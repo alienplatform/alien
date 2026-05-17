@@ -6,7 +6,7 @@
 
 import type { ArtifactRegistry } from "./bindings/artifact-registry.js"
 import type { Build } from "./bindings/build.js"
-import type { FunctionBinding } from "./bindings/function.js"
+import type { WorkerBinding } from "./bindings/worker.js"
 import type { Kv } from "./bindings/kv.js"
 import type { Queue } from "./bindings/queue.js"
 import type { ServiceAccount } from "./bindings/service-account.js"
@@ -151,21 +151,21 @@ export async function artifactRegistry(name: string): Promise<ArtifactRegistry> 
 }
 
 /**
- * Get a function binding.
+ * Get a worker binding.
  *
  * @param name - Binding name
- * @returns Function binding instance
+ * @returns Worker binding instance
  *
  * @example
  * ```typescript
- * import { func } from "@alienplatform/sdk"
+ * import { worker } from "@alienplatform/sdk"
  *
- * const processor = await func("image-processor")
+ * const processor = await worker("image-processor")
  * const result = await processor.invokeJson("resize", { width: 800 })
  * ```
  */
-export async function func(name: string): Promise<FunctionBinding> {
-  return (await getGlobalContext()).func(name)
+export async function worker(name: string): Promise<WorkerBinding> {
+  return (await getGlobalContext()).worker(name)
 }
 
 /**

@@ -13,7 +13,7 @@ use crate::{
     },
     template::{CfExpression, CfResource},
 };
-use alien_core::{import::EmitContext, Build, ErrorData, Function, Result, ServiceAccount};
+use alien_core::{import::EmitContext, Build, ErrorData, Worker, Result, ServiceAccount};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{
     generators::AwsCloudFormationPermissionsGenerator, BindingTarget, PermissionContext,
@@ -41,7 +41,7 @@ impl CfEmitter for AwsServiceAccountEmitter {
         // `AWSLambdaBasicExecutionRole` / `AWSLambdaVPCAccessExecutionRole`
         // managed policies here. The runtime controller doesn't attach
         // them either — every permission grant flows through alien-
-        // permissions (CloudWatch logs come from `function/execute`,
+        // permissions (CloudWatch logs come from `worker/execute`,
         // VPC ENI access is the customer's call via a dedicated
         // permission set). Push and pull deployments must converge on
         // the same effective IAM, so the managed-policy attachment
@@ -93,7 +93,7 @@ fn service_account_trust_policy(
     let mut services = BTreeSet::new();
 
     for (_id, entry) in ctx.stack.resources() {
-        if let Some(function) = entry.config.downcast_ref::<Function>() {
+        if let Some(function) = entry.config.downcast_ref::<Worker>() {
             if Some(function.permissions.as_str()) == profile_name {
                 services.insert("lambda.amazonaws.com");
             }

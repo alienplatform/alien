@@ -9,11 +9,21 @@ export type ListManagersRequest = {
    * Workspace name. Defaults to your last workspace (user auth) or your API key's workspace (token auth). When using an API key, if provided, must match the key's workspace.
    */
   workspace?: string | undefined;
+  /**
+   * Search managers by name
+   */
+  search?: string | undefined;
+  /**
+   * Maximum number of managers to return
+   */
+  limit?: number | undefined;
 };
 
 /** @internal */
 export type ListManagersRequest$Outbound = {
   workspace?: string | undefined;
+  search?: string | undefined;
+  limit?: number | undefined;
 };
 
 /** @internal */
@@ -22,6 +32,8 @@ export const ListManagersRequest$outboundSchema: z.ZodType<
   ListManagersRequest
 > = z.object({
   workspace: z.string().optional(),
+  search: z.string().optional(),
+  limit: z.int().optional(),
 });
 
 export function listManagersRequestToJSON(

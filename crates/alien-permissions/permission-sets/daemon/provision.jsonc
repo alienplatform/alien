@@ -1,0 +1,5 @@
+{
+  "id": "daemon/provision",
+  "description": "Allows provisioning Daemon resources on Local and Kubernetes platforms",
+  "platforms": {}
+}

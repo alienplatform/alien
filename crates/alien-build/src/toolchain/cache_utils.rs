@@ -21,7 +21,7 @@ pub async fn hash_files(patterns: &[&str], base_dir: &Path) -> Result<String> {
                 .into_alien_error()
                 .context(ErrorData::InvalidGlobPattern {
                     pattern: pattern.to_string(),
-                    function_name: "cache_hash".to_string(),
+                    resource_name: "cache_hash".to_string(),
                     reason: "Invalid glob pattern for cache hashing".to_string(),
                 })?;
 
@@ -30,7 +30,7 @@ pub async fn hash_files(patterns: &[&str], base_dir: &Path) -> Result<String> {
                 .into_alien_error()
                 .context(ErrorData::InvalidGlobPattern {
                     pattern: pattern.to_string(),
-                    function_name: "cache_hash".to_string(),
+                    resource_name: "cache_hash".to_string(),
                     reason: "Glob matching error".to_string(),
                 })?;
 

@@ -121,7 +121,7 @@ impl LocalQueueManager {
     ///
     /// Checks that the queue directory exists and is readable. Does NOT open
     /// the sled database — sled acquires an exclusive file lock which would
-    /// conflict with the function runtime and trigger service that hold
+    /// conflict with the worker runtime and trigger service that hold
     /// long-lived handles to the same database.
     pub async fn check_health(&self, id: &str) -> Result<()> {
         let queue_path = self.state_dir.join("queue").join(id);

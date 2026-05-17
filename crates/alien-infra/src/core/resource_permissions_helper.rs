@@ -533,8 +533,8 @@ impl ResourcePermissionsHelper {
             .with_resource_group(resource_group.clone())
             .with_stack_prefix(ctx.resource_prefix.to_string())
             .with_resource_name(resource_name.to_string())
-            // Managing subscription/resource group: used by function/execute and
-            // container-cluster/execute permission sets for cross-tenant management.
+            // Managing subscription/resource group: used by worker/execute and
+            // compute-cluster/execute permission sets for cross-tenant management.
             // In single-subscription mode, these are the same as the current values.
             .with_managing_subscription_id(azure_config.subscription_id.clone())
             .with_managing_resource_group(resource_group);
@@ -1214,7 +1214,7 @@ impl ResourcePermissionsHelper {
     }
 
     /// Public method for controllers that manage their own binding collection
-    /// (e.g., function/gcp.rs) to add management SA bindings for pre-computed
+    /// (e.g., worker/gcp.rs) to add management SA bindings for pre-computed
     /// permission set references.
     pub async fn collect_gcp_management_bindings_for(
         ctx: &ResourceControllerContext<'_>,

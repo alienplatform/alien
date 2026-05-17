@@ -2,7 +2,7 @@
 
 use crate::{
     error::{ErrorData, Result},
-    traits::{ArtifactRegistry, BindingsProviderApi, Build, Function, Kv, Queue, Storage, Vault},
+    traits::{ArtifactRegistry, BindingsProviderApi, Build, Worker, Kv, Queue, Storage, Vault},
 };
 
 use alien_client_config::ClientConfigExt;
@@ -1335,8 +1335,8 @@ impl BindingsProviderApi for BindingsProvider {
         Ok(result)
     }
 
-    async fn load_function(&self, binding_name: &str) -> Result<Arc<dyn Function>> {
-        use alien_core::bindings::FunctionBinding;
+    async fn load_worker(&self, binding_name: &str) -> Result<Arc<dyn Worker>> {
+        use alien_core::bindings::WorkerBinding;
 
         let binding_json = self.bindings.get(binding_name).ok_or_else(|| {
             AlienError::new(ErrorData::BindingConfigInvalid {
@@ -1345,17 +1345,17 @@ impl BindingsProviderApi for BindingsProvider {
             })
         })?;
 
-        let binding: FunctionBinding = serde_json::from_value(binding_json.clone())
+        let binding: WorkerBinding = serde_json::from_value(binding_json.clone())
             .into_alien_error()
             .context(ErrorData::BindingConfigInvalid {
                 binding_name: binding_name.to_string(),
-                reason: "Failed to parse function binding".to_string(),
+                reason: "Failed to parse worker binding".to_string(),
             })?;
 
         match binding {
             #[cfg(feature = "aws")]
-            FunctionBinding::Lambda(lambda_binding) => {
-                use crate::providers::function::LambdaFunction;
+            WorkerBinding::Lambda(lambda_binding) => {
+                use crate::providers::worker::LambdaWorker;
 
                 let aws_config = self.client_config.aws_config().ok_or_else(|| {
                     AlienError::new(ErrorData::ClientConfigInvalid {
@@ -1372,18 +1372,18 @@ impl BindingsProviderApi for BindingsProvider {
                         })?;
                 let client = crate::http_client::create_http_client();
 
-                let function_impl = LambdaFunction::new(client, credentials, lambda_binding);
-                let function: Arc<dyn Function> = Arc::new(function_impl);
+                let function_impl = LambdaWorker::new(client, credentials, lambda_binding);
+                let function: Arc<dyn Worker> = Arc::new(function_impl);
                 Ok(function)
             }
             #[cfg(not(feature = "aws"))]
-            FunctionBinding::Lambda(_) => Err(AlienError::new(ErrorData::FeatureNotEnabled {
+            WorkerBinding::Lambda(_) => Err(AlienError::new(ErrorData::FeatureNotEnabled {
                 feature: "aws".to_string(),
             })),
 
             #[cfg(feature = "gcp")]
-            FunctionBinding::CloudRun(cloudrun_binding) => {
-                use crate::providers::function::CloudRunFunction;
+            WorkerBinding::CloudRun(cloudrun_binding) => {
+                use crate::providers::worker::CloudRunWorker;
 
                 let gcp_config = self.client_config.gcp_config().ok_or_else(|| {
                     AlienError::new(ErrorData::ClientConfigInvalid {
@@ -1394,18 +1394,18 @@ impl BindingsProviderApi for BindingsProvider {
                 let client = crate::http_client::create_http_client();
 
                 let function_impl =
-                    CloudRunFunction::new(client, gcp_config.clone(), cloudrun_binding);
-                let function: Arc<dyn Function> = Arc::new(function_impl);
+                    CloudRunWorker::new(client, gcp_config.clone(), cloudrun_binding);
+                let function: Arc<dyn Worker> = Arc::new(function_impl);
                 Ok(function)
             }
             #[cfg(not(feature = "gcp"))]
-            FunctionBinding::CloudRun(_) => Err(AlienError::new(ErrorData::FeatureNotEnabled {
+            WorkerBinding::CloudRun(_) => Err(AlienError::new(ErrorData::FeatureNotEnabled {
                 feature: "gcp".to_string(),
             })),
 
             #[cfg(feature = "azure")]
-            FunctionBinding::ContainerApp(container_app_binding) => {
-                use crate::providers::function::ContainerAppFunction;
+            WorkerBinding::ContainerApp(container_app_binding) => {
+                use crate::providers::worker::ContainerAppWorker;
 
                 let azure_config = self.client_config.azure_config().ok_or_else(|| {
                     AlienError::new(ErrorData::ClientConfigInvalid {
@@ -1416,41 +1416,41 @@ impl BindingsProviderApi for BindingsProvider {
                 let client = crate::http_client::create_http_client();
 
                 let function_impl =
-                    ContainerAppFunction::new(client, azure_config.clone(), container_app_binding);
-                let function: Arc<dyn Function> = Arc::new(function_impl);
+                    ContainerAppWorker::new(client, azure_config.clone(), container_app_binding);
+                let function: Arc<dyn Worker> = Arc::new(function_impl);
                 Ok(function)
             }
             #[cfg(not(feature = "azure"))]
-            FunctionBinding::ContainerApp(_) => {
+            WorkerBinding::ContainerApp(_) => {
                 Err(AlienError::new(ErrorData::FeatureNotEnabled {
                     feature: "azure".to_string(),
                 }))
             }
 
             #[cfg(feature = "local")]
-            FunctionBinding::Local(local_binding) => {
-                use crate::providers::function::LocalFunction;
+            WorkerBinding::Local(local_binding) => {
+                use crate::providers::worker::LocalWorker;
 
-                let function_impl = LocalFunction::new(local_binding);
-                let function: Arc<dyn Function> = Arc::new(function_impl);
+                let function_impl = LocalWorker::new(local_binding);
+                let function: Arc<dyn Worker> = Arc::new(function_impl);
                 Ok(function)
             }
             #[cfg(not(feature = "local"))]
-            FunctionBinding::Local(_) => Err(AlienError::new(ErrorData::FeatureNotEnabled {
+            WorkerBinding::Local(_) => Err(AlienError::new(ErrorData::FeatureNotEnabled {
                 feature: "local".to_string(),
             })),
 
             #[cfg(feature = "kubernetes")]
-            FunctionBinding::Kubernetes(kubernetes_binding) => {
-                use crate::providers::function::KubernetesFunction;
+            WorkerBinding::Kubernetes(kubernetes_binding) => {
+                use crate::providers::worker::KubernetesWorker;
 
                 let function_impl =
-                    KubernetesFunction::new(binding_name.to_string(), kubernetes_binding)?;
-                let function: Arc<dyn Function> = Arc::new(function_impl);
+                    KubernetesWorker::new(binding_name.to_string(), kubernetes_binding)?;
+                let function: Arc<dyn Worker> = Arc::new(function_impl);
                 Ok(function)
             }
             #[cfg(not(feature = "kubernetes"))]
-            FunctionBinding::Kubernetes(_) => Err(AlienError::new(ErrorData::FeatureNotEnabled {
+            WorkerBinding::Kubernetes(_) => Err(AlienError::new(ErrorData::FeatureNotEnabled {
                 feature: "kubernetes".to_string(),
             })),
         }

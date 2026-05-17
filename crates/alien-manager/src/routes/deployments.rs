@@ -10,7 +10,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use alien_core::{
-    import::ImportSourceKind, ContainerOutputs, DeleteScope, EnvironmentVariable, FunctionOutputs,
+    import::ImportSourceKind, ContainerOutputs, DeleteScope, EnvironmentVariable, WorkerOutputs,
     Platform, StackSettings,
 };
 
@@ -547,8 +547,8 @@ async fn get_deployment_info(
     if let Some(stack_state) = &deployment.stack_state {
         for (resource_id, resource_state) in &stack_state.resources {
             let public_url = match resource_state.resource_type.as_str() {
-                "function" => stack_state
-                    .get_resource_outputs::<FunctionOutputs>(resource_id)
+                "worker" => stack_state
+                    .get_resource_outputs::<WorkerOutputs>(resource_id)
                     .ok()
                     .and_then(|o| o.url.clone()),
                 "container" => stack_state

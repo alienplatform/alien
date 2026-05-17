@@ -46,12 +46,7 @@ pub async fn handle_running(
         })
     })?;
 
-    // Stamp deployment-config values onto ContainerCluster template inputs.
-    // Running still drives management work for Frozen container clusters, such
-    // as worker image rollouts.
-    crate::helpers::stamp_worker_template(&mut target_stack, &config)?;
-
-    // Inject environment variables so the executor sees the same Function config
+    // Inject environment variables so the executor sees the same Worker config
     // as what was deployed during Provisioning. Without this, the executor detects
     // a config mismatch (prepared_stack without env vars vs stack_state with env vars)
     // and incorrectly triggers an update flow.

@@ -16,7 +16,7 @@
 //! cloud) ∈ {storage, kv, vault, queue, network, service-account,
 //! remote-stack-management, build, artifact-registry, function} × {Aws, Gcp,
 //! Azure}` (plus GCP `service_activation`, plus the four Azure aux
-//! resources) is registered. `container` and `container-cluster` are
+//! resources) is registered. `container` and `compute-cluster` are
 //! deliberately *not* asserted — they live in `alien-platform-controllers`.
 
 use alien_core::import::{
@@ -31,7 +31,7 @@ use alien_core::import::{
 use alien_core::{
     ArtifactRegistry, AwsManagementConfig, AzureContainerAppsEnvironment,
     AzureContainerAppsEnvironmentOutputs, AzureManagementConfig, AzureResourceGroup,
-    AzureResourceGroupOutputs, AzureServiceBusNamespace, AzureStorageAccount, Build, Function,
+    AzureResourceGroupOutputs, AzureServiceBusNamespace, AzureStorageAccount, Build, Worker,
     GcpManagementConfig, Kv, ManagementConfig, Network, Platform, Queue, RemoteStackManagement,
     RemoteStackManagementOutputs, Resource, ResourceDefinition, ResourceEntry, ResourceLifecycle,
     ResourceStatus, ResourceType, ServiceAccount, ServiceActivation, StackSettings, Storage, Vault,
@@ -427,7 +427,7 @@ fn registry_built_in_covers_all_oss_pairs() {
         RemoteStackManagement::RESOURCE_TYPE,
         Build::RESOURCE_TYPE,
         ArtifactRegistry::RESOURCE_TYPE,
-        Function::RESOURCE_TYPE,
+        Worker::RESOURCE_TYPE,
     ];
     for rt in aws_pairs {
         assert!(
@@ -447,7 +447,7 @@ fn registry_built_in_covers_all_oss_pairs() {
         RemoteStackManagement::RESOURCE_TYPE,
         Build::RESOURCE_TYPE,
         ArtifactRegistry::RESOURCE_TYPE,
-        Function::RESOURCE_TYPE,
+        Worker::RESOURCE_TYPE,
         ServiceActivation::RESOURCE_TYPE,
     ];
     for rt in gcp_pairs {
@@ -468,7 +468,7 @@ fn registry_built_in_covers_all_oss_pairs() {
         RemoteStackManagement::RESOURCE_TYPE,
         Build::RESOURCE_TYPE,
         ArtifactRegistry::RESOURCE_TYPE,
-        Function::RESOURCE_TYPE,
+        Worker::RESOURCE_TYPE,
         ServiceActivation::RESOURCE_TYPE,
         AzureResourceGroup::RESOURCE_TYPE,
         AzureStorageAccount::RESOURCE_TYPE,
@@ -483,11 +483,11 @@ fn registry_built_in_covers_all_oss_pairs() {
         );
     }
 
-    // Container / container-cluster live in the platform crate.
-    let container_cluster: ResourceType = "container-cluster".into();
+    // Container / compute-cluster live in the platform crate.
+    let compute_cluster: ResourceType = "compute-cluster".into();
     assert!(
-        registry.importer(&container_cluster, Platform::Aws).is_none(),
-        "container-cluster must not be registered in OSS built_in (it lives in alien-platform-controllers)"
+        registry.importer(&compute_cluster, Platform::Aws).is_none(),
+        "compute-cluster must not be registered in OSS built_in (it lives in alien-platform-controllers)"
     );
 }
 

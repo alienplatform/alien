@@ -2707,7 +2707,7 @@ export type SyncReconcileResponseStackStateResources = {
    */
   status: SyncReconcileResponseStackStateStatus;
   /**
-   * The high-level type of the resource (e.g., Function::RESOURCE_TYPE, Storage::RESOURCE_TYPE).
+   * The high-level type of the resource (e.g., Worker::RESOURCE_TYPE, Storage::RESOURCE_TYPE).
    */
   type: string;
 };
@@ -3952,6 +3952,41 @@ export type SyncReconcileResponseClusters = {
   managementToken: string;
 };
 
+/**
+ * Horizon host image channel or provider-specific pointer.
+ *
+ * @remarks
+ *
+ * Setup references these stable pointers. The concrete image version resolved
+ * during rollout is management state, not ComputeCluster resource config.
+ */
+export type SyncReconcileResponseHorizonHostImage = {
+  /**
+   * Machine architecture, such as amd64 or arm64.
+   */
+  architecture: string;
+  /**
+   * AWS SSM parameter path for the channel pointer.
+   */
+  awsSsmParameter?: string | null | undefined;
+  /**
+   * Azure Compute Gallery image definition ID for the channel pointer.
+   */
+  azureGalleryImageDefinitionId?: string | null | undefined;
+  /**
+   * Logical image channel, such as prod, staging, or canary.
+   */
+  channel: string;
+  /**
+   * GCP image family for the channel pointer.
+   */
+  gcpImageFamily?: string | null | undefined;
+};
+
+export type SyncReconcileResponseHorizonHostImageUnion =
+  | SyncReconcileResponseHorizonHostImage
+  | any;
+
 export const SyncReconcileResponseComputeBackendType = {
   Horizon: "horizon",
 } as const;
@@ -3960,7 +3995,7 @@ export type SyncReconcileResponseComputeBackendType = ClosedEnum<
 >;
 
 /**
- * Compute backend for Container and Function resources.
+ * Compute backend for Container and Worker resources.
  *
  * @remarks
  *
@@ -3969,26 +4004,22 @@ export type SyncReconcileResponseComputeBackendType = ClosedEnum<
  */
 export type SyncReconcileResponseComputeBackendHorizon = {
   /**
-   * Cluster configurations (one per ContainerCluster resource)
+   * Cluster configurations (one per ComputeCluster resource)
    *
    * @remarks
-   * Key: ContainerCluster resource ID from stack
+   * Key: ComputeCluster resource ID from stack
    * Value: Cluster ID and management token for that cluster
    */
   clusters: { [k: string]: SyncReconcileResponseClusters };
+  horizonHostImage?:
+    | SyncReconcileResponseHorizonHostImage
+    | any
+    | null
+    | undefined;
   /**
-   * Worker control-plane API base URL.
+   * Horizon control-plane API base URL.
    */
   url: string;
-  /**
-   * AMI / image ID for the worker machine image.
-   *
-   * @remarks
-   *
-   * The image contains the worker runtime bootstrap. Controllers only pass
-   * machine-specific settings into that image.
-   */
-  workerImageId?: string | null | undefined;
   type: SyncReconcileResponseComputeBackendType;
 };
 
@@ -6185,7 +6216,7 @@ export type SyncReconcileResponseMonitoring = {
    * into all containers. It must be plain (not a vault secret) because alien-runtime
    * reads `OTEL_EXPORTER_OTLP_HEADERS` at tracing-init time, before vault secrets load.
    *
-   * Worker VMs do NOT use this field directly. The ContainerCluster infra
+   * Worker VMs do NOT use this field directly. The ComputeCluster infra
    * controller writes the same value to the cloud vault used by the worker
    * image (GCP: Secret Manager, AWS: Secrets Manager, Azure: Key Vault).
    *
@@ -14700,6 +14731,52 @@ export function syncReconcileResponseClustersFromJSON(
 }
 
 /** @internal */
+export const SyncReconcileResponseHorizonHostImage$inboundSchema: z.ZodType<
+  SyncReconcileResponseHorizonHostImage,
+  unknown
+> = z.object({
+  architecture: z.string(),
+  awsSsmParameter: z.nullable(z.string()).optional(),
+  azureGalleryImageDefinitionId: z.nullable(z.string()).optional(),
+  channel: z.string(),
+  gcpImageFamily: z.nullable(z.string()).optional(),
+});
+
+export function syncReconcileResponseHorizonHostImageFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncReconcileResponseHorizonHostImage, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseHorizonHostImage$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncReconcileResponseHorizonHostImage' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseHorizonHostImageUnion$inboundSchema:
+  z.ZodType<SyncReconcileResponseHorizonHostImageUnion, unknown> = z.union([
+    z.lazy(() => SyncReconcileResponseHorizonHostImage$inboundSchema),
+    z.any(),
+  ]);
+
+export function syncReconcileResponseHorizonHostImageUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponseHorizonHostImageUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseHorizonHostImageUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponseHorizonHostImageUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const SyncReconcileResponseComputeBackendType$inboundSchema: z.ZodEnum<
   typeof SyncReconcileResponseComputeBackendType
 > = z.enum(SyncReconcileResponseComputeBackendType);
@@ -14711,8 +14788,13 @@ export const SyncReconcileResponseComputeBackendHorizon$inboundSchema:
       z.string(),
       z.lazy(() => SyncReconcileResponseClusters$inboundSchema),
     ),
+    horizonHostImage: z.nullable(
+      z.union([
+        z.lazy(() => SyncReconcileResponseHorizonHostImage$inboundSchema),
+        z.any(),
+      ]),
+    ).optional(),
     url: z.string(),
-    workerImageId: z.nullable(z.string()).optional(),
     type: SyncReconcileResponseComputeBackendType$inboundSchema,
   });
 

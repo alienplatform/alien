@@ -8,7 +8,7 @@
 
 use crate::error::{ErrorData, Result};
 use alien_core::bindings::{
-    binding_env_var_name, ArtifactRegistryBinding, BindingValue, ContainerBinding, FunctionBinding,
+    binding_env_var_name, ArtifactRegistryBinding, BindingValue, ContainerBinding, WorkerBinding,
     KvBinding, StorageBinding, VaultBinding,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
@@ -17,7 +17,7 @@ use tracing::debug;
 /// Rewrites a binding's filesystem path from host path to container path.
 ///
 /// For containers, linked resources (Storage, KV, Vault) are mounted at different
-/// paths inside the container. This function updates the binding env var to use
+/// paths inside the container. This worker updates the binding env var to use
 /// the container-internal path.
 ///
 /// **Fails fast** if non-Local binding variants are encountered - this indicates
@@ -230,36 +230,36 @@ pub(super) fn rewrite_localhost_urls_for_container(
             }
         }
 
-        // Function binding: only Local variant allowed
-        if let Ok(mut binding) = serde_json::from_str::<FunctionBinding>(binding_json) {
+        // Worker binding: only Local variant allowed
+        if let Ok(mut binding) = serde_json::from_str::<WorkerBinding>(binding_json) {
             match binding {
-                FunctionBinding::Local(ref mut local) => {
+                WorkerBinding::Local(ref mut local) => {
                     // Extract URL to avoid borrow conflicts
-                    let needs_rewrite = if let BindingValue::Value(ref url) = local.function_url {
+                    let needs_rewrite = if let BindingValue::Value(ref url) = local.worker_url {
                         url.contains("localhost:") || url.contains("127.0.0.1:")
                     } else {
                         false
                     };
 
                     if needs_rewrite {
-                        if let BindingValue::Value(url) = &local.function_url {
+                        if let BindingValue::Value(url) = &local.worker_url {
                             let original_url = url.clone();
                             let new_url = url
                                 .replace("localhost:", "host.docker.internal:")
                                 .replace("127.0.0.1:", "host.docker.internal:");
 
-                            local.function_url = BindingValue::value(new_url.clone());
+                            local.worker_url = BindingValue::value(new_url.clone());
                             let new_json = serde_json::to_string(&binding)
                                 .into_alien_error()
                                 .context(ErrorData::ResourceControllerConfigError {
                                     resource_id: binding_key.clone(),
-                                    message: "Failed to serialize Function binding".to_string(),
+                                    message: "Failed to serialize Worker binding".to_string(),
                                 })?;
 
                             debug!(
                                 original_url = %original_url,
                                 rewritten_url = %new_url,
-                                "Rewrote Function localhost URL for container"
+                                "Rewrote Worker localhost URL for container"
                             );
                             *binding_json = new_json;
                         }
@@ -269,7 +269,7 @@ pub(super) fn rewrite_localhost_urls_for_container(
                 _ => {
                     return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
                         resource_id: binding_key,
-                        message: "Local platform containers cannot use cloud function bindings"
+                        message: "Local platform containers cannot use cloud worker bindings"
                             .to_string(),
                     }));
                 }

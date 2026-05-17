@@ -57,6 +57,10 @@ export type ListPackagesRequest = {
    */
   status?: ListPackagesStatus | undefined;
   /**
+   * Search packages by type or version
+   */
+  search?: string | undefined;
+  /**
    * Maximum number of items to return per page
    */
   limit?: number | undefined;
@@ -96,6 +100,7 @@ export type ListPackagesRequest$Outbound = {
   project?: string | undefined;
   type?: string | undefined;
   status?: string | undefined;
+  search?: string | undefined;
   limit: number;
   cursor?: string | undefined;
 };
@@ -109,6 +114,7 @@ export const ListPackagesRequest$outboundSchema: z.ZodType<
   project: z.string().optional(),
   type: ListPackagesType$outboundSchema.optional(),
   status: ListPackagesStatus$outboundSchema.optional(),
+  search: z.string().optional(),
   limit: z.int().default(20),
   cursor: z.string().optional(),
 });

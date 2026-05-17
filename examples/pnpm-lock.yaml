@@ -14,7 +14,7 @@ importers:
 
   .: {}
 
-  basic-function-rs:
+  basic-worker-rs:
     dependencies:
       '@alienplatform/core':
         specifier: file:../../packages/core
@@ -33,7 +33,7 @@ importers:
         specifier: ^3.1.4
         version: 3.2.4(@types/node@24.12.0)(jiti@2.6.1)
 
-  basic-function-ts:
+  basic-worker-ts:
     dependencies:
       '@alienplatform/core':
         specifier: file:../../packages/core

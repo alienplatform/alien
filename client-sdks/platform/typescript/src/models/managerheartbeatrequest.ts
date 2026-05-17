@@ -48,6 +48,10 @@ export type ManagerHeartbeatRequest = {
    * Manager public URL (for accessing DeepStore endpoints)
    */
   url: string;
+  /**
+   * DeepStore database ID used by this manager for telemetry
+   */
+  logsDatabaseId?: string | null | undefined;
   managementConfigs: ManagerManagementConfigs;
   /**
    * Optional runtime metrics
@@ -94,6 +98,7 @@ export type ManagerHeartbeatRequest$Outbound = {
   status: string;
   version?: string | undefined;
   url: string;
+  logsDatabaseId?: string | null | undefined;
   managementConfigs: ManagerManagementConfigs$Outbound;
   metrics?: ManagerHeartbeatRequestMetrics$Outbound | undefined;
 };
@@ -106,6 +111,7 @@ export const ManagerHeartbeatRequest$outboundSchema: z.ZodType<
   status: ManagerHeartbeatRequestStatus$outboundSchema,
   version: z.string().optional(),
   url: z.string(),
+  logsDatabaseId: z.nullable(z.string()).optional(),
   managementConfigs: ManagerManagementConfigs$outboundSchema,
   metrics: z.lazy(() => ManagerHeartbeatRequestMetrics$outboundSchema)
     .optional(),

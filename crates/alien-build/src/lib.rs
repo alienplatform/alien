@@ -4,7 +4,7 @@ pub mod settings;
 pub mod toolchain;
 
 use alien_core::{
-    alien_event, AlienEvent, BinaryTarget, Container, ContainerCode, Function, FunctionCode,
+    alien_event, AlienEvent, BinaryTarget, Container, ContainerCode, Worker, WorkerCode,
     Platform, Stack, ToolchainConfig,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
@@ -63,7 +63,7 @@ impl DedupeKey {
     }
 }
 
-/// Builds a given `Stack`, processing `FunctionCode::Source` into `FunctionCode::Image`,
+/// Builds a given `Stack`, processing `WorkerCode::Source` into `WorkerCode::Image`,
 /// building and pushing container images, generating platform-specific templates,
 /// and saving the result to the output directory.
 #[alien_event(AlienEvent::BuildingStack {
@@ -127,12 +127,12 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
     let mut functions_to_build = Vec::new();
 
     for (id, resource_entry) in stack.resources() {
-        if let Some(func) = resource_entry.config.downcast_ref::<alien_core::Function>() {
+        if let Some(func) = resource_entry.config.downcast_ref::<alien_core::Worker>() {
             info!("Processing function: {}", func.id);
             match &func.code {
-                FunctionCode::Source { src, toolchain } => {
+                WorkerCode::Source { src, toolchain } => {
                     info!(
-                        "Function '{}' has source code. Queued for parallel build.",
+                        "Worker '{}' has source code. Queued for parallel build.",
                         func.id
                     );
                     functions_to_build.push((
@@ -142,8 +142,8 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                         toolchain.clone(),
                     ));
                 }
-                FunctionCode::Image { .. } => {
-                    info!("Function '{}' already has an image. Skipping.", func.id);
+                WorkerCode::Image { .. } => {
+                    info!("Worker '{}' already has an image. Skipping.", func.id);
                 }
             }
         }
@@ -214,7 +214,7 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
 
                     // Define the actual work function
                     let build_work = async move {
-                        info!("Starting parallel build for function: {}", func_id);
+                        info!("Starting parallel build for resource: {}", func_id);
 
                         // Check if we're already cancelled
                         if cancel_token.is_cancelled() {
@@ -232,12 +232,12 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                                 &stack_id,
                                 &settings,
                                 &output_dir,
-                                false, // is_container = false for Function resources
-                                "function",
+                                false, // is_container = false for Worker resources
+                                "worker",
                                 &[],
                             ) => result,
                             _ = cancel_token.cancelled() => {
-                                info!("Build for function '{}' was cancelled", func_id);
+                                info!("Build for worker '{}' was cancelled", func_id);
                                 Err(AlienError::new(ErrorData::BuildCanceled {
                                     resource_name: func_id.clone()
                                 }))
@@ -247,12 +247,12 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                         match &result {
                             Ok(image_uri) => {
                                 info!(
-                                    "Successfully built OCI image for function '{}' to: {}",
+                                    "Successfully built OCI image for resource '{}' to: {}",
                                     func_id, image_uri
                                 );
                             }
                             Err(e) => {
-                                info!("Failed to build function '{}': {}", func_id, e);
+                                info!("Failed to build worker '{}': {}", func_id, e);
                             }
                         }
 
@@ -264,7 +264,7 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                         Some(bus) => bus.run(|| build_work).await,
                         None => {
                             tracing::debug!(
-                                "No event bus context available for parallel build of function '{}'",
+                                "No event bus context available for parallel build of worker '{}'",
                                 func_id_for_warning
                             );
                             build_work.await
@@ -292,7 +292,7 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                         Ok(image_uri) => {
                             // Success - update the function
                             let mut updated_func = func;
-                            updated_func.code = FunctionCode::Image { image: image_uri };
+                            updated_func.code = WorkerCode::Image { image: image_uri };
                             build_results.push((resource_id, updated_func));
                             completed_tasks += 1;
                         }
@@ -763,9 +763,9 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
 struct ResourcePushTarget {
     /// Stack resource key (used to locate the resource for updating after push)
     resource_id: String,
-    /// The resource's own ID (e.g. `func.id`) — used for logging and image tagging
+    /// The resource's own ID (e.g. `worker.id`) — used for logging and image tagging
     resource_name: String,
-    /// Display name for events/logging ("function", "container", etc.)
+    /// Display name for events/logging ("worker", "container", etc.)
     resource_type: &'static str,
     /// Local directory containing OCI tarballs produced by `alien build`
     local_image_dir: PathBuf,
@@ -783,29 +783,29 @@ fn collect_push_targets(stack: &Stack) -> Result<Vec<ResourcePushTarget>> {
     let mut targets = Vec::new();
 
     for (resource_id, resource_entry) in stack.resources() {
-        if let Some(func) = resource_entry.config.downcast_ref::<Function>() {
+        if let Some(func) = resource_entry.config.downcast_ref::<Worker>() {
             match &func.code {
-                FunctionCode::Image { image } => {
+                WorkerCode::Image { image } => {
                     let path = PathBuf::from(image);
                     if path.exists() && path.is_dir() {
                         info!(
-                            "Function '{}' has local image directory, queuing for push",
+                            "Worker '{}' has local image directory, queuing for push",
                             func.id
                         );
                         targets.push(ResourcePushTarget {
                             resource_id: resource_id.clone(),
                             resource_name: func.id.clone(),
-                            resource_type: "function",
+                            resource_type: "worker",
                             local_image_dir: path,
                         });
                     } else {
-                        info!("Function '{}' already has remote image: {}", func.id, image);
+                        info!("Worker '{}' already has remote image: {}", func.id, image);
                     }
                 }
-                FunctionCode::Source { .. } => {
+                WorkerCode::Source { .. } => {
                     return Err(AlienError::new(ErrorData::InvalidResourceConfig {
                         resource_id: func.id.clone(),
-                        reason: "Function has source code instead of built image. Run 'alien build' first.".to_string(),
+                        reason: "Worker has source code instead of built image. Run 'alien build' first.".to_string(),
                     }));
                 }
             }
@@ -851,8 +851,8 @@ fn collect_push_targets(stack: &Stack) -> Result<Vec<ResourcePushTarget>> {
 fn apply_pushed_images(stack: &mut Stack, updates: Vec<(String, String)>) {
     for (resource_id, image_uri) in updates {
         if let Some(resource_entry) = stack.resources_mut().find(|(id, _)| *id == &resource_id) {
-            if let Some(func) = resource_entry.1.config.downcast_mut::<Function>() {
-                func.code = FunctionCode::Image { image: image_uri };
+            if let Some(func) = resource_entry.1.config.downcast_mut::<Worker>() {
+                func.code = WorkerCode::Image { image: image_uri };
             } else if let Some(container) = resource_entry.1.config.downcast_mut::<Container>() {
                 container.code = ContainerCode::Image { image: image_uri };
             }
@@ -1178,19 +1178,19 @@ async fn finalize_artifact_dir(
     }
 }
 
-/// Build a resource (function, container, or worker) for one or more OS/architecture targets
+/// Build a resource (worker, container, or dependency) for one or more OS/architecture targets
 ///
 /// Always saves OCI tarballs to a consistent directory structure:
-/// `build_output_dir/function_name/{target}.oci.tar`
+/// `build_output_dir/resource_name/{target}.oci.tar`
 #[alien_event(AlienEvent::BuildingResource {
-    resource_name: function_name.to_string(),
+    resource_name: resource_name.to_string(),
     resource_type: resource_type.to_string(),
     related_resources: related_resources.to_vec(),
 })]
 async fn build_resource(
     src: &str,
     toolchain_config: &alien_core::ToolchainConfig,
-    function_name: &str,
+    resource_name: &str,
     stack_id: &str,
     settings: &BuildSettings,
     build_output_dir: &Path,
@@ -1202,21 +1202,21 @@ async fn build_resource(
     let targets = settings.get_targets();
 
     info!(
-        "Building function '{}' for {} target(s): {:?}",
-        function_name,
+        "Building resource '{}' for {} target(s): {:?}",
+        resource_name,
         targets.len(),
         targets
     );
 
     // Build into a unique staging directory so concurrent builds do not race on
     // the same path before the hashed output is finalized.
-    let function_dir = temp_artifact_dir(build_output_dir, function_name);
-    fs::create_dir_all(&function_dir)
+    let resource_dir = temp_artifact_dir(build_output_dir, resource_name);
+    fs::create_dir_all(&resource_dir)
         .await
         .into_alien_error()
         .context(ErrorData::FileOperationFailed {
             operation: "create directory".to_string(),
-            file_path: function_dir.display().to_string(),
+            file_path: resource_dir.display().to_string(),
             reason: "Failed to create function directory for build".to_string(),
         })?;
 
@@ -1227,11 +1227,11 @@ async fn build_resource(
         .map(|target| {
             let src = src.to_string();
             let toolchain_config = toolchain_config.clone();
-            let function_name = function_name.to_string();
+            let resource_name = resource_name.to_string();
             let stack_id = stack_id.to_string();
             let settings = settings.clone();
             let target = *target;
-            let function_dir = function_dir.clone();
+            let resource_dir = resource_dir.clone();
 
             tokio::spawn(async move {
                 info!("Building for target: {:?}", target);
@@ -1239,13 +1239,13 @@ async fn build_resource(
                 // Create target-specific output path
                 // Always use target ID in filename for consistency
                 let target_filename = format!("{}.oci.tar", target.runtime_platform_id());
-                let target_output_path = function_dir.join(&target_filename);
+                let target_output_path = resource_dir.join(&target_filename);
 
                 // Build with toolchain for this specific target
                 let result = build_target_to_file(
                     &src,
                     &toolchain_config,
-                    &function_name,
+                    &resource_name,
                     &stack_id,
                     &settings,
                     &target,
@@ -1255,9 +1255,9 @@ async fn build_resource(
                 .await?;
 
                 info!(
-                    "Successfully built target {} for function '{}' at: {}",
+                    "Successfully built target {} for resource '{}' at: {}",
                     target.runtime_platform_id(),
-                    function_name,
+                    resource_name,
                     target_output_path.display()
                 );
 
@@ -1271,7 +1271,7 @@ async fn build_resource(
     for task in build_tasks {
         let result = task.await.map_err(|e| {
             AlienError::new(ErrorData::ImageBuildFailed {
-                function_name: function_name.to_string(),
+                resource_name: resource_name.to_string(),
                 reason: format!("Build task panicked or was cancelled: {}", e),
                 build_output: None,
             })
@@ -1281,19 +1281,19 @@ async fn build_resource(
 
     // Compute content hash of all built tarballs
     // This ensures the executor detects code changes between builds
-    let content_hash = compute_function_content_hash(&function_dir).await?;
+    let content_hash = compute_function_content_hash(&resource_dir).await?;
     let short_hash = &content_hash[..8];
 
     // Rename directory to include content hash
-    let hashed_dir_name = format!("{}-{}", function_name, short_hash);
+    let hashed_dir_name = format!("{}-{}", resource_name, short_hash);
     let final_output_dir = build_output_dir.join(&hashed_dir_name);
 
-    let finalized_dir = finalize_artifact_dir(&function_dir, &final_output_dir, "build").await?;
+    let finalized_dir = finalize_artifact_dir(&resource_dir, &final_output_dir, "build").await?;
 
     // Return the directory path containing all OCI tarballs (with content hash)
     info!(
-        "Completed build for function '{}'. Images directory: {} (hash: {})",
-        function_name,
+        "Completed build for resource '{}'. Images directory: {} (hash: {})",
+        resource_name,
         final_output_dir.display(),
         short_hash
     );
@@ -1305,7 +1305,7 @@ async fn build_resource(
 async fn build_target_to_file(
     src: &str,
     toolchain_config: &alien_core::ToolchainConfig,
-    function_name: &str,
+    resource_name: &str,
     stack_id: &str,
     settings: &BuildSettings,
     target: &BinaryTarget,
@@ -1313,8 +1313,8 @@ async fn build_target_to_file(
     is_container: bool,
 ) -> Result<String> {
     info!(
-        "Starting toolchain build for function: {} (target: {})",
-        function_name,
+        "Starting toolchain build for resource: {} (target: {})",
+        resource_name,
         target.runtime_platform_id()
     );
 
@@ -1351,7 +1351,7 @@ async fn build_target_to_file(
         cache_prefix: format!(
             "{}-{}-{}",
             stack_id,
-            function_name,
+            resource_name,
             target.runtime_platform_id()
         ),
         build_target: *target,
@@ -1368,7 +1368,7 @@ async fn build_target_to_file(
     let image_tag = generate_unique_tag();
     let image_name_for_build = format!(
         "{}:{}{}",
-        function_name,
+        resource_name,
         target.runtime_platform_id(),
         image_tag
     );
@@ -1498,7 +1498,7 @@ async fn build_target_to_file(
                     };
 
                     return Err(AlienError::new(ErrorData::ImageBuildFailed {
-                        function_name: function_name.to_string(),
+                        resource_name: resource_name.to_string(),
                         reason: error_message,
                         build_output: None,
                     }));
@@ -1567,8 +1567,8 @@ async fn build_target_to_file(
     }
 
     info!(
-        "Successfully built OCI image for function {} (target: {}) at {}",
-        function_name,
+        "Successfully built OCI image for resource {} (target: {}) at {}",
+        resource_name,
         target.runtime_platform_id(),
         output_path.display()
     );
@@ -1637,7 +1637,7 @@ async fn pull_and_export_image(
             .await
             .into_alien_error()
             .context(ErrorData::ImageBuildFailed {
-                function_name: container_name.to_string(),
+                resource_name: container_name.to_string(),
                 reason: "Failed to execute docker pull".to_string(),
                 build_output: None,
             })?;
@@ -1645,7 +1645,7 @@ async fn pull_and_export_image(
         if !pull_output.status.success() {
             let stderr = String::from_utf8_lossy(&pull_output.stderr);
             return Err(AlienError::new(ErrorData::ImageBuildFailed {
-                function_name: container_name.to_string(),
+                resource_name: container_name.to_string(),
                 reason: format!("docker pull failed for image '{}'", image),
                 build_output: Some(stderr.to_string()),
             }));
@@ -1667,7 +1667,7 @@ async fn pull_and_export_image(
             .await
             .into_alien_error()
             .context(ErrorData::ImageBuildFailed {
-                function_name: container_name.to_string(),
+                resource_name: container_name.to_string(),
                 reason: "Failed to execute docker save".to_string(),
                 build_output: None,
             })?;
@@ -1675,7 +1675,7 @@ async fn pull_and_export_image(
         if !save_output.status.success() {
             let stderr = String::from_utf8_lossy(&save_output.stderr);
             return Err(AlienError::new(ErrorData::ImageBuildFailed {
-                function_name: container_name.to_string(),
+                resource_name: container_name.to_string(),
                 reason: "docker save failed".to_string(),
                 build_output: Some(stderr.to_string()),
             }));

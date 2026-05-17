@@ -45,7 +45,7 @@ export class Container {
     ports: [],
     environment: {},
     stateful: false,
-    // cluster is optional - if not set, ContainerClusterMutation will auto-assign
+    // cluster is optional - if not set, ComputeClusterMutation will auto-assign
   }
 
   /**
@@ -67,7 +67,7 @@ export class Container {
 
   /**
    * Sets the container cluster this container runs on.
-   * @param clusterId The ContainerCluster resource ID.
+   * @param clusterId The ComputeCluster resource ID.
    * @returns The Container builder instance.
    */
   public cluster(clusterId: string): this {

@@ -20,7 +20,7 @@ use bollard::Docker;
 use futures_util::StreamExt;
 
 use alien_core::{
-    Function, FunctionCode, Ingress, Platform, ReadinessProbe, ResourceLifecycle, Stack,
+    Worker, WorkerCode, Ingress, Platform, ReadinessProbe, ResourceLifecycle, Stack,
 };
 use alien_manager::auth::{Role, Scope, Subject, SubjectKind};
 use alien_manager::config::ManagerConfig;
@@ -57,8 +57,8 @@ fn test_subject() -> Subject {
 
 /// Build a typed Stack with a single Function resource pointing at the given image.
 fn test_stack(stack_id: &str, function_id: &str, image_uri: &str) -> Stack {
-    let function = Function::new(function_id.to_string())
-        .code(FunctionCode::Image {
+    let function = Worker::new(function_id.to_string())
+        .code(WorkerCode::Image {
             image: image_uri.to_string(),
         })
         .permissions("execution".to_string())

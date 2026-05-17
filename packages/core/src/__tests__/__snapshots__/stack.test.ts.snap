@@ -28,6 +28,7 @@ exports[`ArtifactRegistry resource configuration > can be used in stack permissi
           "image": "docker.io/library/rust:latest",
           "type": "image",
         },
+        "commandsEnabled": false,
         "environment": {},
         "id": "registry-user",
         "ingress": "private",
@@ -35,7 +36,8 @@ exports[`ArtifactRegistry resource configuration > can be used in stack permissi
         "memoryMb": 256,
         "permissions": "execution",
         "timeoutSeconds": 180,
-        "type": "function",
+        "triggers": [],
+        "type": "worker",
       },
       "dependencies": [],
       "lifecycle": "live",
@@ -98,7 +100,7 @@ exports[`Permissions system > creates a stack with custom permission sets 1`] = 
     "management": {
       "extend": {
         "*": [
-          "function/management",
+          "worker/management",
         ],
       },
     },
@@ -134,20 +136,22 @@ exports[`Permissions system > creates a stack with custom permission sets 1`] = 
     },
   },
   "resources": {
-    "test-function": {
+    "test-worker": {
       "config": {
         "code": {
           "image": "docker.io/library/rust:latest",
           "type": "image",
         },
+        "commandsEnabled": false,
         "environment": {},
-        "id": "test-function",
+        "id": "test-worker",
         "ingress": "private",
         "links": [],
         "memoryMb": 256,
         "permissions": "execution",
         "timeoutSeconds": 180,
-        "type": "function",
+        "triggers": [],
+        "type": "worker",
       },
       "dependencies": [],
       "lifecycle": "live",
@@ -163,7 +167,7 @@ exports[`Stack builder validation > builds and validates a complex stack with pe
     "management": {
       "extend": {
         "*": [
-          "function/management",
+          "worker/management",
           "storage/management",
         ],
       },
@@ -191,16 +195,17 @@ exports[`Stack builder validation > builds and validates a complex stack with pe
       "dependencies": [],
       "lifecycle": "frozen",
     },
-    "my-test-function": {
+    "my-test-worker": {
       "config": {
         "code": {
           "image": "docker.io/library/rust:latest",
           "type": "image",
         },
+        "commandsEnabled": false,
         "environment": {
           "RUST_LOG": "info,alien_runtime_test_server=debug,alien_runtime=debug",
         },
-        "id": "my-test-function",
+        "id": "my-test-worker",
         "ingress": "public",
         "links": [
           {
@@ -211,7 +216,8 @@ exports[`Stack builder validation > builds and validates a complex stack with pe
         "memoryMb": 512,
         "permissions": "execution",
         "timeoutSeconds": 30,
-        "type": "function",
+        "triggers": [],
+        "type": "worker",
       },
       "dependencies": [],
       "lifecycle": "live",
@@ -294,27 +300,27 @@ exports[`Stack builder validation > builds and validates a stack with Build and 
 }
 `;
 
-exports[`Stack builder validation > builds and validates a stack with function source 1`] = `
+exports[`Stack builder validation > builds and validates a stack with worker source 1`] = `
 {
   "id": "my-source-stack",
   "permissions": {
     "management": {
       "extend": {
         "*": [
-          "function/management",
+          "worker/management",
         ],
       },
     },
     "profiles": {
       "execution": {
         "*": [
-          "function/execute",
+          "worker/execute",
         ],
       },
     },
   },
   "resources": {
-    "my-source-function": {
+    "my-source-worker": {
       "config": {
         "code": {
           "src": "./app",
@@ -323,14 +329,16 @@ exports[`Stack builder validation > builds and validates a stack with function s
           },
           "type": "source",
         },
+        "commandsEnabled": false,
         "environment": {},
-        "id": "my-source-function",
+        "id": "my-source-worker",
         "ingress": "private",
         "links": [],
         "memoryMb": 256,
         "permissions": "execution",
         "timeoutSeconds": 15,
-        "type": "function",
+        "triggers": [],
+        "type": "worker",
       },
       "dependencies": [],
       "lifecycle": "live",

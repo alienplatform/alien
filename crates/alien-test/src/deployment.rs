@@ -120,7 +120,7 @@ impl TestDeployment {
                         for (resource_id, resource_state) in &stack_state.resources {
                             if let Some(ref outputs) = resource_state.outputs {
                                 let url = if let Some(f) =
-                                    outputs.downcast_ref::<alien_core::FunctionOutputs>()
+                                    outputs.downcast_ref::<alien_core::WorkerOutputs>()
                                 {
                                     f.url.as_deref()
                                 } else if let Some(c) =

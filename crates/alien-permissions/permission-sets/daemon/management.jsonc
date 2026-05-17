@@ -1,0 +1,5 @@
+{
+  "id": "daemon/management",
+  "description": "Allows management of Daemon resources on Local and Kubernetes platforms",
+  "platforms": {}
+}

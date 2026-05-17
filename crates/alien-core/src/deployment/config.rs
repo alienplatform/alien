@@ -30,7 +30,7 @@ pub struct DeploymentConfig {
     /// This requires running with elevated cloud credentials.
     #[serde(default, skip_serializing_if = "is_false")]
     pub allow_frozen_changes: bool,
-    /// Compute backend for Container and Function resources.
+    /// Compute backend for Container and Worker resources.
     /// When None, the platform default is used for cloud platforms.
     /// Contains cluster IDs and management tokens for container orchestration.
     /// Worker runtime credentials are provided through cloud identity and vault-backed secrets.
@@ -117,7 +117,7 @@ pub struct OtlpConfig {
     /// into all containers. It must be plain (not a vault secret) because alien-runtime
     /// reads `OTEL_EXPORTER_OTLP_HEADERS` at tracing-init time, before vault secrets load.
     ///
-    /// Worker VMs do NOT use this field directly. The ContainerCluster infra
+    /// Worker VMs do NOT use this field directly. The ComputeCluster infra
     /// controller writes the same value to the cloud vault used by the worker
     /// image (GCP: Secret Manager, AWS: Secrets Manager, Azure: Key Vault).
     ///

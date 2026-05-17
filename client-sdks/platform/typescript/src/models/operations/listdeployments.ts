@@ -77,7 +77,7 @@ export type ListDeploymentsRequest = {
    */
   workspace?: string | undefined;
   /**
-   * Search deployments by name or deployment group name
+   * Search deployments by name, public subdomain, or deployment group name
    */
   search?: string | undefined;
   /**

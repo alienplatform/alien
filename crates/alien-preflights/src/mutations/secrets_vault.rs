@@ -4,20 +4,20 @@ use crate::error::Result;
 use crate::StackMutation;
 use alien_core::permissions::{PermissionProfile, PermissionSetReference};
 use alien_core::{
-    Container, DeploymentConfig, Function, RemoteStackManagement, ResourceEntry, ResourceLifecycle,
-    ResourceRef, Stack, StackState, Vault,
+    Container, Daemon, DeploymentConfig, Worker, RemoteStackManagement, ResourceEntry,
+    ResourceLifecycle, ResourceRef, Stack, StackState, Vault,
 };
 use async_trait::async_trait;
 use tracing::{debug, info};
 
 /// Adds secrets vault for environment variable storage.
 ///
-/// Creates the "secrets" vault (if missing) and links it to all Functions and Containers.
+/// Creates the "secrets" vault (if missing) and links it to all Workers, Daemons, and Containers.
 /// Secrets are synced during deployment and loaded by alien-runtime at startup.
 ///
 /// Steps:
 /// 1. Add "secrets" vault resource (if not present)
-/// 2. Link vault to all Functions and Containers
+/// 2. Link vault to all Workers, Daemons, and Containers
 /// 3. Add vault/data-read to compute resource profiles
 /// 4. Add vault/data-read and vault/data-write to management profile for the secrets vault
 pub struct SecretsVaultMutation;
@@ -66,12 +66,12 @@ impl StackMutation for SecretsVaultMutation {
             debug!("Secrets vault already exists");
         }
 
-        // Step 2: Link the vault to all compute resources (Functions and Containers)
+        // Step 2: Link the vault to all compute resources (Workers, Daemons, and Containers)
         // This gives them the vault binding so alien-runtime can load secrets
         link_vault_to_compute_resources(&mut stack, secrets_vault_id)?;
 
         // Step 3: Add vault/data-read permission to all compute resource profiles
-        // This allows Functions and Containers to read secrets from the vault
+        // This allows Workers, Daemons, and Containers to read secrets from the vault
         add_vault_read_permissions_to_compute_profiles(&mut stack, secrets_vault_id)?;
 
         // Step 4: Add vault data permissions to management profile for the secrets vault.
@@ -83,7 +83,7 @@ impl StackMutation for SecretsVaultMutation {
     }
 }
 
-/// Link the secrets vault to all compute resources (Functions and Containers)
+/// Link the secrets vault to all compute resources (Workers, Daemons, and Containers)
 ///
 /// This ensures all source-based compute resources get the vault binding,
 /// allowing alien-runtime to load secrets at startup via ALIEN_SECRETS.
@@ -94,18 +94,25 @@ fn link_vault_to_compute_resources(stack: &mut Stack, vault_id: &str) -> Result<
     for (resource_id, entry) in &mut stack.resources {
         let resource_type = entry.config.resource_type();
 
-        // Check if this is a compute resource (Function or Container)
-        let is_compute =
-            resource_type == Function::RESOURCE_TYPE || resource_type == Container::RESOURCE_TYPE;
+        // Check if this is a compute resource (Worker, Daemon, or Container)
+        let is_compute = resource_type == Worker::RESOURCE_TYPE
+            || resource_type == Daemon::RESOURCE_TYPE
+            || resource_type == Container::RESOURCE_TYPE;
 
         if !is_compute {
             continue;
         }
 
-        // Get the links array (both Function and Container have .links field)
-        let links = if resource_type == Function::RESOURCE_TYPE {
-            if let Some(function) = entry.config.downcast_mut::<Function>() {
-                &mut function.links
+        // Get the links array (Worker, Daemon, and Container have .links field)
+        let links = if resource_type == Worker::RESOURCE_TYPE {
+            if let Some(worker) = entry.config.downcast_mut::<Worker>() {
+                &mut worker.links
+            } else {
+                continue;
+            }
+        } else if resource_type == Daemon::RESOURCE_TYPE {
+            if let Some(daemon) = entry.config.downcast_mut::<Daemon>() {
+                &mut daemon.links
             } else {
                 continue;
             }
@@ -134,7 +141,7 @@ fn link_vault_to_compute_resources(stack: &mut Stack, vault_id: &str) -> Result<
 
 /// Add vault/data-read permission to all compute resource permission profiles
 ///
-/// Both Functions and Containers built from source need to read secrets from the vault.
+/// Workers, Daemons, and Containers need to read secrets from the vault.
 /// This permission is added to their profiles, allowing alien-runtime to fetch secrets.
 fn add_vault_read_permissions_to_compute_profiles(
     stack: &mut Stack,
@@ -148,11 +155,16 @@ fn add_vault_read_permissions_to_compute_profiles(
             let resource_type = entry.config.resource_type();
 
             // Check if this is a compute resource
-            if resource_type == Function::RESOURCE_TYPE {
+            if resource_type == Worker::RESOURCE_TYPE {
                 entry
                     .config
-                    .downcast_ref::<Function>()
-                    .map(|f| f.permissions.clone())
+                    .downcast_ref::<Worker>()
+                    .map(|worker| worker.permissions.clone())
+            } else if resource_type == Daemon::RESOURCE_TYPE {
+                entry
+                    .config
+                    .downcast_ref::<Daemon>()
+                    .map(|daemon| daemon.permissions.clone())
             } else if resource_type == Container::RESOURCE_TYPE {
                 entry
                     .config
@@ -277,8 +289,8 @@ mod tests {
     use super::*;
     use alien_core::permissions::{ManagementPermissions, PermissionsConfig};
     use alien_core::{
-        Container, ContainerCode, EnvironmentVariablesSnapshot, ExternalBindings, Function,
-        FunctionCode, Platform, ResourceEntry, ResourceLifecycle, ResourceSpec, StackSettings,
+        Container, ContainerCode, EnvironmentVariablesSnapshot, ExternalBindings, Worker,
+        WorkerCode, Platform, ResourceEntry, ResourceLifecycle, ResourceSpec, StackSettings,
         StackState,
     };
     use indexmap::IndexMap;
@@ -304,8 +316,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_adds_secrets_vault_and_links_to_function() {
-        let function = Function::new("test-function".to_string())
-            .code(FunctionCode::Image {
+        let worker = Worker::new("test-worker".to_string())
+            .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
             })
             .permissions("test-profile".to_string())
@@ -313,9 +325,9 @@ mod tests {
 
         let mut resources = IndexMap::new();
         resources.insert(
-            "test-function".to_string(),
+            "test-worker".to_string(),
             ResourceEntry {
-                config: alien_core::Resource::new(function),
+                config: alien_core::Resource::new(worker),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
@@ -354,15 +366,15 @@ mod tests {
         let vault_entry = result_stack.resources.get("secrets").unwrap();
         assert_eq!(vault_entry.lifecycle, ResourceLifecycle::Frozen);
 
-        // Check that vault was linked to the function
-        let function_entry = result_stack.resources.get("test-function").unwrap();
-        let function = function_entry.config.downcast_ref::<Function>().unwrap();
+        // Check that vault was linked to the worker
+        let function_entry = result_stack.resources.get("test-worker").unwrap();
+        let worker = function_entry.config.downcast_ref::<Worker>().unwrap();
         assert!(
-            function.links.iter().any(|link| link.id() == "secrets"),
-            "Function should be linked to secrets vault"
+            worker.links.iter().any(|link| link.id() == "secrets"),
+            "Worker should be linked to secrets vault"
         );
 
-        // Check that vault/data-read was added to function profile
+        // Check that vault/data-read was added to worker profile
         let function_profile = result_stack
             .permissions
             .profiles
@@ -493,8 +505,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_supports_mixed_functions_and_containers() {
-        let function = Function::new("api".to_string())
-            .code(FunctionCode::Image {
+        let worker = Worker::new("api".to_string())
+            .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
             })
             .permissions("api-profile".to_string())
@@ -520,7 +532,7 @@ mod tests {
         resources.insert(
             "api".to_string(),
             ResourceEntry {
-                config: alien_core::Resource::new(function),
+                config: alien_core::Resource::new(worker),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
@@ -561,14 +573,14 @@ mod tests {
         let result_stack = mutation.mutate(stack, &stack_state, &config).await.unwrap();
 
         // Both resources should be linked to secrets vault
-        let function = result_stack
+        let worker = result_stack
             .resources
             .get("api")
             .unwrap()
             .config
-            .downcast_ref::<Function>()
+            .downcast_ref::<Worker>()
             .unwrap();
-        assert!(function.links.iter().any(|link| link.id() == "secrets"));
+        assert!(worker.links.iter().any(|link| link.id() == "secrets"));
 
         let container = result_stack
             .resources
@@ -595,8 +607,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_adds_vault_data_permissions_to_management() {
-        let function = Function::new("test-function".to_string())
-            .code(FunctionCode::Image {
+        let worker = Worker::new("test-worker".to_string())
+            .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
             })
             .permissions("test-profile".to_string())
@@ -604,9 +616,9 @@ mod tests {
 
         let mut resources = IndexMap::new();
         resources.insert(
-            "test-function".to_string(),
+            "test-worker".to_string(),
             ResourceEntry {
-                config: alien_core::Resource::new(function),
+                config: alien_core::Resource::new(worker),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
@@ -755,8 +767,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_respects_override_management_permissions() {
-        let function = Function::new("test-function".to_string())
-            .code(FunctionCode::Image {
+        let worker = Worker::new("test-worker".to_string())
+            .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
             })
             .permissions("test-profile".to_string())
@@ -764,9 +776,9 @@ mod tests {
 
         let mut resources = IndexMap::new();
         resources.insert(
-            "test-function".to_string(),
+            "test-worker".to_string(),
             ResourceEntry {
-                config: alien_core::Resource::new(function),
+                config: alien_core::Resource::new(worker),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
@@ -823,8 +835,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_skips_management_permissions_without_remote_stack_management() {
-        let function = Function::new("test-function".to_string())
-            .code(FunctionCode::Image {
+        let worker = Worker::new("test-worker".to_string())
+            .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
             })
             .permissions("test-profile".to_string())
@@ -832,9 +844,9 @@ mod tests {
 
         let mut resources = IndexMap::new();
         resources.insert(
-            "test-function".to_string(),
+            "test-worker".to_string(),
             ResourceEntry {
-                config: alien_core::Resource::new(function),
+                config: alien_core::Resource::new(worker),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,

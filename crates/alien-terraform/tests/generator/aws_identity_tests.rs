@@ -29,7 +29,7 @@ fn aws_service_account_with_permission_set() {
 fn aws_remote_stack_management_role() {
     let stack = Stack::new("acme-mgmt".to_string())
         .management(ManagementPermissions::extend(
-            PermissionProfile::new().global(["function/management", "storage/heartbeat"]),
+            PermissionProfile::new().global(["worker/management", "storage/heartbeat"]),
         ))
         .add(
             RemoteStackManagement::new("management".to_string()).build(),

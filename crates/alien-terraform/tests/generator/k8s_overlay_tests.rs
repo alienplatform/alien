@@ -11,7 +11,7 @@
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
-    AzureResourceGroup, Function, FunctionCode, Ingress, ResourceLifecycle, ServiceAccount, Stack,
+    AzureResourceGroup, Worker, WorkerCode, Ingress, ResourceLifecycle, ServiceAccount, Stack,
     StackSettings, Storage,
 };
 use alien_terraform::TerraformTarget;
@@ -80,8 +80,8 @@ fn aks_overlay_emits_workload_identity_federated_credential() {
 #[test]
 fn eks_overlay_leaves_live_workloads_to_helm() {
     let storage = Storage::new("data".to_string()).build();
-    let function = Function::new("api".to_string())
-        .code(FunctionCode::Image {
+    let function = Worker::new("api".to_string())
+        .code(WorkerCode::Image {
             image: "example.com/api:latest".to_string(),
         })
         .permissions("execution-sa".to_string())

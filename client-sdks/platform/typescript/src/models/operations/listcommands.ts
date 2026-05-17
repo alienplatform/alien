@@ -53,6 +53,10 @@ export type ListCommandsRequest = {
    */
   name?: string | undefined;
   /**
+   * Search commands by name
+   */
+  search?: string | undefined;
+  /**
    * Filter commands created after this date (ISO 8601)
    */
   createdAfter?: Date | null | undefined;
@@ -103,6 +107,7 @@ export type ListCommandsRequest$Outbound = {
   deploymentId?: string | undefined;
   state?: string | undefined;
   name?: string | undefined;
+  search?: string | undefined;
   createdAfter?: string | null | undefined;
   createdBefore?: string | null | undefined;
   include?: Array<string> | undefined;
@@ -120,6 +125,7 @@ export const ListCommandsRequest$outboundSchema: z.ZodType<
   deploymentId: z.string().optional(),
   state: State$outboundSchema.optional(),
   name: z.string().optional(),
+  search: z.string().optional(),
   createdAfter: z.nullable(z.date().transform(v => v.toISOString())).optional(),
   createdBefore: z.nullable(z.date().transform(v => v.toISOString()))
     .optional(),

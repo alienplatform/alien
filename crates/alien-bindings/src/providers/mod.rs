@@ -2,7 +2,7 @@
 pub mod artifact_registry;
 pub mod build;
 pub mod container;
-pub mod function;
+pub mod worker;
 pub mod kv;
 pub mod queue;
 pub mod service_account;

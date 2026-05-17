@@ -1,9 +1,9 @@
-//! Validates that ContainerCluster capacity groups have instance_type and profile set
+//! Validates that ComputeCluster capacity groups have instance_type and profile set
 //! for cloud platforms.
 //!
 //! This is a defense-in-depth check. For auto-generated clusters, the
-//! ContainerClusterMutation always populates these fields. This check catches the
-//! case where a user manually defines a ContainerCluster without profiles, which
+//! ComputeClusterMutation always populates these fields. This check catches the
+//! case where a user manually defines a ComputeCluster without profiles, which
 //! would cause a provisioning failure when the infra controller tries to create
 //! the managed container cluster or launch instances.
 //!
@@ -15,9 +15,9 @@
 
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
-use alien_core::{ContainerCluster, Platform, Stack};
+use alien_core::{ComputeCluster, Platform, Stack};
 
-/// Validates that all ContainerCluster capacity groups have instance_type and profile
+/// Validates that all ComputeCluster capacity groups have instance_type and profile
 /// set for cloud platforms (AWS, GCP, Azure).
 pub struct CapacityGroupProfileCheck;
 
@@ -32,23 +32,23 @@ impl CompileTimeCheck for CapacityGroupProfileCheck {
             && stack
                 .resources
                 .values()
-                .any(|entry| entry.config.downcast_ref::<ContainerCluster>().is_some())
+                .any(|entry| entry.config.downcast_ref::<ComputeCluster>().is_some())
     }
 
     async fn check(&self, stack: &Stack, _platform: Platform) -> Result<CheckResult> {
         let mut errors = Vec::new();
 
         for (resource_id, entry) in &stack.resources {
-            let Some(cluster) = entry.config.downcast_ref::<ContainerCluster>() else {
+            let Some(cluster) = entry.config.downcast_ref::<ComputeCluster>() else {
                 continue;
             };
 
             for group in &cluster.capacity_groups {
                 if group.instance_type.is_none() {
                     errors.push(format!(
-                        "ContainerCluster '{}' capacity group '{}': instance_type is not set. \
+                        "ComputeCluster '{}' capacity group '{}': instance_type is not set. \
                         This is required for cloud platforms. If using an auto-generated cluster, \
-                        this should be resolved by ContainerClusterMutation. If defining a cluster \
+                        this should be resolved by ComputeClusterMutation. If defining a cluster \
                         manually, set instance_type explicitly.",
                         resource_id, group.group_id
                     ));
@@ -56,10 +56,10 @@ impl CompileTimeCheck for CapacityGroupProfileCheck {
 
                 if group.profile.is_none() {
                     errors.push(format!(
-                        "ContainerCluster '{}' capacity group '{}': profile is not set. \
+                        "ComputeCluster '{}' capacity group '{}': profile is not set. \
                         This is required for cloud platforms (the managed container backend needs the machine profile \
                         for capacity planning). If using an auto-generated cluster, this should \
-                        be resolved by ContainerClusterMutation.",
+                        be resolved by ComputeClusterMutation.",
                         resource_id, group.group_id
                     ));
                 }
@@ -78,11 +78,11 @@ impl CompileTimeCheck for CapacityGroupProfileCheck {
 mod tests {
     use super::*;
     use alien_core::{
-        CapacityGroup, ContainerCluster, MachineProfile, Resource, ResourceEntry, ResourceLifecycle,
+        CapacityGroup, ComputeCluster, MachineProfile, Resource, ResourceEntry, ResourceLifecycle,
     };
     use indexmap::IndexMap;
 
-    fn make_stack(cluster: ContainerCluster) -> Stack {
+    fn make_stack(cluster: ComputeCluster) -> Stack {
         let mut resources = IndexMap::new();
         resources.insert(
             "compute".to_string(),
@@ -103,7 +103,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_passes_with_complete_profile() {
-        let cluster = ContainerCluster::new("compute".to_string())
+        let cluster = ComputeCluster::new("compute".to_string())
             .capacity_group(CapacityGroup {
                 group_id: "general".to_string(),
                 instance_type: Some("m7g.2xlarge".to_string()),
@@ -126,7 +126,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_fails_without_instance_type() {
-        let cluster = ContainerCluster::new("compute".to_string())
+        let cluster = ComputeCluster::new("compute".to_string())
             .capacity_group(CapacityGroup {
                 group_id: "general".to_string(),
                 instance_type: None,
@@ -150,7 +150,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_fails_without_profile() {
-        let cluster = ContainerCluster::new("compute".to_string())
+        let cluster = ComputeCluster::new("compute".to_string())
             .capacity_group(CapacityGroup {
                 group_id: "general".to_string(),
                 instance_type: Some("m7g.2xlarge".to_string()),
@@ -169,7 +169,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_skips_non_cloud_platforms() {
-        let cluster = ContainerCluster::new("compute".to_string())
+        let cluster = ComputeCluster::new("compute".to_string())
             .capacity_group(CapacityGroup {
                 group_id: "general".to_string(),
                 instance_type: None,

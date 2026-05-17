@@ -63,11 +63,6 @@ pub async fn handle_provisioning(
         })
     })?;
 
-    // Stamp deployment-config values onto ContainerCluster template inputs.
-    // Runs every step (not just during preflights) so the executor sees the latest
-    // DeploymentConfig values — e.g., a new worker image ID.
-    crate::helpers::stamp_worker_template(&mut target_stack, &config)?;
-
     // Inject environment variables into the prepared stack
     crate::helpers::inject_environment_variables(&mut target_stack, &config)?;
 
@@ -76,7 +71,7 @@ pub async fn handle_provisioning(
         crate::helpers::inject_monitoring_environment_variables(&mut target_stack, monitoring)?;
     }
 
-    // Sync secrets to vault before deploying functions.
+    // Sync secrets to vault before deploying workload resources.
     // The vault was deployed during InitialSetup and is now Running.
     // Hash check inside sync_secrets_to_vault prevents redundant cloud calls.
     let synced = crate::helpers::sync_secrets_to_vault(

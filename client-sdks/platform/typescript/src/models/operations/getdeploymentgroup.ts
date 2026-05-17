@@ -4,8 +4,16 @@
 
 import * as z from "zod/v4";
 import { safeParse } from "../../lib/schemas.js";
+import { ClosedEnum } from "../../types/enums.js";
 import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
+
+export const GetDeploymentGroupInclude = {
+  Project: "project",
+} as const;
+export type GetDeploymentGroupInclude = ClosedEnum<
+  typeof GetDeploymentGroupInclude
+>;
 
 export type GetDeploymentGroupRequest = {
   /**
@@ -16,6 +24,24 @@ export type GetDeploymentGroupRequest = {
    * Workspace name. Defaults to your last workspace (user auth) or your API key's workspace (token auth). When using an API key, if provided, must match the key's workspace.
    */
   workspace?: string | undefined;
+  /**
+   * Optional fields to include: project
+   */
+  include?: Array<GetDeploymentGroupInclude> | undefined;
+};
+
+/**
+ * Project info, included when ?include=project is used
+ */
+export type GetDeploymentGroupProject = {
+  /**
+   * Project ID
+   */
+  id: string;
+  /**
+   * Project name
+   */
+  name: string;
 };
 
 /**
@@ -44,15 +70,25 @@ export type GetDeploymentGroupResponse = {
   maxDeployments: number;
   createdAt: Date;
   /**
+   * Project info, included when ?include=project is used
+   */
+  project?: GetDeploymentGroupProject | null | undefined;
+  /**
    * Current number of deployments in this deployment group
    */
   deploymentCount: number;
 };
 
 /** @internal */
+export const GetDeploymentGroupInclude$outboundSchema: z.ZodEnum<
+  typeof GetDeploymentGroupInclude
+> = z.enum(GetDeploymentGroupInclude);
+
+/** @internal */
 export type GetDeploymentGroupRequest$Outbound = {
   id: string;
   workspace?: string | undefined;
+  include?: Array<string> | undefined;
 };
 
 /** @internal */
@@ -62,6 +98,7 @@ export const GetDeploymentGroupRequest$outboundSchema: z.ZodType<
 > = z.object({
   id: z.string(),
   workspace: z.string().optional(),
+  include: z.array(GetDeploymentGroupInclude$outboundSchema).optional(),
 });
 
 export function getDeploymentGroupRequestToJSON(
@@ -69,6 +106,25 @@ export function getDeploymentGroupRequestToJSON(
 ): string {
   return JSON.stringify(
     GetDeploymentGroupRequest$outboundSchema.parse(getDeploymentGroupRequest),
+  );
+}
+
+/** @internal */
+export const GetDeploymentGroupProject$inboundSchema: z.ZodType<
+  GetDeploymentGroupProject,
+  unknown
+> = z.object({
+  id: z.string(),
+  name: z.string(),
+});
+
+export function getDeploymentGroupProjectFromJSON(
+  jsonString: string,
+): SafeParseResult<GetDeploymentGroupProject, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => GetDeploymentGroupProject$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetDeploymentGroupProject' from JSON`,
   );
 }
 
@@ -83,6 +139,8 @@ export const GetDeploymentGroupResponse$inboundSchema: z.ZodType<
   workspaceId: z.string(),
   maxDeployments: z.int().default(100),
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  project: z.nullable(z.lazy(() => GetDeploymentGroupProject$inboundSchema))
+    .optional(),
   deploymentCount: z.int(),
 });
 

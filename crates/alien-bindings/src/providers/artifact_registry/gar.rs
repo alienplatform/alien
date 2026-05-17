@@ -309,8 +309,8 @@ impl ArtifactRegistry for GarArtifactRegistry {
         // Add service accounts based on compute service types and project numbers
         for service_type in &gcp_access.allowed_service_types {
             match service_type {
-                ComputeServiceType::Function => {
-                    // Add serverless robot service accounts for Function service type
+                ComputeServiceType::Worker => {
+                    // Add serverless robot service accounts for Worker service type
                     for project_number in &gcp_access.project_numbers {
                         let serverless_robot_email = format!(
                             "service-{}@serverless-robot-prod.iam.gserviceaccount.com",
@@ -382,8 +382,8 @@ impl ArtifactRegistry for GarArtifactRegistry {
         // Add service accounts based on compute service types and project numbers
         for service_type in &gcp_access.allowed_service_types {
             match service_type {
-                ComputeServiceType::Function => {
-                    // Add serverless robot service accounts for Function service type
+                ComputeServiceType::Worker => {
+                    // Add serverless robot service accounts for Worker service type
                     for project_number in &gcp_access.project_numbers {
                         let serverless_robot_email = format!(
                             "service-{}@serverless-robot-prod.iam.gserviceaccount.com",
@@ -464,9 +464,9 @@ impl ArtifactRegistry for GarArtifactRegistry {
                                 })
                             {
                                 project_numbers.push(project_number.to_string());
-                                // If we found a serverless robot, we can infer Function resource type
-                                if !allowed_service_types.contains(&ComputeServiceType::Function) {
-                                    allowed_service_types.push(ComputeServiceType::Function);
+                                // If we found a serverless robot, we can infer Worker resource type
+                                if !allowed_service_types.contains(&ComputeServiceType::Worker) {
+                                    allowed_service_types.push(ComputeServiceType::Worker);
                                 }
                             }
                         } else {

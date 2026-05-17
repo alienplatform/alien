@@ -7,7 +7,7 @@
 
 use crate::template::{CfExpression, CfResource};
 use alien_core::{
-    import::EmitContext, ErrorData, Function, Network, NetworkSettings, Queue, ResourceDefinition,
+    import::EmitContext, ErrorData, Worker, Network, NetworkSettings, Queue, ResourceDefinition,
     ResourceRef, ResourceType, Result, ServiceAccount, Storage, Vault, ALIEN_MANAGED_BY_TAG_KEY,
     ALIEN_MANAGED_BY_TAG_VALUE, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
 };
@@ -453,14 +453,14 @@ pub fn cf_from_json(value: JsonValue) -> Result<CfExpression> {
 pub fn storage_notification_configuration(ctx: &EmitContext<'_>) -> Result<Option<CfExpression>> {
     let mut lambda_configurations = Vec::new();
     for (_id, entry) in ctx.stack.resources() {
-        let Some(function) = entry.config.downcast_ref::<Function>() else {
+        let Some(function) = entry.config.downcast_ref::<Worker>() else {
             continue;
         };
         let Some(function_logical_id) = ctx.name_for(function.id()) else {
             continue;
         };
         for trigger in &function.triggers {
-            let alien_core::FunctionTrigger::Storage { storage, events } = trigger else {
+            let alien_core::WorkerTrigger::Storage { storage, events } = trigger else {
                 continue;
             };
             if storage.resource_type == Storage::RESOURCE_TYPE && storage.id == ctx.resource_id {
@@ -493,7 +493,7 @@ pub fn storage_notification_configuration(ctx: &EmitContext<'_>) -> Result<Optio
 pub fn storage_notification_dependencies(ctx: &EmitContext<'_>) -> Vec<String> {
     let mut dependencies = Vec::new();
     for (_id, entry) in ctx.stack.resources() {
-        let Some(function) = entry.config.downcast_ref::<Function>() else {
+        let Some(function) = entry.config.downcast_ref::<Worker>() else {
             continue;
         };
         let Some(function_logical_id) = ctx.name_for(function.id()) else {
@@ -502,7 +502,7 @@ pub fn storage_notification_dependencies(ctx: &EmitContext<'_>) -> Vec<String> {
         if function.triggers.iter().any(|trigger| {
             matches!(
                 trigger,
-                alien_core::FunctionTrigger::Storage { storage, .. }
+                alien_core::WorkerTrigger::Storage { storage, .. }
                     if storage.resource_type == Storage::RESOURCE_TYPE && storage.id == ctx.resource_id
             )
         }) {

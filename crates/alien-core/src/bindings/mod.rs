@@ -18,7 +18,7 @@ mod artifact_registry;
 mod build;
 mod container;
 mod container_apps_environment;
-mod function;
+mod worker;
 mod kv;
 mod queue;
 mod service_account;
@@ -36,9 +36,9 @@ pub use container::{
     ContainerBinding, HorizonContainerBinding, KubernetesContainerBinding, LocalContainerBinding,
 };
 pub use container_apps_environment::ContainerAppsEnvironmentBinding;
-pub use function::{
-    CloudRunFunctionBinding, ContainerAppFunctionBinding, FunctionBinding,
-    KubernetesFunctionBinding, LambdaFunctionBinding, LocalFunctionBinding,
+pub use worker::{
+    CloudRunWorkerBinding, ContainerAppWorkerBinding, WorkerBinding,
+    KubernetesWorkerBinding, LambdaWorkerBinding, LocalWorkerBinding,
 };
 pub use kv::{
     DynamodbKvBinding, FirestoreKvBinding, KvBinding, LocalKvBinding, RedisKvBinding,
@@ -131,7 +131,7 @@ impl From<JsonValue> for BindingValue<String> {
     }
 }
 
-/// Helper function to serialize binding struct as JSON for environment variables
+/// Helper worker to serialize binding struct as JSON for environment variables
 pub fn serialize_binding_as_env_var<T: Serialize>(
     binding_name: &str,
     binding: &T,
@@ -148,7 +148,7 @@ pub fn serialize_binding_as_env_var<T: Serialize>(
     Ok(env_vars)
 }
 
-/// Helper function to serialize binding struct for CloudFormation templates
+/// Helper worker to serialize binding struct for CloudFormation templates
 pub fn serialize_binding_for_template<T: Serialize>(
     binding_name: &str,
     binding: &T,
@@ -175,7 +175,7 @@ pub fn serialize_binding_for_template<T: Serialize>(
     Ok(env_vars)
 }
 
-/// Helper function to generate the environment variable name for a binding
+/// Helper worker to generate the environment variable name for a binding
 pub fn binding_env_var_name(binding_name: &str) -> String {
     format!(
         "ALIEN_{}_BINDING",
@@ -183,7 +183,7 @@ pub fn binding_env_var_name(binding_name: &str) -> String {
     )
 }
 
-/// Helper function to parse binding from environment variable
+/// Helper worker to parse binding from environment variable
 pub fn parse_binding_from_env<T: for<'de> Deserialize<'de>>(
     env: &HashMap<String, String>,
     binding_name: &str,

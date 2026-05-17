@@ -7,7 +7,7 @@ use std::time::Duration;
 use super::helpers::*;
 use crate::error::{ErrorData, Result};
 use alien_core::{
-    Function, Resource, ResourceLifecycle, ResourceRef, ResourceStatus, Stack, Storage,
+    Worker, Resource, ResourceLifecycle, ResourceRef, ResourceStatus, Stack, Storage,
 };
 use alien_error::AlienError;
 use rand::{seq::IndexedRandom, Rng};
@@ -37,7 +37,7 @@ async fn test_complex_large_dependency_graph() -> Result<()> {
         let func_name = format!("func-{}", i);
         let func = test_function(&func_name);
 
-        // Functions can depend on any storage or any *previous* function
+        // Workers can depend on any storage or any *previous* function
         let mut potential_deps: Vec<Resource> =
             storages.iter().cloned().map(Resource::new).collect();
         potential_deps.extend(functions.iter().cloned().map(Resource::new));
@@ -122,7 +122,7 @@ async fn test_complex_large_dependency_graph() -> Result<()> {
         assert_eq!(
             get_status(&state, &id),
             Some(ResourceStatus::Running),
-            "Function {} should be Running",
+            "Worker {} should be Running",
             id
         );
     }
@@ -219,7 +219,7 @@ async fn test_deep_dependency_chain() -> Result<()> {
         assert_eq!(
             get_status(&state, func_id),
             Some(ResourceStatus::Running),
-            "Function {} failed",
+            "Worker {} failed",
             func_id
         );
     }
@@ -319,9 +319,9 @@ async fn test_diamond_pattern_at_scale() -> Result<()> {
                 tip,
                 ResourceLifecycle::Live,
                 vec![
-                    ResourceRef::new(Function::RESOURCE_TYPE, &format!("left-{}", d)),
-                    ResourceRef::new(Function::RESOURCE_TYPE, &format!("middle-{}", d)),
-                    ResourceRef::new(Function::RESOURCE_TYPE, &format!("right-{}", d)),
+                    ResourceRef::new(Worker::RESOURCE_TYPE, &format!("left-{}", d)),
+                    ResourceRef::new(Worker::RESOURCE_TYPE, &format!("middle-{}", d)),
+                    ResourceRef::new(Worker::RESOURCE_TYPE, &format!("right-{}", d)),
                 ],
             );
     }

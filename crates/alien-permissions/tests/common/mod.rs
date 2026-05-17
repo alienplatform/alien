@@ -301,7 +301,7 @@ pub fn create_aws_lambda_permission_set() -> PermissionSet {
     condition.insert("StringEquals".to_string(), string_equals);
 
     PermissionSet {
-        id: "function/execute".to_string(),
+        id: "worker/execute".to_string(),
         description: "Allows executing Lambda functions and pulling container images".to_string(),
         platforms: PlatformPermissions {
             aws: Some(vec![
@@ -309,7 +309,7 @@ pub fn create_aws_lambda_permission_set() -> PermissionSet {
                     effect: Default::default(),
                     grant: PermissionGrant {
                         actions: Some(vec![
-                            "lambda:InvokeFunction".to_string(),
+                            "lambda:InvokeWorker".to_string(),
                         ]),
                         permissions: None,
                         data_actions: None,

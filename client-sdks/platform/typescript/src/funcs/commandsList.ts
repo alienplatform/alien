@@ -97,6 +97,7 @@ async function $do(
     "limit": payload?.limit,
     "name": payload?.name,
     "project": payload?.project,
+    "search": payload?.search,
     "state": payload?.state,
     "workspace": payload?.workspace,
   });

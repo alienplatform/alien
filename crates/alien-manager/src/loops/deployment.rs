@@ -497,7 +497,7 @@ impl DeploymentLoop {
     /// Derive the native image host for Lambda/Cloud Run deployments.
     ///
     /// Lambda requires ECR URIs and Cloud Run requires GAR URIs — they can't pull
-    /// Build the environment variables snapshot injected into containers/functions.
+    /// Build the environment variables snapshot injected into containers/workers.
     ///
     /// Includes:
     /// - `ALIEN_DEPLOYMENT_ID`
@@ -542,7 +542,7 @@ impl DeploymentLoop {
         }
 
         // 3. Commands configuration — only inject polling for K8s/Local.
-        // Cloud functions (Lambda, Cloud Run, Container Apps) receive commands via
+        // Cloud workers (Lambda, Cloud Run, Container Apps) receive commands via
         // platform-native push (InvokeFunction, Pub/Sub, Service Bus) — no polling needed,
         // regardless of deployment model. K8s/Local run as containers that must poll.
         let needs_polling = matches!(

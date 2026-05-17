@@ -1,6 +1,6 @@
 //! Bulk registration of Azure [`crate::ResourceImporter`] implementations.
 //!
-//! See [`crate::aws_importers`] for the parent doc. `container-cluster`
+//! See [`crate::aws_importers`] for the parent doc. `compute-cluster`
 //! intentionally lives in `alien-platform-controllers`.
 //!
 //! Azure has additional **auxiliary** resources that the preflight stamps
@@ -11,13 +11,13 @@
 
 use alien_core::{
     ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup, AzureServiceBusNamespace,
-    AzureStorageAccount, Build, Function, Kv, Network, Platform, Queue, RemoteStackManagement,
+    AzureStorageAccount, Build, Worker, Kv, Network, Platform, Queue, RemoteStackManagement,
     ServiceAccount, ServiceActivation, Storage, Vault,
 };
 
 use crate::artifact_registry::AzureArtifactRegistryImporter;
 use crate::build::AzureBuildImporter;
-use crate::function::AzureFunctionImporter;
+use crate::worker::AzureWorkerImporter;
 use crate::kv::AzureKvImporter;
 use crate::network::AzureNetworkImporter;
 use crate::queue::AzureQueueImporter;
@@ -65,9 +65,9 @@ pub fn register(registry: &mut ImporterRegistry) {
             AzureArtifactRegistryImporter,
         )
         .register(
-            Function::RESOURCE_TYPE,
+            Worker::RESOURCE_TYPE,
             Platform::Azure,
-            AzureFunctionImporter,
+            AzureWorkerImporter,
         )
         .register(
             ServiceActivation::RESOURCE_TYPE,

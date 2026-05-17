@@ -564,12 +564,12 @@ export type DataCleaningUpStack = {
   type: "CleaningUpStack";
 };
 
-export type DataRunningTestFunction = {
+export type DataRunningTestWorker = {
   /**
    * Name of the stack being tested
    */
   stackName: string;
-  type: "RunningTestFunction";
+  type: "RunningTestWorker";
 };
 
 export type DataDeployingStack = {
@@ -870,13 +870,6 @@ export type EventResources = {
   dependencies?: Array<EventDependency> | undefined;
   error?: ErrorNextState | any | null | undefined;
   /**
-   * True if the resource was provisioned by an external system (e.g., CloudFormation).
-   *
-   * @remarks
-   * Defaults to false, indicating dynamic provisioning by the executor.
-   */
-  isExternallyProvisioned?: boolean | undefined;
-  /**
    * Stores the controller state that failed, used for manual retry operations.
    *
    * @remarks
@@ -905,7 +898,7 @@ export type EventResources = {
    */
   status: EventStatus;
   /**
-   * The high-level type of the resource (e.g., Function::RESOURCE_TYPE, Storage::RESOURCE_TYPE).
+   * The high-level type of the resource (e.g., Worker::RESOURCE_TYPE, Storage::RESOURCE_TYPE).
    */
   type: string;
 };
@@ -966,7 +959,7 @@ export type DataPushingResource = {
    */
   resourceName: string;
   /**
-   * Type of the resource: "function", "container", "worker"
+   * Type of the resource: "worker", "container"
    */
   resourceType: string;
   type: "PushingResource";
@@ -1039,7 +1032,7 @@ export type DataBuildingResource = {
    */
   resourceName: string;
   /**
-   * Type of the resource: "function", "container", "worker"
+   * Type of the resource: "worker", "container"
    */
   resourceType: string;
   type: "BuildingResource";
@@ -1107,7 +1100,7 @@ export type Data =
   | DataDebuggingAgent
   | DataPreparingEnvironment
   | DataDeployingStack
-  | DataRunningTestFunction
+  | DataRunningTestWorker
   | DataCleaningUpStack
   | DataCleaningUpEnvironment
   | DataSettingUpPlatformContext
@@ -1291,7 +1284,7 @@ export type Event = {
     | DataDebuggingAgent
     | DataPreparingEnvironment
     | DataDeployingStack
-    | DataRunningTestFunction
+    | DataRunningTestWorker
     | DataCleaningUpStack
     | DataCleaningUpEnvironment
     | DataSettingUpPlatformContext
@@ -1844,21 +1837,21 @@ export function dataCleaningUpStackFromJSON(
 }
 
 /** @internal */
-export const DataRunningTestFunction$inboundSchema: z.ZodType<
-  DataRunningTestFunction,
+export const DataRunningTestWorker$inboundSchema: z.ZodType<
+  DataRunningTestWorker,
   unknown
 > = z.object({
   stackName: z.string(),
-  type: z.literal("RunningTestFunction"),
+  type: z.literal("RunningTestWorker"),
 });
 
-export function dataRunningTestFunctionFromJSON(
+export function dataRunningTestWorkerFromJSON(
   jsonString: string,
-): SafeParseResult<DataRunningTestFunction, SDKValidationError> {
+): SafeParseResult<DataRunningTestWorker, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataRunningTestFunction$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataRunningTestFunction' from JSON`,
+    (x) => DataRunningTestWorker$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataRunningTestWorker' from JSON`,
   );
 }
 
@@ -2212,7 +2205,6 @@ export const EventResources$inboundSchema: z.ZodType<EventResources, unknown> =
     error: z.nullable(
       z.union([z.lazy(() => ErrorNextState$inboundSchema), z.any()]),
     ).optional(),
-    isExternallyProvisioned: z.boolean().optional(),
     lastFailedState: z.nullable(z.any()).optional(),
     lifecycle: z.nullable(z.union([EventLifecycleEnum$inboundSchema, z.any()]))
       .optional(),
@@ -2566,7 +2558,7 @@ export const Data$inboundSchema: z.ZodType<Data, unknown> = z.union([
   z.lazy(() => DataDebuggingAgent$inboundSchema),
   z.lazy(() => DataPreparingEnvironment$inboundSchema),
   z.lazy(() => DataDeployingStack$inboundSchema),
-  z.lazy(() => DataRunningTestFunction$inboundSchema),
+  z.lazy(() => DataRunningTestWorker$inboundSchema),
   z.lazy(() => DataCleaningUpStack$inboundSchema),
   z.lazy(() => DataCleaningUpEnvironment$inboundSchema),
   z.lazy(() => DataSettingUpPlatformContext$inboundSchema),
@@ -2730,7 +2722,7 @@ export const Event$inboundSchema: z.ZodType<Event, unknown> = z.object({
     z.lazy(() => DataDebuggingAgent$inboundSchema),
     z.lazy(() => DataPreparingEnvironment$inboundSchema),
     z.lazy(() => DataDeployingStack$inboundSchema),
-    z.lazy(() => DataRunningTestFunction$inboundSchema),
+    z.lazy(() => DataRunningTestWorker$inboundSchema),
     z.lazy(() => DataCleaningUpStack$inboundSchema),
     z.lazy(() => DataCleaningUpEnvironment$inboundSchema),
     z.lazy(() => DataSettingUpPlatformContext$inboundSchema),

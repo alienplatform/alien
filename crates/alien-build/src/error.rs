@@ -50,29 +50,29 @@ pub enum ErrorData {
     /// Specified file or directory path not found.
     #[error(
         code = "PATH_NOT_FOUND",
-        message = "Path '{path}' specified in function '{function_name}' does not exist",
+        message = "Path '{path}' specified in resource '{resource_name}' does not exist",
         retryable = "false",
         internal = "false"
     )]
     PathNotFound {
         /// The path that was not found
         path: String,
-        /// Name of the function that referenced the path
-        function_name: String,
+        /// Name of the resource that referenced the path
+        resource_name: String,
     },
 
     /// Glob pattern is invalid or cannot be processed.
     #[error(
         code = "INVALID_GLOB_PATTERN",
-        message = "Invalid glob pattern '{pattern}' for function '{function_name}': {reason}",
+        message = "Invalid glob pattern '{pattern}' for resource '{resource_name}': {reason}",
         retryable = "false",
         internal = "false"
     )]
     InvalidGlobPattern {
         /// The invalid glob pattern
         pattern: String,
-        /// Name of the function that used the pattern
-        function_name: String,
+        /// Name of the resource that used the pattern
+        resource_name: String,
         /// Reason why the pattern is invalid
         reason: String,
     },
@@ -94,13 +94,13 @@ pub enum ErrorData {
     /// Container image build operation failed.
     #[error(
         code = "IMAGE_BUILD_FAILED",
-        message = "Failed to build container image for function '{function_name}': {reason}",
+        message = "Failed to build container image for resource '{resource_name}': {reason}",
         retryable = "true",
         internal = "false"
     )]
     ImageBuildFailed {
-        /// Name of the function being built
-        function_name: String,
+        /// Name of the resource being built
+        resource_name: String,
         /// Reason for the build failure
         reason: String,
         /// Full build output (stdout and stderr combined)

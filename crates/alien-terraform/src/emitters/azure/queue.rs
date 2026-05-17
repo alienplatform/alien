@@ -19,7 +19,7 @@ use crate::{
     expr,
 };
 use alien_core::{
-    import::EmitContext, AzureServiceBusNamespace, ErrorData, Function, FunctionTrigger, Queue,
+    import::EmitContext, AzureServiceBusNamespace, ErrorData, Worker, WorkerTrigger, Queue,
     Result,
 };
 use alien_error::AlienError;
@@ -127,13 +127,13 @@ fn parent_namespace_label<'a>(ctx: &EmitContext<'a>) -> Result<&'a str> {
 fn lock_duration_for(ctx: &EmitContext<'_>) -> u32 {
     let mut max_function_timeout = 0u32;
     for (_id, entry) in ctx.stack.resources() {
-        let Some(function) = entry.config.downcast_ref::<Function>() else {
+        let Some(function) = entry.config.downcast_ref::<Worker>() else {
             continue;
         };
         if function.triggers.iter().any(|trigger| {
             matches!(
                 trigger,
-                FunctionTrigger::Queue { queue }
+                WorkerTrigger::Queue { queue }
                     if queue.resource_type == Queue::RESOURCE_TYPE && queue.id == ctx.resource_id
             )
         }) {

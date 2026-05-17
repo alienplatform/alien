@@ -12,7 +12,7 @@ packages/core/
 │   │   └── schemas/       # JSON schemas
 │   ├── stack.ts           # Stack builder class
 │   ├── resource.ts        # Base Resource class
-│   ├── function.ts        # Function resource builder
+│   ├── function.ts        # Worker resource builder
 │   ├── storage.ts         # Storage resource builder
 │   ├── kv.ts              # KV resource builder
 │   ├── queue.ts           # Queue resource builder
@@ -61,10 +61,10 @@ When you modify types in `alien-core` (Rust), run `pnpm generate` to update Type
 The `Stack` class is a builder for defining resources:
 
 ```typescript
-import { Stack, Storage, Function } from "@alienplatform/core"
+import { Stack, Storage, Worker } from "@alienplatform/core"
 
 const storage = new Storage("data").build()
-const fn = new Function("processor")
+const fn = new Worker("processor")
   .code({ type: "image", image: "my-image:latest" })
   .link(storage)
   .build()

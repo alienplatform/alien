@@ -2,7 +2,7 @@
 
 Build system for Alien applications. Takes a stack with source code, compiles it, assembles OCI images (via `dockdash`), and pushes them to container registries.
 
-Main entry point: `build_stack(stack, settings)` — processes `FunctionCode::Source` into `FunctionCode::Image`, deduplicating builds across resources that share the same source.
+Main entry point: `build_stack(stack, settings)` — processes `WorkerCode::Source` into `WorkerCode::Image`, deduplicating builds across resources that share the same source.
 
 ## Toolchains
 

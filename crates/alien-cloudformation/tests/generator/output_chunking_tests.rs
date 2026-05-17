@@ -12,7 +12,7 @@ use alien_cloudformation::{
     RegistrationMode,
 };
 use alien_core::{
-    Function, FunctionCode, ResourceLifecycle, Stack, StackSettings, ToolchainConfig,
+    Worker, WorkerCode, ResourceLifecycle, Stack, StackSettings, ToolchainConfig,
 };
 
 const OUTPUT_RESOURCES: &str = "DeploymentResources";
@@ -95,8 +95,8 @@ fn small_payload_emits_single_resources_output() {
 
 #[test]
 fn source_function_returns_typed_error() {
-    let function = Function::new("source-fn".to_string())
-        .code(FunctionCode::Source {
+    let function = Worker::new("source-fn".to_string())
+        .code(WorkerCode::Source {
             src: ".".to_string(),
             toolchain: ToolchainConfig::Rust {
                 binary_name: "app".to_string(),

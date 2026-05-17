@@ -4,16 +4,16 @@
 //! Platform::Aws)` pair maps to one of the per-resource importers under
 //! `crate::<resource>::Aws<Resource>Importer`.
 //!
-//! `container-cluster` is intentionally absent — that controller lives in
+//! `compute-cluster` is intentionally absent — that controller lives in
 //! `alien-platform-controllers` (per the OSS / platform split) and is added
 //! by `register_platform_importers` at boot.
 
-use alien_core::{ArtifactRegistry, Build, Function, Kv, Network, Platform, Queue, Storage, Vault};
+use alien_core::{ArtifactRegistry, Build, Worker, Kv, Network, Platform, Queue, Storage, Vault};
 use alien_core::{RemoteStackManagement, ServiceAccount};
 
 use crate::artifact_registry::AwsArtifactRegistryImporter;
 use crate::build::AwsBuildImporter;
-use crate::function::AwsFunctionImporter;
+use crate::worker::AwsWorkerImporter;
 use crate::kv::AwsKvImporter;
 use crate::network::AwsNetworkImporter;
 use crate::queue::AwsQueueImporter;
@@ -47,5 +47,5 @@ pub fn register(registry: &mut ImporterRegistry) {
             Platform::Aws,
             AwsArtifactRegistryImporter,
         )
-        .register(Function::RESOURCE_TYPE, Platform::Aws, AwsFunctionImporter);
+        .register(Worker::RESOURCE_TYPE, Platform::Aws, AwsWorkerImporter);
 }

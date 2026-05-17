@@ -115,7 +115,7 @@ pub struct AgentSyncRequest {
 pub struct AgentSyncResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target: Option<serde_json::Value>,
-    /// Public URL for the commands API. Cloud-deployed functions use this
+    /// Public URL for the commands API. Cloud-deployed workers use this
     /// to poll for pending commands instead of the agent's local sync URL.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub commands_url: Option<String>,

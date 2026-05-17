@@ -6,7 +6,7 @@ use crate::ui::{command, contextual_heading, dim_label, success_line};
 use crate::{ErrorData, Result};
 use alien_build::settings::PushSettings;
 use alien_core::{
-    alien_event, AlienEvent, Container, ContainerCode, Function, FunctionCode, Platform, Stack,
+    alien_event, AlienEvent, Container, ContainerCode, Worker, WorkerCode, Platform, Stack,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_manager_api::types::{
@@ -965,8 +965,8 @@ fn validate_platforms_against_stack(platforms: &[String], stack: &Stack) -> Resu
 /// Used with `--prebuilt` to ensure images were already pushed externally.
 fn validate_prebuilt_stack(stack: &Stack) -> Result<()> {
     for (_resource_id, resource_entry) in stack.resources() {
-        if let Some(func) = resource_entry.config.downcast_ref::<Function>() {
-            if let FunctionCode::Image { ref image } = func.code {
+        if let Some(func) = resource_entry.config.downcast_ref::<Worker>() {
+            if let WorkerCode::Image { ref image } = func.code {
                 let path = PathBuf::from(image);
                 if path.exists() && path.is_dir() {
                     return Err(AlienError::new(ErrorData::ValidationError {
@@ -1085,15 +1085,15 @@ fn apply_push_cache(stack: &mut Stack, cache: &HashMap<String, String>) -> usize
     let mut hits = 0;
 
     for (_resource_id, resource_entry) in stack.resources_mut() {
-        if let Some(func) = resource_entry.config.downcast_mut::<Function>() {
-            if let FunctionCode::Image { ref image } = func.code {
+        if let Some(func) = resource_entry.config.downcast_mut::<Worker>() {
+            if let WorkerCode::Image { ref image } = func.code {
                 if let Some(key) = cache_key_from_path(image) {
                     if let Some(cached_uri) = cache.get(&key) {
                         info!(
                             "Push cache hit for function '{}': {} → {}",
                             func.id, key, cached_uri
                         );
-                        func.code = FunctionCode::Image {
+                        func.code = WorkerCode::Image {
                             image: cached_uri.clone(),
                         };
                         hits += 1;
@@ -1132,8 +1132,8 @@ fn collect_push_cache_entries(
     let pre_push_images: HashMap<String, String> = pre_push_stack
         .resources()
         .filter_map(|(id, entry)| {
-            if let Some(func) = entry.config.downcast_ref::<Function>() {
-                if let FunctionCode::Image { ref image } = func.code {
+            if let Some(func) = entry.config.downcast_ref::<Worker>() {
+                if let WorkerCode::Image { ref image } = func.code {
                     return Some((id.clone(), image.clone()));
                 }
             }
@@ -1147,8 +1147,8 @@ fn collect_push_cache_entries(
         .collect();
 
     for (resource_id, resource_entry) in stack.resources() {
-        let pushed_uri = if let Some(func) = resource_entry.config.downcast_ref::<Function>() {
-            if let FunctionCode::Image { ref image } = func.code {
+        let pushed_uri = if let Some(func) = resource_entry.config.downcast_ref::<Worker>() {
+            if let WorkerCode::Image { ref image } = func.code {
                 Some(image.clone())
             } else {
                 None

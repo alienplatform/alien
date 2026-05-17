@@ -20,10 +20,10 @@ use crate::manager::TestManager;
 // Enums
 // ---------------------------------------------------------------------------
 
-/// Deployment model: push (serverless function) or pull (container / agent).
+/// Deployment model: push (serverless worker) or pull (container / agent).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeploymentModel {
-    /// Serverless / function-based deployment (Lambda, Cloud Run function, etc.)
+    /// Serverless / worker-based deployment (Lambda, Cloud Run worker, etc.)
     Push,
     /// Container-based deployment (managed cloud, Kubernetes, local Docker)
     Pull,
@@ -130,8 +130,8 @@ pub enum Binding {
     Vault,
     /// Message queue (SQS, Pub/Sub, Service Bus)
     Queue,
-    /// Direct function-to-function invocation
-    Function,
+    /// Direct worker-to-worker invocation
+    Worker,
     /// Container-to-container communication
     Container,
     /// Background tasks that outlive the request
@@ -165,7 +165,7 @@ impl std::fmt::Display for Binding {
             Binding::Kv => write!(f, "kv"),
             Binding::Vault => write!(f, "vault"),
             Binding::Queue => write!(f, "queue"),
-            Binding::Function => write!(f, "function"),
+            Binding::Worker => write!(f, "worker"),
             Binding::Container => write!(f, "container"),
             Binding::WaitUntil => write!(f, "wait-until"),
             Binding::Health => write!(f, "health"),
@@ -232,11 +232,11 @@ pub fn supported_bindings(platform: Platform, model: DeploymentModel) -> Vec<Bin
         _ => {}
     }
 
-    // Function binding only for push (serverless) deployments on cloud
+    // Worker binding only for push (serverless) deployments on cloud
     if model == DeploymentModel::Push {
         match platform {
             Platform::Aws | Platform::Gcp | Platform::Azure => {
-                bindings.push(Binding::Function);
+                bindings.push(Binding::Worker);
             }
             _ => {}
         }
@@ -257,7 +257,7 @@ pub fn exclusion_reason(
     language: Language,
 ) -> Option<&'static str> {
     match binding {
-        Binding::Function => Some("Function binding test app endpoint not yet implemented"),
+        Binding::Worker => Some("Worker binding test app endpoint not yet implemented"),
         Binding::Container => Some("Container binding requires managed container infrastructure"),
         Binding::Build => Some("Build binding not yet stable across all platforms"),
         Binding::ServiceAccount if platform == Platform::Local => {
@@ -432,7 +432,7 @@ impl TestContext {
 /// Evaluate a TypeScript alien config file using `bun` and return the Stack JSON.
 ///
 /// The config file (alien.ts) uses the `@alienplatform/core` SDK to define
-/// stacks. This function evaluates it via bun and captures the serialized
+/// stacks. This worker evaluates it via bun and captures the serialized
 /// JSON output.
 pub(crate) async fn load_stack_json(
     app_dir: &std::path::Path,
@@ -618,15 +618,15 @@ pub(crate) fn e2e_test_apps_root() -> anyhow::Result<PathBuf> {
 
 /// Deploy a test app to the given platform with the specified model and language.
 ///
-/// Extract ECR image tags from a pushed stack's function resources.
+/// Extract ECR image tags from a pushed stack's worker resources.
 pub(crate) fn extract_ecr_image_tags(stack: &Stack) -> Vec<String> {
-    use alien_core::Function;
+    use alien_core::Worker;
 
     stack
         .resources()
         .filter_map(|(_, entry)| {
-            let func = entry.config.downcast_ref::<Function>()?;
-            if let alien_core::FunctionCode::Image { ref image } = func.code {
+            let func = entry.config.downcast_ref::<Worker>()?;
+            if let alien_core::WorkerCode::Image { ref image } = func.code {
                 // Image URI: "123.dkr.ecr.us-east-1.amazonaws.com/repo:tag"
                 image.split(':').last().map(|t| t.to_string())
             } else {
@@ -678,7 +678,7 @@ pub async fn deploy_test_app(
     //
     // This mirrors the production flow: `alien build` compiles source into OCI
     // image tarballs, then `alien release` pushes them to the cloud registry.
-    // After push, the stack has FunctionCode::Image with pushed URIs.
+    // After push, the stack has WorkerCode::Image with pushed URIs.
     let platform_key = platform.as_str();
     let stack_json = stack_by_platform_json
         .get(platform_key)

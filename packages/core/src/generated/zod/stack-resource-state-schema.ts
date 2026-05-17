@@ -40,7 +40,7 @@ get "previousConfig"(){
 get "status"(){
                 return ResourceStatusSchema.describe("Represents the high-level status of a resource during its lifecycle.")
               },
-"type": z.string().describe("The high-level type of the resource (e.g., Function::RESOURCE_TYPE, Storage::RESOURCE_TYPE).")
+"type": z.string().describe("The high-level type of the resource (e.g., Worker::RESOURCE_TYPE, Storage::RESOURCE_TYPE).")
     }).describe("Represents the state of a single resource within the stack for a specific platform.")
 
 export type StackResourceState = z.infer<typeof StackResourceStateSchema>

@@ -17,7 +17,7 @@ use alien_core::{
     },
     AwsManagementConfig, AzureClientConfig, AzureCredentials, AzureManagementConfig,
     DeploymentConfig, DeploymentModel as StackDeploymentModel, EnvironmentVariablesSnapshot,
-    ExternalBinding, ExternalBindings, Function, FunctionCode, GcpClientConfig, GcpCredentials,
+    ExternalBinding, ExternalBindings, Worker, WorkerCode, GcpClientConfig, GcpCredentials,
     GcpImpersonationConfig, GcpManagementConfig, ManagementConfig, Platform, Stack, StackSettings,
     StackState, Vault,
 };
@@ -625,10 +625,10 @@ fn rewrite_push_distribution_images(
     };
 
     for (_id, entry) in stack.resources_mut() {
-        let Some(function) = entry.config.downcast_mut::<Function>() else {
+        let Some(worker) = entry.config.downcast_mut::<Worker>() else {
             continue;
         };
-        let FunctionCode::Image { image } = &mut function.code else {
+        let WorkerCode::Image { image } = &mut worker.code else {
             continue;
         };
         if let Some(rewritten) =
@@ -1485,7 +1485,7 @@ fn gcp_management_permission_probe_should_retry(error: &alien_gcp_clients::Error
 
 /// Terraform can finish before Azure federated credentials and role
 /// assignments are visible to ARM. Probe the imported management identity
-/// against the first live function dependency so deployment starts only after
+/// against the first live worker dependency so deployment starts only after
 /// the same identity can perform the Service Bus control-plane operation.
 async fn wait_for_azure_management_permissions(
     config: &TestConfig,
@@ -1966,16 +1966,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn gcp_distribution_render_grants_live_function_provision() {
+    async fn gcp_distribution_render_grants_live_worker_provision() {
         let stack = Stack::new("distribution-gcp".to_string())
             .permission(
                 "execution",
-                PermissionProfile::new().global(["function/execute"]),
+                PermissionProfile::new().global(["worker/execute"]),
             )
             .add(
-                Function::new("alien-rs-fn".to_string())
+                Worker::new("alien-rs-fn".to_string())
                     .permissions("execution".to_string())
-                    .code(FunctionCode::Image {
+                    .code(WorkerCode::Image {
                         image: "us-central1-docker.pkg.dev/project/repo/alien-rs-fn:tag"
                             .to_string(),
                     })
@@ -2005,7 +2005,7 @@ mod tests {
             .collect::<String>();
 
         assert!(rendered
-            .contains("google_project_iam_custom_role.remote_stack_management_functionprovision"));
+            .contains("google_project_iam_custom_role.remote_stack_management_workerprovision"));
         assert!(rendered.contains("\"resourcemanager.projects.get\""));
         assert!(rendered.contains("\"run.services.create\""));
         assert!(rendered.contains("\"iam.serviceAccounts.actAs\""));

@@ -7,7 +7,7 @@
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
     ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup, AzureServiceBusNamespace,
-    AzureStorageAccount, Build, Function, FunctionCode, Ingress, Kv, ManagementPermissions,
+    AzureStorageAccount, Build, Worker, WorkerCode, Ingress, Kv, ManagementPermissions,
     Network, NetworkSettings, PermissionProfile, Queue, RemoteStackManagement, ResourceLifecycle,
     ServiceAccount, Stack, StackSettings, Storage, UpdatesMode, Vault,
 };
@@ -42,8 +42,8 @@ fn azure_full_stack_renders_audit_ready_module() {
     let metadata = Kv::new("metadata".to_string()).build();
     let secrets = Vault::new("secrets".to_string()).build();
 
-    let public_api = Function::new("public-api".to_string())
-        .code(FunctionCode::Image {
+    let public_api = Worker::new("public-api".to_string())
+        .code(WorkerCode::Image {
             image: "acmeprod.azurecr.io/api:1.2.3".to_string(),
         })
         .permissions("execution".to_string())
@@ -56,8 +56,8 @@ fn azure_full_stack_renders_audit_ready_module() {
         .link(&secrets)
         .build();
 
-    let worker = Function::new("worker".to_string())
-        .code(FunctionCode::Image {
+    let worker = Worker::new("worker".to_string())
+        .code(WorkerCode::Image {
             image: "acmeprod.azurecr.io/worker:1.2.3".to_string(),
         })
         .permissions("execution".to_string())
@@ -67,7 +67,7 @@ fn azure_full_stack_renders_audit_ready_module() {
         .management(ManagementPermissions::extend(
             PermissionProfile::new()
                 .global([
-                    "function/management",
+                    "worker/management",
                     "storage/heartbeat",
                     "queue/heartbeat",
                     "kv/heartbeat",

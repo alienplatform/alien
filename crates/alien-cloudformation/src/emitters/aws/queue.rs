@@ -5,7 +5,7 @@ use crate::{
     emitters::aws::helpers::{required_logical_id, resource_config, tags},
     template::{CfExpression, CfResource},
 };
-use alien_core::{import::EmitContext, Function, FunctionTrigger, Queue, Result};
+use alien_core::{import::EmitContext, Worker, WorkerTrigger, Queue, Result};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AwsQueueEmitter;
@@ -56,14 +56,14 @@ fn visibility_timeout(ctx: &EmitContext<'_>) -> u32 {
     let mut max_function_timeout = 0u32;
 
     for (_id, entry) in ctx.stack.resources() {
-        let Some(function) = entry.config.downcast_ref::<Function>() else {
+        let Some(function) = entry.config.downcast_ref::<Worker>() else {
             continue;
         };
 
         if function.triggers.iter().any(|trigger| {
             matches!(
                 trigger,
-                FunctionTrigger::Queue { queue }
+                WorkerTrigger::Queue { queue }
                     if queue.resource_type == Queue::RESOURCE_TYPE && queue.id == ctx.resource_id
             )
         }) {

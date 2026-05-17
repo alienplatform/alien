@@ -3,7 +3,7 @@
 use super::helpers::*;
 use crate::error::Result;
 use alien_core::{
-    Function, Resource, ResourceLifecycle, ResourceRef, ResourceStatus, Stack, Storage,
+    Worker, Resource, ResourceLifecycle, ResourceRef, ResourceStatus, Stack, Storage,
 };
 
 /// Tests that filtering to Frozen only processes Frozen resources.
@@ -241,7 +241,7 @@ async fn test_transitive_dependencies_across_lifecycles() -> Result<()> {
         .add_with_dependencies(
             resource_c.clone(),
             ResourceLifecycle::Frozen,
-            vec![ResourceRef::new(Function::RESOURCE_TYPE, "resource-b")],
+            vec![ResourceRef::new(Worker::RESOURCE_TYPE, "resource-b")],
         )
         .build();
 
@@ -437,14 +437,14 @@ async fn test_complex_dependency_graph_with_lifecycles() -> Result<()> {
             resource_d.clone(),
             ResourceLifecycle::Frozen,
             vec![
-                ResourceRef::new(Function::RESOURCE_TYPE, "resource-b"),
-                ResourceRef::new(Function::RESOURCE_TYPE, "resource-c"),
+                ResourceRef::new(Worker::RESOURCE_TYPE, "resource-b"),
+                ResourceRef::new(Worker::RESOURCE_TYPE, "resource-c"),
             ],
         )
         .add_with_dependencies(
             resource_e.clone(),
             ResourceLifecycle::Live,
-            vec![ResourceRef::new(Function::RESOURCE_TYPE, "resource-d")],
+            vec![ResourceRef::new(Worker::RESOURCE_TYPE, "resource-d")],
         )
         .build();
 

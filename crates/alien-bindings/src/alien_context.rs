@@ -17,7 +17,7 @@ use crate::error::{ErrorData, Result};
 use crate::wait_until::WaitUntilContext;
 use crate::{BindingsMode, BindingsProvider, BindingsProviderApi, WaitUntil};
 use alien_core::{
-    ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME, ENV_ALIEN_CURRENT_FUNCTION_BINDING_NAME,
+    ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME, ENV_ALIEN_CURRENT_WORKER_BINDING_NAME,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 
@@ -806,14 +806,14 @@ impl AlienContext {
         self.wait_until_context.get_task_count().await
     }
 
-    /// Gets the current function binding if available.
-    pub async fn get_current_function(&self) -> Result<Option<Arc<dyn crate::traits::Function>>> {
-        if let Some(current_function_name) =
-            self.env_vars.get(ENV_ALIEN_CURRENT_FUNCTION_BINDING_NAME)
+    /// Gets the current worker binding if available.
+    pub async fn get_current_worker(&self) -> Result<Option<Arc<dyn crate::traits::Worker>>> {
+        if let Some(current_worker_name) =
+            self.env_vars.get(ENV_ALIEN_CURRENT_WORKER_BINDING_NAME)
         {
             Ok(Some(
                 self.bindings_provider
-                    .load_function(current_function_name)
+                    .load_worker(current_worker_name)
                     .await?,
             ))
         } else {

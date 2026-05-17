@@ -91,6 +91,8 @@ async function $do(
   const path = pathToFunc("/v1/managers")();
 
   const query = encodeFormQuery({
+    "limit": payload?.limit,
+    "search": payload?.search,
     "workspace": payload?.workspace,
   });
 

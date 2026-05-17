@@ -10,12 +10,12 @@ import { StackResourceState } from "@alienplatform/manager-api/models";
 let value: StackResourceState = {
   config: {
     id: "<id>",
-    type: "function",
+    type: "worker",
   },
   dependencies: [
     {
       id: "<id>",
-      type: "function",
+      type: "worker",
     },
   ],
   error: {
@@ -24,11 +24,11 @@ let value: StackResourceState = {
     message: "Item not found.",
   },
   outputs: {
-    type: "function",
+    type: "worker",
   },
   previousConfig: {
     id: "<id>",
-    type: "function",
+    type: "worker",
   },
   status: "updating",
   type: "<value>",
@@ -50,4 +50,4 @@ let value: StackResourceState = {
 | `remoteBindingParams`                                                                                                                                                                                                                                                                             | *any*                                                                                                                                                                                                                                                                                             | :heavy_minus_sign:                                                                                                                                                                                                                                                                                | Binding parameters for remote access.<br/>Only populated when the resource has `remote_access: true` in its ResourceEntry.<br/>This is the JSON serialization of the binding configuration (e.g., StorageBinding, VaultBinding).<br/>Populated by controllers during provisioning using get_binding_params(). |
 | `retryAttempt`                                                                                                                                                                                                                                                                                    | *number*                                                                                                                                                                                                                                                                                          | :heavy_minus_sign:                                                                                                                                                                                                                                                                                | Tracks consecutive retry attempts for the current state transition.                                                                                                                                                                                                                               |
 | `status`                                                                                                                                                                                                                                                                                          | [models.ResourceStatus](../models/resourcestatus.md)                                                                                                                                                                                                                                              | :heavy_check_mark:                                                                                                                                                                                                                                                                                | Represents the high-level status of a resource during its lifecycle.                                                                                                                                                                                                                              |
-| `type`                                                                                                                                                                                                                                                                                            | *string*                                                                                                                                                                                                                                                                                          | :heavy_check_mark:                                                                                                                                                                                                                                                                                | The high-level type of the resource (e.g., Function::RESOURCE_TYPE, Storage::RESOURCE_TYPE).                                                                                                                                                                                                      |
+| `type`                                                                                                                                                                                                                                                                                            | *string*                                                                                                                                                                                                                                                                                          | :heavy_check_mark:                                                                                                                                                                                                                                                                                | The high-level type of the resource (e.g., Worker::RESOURCE_TYPE, Storage::RESOURCE_TYPE).                                                                                                                                                                                                        |

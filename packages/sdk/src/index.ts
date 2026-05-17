@@ -2,7 +2,7 @@
  * @alienplatform/sdk - TypeScript SDK for Alien bindings.
  *
  * This package provides type-safe access to Alien resources including
- * Storage, KV, Queue, Vault, Build, ArtifactRegistry, Function, and ServiceAccount.
+ * Storage, KV, Queue, Vault, Build, ArtifactRegistry, Worker, and ServiceAccount.
  *
  * @example
  * ```typescript
@@ -29,7 +29,7 @@
 export { AlienContext } from "./context.js"
 
 // ============================================================================
-// Global Convenience Functions
+// Global Convenience Bindings
 // ============================================================================
 
 export {
@@ -40,7 +40,7 @@ export {
   vault,
   build,
   artifactRegistry,
-  func,
+  worker,
   serviceAccount,
   // Event handlers
   onStorageEvent,
@@ -71,7 +71,7 @@ export { Queue } from "./bindings/queue.js"
 export { Vault } from "./bindings/vault.js"
 export { Build } from "./bindings/build.js"
 export { ArtifactRegistry } from "./bindings/artifact-registry.js"
-export { FunctionBinding } from "./bindings/function.js"
+export { WorkerBinding } from "./bindings/worker.js"
 export { ServiceAccount } from "./bindings/service-account.js"
 
 // ============================================================================
@@ -105,9 +105,9 @@ export type {
   GcpCrossAccountAccess,
   CrossAccountAccess,
   CrossAccountPermissions,
-  // Function
-  FunctionInvokeRequest,
-  FunctionInvokeResponse,
+  // Worker
+  WorkerInvokeRequest,
+  WorkerInvokeResponse,
   // Service Account
   ServiceAccountInfo,
   AwsServiceAccountInfo,

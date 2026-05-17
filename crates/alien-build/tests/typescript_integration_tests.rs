@@ -3,7 +3,7 @@ use alien_build::{
     settings::{BuildSettings, PlatformBuildSettings, PushSettings},
 };
 use alien_core::{
-    permissions::PermissionProfile, Function, FunctionCode, Ingress, Platform, ResourceLifecycle,
+    permissions::PermissionProfile, Worker, WorkerCode, Ingress, Platform, ResourceLifecycle,
     Storage,
 };
 use dockdash::{test_utils::setup_local_registry, ClientProtocol, PushOptions, RegistryAuth};
@@ -68,8 +68,8 @@ async fn install_bindings_package(project_dir: &Path) {
 }
 
 // Helper to create a basic function for testing
-fn create_test_function(name: &str, code: FunctionCode) -> Function {
-    Function::new(name.to_string())
+fn create_test_function(name: &str, code: WorkerCode) -> Worker {
+    Worker::new(name.to_string())
         .code(code)
         .memory_mb(512)
         .timeout_seconds(60)
@@ -83,13 +83,13 @@ fn stack_with_permissions(name: &str) -> alien_core::StackBuilder {
     alien_core::Stack::new(name.to_string()).permission("execution", PermissionProfile::new())
 }
 
-fn assert_image_dir_has_hash(image: &str, function_name: &str) {
+fn assert_image_dir_has_hash(image: &str, resource_name: &str) {
     let dir_name = Path::new(image)
         .file_name()
         .and_then(|name| name.to_str())
         .expect("Image path should end with a directory name");
 
-    let prefix = format!("{}-", function_name);
+    let prefix = format!("{}-", resource_name);
     assert!(
         dir_name.starts_with(&prefix),
         "Image path should start with {}: got {}",
@@ -111,8 +111,8 @@ fn assert_image_dir_has_hash(image: &str, function_name: &str) {
     );
 }
 
-fn find_function_dir(base_dir: &Path, function_name: &str) -> PathBuf {
-    let prefix = format!("{}-", function_name);
+fn find_resource_dir(base_dir: &Path, resource_name: &str) -> PathBuf {
+    let prefix = format!("{}-", resource_name);
     let entries = std::fs::read_dir(base_dir)
         .unwrap_or_else(|_| panic!("Failed to read directory: {}", base_dir.display()));
 
@@ -123,14 +123,14 @@ fn find_function_dir(base_dir: &Path, function_name: &str) -> PathBuf {
                 continue;
             }
             let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-            if name == function_name || name.starts_with(&prefix) {
+            if name == resource_name || name.starts_with(&prefix) {
                 return path;
             }
         }
     }
 
     panic!(
-        "Function directory with prefix '{}' not found in {}",
+        "Worker directory with prefix '{}' not found in {}",
         prefix,
         base_dir.display()
     );
@@ -261,7 +261,7 @@ async fn create_test_typescript_workspace(
 
 // Helper function to test workspace builds
 async fn test_typescript_workspace_build(
-    function_name: &str,
+    resource_name: &str,
     stack_name: &str,
     src_dir: PathBuf,
     success_message: &str,
@@ -270,8 +270,8 @@ async fn test_typescript_workspace_build(
     let output_dir_path = temp_output_dir.path().to_path_buf();
 
     let func_with_workspace = create_test_function(
-        function_name,
-        FunctionCode::Source {
+        resource_name,
+        WorkerCode::Source {
             src: src_dir.to_str().unwrap().to_string(),
             toolchain: alien_core::ToolchainConfig::TypeScript {
                 binary_name: Some("app".to_string()),
@@ -305,11 +305,11 @@ async fn test_typescript_workspace_build(
     // Verify that the function was converted to an Image with local directory reference
     let mut func_found = false;
     for (_id, entry) in built_stack.resources() {
-        if let Some(f) = entry.config.downcast_ref::<alien_core::Function>() {
-            if f.id == function_name {
+        if let Some(f) = entry.config.downcast_ref::<alien_core::Worker>() {
+            if f.id == resource_name {
                 func_found = true;
                 match &f.code {
-                    FunctionCode::Image { image } => {
+                    WorkerCode::Image { image } => {
                         // After build, image should be a local directory path
                         let image_path = PathBuf::from(image);
                         assert!(
@@ -317,26 +317,26 @@ async fn test_typescript_workspace_build(
                             "Image should be a local directory path, got: {}",
                             image
                         );
-                        assert_image_dir_has_hash(image, function_name);
+                        assert_image_dir_has_hash(image, resource_name);
 
                         // Verify the directory contains OCI tarballs
                         let test_output_dir = output_dir_path.join("build").join("test");
-                        let function_dir = find_function_dir(&test_output_dir, function_name);
+                        let resource_dir = find_resource_dir(&test_output_dir, resource_name);
                         assert!(
-                            function_dir.exists(),
-                            "Function directory should exist at: {}",
-                            function_dir.display()
+                            resource_dir.exists(),
+                            "Worker directory should exist at: {}",
+                            resource_dir.display()
                         );
                     }
-                    _ => panic!("Function should have been converted to Image"),
+                    _ => panic!("Worker should have been converted to Image"),
                 }
             }
         }
     }
     assert!(
         func_found,
-        "TypeScript workspace function '{}' was not found in the result stack",
-        function_name
+        "TypeScript workspace worker '{}' was not found in the result stack",
+        resource_name
     );
 
     println!("✅ {}", success_message);
@@ -363,7 +363,7 @@ async fn test_build_stack_with_source_code() {
 
     let func_to_build_resource = create_test_function(
         "my-func-to-build",
-        FunctionCode::Source {
+        WorkerCode::Source {
             src: project_dir.to_str().unwrap().to_string(),
             toolchain: alien_core::ToolchainConfig::TypeScript {
                 binary_name: Some("app".to_string()),
@@ -372,7 +372,7 @@ async fn test_build_stack_with_source_code() {
     );
     let func_already_image_resource = create_test_function(
         "my-func-already-image",
-        FunctionCode::Image {
+        WorkerCode::Image {
             image: "existing/image:latest".to_string(),
         },
     );
@@ -444,23 +444,23 @@ async fn test_build_stack_with_source_code() {
     let mut image_func_untouched = false;
 
     for (_id, entry) in built_stack.resources() {
-        if let Some(f) = entry.config.downcast_ref::<alien_core::Function>() {
+        if let Some(f) = entry.config.downcast_ref::<alien_core::Worker>() {
             if f.id == "my-func-to-build" {
                 built_func_found = true;
                 match &f.code {
-                    FunctionCode::Image { image } => {
-                        // After push, image should be registry URL with format: {repo}:{function_name}-{tag}
+                    WorkerCode::Image { image } => {
+                        // After push, image should be registry URL with format: {repo}:{resource_name}-{tag}
                         assert!(image.starts_with(&format!("{}/test/build:", local_registry_host)) && image.contains("my-func-to-build"),
                             "Image URI '{}' should contain function name and be in registry format", image);
                         tracing::info!("Built and pushed function image URI: {}", image);
 
                         // Verify the OCI tarball exists in the build output directory
-                        let function_dir = find_function_dir(&platform_output_dir, "my-func-to-build");
-                        assert!(function_dir.exists(), "Function directory '{}' not found", function_dir.display());
+                        let resource_dir = find_resource_dir(&platform_output_dir, "my-func-to-build");
+                        assert!(resource_dir.exists(), "Worker directory '{}' not found", resource_dir.display());
 
                         // Check for at least one OCI tarball
                         let mut found_tarball = false;
-                        if let Ok(mut entries) = std::fs::read_dir(&function_dir) {
+                        if let Ok(mut entries) = std::fs::read_dir(&resource_dir) {
                             while let Some(Ok(entry)) = entries.next() {
                                 if entry.path().extension().and_then(|s| s.to_str()) == Some("tar") {
                                     found_tarball = true;
@@ -468,14 +468,14 @@ async fn test_build_stack_with_source_code() {
                                 }
                             }
                         }
-                        assert!(found_tarball, "No OCI tarballs found in {}", function_dir.display());
+                        assert!(found_tarball, "No OCI tarballs found in {}", resource_dir.display());
                     }
-                    _ => panic!("Function '{}' was not converted to FunctionCode::Image with a pushed registry URI", f.id),
+                    _ => panic!("Worker '{}' was not converted to WorkerCode::Image with a pushed registry URI", f.id),
                 }
             } else if f.id == "my-func-already-image" {
                 image_func_untouched = true;
                 match &f.code {
-                    FunctionCode::Image { image } => {
+                    WorkerCode::Image { image } => {
                         assert_eq!(image, "existing/image:latest");
                     }
                     _ => panic!("Image function was unexpectedly modified"),
@@ -509,7 +509,7 @@ async fn test_typescript_toolchain_invalid_project() {
 
     let func_with_invalid_ts = create_test_function(
         "invalid-ts-func",
-        FunctionCode::Source {
+        WorkerCode::Source {
             src: temp_source_dir.path().to_str().unwrap().to_string(),
             toolchain: alien_core::ToolchainConfig::TypeScript {
                 binary_name: Some("app".to_string()),
@@ -614,7 +614,7 @@ async fn test_real_npm_init_project() {
 
     let func_with_npm_project = create_test_function(
         "my-npm-func",
-        FunctionCode::Source {
+        WorkerCode::Source {
             src: project_dir.to_str().unwrap().to_string(),
             toolchain: alien_core::ToolchainConfig::TypeScript {
                 binary_name: Some("app".to_string()),
@@ -648,11 +648,11 @@ async fn test_real_npm_init_project() {
     // Verify that the function was converted to an Image with local directory reference
     let mut npm_func_found = false;
     for (_id, entry) in built_stack.resources() {
-        if let Some(f) = entry.config.downcast_ref::<alien_core::Function>() {
+        if let Some(f) = entry.config.downcast_ref::<alien_core::Worker>() {
             if f.id == "my-npm-func" {
                 npm_func_found = true;
                 match &f.code {
-                    FunctionCode::Image { image } => {
+                    WorkerCode::Image { image } => {
                         // After build, image should be a local directory path
                         let image_path = PathBuf::from(image);
                         assert!(
@@ -664,14 +664,14 @@ async fn test_real_npm_init_project() {
 
                         // Verify the directory contains OCI tarballs
                         let test_output_dir = output_dir_path.join("build").join("test");
-                        let function_dir = find_function_dir(&test_output_dir, "my-npm-func");
+                        let resource_dir = find_resource_dir(&test_output_dir, "my-npm-func");
                         assert!(
-                            function_dir.exists(),
-                            "Function directory should exist at: {}",
-                            function_dir.display()
+                            resource_dir.exists(),
+                            "Worker directory should exist at: {}",
+                            resource_dir.display()
                         );
                     }
-                    _ => panic!("Function should have been converted to Image"),
+                    _ => panic!("Worker should have been converted to Image"),
                 }
             }
         }
@@ -756,7 +756,7 @@ async fn test_real_pnpm_init_project() {
 
     let func_with_pnpm_project = create_test_function(
         "my-pnpm-func",
-        FunctionCode::Source {
+        WorkerCode::Source {
             src: project_dir.to_str().unwrap().to_string(),
             toolchain: alien_core::ToolchainConfig::TypeScript {
                 binary_name: Some("app".to_string()),
@@ -790,11 +790,11 @@ async fn test_real_pnpm_init_project() {
     // Verify that the function was converted to an Image with local directory reference
     let mut pnpm_func_found = false;
     for (_id, entry) in built_stack.resources() {
-        if let Some(f) = entry.config.downcast_ref::<alien_core::Function>() {
+        if let Some(f) = entry.config.downcast_ref::<alien_core::Worker>() {
             if f.id == "my-pnpm-func" {
                 pnpm_func_found = true;
                 match &f.code {
-                    FunctionCode::Image { image } => {
+                    WorkerCode::Image { image } => {
                         // After build, image should be a local directory path
                         let image_path = PathBuf::from(image);
                         assert!(
@@ -806,14 +806,14 @@ async fn test_real_pnpm_init_project() {
 
                         // Verify the directory contains OCI tarballs
                         let test_output_dir = output_dir_path.join("build").join("test");
-                        let function_dir = find_function_dir(&test_output_dir, "my-pnpm-func");
+                        let resource_dir = find_resource_dir(&test_output_dir, "my-pnpm-func");
                         assert!(
-                            function_dir.exists(),
-                            "Function directory should exist at: {}",
-                            function_dir.display()
+                            resource_dir.exists(),
+                            "Worker directory should exist at: {}",
+                            resource_dir.display()
                         );
                     }
-                    _ => panic!("Function should have been converted to Image"),
+                    _ => panic!("Worker should have been converted to Image"),
                 }
             }
         }
@@ -911,7 +911,7 @@ async fn test_real_bun_init_project() {
 
     let func_with_bun_project = create_test_function(
         "my-bun-func",
-        FunctionCode::Source {
+        WorkerCode::Source {
             src: project_dir.to_str().unwrap().to_string(),
             toolchain: alien_core::ToolchainConfig::TypeScript {
                 binary_name: Some("app".to_string()),
@@ -945,11 +945,11 @@ async fn test_real_bun_init_project() {
     // Verify that the function was converted to an Image with local directory reference
     let mut bun_func_found = false;
     for (_id, entry) in built_stack.resources() {
-        if let Some(f) = entry.config.downcast_ref::<alien_core::Function>() {
+        if let Some(f) = entry.config.downcast_ref::<alien_core::Worker>() {
             if f.id == "my-bun-func" {
                 bun_func_found = true;
                 match &f.code {
-                    FunctionCode::Image { image } => {
+                    WorkerCode::Image { image } => {
                         // After build, image should be a local directory path
                         let image_path = PathBuf::from(image);
                         assert!(
@@ -961,14 +961,14 @@ async fn test_real_bun_init_project() {
 
                         // Verify the directory contains OCI tarballs
                         let test_output_dir = output_dir_path.join("build").join("test");
-                        let function_dir = find_function_dir(&test_output_dir, "my-bun-func");
+                        let resource_dir = find_resource_dir(&test_output_dir, "my-bun-func");
                         assert!(
-                            function_dir.exists(),
-                            "Function directory should exist at: {}",
-                            function_dir.display()
+                            resource_dir.exists(),
+                            "Worker directory should exist at: {}",
+                            resource_dir.display()
                         );
                     }
-                    _ => panic!("Function should have been converted to Image"),
+                    _ => panic!("Worker should have been converted to Image"),
                 }
             }
         }

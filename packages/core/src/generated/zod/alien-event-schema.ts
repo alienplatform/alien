@@ -28,7 +28,7 @@ export const AlienEventSchema = z.union([z.object({
     }), z.object({
     "relatedResources": z.optional(z.array(z.string()).describe("All resource names sharing this build (for deduped container groups)")),
 "resourceName": z.string().describe("Name of the resource being built"),
-"resourceType": z.string().describe("Type of the resource: \"function\", \"container\", \"worker\""),
+"resourceType": z.string().describe("Type of the resource: \"worker\", \"container\""),
 "type": z.enum(["BuildingResource"])
     }), z.object({
     "image": z.string().describe("Name of the image being built"),
@@ -45,7 +45,7 @@ get "progress"(){
 "type": z.enum(["PushingStack"])
     }), z.object({
     "resourceName": z.string().describe("Name of the resource being pushed"),
-"resourceType": z.string().describe("Type of the resource: \"function\", \"container\", \"worker\""),
+"resourceType": z.string().describe("Type of the resource: \"worker\", \"container\""),
 "type": z.enum(["PushingResource"])
     }), z.object({
     "project": z.string().describe("Project name"),
@@ -89,7 +89,7 @@ get "progress"(){
 "type": z.enum(["DeployingStack"])
     }), z.object({
     "stackName": z.string().describe("Name of the stack being tested"),
-"type": z.enum(["RunningTestFunction"])
+"type": z.enum(["RunningTestWorker"])
     }), z.object({
     "stackName": z.string().describe("Name of the stack being cleaned up"),
 "strategyName": z.string().describe("Name of the deployment strategy being used for cleanup"),

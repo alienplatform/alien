@@ -211,12 +211,12 @@ const value: models.DataDeployingStack = {
 };
 ```
 
-### `models.DataRunningTestFunction`
+### `models.DataRunningTestWorker`
 
 ```typescript
-const value: models.DataRunningTestFunction = {
+const value: models.DataRunningTestWorker = {
   stackName: "<value>",
-  type: "RunningTestFunction",
+  type: "RunningTestWorker",
 };
 ```
 

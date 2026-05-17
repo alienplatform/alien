@@ -4,7 +4,7 @@
 
 use alien_core::{
     ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus, EnvironmentVariable,
-    EnvironmentVariableType, EnvironmentVariablesSnapshot, Function, FunctionCode, Platform,
+    EnvironmentVariableType, EnvironmentVariablesSnapshot, Worker, WorkerCode, Platform,
     ReleaseInfo, ResourceEntry, ResourceLifecycle, Stack, StackSettings, Storage,
 };
 use chrono::Utc;
@@ -115,8 +115,8 @@ fn start_delete(state: &mut DeploymentState) {
 
 /// Create a minimal stack fixture for Platform::Test
 fn create_test_stack(stack_id: &str, function_id: &str) -> Stack {
-    let function = Function::new(function_id.to_string())
-        .code(FunctionCode::Image {
+    let function = Worker::new(function_id.to_string())
+        .code(WorkerCode::Image {
             image: "test:latest".to_string(),
         })
         .permissions("default".to_string())
@@ -150,8 +150,8 @@ fn create_test_stack(stack_id: &str, function_id: &str) -> Stack {
 /// Create a stack with one setup-owned Frozen resource and one Alien-owned Live resource.
 fn create_test_stack_with_storage(stack_id: &str, storage_id: &str, function_id: &str) -> Stack {
     let storage = Storage::new(storage_id.to_string()).build();
-    let function = Function::new(function_id.to_string())
-        .code(FunctionCode::Image {
+    let function = Worker::new(function_id.to_string())
+        .code(WorkerCode::Image {
             image: "test:latest".to_string(),
         })
         .permissions("default".to_string())
@@ -566,8 +566,8 @@ async fn test_running_transitions_to_refresh_failed_on_health_check_failure() {
     let _temp_dir = TempDir::new().expect("Failed to create temp dir");
 
     // Create a function configured to fail persistently
-    let function = Function::new("test-function".to_string())
-        .code(FunctionCode::Image {
+    let function = Worker::new("test-function".to_string())
+        .code(WorkerCode::Image {
             image: "test:latest".to_string(),
         })
         .permissions("default".to_string())
@@ -682,8 +682,8 @@ async fn test_update_failed_retry_gate_returns_to_update_pending() {
     state = run_to_completion(state, config.clone()).await;
 
     // Start update with a function that will fail
-    let function_v2 = Function::new("test-function-v2".to_string())
-        .code(FunctionCode::Image {
+    let function_v2 = Worker::new("test-function-v2".to_string())
+        .code(WorkerCode::Image {
             image: "test:latest".to_string(),
         })
         .permissions("default".to_string())
@@ -781,7 +781,7 @@ async fn test_delete_flow_happy_path_reaches_deleted() {
 #[tokio::test]
 async fn test_delete_failed_retry_gate() {
     // Create a minimal test for delete retry pattern
-    // In practice, TestFunctionController doesn't easily simulate delete failures,
+    // In practice, TestWorkerController doesn't easily simulate delete failures,
     // but we can test the pattern conceptually by checking the handler exists
 
     let _temp_dir = TempDir::new().expect("Failed to create temp dir");
@@ -808,8 +808,8 @@ async fn test_delete_failed_retry_gate() {
 /// the executor processes resources in parallel; its provisioning will still be in progress when
 /// `failing-fn` transitions to ProvisionFailed.
 fn create_two_function_stack_one_fails(stack_id: &str) -> Stack {
-    let failing_fn = Function::new("failing-fn".to_string())
-        .code(FunctionCode::Image {
+    let failing_fn = Worker::new("failing-fn".to_string())
+        .code(WorkerCode::Image {
             image: "test:latest".to_string(),
         })
         .permissions("default".to_string())
@@ -823,8 +823,8 @@ fn create_two_function_stack_one_fails(stack_id: &str) -> Stack {
         })
         .build();
 
-    let sibling_fn = Function::new("sibling-fn".to_string())
-        .code(FunctionCode::Image {
+    let sibling_fn = Worker::new("sibling-fn".to_string())
+        .code(WorkerCode::Image {
             image: "test:latest".to_string(),
         })
         .permissions("default".to_string())
@@ -867,8 +867,8 @@ fn create_two_function_stack_one_fails(stack_id: &str) -> Stack {
 /// Build a two-resource stack where `sibling-fn` depends on `failing-fn`.
 /// `sibling-fn` will be in Pending when `failing-fn` fails.
 fn create_two_function_stack_dependent_one_fails(stack_id: &str) -> Stack {
-    let failing_fn = Function::new("failing-fn".to_string())
-        .code(FunctionCode::Image {
+    let failing_fn = Worker::new("failing-fn".to_string())
+        .code(WorkerCode::Image {
             image: "test:latest".to_string(),
         })
         .permissions("default".to_string())
@@ -882,8 +882,8 @@ fn create_two_function_stack_dependent_one_fails(stack_id: &str) -> Stack {
         })
         .build();
 
-    let sibling_fn = Function::new("sibling-fn".to_string())
-        .code(FunctionCode::Image {
+    let sibling_fn = Worker::new("sibling-fn".to_string())
+        .code(WorkerCode::Image {
             image: "test:latest".to_string(),
         })
         .permissions("default".to_string())
@@ -905,7 +905,7 @@ fn create_two_function_stack_dependent_one_fails(stack_id: &str) -> Stack {
             config: alien_core::Resource::new(sibling_fn),
             lifecycle: ResourceLifecycle::Live,
             dependencies: vec![alien_core::ResourceRef::new(
-                alien_core::Function::RESOURCE_TYPE,
+                alien_core::Worker::RESOURCE_TYPE,
                 "failing-fn".to_string(),
             )],
             remote_access: false,

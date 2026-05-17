@@ -2,7 +2,7 @@ pub(crate) mod artifact_registry_service;
 pub(crate) mod build_service;
 pub(crate) mod container_service;
 pub mod control_service;
-pub(crate) mod function_service;
+pub(crate) mod worker_service;
 pub(crate) mod kv_service;
 pub(crate) mod queue_service;
 pub(crate) mod service_account_service;

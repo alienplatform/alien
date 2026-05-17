@@ -192,7 +192,7 @@ pub async fn install_dependencies(src_dir: &Path) -> Result<()> {
     // Check if package manager is available
     if !package_manager.is_available() {
         return Err(AlienError::new(ErrorData::ImageBuildFailed {
-            function_name: "dependency-install".to_string(),
+            resource_name: "dependency-install".to_string(),
             reason: format!(
                 "{} is required for building this project. Please install it.",
                 pm_command
@@ -221,7 +221,7 @@ pub async fn install_dependencies(src_dir: &Path) -> Result<()> {
         .await
         .into_alien_error()
         .context(ErrorData::ImageBuildFailed {
-            function_name: "dependency-install".to_string(),
+            resource_name: "dependency-install".to_string(),
             reason: format!("Failed to execute {} install", pm_command),
             build_output: None,
         })?;
@@ -234,7 +234,7 @@ pub async fn install_dependencies(src_dir: &Path) -> Result<()> {
             stderr, stdout
         );
         return Err(AlienError::new(ErrorData::ImageBuildFailed {
-            function_name: "dependency-install".to_string(),
+            resource_name: "dependency-install".to_string(),
             reason: format!("{} install failed", pm_command),
             build_output: Some(stderr.to_string()),
         }));

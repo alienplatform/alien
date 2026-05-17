@@ -4,8 +4,11 @@ pub use core::*;
 mod error;
 pub use error::*;
 
-mod function;
-pub use function::*;
+mod worker;
+pub use worker::*;
+
+mod daemon;
+pub use daemon::*;
 
 mod storage;
 pub use storage::*;
@@ -31,8 +34,8 @@ pub use vault::*;
 mod network;
 pub use network::*;
 
-mod container_cluster;
-pub use container_cluster::*;
+mod compute_cluster;
+pub use compute_cluster::*;
 
 mod container;
 pub use container::*;

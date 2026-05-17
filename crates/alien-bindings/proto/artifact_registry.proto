@@ -12,8 +12,8 @@ enum ArtifactRegistryPermissions {
 
 // Types of compute services that can access artifact registries
 enum ComputeServiceType {
-    // Serverless functions
-    FUNCTION = 0;
+    // Serverless workers
+    WORKER = 0;
 }
 
 // Artifact Registry service for managing container repositories
@@ -144,7 +144,7 @@ message AwsCrossAccountAccess {
     repeated ComputeServiceType allowed_service_types = 2;
     // Specific IAM role ARNs to grant access to
     repeated string role_arns = 3;
-    // AWS regions where target Lambda functions run (for sourceArn condition)
+    // AWS regions where target Lambda workers run (for sourceArn condition)
     repeated string regions = 4;
 }
 

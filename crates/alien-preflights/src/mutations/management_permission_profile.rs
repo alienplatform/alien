@@ -2,7 +2,7 @@ use crate::error::Result;
 use crate::StackMutation;
 use alien_core::permissions::{ManagementPermissions, PermissionProfile, PermissionSetReference};
 use alien_core::{
-    ownership_policy_for_resource_type, DeploymentConfig, Function, Platform, ResourceLifecycle,
+    ownership_policy_for_resource_type, DeploymentConfig, Worker, Platform, ResourceLifecycle,
     Stack, StackState,
 };
 use alien_permissions::get_permission_set;
@@ -140,14 +140,14 @@ fn generate_auto_management_profile(
             permission_set_ids.insert(format!("{}/telemetry", resource_type));
         }
 
-        // Add commands-specific permissions for functions with commands_enabled = true
-        if resource_type == "function" {
-            if let Some(function) = resource_entry.config.downcast_ref::<Function>() {
-                if function.commands_enabled {
+        // Add commands-specific permissions for workers with commands_enabled = true
+        if resource_type == "worker" {
+            if let Some(worker) = resource_entry.config.downcast_ref::<Worker>() {
+                if worker.commands_enabled {
                     match platform {
                         Platform::Aws => {
-                            // On AWS: function/invoke for Lambda InvokeFunction API
-                            permission_set_ids.insert("function/invoke".to_string());
+                            // On AWS: worker/invoke for Lambda InvokeWorker API
+                            permission_set_ids.insert("worker/invoke".to_string());
                         }
                         Platform::Gcp | Platform::Azure => {
                             // On GCP/Azure: queue/data-write for Pub/Sub and Service Bus
@@ -197,8 +197,8 @@ mod tests {
     use super::*;
     use alien_core::permissions::{ManagementPermissions, PermissionsConfig};
     use alien_core::{
-        CapacityGroup, Container, ContainerCluster, ContainerCode, DeploymentModel,
-        EnvironmentVariablesSnapshot, ExternalBindings, Function, FunctionCode, HeartbeatsMode,
+        CapacityGroup, Container, ComputeCluster, ContainerCode, DeploymentModel,
+        EnvironmentVariablesSnapshot, ExternalBindings, Worker, WorkerCode, HeartbeatsMode,
         ResourceEntry, ResourceLifecycle, ResourceSpec, StackSettings, StackState, Storage,
         TelemetryMode,
     };
@@ -213,8 +213,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_auto_management_profile_generation() {
-        let function = Function::new("test-function".to_string())
-            .code(FunctionCode::Image {
+        let worker = Worker::new("test-worker".to_string())
+            .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
             })
             .permissions("test".to_string())
@@ -223,9 +223,9 @@ mod tests {
 
         let mut resources = IndexMap::new();
         resources.insert(
-            "test-function".to_string(),
+            "test-worker".to_string(),
             ResourceEntry {
-                config: alien_core::Resource::new(function),
+                config: alien_core::Resource::new(worker),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
@@ -267,14 +267,14 @@ mod tests {
                 assert!(profile.0.contains_key("*"));
                 let global_permissions = profile.0.get("*").unwrap();
 
-                // Live function gets provision; storage is frozen so no management.
+                // Live worker gets provision; storage is frozen so no management.
                 let permission_names: Vec<String> = global_permissions
                     .iter()
                     .map(|perm_ref| perm_ref.id().to_string())
                     .collect();
 
-                assert!(permission_names.contains(&"function/provision".to_string()));
-                assert!(!permission_names.contains(&"function/management".to_string()));
+                assert!(permission_names.contains(&"worker/provision".to_string()));
+                assert!(!permission_names.contains(&"worker/management".to_string()));
                 assert!(!permission_names.contains(&"storage/management".to_string()));
             }
             _ => panic!("Expected Extend management permissions"),
@@ -283,8 +283,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_extend_management_profile_merge() {
-        let function = Function::new("test-function".to_string())
-            .code(FunctionCode::Image {
+        let worker = Worker::new("test-worker".to_string())
+            .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
             })
             .permissions("test".to_string())
@@ -292,9 +292,9 @@ mod tests {
 
         let mut resources = IndexMap::new();
         resources.insert(
-            "test-function".to_string(),
+            "test-worker".to_string(),
             ResourceEntry {
-                config: alien_core::Resource::new(function),
+                config: alien_core::Resource::new(worker),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
@@ -334,8 +334,8 @@ mod tests {
                     .collect();
 
                 // Should have auto-generated live provision and extended storage/data-write.
-                assert!(permission_names.contains(&"function/provision".to_string()));
-                assert!(!permission_names.contains(&"function/management".to_string()));
+                assert!(permission_names.contains(&"worker/provision".to_string()));
+                assert!(!permission_names.contains(&"worker/management".to_string()));
                 assert!(permission_names.contains(&"storage/data-write".to_string()));
             }
             _ => panic!("Expected Extend management permissions"),
@@ -344,8 +344,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_override_management_profile_unchanged() {
-        let function = Function::new("test-function".to_string())
-            .code(FunctionCode::Image {
+        let worker = Worker::new("test-worker".to_string())
+            .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
             })
             .permissions("test".to_string())
@@ -353,9 +353,9 @@ mod tests {
 
         let mut resources = IndexMap::new();
         resources.insert(
-            "test-function".to_string(),
+            "test-worker".to_string(),
             ResourceEntry {
-                config: alien_core::Resource::new(function),
+                config: alien_core::Resource::new(worker),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
@@ -364,7 +364,7 @@ mod tests {
 
         // Create an override profile
         let override_profile =
-            PermissionProfile::new().global(["storage/management", "function/management"]);
+            PermissionProfile::new().global(["storage/management", "worker/management"]);
 
         let stack = Stack {
             id: "test-stack".to_string(),
@@ -398,9 +398,9 @@ mod tests {
                     .collect();
 
                 assert!(permission_names.contains(&"storage/management".to_string()));
-                assert!(permission_names.contains(&"function/management".to_string()));
-                // Should NOT have auto-generated function/provision
-                assert!(!permission_names.contains(&"function/provision".to_string()));
+                assert!(permission_names.contains(&"worker/management".to_string()));
+                // Should NOT have auto-generated worker/provision
+                assert!(!permission_names.contains(&"worker/provision".to_string()));
             }
             _ => panic!("Expected Override management permissions"),
         }
@@ -408,8 +408,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_pull_model_permissions() {
-        let function = Function::new("test-function".to_string())
-            .code(FunctionCode::Image {
+        let worker = Worker::new("test-worker".to_string())
+            .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
             })
             .permissions("test".to_string())
@@ -418,9 +418,9 @@ mod tests {
 
         let mut resources = IndexMap::new();
         resources.insert(
-            "test-function".to_string(),
+            "test-worker".to_string(),
             ResourceEntry {
-                config: alien_core::Resource::new(function),
+                config: alien_core::Resource::new(worker),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
@@ -475,13 +475,13 @@ mod tests {
                     .collect();
 
                 // Should contain heartbeat permissions for both resources
-                assert!(permission_names.contains(&"function/heartbeat".to_string()));
+                assert!(permission_names.contains(&"worker/heartbeat".to_string()));
                 assert!(permission_names.contains(&"storage/heartbeat".to_string()));
 
                 // Should contain live resource mutation permissions in both
                 // Pull and Push models.
-                assert!(permission_names.contains(&"function/provision".to_string()));
-                assert!(!permission_names.contains(&"function/management".to_string()));
+                assert!(permission_names.contains(&"worker/provision".to_string()));
+                assert!(!permission_names.contains(&"worker/management".to_string()));
                 assert!(!permission_names.contains(&"storage/management".to_string()));
             }
             _ => panic!("Expected Extend management permissions"),
@@ -505,7 +505,7 @@ mod tests {
             .port(8080)
             .permissions("test".to_string())
             .build();
-        let cluster = ContainerCluster::new("compute".to_string())
+        let cluster = ComputeCluster::new("compute".to_string())
             .capacity_group(CapacityGroup {
                 group_id: "general".to_string(),
                 instance_type: Some("m7g.large".to_string()),
@@ -568,8 +568,8 @@ mod tests {
 
                 assert!(permission_names.contains(&"container/provision".to_string()));
                 assert!(!permission_names.contains(&"container/management".to_string()));
-                assert!(permission_names.contains(&"container-cluster/management".to_string()));
-                assert!(!permission_names.contains(&"container-cluster/provision".to_string()));
+                assert!(permission_names.contains(&"compute-cluster/management".to_string()));
+                assert!(!permission_names.contains(&"compute-cluster/provision".to_string()));
             }
             _ => panic!("Expected Extend management permissions"),
         }
@@ -577,8 +577,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_push_model_permissions() {
-        let function = Function::new("test-function".to_string())
-            .code(FunctionCode::Image {
+        let worker = Worker::new("test-worker".to_string())
+            .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
             })
             .permissions("test".to_string())
@@ -586,9 +586,9 @@ mod tests {
 
         let mut resources = IndexMap::new();
         resources.insert(
-            "test-function".to_string(),
+            "test-worker".to_string(),
             ResourceEntry {
-                config: alien_core::Resource::new(function),
+                config: alien_core::Resource::new(worker),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
@@ -631,9 +631,9 @@ mod tests {
                     .collect();
 
                 // Should contain heartbeat plus live mutation permissions.
-                assert!(permission_names.contains(&"function/heartbeat".to_string()));
-                assert!(permission_names.contains(&"function/provision".to_string()));
-                assert!(!permission_names.contains(&"function/management".to_string()));
+                assert!(permission_names.contains(&"worker/heartbeat".to_string()));
+                assert!(permission_names.contains(&"worker/provision".to_string()));
+                assert!(!permission_names.contains(&"worker/management".to_string()));
             }
             _ => panic!("Expected Extend management permissions"),
         }
@@ -641,9 +641,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_commands_enabled_function_permissions() {
-        // Test AWS platform - should add function/invoke
-        let arc_function = Function::new("arc-function".to_string())
-            .code(FunctionCode::Image {
+        // Test AWS platform - should add worker/invoke
+        let arc_function = Worker::new("arc-worker".to_string())
+            .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
             })
             .permissions("test".to_string())
@@ -652,7 +652,7 @@ mod tests {
 
         let mut resources = IndexMap::new();
         resources.insert(
-            "arc-function".to_string(),
+            "arc-worker".to_string(),
             ResourceEntry {
                 config: alien_core::Resource::new(arc_function),
                 lifecycle: ResourceLifecycle::Live,
@@ -690,10 +690,10 @@ mod tests {
                     .map(|perm_ref| perm_ref.id().to_string())
                     .collect();
 
-                // Should have live resource permissions and function/invoke for Commands.
-                assert!(permission_names.contains(&"function/provision".to_string()));
-                assert!(!permission_names.contains(&"function/management".to_string()));
-                assert!(permission_names.contains(&"function/invoke".to_string()));
+                // Should have live resource permissions and worker/invoke for Commands.
+                assert!(permission_names.contains(&"worker/provision".to_string()));
+                assert!(!permission_names.contains(&"worker/management".to_string()));
+                assert!(permission_names.contains(&"worker/invoke".to_string()));
             }
             _ => panic!("Expected Extend management permissions"),
         }
@@ -710,15 +710,15 @@ mod tests {
             id: "test-stack-gcp".to_string(),
             resources: {
                 let mut resources = IndexMap::new();
-                let arc_function = Function::new("arc-function".to_string())
-                    .code(FunctionCode::Image {
+                let arc_function = Worker::new("arc-worker".to_string())
+                    .code(WorkerCode::Image {
                         image: "test:latest".to_string(),
                     })
                     .permissions("test".to_string())
                     .commands_enabled(true)
                     .build();
                 resources.insert(
-                    "arc-function".to_string(),
+                    "arc-worker".to_string(),
                     ResourceEntry {
                         config: alien_core::Resource::new(arc_function),
                         lifecycle: ResourceLifecycle::Live,
@@ -749,8 +749,8 @@ mod tests {
                     .collect();
 
                 // Should have live resource permissions and queue/data-write for Commands.
-                assert!(permission_names.contains(&"function/provision".to_string()));
-                assert!(!permission_names.contains(&"function/management".to_string()));
+                assert!(permission_names.contains(&"worker/provision".to_string()));
+                assert!(!permission_names.contains(&"worker/management".to_string()));
                 assert!(permission_names.contains(&"queue/data-write".to_string()));
             }
             _ => panic!("Expected Extend management permissions"),
@@ -759,8 +759,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_disabled_heartbeat_no_permissions() {
-        let function = Function::new("test-function".to_string())
-            .code(FunctionCode::Image {
+        let worker = Worker::new("test-worker".to_string())
+            .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
             })
             .permissions("test".to_string())
@@ -768,9 +768,9 @@ mod tests {
 
         let mut resources = IndexMap::new();
         resources.insert(
-            "test-function".to_string(),
+            "test-worker".to_string(),
             ResourceEntry {
-                config: alien_core::Resource::new(function),
+                config: alien_core::Resource::new(worker),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
@@ -812,10 +812,10 @@ mod tests {
                     .collect();
 
                 // Should NOT contain heartbeat permissions since heartbeat is disabled
-                assert!(!permission_names.contains(&"function/heartbeat".to_string()));
+                assert!(!permission_names.contains(&"worker/heartbeat".to_string()));
                 // Should still have live mutation permissions.
-                assert!(permission_names.contains(&"function/provision".to_string()));
-                assert!(!permission_names.contains(&"function/management".to_string()));
+                assert!(permission_names.contains(&"worker/provision".to_string()));
+                assert!(!permission_names.contains(&"worker/management".to_string()));
             }
             _ => panic!("Expected Extend management permissions"),
         }
@@ -823,8 +823,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_disabled_telemetry_no_permissions() {
-        let function = Function::new("test-function".to_string())
-            .code(FunctionCode::Image {
+        let worker = Worker::new("test-worker".to_string())
+            .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
             })
             .permissions("test".to_string())
@@ -832,9 +832,9 @@ mod tests {
 
         let mut resources = IndexMap::new();
         resources.insert(
-            "test-function".to_string(),
+            "test-worker".to_string(),
             ResourceEntry {
-                config: alien_core::Resource::new(function),
+                config: alien_core::Resource::new(worker),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
@@ -876,11 +876,11 @@ mod tests {
                     .collect();
 
                 // Should NOT contain telemetry permissions since telemetry is disabled
-                assert!(!permission_names.contains(&"function/telemetry".to_string()));
+                assert!(!permission_names.contains(&"worker/telemetry".to_string()));
                 // Should still have heartbeat and live mutation permissions.
-                assert!(permission_names.contains(&"function/heartbeat".to_string()));
-                assert!(permission_names.contains(&"function/provision".to_string()));
-                assert!(!permission_names.contains(&"function/management".to_string()));
+                assert!(permission_names.contains(&"worker/heartbeat".to_string()));
+                assert!(permission_names.contains(&"worker/provision".to_string()));
+                assert!(!permission_names.contains(&"worker/management".to_string()));
             }
             _ => panic!("Expected Extend management permissions"),
         }
@@ -888,8 +888,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_requires_approval_still_creates_permissions() {
-        let function = Function::new("test-function".to_string())
-            .code(FunctionCode::Image {
+        let worker = Worker::new("test-worker".to_string())
+            .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
             })
             .permissions("test".to_string())
@@ -897,9 +897,9 @@ mod tests {
 
         let mut resources = IndexMap::new();
         resources.insert(
-            "test-function".to_string(),
+            "test-worker".to_string(),
             ResourceEntry {
-                config: alien_core::Resource::new(function),
+                config: alien_core::Resource::new(worker),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
@@ -944,11 +944,11 @@ mod tests {
                     .collect();
 
                 // Should contain heartbeat permissions (heartbeat is On by default)
-                assert!(permission_names.contains(&"function/heartbeat".to_string()));
+                assert!(permission_names.contains(&"worker/heartbeat".to_string()));
                 // Should contain live mutation permissions.
-                assert!(permission_names.contains(&"function/provision".to_string()));
-                assert!(!permission_names.contains(&"function/management".to_string()));
-                // Note: function/telemetry permission set may not exist in registry,
+                assert!(permission_names.contains(&"worker/provision".to_string()));
+                assert!(!permission_names.contains(&"worker/management".to_string()));
+                // Note: worker/telemetry permission set may not exist in registry,
                 // but the code attempts to add it. If it exists, it would be added.
             }
             _ => panic!("Expected Extend management permissions"),

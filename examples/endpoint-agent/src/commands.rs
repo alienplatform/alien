@@ -17,7 +17,7 @@ fn to_bindings_error<T>(result: Result<T>) -> alien_sdk::Result<T> {
     })
 }
 
-/// Register all ARC command handlers
+/// Register all command handlers
 pub fn register(ctx: &AlienContext, db: EncryptedDb) {
     // get-events command
     {

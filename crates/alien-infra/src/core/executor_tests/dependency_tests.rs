@@ -5,7 +5,7 @@ use std::time::Duration;
 use super::helpers::*;
 use crate::error::Result;
 use alien_core::{
-    Function, Resource, ResourceLifecycle, ResourceRef, ResourceStatus, Stack, Storage,
+    Worker, Resource, ResourceLifecycle, ResourceRef, ResourceStatus, Stack, Storage,
 };
 
 /// Tests that a function waits for its storage dependency to be Running.
@@ -49,7 +49,7 @@ async fn test_transitive_dependencies() -> Result<()> {
         .add_with_dependencies(
             func_c.clone(),
             ResourceLifecycle::Live,
-            vec![ResourceRef::new(Function::RESOURCE_TYPE, "func-b")],
+            vec![ResourceRef::new(Worker::RESOURCE_TYPE, "func-b")],
         )
         .build();
 
@@ -72,12 +72,12 @@ async fn test_circular_dependency_detection() {
         .add_with_dependencies(
             func_a,
             ResourceLifecycle::Live,
-            vec![ResourceRef::new(Function::RESOURCE_TYPE, "func-b")],
+            vec![ResourceRef::new(Worker::RESOURCE_TYPE, "func-b")],
         )
         .add_with_dependencies(
             func_b,
             ResourceLifecycle::Live,
-            vec![ResourceRef::new(Function::RESOURCE_TYPE, "func-a")],
+            vec![ResourceRef::new(Worker::RESOURCE_TYPE, "func-a")],
         )
         .build();
 
@@ -110,8 +110,8 @@ async fn test_diamond_dependencies() -> Result<()> {
             func_d.clone(),
             ResourceLifecycle::Live,
             vec![
-                ResourceRef::new(Function::RESOURCE_TYPE, "func-b"),
-                ResourceRef::new(Function::RESOURCE_TYPE, "func-c"),
+                ResourceRef::new(Worker::RESOURCE_TYPE, "func-b"),
+                ResourceRef::new(Worker::RESOURCE_TYPE, "func-c"),
             ],
         )
         .build();
@@ -158,9 +158,9 @@ async fn test_independent_branches_run_in_parallel() -> Result<()> {
 }
 
 /// Tests a mix of independent and dependent resources.
-/// - An independent Function.
+/// - An independent Worker.
 /// - A Storage resource.
-/// - A Function dependent on the Storage resource.
+/// - A Worker dependent on the Storage resource.
 #[tokio::test]
 async fn test_mixed_dependencies() -> Result<()> {
     let store1 = test_storage("store1");

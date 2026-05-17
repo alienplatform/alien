@@ -18,7 +18,7 @@ pub mod vault;
 
 use crate::registry::HelmRegistry;
 use alien_core::{
-    ArtifactRegistry, Build, Function, Kv, Platform, Queue, ServiceAccount, Storage, Vault,
+    ArtifactRegistry, Build, Worker, Kv, Platform, Queue, ServiceAccount, Storage, Vault,
 };
 
 /// Wire every built-in K8s Helm emitter into `registry`.
@@ -34,7 +34,7 @@ pub fn register_built_ins(registry: &mut HelmRegistry) {
         artifact_registry::ArtifactRegistryEmitter,
     );
     registry.register(Build::RESOURCE_TYPE, p, build::BuildEmitter);
-    registry.register(Function::RESOURCE_TYPE, p, function::FunctionEmitter);
+    registry.register(Worker::RESOURCE_TYPE, p, function::FunctionEmitter);
     registry.register(
         ServiceAccount::RESOURCE_TYPE,
         p,

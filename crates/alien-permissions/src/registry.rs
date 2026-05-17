@@ -26,7 +26,7 @@
 //! │   ├── data-write.jsonc
 //! │   ├── management.jsonc
 //! │   └── provision.jsonc
-//! ├── function/
+//! ├── worker/
 //! │   ├── execute.jsonc
 //! │   ├── management.jsonc
 //! │   ├── provision.jsonc
@@ -105,11 +105,11 @@
 //! - Permission sets are loaded into a static `HashMap` using `once_cell::sync::Lazy`
 //! - JSONC parsing is done at build time using the `json5` crate
 //! - Generated constants use raw string literals with `###` delimiters to avoid escaping issues
-//! - The registry functions return references to static data, so there's no runtime allocation
+//! - The registry workers return references to static data, so there's no runtime allocation
 //! - Changes to permission set files automatically trigger rebuilds via `cargo:rerun-if-changed`
 
 // Include the generated registry code
-// This includes the static PERMISSION_SETS_REGISTRY and the public API functions
+// This includes the static PERMISSION_SETS_REGISTRY and the public API workers
 include!(concat!(env!("OUT_DIR"), "/permission_sets_registry.rs"));
 
 #[cfg(test)]
@@ -123,9 +123,9 @@ mod tests {
         assert!(has_permission_set("storage/data-write"));
         assert!(has_permission_set("storage/management"));
         assert!(has_permission_set("storage/provision"));
-        assert!(has_permission_set("function/execute"));
-        assert!(has_permission_set("function/management"));
-        assert!(has_permission_set("function/provision"));
+        assert!(has_permission_set("worker/execute"));
+        assert!(has_permission_set("worker/management"));
+        assert!(has_permission_set("worker/provision"));
         assert!(has_permission_set("build/execute"));
         assert!(has_permission_set("build/management"));
         assert!(has_permission_set("build/provision"));
@@ -160,7 +160,7 @@ mod tests {
         let ids = list_permission_set_ids();
         assert!(!ids.is_empty());
         assert!(ids.contains(&"storage/data-read"));
-        assert!(ids.contains(&"function/execute"));
+        assert!(ids.contains(&"worker/execute"));
 
         // Should be sorted or at least consistent
         println!("Available permission sets: {:?}", ids);
@@ -168,7 +168,7 @@ mod tests {
 
     #[test]
     fn test_permission_set_structure() {
-        let function_exec = get_permission_set("function/execute").unwrap();
+        let function_exec = get_permission_set("worker/execute").unwrap();
 
         // Test AWS platform
         if let Some(aws_perms) = &function_exec.platforms.aws {

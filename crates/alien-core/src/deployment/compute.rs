@@ -19,32 +19,52 @@ pub struct HorizonClusterConfig {
     pub management_token: String,
 }
 
-/// Worker control-plane configuration for container orchestration.
+/// Horizon host image channel or provider-specific pointer.
+///
+/// Setup references these stable pointers. The concrete image version resolved
+/// during rollout is management state, not ComputeCluster resource config.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct HorizonHostImage {
+    /// Logical image channel, such as prod, staging, or canary.
+    pub channel: String,
+    /// Machine architecture, such as amd64 or arm64.
+    pub architecture: String,
+    /// AWS SSM parameter path for the channel pointer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aws_ssm_parameter: Option<String>,
+    /// GCP image family for the channel pointer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gcp_image_family: Option<String>,
+    /// Azure Compute Gallery image definition ID for the channel pointer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub azure_gallery_image_definition_id: Option<String>,
+}
+
+/// Horizon control-plane configuration for container orchestration.
 ///
 /// Contains all the information needed for Alien to interact with managed
-/// container clusters during deployment. Each ContainerCluster resource gets its own
+/// container clusters during deployment. Each ComputeCluster resource gets its own
 /// entry in the clusters map.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct HorizonConfig {
-    /// Worker control-plane API base URL.
+    /// Horizon control-plane API base URL.
     pub url: String,
 
-    /// AMI / image ID for the worker machine image.
-    ///
-    /// The image contains the worker runtime bootstrap. Controllers only pass
-    /// machine-specific settings into that image.
+    /// Stable Horizon host image channel or provider pointer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub worker_image_id: Option<String>,
+    pub horizon_host_image: Option<HorizonHostImage>,
 
-    /// Cluster configurations (one per ContainerCluster resource)
-    /// Key: ContainerCluster resource ID from stack
+    /// Cluster configurations (one per ComputeCluster resource)
+    /// Key: ComputeCluster resource ID from stack
     /// Value: Cluster ID and management token for that cluster
     pub clusters: HashMap<String, HorizonClusterConfig>,
 }
 
-/// Compute backend for Container and Function resources.
+/// Compute backend for Container and Worker resources.
 ///
 /// Determines how compute workloads are orchestrated on cloud platforms.
 /// When None, the platform default is used for cloud platforms.

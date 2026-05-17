@@ -186,14 +186,14 @@ impl StackState {
     ///
     /// # Example
     /// ```rust,ignore
-    /// use alien_core::{StackState, Platform, FunctionOutputs};
+    /// use alien_core::{StackState, Platform, WorkerOutputs};
     ///
     /// let stack_state = StackState::new(Platform::Aws);
     ///
-    /// // Get function outputs with error handling
-    /// let function_outputs = stack_state.get_resource_outputs::<FunctionOutputs>("my-function")?;
-    /// if let Some(url) = &function_outputs.url {
-    ///     println!("Function URL: {}", url);
+    /// // Get worker outputs with error handling
+    /// let worker_outputs = stack_state.get_resource_outputs::<WorkerOutputs>("my-worker")?;
+    /// if let Some(url) = &worker_outputs.url {
+    ///     println!("Worker URL: {}", url);
     /// }
     /// ```
     pub fn get_resource_outputs<T: ResourceOutputsDefinition + 'static>(
@@ -228,7 +228,7 @@ impl StackState {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct StackResourceState {
-    /// The high-level type of the resource (e.g., Function::RESOURCE_TYPE, Storage::RESOURCE_TYPE).
+    /// The high-level type of the resource (e.g., Worker::RESOURCE_TYPE, Storage::RESOURCE_TYPE).
     #[serde(rename = "type")]
     pub resource_type: String,
 
@@ -339,57 +339,57 @@ fn is_zero(num: &u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Function, FunctionCode, FunctionOutputs, ResourceType, Storage, StorageOutputs};
+    use crate::{Worker, WorkerCode, WorkerOutputs, ResourceType, Storage, StorageOutputs};
 
     #[test]
     fn test_get_resource_outputs_success() {
         let mut stack_state = StackState::new(Platform::Aws);
 
-        // Create a function with outputs
-        let function_outputs = FunctionOutputs {
-            function_name: "test-function".to_string(),
+        // Create a worker with outputs
+        let worker_outputs = WorkerOutputs {
+            worker_name: "test-worker".to_string(),
             url: Some("https://example.lambda-url.us-east-1.on.aws/".to_string()),
             identifier: Some(
-                "arn:aws:lambda:us-east-1:123456789012:function:test-function".to_string(),
+                "arn:aws:lambda:us-east-1:123456789012:function:test-worker".to_string(),
             ),
             load_balancer_endpoint: None,
             commands_push_target: None,
         };
 
-        let test_function = Function::new("test-function".to_string())
-            .code(FunctionCode::Image {
+        let test_worker = Worker::new("test-worker".to_string())
+            .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
             })
             .permissions("test-profile".to_string())
             .build();
 
         let resource_state = StackResourceState::new_pending(
-            "function".to_string(),
-            Resource::new(test_function),
+            "worker".to_string(),
+            Resource::new(test_worker),
             None,
             Vec::new(),
         )
         .with_updates(|state| {
             state.status = ResourceStatus::Running;
-            state.outputs = Some(ResourceOutputs::new(function_outputs.clone()));
+            state.outputs = Some(ResourceOutputs::new(worker_outputs.clone()));
         });
 
         stack_state
             .resources
-            .insert("test-function".to_string(), resource_state);
+            .insert("test-worker".to_string(), resource_state);
 
         // Test successful retrieval
         let retrieved_outputs = stack_state
-            .get_resource_outputs::<FunctionOutputs>("test-function")
+            .get_resource_outputs::<WorkerOutputs>("test-worker")
             .unwrap();
-        assert_eq!(retrieved_outputs.function_name, "test-function");
+        assert_eq!(retrieved_outputs.worker_name, "test-worker");
         assert_eq!(
             retrieved_outputs.url,
             Some("https://example.lambda-url.us-east-1.on.aws/".to_string())
         );
         assert_eq!(
             retrieved_outputs.identifier,
-            Some("arn:aws:lambda:us-east-1:123456789012:function:test-function".to_string())
+            Some("arn:aws:lambda:us-east-1:123456789012:function:test-worker".to_string())
         );
     }
 
@@ -398,7 +398,7 @@ mod tests {
         let stack_state = StackState::new(Platform::Aws);
 
         // Test resource not found
-        let result = stack_state.get_resource_outputs::<FunctionOutputs>("nonexistent-function");
+        let result = stack_state.get_resource_outputs::<WorkerOutputs>("nonexistent-worker");
         assert!(result.is_err());
         let error = result.unwrap_err();
 
@@ -409,7 +409,7 @@ mod tests {
             available_resources,
         }) = error_data
         {
-            assert_eq!(resource_id, "nonexistent-function");
+            assert_eq!(resource_id, "nonexistent-worker");
             assert_eq!(available_resources, &Vec::<String>::new());
         } else {
             panic!("Expected ResourceNotFound error, got: {:?}", error_data);
@@ -417,7 +417,7 @@ mod tests {
 
         // Also check the string representation
         let error_message = error.to_string();
-        assert!(error_message.contains("Resource 'nonexistent-function' not found in stack state"));
+        assert!(error_message.contains("Resource 'nonexistent-worker' not found in stack state"));
         assert!(error_message.contains("Available resources: []"));
     }
 
@@ -426,16 +426,16 @@ mod tests {
         let mut stack_state = StackState::new(Platform::Aws);
 
         // Create a resource without outputs
-        let test_function_2 = Function::new("test-function".to_string())
-            .code(FunctionCode::Image {
+        let test_worker_2 = Worker::new("test-worker".to_string())
+            .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
             })
             .permissions("test-profile".to_string())
             .build();
 
         let resource_state = StackResourceState::new_pending(
-            "function".to_string(),
-            Resource::new(test_function_2),
+            "worker".to_string(),
+            Resource::new(test_worker_2),
             None,
             Vec::new(),
         )
@@ -445,24 +445,24 @@ mod tests {
 
         stack_state
             .resources
-            .insert("test-function".to_string(), resource_state);
+            .insert("test-worker".to_string(), resource_state);
 
         // Test no outputs
-        let result = stack_state.get_resource_outputs::<FunctionOutputs>("test-function");
+        let result = stack_state.get_resource_outputs::<WorkerOutputs>("test-worker");
         assert!(result.is_err());
         let error = result.unwrap_err();
 
         // Assert on the specific error variant
         let error_data = &error.error;
         if let Some(ErrorData::ResourceHasNoOutputs { resource_id, .. }) = error_data {
-            assert_eq!(resource_id, "test-function");
+            assert_eq!(resource_id, "test-worker");
         } else {
             panic!("Expected ResourceHasNoOutputs error, got: {:?}", error_data);
         }
 
         // Also check the string representation
         let error_message = error.to_string();
-        assert!(error_message.contains("Resource 'test-function' has no outputs"));
+        assert!(error_message.contains("Resource 'test-worker' has no outputs"));
     }
 
     #[test]
@@ -491,8 +491,8 @@ mod tests {
             .resources
             .insert("test-storage".to_string(), resource_state);
 
-        // Try to get function outputs from a storage resource
-        let result = stack_state.get_resource_outputs::<FunctionOutputs>("test-storage");
+        // Try to get worker outputs from a storage resource
+        let result = stack_state.get_resource_outputs::<WorkerOutputs>("test-storage");
         assert!(result.is_err());
         let error = result.unwrap_err();
 
@@ -506,8 +506,8 @@ mod tests {
         {
             assert_eq!(resource_id, "test-storage");
             assert!(
-                expected.0.contains("FunctionOutputs"),
-                "expected should reference FunctionOutputs, got: {}",
+                expected.0.contains("WorkerOutputs"),
+                "expected should reference WorkerOutputs, got: {}",
                 expected.0
             );
             assert_eq!(*actual, ResourceType::from_static("storage"));
@@ -523,30 +523,30 @@ mod tests {
     fn test_get_resource_outputs_usage_example() {
         let mut stack_state = StackState::new(Platform::Aws);
 
-        // Create a function with outputs (similar to your original sketch)
-        let function_outputs = FunctionOutputs {
-            function_name: "test-alien-function".to_string(),
+        // Create a worker with outputs (similar to your original sketch)
+        let worker_outputs = WorkerOutputs {
+            worker_name: "test-alien-worker".to_string(),
             url: Some("https://test.lambda-url.us-east-1.on.aws/".to_string()),
             identifier: Some(
-                "arn:aws:lambda:us-east-1:123456789012:function:test-alien-function".to_string(),
+                "arn:aws:lambda:us-east-1:123456789012:function:test-alien-worker".to_string(),
             ),
             load_balancer_endpoint: None,
             commands_push_target: None,
         };
 
-        let test_alien_function = Function::new("test-alien-function".to_string())
-            .code(FunctionCode::Image {
+        let test_alien_worker = Worker::new("test-alien-worker".to_string())
+            .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
             })
             .permissions("test-profile".to_string())
             .build();
 
         let resource_state = StackResourceState {
-            resource_type: "function".to_string(),
+            resource_type: "worker".to_string(),
             internal_state: None,
             status: ResourceStatus::Running,
-            outputs: Some(ResourceOutputs::new(function_outputs)),
-            config: Resource::new(test_alien_function),
+            outputs: Some(ResourceOutputs::new(worker_outputs)),
+            config: Resource::new(test_alien_worker),
             previous_config: None,
             retry_attempt: 0,
             error: None,
@@ -558,20 +558,20 @@ mod tests {
 
         stack_state
             .resources
-            .insert("test-alien-function".to_string(), resource_state);
+            .insert("test-alien-worker".to_string(), resource_state);
 
         // Test the usage pattern from your original sketch
-        let function_outputs = stack_state
-            .get_resource_outputs::<FunctionOutputs>("test-alien-function")
+        let worker_outputs = stack_state
+            .get_resource_outputs::<WorkerOutputs>("test-alien-worker")
             .unwrap();
 
-        let function_url = function_outputs
+        let worker_url = worker_outputs
             .url
             .as_ref()
-            .ok_or_else(|| "Function URL not found in stack state")
+            .ok_or_else(|| "Worker URL not found in stack state")
             .unwrap();
 
-        assert_eq!(function_url, "https://test.lambda-url.us-east-1.on.aws/");
+        assert_eq!(worker_url, "https://test.lambda-url.us-east-1.on.aws/");
     }
 
     // Tests for StackStatus computation - ported from TypeScript
@@ -868,16 +868,16 @@ mod tests {
             );
 
             // Add a running resource
-            let test_function = Function::new("test-function".to_string())
-                .code(FunctionCode::Image {
+            let test_worker = Worker::new("test-worker".to_string())
+                .code(WorkerCode::Image {
                     image: "test:latest".to_string(),
                 })
                 .permissions("test-profile".to_string())
                 .build();
 
             let resource_state = StackResourceState::new_pending(
-                "function".to_string(),
-                Resource::new(test_function),
+                "worker".to_string(),
+                Resource::new(test_worker),
                 None,
                 Vec::new(),
             )
@@ -887,7 +887,7 @@ mod tests {
 
             stack_state
                 .resources
-                .insert("test-function".to_string(), resource_state);
+                .insert("test-worker".to_string(), resource_state);
 
             // Compute status
             assert_eq!(
@@ -933,17 +933,17 @@ mod tests {
                 .resources
                 .insert("default-container-env".to_string(), env_state);
 
-            // 2. Also add a function that depends on it (like the real stack)
-            let test_function = Function::new("alien-rs-fn".to_string())
-                .code(FunctionCode::Image {
+            // 2. Also add a worker that depends on it (like the real stack)
+            let test_worker = Worker::new("alien-rs-worker".to_string())
+                .code(WorkerCode::Image {
                     image: "test:latest".to_string(),
                 })
                 .permissions("execution".to_string())
                 .build();
 
             let fn_state = StackResourceState::new_pending(
-                "function".to_string(),
-                Resource::new(test_function),
+                "worker".to_string(),
+                Resource::new(test_worker),
                 Some(ResourceLifecycle::Live),
                 vec![crate::ResourceRef::new(
                     AzureContainerAppsEnvironment::RESOURCE_TYPE,
@@ -956,7 +956,7 @@ mod tests {
 
             stack_state
                 .resources
-                .insert("alien-rs-fn".to_string(), fn_state);
+                .insert("alien-rs-worker".to_string(), fn_state);
 
             // 3. Verify before roundtrip
             assert!(

@@ -119,11 +119,6 @@ pub async fn handle_updating(
         })
     })?;
 
-    // Stamp deployment-config values onto ContainerCluster template inputs.
-    // Runs every step (not just during preflights) so the executor sees the latest
-    // DeploymentConfig values — e.g., a new worker image ID.
-    crate::helpers::stamp_worker_template(&mut target_stack, &config)?;
-
     // Inject environment variables into the prepared stack
     crate::helpers::inject_environment_variables(&mut target_stack, &config)?;
 
@@ -132,7 +127,7 @@ pub async fn handle_updating(
         crate::helpers::inject_monitoring_environment_variables(&mut target_stack, monitoring)?;
     }
 
-    // Sync secrets to vault before updating functions
+    // Sync secrets to vault before updating workload resources.
     // The vault is Running and secrets may have been updated
     // This checks the hash and only syncs if needed
     info!("Syncing secrets to vault before updating live resources");

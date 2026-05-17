@@ -6,10 +6,10 @@ expression: result
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "FunctionExecute1",
+      "Sid": "WorkerExecute1",
       "Effect": "Allow",
       "Action": [
-        "lambda:InvokeFunction"
+        "lambda:InvokeWorker"
       ],
       "Resource": [
         {
@@ -18,7 +18,7 @@ expression: result
       ]
     },
     {
-      "Sid": "FunctionExecute2",
+      "Sid": "WorkerExecute2",
       "Effect": "Allow",
       "Action": [
         "ecr:BatchGetImage",

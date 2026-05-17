@@ -734,13 +734,6 @@ export type DeploymentDetailResponseStackStateResources = {
     | undefined;
   error?: DeploymentDetailResponseErrorStackState | any | null | undefined;
   /**
-   * True if the resource was provisioned by an external system (e.g., CloudFormation).
-   *
-   * @remarks
-   * Defaults to false, indicating dynamic provisioning by the executor.
-   */
-  isExternallyProvisioned?: boolean | undefined;
-  /**
    * Stores the controller state that failed, used for manual retry operations.
    *
    * @remarks
@@ -777,7 +770,7 @@ export type DeploymentDetailResponseStackStateResources = {
    */
   status: DeploymentDetailResponseStackStateStatus;
   /**
-   * The high-level type of the resource (e.g., Function::RESOURCE_TYPE, Storage::RESOURCE_TYPE).
+   * The high-level type of the resource (e.g., Worker::RESOURCE_TYPE, Storage::RESOURCE_TYPE).
    */
   type: string;
 };
@@ -3114,7 +3107,6 @@ export const DeploymentDetailResponseStackStateResources$inboundSchema:
         z.any(),
       ]),
     ).optional(),
-    isExternallyProvisioned: z.boolean().optional(),
     lastFailedState: z.nullable(z.any()).optional(),
     lifecycle: z.nullable(
       z.union([

@@ -2,12 +2,12 @@ use crate::{
     error::{Error, ErrorData},
     providers::{
         artifact_registry::grpc::GrpcArtifactRegistry, build::grpc::GrpcBuild,
-        function::grpc::GrpcFunction, kv::grpc::GrpcKv, queue::grpc::GrpcQueue,
+        worker::grpc::GrpcWorker, kv::grpc::GrpcKv, queue::grpc::GrpcQueue,
         service_account::grpc::GrpcServiceAccount, storage::grpc::GrpcStorage,
         vault::grpc::GrpcVault,
     },
     traits::{
-        ArtifactRegistry, BindingsProviderApi, Build, Container, Function, Kv, Queue,
+        ArtifactRegistry, BindingsProviderApi, Build, Container, Worker, Kv, Queue,
         ServiceAccount, Storage, Vault,
     },
 };
@@ -279,7 +279,7 @@ impl BindingsProviderApi for GrpcBindingsProvider {
         Ok(queue)
     }
 
-    async fn load_function(&self, binding_name: &str) -> Result<Arc<dyn Function>, Error> {
+    async fn load_worker(&self, binding_name: &str) -> Result<Arc<dyn Worker>, Error> {
         let channel = self
             .get_channel()
             .await
@@ -289,7 +289,7 @@ impl BindingsProviderApi for GrpcBindingsProvider {
             })?;
 
         let function = Arc::new(
-            GrpcFunction::new_from_channel(channel, binding_name.to_string())
+            GrpcWorker::new_from_channel(channel, binding_name.to_string())
                 .await
                 .context(ErrorData::BindingConfigInvalid {
                     binding_name: binding_name.to_string(),

@@ -17,9 +17,9 @@ use crate::{
             alien_bindings::control::FILE_DESCRIPTOR_SET as CONTROL_FILE_DESCRIPTOR_SET,
             ControlGrpcServer,
         },
-        function_service::{
-            alien_bindings::function::FILE_DESCRIPTOR_SET as FUNCTION_FILE_DESCRIPTOR_SET,
-            FunctionGrpcServer,
+        worker_service::{
+            alien_bindings::worker::FILE_DESCRIPTOR_SET as WORKER_FILE_DESCRIPTOR_SET,
+            WorkerGrpcServer,
         },
         kv_service::{
             alien_bindings::kv::FILE_DESCRIPTOR_SET as KV_FILE_DESCRIPTOR_SET, KvGrpcServer,
@@ -137,7 +137,7 @@ pub async fn run_grpc_server(
                 .max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
         )
         .add_service(
-            FunctionGrpcServer::new(provider.clone())
+            WorkerGrpcServer::new(provider.clone())
                 .into_service()
                 .max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
         )
@@ -172,7 +172,7 @@ pub async fn run_grpc_server(
         .register_encoded_file_descriptor_set(VAULT_FILE_DESCRIPTOR_SET)
         .register_encoded_file_descriptor_set(KV_FILE_DESCRIPTOR_SET)
         .register_encoded_file_descriptor_set(QUEUE_FILE_DESCRIPTOR_SET)
-        .register_encoded_file_descriptor_set(FUNCTION_FILE_DESCRIPTOR_SET)
+        .register_encoded_file_descriptor_set(WORKER_FILE_DESCRIPTOR_SET)
         .register_encoded_file_descriptor_set(CONTAINER_FILE_DESCRIPTOR_SET)
         .register_encoded_file_descriptor_set(SERVICE_ACCOUNT_FILE_DESCRIPTOR_SET)
         .register_encoded_file_descriptor_set(WAIT_UNTIL_FILE_DESCRIPTOR_SET)

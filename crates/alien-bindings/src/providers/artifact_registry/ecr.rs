@@ -173,7 +173,7 @@ impl EcrArtifactRegistry {
         // Add service-specific access based on compute service types
         for service_type in &aws_access.allowed_service_types {
             match service_type {
-                ComputeServiceType::Function => {
+                ComputeServiceType::Worker => {
                     if !aws_access.account_ids.is_empty() {
                         // Build sourceArn patterns per AWS docs:
                         // https://docs.aws.amazon.com/lambda/latest/dg/images-create.html
@@ -745,7 +745,7 @@ impl ArtifactRegistry for EcrArtifactRegistry {
                     || statement["Sid"] == "LambdaServiceAccess"
                 {
                     if statement["Principal"]["Service"] == "lambda.amazonaws.com" {
-                        allowed_service_types.push(ComputeServiceType::Function);
+                        allowed_service_types.push(ComputeServiceType::Worker);
                     }
                 }
             }

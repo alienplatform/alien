@@ -3136,7 +3136,7 @@
         "type": "string",
         "description": "Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior.",
         "examples": [
-          "function",
+          "worker",
           "storage",
           "queue",
           "redis",
@@ -3405,7 +3405,7 @@
           },
           "type": {
             "type": "string",
-            "description": "The high-level type of the resource (e.g., Function::RESOURCE_TYPE, Storage::RESOURCE_TYPE)."
+            "description": "The high-level type of the resource (e.g., Worker::RESOURCE_TYPE, Storage::RESOURCE_TYPE)."
           }
         }
       },

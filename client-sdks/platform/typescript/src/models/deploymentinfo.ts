@@ -7,9 +7,9 @@ import { safeParse } from "../lib/schemas.js";
 import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import {
-  DeploymentPageBackground,
-  DeploymentPageBackground$inboundSchema,
-} from "./deploymentpagebackground.js";
+  DeploymentPortalAppearance,
+  DeploymentPortalAppearance$inboundSchema,
+} from "./deploymentportalappearance.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 /**
@@ -66,6 +66,15 @@ export type DeploymentInfoDeploymentGroup = {
   name: string;
 };
 
+export type DeploymentInfoWorkspace = {
+  name: string;
+  avatarUrl?: string | null | undefined;
+};
+
+export type Portal = {
+  appearance: DeploymentPortalAppearance;
+};
+
 /**
  * Represents the target cloud platform.
  */
@@ -83,7 +92,7 @@ export const StackSummaryPlatform = {
 export type StackSummaryPlatform = ClosedEnum<typeof StackSummaryPlatform>;
 
 export type ResourceCounts = {
-  functions: number;
+  workers: number;
   containers: number;
   /**
    * Storage, queue, KV, vault, database, or cache resources that Kubernetes needs Terraform to provision
@@ -102,9 +111,7 @@ export type StackSummary = {
 
 export type DeploymentInfoProject = {
   name: string;
-  workspace: string;
-  deploymentPageBackground?: DeploymentPageBackground | null | undefined;
-  deploymentPageLogoUrl?: string | null | undefined;
+  portal: Portal;
   stackSummary?: StackSummary | null | undefined;
 };
 
@@ -570,6 +577,7 @@ export type DeploymentInfo = {
    * Deployment group details (present when using a deployment-group token)
    */
   deploymentGroup?: DeploymentInfoDeploymentGroup | undefined;
+  workspace: DeploymentInfoWorkspace;
   project: DeploymentInfoProject;
   packages: Packages;
   installContext: InstallContext;
@@ -624,6 +632,40 @@ export function deploymentInfoDeploymentGroupFromJSON(
 }
 
 /** @internal */
+export const DeploymentInfoWorkspace$inboundSchema: z.ZodType<
+  DeploymentInfoWorkspace,
+  unknown
+> = z.object({
+  name: z.string(),
+  avatarUrl: z.nullable(z.string()).optional(),
+});
+
+export function deploymentInfoWorkspaceFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentInfoWorkspace, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentInfoWorkspace$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInfoWorkspace' from JSON`,
+  );
+}
+
+/** @internal */
+export const Portal$inboundSchema: z.ZodType<Portal, unknown> = z.object({
+  appearance: DeploymentPortalAppearance$inboundSchema,
+});
+
+export function portalFromJSON(
+  jsonString: string,
+): SafeParseResult<Portal, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Portal$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Portal' from JSON`,
+  );
+}
+
+/** @internal */
 export const StackSummaryPlatform$inboundSchema: z.ZodEnum<
   typeof StackSummaryPlatform
 > = z.enum(StackSummaryPlatform);
@@ -631,7 +673,7 @@ export const StackSummaryPlatform$inboundSchema: z.ZodEnum<
 /** @internal */
 export const ResourceCounts$inboundSchema: z.ZodType<ResourceCounts, unknown> =
   z.object({
-    functions: z.int(),
+    workers: z.int(),
     containers: z.int(),
     externalInfra: z.int(),
     total: z.int(),
@@ -670,10 +712,7 @@ export const DeploymentInfoProject$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   name: z.string(),
-  workspace: z.string(),
-  deploymentPageBackground: z.nullable(DeploymentPageBackground$inboundSchema)
-    .optional(),
-  deploymentPageLogoUrl: z.nullable(z.string()).optional(),
+  portal: z.lazy(() => Portal$inboundSchema),
   stackSummary: z.nullable(z.lazy(() => StackSummary$inboundSchema)).optional(),
 });
 
@@ -1190,6 +1229,7 @@ export const DeploymentInfo$inboundSchema: z.ZodType<DeploymentInfo, unknown> =
     deployment: z.lazy(() => DeploymentInfoDeployment$inboundSchema).optional(),
     deploymentGroup: z.lazy(() => DeploymentInfoDeploymentGroup$inboundSchema)
       .optional(),
+    workspace: z.lazy(() => DeploymentInfoWorkspace$inboundSchema),
     project: z.lazy(() => DeploymentInfoProject$inboundSchema),
     packages: z.lazy(() => Packages$inboundSchema),
     installContext: z.lazy(() => InstallContext$inboundSchema),

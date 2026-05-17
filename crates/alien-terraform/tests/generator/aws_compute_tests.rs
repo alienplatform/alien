@@ -1,13 +1,13 @@
 //! AWS compute & artifacts — function / build / artifact-registry.
 //!
-//! `container-cluster` is a platform-only resource (Phase 6d moved its
+//! `compute-cluster` is a platform-only resource (Phase 6d moved its
 //! emitter to `alien-terraformx`); the OSS suite asserts the dispatch
 //! registry produces a typed `ImportRegistrationMissing` error if the
 //! extension is absent.
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
-    ArtifactRegistry, Build, CapacityGroup, ContainerCluster, ErrorData, Function, FunctionCode,
+    ArtifactRegistry, Build, CapacityGroup, ComputeCluster, ErrorData, Worker, WorkerCode,
     Ingress, Platform, ResourceLifecycle, Stack, StackSettings,
 };
 use alien_terraform::{generate_terraform_module, TerraformOptions, TerraformTarget, TfRegistry};
@@ -45,8 +45,8 @@ fn aws_build_renders_codebuild_project() {
 fn aws_function_basic_lambda() {
     let stack = Stack::new("acme-fn".to_string())
         .add(
-            Function::new("api".to_string())
-                .code(FunctionCode::Image {
+            Worker::new("api".to_string())
+                .code(WorkerCode::Image {
                     image: "123456789012.dkr.ecr.us-east-1.amazonaws.com/app:1".to_string(),
                 })
                 .permissions("execution".to_string())
@@ -65,8 +65,8 @@ fn aws_function_basic_lambda() {
 fn aws_function_public_ingress_emits_apigw_v2() {
     let stack = Stack::new("acme-public".to_string())
         .add(
-            Function::new("public-api".to_string())
-                .code(FunctionCode::Image {
+            Worker::new("public-api".to_string())
+                .code(WorkerCode::Image {
                     image: "123456789012.dkr.ecr.us-east-1.amazonaws.com/app:1".to_string(),
                 })
                 .permissions("execution".to_string())
@@ -86,7 +86,7 @@ fn aws_function_public_ingress_emits_apigw_v2() {
 fn aws_container_cluster_without_platform_extension_errors_cleanly() {
     let stack = Stack::new("acme-cluster".to_string())
         .add(
-            ContainerCluster::new("compute".to_string())
+            ComputeCluster::new("compute".to_string())
                 .capacity_group(CapacityGroup {
                     group_id: "general".to_string(),
                     instance_type: Some("m7g.large".to_string()),
@@ -117,7 +117,7 @@ fn aws_container_cluster_without_platform_extension_errors_cleanly() {
             platform,
             ..
         } => {
-            assert_eq!(resource_type.as_ref(), "container-cluster");
+            assert_eq!(resource_type.as_ref(), "compute-cluster");
             assert_eq!(*platform, Platform::Aws);
         }
         other => panic!("expected ImportRegistrationMissing, got {other:?}"),

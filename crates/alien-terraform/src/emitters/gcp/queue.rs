@@ -11,7 +11,7 @@ use crate::{
     emitters::gcp::helpers::{downcast, labels, required_label, stack_name_template},
     expr,
 };
-use alien_core::{import::EmitContext, Function, FunctionTrigger, Queue, Result};
+use alien_core::{import::EmitContext, Worker, WorkerTrigger, Queue, Result};
 use hcl::expr::Expression;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -111,13 +111,13 @@ impl TfEmitter for GcpQueueEmitter {
 fn ack_deadline_for(ctx: &EmitContext<'_>) -> u32 {
     let mut max_function_timeout = 0u32;
     for (_id, entry) in ctx.stack.resources() {
-        let Some(function) = entry.config.downcast_ref::<Function>() else {
+        let Some(function) = entry.config.downcast_ref::<Worker>() else {
             continue;
         };
         if function.triggers.iter().any(|trigger| {
             matches!(
                 trigger,
-                FunctionTrigger::Queue { queue }
+                WorkerTrigger::Queue { queue }
                     if queue.resource_type == Queue::RESOURCE_TYPE && queue.id == ctx.resource_id
             )
         }) {

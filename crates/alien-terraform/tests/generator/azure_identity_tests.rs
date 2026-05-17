@@ -84,7 +84,7 @@ fn azure_remote_stack_management_emits_uami_with_federated_credential() {
     let stack = Stack::new("acme-mgmt".to_string())
         .management(ManagementPermissions::extend(
             PermissionProfile::new().global([
-                "function/provision",
+                "worker/provision",
                 "storage/provision",
                 "artifact-registry/provision",
             ]),

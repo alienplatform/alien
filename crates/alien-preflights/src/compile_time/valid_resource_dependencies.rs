@@ -57,7 +57,7 @@ impl CompileTimeCheck for ValidResourceDependenciesCheck {
     }
 }
 
-/// Helper function to detect cycles in dependency graph using DFS
+/// Helper worker to detect cycles in dependency graph using DFS
 fn find_cycle(graph: &HashMap<String, Vec<String>>, start: &str) -> Option<Vec<String>> {
     let mut visited = HashSet::new();
     let mut path = Vec::new();
@@ -106,19 +106,19 @@ fn find_cycle(graph: &HashMap<String, Vec<String>>, start: &str) -> Option<Vec<S
 mod tests {
     use super::*;
     use alien_core::{
-        Function, FunctionCode, ResourceEntry, ResourceLifecycle, ResourceRef, Storage,
+        Worker, WorkerCode, ResourceEntry, ResourceLifecycle, ResourceRef, Storage,
     };
     use indexmap::IndexMap;
 
     #[tokio::test]
     async fn test_valid_dependencies_success() {
         let storage = Storage::new("storage".to_string()).build();
-        let function = Function::new("function".to_string())
-            .code(FunctionCode::Image {
+        let worker = Worker::new("worker".to_string())
+            .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
             })
             .permissions("test".to_string())
-            .link(&storage) // function depends on storage - this is valid
+            .link(&storage) // worker depends on storage - this is valid
             .build();
 
         let mut resources = IndexMap::new();
@@ -132,9 +132,9 @@ mod tests {
             },
         );
         resources.insert(
-            "function".to_string(),
+            "worker".to_string(),
             ResourceEntry {
-                config: alien_core::Resource::new(function),
+                config: alien_core::Resource::new(worker),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
@@ -156,12 +156,12 @@ mod tests {
     #[tokio::test]
     async fn test_circular_dependency_failure() {
         let storage = Storage::new("storage".to_string()).build();
-        let function = Function::new("function".to_string())
-            .code(FunctionCode::Image {
+        let worker = Worker::new("worker".to_string())
+            .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
             })
             .permissions("test".to_string())
-            .link(&storage) // function depends on storage
+            .link(&storage) // worker depends on storage
             .build();
 
         let mut resources = IndexMap::new();
@@ -171,16 +171,16 @@ mod tests {
                 config: alien_core::Resource::new(storage),
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: vec![ResourceRef::new(
-                    alien_core::ResourceType::from("function"),
-                    "function".to_string(),
-                )], // storage depends on function - creates cycle
+                    alien_core::ResourceType::from("worker"),
+                    "worker".to_string(),
+                )], // storage depends on worker - creates cycle
                 remote_access: false,
             },
         );
         resources.insert(
-            "function".to_string(),
+            "worker".to_string(),
             ResourceEntry {
-                config: alien_core::Resource::new(function),
+                config: alien_core::Resource::new(worker),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,

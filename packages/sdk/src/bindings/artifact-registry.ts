@@ -299,8 +299,8 @@ export class ArtifactRegistry {
 
   private computeServiceTypeToProto(st: ComputeServiceType): ComputeServiceTypeProto {
     switch (st) {
-      case "function":
-        return ComputeServiceTypeProto.FUNCTION
+      case "worker":
+        return ComputeServiceTypeProto.WORKER
       default:
         return ComputeServiceTypeProto.UNRECOGNIZED
     }
@@ -308,8 +308,8 @@ export class ArtifactRegistry {
 
   private protoToComputeServiceType(st: ComputeServiceTypeProto): ComputeServiceType | undefined {
     switch (st) {
-      case ComputeServiceTypeProto.FUNCTION:
-        return "function"
+      case ComputeServiceTypeProto.WORKER:
+        return "worker"
       default:
         return undefined
     }

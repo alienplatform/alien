@@ -4,13 +4,14 @@
 pub mod allowed_user_resources;
 pub mod capacity_group_profile;
 pub mod container_lifecycle;
+pub mod daemon_platform;
 pub mod external_bindings_required;
 pub mod frozen_resource_lifecycle;
-pub mod function_memory;
+pub mod worker_memory;
 pub mod live_provision_permissions;
 pub mod network_required;
 pub mod permission_profiles_exist;
-pub mod public_function_lifecycle;
+pub mod public_worker_lifecycle;
 pub mod resource_id_pattern;
 pub mod resource_name_length;
 pub mod resource_references_exist;
@@ -24,15 +25,16 @@ pub mod valid_resource_dependencies;
 pub use allowed_user_resources::AllowedUserResourcesCheck;
 pub use capacity_group_profile::CapacityGroupProfileCheck;
 pub use container_lifecycle::ContainerLifecycleCheck;
+pub use daemon_platform::DaemonPlatformCheck;
 pub use external_bindings_required::ExternalBindingsRequiredCheck;
 pub use frozen_resource_lifecycle::FrozenResourceLifecycleCheck;
-pub use function_memory::FunctionMemoryCheck;
+pub use worker_memory::WorkerMemoryCheck;
 pub use live_provision_permissions::LiveProvisionPermissionsCheck;
 pub use network_required::{
     stack_requires_network, NetworkSettingsPlatformCheck, PublicSubnetsRequiredCheck,
 };
 pub use permission_profiles_exist::PermissionProfilesExistCheck;
-pub use public_function_lifecycle::PublicFunctionLifecycleCheck;
+pub use public_worker_lifecycle::PublicWorkerLifecycleCheck;
 pub use resource_id_pattern::ResourceIdPatternCheck;
 pub use resource_name_length::ResourceNameLengthCheck;
 pub use resource_references_exist::ResourceReferencesExistCheck;

@@ -17,12 +17,12 @@ let value: StackImportResponse = {
       "key": {
         config: {
           id: "<id>",
-          type: "function",
+          type: "worker",
         },
         dependencies: [
           {
             id: "<id>",
-            type: "function",
+            type: "worker",
           },
         ],
         error: {
@@ -31,11 +31,11 @@ let value: StackImportResponse = {
           message: "Item not found.",
         },
         outputs: {
-          type: "function",
+          type: "worker",
         },
         previousConfig: {
           id: "<id>",
-          type: "function",
+          type: "worker",
         },
         status: "provision-failed",
         type: "<value>",

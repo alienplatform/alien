@@ -13,7 +13,7 @@ use tracing::{debug, info};
 /// Mutation that adds ServiceActivation resources for required Azure services.
 ///
 /// Different Azure resource types require different Azure service providers to be enabled:
-/// - function, build: Microsoft.App
+/// - worker, build: Microsoft.App
 /// - storage, kv: Microsoft.Storage  
 /// - vault: Microsoft.KeyVault
 /// - artifact-registry: Microsoft.ContainerRegistry
@@ -119,7 +119,7 @@ impl AzureServiceActivationMutation {
         for (_, entry) in &stack.resources {
             let resource_type = entry.config.resource_type();
             match resource_type.as_ref() {
-                "function" | "build" => {
+                "worker" | "build" => {
                     services.insert("enable-app".to_string(), "Microsoft.App".to_string());
                 }
                 "storage" | "kv" => {

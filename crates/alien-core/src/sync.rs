@@ -27,7 +27,7 @@ pub struct SyncResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target: Option<TargetDeployment>,
     /// Public URL for the commands API (e.g. `https://manager.example.com/v1`).
-    /// Cloud-deployed functions use this to poll for pending commands.
+    /// Cloud-deployed workers use this to poll for pending commands.
     /// When absent, the agent falls back to its sync URL.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub commands_url: Option<String>,

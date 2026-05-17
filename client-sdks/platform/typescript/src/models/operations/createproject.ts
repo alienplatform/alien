@@ -8,6 +8,7 @@ import { safeParse } from "../../lib/schemas.js";
 import { ClosedEnum } from "../../types/enums.js";
 import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
+import * as models from "../index.js";
 
 /**
  * The Git Provider of the repository
@@ -166,14 +167,14 @@ export type CreateProjectRequest = {
 /**
  * The Git Provider of the repository
  */
-export const CreateProjectTypeGithubResponse = {
+export const CreateProjectTypeResponse = {
   Github: "github",
 } as const;
 /**
  * The Git Provider of the repository
  */
-export type CreateProjectTypeGithubResponse = ClosedEnum<
-  typeof CreateProjectTypeGithubResponse
+export type CreateProjectTypeResponse = ClosedEnum<
+  typeof CreateProjectTypeResponse
 >;
 
 /**
@@ -183,7 +184,7 @@ export type CreateProjectGitRepositoryResponse = {
   /**
    * The Git Provider of the repository
    */
-  type: CreateProjectTypeGithubResponse;
+  type: CreateProjectTypeResponse;
   /**
    * The name of the git repository
    */
@@ -191,67 +192,41 @@ export type CreateProjectGitRepositoryResponse = {
 };
 
 /**
- * Type of animated background to display on the deployment page.
+ * Customer-facing deployment portal appearance settings.
  */
-export const CreateProjectDeploymentPageBackgroundType = {
-  GradientMesh: "gradient-mesh",
-  FloatingOrbs: "floating-orbs",
-  FlickeringGrid: "flickering-grid",
-  BubbleGlow: "bubble-glow",
-  ParticleField: "particle-field",
-} as const;
-/**
- * Type of animated background to display on the deployment page.
- */
-export type CreateProjectDeploymentPageBackgroundType = ClosedEnum<
-  typeof CreateProjectDeploymentPageBackgroundType
->;
-
-/**
- * Color mode for the background animation.
- */
-export const CreateProjectMode = {
-  Dark: "dark",
-  Light: "light",
-} as const;
-/**
- * Color mode for the background animation.
- */
-export type CreateProjectMode = ClosedEnum<typeof CreateProjectMode>;
-
-/**
- * Color scheme for the background animation.
- */
-export const CreateProjectColorScheme = {
-  Blue: "blue",
-  Purple: "purple",
-  Green: "green",
-  Orange: "orange",
-  Pink: "pink",
-} as const;
-/**
- * Color scheme for the background animation.
- */
-export type CreateProjectColorScheme = ClosedEnum<
-  typeof CreateProjectColorScheme
->;
-
-/**
- * Customization settings for the deployment page background animation.
- */
-export type CreateProjectDeploymentPageBackground = {
+export type CreateProjectDeploymentPortalAppearance = {
   /**
-   * Type of animated background to display on the deployment page.
+   * Optional project-specific avatar override for the deployment portal.
    */
-  type: CreateProjectDeploymentPageBackgroundType;
+  avatarUrl?: string | null | undefined;
   /**
-   * Color mode for the background animation.
+   * Curated visual style for the deployment portal.
    */
-  mode: CreateProjectMode;
+  preset: models.DeploymentPortalAppearancePreset;
   /**
-   * Color scheme for the background animation.
+   * Accent color used for highlights and primary actions.
    */
-  colorScheme: CreateProjectColorScheme;
+  accentColor: models.DeploymentPortalAccentColor;
+  /**
+   * Optional portal title. Defaults to the project name.
+   */
+  title?: string | null | undefined;
+  /**
+   * Optional customer-facing subtitle.
+   */
+  subtitle?: string | null | undefined;
+  /**
+   * Optional support or contact URL.
+   */
+  supportUrl?: string | null | undefined;
+  /**
+   * Optional documentation URL.
+   */
+  docsUrl?: string | null | undefined;
+  /**
+   * Layout density for portal content.
+   */
+  density: models.DeploymentPortalDensity;
 };
 
 /**
@@ -386,16 +361,12 @@ export type CreateProjectResponse = {
    */
   rootDirectory?: string | null | undefined;
   /**
-   * Customization settings for the deployment page background animation.
+   * Customer-facing deployment portal appearance settings.
    */
-  deploymentPageBackground?:
-    | CreateProjectDeploymentPageBackground
+  deploymentPortalAppearance?:
+    | CreateProjectDeploymentPortalAppearance
     | null
     | undefined;
-  /**
-   * Custom logo URL to show on the deployment page.
-   */
-  deploymentPageLogoUrl?: string | null | undefined;
   /**
    * Configuration for embedded packages (CLI, CloudFormation, Helm, Terraform)
    */
@@ -669,16 +640,16 @@ export function createProjectRequestToJSON(
 }
 
 /** @internal */
-export const CreateProjectTypeGithubResponse$inboundSchema: z.ZodEnum<
-  typeof CreateProjectTypeGithubResponse
-> = z.enum(CreateProjectTypeGithubResponse);
+export const CreateProjectTypeResponse$inboundSchema: z.ZodEnum<
+  typeof CreateProjectTypeResponse
+> = z.enum(CreateProjectTypeResponse);
 
 /** @internal */
 export const CreateProjectGitRepositoryResponse$inboundSchema: z.ZodType<
   CreateProjectGitRepositoryResponse,
   unknown
 > = z.object({
-  type: CreateProjectTypeGithubResponse$inboundSchema,
+  type: CreateProjectTypeResponse$inboundSchema,
   repo: z.string(),
 });
 
@@ -694,38 +665,35 @@ export function createProjectGitRepositoryResponseFromJSON(
 }
 
 /** @internal */
-export const CreateProjectDeploymentPageBackgroundType$inboundSchema: z.ZodEnum<
-  typeof CreateProjectDeploymentPageBackgroundType
-> = z.enum(CreateProjectDeploymentPageBackgroundType);
-
-/** @internal */
-export const CreateProjectMode$inboundSchema: z.ZodEnum<
-  typeof CreateProjectMode
-> = z.enum(CreateProjectMode);
-
-/** @internal */
-export const CreateProjectColorScheme$inboundSchema: z.ZodEnum<
-  typeof CreateProjectColorScheme
-> = z.enum(CreateProjectColorScheme);
-
-/** @internal */
-export const CreateProjectDeploymentPageBackground$inboundSchema: z.ZodType<
-  CreateProjectDeploymentPageBackground,
+export const CreateProjectDeploymentPortalAppearance$inboundSchema: z.ZodType<
+  CreateProjectDeploymentPortalAppearance,
   unknown
 > = z.object({
-  type: CreateProjectDeploymentPageBackgroundType$inboundSchema,
-  mode: CreateProjectMode$inboundSchema,
-  colorScheme: CreateProjectColorScheme$inboundSchema,
+  avatarUrl: z.nullable(z.string()).optional(),
+  preset: models.DeploymentPortalAppearancePreset$inboundSchema.default(
+    "clean",
+  ),
+  accentColor: models.DeploymentPortalAccentColor$inboundSchema.default("blue"),
+  title: z.nullable(z.string()).optional(),
+  subtitle: z.nullable(z.string()).optional(),
+  supportUrl: z.nullable(z.string()).optional(),
+  docsUrl: z.nullable(z.string()).optional(),
+  density: models.DeploymentPortalDensity$inboundSchema.default("comfortable"),
 });
 
-export function createProjectDeploymentPageBackgroundFromJSON(
+export function createProjectDeploymentPortalAppearanceFromJSON(
   jsonString: string,
-): SafeParseResult<CreateProjectDeploymentPageBackground, SDKValidationError> {
+): SafeParseResult<
+  CreateProjectDeploymentPortalAppearance,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
     (x) =>
-      CreateProjectDeploymentPageBackground$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CreateProjectDeploymentPageBackground' from JSON`,
+      CreateProjectDeploymentPortalAppearance$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'CreateProjectDeploymentPortalAppearance' from JSON`,
   );
 }
 
@@ -887,10 +855,9 @@ export const CreateProjectResponse$inboundSchema: z.ZodType<
     z.lazy(() => CreateProjectGitRepositoryResponse$inboundSchema),
   ).optional(),
   rootDirectory: z.nullable(z.string()).optional(),
-  deploymentPageBackground: z.nullable(
-    z.lazy(() => CreateProjectDeploymentPageBackground$inboundSchema),
+  deploymentPortalAppearance: z.nullable(
+    z.lazy(() => CreateProjectDeploymentPortalAppearance$inboundSchema),
   ).optional(),
-  deploymentPageLogoUrl: z.nullable(z.string()).optional(),
   packagesConfig: z.nullable(
     z.lazy(() => CreateProjectPackagesConfigResponse$inboundSchema),
   ).optional(),

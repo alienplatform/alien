@@ -14,7 +14,7 @@
 pub mod artifact_registry;
 pub mod build;
 pub mod container_apps_environment;
-pub mod function;
+pub mod worker;
 pub mod helpers;
 pub mod kv;
 pub mod network;
@@ -31,7 +31,7 @@ pub mod vault;
 pub use artifact_registry::AzureArtifactRegistryEmitter;
 pub use build::AzureBuildEmitter;
 pub use container_apps_environment::AzureContainerAppsEnvironmentEmitter;
-pub use function::AzureFunctionEmitter;
+pub use worker::AzureWorkerEmitter;
 pub use kv::AzureKvEmitter;
 pub use network::AzureNetworkEmitter;
 pub use queue::AzureQueueEmitter;

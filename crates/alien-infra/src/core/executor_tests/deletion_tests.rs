@@ -319,7 +319,7 @@ async fn test_delete_dependent_running() -> Result<()> {
             leaf_func.clone(),
             ResourceLifecycle::Live,
             vec![ResourceRef::new(
-                alien_core::Function::RESOURCE_TYPE,
+                alien_core::Worker::RESOURCE_TYPE,
                 "middle-func",
             )],
         )

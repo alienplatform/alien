@@ -10,7 +10,7 @@
 use std::path::Path;
 
 use alien_build::settings::{BuildSettings, PlatformBuildSettings, PushSettings};
-use alien_core::{Function, FunctionCode, Platform};
+use alien_core::{Worker, WorkerCode, Platform};
 use anyhow::Context;
 use dockdash::{ClientProtocol, PushOptions, RegistryAuth};
 use tracing::info;
@@ -18,15 +18,15 @@ use tracing::info;
 use crate::config::TestConfig;
 use crate::manager::TestManager;
 
-/// Resolve relative `src` paths in FunctionCode::Source entries against `app_dir`.
+/// Resolve relative `src` paths in WorkerCode::Source entries against `app_dir`.
 ///
 /// The production CLI runs from the project directory, so relative paths in
 /// the Stack JSON resolve correctly. In tests, the working directory is the
 /// workspace root, so we must absolutize them before calling `build_stack`.
 fn resolve_source_paths(stack: &mut alien_core::Stack, app_dir: &Path) {
     for (_id, entry) in stack.resources_mut() {
-        if let Some(func) = entry.config.downcast_mut::<Function>() {
-            if let FunctionCode::Source { ref mut src, .. } = func.code {
+        if let Some(func) = entry.config.downcast_mut::<Worker>() {
+            if let WorkerCode::Source { ref mut src, .. } = func.code {
                 let resolved = app_dir.join(&*src);
                 *src = resolved.to_string_lossy().to_string();
             }
@@ -219,7 +219,7 @@ fn extract_ecr_region(ecr_url: &str) -> anyhow::Result<String> {
 ///
 /// ECR replication copies images asynchronously. When Lambda is deployed in a
 /// different region from the ECR source, it uses the replicated image. This
-/// function polls the target-region ECR until the image tag is available.
+/// worker polls the target-region ECR until the image tag is available.
 pub async fn wait_for_ecr_replication(
     config: &TestConfig,
     image_tags: &[String],

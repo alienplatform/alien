@@ -5,19 +5,18 @@
 import * as z from "zod/v4";
 import { remap as remap$ } from "../../lib/primitives.js";
 import { ClosedEnum } from "../../types/enums.js";
+import * as models from "../index.js";
 
 /**
  * The Git Provider of the repository
  */
-export const UpdateProjectTypeGithub = {
+export const UpdateProjectType = {
   Github: "github",
 } as const;
 /**
  * The Git Provider of the repository
  */
-export type UpdateProjectTypeGithub = ClosedEnum<
-  typeof UpdateProjectTypeGithub
->;
+export type UpdateProjectType = ClosedEnum<typeof UpdateProjectType>;
 
 /**
  * The Git Repository that will be connected to the project. When this is defined, any pushes to the specified connected Git Repository will be automatically deployed
@@ -26,7 +25,7 @@ export type UpdateProjectGitRepository = {
   /**
    * The Git Provider of the repository
    */
-  type: UpdateProjectTypeGithub;
+  type: UpdateProjectType;
   /**
    * The name of the git repository
    */
@@ -34,67 +33,41 @@ export type UpdateProjectGitRepository = {
 };
 
 /**
- * Type of animated background to display on the deployment page.
+ * Customer-facing deployment portal appearance settings.
  */
-export const UpdateProjectDeploymentPageBackgroundType = {
-  GradientMesh: "gradient-mesh",
-  FloatingOrbs: "floating-orbs",
-  FlickeringGrid: "flickering-grid",
-  BubbleGlow: "bubble-glow",
-  ParticleField: "particle-field",
-} as const;
-/**
- * Type of animated background to display on the deployment page.
- */
-export type UpdateProjectDeploymentPageBackgroundType = ClosedEnum<
-  typeof UpdateProjectDeploymentPageBackgroundType
->;
-
-/**
- * Color mode for the background animation.
- */
-export const UpdateProjectMode = {
-  Dark: "dark",
-  Light: "light",
-} as const;
-/**
- * Color mode for the background animation.
- */
-export type UpdateProjectMode = ClosedEnum<typeof UpdateProjectMode>;
-
-/**
- * Color scheme for the background animation.
- */
-export const UpdateProjectColorScheme = {
-  Blue: "blue",
-  Purple: "purple",
-  Green: "green",
-  Orange: "orange",
-  Pink: "pink",
-} as const;
-/**
- * Color scheme for the background animation.
- */
-export type UpdateProjectColorScheme = ClosedEnum<
-  typeof UpdateProjectColorScheme
->;
-
-/**
- * Customization settings for the deployment page background animation.
- */
-export type UpdateProjectDeploymentPageBackground = {
+export type UpdateProjectDeploymentPortalAppearance = {
   /**
-   * Type of animated background to display on the deployment page.
+   * Optional project-specific avatar override for the deployment portal.
    */
-  type: UpdateProjectDeploymentPageBackgroundType;
+  avatarUrl?: string | null | undefined;
   /**
-   * Color mode for the background animation.
+   * Curated visual style for the deployment portal.
    */
-  mode: UpdateProjectMode;
+  preset?: models.DeploymentPortalAppearancePreset | undefined;
   /**
-   * Color scheme for the background animation.
+   * Accent color used for highlights and primary actions.
    */
-  colorScheme: UpdateProjectColorScheme;
+  accentColor?: models.DeploymentPortalAccentColor | undefined;
+  /**
+   * Optional portal title. Defaults to the project name.
+   */
+  title?: string | null | undefined;
+  /**
+   * Optional customer-facing subtitle.
+   */
+  subtitle?: string | null | undefined;
+  /**
+   * Optional support or contact URL.
+   */
+  supportUrl?: string | null | undefined;
+  /**
+   * Optional documentation URL.
+   */
+  docsUrl?: string | null | undefined;
+  /**
+   * Layout density for portal content.
+   */
+  density?: models.DeploymentPortalDensity | undefined;
 };
 
 /**
@@ -207,16 +180,12 @@ export type UpdateProjectRequestBody = {
    */
   rootDirectory?: string | null | undefined;
   /**
-   * Customization settings for the deployment page background animation.
+   * Customer-facing deployment portal appearance settings.
    */
-  deploymentPageBackground?:
-    | UpdateProjectDeploymentPageBackground
+  deploymentPortalAppearance?:
+    | UpdateProjectDeploymentPortalAppearance
     | null
     | undefined;
-  /**
-   * Custom logo URL to show on the deployment page.
-   */
-  deploymentPageLogoUrl?: string | null | undefined;
   /**
    * Configuration for embedded packages (CLI, CloudFormation, Helm, Terraform)
    */
@@ -240,9 +209,9 @@ export type UpdateProjectRequest = {
 };
 
 /** @internal */
-export const UpdateProjectTypeGithub$outboundSchema: z.ZodEnum<
-  typeof UpdateProjectTypeGithub
-> = z.enum(UpdateProjectTypeGithub);
+export const UpdateProjectType$outboundSchema: z.ZodEnum<
+  typeof UpdateProjectType
+> = z.enum(UpdateProjectType);
 
 /** @internal */
 export type UpdateProjectGitRepository$Outbound = {
@@ -255,7 +224,7 @@ export const UpdateProjectGitRepository$outboundSchema: z.ZodType<
   UpdateProjectGitRepository$Outbound,
   UpdateProjectGitRepository
 > = z.object({
-  type: UpdateProjectTypeGithub$outboundSchema,
+  type: UpdateProjectType$outboundSchema,
   repo: z.string(),
 });
 
@@ -268,44 +237,43 @@ export function updateProjectGitRepositoryToJSON(
 }
 
 /** @internal */
-export const UpdateProjectDeploymentPageBackgroundType$outboundSchema:
-  z.ZodEnum<typeof UpdateProjectDeploymentPageBackgroundType> = z.enum(
-    UpdateProjectDeploymentPageBackgroundType,
-  );
-
-/** @internal */
-export const UpdateProjectMode$outboundSchema: z.ZodEnum<
-  typeof UpdateProjectMode
-> = z.enum(UpdateProjectMode);
-
-/** @internal */
-export const UpdateProjectColorScheme$outboundSchema: z.ZodEnum<
-  typeof UpdateProjectColorScheme
-> = z.enum(UpdateProjectColorScheme);
-
-/** @internal */
-export type UpdateProjectDeploymentPageBackground$Outbound = {
-  type: string;
-  mode: string;
-  colorScheme: string;
+export type UpdateProjectDeploymentPortalAppearance$Outbound = {
+  avatarUrl?: string | null | undefined;
+  preset: string;
+  accentColor: string;
+  title?: string | null | undefined;
+  subtitle?: string | null | undefined;
+  supportUrl?: string | null | undefined;
+  docsUrl?: string | null | undefined;
+  density: string;
 };
 
 /** @internal */
-export const UpdateProjectDeploymentPageBackground$outboundSchema: z.ZodType<
-  UpdateProjectDeploymentPageBackground$Outbound,
-  UpdateProjectDeploymentPageBackground
+export const UpdateProjectDeploymentPortalAppearance$outboundSchema: z.ZodType<
+  UpdateProjectDeploymentPortalAppearance$Outbound,
+  UpdateProjectDeploymentPortalAppearance
 > = z.object({
-  type: UpdateProjectDeploymentPageBackgroundType$outboundSchema,
-  mode: UpdateProjectMode$outboundSchema,
-  colorScheme: UpdateProjectColorScheme$outboundSchema,
+  avatarUrl: z.nullable(z.string()).optional(),
+  preset: models.DeploymentPortalAppearancePreset$outboundSchema.default(
+    "clean",
+  ),
+  accentColor: models.DeploymentPortalAccentColor$outboundSchema.default(
+    "blue",
+  ),
+  title: z.nullable(z.string()).optional(),
+  subtitle: z.nullable(z.string()).optional(),
+  supportUrl: z.nullable(z.string()).optional(),
+  docsUrl: z.nullable(z.string()).optional(),
+  density: models.DeploymentPortalDensity$outboundSchema.default("comfortable"),
 });
 
-export function updateProjectDeploymentPageBackgroundToJSON(
-  updateProjectDeploymentPageBackground: UpdateProjectDeploymentPageBackground,
+export function updateProjectDeploymentPortalAppearanceToJSON(
+  updateProjectDeploymentPortalAppearance:
+    UpdateProjectDeploymentPortalAppearance,
 ): string {
   return JSON.stringify(
-    UpdateProjectDeploymentPageBackground$outboundSchema.parse(
-      updateProjectDeploymentPageBackground,
+    UpdateProjectDeploymentPortalAppearance$outboundSchema.parse(
+      updateProjectDeploymentPortalAppearance,
     ),
   );
 }
@@ -468,11 +436,10 @@ export function updateProjectPackagesConfigToJSON(
 export type UpdateProjectRequestBody$Outbound = {
   gitRepository?: UpdateProjectGitRepository$Outbound | null | undefined;
   rootDirectory?: string | null | undefined;
-  deploymentPageBackground?:
-    | UpdateProjectDeploymentPageBackground$Outbound
+  deploymentPortalAppearance?:
+    | UpdateProjectDeploymentPortalAppearance$Outbound
     | null
     | undefined;
-  deploymentPageLogoUrl?: string | null | undefined;
   packagesConfig?: UpdateProjectPackagesConfig$Outbound | null | undefined;
   domainId?: string | null | undefined;
 };
@@ -486,10 +453,9 @@ export const UpdateProjectRequestBody$outboundSchema: z.ZodType<
     z.lazy(() => UpdateProjectGitRepository$outboundSchema),
   ).optional(),
   rootDirectory: z.nullable(z.string()).optional(),
-  deploymentPageBackground: z.nullable(
-    z.lazy(() => UpdateProjectDeploymentPageBackground$outboundSchema),
+  deploymentPortalAppearance: z.nullable(
+    z.lazy(() => UpdateProjectDeploymentPortalAppearance$outboundSchema),
   ).optional(),
-  deploymentPageLogoUrl: z.nullable(z.string()).optional(),
   packagesConfig: z.nullable(
     z.lazy(() => UpdateProjectPackagesConfig$outboundSchema),
   ).optional(),

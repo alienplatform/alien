@@ -7,7 +7,7 @@
 
 pub mod artifact_registry;
 pub mod build;
-pub mod function;
+pub mod worker;
 pub mod helpers;
 pub mod kv;
 pub mod network;
@@ -20,7 +20,7 @@ pub mod vault;
 
 pub use artifact_registry::GcpArtifactRegistryEmitter;
 pub use build::GcpBuildEmitter;
-pub use function::GcpFunctionEmitter;
+pub use worker::GcpWorkerEmitter;
 pub use kv::GcpKvEmitter;
 pub use network::GcpNetworkEmitter;
 pub use queue::GcpQueueEmitter;

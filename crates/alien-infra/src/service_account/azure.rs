@@ -1056,7 +1056,7 @@ impl AzureServiceAccountController {
         );
         permission_context = permission_context.with_storage_account_name(storage_account_name);
 
-        // Managing subscription/resource group: used by function/execute and container-cluster/execute
+        // Managing subscription/resource group: used by worker/execute and compute-cluster/execute
         // permission sets for cross-tenant management. In single-subscription mode,
         // these are the same as the current subscription/resource group.
         permission_context = permission_context
@@ -1093,8 +1093,8 @@ impl AzureServiceAccountController {
     const ACR_PULL_PERMISSION_SETS: &'static [&'static str] = &[
         "artifact-registry/pull",
         "artifact-registry/management",
-        "function/execute",
-        "container-cluster/execute",
+        "worker/execute",
+        "compute-cluster/execute",
     ];
 
     /// Permission set IDs that require ACR push access (push implies pull).

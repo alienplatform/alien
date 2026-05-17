@@ -216,7 +216,7 @@ pub fn storage_write_permission_set() -> PermissionSet {
 /// Creates a function execute permission set for testing
 pub fn function_execute_permission_set() -> PermissionSet {
     PermissionSet {
-        id: "function/execute".to_string(),
+        id: "worker/execute".to_string(),
         description: "Allows executing functions".to_string(),
         platforms: PlatformPermissions {
             aws: Some(vec![AwsPlatformPermission {

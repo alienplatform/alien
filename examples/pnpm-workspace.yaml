@@ -1,6 +1,6 @@
 packages:
-  - basic-function-ts
-  - basic-function-rs
+  - basic-worker-ts
+  - basic-worker-rs
   - remote-worker-ts
   - data-connector-ts
   - event-pipeline-ts

@@ -229,7 +229,7 @@ export interface ArtifactRegistryCredentials {
 /**
  * Types of compute services that can have cross-account access.
  */
-export type ComputeServiceType = "function"
+export type ComputeServiceType = "worker"
 
 /**
  * AWS-specific cross-account access configuration.
@@ -241,7 +241,7 @@ export interface AwsCrossAccountAccess {
   allowedServiceTypes: ComputeServiceType[]
   /** Specific IAM role ARNs to grant access to */
   roleArns: string[]
-  /** AWS regions where target Lambda functions run (for sourceArn condition) */
+  /** AWS regions where target Lambda workers run (for sourceArn condition) */
   regions: string[]
 }
 
@@ -275,15 +275,15 @@ export interface CrossAccountPermissions {
 }
 
 // ============================================================================
-// Function Types
+// Worker Types
 // ============================================================================
 
 /**
- * Request for function invocation.
+ * Request for worker invocation.
  */
-export interface FunctionInvokeRequest {
-  /** Target function identifier */
-  targetFunction: string
+export interface WorkerInvokeRequest {
+  /** Target worker identifier */
+  targetWorker: string
   /** HTTP method */
   method: string
   /** Request path */
@@ -297,9 +297,9 @@ export interface FunctionInvokeRequest {
 }
 
 /**
- * Response from function invocation.
+ * Response from worker invocation.
  */
-export interface FunctionInvokeResponse {
+export interface WorkerInvokeResponse {
   /** HTTP status code */
   status: number
   /** Response headers */
@@ -388,8 +388,8 @@ export interface AlienBindingsProvider {
   build(name: string): import("./bindings/build.js").Build
   /** Get an artifact registry binding */
   artifactRegistry(name: string): import("./bindings/artifact-registry.js").ArtifactRegistry
-  /** Get a function binding */
-  func(name: string): import("./bindings/function.js").FunctionBinding
+  /** Get a worker binding */
+  worker(name: string): import("./bindings/worker.js").WorkerBinding
   /** Get a service account binding */
   serviceAccount(name: string): import("./bindings/service-account.js").ServiceAccount
 }

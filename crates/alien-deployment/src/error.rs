@@ -171,7 +171,7 @@ pub enum ErrorData {
 pub struct ResourceError {
     /// ID of the resource that failed
     pub resource_id: String,
-    /// Type of the resource (e.g., "function", "storage")
+    /// Type of the resource (e.g., "worker", "storage")
     pub resource_type: String,
     /// The error that occurred (if available)
     #[serde(skip_serializing_if = "Option::is_none")]

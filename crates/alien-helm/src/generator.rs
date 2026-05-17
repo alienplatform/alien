@@ -10,7 +10,7 @@ use crate::{
     registry::HelmRegistry,
 };
 use alien_core::{
-    import::EmitContext, ErrorData, Function, Ingress, Platform, ResourceLifecycle, Result, Stack,
+    import::EmitContext, ErrorData, Worker, Ingress, Platform, ResourceLifecycle, Result, Stack,
     StackSettings,
 };
 use alien_error::{Context, IntoAlienError};
@@ -129,7 +129,7 @@ impl ChartAnalysis {
         let stack_settings = StackSettings::default();
 
         for (resource_id, entry) in stack.resources() {
-            if let Some(function) = entry.config.downcast_ref::<Function>() {
+            if let Some(function) = entry.config.downcast_ref::<Worker>() {
                 service_accounts.insert(function.permissions.clone());
                 if function.ingress == Ingress::Public {
                     analysis.services.push(ServiceValue {
@@ -780,20 +780,20 @@ fn ensure_trailing_newline(mut value: String) -> String {
 mod tests {
     use super::*;
     use alien_core::{
-        FunctionCode, FunctionTrigger, PermissionProfile, Queue, ResourceLifecycle, Storage,
+        WorkerCode, WorkerTrigger, PermissionProfile, Queue, ResourceLifecycle, Storage,
     };
 
     fn sample_stack() -> Stack {
         let storage = Storage::new("assets".to_string()).versioning(true).build();
         let queue = Queue::new("jobs".to_string()).build();
-        let function = Function::new("api".to_string())
-            .code(FunctionCode::Image {
+        let function = Worker::new("api".to_string())
+            .code(WorkerCode::Image {
                 image: "example.com/api:1".to_string(),
             })
             .permissions("runtime".to_string())
             .ingress(Ingress::Public)
             .link(&storage)
-            .trigger(FunctionTrigger::queue(&queue))
+            .trigger(WorkerTrigger::queue(&queue))
             .build();
 
         Stack::new("sample-stack".to_string())

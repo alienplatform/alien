@@ -36,7 +36,7 @@ impl DockerToolchain {
     }
 
     /// Generate a temporary tag for the build
-    fn generate_temp_tag(function_name: &str) -> String {
+    fn generate_temp_tag(resource_name: &str) -> String {
         use rand::distr::Alphanumeric;
         use rand::Rng;
 
@@ -47,7 +47,7 @@ impl DockerToolchain {
             .collect::<String>()
             .to_lowercase();
 
-        format!("alien-build-{}:{}", function_name, random_suffix)
+        format!("alien-build-{}:{}", resource_name, random_suffix)
     }
 
     fn humanize_buildx_failure(stderr_output: &str) -> String {
@@ -145,7 +145,7 @@ impl Toolchain for DockerToolchain {
                 .spawn()
                 .into_alien_error()
                 .context(ErrorData::ImageBuildFailed {
-                    function_name: "docker-build".to_string(),
+                    resource_name: "docker-build".to_string(),
                     reason: "Failed to execute docker buildx build. Is Docker installed?"
                         .to_string(),
                     build_output: None,
@@ -158,7 +158,7 @@ impl Toolchain for DockerToolchain {
 
             while let Some(line) = stderr_reader.next_line().await.into_alien_error().context(
                 ErrorData::ImageBuildFailed {
-                    function_name: "docker-build".to_string(),
+                    resource_name: "docker-build".to_string(),
                     reason: "Failed to read docker build output".to_string(),
                     build_output: None,
                 },
@@ -182,7 +182,7 @@ impl Toolchain for DockerToolchain {
                     .await
                     .into_alien_error()
                     .context(ErrorData::ImageBuildFailed {
-                        function_name: "docker-build".to_string(),
+                        resource_name: "docker-build".to_string(),
                         reason: "Failed to wait for docker build completion".to_string(),
                         build_output: None,
                     })?;
@@ -190,7 +190,7 @@ impl Toolchain for DockerToolchain {
             if !output.success() {
                 let stderr_output = stderr_lines.join("\n");
                 return Err(AlienError::new(ErrorData::ImageBuildFailed {
-                    function_name: "docker-build".to_string(),
+                    resource_name: "docker-build".to_string(),
                     reason: Self::humanize_buildx_failure(&stderr_output),
                     build_output: Some(stderr_output),
                 }));
@@ -224,7 +224,7 @@ impl Toolchain for DockerToolchain {
             .await
             .into_alien_error()
             .context(ErrorData::ImageBuildFailed {
-                function_name: "docker-build".to_string(),
+                resource_name: "docker-build".to_string(),
                 reason: "Failed to execute docker save".to_string(),
                 build_output: None,
             })?;
@@ -232,7 +232,7 @@ impl Toolchain for DockerToolchain {
         if !save_output.status.success() {
             let stderr = String::from_utf8_lossy(&save_output.stderr);
             return Err(AlienError::new(ErrorData::ImageBuildFailed {
-                function_name: "docker-build".to_string(),
+                resource_name: "docker-build".to_string(),
                 reason: "docker save failed".to_string(),
                 build_output: Some(stderr.to_string()),
             }));
@@ -274,7 +274,7 @@ impl DockerToolchain {
         let image = Image::from_tarball(tarball_path)
             .into_alien_error()
             .context(ErrorData::ImageBuildFailed {
-                function_name: "docker-build".to_string(),
+                resource_name: "docker-build".to_string(),
                 reason: "Failed to read OCI tarball".to_string(),
                 build_output: None,
             })?;
@@ -284,7 +284,7 @@ impl DockerToolchain {
                 .get_metadata()
                 .into_alien_error()
                 .context(ErrorData::ImageBuildFailed {
-                    function_name: "docker-build".to_string(),
+                    resource_name: "docker-build".to_string(),
                     reason: "Failed to read image metadata from tarball".to_string(),
                     build_output: None,
                 })?;

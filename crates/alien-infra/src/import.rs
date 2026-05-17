@@ -105,7 +105,7 @@ impl ImporterRegistry {
     ///
     /// # Platform-only resources
     ///
-    /// `container` and `container-cluster` are deliberately **not** registered
+    /// `container` and `compute-cluster` are deliberately **not** registered
     /// here — their controllers live in `platform/crates/alien-managerx`
     /// (see ALIEN-120 for the planned `alien-platform-controllers` extraction).
     /// Platform-mode managers extend the registry on top:
@@ -115,7 +115,7 @@ impl ImporterRegistry {
     /// alien_platform_controllers::register_platform_importers(&mut registry);
     /// ```
     ///
-    /// OSS-mode callers that encounter a `container` / `container-cluster`
+    /// OSS-mode callers that encounter a `container` / `compute-cluster`
     /// resource get a typed `ImportRegistrationMissing` error — explicit, not
     /// silent. That is the OSS / platform boundary.
     pub fn built_in() -> Self {

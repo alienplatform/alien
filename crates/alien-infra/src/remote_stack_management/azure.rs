@@ -399,8 +399,8 @@ impl AzureRemoteStackManagementController {
                 let needs_acr = global_refs.iter().any(|r| {
                     let id = r.id();
                     id.starts_with("artifact-registry/")
-                        || id.starts_with("function/")
-                        || id.starts_with("container-cluster/")
+                        || id.starts_with("worker/")
+                        || id.starts_with("compute-cluster/")
                 });
 
                 if needs_acr {

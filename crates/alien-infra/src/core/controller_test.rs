@@ -95,7 +95,7 @@
 //! different resource configurations you want to test:
 //!
 //! ```rust
-//! # use alien_core::{Storage, Function, FunctionCode};
+//! # use alien_core::{Storage, Worker, WorkerCode};
 //! use rstest::fixture;
 //!
 //! #[fixture]
@@ -104,9 +104,9 @@
 //! }
 //!
 //! #[fixture]
-//! pub(crate) fn basic_function() -> Function {
-//!     Function::new("basic-function".to_string())
-//!         .code(FunctionCode::Image { image: "test:latest".to_string() })
+//! pub(crate) fn basic_function() -> Worker {
+//!     Worker::new("basic-function".to_string())
+//!         .code(WorkerCode::Image { image: "test:latest".to_string() })
 //!         .permissions("execute".to_string())
 //!         .build()
 //! }
@@ -116,7 +116,7 @@
 //! test configurations need:
 //!
 //! ```rust
-//! # use alien_core::{Storage, Function, FunctionCode};
+//! # use alien_core::{Storage, Worker, WorkerCode};
 //! # use rstest::fixture;
 //! // ─────────────── DEPENDENCY FIXTURES ───────────────────────────────
 //!
@@ -126,9 +126,9 @@
 //! }
 //!
 //! #[fixture]
-//! pub(crate) fn test_function() -> Function {
-//!     Function::new("test-function".to_string())
-//!         .code(FunctionCode::Image { image: "test:latest".to_string() })
+//! pub(crate) fn test_function() -> Worker {
+//!     Worker::new("test-function".to_string())
+//!         .code(WorkerCode::Image { image: "test:latest".to_string() })
 //!         .permissions("execute".to_string())
 //!         .build()
 //! }
@@ -240,7 +240,7 @@ use crate::core::{
     ResourceControllerContext, ResourceControllerStepResult, ResourceRegistry,
 };
 use crate::error::{ErrorData, Result};
-use crate::function::{AwsFunctionController, AzureFunctionController, GcpFunctionController};
+use crate::worker::{AwsWorkerController, AzureWorkerController, GcpWorkerController};
 // Note: Role controllers removed - now using ServiceAccount and permission profiles
 use crate::infra_requirements::AzureContainerAppsEnvironmentController;
 use crate::infra_requirements::AzureResourceGroupController;
@@ -253,7 +253,7 @@ use alien_core::ClientConfig;
 use alien_core::{
     AzureContainerAppsEnvironment, AzureResourceGroup, AzureServiceBusNamespace,
     AzureStorageAccount, ComputeBackend, DeploymentConfig, DomainMetadata,
-    EnvironmentVariablesSnapshot, Function, FunctionCode, ManagementConfig, Platform, Resource,
+    EnvironmentVariablesSnapshot, Worker, WorkerCode, ManagementConfig, Platform, Resource,
     ResourceDefinition, ResourceEntry, ResourceLifecycle, ResourceOutputs, ResourceRef,
     ResourceStatus, Stack, StackResourceState, StackSettings, StackState, Storage,
 };
@@ -680,11 +680,11 @@ impl SingleControllerExecutorBuilder {
                     )
                     .with_dependency(
                         test_function_1(),
-                        AwsFunctionController::mock_ready("test-function-1"),
+                        AwsWorkerController::mock_ready("test-function-1"),
                     )
                     .with_dependency(
                         test_function_2(),
-                        AwsFunctionController::mock_ready("test-function-2"),
+                        AwsWorkerController::mock_ready("test-function-2"),
                     );
             }
             Platform::Gcp => {
@@ -699,11 +699,11 @@ impl SingleControllerExecutorBuilder {
                     )
                     .with_dependency(
                         test_function_1(),
-                        GcpFunctionController::mock_ready("test-function-1"),
+                        GcpWorkerController::mock_ready("test-function-1"),
                     )
                     .with_dependency(
                         test_function_2(),
-                        GcpFunctionController::mock_ready("test-function-2"),
+                        GcpWorkerController::mock_ready("test-function-2"),
                     );
             }
             Platform::Azure => {
@@ -718,11 +718,11 @@ impl SingleControllerExecutorBuilder {
                     )
                     .with_dependency(
                         test_function_1(),
-                        AzureFunctionController::mock_ready("test-function-1"),
+                        AzureWorkerController::mock_ready("test-function-1"),
                     )
                     .with_dependency(
                         test_function_2(),
-                        AzureFunctionController::mock_ready("test-function-2"),
+                        AzureWorkerController::mock_ready("test-function-2"),
                     )
                     // Azure infrastructure dependencies
                     .with_dependency(
@@ -759,11 +759,11 @@ impl SingleControllerExecutorBuilder {
                     )
                     .with_dependency(
                         test_function_1(),
-                        AwsFunctionController::mock_ready("test-function-1"),
+                        AwsWorkerController::mock_ready("test-function-1"),
                     )
                     .with_dependency(
                         test_function_2(),
-                        AwsFunctionController::mock_ready("test-function-2"),
+                        AwsWorkerController::mock_ready("test-function-2"),
                     );
             }
         }
@@ -900,7 +900,7 @@ impl SingleControllerExecutorBuilder {
         default_profile.0.insert(
             "*".to_string(),
             vec![alien_core::permissions::PermissionSetReference::from_name(
-                "function/execute",
+                "worker/execute",
             )],
         );
 
@@ -1036,9 +1036,9 @@ pub fn test_storage_2() -> Storage {
 }
 
 /// Creates the first standard test function dependency
-pub fn test_function_1() -> Function {
-    Function::new("test-function-1".to_string())
-        .code(FunctionCode::Image {
+pub fn test_function_1() -> Worker {
+    Worker::new("test-function-1".to_string())
+        .code(WorkerCode::Image {
             image: "test-image-1:latest".to_string(),
         })
         .permissions("default-profile".to_string())
@@ -1046,9 +1046,9 @@ pub fn test_function_1() -> Function {
 }
 
 /// Creates the second standard test function dependency
-pub fn test_function_2() -> Function {
-    Function::new("test-function-2".to_string())
-        .code(FunctionCode::Image {
+pub fn test_function_2() -> Worker {
+    Worker::new("test-function-2".to_string())
+        .code(WorkerCode::Image {
             image: "test-image-2:latest".to_string(),
         })
         .permissions("default-profile".to_string())

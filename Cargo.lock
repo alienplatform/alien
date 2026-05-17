@@ -2077,7 +2077,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "basic-function"
+name = "basic-worker"
 version = "0.1.0"
 dependencies = [
  "alien-sdk",
@@ -3422,9 +3422,6 @@ dependencies = [
  "alien-sdk",
  "blake3",
  "chrono",
- "http-body-util",
- "hyper 1.9.0",
- "hyper-util",
  "notify",
  "rand 0.8.5",
  "regex",

@@ -106,11 +106,11 @@ pub fn generate_aws_initial_setup_policy(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::{Function, FunctionCode, ResourceLifecycle, Storage};
+    use alien_core::{Worker, WorkerCode, ResourceLifecycle, Storage};
 
-    fn test_function(name: &str) -> Function {
-        Function::new(name.to_string())
-            .code(FunctionCode::Image {
+    fn test_function(name: &str) -> Worker {
+        Worker::new(name.to_string())
+            .code(WorkerCode::Image {
                 image: "rust:latest".to_string(),
             })
             .permissions("execution".to_string())
@@ -119,16 +119,16 @@ mod tests {
 
     #[test]
     fn live_function_stack_excludes_function_provision() {
-        let function = test_function("my-fn");
+        let worker = test_function("my-fn");
 
         let stack = Stack::new("test-stack".to_string())
-            .add(function, ResourceLifecycle::Live)
+            .add(worker, ResourceLifecycle::Live)
             .build();
 
         let ids = initial_setup_permission_set_ids(&stack);
         assert!(
-            !ids.contains(&"function/provision".to_string()),
-            "function/provision belongs to management permissions, got {ids:?}"
+            !ids.contains(&"worker/provision".to_string()),
+            "worker/provision belongs to management permissions, got {ids:?}"
         );
     }
 
@@ -178,16 +178,16 @@ mod tests {
 
     #[test]
     fn combined_stack_includes_all_resource_types() {
-        let function = test_function("my-fn");
+        let worker = test_function("my-fn");
         let storage = Storage::new("my-bucket".to_string()).build();
 
         let stack = Stack::new("test-stack".to_string())
-            .add(function, ResourceLifecycle::Live)
+            .add(worker, ResourceLifecycle::Live)
             .add(storage, ResourceLifecycle::Frozen)
             .build();
 
         let ids = initial_setup_permission_set_ids(&stack);
-        assert!(!ids.contains(&"function/provision".to_string()));
+        assert!(!ids.contains(&"worker/provision".to_string()));
         assert!(ids.contains(&"storage/provision".to_string()));
         assert!(ids.contains(&"service-account/provision".to_string()));
     }
@@ -209,7 +209,7 @@ mod tests {
 
         assert!(
             !actions.contains(&&"lambda:CreateFunction".to_string()),
-            "setup policy must not include live function provision actions"
+            "setup policy must not include live worker provision actions"
         );
         assert!(
             actions.iter().any(|action| action.starts_with("s3:")),

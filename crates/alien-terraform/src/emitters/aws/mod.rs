@@ -6,7 +6,7 @@
 
 pub mod artifact_registry;
 pub mod build;
-pub mod function;
+pub mod worker;
 pub mod helpers;
 pub mod kv;
 pub mod network;
@@ -18,7 +18,7 @@ pub mod vault;
 
 pub use artifact_registry::AwsArtifactRegistryEmitter;
 pub use build::AwsBuildEmitter;
-pub use function::AwsFunctionEmitter;
+pub use worker::AwsWorkerEmitter;
 pub use kv::AwsKvEmitter;
 pub use network::AwsNetworkEmitter;
 pub use queue::AwsQueueEmitter;

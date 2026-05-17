@@ -39,7 +39,7 @@ expression: stack
         "readinessProbe": null,
         "timeoutSeconds": 180,
         "triggers": [],
-        "type": "function"
+        "type": "worker"
       },
       "lifecycle": "live",
       "dependencies": [],

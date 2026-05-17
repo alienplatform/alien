@@ -12,9 +12,9 @@ struct OperationCoverage<'a> {
 fn critical_e2e_provider_operations_are_declared() {
     let cases = [
         OperationCoverage {
-            permission_set_id: "function/provision",
+            permission_set_id: "worker/provision",
             aws_actions: &[
-                "lambda:CreateFunction",
+                "lambda:CreateWorker",
                 "iam:PassRole",
                 "iam:PutRolePolicy",
                 "apigateway:POST",
@@ -40,10 +40,10 @@ fn critical_e2e_provider_operations_are_declared() {
             azure_data_actions: &[],
         },
         OperationCoverage {
-            permission_set_id: "function/heartbeat",
+            permission_set_id: "worker/heartbeat",
             aws_actions: &[
-                "lambda:GetFunction",
-                "lambda:GetFunctionConfiguration",
+                "lambda:GetWorker",
+                "lambda:GetWorkerConfiguration",
                 "lambda:ListTags",
                 "ecr:GetAuthorizationToken",
             ],

@@ -65,8 +65,9 @@ impl ResourceOwnershipPolicy {
 
 pub fn ownership_policy_for_resource_type(resource_type: &str) -> ResourceOwnershipPolicy {
     match resource_type {
-        "function" | "container" => live_only(),
-        "container-cluster" => frozen_with_management(),
+        "function" | "container-cluster" => removed_resource_type(),
+        "worker" | "daemon" | "container" => live_only(),
+        "compute-cluster" => frozen_with_management(),
         "artifact-registry"
         | "build"
         | "network"
@@ -99,6 +100,10 @@ const fn live_only() -> ResourceOwnershipPolicy {
     ResourceOwnershipPolicy::new(ResourceLifecycle::Live, false, true, false, false)
 }
 
+const fn removed_resource_type() -> ResourceOwnershipPolicy {
+    ResourceOwnershipPolicy::new(ResourceLifecycle::Live, false, false, false, false)
+}
+
 const fn user_choice() -> ResourceOwnershipPolicy {
     ResourceOwnershipPolicy::new(ResourceLifecycle::Frozen, true, true, true, false)
 }
@@ -108,8 +113,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn functions_and_containers_are_live_only() {
-        for resource_type in ["function", "container"] {
+    fn workload_resources_are_live_only() {
+        for resource_type in ["worker", "daemon", "container"] {
             let policy = ownership_policy_for_resource_type(resource_type);
             assert_eq!(policy.default_lifecycle(), ResourceLifecycle::Live);
             assert!(!policy.allows_lifecycle(ResourceLifecycle::Frozen));
@@ -119,13 +124,23 @@ mod tests {
     }
 
     #[test]
-    fn container_cluster_is_frozen_with_management() {
-        let policy = ownership_policy_for_resource_type("container-cluster");
+    fn compute_cluster_is_frozen_with_management() {
+        let policy = ownership_policy_for_resource_type("compute-cluster");
         assert_eq!(policy.default_lifecycle(), ResourceLifecycle::Frozen);
         assert!(policy.allows_lifecycle(ResourceLifecycle::Frozen));
         assert!(!policy.allows_lifecycle(ResourceLifecycle::Live));
         assert!(policy.should_emit_in_setup(ResourceLifecycle::Frozen));
         assert!(policy.frozen_requires_management());
+    }
+
+    #[test]
+    fn removed_resource_type_tags_are_not_normal_policy_entries() {
+        for resource_type in ["function", "container-cluster"] {
+            let policy = ownership_policy_for_resource_type(resource_type);
+            assert!(!policy.allows_lifecycle(ResourceLifecycle::Frozen));
+            assert!(!policy.allows_lifecycle(ResourceLifecycle::Live));
+            assert!(!policy.frozen_requires_management());
+        }
     }
 
     #[test]

@@ -5,7 +5,7 @@
 //! - GCP: Pub/Sub push subscription → Cloud Run
 //! - Azure: Service Bus → Container Apps
 //!
-//! For the local platform, this service runs independently of the function and delivers
+//! For the local platform, this service runs independently of the worker and delivers
 //! events via the runtime's `ControlGrpcServer::send_task()`. This ensures:
 //! - At-least-once delivery for queue messages (ack only on handler success)
 //! - Filesystem-level storage event watching via `notify` (no polling)
@@ -29,7 +29,7 @@ use alien_bindings::grpc::control::{
 };
 use alien_bindings::grpc::control_service::ControlGrpcServer;
 use alien_bindings::traits::{BindingsProviderApi, MessagePayload, Queue};
-use alien_core::FunctionTrigger;
+use alien_core::WorkerTrigger;
 use alien_error::{AlienError, Context, IntoAlienError};
 use chrono::Utc;
 use prost_types::Timestamp;
@@ -44,10 +44,10 @@ type Result<T> = crate::error::Result<T>;
 
 /// Platform-level trigger service for local deployments.
 ///
-/// Runs alongside the function process, managed by the infra controller.
-/// Delivers events to the function via `control_server.send_task()`.
+/// Runs alongside the worker process, managed by the infra controller.
+/// Delivers events to the worker via `control_server.send_task()`.
 pub struct LocalTriggerService {
-    triggers: Vec<FunctionTrigger>,
+    triggers: Vec<WorkerTrigger>,
     bindings_provider: Arc<LocalBindingsProvider>,
     state_dir: PathBuf,
     shutdown_rx: broadcast::Receiver<()>,
@@ -55,7 +55,7 @@ pub struct LocalTriggerService {
 
 impl LocalTriggerService {
     pub fn new(
-        triggers: Vec<FunctionTrigger>,
+        triggers: Vec<WorkerTrigger>,
         bindings_provider: Arc<LocalBindingsProvider>,
         state_dir: PathBuf,
         shutdown_rx: broadcast::Receiver<()>,
@@ -86,7 +86,7 @@ impl LocalTriggerService {
 
         for trigger in &self.triggers {
             match trigger {
-                FunctionTrigger::Queue { queue } => {
+                WorkerTrigger::Queue { queue } => {
                     let binding_name = queue.id.clone();
                     let provider = self.bindings_provider.clone();
                     let cs = control_server.clone();
@@ -101,7 +101,7 @@ impl LocalTriggerService {
                         }
                     }));
                 }
-                FunctionTrigger::Storage { storage, events } => {
+                WorkerTrigger::Storage { storage, events } => {
                     let binding_name = storage.id.clone();
                     let event_types = events.clone();
                     let storage_path = self
@@ -131,7 +131,7 @@ impl LocalTriggerService {
                         }
                     }));
                 }
-                FunctionTrigger::Schedule { cron } => {
+                WorkerTrigger::Schedule { cron } => {
                     let cron_expr = cron.clone();
                     let cs = control_server.clone();
                     let cron_state_dir = self.state_dir.clone();
@@ -232,11 +232,11 @@ fn to_cron_crate_format(user_cron: &str) -> String {
 // Queue Polling
 // ---------------------------------------------------------------------------
 
-/// Poll a queue for messages and deliver to the function via send_task.
+/// Poll a queue for messages and deliver to the worker via send_task.
 /// Acks only on successful handler completion (at-least-once delivery).
 ///
 /// Uses the shared `LocalBindingsProvider` to access the queue — the same
-/// provider the function runtime uses. This avoids sled lock contention
+/// provider the worker runtime uses. This avoids sled lock contention
 /// (sled only allows one open handle per database directory).
 async fn poll_queue(
     binding_name: &str,

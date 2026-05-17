@@ -16,7 +16,7 @@ export class Resource {
 
   /**
    * Returns a reference to this resource.
-   * A resource reference is used to link resources together (e.g., granting a Function access to a Storage bucket).
+   * A resource reference is used to link resources together (e.g., granting a Worker access to a Storage bucket).
    * @returns A ResourceRef object containing the type and name of this resource.
    */
   public ref(): ResourceRef {

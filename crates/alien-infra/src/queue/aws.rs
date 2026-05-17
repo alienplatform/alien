@@ -327,17 +327,17 @@ impl AwsQueueController {
         ctx: &ResourceControllerContext<'_>,
         queue_config: &Queue,
     ) -> Result<u32> {
-        use alien_core::{Function, FunctionTrigger};
+        use alien_core::{Worker, WorkerTrigger};
 
         let mut max_function_timeout = 0u32;
         let mut functions_using_queue = 0;
 
         // Find all functions in the stack that have queue triggers referencing this queue
         for (_resource_id, resource) in &ctx.desired_stack.resources {
-            if let Some(function) = resource.config.downcast_ref::<Function>() {
+            if let Some(function) = resource.config.downcast_ref::<Worker>() {
                 // Check if this function has a queue trigger that references our queue
                 for trigger in &function.triggers {
-                    if let FunctionTrigger::Queue { queue } = trigger {
+                    if let WorkerTrigger::Queue { queue } = trigger {
                         if queue.id == queue_config.id {
                             max_function_timeout =
                                 max_function_timeout.max(function.timeout_seconds);

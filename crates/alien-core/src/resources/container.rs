@@ -1,6 +1,6 @@
 //! Container resource for long-running container workloads.
 //!
-//! A Container represents a deployable unit that runs on a ContainerCluster.
+//! A Container represents a deployable unit that runs on a ComputeCluster.
 //! It defines the container image, resource requirements, scaling configuration,
 //! and networking settings.
 //!
@@ -13,7 +13,7 @@
 
 use crate::error::{ErrorData, Result};
 use crate::resource::{ResourceDefinition, ResourceOutputsDefinition, ResourceRef, ResourceType};
-use crate::resources::{ContainerCluster, ToolchainConfig};
+use crate::resources::{ComputeCluster, ToolchainConfig};
 use crate::LoadBalancerEndpoint;
 use alien_error::AlienError;
 use bon::Builder;
@@ -174,7 +174,7 @@ pub struct ContainerPort {
 
 /// Container resource for running long-running container workloads.
 ///
-/// A Container defines a deployable unit that runs on a ContainerCluster.
+/// A Container defines a deployable unit that runs on a ComputeCluster.
 /// The managed container backend handles scheduling replicas across machines,
 /// autoscaling based on various metrics, and service discovery.
 ///
@@ -222,8 +222,8 @@ pub struct Container {
     #[builder(field)]
     pub ports: Vec<ContainerPort>,
 
-    /// ContainerCluster resource ID that this container runs on.
-    /// If None, will be auto-assigned by ContainerClusterMutation at deployment time.
+    /// ComputeCluster resource ID that this container runs on.
+    /// If None, will be auto-assigned by ComputeClusterMutation at deployment time.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cluster: Option<String>,
 
@@ -455,10 +455,10 @@ impl ResourceDefinition for Container {
     fn get_dependencies(&self) -> Vec<ResourceRef> {
         let mut deps = self.links.clone();
         // Add dependency on the container cluster if explicitly specified.
-        // If None, ContainerClusterMutation will auto-assign at deployment time.
+        // If None, ComputeClusterMutation will auto-assign at deployment time.
         if let Some(cluster) = &self.cluster {
             deps.push(ResourceRef::new(
-                ContainerCluster::RESOURCE_TYPE.clone(),
+                ComputeCluster::RESOURCE_TYPE.clone(),
                 cluster,
             ));
         }

@@ -1,7 +1,7 @@
 //! # Resource Controller Guidelines
 //!
 //! Resource controllers manage the lifecycle of cloud resources (create, update, delete) through state machines.
-//! Each controller handles one resource type on one platform (e.g., `AwsFunctionController`, `GcpRoleController`).
+//! Each controller handles one resource type on one platform (e.g., `AwsWorkerController`, `GcpRoleController`).
 //!
 //! **Key Principles:**
 //! - **Fail Fast on Conflict for Create/Update**: Issue the cloud API call directly and propagate all errors (including `RemoteResourceConflict`). The executor handles retries automatically. Deletion flows still tolerate `RemoteResourceNotFound` and `RemoteAccessDenied`.
@@ -11,7 +11,7 @@
 //! - **Predictability Over Efficiency**: Always go through all states in order, even if some are no-ops
 //!
 //! **Examples:**
-//! - `AwsFunctionController`: Manages Lambda functions, IAM roles, and deployment packages
+//! - `AwsWorkerController`: Manages Lambda functions, IAM roles, and deployment packages
 //! - `GcpStorageController`: Manages Cloud Storage buckets, permissions, and lifecycle policies  
 //! - `AzureServiceController`: Manages Container Instances, networking, and monitoring
 //!
@@ -104,7 +104,7 @@
 //!     if s.url.is_some() {
 //!         Ok(MyState { status: DeletingUrl, ..s.clone() })
 //!     } else {
-//!         Ok(MyState { status: DeletingFunction, ..s.clone() })
+//!         Ok(MyState { status: DeletingWorker, ..s.clone() })
 //!     }
 //! }
 //! ```
@@ -139,8 +139,8 @@
 //! }
 //!
 //! async fn update_config_start(&self, s: &MyState, ctx: &Context) -> Result<(MyState, Option<Duration>)> {
-//!     let current = ctx.desired_resource_config::<Function>()?;
-//!     let previous = ctx.previous_resource_config::<Function>()?;
+//!     let current = ctx.desired_resource_config::<Worker>()?;
+//!     let previous = ctx.previous_resource_config::<Worker>()?;
 //!     let config_changed = current.memory_mb != previous.memory_mb; // ... other checks
 //!     
 //!     // Only perform update if needed, but always transition to wait state
@@ -176,7 +176,7 @@
 //! **always** go through all phases in the same order, even if some phases are no-ops:
 //!
 //! ```ignore
-//! enum FunctionStatus {
+//! enum WorkerStatus {
 //!     UpdateStart,              // Updates code if needed
 //!     UpdateCodeWaitForActive,  // Waits for code update (even if no-op)
 //!     UpdateConfigStart,        // Updates config if needed  
@@ -327,7 +327,7 @@
 //!
 //! ## Dependency Management
 //!
-//! Controllers often need to access state from other resources they depend on (e.g., a Function needs its Role's ARN).
+//! Controllers often need to access state from other resources they depend on (e.g., a Worker needs its Role's ARN).
 //! Use the provided helper method to safely access dependency internal state.
 //!
 //! ```ignore
@@ -383,20 +383,20 @@
 //!
 //! ## Testing Guidelines
 //!
-//! ### Use Fixture Functions for Test Data
+//! ### Use Fixture Workers for Test Data
 //! Create fixture functions for different resource configurations to ensure consistent test data.
 //! Use `rstest::fixture` for reusable test data that can be composed in different ways.
 //!
 //! ```ignore
 //! #[fixture]
-//! pub fn basic_function() -> Function {
-//!     Function::new("test-func".to_string())
-//!         .code(FunctionCode::Image { image: "test:latest".to_string() })
+//! pub fn basic_function() -> Worker {
+//!     Worker::new("test-func".to_string())
+//!         .code(WorkerCode::Image { image: "test:latest".to_string() })
 //!         .build()
 //! }
 //!
 //! #[fixture]
-//! pub fn function_with_env_vars() -> Function {
+//! pub fn function_with_env_vars() -> Worker {
 //!     let mut env = HashMap::new();
 //!     env.insert("APP_ENV".to_string(), "test".to_string());
 //!     basic_function().environment(env).build()
@@ -432,7 +432,7 @@
 //! #[case::basic(basic_function())]
 //! #[case::with_env(function_with_env_vars())]
 //! #[tokio::test]
-//! async fn test_full_lifecycle(#[case] function: Function) {
+//! async fn test_full_lifecycle(#[case] function: Worker) {
 //!     // Test creation flow until Ready
 //!     // Test update flow  
 //!     // Test deletion flow until Deleted
@@ -514,7 +514,7 @@
 //! }
 //! ```
 //!
-//! ### Use Helper Functions for Test Setup
+//! ### Use Helper Workers for Test Setup
 //! Create helper functions to reduce boilerplate in test setup, especially for creating
 //! contexts, stack states, and platform configurations.
 //!
@@ -593,7 +593,7 @@ pub struct ResourceControllerContext<'a> {
     pub desired_stack: &'a alien_core::Stack,
     /// Provider for platform services - enables dependency injection for testing.
     /// For cloud platforms: provides API clients (S3, Lambda, GCS, etc.)
-    /// For local platform: provides service managers (FunctionManager, StorageManager, etc.)
+    /// For local platform: provides service managers (WorkerManager, StorageManager, etc.)
     pub service_provider: &'a Arc<dyn PlatformServiceProvider>,
     /// Deployment configuration containing stack settings, management config, and deployment-time settings.
     pub deployment_config: &'a alien_core::DeploymentConfig,
@@ -628,7 +628,7 @@ pub struct ResourceControllerStepResult {
     pub suggested_delay: Option<Duration>,
 }
 
-/// Trait implemented by platform-specific controller structs (e.g., AwsFunctionController).
+/// Trait implemented by platform-specific controller structs (e.g., AwsWorkerController).
 /// Defines the logic for managing a specific resource type on a specific platform.
 // Make Send + Sync + Debug for potential multi-threading and easier debugging
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
@@ -683,14 +683,14 @@ pub trait ResourceController: Send + Sync + Debug {
     /// Gets binding parameters for this resource when it's used as a dependency.
     /// This method is called when other resources need to access this resource.
     ///
-    /// # Important: Pure Function Design
+    /// # Important: Pure Worker Design
     ///
     /// This is a **pure function** that derives binding parameters solely from the controller's internal state.
     /// All necessary data (infrastructure identifiers, computed environment variables) should be stored in the
     /// controller state during resource creation/updates.
     ///
     /// **Why this approach**:
-    /// - Eliminates context confusion (when Function depends on Build, context was for Function, not Build)
+    /// - Eliminates context confusion (when Worker depends on Build, context was for Worker, not Build)
     /// - Makes the method predictable and testable
     /// - Ensures all needed data is computed and stored during resource lifecycle operations
     ///
@@ -787,19 +787,19 @@ fn deserialize_controller_by_tag(
     }
 
     match type_tag {
-        // Function controllers
+        // Worker controllers
         #[cfg(feature = "aws")]
-        "AwsFunctionController" => deser!(crate::function::AwsFunctionController),
+        "AwsWorkerController" => deser!(crate::worker::AwsWorkerController),
         #[cfg(feature = "gcp")]
-        "GcpFunctionController" => deser!(crate::function::GcpFunctionController),
+        "GcpWorkerController" => deser!(crate::worker::GcpWorkerController),
         #[cfg(feature = "azure")]
-        "AzureFunctionController" => deser!(crate::function::AzureFunctionController),
+        "AzureWorkerController" => deser!(crate::worker::AzureWorkerController),
         #[cfg(feature = "kubernetes")]
-        "KubernetesFunctionController" => deser!(crate::function::KubernetesFunctionController),
+        "KubernetesWorkerController" => deser!(crate::worker::KubernetesWorkerController),
         #[cfg(feature = "local")]
-        "LocalFunctionController" => deser!(crate::function::LocalFunctionController),
+        "LocalWorkerController" => deser!(crate::worker::LocalWorkerController),
         #[cfg(feature = "test")]
-        "TestFunctionController" => deser!(crate::function::TestFunctionController),
+        "TestWorkerController" => deser!(crate::worker::TestWorkerController),
 
         // Container controllers
         // They are registered via register_controller_deserializer_extension().
@@ -810,8 +810,8 @@ fn deserialize_controller_by_tag(
 
         // Container cluster controllers
         #[cfg(feature = "local")]
-        "LocalContainerClusterController" => {
-            deser!(crate::container_cluster::LocalContainerClusterController)
+        "LocalComputeClusterController" => {
+            deser!(crate::compute_cluster::LocalComputeClusterController)
         }
 
         // Storage controllers

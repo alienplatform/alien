@@ -2,7 +2,7 @@ use crate::{bindings::binding_env_var_name, ErrorData, Platform, ResourceRef, Re
 use alien_error::AlienError;
 use std::collections::HashMap;
 
-pub const ENV_ALIEN_CURRENT_FUNCTION_BINDING_NAME: &str = "ALIEN_CURRENT_FUNCTION_BINDING_NAME";
+pub const ENV_ALIEN_CURRENT_WORKER_BINDING_NAME: &str = "ALIEN_CURRENT_WORKER_BINDING_NAME";
 pub const ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME: &str = "ALIEN_CURRENT_CONTAINER_BINDING_NAME";
 pub const ENV_ALIEN_DEPLOYMENT_TYPE: &str = "ALIEN_DEPLOYMENT_TYPE";
 pub const ENV_ALIEN_LAMBDA_MODE: &str = "ALIEN_LAMBDA_MODE";
@@ -35,7 +35,7 @@ pub enum RuntimeEnvironmentValue {
     AzureSubscriptionId,
     AzureTenantId,
     CurrentContainerBindingName,
-    CurrentFunctionBindingName,
+    CurrentWorkerBindingName,
     GcpProjectId,
     GcpRegion,
 }
@@ -50,7 +50,7 @@ pub struct RuntimeEnvironmentEntry {
 pub enum RuntimeEnvironmentBindingSource {
     LinkedResource(ResourceRef),
     CurrentContainer,
-    CurrentFunction,
+    CurrentWorker,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,12 +97,12 @@ impl RuntimeEnvironmentPlan {
         self
     }
 
-    pub fn add_current_function_binding(mut self, function_id: &str) -> Self {
+    pub fn add_current_worker_binding(mut self, worker_id: &str) -> Self {
         self.entries.push(RuntimeEnvironmentPlanEntry::Binding(
             RuntimeEnvironmentBindingEntry {
-                env_name: binding_env_var_name(function_id),
-                binding_name: function_id.to_string(),
-                source: RuntimeEnvironmentBindingSource::CurrentFunction,
+                env_name: binding_env_var_name(worker_id),
+                binding_name: worker_id.to_string(),
+                source: RuntimeEnvironmentBindingSource::CurrentWorker,
             },
         ));
         self
@@ -183,7 +183,7 @@ pub fn standard_runtime_environment_plan(platform: Platform) -> Vec<RuntimeEnvir
     entries
 }
 
-pub fn function_transport_runtime_environment_plan(
+pub fn worker_transport_runtime_environment_plan(
     platform: Platform,
 ) -> Vec<RuntimeEnvironmentEntry> {
     match platform {
@@ -212,16 +212,16 @@ pub fn function_transport_runtime_environment_plan(
     }
 }
 
-pub fn function_runtime_environment_plan(platform: Platform) -> Vec<RuntimeEnvironmentEntry> {
+pub fn worker_runtime_environment_plan(platform: Platform) -> Vec<RuntimeEnvironmentEntry> {
     let mut entries = standard_runtime_environment_plan(platform);
-    entries.extend(function_transport_runtime_environment_plan(platform));
+    entries.extend(worker_transport_runtime_environment_plan(platform));
     entries.push(RuntimeEnvironmentEntry {
         name: ENV_ALIEN_RUNTIME_SEND_OTLP,
         value: RuntimeEnvironmentValue::Literal("true"),
     });
     entries.push(RuntimeEnvironmentEntry {
-        name: ENV_ALIEN_CURRENT_FUNCTION_BINDING_NAME,
-        value: RuntimeEnvironmentValue::CurrentFunctionBindingName,
+        name: ENV_ALIEN_CURRENT_WORKER_BINDING_NAME,
+        value: RuntimeEnvironmentValue::CurrentWorkerBindingName,
     });
     if platform == Platform::Azure {
         entries.push(RuntimeEnvironmentEntry {
@@ -232,15 +232,15 @@ pub fn function_runtime_environment_plan(platform: Platform) -> Vec<RuntimeEnvir
     entries
 }
 
-pub fn function_runtime_environment_contract(
+pub fn worker_runtime_environment_contract(
     platform: Platform,
-    function_id: &str,
+    worker_id: &str,
     links: &[ResourceRef],
 ) -> RuntimeEnvironmentPlan {
     RuntimeEnvironmentPlan::new()
-        .add_scalar_entries(function_runtime_environment_plan(platform))
+        .add_scalar_entries(worker_runtime_environment_plan(platform))
         .add_linked_bindings(links)
-        .add_current_function_binding(function_id)
+        .add_current_worker_binding(worker_id)
 }
 
 pub fn passthrough_transport_runtime_environment_plan() -> [RuntimeEnvironmentEntry; 1] {
@@ -316,7 +316,7 @@ pub fn is_runtime_environment_contract_name(name: &str) -> bool {
     matches!(
         name,
         ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME
-            | ENV_ALIEN_CURRENT_FUNCTION_BINDING_NAME
+            | ENV_ALIEN_CURRENT_WORKER_BINDING_NAME
             | ENV_ALIEN_DEPLOYMENT_TYPE
             | ENV_ALIEN_LAMBDA_MODE
             | ENV_ALIEN_RUNTIME_SEND_OTLP

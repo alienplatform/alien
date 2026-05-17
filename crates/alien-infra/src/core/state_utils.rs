@@ -386,8 +386,8 @@ fn prepare_for_destroy_matching(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::function::{TestFunctionController, TestFunctionState};
-    use alien_core::{Function, FunctionCode};
+    use crate::worker::{TestWorkerController, TestWorkerState};
+    use alien_core::{Worker, WorkerCode};
     use alien_core::{
         Platform, Resource, ResourceStatus, StackResourceState, StackSettings, StackState,
     };
@@ -397,18 +397,18 @@ mod tests {
         let mut stack_state = StackState::new(Platform::Test);
 
         // Create a function resource that failed during provision
-        let function_config = Function::new("test-function".to_string())
-            .code(FunctionCode::Image {
+        let function_config = Worker::new("test-function".to_string())
+            .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
             })
             .permissions("execution".to_string())
             .build();
 
-        let mut failed_controller = TestFunctionController::default();
-        failed_controller.state = TestFunctionState::CreateFailed;
+        let mut failed_controller = TestWorkerController::default();
+        failed_controller.state = TestWorkerState::CreateFailed;
 
         let mut resource_state = StackResourceState::new_pending(
-            "function".to_string(),
+            "worker".to_string(),
             Resource::new(function_config),
             None,
             Vec::new(),
@@ -434,9 +434,9 @@ mod tests {
         assert_eq!(updated_resource.status, ResourceStatus::Deleting);
 
         let controller = updated_resource
-            .get_internal_controller_typed::<TestFunctionController>()
+            .get_internal_controller_typed::<TestWorkerController>()
             .unwrap();
-        assert_eq!(controller.state, TestFunctionState::DeleteStart);
+        assert_eq!(controller.state, TestWorkerState::DeleteStart);
 
         // Error should be cleared
         assert!(updated_resource.error.is_none());
@@ -449,18 +449,18 @@ mod tests {
         let mut stack_state = StackState::new(Platform::Test);
 
         // Create a function resource that failed during update
-        let function_config = Function::new("test-function".to_string())
-            .code(FunctionCode::Image {
+        let function_config = Worker::new("test-function".to_string())
+            .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
             })
             .permissions("execution".to_string())
             .build();
 
-        let mut failed_controller = TestFunctionController::default();
-        failed_controller.state = TestFunctionState::UpdateFailed;
+        let mut failed_controller = TestWorkerController::default();
+        failed_controller.state = TestWorkerState::UpdateFailed;
 
         let mut resource_state = StackResourceState::new_pending(
-            "function".to_string(),
+            "worker".to_string(),
             Resource::new(function_config),
             None,
             Vec::new(),
@@ -486,9 +486,9 @@ mod tests {
         assert_eq!(updated_resource.status, ResourceStatus::Deleting);
 
         let controller = updated_resource
-            .get_internal_controller_typed::<TestFunctionController>()
+            .get_internal_controller_typed::<TestWorkerController>()
             .unwrap();
-        assert_eq!(controller.state, TestFunctionState::DeleteStart);
+        assert_eq!(controller.state, TestWorkerState::DeleteStart);
     }
 
     #[tokio::test]
@@ -496,18 +496,18 @@ mod tests {
         let mut stack_state = StackState::new(Platform::Test);
 
         // Create a function resource that failed during delete
-        let function_config = Function::new("test-function".to_string())
-            .code(FunctionCode::Image {
+        let function_config = Worker::new("test-function".to_string())
+            .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
             })
             .permissions("execution".to_string())
             .build();
 
-        let mut failed_controller = TestFunctionController::default();
-        failed_controller.state = TestFunctionState::DeleteFailed;
+        let mut failed_controller = TestWorkerController::default();
+        failed_controller.state = TestWorkerState::DeleteFailed;
 
         let mut resource_state = StackResourceState::new_pending(
-            "function".to_string(),
+            "worker".to_string(),
             Resource::new(function_config),
             None,
             Vec::new(),
@@ -543,18 +543,18 @@ mod tests {
         let mut stack_state = StackState::new(Platform::Test);
 
         // Create a running function resource
-        let function_config = Function::new("test-function".to_string())
-            .code(FunctionCode::Image {
+        let function_config = Worker::new("test-function".to_string())
+            .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
             })
             .permissions("execution".to_string())
             .build();
 
-        let mut running_controller = TestFunctionController::default();
-        running_controller.state = TestFunctionState::Ready;
+        let mut running_controller = TestWorkerController::default();
+        running_controller.state = TestWorkerState::Ready;
 
         let mut resource_state = StackResourceState::new_pending(
-            "function".to_string(),
+            "worker".to_string(),
             Resource::new(function_config),
             None,
             Vec::new(),
@@ -579,9 +579,9 @@ mod tests {
         assert_eq!(updated_resource.status, ResourceStatus::Running);
 
         let controller = updated_resource
-            .get_internal_controller_typed::<TestFunctionController>()
+            .get_internal_controller_typed::<TestWorkerController>()
             .unwrap();
-        assert_eq!(controller.state, TestFunctionState::Ready);
+        assert_eq!(controller.state, TestWorkerState::Ready);
     }
 
     /// Test A: retry_failed() resets _internal_stay_count to None (Bug 2 fix).
@@ -591,21 +591,21 @@ mod tests {
     /// _internal_stay_count = None so the next run gets a full fresh polling window.
     #[tokio::test]
     async fn test_retry_failed_resets_internal_stay_count() {
-        let function_config = Function::new("test-function".to_string())
-            .code(FunctionCode::Image {
+        let function_config = Worker::new("test-function".to_string())
+            .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
             })
             .permissions("execution".to_string())
             .build();
 
-        let mut polling_controller = TestFunctionController::default();
-        polling_controller.state = TestFunctionState::CreateFunctionPolling;
+        let mut polling_controller = TestWorkerController::default();
+        polling_controller.state = TestWorkerState::CreateWorkerPolling;
         polling_controller.identifier = Some("test:function:test-function".to_string());
         // Simulate a controller that was mid-exhaustion with 50 out of 60 polls used.
         polling_controller._internal_stay_count = Some(50);
 
         let mut resource_state = StackResourceState::new_pending(
-            "function".to_string(),
+            "worker".to_string(),
             Resource::new(function_config),
             None,
             Vec::new(),
@@ -633,9 +633,9 @@ mod tests {
         // The restored controller must have _internal_stay_count = None so the
         // next run gets the full max_times polling window, not the leftover 10.
         let restored = resource_state
-            .get_internal_controller_typed::<TestFunctionController>()
+            .get_internal_controller_typed::<TestWorkerController>()
             .unwrap();
-        assert_eq!(restored.state, TestFunctionState::CreateFunctionPolling);
+        assert_eq!(restored.state, TestWorkerState::CreateWorkerPolling);
         assert!(
             restored._internal_stay_count.is_none(),
             "_internal_stay_count must be None after retry, got {:?}",

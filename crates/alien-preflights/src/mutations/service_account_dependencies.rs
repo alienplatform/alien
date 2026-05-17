@@ -9,7 +9,7 @@ use tracing::{debug, info};
 
 /// Resource types that carry a `permissions` profile and therefore need a dependency
 /// on the corresponding `{permissions}-sa` service account.
-const PERMISSION_BEARING_RESOURCE_TYPES: &[&str] = &["container", "function"];
+const PERMISSION_BEARING_RESOURCE_TYPES: &[&str] = &["container", "worker"];
 
 /// Mutation that adds ServiceAccount dependencies to resources that have resource-scoped permissions.
 ///
@@ -51,7 +51,7 @@ impl StackMutation for ServiceAccountDependenciesMutation {
             alien_core::ManagementPermissions::Auto => {}
         }
 
-        // Also run if any container or function uses a named permission profile, so we can
+        // Also run if any container or worker uses a named permission profile, so we can
         // wire it as a declared dependency on the corresponding SA.
         for (_resource_id, entry) in &stack.resources {
             let rtype = entry.config.resource_type();
@@ -127,7 +127,7 @@ impl StackMutation for ServiceAccountDependenciesMutation {
             }
         }
 
-        // Second pass: for every container/function with a named permission profile, add
+        // Second pass: for every container/worker with a named permission profile, add
         // the corresponding {profile}-sa as a declared dependency.  This ensures the
         // executor waits for the SA before creating the resource and propagates SA changes
         // to the resource automatically — the consumer side of the SA dependency, not just

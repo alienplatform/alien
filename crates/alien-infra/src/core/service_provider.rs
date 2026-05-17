@@ -275,9 +275,9 @@ pub trait PlatformServiceProvider: Send + Sync {
     }
 
     #[cfg(feature = "local")]
-    fn get_local_function_manager(&self) -> Option<Arc<alien_local::LocalFunctionManager>>;
+    fn get_local_worker_manager(&self) -> Option<Arc<alien_local::LocalWorkerManager>>;
     #[cfg(not(feature = "local"))]
-    fn get_local_function_manager(&self) -> Option<Arc<()>> {
+    fn get_local_worker_manager(&self) -> Option<Arc<()>> {
         None
     }
 
@@ -955,8 +955,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
     }
 
     #[cfg(feature = "local")]
-    fn get_local_function_manager(&self) -> Option<Arc<alien_local::LocalFunctionManager>> {
-        self.local_bindings.as_ref().map(|p| p.function_manager())
+    fn get_local_worker_manager(&self) -> Option<Arc<alien_local::LocalWorkerManager>> {
+        self.local_bindings.as_ref().map(|p| p.worker_manager())
     }
 
     #[cfg(feature = "local")]

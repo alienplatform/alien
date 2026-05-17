@@ -2696,7 +2696,7 @@ export type SyncReconcileRequestStackStateResources = {
    */
   status: SyncReconcileRequestStackStateStatus;
   /**
-   * The high-level type of the resource (e.g., Function::RESOURCE_TYPE, Storage::RESOURCE_TYPE).
+   * The high-level type of the resource (e.g., Worker::RESOURCE_TYPE, Storage::RESOURCE_TYPE).
    */
   type: string;
 };

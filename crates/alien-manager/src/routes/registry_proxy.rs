@@ -854,15 +854,15 @@ async fn validate_pull_access(
 /// Extract the set of repo names from a release's stack.
 fn extract_repo_names(stack: &alien_core::Stack) -> Vec<String> {
     use alien_core::image_rewrite::strip_registry_host;
-    use alien_core::{Container, ContainerCode, Function, FunctionCode};
+    use alien_core::{Container, ContainerCode, Worker, WorkerCode};
 
     let mut repos = Vec::new();
 
     for (_resource_id, entry) in stack.resources() {
-        let image = if let Some(func) = entry.config.downcast_ref::<Function>() {
+        let image = if let Some(func) = entry.config.downcast_ref::<Worker>() {
             match &func.code {
-                FunctionCode::Image { image } => Some(image.as_str()),
-                FunctionCode::Source { .. } => None,
+                WorkerCode::Image { image } => Some(image.as_str()),
+                WorkerCode::Source { .. } => None,
             }
         } else if let Some(container) = entry.config.downcast_ref::<Container>() {
             match &container.code {

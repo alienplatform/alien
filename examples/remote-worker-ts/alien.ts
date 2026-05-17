@@ -2,7 +2,7 @@ import * as alien from "@alienplatform/core"
 
 const files = new alien.Storage("files").build()
 
-const worker = new alien.Function("worker")
+const worker = new alien.Worker("worker")
   .code({ type: "source", src: "./", toolchain: { type: "typescript" } })
   .commandsEnabled(true)
   .ingress("private")

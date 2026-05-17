@@ -212,7 +212,7 @@ pub struct ArtifactRegistryCredentials {
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub enum ComputeServiceType {
     /// Serverless functions
-    Function,
+    Worker,
     // In the future, we could add Container, VirtualMachine, Kubernetes, etc.
 }
 
@@ -569,9 +569,9 @@ pub trait Queue: Binding {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
-pub struct FunctionInvokeRequest {
-    /// Function identifier (name, ARN, URL, etc.)
-    pub target_function: String,
+pub struct WorkerInvokeRequest {
+    /// Worker identifier (name, ARN, URL, etc.)
+    pub target_worker: String,
     /// HTTP method
     pub method: String,
     /// Request path
@@ -588,7 +588,7 @@ pub struct FunctionInvokeRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
-pub struct FunctionInvokeResponse {
+pub struct WorkerInvokeResponse {
     /// HTTP status code
     pub status: u16,
     /// HTTP response headers
@@ -597,20 +597,20 @@ pub struct FunctionInvokeResponse {
     pub body: Vec<u8>,
 }
 
-/// A trait for function bindings that enable direct function-to-function calls
+/// A trait for function bindings that enable direct worker-to-worker calls
 #[async_trait]
-pub trait Function: Binding {
+pub trait Worker: Binding {
     /// Invoke a function with HTTP request data.
     ///
-    /// This enables direct, low-latency function-to-function communication within
+    /// This enables direct, low-latency worker-to-worker communication within
     /// the same cloud environment, bypassing Commands for internal calls.
     ///
     /// Platform implementations:
-    /// - AWS: Uses InvokeFunction API directly
+    /// - AWS: Uses InvokeWorker API directly
     /// - GCP: Calls private service URL directly  
     /// - Azure: Calls private container app URL directly
     /// - Kubernetes: HTTP call to internal service
-    async fn invoke(&self, request: FunctionInvokeRequest) -> Result<FunctionInvokeResponse>;
+    async fn invoke(&self, request: WorkerInvokeRequest) -> Result<WorkerInvokeResponse>;
 
     /// Get the public URL of the function, if available.
     ///
@@ -619,10 +619,10 @@ pub trait Function: Binding {
     /// external integration.
     ///
     /// Platform implementations:
-    /// - AWS: Uses GetFunctionUrlConfig API or returns URL from binding
+    /// - AWS: Uses GetWorkerUrlConfig API or returns URL from binding
     /// - GCP: Returns Cloud Run service URL or calls get_service API
     /// - Azure: Returns Container App URL or calls get_container_app API
-    async fn get_function_url(&self) -> Result<Option<String>>;
+    async fn get_worker_url(&self) -> Result<Option<String>>;
 
     /// Get a reference to this object as `Any` for dynamic casting
     fn as_any(&self) -> &dyn std::any::Any;
@@ -681,8 +681,8 @@ pub trait BindingsProviderApi: Send + Sync + std::fmt::Debug {
     /// Given a binding identifier, builds a Queue implementation.
     async fn load_queue(&self, binding_name: &str) -> Result<Arc<dyn Queue>>;
 
-    /// Given a binding identifier, builds a Function implementation.
-    async fn load_function(&self, binding_name: &str) -> Result<Arc<dyn Function>>;
+    /// Given a binding identifier, builds a Worker implementation.
+    async fn load_worker(&self, binding_name: &str) -> Result<Arc<dyn Worker>>;
 
     /// Given a binding identifier, builds a Container implementation.
     async fn load_container(&self, binding_name: &str) -> Result<Arc<dyn Container>>;

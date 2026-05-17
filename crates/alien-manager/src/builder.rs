@@ -47,7 +47,7 @@ pub struct AlienManagerBuilder {
     /// Optional override for the `/v1/stack/import` dispatch registry.
     /// Defaults to [`alien_infra::ImporterRegistry::built_in`] (OSS resources
     /// only). Platform-mode embedders extend the OSS registry with
-    /// proprietary controllers (`container`, `container-cluster`) before
+    /// proprietary controllers (`container`, `compute-cluster`) before
     /// passing it in here.
     import_registry: Option<Arc<alien_infra::ImporterRegistry>>,
 }
@@ -166,7 +166,7 @@ impl AlienManagerBuilder {
     /// [`alien_infra::ImporterRegistry::built_in`].
     ///
     /// Platform-mode embedders use this to layer proprietary importers
-    /// (`container`, `container-cluster`) on top of the OSS resource set
+    /// (`container`, `compute-cluster`) on top of the OSS resource set
     /// without forking the OSS registration helpers:
     ///
     /// ```ignore
@@ -726,7 +726,7 @@ async fn finalize(
         // Platform)` pair across AWS / GCP / Azure (see
         // `alien_infra::ImporterRegistry::built_in`). Embedders that need
         // to layer platform-only resource importers (e.g. `container` /
-        // `container-cluster`) inject an extended registry through
+        // `compute-cluster`) inject an extended registry through
         // [`AlienManagerBuilder::import_registry`].
         import_registry: import_registry_override
             .unwrap_or_else(|| Arc::new(alien_infra::ImporterRegistry::built_in())),

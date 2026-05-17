@@ -2,17 +2,17 @@ use crate::core::{state_utils::StackResourceStateExt, ResourceControllerContext}
 use crate::error::{ErrorData, Result};
 use alien_core::{
     bindings::serialize_binding_as_env_var, container_runtime_environment_contract,
-    function_runtime_environment_contract, passthrough_transport_runtime_environment_plan,
+    worker_runtime_environment_contract, passthrough_transport_runtime_environment_plan,
     render_runtime_environment_entries, render_runtime_environment_plan,
     standard_runtime_environment_plan, validate_prepared_runtime_environment_map, ResourceRef,
     ResourceStatus, RuntimeEnvironmentBindingEntry, RuntimeEnvironmentRenderer,
     RuntimeEnvironmentValue, ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME,
-    ENV_ALIEN_CURRENT_FUNCTION_BINDING_NAME,
+    ENV_ALIEN_CURRENT_WORKER_BINDING_NAME,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use std::collections::HashMap;
 
-/// Common environment variable preparation for function controllers.
+/// Common environment variable preparation for worker controllers.
 /// This handles the shared logic of processing linked resources and setting up
 /// platform-agnostic environment variables.
 pub struct EnvironmentVariableBuilder {
@@ -25,7 +25,7 @@ pub struct EnvironmentVariableBuilder {
 struct ControllerRuntimeEnvironmentRenderer<'ctx, 'state> {
     ctx: &'ctx ResourceControllerContext<'state>,
     current_container_id: Option<&'ctx str>,
-    current_function_id: Option<&'ctx str>,
+    current_worker_id: Option<&'ctx str>,
 }
 
 impl RuntimeEnvironmentRenderer for ControllerRuntimeEnvironmentRenderer<'_, '_> {
@@ -70,8 +70,8 @@ impl RuntimeEnvironmentRenderer for ControllerRuntimeEnvironmentRenderer<'_, '_>
             RuntimeEnvironmentValue::CurrentContainerBindingName => {
                 Ok(self.current_container_id.map(ToString::to_string))
             }
-            RuntimeEnvironmentValue::CurrentFunctionBindingName => {
-                Ok(self.current_function_id.map(ToString::to_string))
+            RuntimeEnvironmentValue::CurrentWorkerBindingName => {
+                Ok(self.current_worker_id.map(ToString::to_string))
             }
             RuntimeEnvironmentValue::AzureClientId => Ok(None),
         }
@@ -115,7 +115,7 @@ impl EnvironmentVariableBuilder {
         let renderer = ControllerRuntimeEnvironmentRenderer {
             ctx,
             current_container_id: None,
-            current_function_id: None,
+            current_worker_id: None,
         };
         for (name, value) in render_runtime_environment_entries(
             standard_runtime_environment_plan(ctx.platform),
@@ -133,22 +133,22 @@ impl EnvironmentVariableBuilder {
         Ok(self)
     }
 
-    /// Add the complete scalar runtime environment for a Function.
-    pub fn add_function_runtime_env_vars(
+    /// Add the complete scalar runtime environment for a Worker.
+    pub fn add_worker_runtime_env_vars(
         mut self,
         ctx: &ResourceControllerContext<'_>,
-        function_id: &str,
+        worker_id: &str,
     ) -> Result<Self> {
         let renderer = ControllerRuntimeEnvironmentRenderer {
             ctx,
             current_container_id: None,
-            current_function_id: Some(function_id),
+            current_worker_id: Some(worker_id),
         };
-        let plan = function_runtime_environment_contract(ctx.platform, function_id, &[]);
+        let plan = worker_runtime_environment_contract(ctx.platform, worker_id, &[]);
         for (name, value) in render_runtime_environment_plan(&plan, &renderer).map_err(|error| {
             AlienError::new(ErrorData::ResourceConfigInvalid {
                 message: error.to_string(),
-                resource_id: Some(function_id.to_string()),
+                resource_id: Some(worker_id.to_string()),
             })
         })? {
             self.env_vars.insert(name, value);
@@ -166,7 +166,7 @@ impl EnvironmentVariableBuilder {
         let renderer = ControllerRuntimeEnvironmentRenderer {
             ctx,
             current_container_id: Some(container_id),
-            current_function_id: None,
+            current_worker_id: None,
         };
         let plan = container_runtime_environment_contract(ctx.platform, container_id, &[]);
         for (name, value) in render_runtime_environment_plan(&plan, &renderer).map_err(|error| {
@@ -281,7 +281,7 @@ impl EnvironmentVariableBuilder {
         self
     }
 
-    /// Add passthrough transport for non-Function runtime workloads.
+    /// Add passthrough transport for non-Worker runtime workloads.
     pub fn add_passthrough_transport_env_vars(mut self) -> Self {
         for entry in passthrough_transport_runtime_environment_plan() {
             if let RuntimeEnvironmentValue::Literal(value) = entry.value {
@@ -294,32 +294,32 @@ impl EnvironmentVariableBuilder {
 
     /// Add the function's own binding to its environment variables for self-introspection.
     /// This adds both:
-    /// 1. ALIEN_CURRENT_FUNCTION_BINDING_NAME - the function's ID for identifying itself
+    /// 1. ALIEN_CURRENT_WORKER_BINDING_NAME - the function's ID for identifying itself
     /// 2. ALIEN_{FUNCTION_ID}_BINDING - the function's full binding parameters (if available)
     ///
-    /// This allows the function to introspect itself via alien_context.get_current_function().
+    /// This allows the function to introspect itself via alien_context.get_current_worker().
     ///
     /// The binding params should be provided when available. During initial creation, binding
     /// params may be incomplete (e.g., URL not yet known). During updates or after creation
     /// completes, full binding params should be available.
-    pub fn add_self_function_binding(
+    pub fn add_self_worker_binding(
         mut self,
-        function_id: &str,
+        worker_id: &str,
         binding_params: Option<&serde_json::Value>,
     ) -> Result<Self> {
         // Always add the current function's binding name (its ID)
         self.env_vars.insert(
-            ENV_ALIEN_CURRENT_FUNCTION_BINDING_NAME.to_string(),
-            function_id.to_string(),
+            ENV_ALIEN_CURRENT_WORKER_BINDING_NAME.to_string(),
+            worker_id.to_string(),
         );
 
         // Add the full binding parameters if available
         if let Some(params) = binding_params {
             // Use the centralized function to serialize binding parameters
-            let binding_env_vars = serialize_binding_as_env_var(function_id, params).context(
+            let binding_env_vars = serialize_binding_as_env_var(worker_id, params).context(
                 ErrorData::ResourceConfigInvalid {
-                    message: "Failed to serialize self function binding parameters".to_string(),
-                    resource_id: Some(function_id.to_string()),
+                    message: "Failed to serialize self worker binding parameters".to_string(),
+                    resource_id: Some(worker_id.to_string()),
                 },
             )?;
 

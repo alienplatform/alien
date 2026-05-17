@@ -24,7 +24,8 @@ impl CompileTimeCheck for AllowedUserResourcesCheck {
 
     async fn check(&self, stack: &Stack, _platform: Platform) -> Result<CheckResult> {
         let allowed_types = HashSet::from([
-            "function",
+            "worker",
+            "daemon",
             "storage",
             "artifact-registry",
             "build",
@@ -62,14 +63,14 @@ impl CompileTimeCheck for AllowedUserResourcesCheck {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::{Function, FunctionCode, ResourceEntry, ResourceLifecycle, Storage};
+    use alien_core::{Worker, WorkerCode, ResourceEntry, ResourceLifecycle, Storage};
     use indexmap::IndexMap;
 
     #[tokio::test]
     async fn test_allowed_user_resources_success() {
         let storage = Storage::new("test-storage".to_string()).build();
-        let function = Function::new("test-function".to_string())
-            .code(FunctionCode::Image {
+        let worker = Worker::new("test-worker".to_string())
+            .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
             })
             .permissions("test".to_string())
@@ -86,9 +87,9 @@ mod tests {
             },
         );
         resources.insert(
-            "test-function".to_string(),
+            "test-worker".to_string(),
             ResourceEntry {
-                config: alien_core::Resource::new(function),
+                config: alien_core::Resource::new(worker),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,

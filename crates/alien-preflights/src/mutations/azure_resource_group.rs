@@ -32,12 +32,12 @@ impl StackMutation for AzureResourceGroupMutation {
             return false;
         }
 
-        // Check if we have any user-defined resources (function, storage, etc.)
+        // Check if we have any user-defined resources (worker, storage, etc.)
         let has_user_resources = stack.resources.iter().any(|(_, entry)| {
             let resource_type = entry.config.resource_type();
             matches!(
                 resource_type.as_ref(),
-                "function" | "storage" | "vault" | "kv" | "artifact-registry" | "build"
+                "worker" | "storage" | "vault" | "kv" | "artifact-registry" | "build"
             )
         });
 

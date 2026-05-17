@@ -9,5 +9,5 @@
 
 pub mod aws;
 pub mod azure;
-pub mod function_environment;
+pub mod worker_environment;
 pub mod gcp;

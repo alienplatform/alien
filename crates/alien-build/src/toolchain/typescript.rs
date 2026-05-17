@@ -102,14 +102,14 @@ impl TypeScriptToolchain {
             .await
             .into_alien_error()
             .context(ErrorData::ImageBuildFailed {
-                function_name: "typescript-project".to_string(),
+                resource_name: "typescript-project".to_string(),
                 reason: "Failed to read package.json".to_string(),
                 build_output: None,
             })?;
 
         let package_json: Value = serde_json::from_str(&content).into_alien_error().context(
             ErrorData::ImageBuildFailed {
-                function_name: "typescript-project".to_string(),
+                resource_name: "typescript-project".to_string(),
                 reason: "Failed to parse package.json".to_string(),
                 build_output: None,
             },
@@ -137,14 +137,14 @@ impl TypeScriptToolchain {
             .await
             .into_alien_error()
             .context(ErrorData::ImageBuildFailed {
-                function_name: "typescript-project".to_string(),
+                resource_name: "typescript-project".to_string(),
                 reason: "Failed to read package.json".to_string(),
                 build_output: None,
             })?;
 
         let package_json: Value = serde_json::from_str(&content).into_alien_error().context(
             ErrorData::ImageBuildFailed {
-                function_name: "typescript-project".to_string(),
+                resource_name: "typescript-project".to_string(),
                 reason: "Failed to parse package.json".to_string(),
                 build_output: None,
             },
@@ -179,7 +179,7 @@ impl TypeScriptToolchain {
         }
 
         Err(AlienError::new(ErrorData::ImageBuildFailed {
-            function_name: "typescript-project".to_string(),
+            resource_name: "typescript-project".to_string(),
             reason:
                 "Could not detect entry point. Set 'main' in package.json or create src/index.ts"
                     .to_string(),
@@ -231,7 +231,7 @@ impl TypeScriptToolchain {
             .await
             .into_alien_error()
             .context(ErrorData::ImageBuildFailed {
-                function_name: "typescript-project".to_string(),
+                resource_name: "typescript-project".to_string(),
                 reason: "Failed to create bootstrap directory".to_string(),
                 build_output: None,
             })?;
@@ -260,7 +260,7 @@ impl TypeScriptToolchain {
             .await
             .into_alien_error()
             .context(ErrorData::ImageBuildFailed {
-                function_name: "typescript-project".to_string(),
+                resource_name: "typescript-project".to_string(),
                 reason: "Failed to write bootstrap wrapper".to_string(),
                 build_output: None,
             })?;
@@ -312,7 +312,7 @@ impl Toolchain for TypeScriptToolchain {
             install_dependencies(&context.src_dir)
                 .await
                 .context(ErrorData::ImageBuildFailed {
-                    function_name: binary_name.clone(),
+                    resource_name: binary_name.clone(),
                     reason: "Failed to install dependencies".to_string(),
                     build_output: None,
                 })?;
@@ -326,7 +326,7 @@ impl Toolchain for TypeScriptToolchain {
             .await
             .into_alien_error()
             .context(ErrorData::ImageBuildFailed {
-                function_name: binary_name.clone(),
+                resource_name: binary_name.clone(),
                 reason: "Failed to create bootstrap directory".to_string(),
                 build_output: None,
             })?;
@@ -336,7 +336,7 @@ impl Toolchain for TypeScriptToolchain {
             .await
             .into_alien_error()
             .context(ErrorData::ImageBuildFailed {
-                function_name: binary_name.clone(),
+                resource_name: binary_name.clone(),
                 reason: "Failed to create build output directory".to_string(),
                 build_output: None,
             })?;
@@ -414,7 +414,7 @@ impl Toolchain for TypeScriptToolchain {
                 .spawn()
                 .into_alien_error()
                 .context(ErrorData::ImageBuildFailed {
-                    function_name: binary_name_clone.clone(),
+                    resource_name: binary_name_clone.clone(),
                     reason: "Failed to execute bun build --compile. Is Bun installed?".to_string(),
                     build_output: None,
                 })?;
@@ -426,7 +426,7 @@ impl Toolchain for TypeScriptToolchain {
 
             while let Some(line) = stderr_reader.next_line().await.into_alien_error().context(
                 ErrorData::ImageBuildFailed {
-                    function_name: binary_name_clone.clone(),
+                    resource_name: binary_name_clone.clone(),
                     reason: "Failed to read bun build output".to_string(),
                     build_output: None,
                 },
@@ -450,7 +450,7 @@ impl Toolchain for TypeScriptToolchain {
                     .await
                     .into_alien_error()
                     .context(ErrorData::ImageBuildFailed {
-                        function_name: binary_name_clone.clone(),
+                        resource_name: binary_name_clone.clone(),
                         reason: "Failed to wait for bun build --compile".to_string(),
                         build_output: None,
                     })?;
@@ -463,7 +463,7 @@ impl Toolchain for TypeScriptToolchain {
                     stderr_output
                 );
                 return Err(AlienError::new(ErrorData::ImageBuildFailed {
-                    function_name: binary_name_clone.clone(),
+                    resource_name: binary_name_clone.clone(),
                     reason: "bun build --compile failed".to_string(),
                     build_output: Some(stderr_output),
                 }));
@@ -483,7 +483,7 @@ impl Toolchain for TypeScriptToolchain {
         // Verify binary was created
         if !binary_path.exists() {
             return Err(AlienError::new(ErrorData::ImageBuildFailed {
-                function_name: binary_name.clone(),
+                resource_name: binary_name.clone(),
                 reason: format!("Compiled binary not found at {}", binary_path.display()),
                 build_output: None,
             }));
@@ -498,12 +498,12 @@ impl Toolchain for TypeScriptToolchain {
         cache_utils::save_cache(context.cache_store.as_deref(), &cache_key, &cache_paths).await?;
 
         // Determine if we need alien-runtime in the image
-        // Functions on local platform use embedded runtime in agent (no runtime in image)
+        // Workers on local platform use embedded runtime in agent (no runtime in image)
         // Everything else (containers on any platform, functions on cloud) needs alien-runtime
         let needs_runtime_in_image = context.is_container || context.platform_name != "local";
 
         if !needs_runtime_in_image {
-            // Function on local platform - runtime is embedded in operator
+            // Worker on local platform - runtime is embedded in operator
             let runtime_command = vec![format!("./{}", binary_filename)];
 
             return Ok(ToolchainOutput {

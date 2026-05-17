@@ -34,7 +34,7 @@ fn gcp_service_account_with_permission_set() {
 fn gcp_remote_stack_management_role() {
     let stack = Stack::new("acme-mgmt".to_string())
         .management(ManagementPermissions::extend(
-            PermissionProfile::new().global(["function/management", "storage/heartbeat"]),
+            PermissionProfile::new().global(["worker/management", "storage/heartbeat"]),
         ))
         .add(
             RemoteStackManagement::new("management".to_string()).build(),
@@ -50,7 +50,7 @@ fn gcp_remote_stack_management_role() {
 fn gcp_remote_stack_management_function_provision_role() {
     let stack = Stack::new("acme-mgmt".to_string())
         .management(ManagementPermissions::extend(
-            PermissionProfile::new().global(["function/provision"]),
+            PermissionProfile::new().global(["worker/provision"]),
         ))
         .add(
             RemoteStackManagement::new("management".to_string()).build(),

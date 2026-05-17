@@ -230,7 +230,8 @@ impl PreflightRegistry {
         registry.add_compile_time_check(Box::new(compile_time::UniqueResourcesCheck));
         registry.add_compile_time_check(Box::new(compile_time::FrozenResourceLifecycleCheck));
         registry.add_compile_time_check(Box::new(compile_time::ContainerLifecycleCheck));
-        registry.add_compile_time_check(Box::new(compile_time::PublicFunctionLifecycleCheck));
+        registry.add_compile_time_check(Box::new(compile_time::DaemonPlatformCheck));
+        registry.add_compile_time_check(Box::new(compile_time::PublicWorkerLifecycleCheck));
         registry.add_compile_time_check(Box::new(compile_time::LiveProvisionPermissionsCheck));
         registry.add_compile_time_check(Box::new(compile_time::ValidResourceDependenciesCheck));
         registry.add_compile_time_check(Box::new(compile_time::ResourceReferencesExistCheck));
@@ -246,7 +247,7 @@ impl PreflightRegistry {
         registry.add_compile_time_check(Box::new(compile_time::ResourceNameLengthCheck));
         registry.add_compile_time_check(Box::new(compile_time::ResourceIdPatternCheck));
         registry.add_compile_time_check(Box::new(compile_time::CapacityGroupProfileCheck));
-        registry.add_compile_time_check(Box::new(compile_time::FunctionMemoryCheck));
+        registry.add_compile_time_check(Box::new(compile_time::WorkerMemoryCheck));
 
         // Add deployment prerequisite checks. These validate the concrete
         // deployment target/config, so they run only after deployment-time
@@ -301,7 +302,7 @@ impl PreflightRegistry {
         registry.add_mutation(Box::new(mutations::AzureResourceGroupMutation));
 
         // Phase 2: Resource creation
-        registry.add_mutation(Box::new(mutations::ContainerClusterMutation));
+        registry.add_mutation(Box::new(mutations::ComputeClusterMutation));
         registry.add_mutation(Box::new(mutations::RemoteStackManagementMutation));
         registry.add_mutation(Box::new(mutations::ServiceAccountMutation));
         registry.add_mutation(Box::new(mutations::SecretsVaultMutation));

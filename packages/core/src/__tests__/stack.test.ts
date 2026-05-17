@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest"
 
-import { FunctionSchema } from "../generated/index.js"
+import { WorkerSchema } from "../generated/index.js"
 import * as alien from "../index.js"
 
-// Shared image URI for functions in tests
+// Shared image URI for workers in tests
 const SHARED_IMAGE = "docker.io/library/rust:latest"
 
 describe("Stack builder validation", () => {
@@ -11,8 +11,8 @@ describe("Stack builder validation", () => {
     // Storage bucket
     const storage = new alien.Storage("my-test-bucket").publicRead(true).build()
 
-    // Main application function with permissions
-    const func = new alien.Function("my-test-function")
+    // Main application worker with permissions
+    const worker = new alien.Worker("my-test-worker")
       .code({ type: "image", image: SHARED_IMAGE })
       .memoryMb(512)
       .timeoutSeconds(30)
@@ -26,7 +26,7 @@ describe("Stack builder validation", () => {
 
     const stack = new alien.Stack("my-test-stack")
       .add(storage, "frozen")
-      .add(func, "live")
+      .add(worker, "live")
       .permissions({
         profiles: {
           execution: {
@@ -36,7 +36,7 @@ describe("Stack builder validation", () => {
         },
         management: {
           extend: {
-            "*": ["function/management", "storage/management"],
+            "*": ["worker/management", "storage/management"],
           },
         },
       })
@@ -45,7 +45,7 @@ describe("Stack builder validation", () => {
     // Basic assertions
     expect(stack.id).toBe("my-test-stack")
     expect(stack.resources).toHaveProperty("my-test-bucket")
-    expect(stack.resources).toHaveProperty("my-test-function")
+    expect(stack.resources).toHaveProperty("my-test-worker")
     expect(stack.permissions?.profiles).toHaveProperty("execution")
     expect(stack.permissions?.management).toHaveProperty("extend")
 
@@ -112,8 +112,8 @@ describe("Stack builder validation", () => {
     expect(stack).toMatchSnapshot()
   })
 
-  it("builds and validates a stack with function source", () => {
-    const funcWithSource = new alien.Function("my-source-function")
+  it("builds and validates a stack with worker source", () => {
+    const workerWithSource = new alien.Worker("my-source-worker")
       .code({
         type: "source",
         src: "./app",
@@ -126,27 +126,27 @@ describe("Stack builder validation", () => {
       .build()
 
     const stack = new alien.Stack("my-source-stack")
-      .add(funcWithSource, "live")
+      .add(workerWithSource, "live")
       .permissions({
         profiles: {
           execution: {
-            "*": ["function/execute"],
+            "*": ["worker/execute"],
           },
         },
         management: {
           extend: {
-            "*": ["function/management"],
+            "*": ["worker/management"],
           },
         },
       })
       .build()
 
     expect(stack.id).toBe("my-source-stack")
-    expect(stack.resources).toHaveProperty("my-source-function")
-    const resourceInStack = stack.resources["my-source-function"]
+    expect(stack.resources).toHaveProperty("my-source-worker")
+    const resourceInStack = stack.resources["my-source-worker"]
     expect(resourceInStack).toBeDefined()
-    const functionConfigFromStack = FunctionSchema.parse(resourceInStack!.config)
-    expect(functionConfigFromStack.code.type).toBe("source")
+    const workerConfigFromStack = WorkerSchema.parse(resourceInStack!.config)
+    expect(workerConfigFromStack.code.type).toBe("source")
 
     expect(stack).toMatchSnapshot()
   })
@@ -170,15 +170,15 @@ describe("Permissions system", () => {
       },
     }
 
-    // Create a function with permissions
-    const func = new alien.Function("test-function")
+    // Create a worker with permissions
+    const worker = new alien.Worker("test-worker")
       .code({ type: "image", image: SHARED_IMAGE })
       .permissions("execution")
       .build()
 
     // Create stack with both string and custom permission sets
     const stack = new alien.Stack("permissions-stack")
-      .add(func, "live")
+      .add(worker, "live")
       .permissions({
         profiles: {
           execution: {
@@ -187,7 +187,7 @@ describe("Permissions system", () => {
         },
         management: {
           extend: {
-            "*": ["function/management"],
+            "*": ["worker/management"],
           },
         },
       })
@@ -195,7 +195,7 @@ describe("Permissions system", () => {
 
     // Verify the stack is properly configured
     expect(stack.id).toBe("permissions-stack")
-    expect(stack.resources).toHaveProperty("test-function")
+    expect(stack.resources).toHaveProperty("test-worker")
     expect(stack.permissions?.profiles).toHaveProperty("execution")
     expect(stack.permissions?.management).toHaveProperty("extend")
 
@@ -282,14 +282,14 @@ describe("ArtifactRegistry resource configuration", () => {
   it("can be used in stack permissions", () => {
     const registry = new alien.ArtifactRegistry("protected-registry").build()
 
-    const func = new alien.Function("registry-user")
+    const worker = new alien.Worker("registry-user")
       .code({ type: "image", image: SHARED_IMAGE })
       .permissions("execution")
       .build()
 
     const stack = new alien.Stack("registry-stack")
       .add(registry, "frozen")
-      .add(func, "live")
+      .add(worker, "live")
       .permissions({
         profiles: {
           execution: {

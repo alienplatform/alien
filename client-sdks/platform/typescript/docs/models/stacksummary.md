@@ -8,7 +8,7 @@ import { StackSummary } from "@alienplatform/platform-api/models";
 let value: StackSummary = {
   platforms: [],
   resourceCounts: {
-    functions: 753801,
+    workers: 753801,
     containers: 86892,
     externalInfra: 224741,
     total: 58173,

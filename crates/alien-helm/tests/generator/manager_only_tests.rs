@@ -4,13 +4,13 @@
 
 use super::helpers::{assert_helm_valid, render, snapshot_chart};
 use alien_core::{
-    Function, FunctionCode, Ingress, PermissionProfile, ResourceLifecycle, Stack, StackSettings,
+    Worker, WorkerCode, Ingress, PermissionProfile, ResourceLifecycle, Stack, StackSettings,
 };
 
 #[test]
-fn pure_function_chart_emits_service_for_public_ingress() {
-    let function = Function::new("api".to_string())
-        .code(FunctionCode::Image {
+fn pure_worker_chart_emits_service_for_public_ingress() {
+    let worker = Worker::new("api".to_string())
+        .code(WorkerCode::Image {
             image: "registry.example.com/api:1".to_string(),
         })
         .permissions("runtime".to_string())
@@ -19,11 +19,11 @@ fn pure_function_chart_emits_service_for_public_ingress() {
     let stack = Stack::new("pure-fn".to_string())
         .permission(
             "runtime",
-            PermissionProfile::new().global(["function/management"]),
+            PermissionProfile::new().global(["worker/management"]),
         )
-        .add(function, ResourceLifecycle::Live)
+        .add(worker, ResourceLifecycle::Live)
         .build();
     let chart = render(&stack, StackSettings::default());
-    snapshot_chart("manager_only_pure_function", &chart);
-    assert_helm_valid(&chart, "manager_only_pure_function");
+    snapshot_chart("manager_only_pure_worker", &chart);
+    assert_helm_valid(&chart, "manager_only_pure_worker");
 }

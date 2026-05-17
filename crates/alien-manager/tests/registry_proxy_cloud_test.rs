@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use alien_core::{
-    DeploymentModel, DeploymentState, DeploymentStatus, Function, FunctionCode, Ingress, Platform,
+    DeploymentModel, DeploymentState, DeploymentStatus, Worker, WorkerCode, Ingress, Platform,
     ReadinessProbe, ReleaseInfo, Stack, StackSettings,
 };
 use alien_manager::auth::{Role, Scope, Subject, SubjectKind};
@@ -88,8 +88,8 @@ fn hash_token(raw: &str) -> (String, String) {
 }
 
 fn test_stack(function_id: &str, image_uri: &str) -> Stack {
-    let function = Function::new(function_id.to_string())
-        .code(FunctionCode::Image {
+    let function = Worker::new(function_id.to_string())
+        .code(WorkerCode::Image {
             image: image_uri.to_string(),
         })
         .permissions("execution".to_string())

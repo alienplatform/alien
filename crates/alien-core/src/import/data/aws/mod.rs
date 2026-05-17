@@ -1,7 +1,7 @@
 pub mod artifact_registry;
 pub mod build;
-pub mod container_cluster;
-pub mod function;
+pub mod compute_cluster;
+pub mod worker;
 pub mod kv;
 pub mod network;
 pub mod queue;
@@ -12,8 +12,8 @@ pub mod vault;
 
 pub use artifact_registry::*;
 pub use build::*;
-pub use container_cluster::*;
-pub use function::*;
+pub use compute_cluster::*;
+pub use worker::*;
 pub use kv::*;
 pub use network::*;
 pub use queue::*;

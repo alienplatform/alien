@@ -3,8 +3,8 @@ use crate::{
     template::{CfExpression, CfMapping, CfOutput, CfParameter, CfResource, CfTemplate},
 };
 use alien_core::{
-    import::EmitContext, ownership_policy_for_resource_type, DomainSettings, ErrorData, Function,
-    FunctionCode, HeartbeatsMode, Network, NetworkSettings, Platform, Result, Stack, StackSettings,
+    import::EmitContext, ownership_policy_for_resource_type, DomainSettings, ErrorData, Worker,
+    WorkerCode, HeartbeatsMode, Network, NetworkSettings, Platform, Result, Stack, StackSettings,
     TelemetryMode, UpdatesMode,
 };
 use alien_error::AlienError;
@@ -316,8 +316,8 @@ pub fn generate_cloudformation_stack_policy(_stack: &Stack) -> Result<serde_json
 
 fn validate_stack_for_cloudformation(stack: &Stack) -> Result<()> {
     for (resource_id, resource) in stack.resources() {
-        if let Some(function) = resource.config.downcast_ref::<Function>() {
-            if matches!(function.code, FunctionCode::Source { .. }) {
+        if let Some(function) = resource.config.downcast_ref::<Worker>() {
+            if matches!(function.code, WorkerCode::Source { .. }) {
                 return Err(AlienError::new(ErrorData::OperationNotSupported {
                     operation: "generate_cloudformation_template".to_string(),
                     reason: format!(

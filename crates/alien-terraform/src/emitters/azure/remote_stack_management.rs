@@ -320,8 +320,8 @@ fn needs_acr_push_assignment(global_refs: &[&PermissionSetReference]) -> bool {
     global_refs.iter().any(|reference| {
         let id = reference.id();
         id.starts_with("artifact-registry/")
-            || id.starts_with("function/")
-            || id.starts_with("container-cluster/")
+            || id.starts_with("worker/")
+            || id.starts_with("compute-cluster/")
     })
 }
 

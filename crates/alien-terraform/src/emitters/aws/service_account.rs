@@ -16,7 +16,7 @@ use crate::{
     },
     expr,
 };
-use alien_core::{import::EmitContext, Build, Function, Result, ServiceAccount};
+use alien_core::{import::EmitContext, Build, Worker, Result, ServiceAccount};
 use hcl::expr::Expression;
 use std::collections::BTreeSet;
 
@@ -81,7 +81,7 @@ fn trust_principals<'a>(
     let mut services: BTreeSet<&'static str> = BTreeSet::new();
 
     for (_id, entry) in ctx.stack.resources() {
-        if let Some(function) = entry.config.downcast_ref::<Function>() {
+        if let Some(function) = entry.config.downcast_ref::<Worker>() {
             if Some(function.permissions.as_str()) == profile_name {
                 services.insert("lambda.amazonaws.com");
             }

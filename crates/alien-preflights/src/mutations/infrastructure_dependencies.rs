@@ -123,7 +123,7 @@ impl InfrastructureDependenciesMutation {
     ) -> Vec<ResourceRef> {
         match (platform, resource_type.as_ref()) {
             // Azure dependencies
-            (Platform::Azure, "function") => {
+            (Platform::Azure, "worker") => {
                 vec![
                     ResourceRef::new(alien_core::ServiceActivation::RESOURCE_TYPE, "enable-app"),
                     ResourceRef::new(
@@ -191,7 +191,7 @@ impl InfrastructureDependenciesMutation {
             }
 
             // GCP dependencies
-            (Platform::Gcp, "function") => {
+            (Platform::Gcp, "worker") => {
                 vec![ResourceRef::new(
                     alien_core::ServiceActivation::RESOURCE_TYPE,
                     "enable-cloud-run",

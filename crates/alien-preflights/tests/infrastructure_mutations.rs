@@ -1,5 +1,5 @@
 use alien_core::{
-    DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBindings, Function, FunctionCode,
+    DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBindings, Worker, WorkerCode,
     PermissionsConfig, Platform, ResourceLifecycle, Stack, StackSettings, StackState, Storage,
 };
 use alien_preflights::PreflightRegistry;
@@ -15,8 +15,8 @@ fn empty_env_snapshot() -> EnvironmentVariablesSnapshot {
 #[tokio::test]
 async fn test_azure_infrastructure_mutations() {
     // Create a test stack with a function and storage resource
-    let function = Function::new("test-function".to_string())
-        .code(FunctionCode::Image {
+    let function = Worker::new("test-function".to_string())
+        .code(WorkerCode::Image {
             image: "test-image:latest".to_string(),
         })
         .permissions("test-permissions".to_string())
@@ -85,21 +85,21 @@ async fn test_azure_infrastructure_mutations() {
             .dependencies
             .iter()
             .any(|dep| dep.id() == "default-resource-group"),
-        "Function should depend on resource group"
+        "Worker should depend on resource group"
     );
     assert!(
         function_entry
             .dependencies
             .iter()
             .any(|dep| dep.id() == "enable-app"),
-        "Function should depend on Microsoft.App service"
+        "Worker should depend on Microsoft.App service"
     );
     assert!(
         function_entry
             .dependencies
             .iter()
             .any(|dep| dep.id() == "default-container-env"),
-        "Function should depend on container environment"
+        "Worker should depend on container environment"
     );
 
     let storage_entry = current_stack.resources.get("test-storage").unwrap();
@@ -129,8 +129,8 @@ async fn test_azure_infrastructure_mutations() {
 #[tokio::test]
 async fn test_gcp_infrastructure_mutations() {
     // Create a test stack with a function resource
-    let function = Function::new("test-function".to_string())
-        .code(FunctionCode::Image {
+    let function = Worker::new("test-function".to_string())
+        .code(WorkerCode::Image {
             image: "test-image:latest".to_string(),
         })
         .permissions("test-permissions".to_string())
@@ -174,15 +174,15 @@ async fn test_gcp_infrastructure_mutations() {
             .dependencies
             .iter()
             .any(|dep| dep.id() == "enable-cloud-run"),
-        "Function should depend on Cloud Run API"
+        "Worker should depend on Cloud Run API"
     );
 }
 
 #[tokio::test]
 async fn test_kubernetes_infrastructure_mutations() {
     // Create a test stack with a function resource
-    let function = Function::new("test-function".to_string())
-        .code(FunctionCode::Image {
+    let function = Worker::new("test-function".to_string())
+        .code(WorkerCode::Image {
             image: "test-image:latest".to_string(),
         })
         .permissions("test-permissions".to_string())
@@ -226,15 +226,15 @@ async fn test_kubernetes_infrastructure_mutations() {
             .dependencies
             .iter()
             .any(|dep| dep.id() == "ns"),
-        "Function should not depend on a namespace resource"
+        "Worker should not depend on a namespace resource"
     );
 }
 
 #[tokio::test]
 async fn test_no_mutations_for_aws() {
     // Create a test stack with a function resource
-    let function = Function::new("test-function".to_string())
-        .code(FunctionCode::Image {
+    let function = Worker::new("test-function".to_string())
+        .code(WorkerCode::Image {
             image: "test-image:latest".to_string(),
         })
         .permissions("test-permissions".to_string())
@@ -326,8 +326,8 @@ async fn test_empty_stack_no_mutations() {
 #[tokio::test]
 async fn test_mutation_ordering() {
     // Create a test stack with a function resource
-    let function = Function::new("test-function".to_string())
-        .code(FunctionCode::Image {
+    let function = Worker::new("test-function".to_string())
+        .code(WorkerCode::Image {
             image: "test-image:latest".to_string(),
         })
         .permissions("test-permissions".to_string())

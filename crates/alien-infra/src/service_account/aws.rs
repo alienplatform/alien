@@ -8,7 +8,7 @@ use alien_aws_clients::iam::{
     TrustPolicyPrincipalValue, TrustPolicyStatement,
 };
 use alien_core::{
-    standard_resource_tags, Build, Container, ContainerCluster, Function, ResourceOutputs,
+    standard_resource_tags, Build, Container, ComputeCluster, Worker, ResourceOutputs,
     ResourceStatus, ServiceAccount, ServiceAccountOutputs,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
@@ -585,7 +585,7 @@ impl AwsServiceAccountController {
     ///
     /// This function determines which AWS services and IAM roles should be allowed to assume
     /// this service account's IAM role by analyzing:
-    /// 1. Functions/Builds that use a permission profile matching this ServiceAccount
+    /// 1. Workers/Builds that use a permission profile matching this ServiceAccount
     /// 2. Other ServiceAccounts that have impersonation permissions for this ServiceAccount
     ///
     /// **Naming Convention Assumption**: ServiceAccounts created from permission profiles follow
@@ -610,13 +610,13 @@ impl AwsServiceAccountController {
             .unwrap_or(&service_account.id);
 
         // Analyze the stack in a single pass to determine:
-        // 1. Which AWS services need to assume this role (Functions using this profile -> Lambda, Builds -> CodeBuild)
+        // 1. Which AWS services need to assume this role (Workers using this profile -> Lambda, Builds -> CodeBuild)
         // 2. Which other ServiceAccounts can impersonate this one
         for (_, resource_entry) in ctx.desired_stack.resources() {
             let resource = &resource_entry.config;
 
-            // Check if there are Functions that use THIS service account's profile
-            if let Some(function) = resource.downcast_ref::<Function>() {
+            // Check if there are Workers that use THIS service account's profile
+            if let Some(function) = resource.downcast_ref::<Worker>() {
                 if function.get_permissions() == profile_name {
                     if !services.contains(&"lambda.amazonaws.com".to_string()) {
                         services.push("lambda.amazonaws.com".to_string());
@@ -634,9 +634,9 @@ impl AwsServiceAccountController {
             }
         }
 
-        // Check if any Container in the stack uses this profile — if so, the ContainerCluster VM
+        // Check if any Container in the stack uses this profile — if so, the ComputeCluster VM
         // role needs to assume this SA role to vend per-container credentials via the IMDS proxy.
-        // The VM role ARN is deterministic: {prefix}-{clusterId}-role (set in container_cluster/aws.rs).
+        // The VM role ARN is deterministic: {prefix}-{clusterId}-role (set in compute_cluster/aws.rs).
         let has_container_using_profile = ctx.desired_stack.resources().any(|(_, entry)| {
             entry
                 .config
@@ -653,7 +653,7 @@ impl AwsServiceAccountController {
                 .unwrap_or_default();
 
             for (cluster_id, entry) in ctx.desired_stack.resources() {
-                if entry.config.downcast_ref::<ContainerCluster>().is_some() {
+                if entry.config.downcast_ref::<ComputeCluster>().is_some() {
                     let vm_role_arn = format!(
                         "arn:aws:iam::{}:role/{}-{}-role",
                         account_id, ctx.resource_prefix, cluster_id,
@@ -663,7 +663,7 @@ impl AwsServiceAccountController {
                             service_account = %service_account.id,
                             cluster_id = %cluster_id,
                             vm_role_arn = %vm_role_arn,
-                            "Adding ContainerCluster VM role to SA trust policy for IMDS credential vending"
+                            "Adding ComputeCluster VM role to SA trust policy for IMDS credential vending"
                         );
                         role_arns.push(vm_role_arn);
                     }
@@ -878,7 +878,7 @@ impl AwsServiceAccountController {
             let is_lambda_role = ctx.desired_stack.resources().any(|(_, entry)| {
                 entry
                     .config
-                    .downcast_ref::<Function>()
+                    .downcast_ref::<Worker>()
                     .map(|f| f.get_permissions() == profile_name)
                     .unwrap_or(false)
             });

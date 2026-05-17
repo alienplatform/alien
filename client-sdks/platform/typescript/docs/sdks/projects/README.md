@@ -350,11 +350,6 @@ async function run() {
     workspace: "my-workspace",
     requestBody: {
       gitRepository: null,
-      deploymentPageBackground: {
-        type: "gradient-mesh",
-        mode: "dark",
-        colorScheme: "blue",
-      },
       domainId: "dom_469m0agk8luj4s16sakmmpdd",
     },
   });
@@ -385,11 +380,6 @@ async function run() {
     workspace: "my-workspace",
     requestBody: {
       gitRepository: null,
-      deploymentPageBackground: {
-        type: "gradient-mesh",
-        mode: "dark",
-        colorScheme: "blue",
-      },
       domainId: "dom_469m0agk8luj4s16sakmmpdd",
     },
   });

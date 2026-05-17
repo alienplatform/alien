@@ -726,7 +726,7 @@ fn format_local_dev_resource_value(
                 || public_resource
                     .resource_type
                     .as_deref()
-                    .is_some_and(|resource_type| resource_type.eq_ignore_ascii_case("function"))
+                    .is_some_and(|resource_type| resource_type.eq_ignore_ascii_case("worker"))
             {
                 return "running (private)".to_string();
             }

@@ -261,7 +261,7 @@ fn build_cross_account_access(
             Some(CrossAccountAccess::Aws(AwsCrossAccountAccess {
                 account_ids: vec![account_id.clone()],
                 regions: vec![region.clone()],
-                allowed_service_types: vec![ComputeServiceType::Function],
+                allowed_service_types: vec![ComputeServiceType::Worker],
                 role_arns,
             }))
         }
@@ -274,7 +274,7 @@ fn build_cross_account_access(
             };
             Some(CrossAccountAccess::Gcp(GcpCrossAccountAccess {
                 project_numbers,
-                allowed_service_types: vec![ComputeServiceType::Function],
+                allowed_service_types: vec![ComputeServiceType::Worker],
                 service_account_emails,
             }))
         }

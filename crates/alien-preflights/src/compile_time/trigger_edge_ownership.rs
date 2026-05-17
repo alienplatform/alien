@@ -1,12 +1,12 @@
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
-use alien_core::{Function, FunctionTrigger, Platform, ResourceLifecycle, Stack, Storage};
+use alien_core::{Worker, WorkerTrigger, Platform, ResourceLifecycle, Stack, Storage};
 
 /// Validates trigger edges whose source resource is setup-owned.
 ///
 /// A storage trigger mutates the source storage resource on several providers. When that storage
 /// resource is Frozen, setup owns the notification wiring by default, so normal deployment must
-/// fail before the function controller attempts cloud mutations.
+/// fail before the worker controller attempts cloud mutations.
 pub struct TriggerEdgeOwnershipCheck;
 
 #[async_trait::async_trait]
@@ -19,8 +19,8 @@ impl CompileTimeCheck for TriggerEdgeOwnershipCheck {
         stack.resources().any(|(_, entry)| {
             entry
                 .config
-                .downcast_ref::<Function>()
-                .is_some_and(|function| !function.triggers.is_empty())
+                .downcast_ref::<Worker>()
+                .is_some_and(|worker| !worker.triggers.is_empty())
         })
     }
 
@@ -28,12 +28,12 @@ impl CompileTimeCheck for TriggerEdgeOwnershipCheck {
         let mut errors = Vec::new();
 
         for (function_id, entry) in stack.resources() {
-            let Some(function) = entry.config.downcast_ref::<Function>() else {
+            let Some(worker) = entry.config.downcast_ref::<Worker>() else {
                 continue;
             };
 
-            for trigger in &function.triggers {
-                if let FunctionTrigger::Storage { storage, .. } = trigger {
+            for trigger in &worker.triggers {
+                if let WorkerTrigger::Storage { storage, .. } = trigger {
                     if storage.resource_type != Storage::RESOURCE_TYPE {
                         continue;
                     }
@@ -44,7 +44,7 @@ impl CompileTimeCheck for TriggerEdgeOwnershipCheck {
 
                     if source_entry.lifecycle == ResourceLifecycle::Frozen {
                         errors.push(format!(
-                            "Setup required: function '{}' has a storage trigger from Frozen storage '{}'. \
+                            "Setup required: worker '{}' has a storage trigger from Frozen storage '{}'. \
                              Storage notification wiring is setup-owned by default because it mutates the storage resource. \
                              Rerun setup with the updated stack, or make the storage resource Live and grant storage/provision.",
                             function_id,
@@ -67,18 +67,18 @@ impl CompileTimeCheck for TriggerEdgeOwnershipCheck {
 mod tests {
     use super::*;
     use alien_core::{
-        FunctionCode, PermissionProfile, PermissionsConfig, Resource, ResourceEntry, Storage,
+        WorkerCode, PermissionProfile, PermissionsConfig, Resource, ResourceEntry, Storage,
     };
     use indexmap::IndexMap;
 
     fn stack_with_storage_lifecycle(storage_lifecycle: ResourceLifecycle) -> Stack {
         let storage = Storage::new("uploads".to_string()).build();
-        let function = Function::new("processor".to_string())
-            .code(FunctionCode::Image {
+        let worker = Worker::new("processor".to_string())
+            .code(WorkerCode::Image {
                 image: "processor:latest".to_string(),
             })
             .permissions("execution".to_string())
-            .trigger(FunctionTrigger::storage(
+            .trigger(WorkerTrigger::storage(
                 &storage,
                 vec!["object-created".to_string()],
             ))
@@ -97,7 +97,7 @@ mod tests {
         resources.insert(
             "processor".to_string(),
             ResourceEntry {
-                config: Resource::new(function),
+                config: Resource::new(worker),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,

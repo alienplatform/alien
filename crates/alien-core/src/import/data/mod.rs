@@ -5,22 +5,22 @@ pub mod azure;
 pub mod gcp;
 
 pub use aws::{
-    AwsArtifactRegistryImportData, AwsBuildImportData, AwsContainerClusterImportData,
-    AwsFunctionImportData, AwsKvImportData, AwsNetworkImportData, AwsQueueImportData,
+    AwsArtifactRegistryImportData, AwsBuildImportData, AwsComputeClusterImportData,
+    AwsWorkerImportData, AwsKvImportData, AwsNetworkImportData, AwsQueueImportData,
     AwsRemoteStackManagementImportData, AwsServiceAccountImportData, AwsStorageImportData,
     AwsVaultImportData,
 };
 pub use azure::{
     AzureArtifactRegistryImportData, AzureBuildImportData, AzureContainerAppsEnvironmentImportData,
-    AzureContainerClusterImportData, AzureFunctionImportData, AzureKvImportData,
+    AzureComputeClusterImportData, AzureWorkerImportData, AzureKvImportData,
     AzureNetworkImportData, AzureQueueImportData, AzureRemoteStackManagementImportData,
     AzureResourceGroupImportData, AzureServiceAccountImportData, AzureServiceActivationImportData,
     AzureServiceBusNamespaceImportData, AzureStorageAccountImportData, AzureStorageImportData,
     AzureVaultImportData,
 };
 pub use gcp::{
-    GcpArtifactRegistryImportData, GcpBuildImportData, GcpContainerClusterImportData,
-    GcpFunctionImportData, GcpKvImportData, GcpNetworkImportData, GcpQueueImportData,
+    GcpArtifactRegistryImportData, GcpBuildImportData, GcpComputeClusterImportData,
+    GcpWorkerImportData, GcpKvImportData, GcpNetworkImportData, GcpQueueImportData,
     GcpRemoteStackManagementImportData, GcpServiceAccountImportData,
     GcpServiceActivationImportData, GcpStorageImportData, GcpVaultImportData,
 };
@@ -43,10 +43,10 @@ mod schema_snapshots {
             ),
             ("aws_build", schema::<AwsBuildImportData>()),
             (
-                "aws_container_cluster",
-                schema::<AwsContainerClusterImportData>(),
+                "aws_compute_cluster",
+                schema::<AwsComputeClusterImportData>(),
             ),
-            ("aws_function", schema::<AwsFunctionImportData>()),
+            ("aws_function", schema::<AwsWorkerImportData>()),
             ("aws_kv", schema::<AwsKvImportData>()),
             ("aws_network", schema::<AwsNetworkImportData>()),
             ("aws_queue", schema::<AwsQueueImportData>()),
@@ -70,10 +70,10 @@ mod schema_snapshots {
                 schema::<AzureContainerAppsEnvironmentImportData>(),
             ),
             (
-                "azure_container_cluster",
-                schema::<AzureContainerClusterImportData>(),
+                "azure_compute_cluster",
+                schema::<AzureComputeClusterImportData>(),
             ),
-            ("azure_function", schema::<AzureFunctionImportData>()),
+            ("azure_function", schema::<AzureWorkerImportData>()),
             ("azure_kv", schema::<AzureKvImportData>()),
             ("azure_network", schema::<AzureNetworkImportData>()),
             ("azure_queue", schema::<AzureQueueImportData>()),
@@ -109,10 +109,10 @@ mod schema_snapshots {
             ),
             ("gcp_build", schema::<GcpBuildImportData>()),
             (
-                "gcp_container_cluster",
-                schema::<GcpContainerClusterImportData>(),
+                "gcp_compute_cluster",
+                schema::<GcpComputeClusterImportData>(),
             ),
-            ("gcp_function", schema::<GcpFunctionImportData>()),
+            ("gcp_function", schema::<GcpWorkerImportData>()),
             ("gcp_kv", schema::<GcpKvImportData>()),
             ("gcp_network", schema::<GcpNetworkImportData>()),
             ("gcp_queue", schema::<GcpQueueImportData>()),

@@ -6,8 +6,8 @@
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
-    ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup, Build, Function,
-    FunctionCode, Ingress, ResourceLifecycle, Stack, StackSettings,
+    ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup, Build, Worker,
+    WorkerCode, Ingress, ResourceLifecycle, Stack, StackSettings,
 };
 use alien_core::{ContainerAppsEnvironmentBinding, ExternalBinding, ExternalBindings};
 use alien_terraform::TerraformTarget;
@@ -61,8 +61,8 @@ fn azure_function_basic_container_app() {
         .add(resource_group(), ResourceLifecycle::Frozen)
         .add(container_apps_environment(), ResourceLifecycle::Frozen)
         .add(
-            Function::new("api".to_string())
-                .code(FunctionCode::Image {
+            Worker::new("api".to_string())
+                .code(WorkerCode::Image {
                     image: "acmeprod.azurecr.io/api:1".to_string(),
                 })
                 .permissions("execution".to_string())
@@ -83,8 +83,8 @@ fn azure_function_public_ingress_enables_external_ingress() {
         .add(resource_group(), ResourceLifecycle::Frozen)
         .add(container_apps_environment(), ResourceLifecycle::Frozen)
         .add(
-            Function::new("public-api".to_string())
-                .code(FunctionCode::Image {
+            Worker::new("public-api".to_string())
+                .code(WorkerCode::Image {
                     image: "acmeprod.azurecr.io/api:1".to_string(),
                 })
                 .permissions("execution".to_string())
@@ -106,8 +106,8 @@ fn azure_function_reuses_external_container_apps_environment() {
         .add(resource_group(), ResourceLifecycle::Frozen)
         .add(container_apps_environment(), ResourceLifecycle::Frozen)
         .add(
-            Function::new("api".to_string())
-                .code(FunctionCode::Image {
+            Worker::new("api".to_string())
+                .code(WorkerCode::Image {
                     image: "acmeprod.azurecr.io/api:1".to_string(),
                 })
                 .permissions("execution".to_string())

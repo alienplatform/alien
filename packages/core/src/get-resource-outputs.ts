@@ -8,8 +8,8 @@ import {
   BuildSchema,
   ContainerOutputsSchema,
   ContainerSchema,
-  FunctionOutputsSchema,
-  FunctionSchema,
+  WorkerOutputsSchema,
+  WorkerSchema,
   KvOutputsSchema,
   KvSchema,
   QueueOutputsSchema,
@@ -27,8 +27,8 @@ import type { StackState } from "./stack.js"
 
 export const ResourceSchemaMapping = {
   function: {
-    input: FunctionSchema,
-    output: FunctionOutputsSchema,
+    input: WorkerSchema,
+    output: WorkerOutputsSchema,
   },
   container: {
     input: ContainerSchema,

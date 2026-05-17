@@ -750,13 +750,13 @@ async fn test_add_remove_cross_account_access(#[case] ctx: impl ArtifactRegistry
         "aws" => {
             let access_1 = CrossAccountAccess::Aws(AwsCrossAccountAccess {
                 account_ids: vec!["123456789012".to_string()],
-                allowed_service_types: vec![ComputeServiceType::Function],
+                allowed_service_types: vec![ComputeServiceType::Worker],
                 role_arns: vec!["arn:aws:iam::123456789012:role/test-role-1".to_string()],
                 regions: vec![],
             });
             let access_2 = CrossAccountAccess::Aws(AwsCrossAccountAccess {
                 account_ids: vec!["987654321098".to_string()],
-                allowed_service_types: vec![ComputeServiceType::Function],
+                allowed_service_types: vec![ComputeServiceType::Worker],
                 role_arns: vec!["arn:aws:iam::987654321098:role/test-role-2".to_string()],
                 regions: vec![],
             });
@@ -774,12 +774,12 @@ async fn test_add_remove_cross_account_access(#[case] ctx: impl ArtifactRegistry
 
             let access_1 = CrossAccountAccess::Gcp(GcpCrossAccountAccess {
                 project_numbers: vec!["123456789012".to_string()],
-                allowed_service_types: vec![ComputeServiceType::Function],
+                allowed_service_types: vec![ComputeServiceType::Worker],
                 service_account_emails: service_accounts,
             });
             let access_2 = CrossAccountAccess::Gcp(GcpCrossAccountAccess {
                 project_numbers: vec!["987654321098".to_string()],
-                allowed_service_types: vec![ComputeServiceType::Function],
+                allowed_service_types: vec![ComputeServiceType::Worker],
                 service_account_emails: vec!["test2@example.com".to_string()],
             });
             (access_1, access_2)
@@ -822,7 +822,7 @@ async fn test_add_remove_cross_account_access(#[case] ctx: impl ArtifactRegistry
             // Test add_cross_account_access
             let test_access = CrossAccountAccess::Aws(AwsCrossAccountAccess {
                 account_ids: vec!["123456789012".to_string()],
-                allowed_service_types: vec![ComputeServiceType::Function],
+                allowed_service_types: vec![ComputeServiceType::Worker],
                 role_arns: vec!["arn:aws:iam::123456789012:role/test-role".to_string()],
                 regions: vec![],
             });
@@ -923,7 +923,7 @@ async fn test_add_remove_cross_account_access(#[case] ctx: impl ArtifactRegistry
 
             let test_access = CrossAccountAccess::Aws(AwsCrossAccountAccess {
                 account_ids: vec!["123456789012".to_string()],
-                allowed_service_types: vec![ComputeServiceType::Function],
+                allowed_service_types: vec![ComputeServiceType::Worker],
                 role_arns: vec!["arn:aws:iam::123456789012:role/test-role".to_string()],
                 regions: vec![],
             });
@@ -1470,7 +1470,7 @@ async fn test_full_repository_lifecycle(#[case] ctx: impl ArtifactRegistryTestCo
         let cross_account_access = match provider_name {
             "aws" => CrossAccountAccess::Aws(AwsCrossAccountAccess {
                 account_ids: vec!["123456789012".to_string()],
-                allowed_service_types: vec![ComputeServiceType::Function],
+                allowed_service_types: vec![ComputeServiceType::Worker],
                 role_arns: vec!["arn:aws:iam::123456789012:role/test-role".to_string()],
                 regions: vec![],
             }),
@@ -1484,7 +1484,7 @@ async fn test_full_repository_lifecycle(#[case] ctx: impl ArtifactRegistryTestCo
 
                 CrossAccountAccess::Gcp(GcpCrossAccountAccess {
                     project_numbers: vec!["123456789012".to_string()],
-                    allowed_service_types: vec![ComputeServiceType::Function],
+                    allowed_service_types: vec![ComputeServiceType::Worker],
                     service_account_emails: service_accounts,
                 })
             }

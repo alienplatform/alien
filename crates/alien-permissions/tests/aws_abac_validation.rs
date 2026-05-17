@@ -5,11 +5,11 @@ const RUNTIME_AWS_PERMISSION_SETS: &[&str] = &[
     "artifact-registry/provision",
     "container/provision",
     "container/management",
-    "container-cluster/provision",
-    "container-cluster/management",
-    "container-cluster/execute",
-    "function/provision",
-    "function/management",
+    "compute-cluster/provision",
+    "compute-cluster/management",
+    "compute-cluster/execute",
+    "worker/provision",
+    "worker/management",
     "kv/provision",
     "network/provision",
     "queue/provision",
@@ -428,6 +428,6 @@ fn action_requires_tag_condition(action: &str) -> bool {
             | "elasticloadbalancing:DeleteLoadBalancer"
             | "elasticloadbalancing:DeleteTargetGroup"
             | "events:PutRule"
-            | "lambda:CreateFunction"
+            | "lambda:CreateWorker"
     )
 }

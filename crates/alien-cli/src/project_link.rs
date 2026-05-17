@@ -331,8 +331,7 @@ pub async fn create_new_project(
                 },
             )
             .transpose()?,
-        deployment_page_background: None,
-        deployment_page_logo_url: None,
+        deployment_portal_appearance: None,
         packages_config: None,
         deployment_count: Some(0.0),
         latest_release: None.into(),

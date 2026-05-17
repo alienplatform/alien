@@ -2,15 +2,14 @@ use crate::{ErrorData, Result};
 use alien_aws_clients::{StsApi, StsClient};
 use alien_bindings::{BindingsProvider, BindingsProviderApi};
 use alien_core::{
-    AwsEnvironmentInfo, AzureEnvironmentInfo, ClientConfig, ComputeBackend, ContainerCluster,
-    DeploymentConfig, EnvironmentInfo, EnvironmentVariable, EnvironmentVariableType,
-    EnvironmentVariablesSnapshot, GcpEnvironmentInfo, LocalEnvironmentInfo, OtlpConfig, Platform,
-    ResourceStatus, Stack, StackState, TestEnvironmentInfo, WorkerTemplate, ENV_ALIEN_SECRETS,
+    AwsEnvironmentInfo, AzureEnvironmentInfo, ClientConfig, DeploymentConfig, EnvironmentInfo,
+    EnvironmentVariable, EnvironmentVariableType, EnvironmentVariablesSnapshot, GcpEnvironmentInfo,
+    LocalEnvironmentInfo, OtlpConfig, Platform, ResourceStatus, Stack, StackState,
+    TestEnvironmentInfo, ENV_ALIEN_SECRETS,
 };
 use alien_error::{AlienError, Context, IntoAlienError as _};
 use alien_gcp_clients::{ResourceManagerApi, ResourceManagerClient};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use tracing::{debug, info};
 
 /// Collect environment information from cloud platforms
@@ -139,7 +138,7 @@ struct AlienSecretsConfig {
 
 /// Inject environment variables into stack functions and containers.
 ///
-/// For all compute resources (Functions and Containers built from source):
+/// For all compute resources (Workers and Containers built from source):
 /// - Plain variables: Injected directly into resource.environment
 /// - Secret variables: Keys are listed in ALIEN_SECRETS; alien-runtime loads
 ///   the actual values from the "secrets" vault at startup.
@@ -155,7 +154,7 @@ pub fn inject_environment_variables(stack: &mut Stack, config: &DeploymentConfig
     for (resource_name, resource_entry) in &mut stack.resources {
         let resource_type = resource_entry.config.resource_type();
 
-        if resource_type == alien_core::Function::RESOURCE_TYPE {
+        if resource_type == alien_core::Worker::RESOURCE_TYPE {
             inject_into_compute_resource(resource_name, resource_entry, snapshot, true)?;
         } else if resource_type == alien_core::Container::RESOURCE_TYPE {
             inject_into_compute_resource(resource_name, resource_entry, snapshot, false)?;
@@ -183,15 +182,15 @@ pub fn inject_monitoring_environment_variables(
     for (resource_name, resource_entry) in &mut stack.resources {
         let resource_type = resource_entry.config.resource_type();
 
-        let environment = if resource_type == alien_core::Function::RESOURCE_TYPE {
+        let environment = if resource_type == alien_core::Worker::RESOURCE_TYPE {
             Some(
                 &mut resource_entry
                     .config
-                    .downcast_mut::<alien_core::Function>()
+                    .downcast_mut::<alien_core::Worker>()
                     .ok_or_else(|| {
                         AlienError::new(ErrorData::InternalError {
                             message: format!(
-                                "Failed to downcast resource '{}' to Function",
+                                "Failed to downcast resource '{}' to Worker",
                                 resource_name
                             ),
                         })
@@ -260,73 +259,7 @@ pub fn inject_monitoring_environment_variables(
     Ok(())
 }
 
-/// Stamp deployment-config values onto ContainerCluster worker-template inputs.
-///
-/// ContainerCluster controllers read `worker_template` (worker URL, binary hash,
-/// monitoring config) from the resource config. These values originate from
-/// `DeploymentConfig` and may change between syncs (e.g., new worker image ID).
-///
-/// Like `inject_environment_variables`, this runs every step — not just once during
-/// preflights — so the executor's `resource_eq()` always compares against the latest
-/// deployment config values.
-///
-/// The OTLP auth header is sensitive, so only a SHA-256 hash is stored for change
-/// detection. The actual value is read from `DeploymentConfig` at provisioning time.
-pub fn stamp_worker_template(stack: &mut Stack, config: &DeploymentConfig) -> Result<()> {
-    let horizon_config = match &config.compute_backend {
-        Some(ComputeBackend::Horizon(h)) => h,
-        _ => return Ok(()),
-    };
-
-    let monitoring_logs_endpoint = config.monitoring.as_ref().map(|m| m.logs_endpoint.clone());
-    let monitoring_metrics_endpoint = config
-        .monitoring
-        .as_ref()
-        .and_then(|m| m.metrics_endpoint.clone());
-    let monitoring_auth_hash = config.monitoring.as_ref().map(|m| {
-        let hash = Sha256::digest(m.logs_auth_header.as_bytes());
-        hex::encode(hash)
-    });
-    let monitoring_metrics_auth_hash = config.monitoring.as_ref().and_then(|m| {
-        m.metrics_auth_header.as_ref().map(|h| {
-            let hash = Sha256::digest(h.as_bytes());
-            hex::encode(hash)
-        })
-    });
-
-    let cluster_ids: Vec<String> = stack
-        .resources
-        .iter()
-        .filter(|(_, entry)| entry.config.resource_type().as_ref() == "container-cluster")
-        .map(|(id, _)| id.clone())
-        .collect();
-
-    for cluster_id in &cluster_ids {
-        if let Some(entry) = stack.resources.get_mut(cluster_id) {
-            if let Some(cluster) = entry.config.downcast_mut::<ContainerCluster>() {
-                cluster.worker_template = Some(WorkerTemplate {
-                    horizon_api_url: horizon_config.url.clone(),
-                    monitoring_logs_endpoint: monitoring_logs_endpoint.clone(),
-                    monitoring_metrics_endpoint: monitoring_metrics_endpoint.clone(),
-                    monitoring_auth_hash: monitoring_auth_hash.clone(),
-                    monitoring_metrics_auth_hash: monitoring_metrics_auth_hash.clone(),
-                    worker_image_id: horizon_config.worker_image_id.clone(),
-                });
-                debug!(
-                    cluster_id = %cluster_id,
-                    has_worker_image = horizon_config.worker_image_id.is_some(),
-                    has_monitoring = monitoring_logs_endpoint.is_some(),
-                    has_metrics = monitoring_metrics_endpoint.is_some(),
-                    "Stamped worker template onto ContainerCluster"
-                );
-            }
-        }
-    }
-
-    Ok(())
-}
-
-/// Inject environment variables into a Function or Container compute resource.
+/// Inject environment variables into a Worker or Container compute resource.
 ///
 /// - Plain variables: inserted directly into resource.environment.
 /// - Secret variables: their keys are collected into ALIEN_SECRETS so
@@ -335,17 +268,17 @@ fn inject_into_compute_resource(
     resource_name: &str,
     resource_entry: &mut alien_core::ResourceEntry,
     snapshot: &EnvironmentVariablesSnapshot,
-    is_function: bool,
+    is_worker: bool,
 ) -> Result<()> {
-    // Get the environment map (same interface for Function and Container)
-    let environment = if is_function {
+    // Get the environment map (same interface for Worker and Container)
+    let environment = if is_worker {
         &mut resource_entry
             .config
-            .downcast_mut::<alien_core::Function>()
+            .downcast_mut::<alien_core::Worker>()
             .ok_or_else(|| {
                 AlienError::new(ErrorData::InternalError {
                     message: format!(
-                        "Failed to downcast resource '{}' to Function",
+                        "Failed to downcast resource '{}' to Worker",
                         resource_name
                     ),
                 })
@@ -407,7 +340,7 @@ fn inject_into_compute_resource(
 
         environment.insert(ENV_ALIEN_SECRETS.to_string(), alien_secrets_json);
 
-        let resource_type = if is_function { "function" } else { "container" };
+        let resource_type = if is_worker { "worker" } else { "container" };
         debug!(
             "Added ALIEN_SECRETS to {} '{}' with {} secret keys",
             resource_type,
@@ -679,7 +612,7 @@ mod tests {
     // ── inject_environment_variables tests ──────────────────────────
 
     use alien_core::{
-        ExternalBindings, Function, FunctionCode, ResourceEntry, ResourceLifecycle, StackSettings,
+        ExternalBindings, Worker, WorkerCode, ResourceEntry, ResourceLifecycle, StackSettings,
     };
     use indexmap::IndexMap;
 
@@ -721,8 +654,8 @@ mod tests {
     }
 
     fn make_single_function_stack(function_id: &str) -> Stack {
-        let function = Function::new(function_id.to_string())
-            .code(FunctionCode::Image {
+        let function = Worker::new(function_id.to_string())
+            .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
             })
             .permissions("default".to_string())
@@ -769,7 +702,7 @@ mod tests {
             .get("worker")
             .unwrap()
             .config
-            .downcast_ref::<Function>()
+            .downcast_ref::<Worker>()
             .unwrap();
 
         // Plain var injected directly
@@ -800,7 +733,7 @@ mod tests {
             .get("worker")
             .unwrap()
             .config
-            .downcast_ref::<Function>()
+            .downcast_ref::<Worker>()
             .unwrap();
 
         assert_eq!(func.environment.get("APP_ENV").unwrap(), "prod");
@@ -826,7 +759,7 @@ mod tests {
             .get("worker")
             .unwrap()
             .config
-            .downcast_ref::<Function>()
+            .downcast_ref::<Worker>()
             .unwrap();
 
         // Secret targeted at "other-fn" should NOT produce ALIEN_SECRETS on "worker"

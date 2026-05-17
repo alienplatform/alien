@@ -8,7 +8,7 @@ pub use provider::BindingsProvider;
 pub use traits::{
     ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions,
     AwsServiceAccountInfo, AzureServiceAccountInfo, Binding, BindingsProviderApi, Build, Container,
-    Function, GcpServiceAccountInfo, ImpersonationRequest, Kv, Queue, RegistryAuthMethod,
+    Worker, GcpServiceAccountInfo, ImpersonationRequest, Kv, Queue, RegistryAuthMethod,
     RepositoryResponse, ServiceAccount, ServiceAccountInfo, Storage, Vault,
 };
 pub use wait_until::{DrainConfig, DrainResponse, WaitUntil, WaitUntilContext};
