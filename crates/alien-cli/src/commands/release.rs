@@ -6,7 +6,9 @@ use crate::ui::{command, contextual_heading, dim_label, success_line};
 use crate::{ErrorData, Result};
 use alien_build::settings::PushSettings;
 use alien_core::{
-    alien_event, AlienEvent, Container, ContainerCode, Worker, WorkerCode, Platform, Stack,
+    alien_event, AlienEvent, AwsManagementConfig, AzureManagementConfig, Container, ContainerCode,
+    DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBindings, GcpManagementConfig,
+    ManagementConfig, Platform, Stack, StackSettings, StackState, Worker, WorkerCode,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_manager_api::types::{
@@ -337,6 +339,7 @@ async fn release_task_core(
         platforms: platforms_to_release,
         ..
     } = config;
+    let prepare_platform_setup_stack = manager.is_none();
 
     // Process each platform: load stack, push images, collect pushed stacks
     let mut stack_by_platform = ManagerStackByPlatform {
@@ -417,8 +420,14 @@ async fn release_task_core(
             built_stack
         };
 
+        let release_stack = if prepare_platform_setup_stack {
+            prepare_setup_stack_for_release(pushed_stack, platform).await?
+        } else {
+            pushed_stack
+        };
+
         // Convert to JSON for the API
-        let stack_json = serde_json::to_value(&pushed_stack)
+        let stack_json = serde_json::to_value(&release_stack)
             .into_alien_error()
             .context(ErrorData::JsonError {
                 operation: "serialize".to_string(),
@@ -477,6 +486,62 @@ async fn release_task_core(
     };
 
     Ok(release_id)
+}
+
+async fn prepare_setup_stack_for_release(stack: Stack, platform: Platform) -> Result<Stack> {
+    let runner = alien_preflights::runner::PreflightRunner::new();
+    runner
+        .run_template_preflights(&stack, platform)
+        .await
+        .context(ErrorData::ReleaseFailed {
+            message: format!("Template preflights failed for {} platform", platform),
+        })?;
+
+    let stack_settings = StackSettings::default();
+    let stack_state = StackState::new(platform);
+    let config = DeploymentConfig {
+        stack_settings,
+        management_config: release_management_config(platform),
+        environment_variables: EnvironmentVariablesSnapshot {
+            variables: Vec::new(),
+            hash: "empty".to_string(),
+            created_at: "1970-01-01T00:00:00Z".to_string(),
+        },
+        allow_frozen_changes: false,
+        compute_backend: None,
+        external_bindings: ExternalBindings::default(),
+        public_urls: None,
+        domain_metadata: None,
+        monitoring: None,
+        manager_url: None,
+        deployment_token: None,
+        native_image_host: None,
+    };
+
+    runner
+        .apply_mutations(stack, &stack_state, &config)
+        .await
+        .context(ErrorData::ReleaseFailed {
+            message: format!("Failed to prepare setup stack for {} platform", platform),
+        })
+}
+
+fn release_management_config(platform: Platform) -> Option<ManagementConfig> {
+    match platform {
+        Platform::Aws => Some(ManagementConfig::Aws(AwsManagementConfig {
+            managing_role_arn: String::new(),
+        })),
+        Platform::Gcp => Some(ManagementConfig::Gcp(GcpManagementConfig {
+            service_account_email: String::new(),
+        })),
+        Platform::Azure => Some(ManagementConfig::Azure(AzureManagementConfig {
+            managing_tenant_id: String::new(),
+            oidc_issuer: None,
+            oidc_subject: None,
+            management_principal_id: None,
+        })),
+        Platform::Kubernetes | Platform::Local | Platform::Test => None,
+    }
 }
 
 /// Create a release on the manager
