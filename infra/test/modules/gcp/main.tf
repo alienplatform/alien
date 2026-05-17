@@ -13,6 +13,40 @@ resource "random_id" "suffix" {
   byte_length = 4
 }
 
+# ── Target: reusable E2E network ─────────────────────────────────────────────
+
+resource "google_compute_network" "e2e" {
+  provider                = google.target
+  name                    = "alien-e2e-${random_id.suffix.hex}"
+  auto_create_subnetworks = false
+
+  depends_on = [google_project_service.target_apis]
+}
+
+resource "google_compute_subnetwork" "e2e" {
+  provider      = google.target
+  name          = "alien-e2e-${random_id.suffix.hex}"
+  ip_cidr_range = "10.252.0.0/20"
+  region        = var.target_region
+  network       = google_compute_network.e2e.id
+}
+
+resource "google_compute_router" "e2e" {
+  provider = google.target
+  name     = "alien-e2e-${random_id.suffix.hex}"
+  region   = var.target_region
+  network  = google_compute_network.e2e.id
+}
+
+resource "google_compute_router_nat" "e2e" {
+  provider                           = google.target
+  name                               = "alien-e2e-${random_id.suffix.hex}"
+  router                             = google_compute_router.e2e.name
+  region                             = google_compute_router.e2e.region
+  nat_ip_allocate_option             = "AUTO_ONLY"
+  source_subnetwork_ip_ranges_to_nat = "ALL_SUBNETWORKS_ALL_IP_RANGES"
+}
+
 # ── Required APIs ─────────────────────────────────────────────────────────────
 
 resource "google_project_service" "management_apis" {

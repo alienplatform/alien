@@ -50,6 +50,26 @@ output "target_aws_account_id" {
   sensitive = true
 }
 
+output "e2e_aws_vpc_id" {
+  value     = module.aws.e2e_vpc_id
+  sensitive = true
+}
+
+output "e2e_aws_public_subnet_ids" {
+  value     = module.aws.e2e_public_subnet_ids
+  sensitive = true
+}
+
+output "e2e_aws_private_subnet_ids" {
+  value     = module.aws.e2e_private_subnet_ids
+  sensitive = true
+}
+
+output "e2e_aws_security_group_ids" {
+  value     = module.aws.e2e_security_group_ids
+  sensitive = true
+}
+
 # AWS resources
 output "aws_s3_bucket" {
   value     = module.aws.s3_bucket
@@ -116,6 +136,21 @@ output "target_gcp_project_id" {
 
 output "target_gcp_region" {
   value     = var.google_target_region
+  sensitive = true
+}
+
+output "e2e_gcp_network_name" {
+  value     = module.gcp.e2e_network_name
+  sensitive = true
+}
+
+output "e2e_gcp_subnet_name" {
+  value     = module.gcp.e2e_subnet_name
+  sensitive = true
+}
+
+output "e2e_gcp_network_region" {
+  value     = module.gcp.e2e_network_region
   sensitive = true
 }
 
@@ -290,5 +325,20 @@ output "azure_shared_container_env_static_ip" {
 
 output "azure_shared_container_env_join_role_id" {
   value     = module.azure.shared_container_env_join_role_id
+  sensitive = true
+}
+
+output "e2e_azure_vnet_resource_id" {
+  value     = module.azure.e2e_vnet_resource_id
+  sensitive = true
+}
+
+output "e2e_azure_public_subnet_name" {
+  value     = module.azure.e2e_public_subnet_name
+  sensitive = true
+}
+
+output "e2e_azure_private_subnet_name" {
+  value     = module.azure.e2e_private_subnet_name
   sensitive = true
 }

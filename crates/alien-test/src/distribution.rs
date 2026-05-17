@@ -17,9 +17,9 @@ use alien_core::{
     },
     AwsManagementConfig, AzureClientConfig, AzureCredentials, AzureManagementConfig,
     DeploymentConfig, DeploymentModel as StackDeploymentModel, EnvironmentVariablesSnapshot,
-    ExternalBinding, ExternalBindings, Worker, WorkerCode, GcpClientConfig, GcpCredentials,
-    GcpImpersonationConfig, GcpManagementConfig, ManagementConfig, Platform, Stack, StackSettings,
-    StackState, Vault,
+    ExternalBinding, ExternalBindings, GcpClientConfig, GcpCredentials, GcpImpersonationConfig,
+    GcpManagementConfig, ManagementConfig, Platform, Stack, StackSettings, StackState, Vault,
+    Worker, WorkerCode,
 };
 use alien_gcp_clients::{GcpClientConfigExt, ResourceManagerApi};
 use anyhow::Context;
@@ -286,7 +286,7 @@ async fn prepare_distribution(
         pushed_stack.clone()
     };
 
-    let stack_settings = stack_settings_for_flow(model);
+    let stack_settings = e2e_stack_settings_for_flow(model, &config, build_platform)?;
     let rendered_stack = apply_render_mutations(render_stack, build_platform, &stack_settings)
         .await
         .context("Failed to apply distribution render preflights")?;
@@ -355,14 +355,25 @@ fn stack_settings_for_flow(model: DeploymentModel) -> StackSettings {
     settings
 }
 
-fn stack_settings_for_terraform(prepared: &DistributionPrepared) -> StackSettings {
-    let mut settings = stack_settings_for_flow(prepared.model);
+fn e2e_stack_settings_for_flow(
+    model: DeploymentModel,
+    config: &TestConfig,
+    platform: Platform,
+) -> anyhow::Result<StackSettings> {
+    let mut settings = stack_settings_for_flow(model);
+    settings.network = config.e2e_network_settings(platform)?;
+    Ok(settings)
+}
+
+fn stack_settings_for_terraform(prepared: &DistributionPrepared) -> anyhow::Result<StackSettings> {
+    let mut settings =
+        e2e_stack_settings_for_flow(prepared.model, &prepared.config, prepared.platform)?;
     if prepared.platform != Platform::Azure {
-        return settings;
+        return Ok(settings);
     }
 
     let Some(shared_env) = &prepared.config.azure_resources.shared_container_env else {
-        return settings;
+        return Ok(settings);
     };
 
     let binding = alien_core::ContainerAppsEnvironmentBinding::new(
@@ -384,7 +395,7 @@ fn stack_settings_for_terraform(prepared: &DistributionPrepared) -> StackSetting
     );
     settings.external_bindings = Some(external_bindings);
     info!("Injected shared Container Apps Environment into Terraform stack settings");
-    settings
+    Ok(settings)
 }
 
 fn render_management_config(
@@ -525,7 +536,11 @@ async fn run_cloudformation_aws(
         &prepared.rendered_stack,
         alien_cloudformation::CloudFormationOptions {
             registry: &registry,
-            stack_settings: stack_settings_for_flow(prepared.model),
+            stack_settings: e2e_stack_settings_for_flow(
+                prepared.model,
+                &prepared.config,
+                prepared.platform,
+            )?,
             setup_target: "aws".to_string(),
             setup_fingerprint: "test".to_string(),
             setup_fingerprint_version: 1,
@@ -761,7 +776,7 @@ async fn apply_terraform_and_import(
 ) -> anyhow::Result<TerraformApplyResult> {
     let workdir = tempfile::tempdir().context("Failed to create Terraform workdir")?;
     let registry = alien_terraform::TfRegistry::built_in();
-    let stack_settings = stack_settings_for_terraform(prepared);
+    let stack_settings = stack_settings_for_terraform(prepared)?;
     let module = alien_terraform::generate_terraform_module(
         &prepared.rendered_stack,
         target,
@@ -839,7 +854,8 @@ async fn apply_terraform_and_import(
 }
 
 async fn render_helm_chart(prepared: &DistributionPrepared) -> anyhow::Result<TempDir> {
-    let stack_settings = stack_settings_for_flow(prepared.model);
+    let stack_settings =
+        e2e_stack_settings_for_flow(prepared.model, &prepared.config, Platform::Kubernetes)?;
     let stack = apply_render_mutations(
         prepared.built_stack.clone(),
         Platform::Kubernetes,

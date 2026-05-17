@@ -5,7 +5,8 @@
 
 use std::env;
 
-use alien_core::Platform;
+use alien_core::{NetworkSettings, Platform};
+use anyhow::{bail, Context};
 
 /// AWS credentials for a single role (management or target).
 #[derive(Debug, Clone)]
@@ -131,6 +132,14 @@ pub struct E2eArtifactRegistryConfig {
     pub azure_acr_repository: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum E2eNetworkMode {
+    None,
+    UseDefault,
+    Create,
+    Existing,
+}
+
 /// Top-level test configuration holding optional credentials for every
 /// supported cloud platform, in both management and target roles.
 #[derive(Debug, Clone)]
@@ -145,6 +154,7 @@ pub struct TestConfig {
     pub azure_target: Option<AzureConfig>,
     pub azure_resources: AzureTestResources,
     pub e2e_artifact_registry: E2eArtifactRegistryConfig,
+    pub e2e_network_mode: E2eNetworkMode,
 }
 
 impl TestConfig {
@@ -167,9 +177,40 @@ impl TestConfig {
             azure_target: Self::load_azure_target(),
             azure_resources: Self::load_azure_resources(),
             e2e_artifact_registry: Self::load_e2e_artifact_registry(),
+            e2e_network_mode: Self::load_e2e_network_mode(),
         };
         config.mask_ci_secrets();
         config
+    }
+
+    pub fn e2e_network_settings(
+        &self,
+        platform: Platform,
+    ) -> anyhow::Result<Option<NetworkSettings>> {
+        match self.e2e_network_mode {
+            E2eNetworkMode::None => Ok(None),
+            E2eNetworkMode::UseDefault => match platform {
+                Platform::Aws | Platform::Gcp | Platform::Azure => {
+                    Ok(Some(NetworkSettings::UseDefault))
+                }
+                Platform::Kubernetes | Platform::Local | Platform::Test => Ok(None),
+            },
+            E2eNetworkMode::Create => match platform {
+                Platform::Aws | Platform::Gcp | Platform::Azure => {
+                    Ok(Some(NetworkSettings::Create {
+                        cidr: None,
+                        availability_zones: 2,
+                    }))
+                }
+                Platform::Kubernetes | Platform::Local | Platform::Test => Ok(None),
+            },
+            E2eNetworkMode::Existing => match platform {
+                Platform::Aws | Platform::Gcp | Platform::Azure => {
+                    self.e2e_existing_network_settings(platform).map(Some)
+                }
+                Platform::Kubernetes | Platform::Local | Platform::Test => Ok(None),
+            },
+        }
     }
 
     /// Return the platforms where **both** management and target credentials
@@ -330,6 +371,48 @@ impl TestConfig {
         }
     }
 
+    fn load_e2e_network_mode() -> E2eNetworkMode {
+        match env::var("ALIEN_E2E_NETWORK_MODE") {
+            Ok(value) => match value.as_str() {
+                "" | "none" => E2eNetworkMode::None,
+                "default" | "use-default" => E2eNetworkMode::UseDefault,
+                "create" => E2eNetworkMode::Create,
+                "existing" => E2eNetworkMode::Existing,
+                _ => panic!(
+                    "ALIEN_E2E_NETWORK_MODE must be one of: none, use-default, create, existing"
+                ),
+            },
+            Err(_) => E2eNetworkMode::None,
+        }
+    }
+
+    fn e2e_existing_network_settings(&self, platform: Platform) -> anyhow::Result<NetworkSettings> {
+        match platform {
+            Platform::Aws => Ok(NetworkSettings::ByoVpcAws {
+                vpc_id: required_env("ALIEN_E2E_AWS_VPC_ID")?,
+                public_subnet_ids: required_csv_env("ALIEN_E2E_AWS_PUBLIC_SUBNET_IDS")?,
+                private_subnet_ids: required_csv_env("ALIEN_E2E_AWS_PRIVATE_SUBNET_IDS")?,
+                security_group_ids: csv_env("ALIEN_E2E_AWS_SECURITY_GROUP_IDS"),
+            }),
+            Platform::Gcp => Ok(NetworkSettings::ByoVpcGcp {
+                network_name: required_env("ALIEN_E2E_GCP_NETWORK_NAME")?,
+                subnet_name: required_env("ALIEN_E2E_GCP_SUBNET_NAME")?,
+                region: env::var("ALIEN_E2E_GCP_REGION")
+                    .ok()
+                    .or_else(|| self.gcp_target.as_ref().map(|target| target.region.clone()))
+                    .context("ALIEN_E2E_GCP_REGION or GOOGLE_TARGET_REGION is required")?,
+            }),
+            Platform::Azure => Ok(NetworkSettings::ByoVnetAzure {
+                vnet_resource_id: required_env("ALIEN_E2E_AZURE_VNET_RESOURCE_ID")?,
+                public_subnet_name: required_env("ALIEN_E2E_AZURE_PUBLIC_SUBNET_NAME")?,
+                private_subnet_name: required_env("ALIEN_E2E_AZURE_PRIVATE_SUBNET_NAME")?,
+            }),
+            Platform::Kubernetes | Platform::Local | Platform::Test => {
+                bail!("ALIEN_E2E_NETWORK_MODE=existing is not supported for {platform:?}")
+            }
+        }
+    }
+
     fn load_gcp_resources() -> GcpTestResources {
         GcpTestResources {
             gcs_bucket: env::var("ALIEN_TEST_GCP_GCS_BUCKET").ok(),
@@ -469,4 +552,32 @@ impl TestConfig {
         mask_opt(&e2e.gcp_ar_push_sa_email);
         mask_opt(&e2e.azure_acr_repository);
     }
+}
+
+fn required_env(name: &str) -> anyhow::Result<String> {
+    env::var(name).with_context(|| format!("{name} is required"))
+}
+
+fn csv_env(name: &str) -> Vec<String> {
+    env::var(name)
+        .ok()
+        .map(|value| parse_csv(&value))
+        .unwrap_or_default()
+}
+
+fn required_csv_env(name: &str) -> anyhow::Result<Vec<String>> {
+    let values = parse_csv(&required_env(name)?);
+    if values.is_empty() {
+        bail!("{name} must contain at least one value");
+    }
+    Ok(values)
+}
+
+fn parse_csv(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
 }

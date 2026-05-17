@@ -10,7 +10,7 @@
 use std::path::Path;
 
 use alien_build::settings::{BuildSettings, PlatformBuildSettings, PushSettings};
-use alien_core::{Worker, WorkerCode, Platform};
+use alien_core::{Platform, Worker, WorkerCode};
 use anyhow::Context;
 use dockdash::{ClientProtocol, PushOptions, RegistryAuth};
 use tracing::info;

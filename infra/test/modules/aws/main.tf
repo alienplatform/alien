@@ -13,6 +13,146 @@ resource "random_id" "suffix" {
   byte_length = 4
 }
 
+data "aws_availability_zones" "target" {
+  provider = aws.target
+  state    = "available"
+}
+
+# ── Target: reusable E2E network ─────────────────────────────────────────────
+
+resource "aws_vpc" "e2e" {
+  provider             = aws.target
+  cidr_block           = "10.251.0.0/16"
+  enable_dns_hostnames = true
+  enable_dns_support   = true
+
+  tags = {
+    Name = "alien-e2e-${random_id.suffix.hex}"
+  }
+}
+
+resource "aws_internet_gateway" "e2e" {
+  provider = aws.target
+  vpc_id   = aws_vpc.e2e.id
+
+  tags = {
+    Name = "alien-e2e-${random_id.suffix.hex}"
+  }
+}
+
+resource "aws_subnet" "e2e_public" {
+  provider                = aws.target
+  count                   = 2
+  vpc_id                  = aws_vpc.e2e.id
+  cidr_block              = cidrsubnet(aws_vpc.e2e.cidr_block, 8, count.index)
+  availability_zone       = data.aws_availability_zones.target.names[count.index]
+  map_public_ip_on_launch = true
+
+  tags = {
+    Name = "alien-e2e-public-${count.index + 1}-${random_id.suffix.hex}"
+  }
+}
+
+resource "aws_subnet" "e2e_private" {
+  provider          = aws.target
+  count             = 2
+  vpc_id            = aws_vpc.e2e.id
+  cidr_block        = cidrsubnet(aws_vpc.e2e.cidr_block, 8, count.index + 10)
+  availability_zone = data.aws_availability_zones.target.names[count.index]
+
+  tags = {
+    Name = "alien-e2e-private-${count.index + 1}-${random_id.suffix.hex}"
+  }
+}
+
+resource "aws_eip" "e2e_nat" {
+  provider = aws.target
+  domain   = "vpc"
+
+  tags = {
+    Name = "alien-e2e-nat-${random_id.suffix.hex}"
+  }
+}
+
+resource "aws_nat_gateway" "e2e" {
+  provider      = aws.target
+  allocation_id = aws_eip.e2e_nat.id
+  subnet_id     = aws_subnet.e2e_public[0].id
+
+  tags = {
+    Name = "alien-e2e-${random_id.suffix.hex}"
+  }
+}
+
+resource "aws_route_table" "e2e_public" {
+  provider = aws.target
+  vpc_id   = aws_vpc.e2e.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.e2e.id
+  }
+
+  tags = {
+    Name = "alien-e2e-public-${random_id.suffix.hex}"
+  }
+}
+
+resource "aws_route_table_association" "e2e_public" {
+  provider       = aws.target
+  count          = length(aws_subnet.e2e_public)
+  subnet_id      = aws_subnet.e2e_public[count.index].id
+  route_table_id = aws_route_table.e2e_public.id
+}
+
+resource "aws_route_table" "e2e_private" {
+  provider = aws.target
+  vpc_id   = aws_vpc.e2e.id
+
+  route {
+    cidr_block     = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.e2e.id
+  }
+
+  tags = {
+    Name = "alien-e2e-private-${random_id.suffix.hex}"
+  }
+}
+
+resource "aws_route_table_association" "e2e_private" {
+  provider       = aws.target
+  count          = length(aws_subnet.e2e_private)
+  subnet_id      = aws_subnet.e2e_private[count.index].id
+  route_table_id = aws_route_table.e2e_private.id
+}
+
+resource "aws_security_group" "e2e" {
+  provider    = aws.target
+  name        = "alien-e2e-${random_id.suffix.hex}"
+  description = "Reusable Alien E2E security group"
+  vpc_id      = aws_vpc.e2e.id
+
+  ingress {
+    description = "VPC internal"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = [aws_vpc.e2e.cidr_block]
+  }
+
+  egress {
+    description = "All outbound"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "alien-e2e-${random_id.suffix.hex}"
+  }
+}
+
 # ── Management: IAM user ──────────────────────────────────────────────────────
 # Scoped to the services the manager actually provisions, not AdministratorAccess.
 
@@ -46,8 +186,8 @@ resource "aws_iam_policy" "manager" {
         ]
       },
       {
-        Sid      = "AllServices"
-        Effect   = "Allow"
+        Sid    = "AllServices"
+        Effect = "Allow"
         Action = [
           "ec2:*",
           "ecr:*",

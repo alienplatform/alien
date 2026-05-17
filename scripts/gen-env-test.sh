@@ -21,6 +21,7 @@ jq_val() { printf '%s' "$TF" | jq -er --arg key "$1" '.[$key].value // empty'; }
 # Piping through jq -c compacts the valid multiline JSON into one line.
 # This is required because Windows PowerShell reads .env.test line-by-line.
 jq_val_json() { jq_val "$1" | jq -c .; }
+jq_val_csv() { jq_val "$1" | jq -er 'join(",")'; }
 
 # Capture all values into variables before writing so we can safely
 # single-quote them in the output (single-quoted values are literal in
@@ -36,6 +37,10 @@ aws_target_region=$(jq_val target_aws_region)
 aws_target_access_key_id=$(jq_val target_aws_access_key_id)
 aws_target_secret_access_key=$(jq_val target_aws_secret_access_key)
 aws_target_account_id=$(jq_val target_aws_account_id)
+e2e_aws_vpc_id=$(jq_val e2e_aws_vpc_id)
+e2e_aws_public_subnet_ids=$(jq_val_csv e2e_aws_public_subnet_ids)
+e2e_aws_private_subnet_ids=$(jq_val_csv e2e_aws_private_subnet_ids)
+e2e_aws_security_group_ids=$(jq_val_csv e2e_aws_security_group_ids)
 
 aws_s3_bucket=$(jq_val aws_s3_bucket)
 aws_command_kv_table=$(jq_val aws_command_kv_table_name)
@@ -56,6 +61,9 @@ gcp_management_region=$(jq_val management_gcp_region)
 gcp_target_sa_key=$(jq_val_json target_gcp_service_account_key)
 gcp_target_project_id=$(jq_val target_gcp_project_id)
 gcp_target_region=$(jq_val target_gcp_region)
+e2e_gcp_network_name=$(jq_val e2e_gcp_network_name)
+e2e_gcp_subnet_name=$(jq_val e2e_gcp_subnet_name)
+e2e_gcp_network_region=$(jq_val e2e_gcp_network_region)
 
 gcp_management_identity_email=$(jq_val gcp_management_identity_email)
 gcp_management_identity_unique_id=$(jq_val gcp_management_identity_unique_id)
@@ -102,6 +110,9 @@ azure_shared_container_env_resource_group=$(jq_val azure_shared_container_env_re
 azure_shared_container_env_default_domain=$(jq_val azure_shared_container_env_default_domain)
 azure_shared_container_env_static_ip=$(jq_val azure_shared_container_env_static_ip)
 azure_shared_container_env_join_role_id=$(jq_val azure_shared_container_env_join_role_id)
+e2e_azure_vnet_resource_id=$(jq_val e2e_azure_vnet_resource_id)
+e2e_azure_public_subnet_name=$(jq_val e2e_azure_public_subnet_name)
+e2e_azure_private_subnet_name=$(jq_val e2e_azure_private_subnet_name)
 
 cat > .env.test <<EOF
 # AWS - Management
@@ -117,6 +128,12 @@ AWS_TARGET_REGION='${aws_target_region}'
 AWS_TARGET_ACCESS_KEY_ID='${aws_target_access_key_id}'
 AWS_TARGET_SECRET_ACCESS_KEY='${aws_target_secret_access_key}'
 AWS_TARGET_ACCOUNT_ID='${aws_target_account_id}'
+
+# AWS - reusable E2E network
+ALIEN_E2E_AWS_VPC_ID='${e2e_aws_vpc_id}'
+ALIEN_E2E_AWS_PUBLIC_SUBNET_IDS='${e2e_aws_public_subnet_ids}'
+ALIEN_E2E_AWS_PRIVATE_SUBNET_IDS='${e2e_aws_private_subnet_ids}'
+ALIEN_E2E_AWS_SECURITY_GROUP_IDS='${e2e_aws_security_group_ids}'
 
 # AWS test resources
 ALIEN_TEST_AWS_S3_BUCKET='${aws_s3_bucket}'
@@ -140,6 +157,11 @@ GOOGLE_MANAGEMENT_REGION='${gcp_management_region}'
 GOOGLE_TARGET_SERVICE_ACCOUNT_KEY='${gcp_target_sa_key}'
 GOOGLE_TARGET_PROJECT_ID='${gcp_target_project_id}'
 GOOGLE_TARGET_REGION='${gcp_target_region}'
+
+# GCP - reusable E2E network
+ALIEN_E2E_GCP_NETWORK_NAME='${e2e_gcp_network_name}'
+ALIEN_E2E_GCP_SUBNET_NAME='${e2e_gcp_subnet_name}'
+ALIEN_E2E_GCP_REGION='${e2e_gcp_network_region}'
 
 # GCP - Management Identity
 GOOGLE_MANAGEMENT_IDENTITY_EMAIL='${gcp_management_identity_email}'
@@ -198,6 +220,11 @@ AZURE_SHARED_CONTAINER_ENV_RESOURCE_GROUP='${azure_shared_container_env_resource
 AZURE_SHARED_CONTAINER_ENV_DEFAULT_DOMAIN='${azure_shared_container_env_default_domain}'
 AZURE_SHARED_CONTAINER_ENV_STATIC_IP='${azure_shared_container_env_static_ip}'
 AZURE_SHARED_CONTAINER_ENV_JOIN_ROLE_ID='${azure_shared_container_env_join_role_id}'
+
+# Azure - reusable E2E network
+ALIEN_E2E_AZURE_VNET_RESOURCE_ID='${e2e_azure_vnet_resource_id}'
+ALIEN_E2E_AZURE_PUBLIC_SUBNET_NAME='${e2e_azure_public_subnet_name}'
+ALIEN_E2E_AZURE_PRIVATE_SUBNET_NAME='${e2e_azure_private_subnet_name}'
 
 # Ngrok (for push-mode E2E tests — cloud functions submit responses via tunnel)
 NGROK_AUTHTOKEN='${NGROK_AUTHTOKEN:-}'

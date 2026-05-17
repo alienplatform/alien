@@ -33,6 +33,26 @@ output "target_account_id" {
   sensitive = true
 }
 
+output "e2e_vpc_id" {
+  value     = aws_vpc.e2e.id
+  sensitive = true
+}
+
+output "e2e_public_subnet_ids" {
+  value     = aws_subnet.e2e_public[*].id
+  sensitive = true
+}
+
+output "e2e_private_subnet_ids" {
+  value     = aws_subnet.e2e_private[*].id
+  sensitive = true
+}
+
+output "e2e_security_group_ids" {
+  value     = [aws_security_group.e2e.id]
+  sensitive = true
+}
+
 output "s3_bucket" {
   value     = aws_s3_bucket.test.bucket
   sensitive = true

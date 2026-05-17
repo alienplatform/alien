@@ -76,6 +76,59 @@ resource "azurerm_resource_group" "shared_target" {
   location = var.management_region
 }
 
+resource "azurerm_virtual_network" "e2e" {
+  provider            = azurerm.target
+  name                = "alien-e2e-${random_id.suffix.hex}"
+  resource_group_name = azurerm_resource_group.shared_target.name
+  location            = azurerm_resource_group.shared_target.location
+  address_space       = ["10.253.0.0/16"]
+}
+
+resource "azurerm_subnet" "e2e_public" {
+  provider             = azurerm.target
+  name                 = "public"
+  resource_group_name  = azurerm_resource_group.shared_target.name
+  virtual_network_name = azurerm_virtual_network.e2e.name
+  address_prefixes     = ["10.253.0.0/24"]
+}
+
+resource "azurerm_subnet" "e2e_private" {
+  provider             = azurerm.target
+  name                 = "private"
+  resource_group_name  = azurerm_resource_group.shared_target.name
+  virtual_network_name = azurerm_virtual_network.e2e.name
+  address_prefixes     = ["10.253.1.0/24"]
+}
+
+resource "azurerm_public_ip" "e2e_nat" {
+  provider            = azurerm.target
+  name                = "alien-e2e-nat-${random_id.suffix.hex}"
+  resource_group_name = azurerm_resource_group.shared_target.name
+  location            = azurerm_resource_group.shared_target.location
+  allocation_method   = "Static"
+  sku                 = "Standard"
+}
+
+resource "azurerm_nat_gateway" "e2e" {
+  provider            = azurerm.target
+  name                = "alien-e2e-${random_id.suffix.hex}"
+  resource_group_name = azurerm_resource_group.shared_target.name
+  location            = azurerm_resource_group.shared_target.location
+  sku_name            = "Standard"
+}
+
+resource "azurerm_nat_gateway_public_ip_association" "e2e" {
+  provider             = azurerm.target
+  nat_gateway_id       = azurerm_nat_gateway.e2e.id
+  public_ip_address_id = azurerm_public_ip.e2e_nat.id
+}
+
+resource "azurerm_subnet_nat_gateway_association" "e2e_private" {
+  provider       = azurerm.target
+  subnet_id      = azurerm_subnet.e2e_private.id
+  nat_gateway_id = azurerm_nat_gateway.e2e.id
+}
+
 resource "azurerm_container_app_environment" "shared_target" {
   provider            = azurerm.target
   name                = "alien-e2e-shared-${random_id.suffix.hex}"

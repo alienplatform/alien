@@ -8,6 +8,21 @@ output "target_service_account_key" {
   sensitive = true
 }
 
+output "e2e_network_name" {
+  value     = google_compute_network.e2e.name
+  sensitive = true
+}
+
+output "e2e_subnet_name" {
+  value     = google_compute_subnetwork.e2e.name
+  sensitive = true
+}
+
+output "e2e_network_region" {
+  value     = google_compute_subnetwork.e2e.region
+  sensitive = true
+}
+
 output "gcs_bucket" {
   value     = google_storage_bucket.test.name
   sensitive = true

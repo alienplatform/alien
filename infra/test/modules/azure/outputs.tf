@@ -63,6 +63,21 @@ output "shared_container_env_join_role_id" {
   sensitive = true
 }
 
+output "e2e_vnet_resource_id" {
+  value     = azurerm_virtual_network.e2e.id
+  sensitive = true
+}
+
+output "e2e_public_subnet_name" {
+  value     = azurerm_subnet.e2e_public.name
+  sensitive = true
+}
+
+output "e2e_private_subnet_name" {
+  value     = azurerm_subnet.e2e_private.name
+  sensitive = true
+}
+
 output "acr_name" {
   value     = azurerm_container_registry.test.name
   sensitive = true

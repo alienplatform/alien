@@ -28,8 +28,8 @@ use alien_aws_clients::ec2::{
     CreateRouteTableRequest, CreateSecurityGroupRequest, CreateSubnetRequest, CreateVpcRequest,
     DeleteRouteRequest, DescribeAvailabilityZonesRequest, DescribeNatGatewaysRequest,
     DescribeRouteTablesRequest, DescribeSecurityGroupsRequest, DescribeSubnetsRequest,
-    DescribeVpcsRequest, DetachInternetGatewayRequest, Ec2Api, Filter, IpPermission, IpRange,
-    ModifyVpcAttributeRequest, Tag, TagSpecification,
+    DescribeVpcsRequest, DetachInternetGatewayRequest, Ec2Api, Filter, IpPermission,
+    IpPermissionResponse, IpRange, ModifyVpcAttributeRequest, SecurityGroup, Tag, TagSpecification,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
@@ -66,6 +66,95 @@ fn is_security_group_rule_duplicate(error: &AlienError<CloudClientErrorData>) ->
                 || message.contains("specified rule")
                 || message.contains("already exists")
     )
+}
+
+fn has_ipv4_all_protocol_rule(
+    permissions: Option<&[IpPermissionResponse]>,
+    cidr_block: &str,
+) -> bool {
+    permissions.unwrap_or_default().iter().any(|permission| {
+        permission.ip_protocol.as_deref() == Some("-1")
+            && permission.ip_ranges.as_ref().is_some_and(|ranges| {
+                ranges
+                    .items
+                    .iter()
+                    .any(|range| range.cidr_ip.as_deref() == Some(cidr_block))
+            })
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use alien_aws_clients::ec2::{IpPermissionSet, IpRangeResponse, IpRangeSet};
+
+    use super::*;
+
+    #[test]
+    fn detects_existing_all_protocol_ipv4_rule() {
+        let permissions = [IpPermissionResponse {
+            ip_protocol: Some("-1".to_string()),
+            from_port: None,
+            to_port: None,
+            ip_ranges: Some(IpRangeSet {
+                items: vec![IpRangeResponse {
+                    cidr_ip: Some("10.0.0.0/16".to_string()),
+                    description: None,
+                }],
+            }),
+            ipv6_ranges: None,
+            groups: None,
+        }];
+
+        assert!(has_ipv4_all_protocol_rule(
+            Some(&permissions),
+            "10.0.0.0/16"
+        ));
+    }
+
+    #[test]
+    fn ignores_rules_for_other_cidrs_or_protocols() {
+        let permissions = [
+            IpPermissionResponse {
+                ip_protocol: Some("tcp".to_string()),
+                from_port: Some(443),
+                to_port: Some(443),
+                ip_ranges: Some(IpRangeSet {
+                    items: vec![IpRangeResponse {
+                        cidr_ip: Some("10.0.0.0/16".to_string()),
+                        description: None,
+                    }],
+                }),
+                ipv6_ranges: None,
+                groups: None,
+            },
+            IpPermissionResponse {
+                ip_protocol: Some("-1".to_string()),
+                from_port: None,
+                to_port: None,
+                ip_ranges: Some(IpRangeSet {
+                    items: vec![IpRangeResponse {
+                        cidr_ip: Some("192.168.0.0/16".to_string()),
+                        description: None,
+                    }],
+                }),
+                ipv6_ranges: None,
+                groups: None,
+            },
+        ];
+
+        assert!(!has_ipv4_all_protocol_rule(
+            Some(&permissions),
+            "10.0.0.0/16"
+        ));
+    }
+
+    #[test]
+    fn handles_empty_permission_sets() {
+        let set = IpPermissionSet { items: Vec::new() };
+
+        assert!(!has_ipv4_all_protocol_rule(Some(&set.items), "0.0.0.0/0"));
+        assert!(!has_ipv4_all_protocol_rule(None, "0.0.0.0/0"));
+    }
 }
 
 /// AWS Network Controller state machine.
@@ -136,6 +225,38 @@ impl AwsNetworkController {
         Ok(response
             .security_group_info
             .and_then(|set| set.items.into_iter().find_map(|sg| sg.group_id)))
+    }
+
+    async fn find_security_group_by_id(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        group_id: &str,
+        resource_id: &str,
+    ) -> Result<SecurityGroup> {
+        let aws_cfg = ctx.get_aws_config()?;
+        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
+
+        let response = client
+            .describe_security_groups(
+                DescribeSecurityGroupsRequest::builder()
+                    .group_ids(vec![group_id.to_string()])
+                    .build(),
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to describe security group".to_string(),
+                resource_id: Some(resource_id.to_string()),
+            })?;
+
+        response
+            .security_group_info
+            .and_then(|set| set.items.into_iter().next())
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::CloudPlatformError {
+                    message: format!("Security group '{group_id}' was not found"),
+                    resource_id: Some(resource_id.to_string()),
+                })
+            })
     }
 
     /// Find an available CIDR block for the VPC.
@@ -1156,6 +1277,29 @@ impl AwsNetworkController {
         info!("Creating security group");
 
         let group_name = format!("{}-sg", ctx.resource_prefix);
+        if let Some(sg_id) = &self.security_group_id {
+            info!(sg_id = %sg_id, "Security group already recorded");
+            return Ok(HandlerAction::Continue {
+                state: AuthorizingSecurityGroupIngress,
+                suggested_delay: None,
+            });
+        }
+
+        if let Some(sg_id) = self
+            .find_security_group_id_by_name(ctx, vpc_id, &group_name, &config.id)
+            .await?
+        {
+            info!(
+                sg_id = %sg_id,
+                group_name = %group_name,
+                "Security group already exists"
+            );
+            self.security_group_id = Some(sg_id);
+            return Ok(HandlerAction::Continue {
+                state: AuthorizingSecurityGroupIngress,
+                suggested_delay: None,
+            });
+        }
 
         // Create security group
         let sg_result = client
@@ -1211,7 +1355,34 @@ impl AwsNetworkController {
             }
         };
 
-        info!(sg_id = %sg_id, "Security group created, adding ingress rules");
+        info!(sg_id = %sg_id, "Security group created");
+        self.security_group_id = Some(sg_id);
+
+        Ok(HandlerAction::Continue {
+            state: AuthorizingSecurityGroupIngress,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
+        state = AuthorizingSecurityGroupIngress,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn authorizing_security_group_ingress(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let aws_cfg = ctx.get_aws_config()?;
+        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
+        let config = ctx.desired_resource_config::<Network>()?;
+
+        let sg_id = self.security_group_id.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "Security group ID not set in state".to_string(),
+                resource_id: Some(config.id.clone()),
+            })
+        })?;
 
         // Add ingress rule: allow all traffic from within the VPC
         let cidr_block = self.cidr_block.as_ref().ok_or_else(|| {
@@ -1220,6 +1391,23 @@ impl AwsNetworkController {
                 resource_id: Some(config.id.clone()),
             })
         })?;
+
+        let security_group = self
+            .find_security_group_by_id(ctx, sg_id, &config.id)
+            .await?;
+        if has_ipv4_all_protocol_rule(
+            security_group
+                .ip_permissions
+                .as_ref()
+                .map(|permissions| permissions.items.as_slice()),
+            cidr_block,
+        ) {
+            debug!(sg_id = %sg_id, cidr_block = %cidr_block, "Security group ingress rule already exists");
+            return Ok(HandlerAction::Continue {
+                state: AuthorizingSecurityGroupEgress,
+                suggested_delay: None,
+            });
+        }
 
         if let Err(e) = client
             .authorize_security_group_ingress(
@@ -1250,8 +1438,51 @@ impl AwsNetworkController {
             }
         }
 
+        Ok(HandlerAction::Continue {
+            state: AuthorizingSecurityGroupEgress,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
+        state = AuthorizingSecurityGroupEgress,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn authorizing_security_group_egress(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let aws_cfg = ctx.get_aws_config()?;
+        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
+        let config = ctx.desired_resource_config::<Network>()?;
+
+        let sg_id = self.security_group_id.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "Security group ID not set in state".to_string(),
+                resource_id: Some(config.id.clone()),
+            })
+        })?;
+
         // Add egress rule: allow all outbound traffic (default rule, but we make it explicit).
         // Only ignore duplicate-rule errors; propagate everything else.
+        let security_group = self
+            .find_security_group_by_id(ctx, sg_id, &config.id)
+            .await?;
+        if has_ipv4_all_protocol_rule(
+            security_group
+                .ip_permissions_egress
+                .as_ref()
+                .map(|permissions| permissions.items.as_slice()),
+            "0.0.0.0/0",
+        ) {
+            debug!(sg_id = %sg_id, "Security group egress rule already exists");
+            return Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: None,
+            });
+        }
+
         if let Err(e) = client
             .authorize_security_group_egress(
                 AuthorizeSecurityGroupEgressRequest::builder()
@@ -1280,8 +1511,6 @@ impl AwsNetworkController {
                 }));
             }
         }
-
-        self.security_group_id = Some(sg_id);
 
         info!("Security group configured, network provisioning complete");
 

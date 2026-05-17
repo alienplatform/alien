@@ -63,6 +63,15 @@ on:
           - All
           - Rust
           - TypeScript
+      network_mode:
+        description: "Cloud network mode"
+        type: choice
+        default: "none"
+        options:
+          - none
+          - use-default
+          - create
+          - existing
       build_images:
         description: "Build container images (disable to use latest from main)"
         type: boolean
@@ -109,6 +118,7 @@ jobs:
       build_images: ${{ steps.set.outputs.build_images }}
       skip_cleanup: ${{ steps.set.outputs.skip_cleanup }}
       test_filter: ${{ steps.set.outputs.test_filter }}
+      network_mode: ${{ steps.set.outputs.network_mode }}
     steps:
       - id: set
         run: |
@@ -141,6 +151,7 @@ jobs:
             echo "build_images=true" >> $GITHUB_OUTPUT
             echo "skip_cleanup=false" >> $GITHUB_OUTPUT
             echo "test_filter=" >> $GITHUB_OUTPUT
+            echo "network_mode=none" >> $GITHUB_OUTPUT
             exit 0
           fi
 
@@ -161,6 +172,7 @@ jobs:
             LOCAL_MACOS_AGENT="${{ inputs.run_local_macos_agent }}"
             LOCAL_WINDOWS_AGENT="${{ inputs.run_local_windows_agent }}"
             LANG="${{ inputs.language }}"
+            NETWORK_MODE="${{ inputs.network_mode }}"
             BUILD_IMAGES="${{ inputs.build_images }}"
             SKIP_CLEANUP="${{ inputs.skip_cleanup }}"
             TEST_FILTER="${{ inputs.test_filter }}"
@@ -178,7 +190,7 @@ jobs:
             LOCAL_LINUX_AGENT=true
             LOCAL_MACOS_AGENT=false
             LOCAL_WINDOWS_AGENT=false
-            LANG=Rust; BUILD_IMAGES=true; SKIP_CLEANUP=false; TEST_FILTER=""
+            LANG=Rust; NETWORK_MODE=none; BUILD_IMAGES=true; SKIP_CLEANUP=false; TEST_FILTER=""
           fi
 
           # Build push matrix
@@ -303,6 +315,7 @@ jobs:
           echo "build_images=$BUILD_IMAGES" >> $GITHUB_OUTPUT
           echo "skip_cleanup=$SKIP_CLEANUP" >> $GITHUB_OUTPUT
           echo "test_filter=$TEST_FILTER" >> $GITHUB_OUTPUT
+          echo "network_mode=$NETWORK_MODE" >> $GITHUB_OUTPUT
 
   # ── Build alien-runtime + alien-agent for needed architectures ─────
   # Combined into one cargo invocation per arch to share compilation of
@@ -707,6 +720,7 @@ jobs:
         env:
           NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
           ALIEN_TEST_OVERRIDE_BASE_IMAGE: ${{ needs.compute-matrix.outputs.build_images == 'true' && needs.build-base-image.outputs.base_image || '' }}
+          ALIEN_E2E_NETWORK_MODE: ${{ needs.compute-matrix.outputs.network_mode }}
         run: |
           set -a && source .env.test && set +a
           depot cargo nextest run -p alien-test --test push ${{ matrix.test_filter }} ${{ needs.compute-matrix.outputs.test_filter }} --no-capture
@@ -790,6 +804,7 @@ jobs:
         env:
           NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
           ALIEN_TEST_OVERRIDE_BASE_IMAGE: ${{ needs.compute-matrix.outputs.build_images == 'true' && needs.build-base-image.outputs.base_image || '' }}
+          ALIEN_E2E_NETWORK_MODE: ${{ needs.compute-matrix.outputs.network_mode }}
         run: |
           set -a && source .env.test && set +a
           depot cargo nextest run -p alien-test --test distribution ${{ matrix.test_filter }} ${{ needs.compute-matrix.outputs.test_filter }} --no-capture
@@ -918,6 +933,7 @@ jobs:
           NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
           ALIEN_TEST_OVERRIDE_BASE_IMAGE: ${{ needs.compute-matrix.outputs.build_images == 'true' && needs.build-base-image.outputs.base_image || '' }}
           ALIEN_TEST_OVERRIDE_AGENT_IMAGE: ${{ needs.compute-matrix.outputs.build_images == 'true' && needs.build-agent-image.outputs.agent_image || '' }}
+          ALIEN_E2E_NETWORK_MODE: ${{ needs.compute-matrix.outputs.network_mode }}
         run: |
           set -a && source .env.test && set +a
           depot cargo nextest run -p alien-test --test distribution ${{ matrix.test_filter }} ${{ needs.compute-matrix.outputs.test_filter }} --no-capture

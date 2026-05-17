@@ -748,6 +748,15 @@ pub async fn deploy_test_app(
     if model == DeploymentModel::Pull {
         stack_settings.deployment_model = Some(alien_manager_api::types::DeploymentModel::Pull);
     }
+    if let Some(network) = config.e2e_network_settings(platform)? {
+        stack_settings.network = Some(
+            serde_json::from_value(
+                serde_json::to_value(network)
+                    .context("Failed to serialize E2E network settings")?,
+            )
+            .context("Failed to convert E2E network settings to SDK type")?,
+        );
+    }
 
     // Inject shared Container Apps Environment as an external binding (Azure only).
     // This avoids creating a new environment per test, preventing quota exhaustion.
