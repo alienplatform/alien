@@ -276,13 +276,8 @@ fn stack_with_storage(resource_id: &str) -> Stack {
         .build()
 }
 
-fn stack_with_remote_management(resource_id: &str) -> Stack {
-    Stack::new("imported".to_string())
-        .add(
-            RemoteStackManagement::new(resource_id.to_string()).build(),
-            ResourceLifecycle::Frozen,
-        )
-        .build()
+fn source_stack_without_setup_resources() -> Stack {
+    Stack::new("imported".to_string()).build()
 }
 
 fn aws_remote_management_import_request(
@@ -523,10 +518,7 @@ async fn happy_path_creates_imported_deployment() {
 
 #[tokio::test]
 async fn aws_import_persists_target_environment_info() {
-    let fixture = make_fixture(Some(stack_with_remote_management(
-        "remote-stack-management",
-    )))
-    .await;
+    let fixture = make_fixture(Some(source_stack_without_setup_resources())).await;
     let body = aws_remote_management_import_request(
         "acme-prod",
         "us-west-2",
@@ -558,12 +550,26 @@ async fn aws_import_persists_target_environment_info() {
 }
 
 #[tokio::test]
+async fn aws_cloudformation_import_accepts_stringified_booleans() {
+    let fixture = make_fixture(Some(source_stack_without_setup_resources())).await;
+    let mut body = aws_remote_management_import_request(
+        "acme-prod",
+        "us-west-2",
+        "remote-stack-management",
+        "210987654321",
+    );
+    body.resources[0].import_data["managementPermissionsApplied"] =
+        serde_json::Value::String("true".to_string());
+
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(status, StatusCode::CREATED, "body = {:#}", json);
+}
+
+#[tokio::test]
 async fn gcp_import_persists_target_environment_info() {
-    let fixture = make_fixture_for_platform(
-        Platform::Gcp,
-        Some(stack_with_remote_management("remote-stack-management")),
-    )
-    .await;
+    let fixture =
+        make_fixture_for_platform(Platform::Gcp, Some(source_stack_without_setup_resources()))
+            .await;
     let body = gcp_remote_management_import_request(
         "acme-prod",
         "us-central1",
@@ -600,7 +606,7 @@ async fn gcp_import_persists_target_environment_info() {
 async fn azure_import_persists_target_environment_info() {
     let fixture = make_fixture_for_platform(
         Platform::Azure,
-        Some(stack_with_remote_management("remote-stack-management")),
+        Some(source_stack_without_setup_resources()),
     )
     .await;
     let body = azure_remote_management_import_request(

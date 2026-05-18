@@ -120,7 +120,6 @@ pub struct ComputeCluster {
     /// Each machine gets a /24 subnet from this range.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub container_cidr: Option<String>,
-
 }
 
 impl ComputeCluster {

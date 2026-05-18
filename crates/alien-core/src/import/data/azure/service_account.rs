@@ -21,5 +21,6 @@ pub struct AzureServiceAccountImportData {
     pub client_id: String,
     /// Whether stack-level role assignments were attached by the
     /// generated stack.
+    #[serde(deserialize_with = "crate::import::data::deserialize_bool_from_bool_or_string")]
     pub stack_permissions_applied: bool,
 }

@@ -235,7 +235,7 @@ impl From<&Stack> for StackRef {
 mod tests {
     use super::*;
     use crate::resource::ResourceLifecycle;
-    use crate::{Worker, PermissionSetReference, Storage};
+    use crate::{PermissionSetReference, Storage, Worker};
     use insta::assert_json_snapshot;
 
     #[test]

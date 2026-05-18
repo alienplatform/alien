@@ -11,7 +11,7 @@ use crate::{
     emitters::gcp::helpers::{downcast, labels, required_label, stack_name_template},
     expr,
 };
-use alien_core::{import::EmitContext, Worker, WorkerTrigger, Queue, Result};
+use alien_core::{import::EmitContext, Queue, Result, Worker, WorkerTrigger};
 use hcl::expr::Expression;
 
 #[derive(Debug, Clone, Copy, Default)]

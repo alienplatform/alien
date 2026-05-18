@@ -2,10 +2,9 @@ use std::collections::BTreeMap;
 
 use crate::{expr, registry::TfRegistry};
 use alien_core::{
-    worker_runtime_environment_contract, import::EmitContext, render_runtime_environment_plan,
-    validate_runtime_environment_user_map, ErrorData, Worker, Platform,
-    RuntimeEnvironmentBindingEntry, RuntimeEnvironmentBindingSource, RuntimeEnvironmentRenderer,
-    RuntimeEnvironmentValue,
+    import::EmitContext, render_runtime_environment_plan, validate_runtime_environment_user_map,
+    worker_runtime_environment_contract, ErrorData, Platform, RuntimeEnvironmentBindingEntry,
+    RuntimeEnvironmentBindingSource, RuntimeEnvironmentRenderer, RuntimeEnvironmentValue, Worker,
 };
 use alien_error::AlienError;
 use hcl::expr::Expression;

@@ -17,10 +17,6 @@ use crate::{
             alien_bindings::control::FILE_DESCRIPTOR_SET as CONTROL_FILE_DESCRIPTOR_SET,
             ControlGrpcServer,
         },
-        worker_service::{
-            alien_bindings::worker::FILE_DESCRIPTOR_SET as WORKER_FILE_DESCRIPTOR_SET,
-            WorkerGrpcServer,
-        },
         kv_service::{
             alien_bindings::kv::FILE_DESCRIPTOR_SET as KV_FILE_DESCRIPTOR_SET, KvGrpcServer,
         },
@@ -43,6 +39,10 @@ use crate::{
         wait_until_service::{
             alien_bindings::wait_until::FILE_DESCRIPTOR_SET as WAIT_UNTIL_FILE_DESCRIPTOR_SET,
             WaitUntilGrpcServer,
+        },
+        worker_service::{
+            alien_bindings::worker::FILE_DESCRIPTOR_SET as WORKER_FILE_DESCRIPTOR_SET,
+            WorkerGrpcServer,
         },
         MAX_GRPC_MESSAGE_SIZE,
     },

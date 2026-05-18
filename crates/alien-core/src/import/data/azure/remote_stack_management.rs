@@ -21,5 +21,6 @@ pub struct AzureRemoteStackManagementImportData {
     pub client_id: String,
     /// Whether the management role assignments were applied by the
     /// generated stack.
+    #[serde(deserialize_with = "crate::import::data::deserialize_bool_from_bool_or_string")]
     pub management_permissions_applied: bool,
 }

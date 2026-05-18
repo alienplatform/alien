@@ -2,7 +2,7 @@
 
 use crate::{
     error::{ErrorData, Result},
-    traits::{ArtifactRegistry, BindingsProviderApi, Build, Worker, Kv, Queue, Storage, Vault},
+    traits::{ArtifactRegistry, BindingsProviderApi, Build, Kv, Queue, Storage, Vault, Worker},
 };
 
 use alien_client_config::ClientConfigExt;
@@ -1421,11 +1421,9 @@ impl BindingsProviderApi for BindingsProvider {
                 Ok(function)
             }
             #[cfg(not(feature = "azure"))]
-            WorkerBinding::ContainerApp(_) => {
-                Err(AlienError::new(ErrorData::FeatureNotEnabled {
-                    feature: "azure".to_string(),
-                }))
-            }
+            WorkerBinding::ContainerApp(_) => Err(AlienError::new(ErrorData::FeatureNotEnabled {
+                feature: "azure".to_string(),
+            })),
 
             #[cfg(feature = "local")]
             WorkerBinding::Local(local_binding) => {

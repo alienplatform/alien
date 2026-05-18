@@ -339,7 +339,7 @@ fn is_zero(num: &u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Worker, WorkerCode, WorkerOutputs, ResourceType, Storage, StorageOutputs};
+    use crate::{ResourceType, Storage, StorageOutputs, Worker, WorkerCode, WorkerOutputs};
 
     #[test]
     fn test_get_resource_outputs_success() {

@@ -10,8 +10,8 @@
 use super::helpers::render_built_ins;
 use alien_cloudformation::{generate_cloudformation_template, CfRegistry, RegistrationMode};
 use alien_core::{
-    ArtifactRegistry, Build, CapacityGroup, ComputeCluster, ErrorData, Worker, WorkerCode,
-    Ingress, Network, NetworkSettings, Platform, ResourceLifecycle, Stack, StackSettings,
+    ArtifactRegistry, Build, CapacityGroup, ComputeCluster, ErrorData, Ingress, Network,
+    NetworkSettings, Platform, ResourceLifecycle, Stack, StackSettings, Worker, WorkerCode,
 };
 
 #[test]

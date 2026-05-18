@@ -6,8 +6,8 @@
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
-    ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup, Build, Worker,
-    WorkerCode, Ingress, ResourceLifecycle, Stack, StackSettings,
+    ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup, Build, Ingress,
+    ResourceLifecycle, Stack, StackSettings, Worker, WorkerCode,
 };
 use alien_core::{ContainerAppsEnvironmentBinding, ExternalBinding, ExternalBindings};
 use alien_terraform::TerraformTarget;

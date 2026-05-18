@@ -18,12 +18,12 @@ mod artifact_registry;
 mod build;
 mod container;
 mod container_apps_environment;
-mod worker;
 mod kv;
 mod queue;
 mod service_account;
 mod storage;
 mod vault;
+mod worker;
 
 pub use artifact_registry::{
     AcrArtifactRegistryBinding, ArtifactRegistryBinding, EcrArtifactRegistryBinding,
@@ -36,10 +36,6 @@ pub use container::{
     ContainerBinding, HorizonContainerBinding, KubernetesContainerBinding, LocalContainerBinding,
 };
 pub use container_apps_environment::ContainerAppsEnvironmentBinding;
-pub use worker::{
-    CloudRunWorkerBinding, ContainerAppWorkerBinding, WorkerBinding,
-    KubernetesWorkerBinding, LambdaWorkerBinding, LocalWorkerBinding,
-};
 pub use kv::{
     DynamodbKvBinding, FirestoreKvBinding, KvBinding, LocalKvBinding, RedisKvBinding,
     TableStorageKvBinding,
@@ -57,6 +53,10 @@ pub use storage::{
 pub use vault::{
     KeyVaultBinding, KubernetesSecretVaultBinding, LocalVaultBinding, ParameterStoreVaultBinding,
     SecretManagerVaultBinding, VaultBinding,
+};
+pub use worker::{
+    CloudRunWorkerBinding, ContainerAppWorkerBinding, KubernetesWorkerBinding, LambdaWorkerBinding,
+    LocalWorkerBinding, WorkerBinding,
 };
 
 /// Represents a value that can be either a concrete value, a template expression,

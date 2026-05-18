@@ -14,9 +14,9 @@ use crate::{
     registry::TfRegistry,
 };
 use alien_core::{
-    crontab_to_eventbridge::crontab_to_eventbridge, import::EmitContext, ErrorData, Worker,
-    WorkerCode, WorkerTrigger, Ingress, NetworkSettings, Platform, ResourceRef, Result,
-    Storage, Vault,
+    crontab_to_eventbridge::crontab_to_eventbridge, import::EmitContext, ErrorData, Ingress,
+    NetworkSettings, Platform, ResourceRef, Result, Storage, Vault, Worker, WorkerCode,
+    WorkerTrigger,
 };
 use alien_error::AlienError;
 use hcl::expr::Expression;
@@ -445,10 +445,7 @@ fn queue_trigger_resources(
     Ok(resources)
 }
 
-fn storage_trigger_resources(
-    function: &Worker,
-    label: &str,
-) -> Result<Vec<hcl::structure::Block>> {
+fn storage_trigger_resources(function: &Worker, label: &str) -> Result<Vec<hcl::structure::Block>> {
     let mut resources = Vec::new();
     for trigger in &function.triggers {
         let WorkerTrigger::Storage { storage, .. } = trigger else {

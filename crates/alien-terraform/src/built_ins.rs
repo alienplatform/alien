@@ -6,8 +6,8 @@
 use crate::registry::TfRegistry;
 use alien_core::{
     ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup, AzureServiceBusNamespace,
-    AzureStorageAccount, Build, Worker, Kv, Network, Platform, Queue, RemoteStackManagement,
-    ServiceAccount, ServiceActivation, Storage, Vault,
+    AzureStorageAccount, Build, Kv, Network, Platform, Queue, RemoteStackManagement,
+    ServiceAccount, ServiceActivation, Storage, Vault, Worker,
 };
 
 pub(crate) fn register_all(registry: &mut TfRegistry) {

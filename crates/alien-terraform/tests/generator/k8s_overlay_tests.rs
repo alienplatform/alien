@@ -11,8 +11,8 @@
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
-    AzureResourceGroup, Worker, WorkerCode, Ingress, ResourceLifecycle, ServiceAccount, Stack,
-    StackSettings, Storage,
+    AzureResourceGroup, Ingress, ResourceLifecycle, ServiceAccount, Stack, StackSettings, Storage,
+    Worker, WorkerCode,
 };
 use alien_terraform::TerraformTarget;
 

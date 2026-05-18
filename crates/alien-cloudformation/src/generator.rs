@@ -18,6 +18,7 @@ const LANGUAGE_EXTENSIONS_TRANSFORM: &str = "AWS::LanguageExtensions";
 const PARAM_DEPLOYMENT_GROUP_TOKEN: &str = "DeploymentGroupToken";
 const PARAM_MANAGING_ROLE_ARN: &str = "ManagingRoleArn";
 const PARAM_MANAGING_ACCOUNT_ID: &str = "ManagingAccountId";
+const PARAM_NETWORK_MODE: &str = "NetworkMode";
 const PARAM_VPC_CIDR: &str = "VpcCidr";
 const PARAM_AVAILABILITY_ZONES: &str = "AvailabilityZones";
 const PARAM_VPC_ID: &str = "VpcId";
@@ -33,6 +34,10 @@ const PARAM_HEARTBEATS_MODE: &str = "HeartbeatsMode";
 
 const CONDITION_NETWORK_CREATE_AZ2: &str = "NetworkCreateUseAz2";
 const CONDITION_NETWORK_CREATE_AZ3: &str = "NetworkCreateUseAz3";
+const CONDITION_NETWORK_AZ2: &str = "NetworkUseAz2";
+const CONDITION_NETWORK_AZ3: &str = "NetworkUseAz3";
+const CONDITION_NETWORK_MODE_CREATE: &str = "NetworkModeCreate";
+const CONDITION_NETWORK_MODE_USE_EXISTING: &str = "NetworkModeUseExisting";
 const CONDITION_HAS_VPC_CIDR: &str = "HasVpcCidr";
 const CONDITION_HAS_DOMAIN_NAME: &str = "HasDomainName";
 
@@ -491,7 +496,7 @@ fn add_standard_parameters(template: &mut CfTemplate, settings: &StackSettings) 
     template.parameters.insert(
         PARAM_MANAGING_ROLE_ARN.to_string(),
         string_parameter(
-            "AWS IAM role ARN for the manager identity allowed to assume generated management roles.",
+            "Manager IAM role ARN allowed to assume generated management roles.",
             None,
             None,
             false,
@@ -500,7 +505,7 @@ fn add_standard_parameters(template: &mut CfTemplate, settings: &StackSettings) 
     template.parameters.insert(
         PARAM_MANAGING_ACCOUNT_ID.to_string(),
         string_parameter(
-            "AWS account ID hosting the manager. Referenced by stack-side IAM policies that scope cross-account ECR pulls. Empty disables those grants.",
+            "Account ID hosting the manager. Referenced by stack-side IAM policies that scope cross-account image pulls. Empty disables those grants.",
             Some(String::new()),
             None,
             false,
@@ -576,13 +581,30 @@ fn add_standard_parameters(template: &mut CfTemplate, settings: &StackSettings) 
 
 fn add_network_parameters(template: &mut CfTemplate, network: Option<&NetworkSettings>) {
     let defaults = NetworkParameterDefaults::from_settings(network);
+    template.parameters.insert(
+        PARAM_NETWORK_MODE.to_string(),
+        string_parameter(
+            "Choose whether this setup creates a new network, uses an existing network, or uses the default network.",
+            Some(network_mode_default(network).to_string()),
+            Some(vec![
+                CfExpression::from("create-new"),
+                CfExpression::from("use-existing"),
+                CfExpression::from("use-default"),
+            ]),
+            false,
+        ),
+    );
     match network {
-        Some(NetworkSettings::Create { .. }) => {
+        Some(
+            NetworkSettings::Create { .. }
+            | NetworkSettings::UseDefault
+            | NetworkSettings::ByoVpcAws { .. },
+        ) => {
             template.parameters.insert(
                 PARAM_VPC_CIDR.to_string(),
                 string_parameter(
                     "CIDR for created VPCs. Empty uses the generated default.",
-                    defaults.cidr,
+                    Some(defaults.cidr.unwrap_or_default()),
                     None,
                     false,
                 ),
@@ -599,11 +621,14 @@ fn add_network_parameters(template: &mut CfTemplate, network: Option<&NetworkSet
                     ]),
                 ),
             );
-        }
-        Some(NetworkSettings::ByoVpcAws { .. }) => {
             template.parameters.insert(
                 PARAM_VPC_ID.to_string(),
-                string_parameter("Existing VPC ID.", defaults.vpc_id, None, false),
+                string_parameter(
+                    "Existing VPC ID. Required when Network is use-existing.",
+                    Some(defaults.vpc_id.unwrap_or_default()),
+                    None,
+                    false,
+                ),
             );
             template.parameters.insert(
                 PARAM_PUBLIC_SUBNET_IDS.to_string(),
@@ -618,30 +643,53 @@ fn add_network_parameters(template: &mut CfTemplate, network: Option<&NetworkSet
                 comma_list_parameter("Existing security group IDs.", defaults.security_group_ids),
             );
         }
-        None
-        | Some(NetworkSettings::UseDefault)
-        | Some(NetworkSettings::ByoVpcGcp { .. } | NetworkSettings::ByoVnetAzure { .. }) => {}
+        None | Some(NetworkSettings::ByoVpcGcp { .. } | NetworkSettings::ByoVnetAzure { .. }) => {}
     }
 }
 
 fn add_standard_conditions(template: &mut CfTemplate, stack: &Stack, settings: &StackSettings) {
-    if stack_has_created_network(stack) {
+    let has_created_network = stack_has_created_network(stack);
+    if has_dynamic_aws_network_settings(settings.network.as_ref()) || has_created_network {
         template.conditions.insert(
-            CONDITION_NETWORK_CREATE_AZ2.to_string(),
+            CONDITION_NETWORK_MODE_CREATE.to_string(),
+            equals_ref(PARAM_NETWORK_MODE, "create-new"),
+        );
+        template.conditions.insert(
+            CONDITION_NETWORK_MODE_USE_EXISTING.to_string(),
+            equals_ref(PARAM_NETWORK_MODE, "use-existing"),
+        );
+    }
+    if has_created_network {
+        template.conditions.insert(
+            CONDITION_NETWORK_AZ2.to_string(),
             CfExpression::not(CfExpression::equals(
                 CfExpression::ref_(PARAM_AVAILABILITY_ZONES),
                 CfExpression::from(1u8),
             )),
         );
         template.conditions.insert(
-            CONDITION_NETWORK_CREATE_AZ3.to_string(),
+            CONDITION_NETWORK_AZ3.to_string(),
             CfExpression::equals(
                 CfExpression::ref_(PARAM_AVAILABILITY_ZONES),
                 CfExpression::from(3u8),
             ),
         );
+        template.conditions.insert(
+            CONDITION_NETWORK_CREATE_AZ2.to_string(),
+            CfExpression::and([
+                equals_ref(PARAM_NETWORK_MODE, "create-new"),
+                condition_ref(CONDITION_NETWORK_AZ2),
+            ]),
+        );
+        template.conditions.insert(
+            CONDITION_NETWORK_CREATE_AZ3.to_string(),
+            CfExpression::and([
+                equals_ref(PARAM_NETWORK_MODE, "create-new"),
+                condition_ref(CONDITION_NETWORK_AZ3),
+            ]),
+        );
     }
-    if matches!(settings.network, Some(NetworkSettings::Create { .. })) {
+    if has_dynamic_aws_network_settings(settings.network.as_ref()) || has_created_network {
         template.conditions.insert(
             CONDITION_HAS_VPC_CIDR.to_string(),
             CfExpression::not(equals_ref(PARAM_VPC_CIDR, "")),
@@ -660,6 +708,17 @@ fn stack_has_created_network(stack: &Stack) -> bool {
             .downcast_ref::<Network>()
             .is_some_and(|network| matches!(network.settings, NetworkSettings::Create { .. }))
     })
+}
+
+fn has_dynamic_aws_network_settings(network: Option<&NetworkSettings>) -> bool {
+    matches!(
+        network,
+        Some(
+            NetworkSettings::Create { .. }
+                | NetworkSettings::UseDefault
+                | NetworkSettings::ByoVpcAws { .. }
+        )
+    )
 }
 
 fn add_console_interface_metadata(template: &mut CfTemplate, settings: &StackSettings) {
@@ -701,7 +760,7 @@ fn add_console_interface_metadata(template: &mut CfTemplate, settings: &StackSet
     insert_parameter_label(
         &mut parameter_labels,
         PARAM_MANAGING_ACCOUNT_ID,
-        "Manager AWS account ID",
+        "Manager account ID",
     );
     for parameter in network_parameter_names(settings.network.as_ref()) {
         let label = match parameter {
@@ -711,6 +770,7 @@ fn add_console_interface_metadata(template: &mut CfTemplate, settings: &StackSet
             PARAM_PUBLIC_SUBNET_IDS => "Public subnet IDs",
             PARAM_PRIVATE_SUBNET_IDS => "Private subnet IDs",
             PARAM_SECURITY_GROUP_IDS => "Security group IDs",
+            PARAM_NETWORK_MODE => "Network",
             _ => continue,
         };
         insert_parameter_label(&mut parameter_labels, parameter, label);
@@ -741,16 +801,20 @@ fn add_console_interface_metadata(template: &mut CfTemplate, settings: &StackSet
 
 fn network_parameter_names(network: Option<&NetworkSettings>) -> Vec<&'static str> {
     match network {
-        Some(NetworkSettings::Create { .. }) => vec![PARAM_VPC_CIDR, PARAM_AVAILABILITY_ZONES],
-        Some(NetworkSettings::ByoVpcAws { .. }) => vec![
+        Some(
+            NetworkSettings::UseDefault
+            | NetworkSettings::Create { .. }
+            | NetworkSettings::ByoVpcAws { .. },
+        ) => vec![
+            PARAM_NETWORK_MODE,
+            PARAM_VPC_CIDR,
+            PARAM_AVAILABILITY_ZONES,
             PARAM_VPC_ID,
             PARAM_PUBLIC_SUBNET_IDS,
             PARAM_PRIVATE_SUBNET_IDS,
             PARAM_SECURITY_GROUP_IDS,
         ],
-        None
-        | Some(NetworkSettings::UseDefault)
-        | Some(NetworkSettings::ByoVpcGcp { .. } | NetworkSettings::ByoVnetAzure { .. }) => {
+        None | Some(NetworkSettings::ByoVpcGcp { .. } | NetworkSettings::ByoVnetAzure { .. }) => {
             Vec::new()
         }
     }
@@ -980,40 +1044,48 @@ fn stack_settings_expression(settings: &StackSettings) -> CfExpression {
 fn network_expression(network: Option<&NetworkSettings>) -> CfExpression {
     match network {
         None => CfExpression::no_value(),
-        Some(NetworkSettings::UseDefault) => {
-            CfExpression::object([("type", CfExpression::from("use-default"))])
-        }
-        Some(NetworkSettings::Create { .. }) => CfExpression::object([
-            ("type", CfExpression::from("create")),
-            (
-                "cidr",
-                CfExpression::if_(
-                    CONDITION_HAS_VPC_CIDR,
-                    CfExpression::ref_(PARAM_VPC_CIDR),
-                    CfExpression::no_value(),
+        Some(
+            NetworkSettings::UseDefault
+            | NetworkSettings::Create { .. }
+            | NetworkSettings::ByoVpcAws { .. },
+        ) => CfExpression::if_(
+            CONDITION_NETWORK_MODE_CREATE,
+            CfExpression::object([
+                ("type", CfExpression::from("create")),
+                (
+                    "cidr",
+                    CfExpression::if_(
+                        CONDITION_HAS_VPC_CIDR,
+                        CfExpression::ref_(PARAM_VPC_CIDR),
+                        CfExpression::no_value(),
+                    ),
                 ),
+                (
+                    "availabilityZones",
+                    CfExpression::ref_(PARAM_AVAILABILITY_ZONES),
+                ),
+            ]),
+            CfExpression::if_(
+                CONDITION_NETWORK_MODE_USE_EXISTING,
+                CfExpression::object([
+                    ("type", CfExpression::from("byo-vpc-aws")),
+                    ("vpcId", CfExpression::ref_(PARAM_VPC_ID)),
+                    (
+                        "publicSubnetIds",
+                        CfExpression::ref_(PARAM_PUBLIC_SUBNET_IDS),
+                    ),
+                    (
+                        "privateSubnetIds",
+                        CfExpression::ref_(PARAM_PRIVATE_SUBNET_IDS),
+                    ),
+                    (
+                        "securityGroupIds",
+                        CfExpression::ref_(PARAM_SECURITY_GROUP_IDS),
+                    ),
+                ]),
+                CfExpression::object([("type", CfExpression::from("use-default"))]),
             ),
-            (
-                "availabilityZones",
-                CfExpression::ref_(PARAM_AVAILABILITY_ZONES),
-            ),
-        ]),
-        Some(NetworkSettings::ByoVpcAws { .. }) => CfExpression::object([
-            ("type", CfExpression::from("byo-vpc-aws")),
-            ("vpcId", CfExpression::ref_(PARAM_VPC_ID)),
-            (
-                "publicSubnetIds",
-                CfExpression::ref_(PARAM_PUBLIC_SUBNET_IDS),
-            ),
-            (
-                "privateSubnetIds",
-                CfExpression::ref_(PARAM_PRIVATE_SUBNET_IDS),
-            ),
-            (
-                "securityGroupIds",
-                CfExpression::ref_(PARAM_SECURITY_GROUP_IDS),
-            ),
-        ]),
+        ),
         Some(NetworkSettings::ByoVpcGcp { .. } | NetworkSettings::ByoVnetAzure { .. }) => {
             CfExpression::no_value()
         }
@@ -1099,6 +1171,10 @@ fn equals_ref(parameter: &str, value: &str) -> CfExpression {
     CfExpression::equals(CfExpression::ref_(parameter), CfExpression::from(value))
 }
 
+fn condition_ref(condition: &str) -> CfExpression {
+    CfExpression::object([("Condition", CfExpression::from(condition))])
+}
+
 fn output(description: &str, value: CfExpression) -> CfOutput {
     CfOutput {
         description: Some(description.to_string()),
@@ -1126,6 +1202,17 @@ fn heartbeats_mode(mode: HeartbeatsMode) -> &'static str {
     match mode {
         HeartbeatsMode::Off => "off",
         HeartbeatsMode::On => "on",
+    }
+}
+
+fn network_mode_default(network: Option<&NetworkSettings>) -> &'static str {
+    match network {
+        Some(NetworkSettings::ByoVpcAws { .. }) => "use-existing",
+        Some(NetworkSettings::UseDefault) => "use-default",
+        None | Some(NetworkSettings::Create { .. }) => "create-new",
+        Some(NetworkSettings::ByoVpcGcp { .. } | NetworkSettings::ByoVnetAzure { .. }) => {
+            "create-new"
+        }
     }
 }
 

@@ -343,7 +343,9 @@ pub fn private_subnet_ids_expr(ctx: &EmitContext<'_>) -> Expression {
         return expr::raw("[]");
     };
     match &network.settings {
-        NetworkSettings::Create { .. } => expr::raw(format!("aws_subnet.{label}_private[*].id")),
+        NetworkSettings::Create { .. } => expr::raw(format!(
+            "var.network_mode == \"create-new\" ? aws_subnet.{label}_private[*].id : var.network_mode == \"use-existing\" ? var.private_subnet_ids : []"
+        )),
         NetworkSettings::ByoVpcAws { .. } => expr::raw(format!("var.{label}_private_subnet_ids")),
         _ => expr::raw("[]"),
     }
@@ -355,24 +357,24 @@ pub fn security_group_ids_expr(ctx: &EmitContext<'_>) -> Expression {
         return expr::raw("[]");
     };
     match &network.settings {
-        NetworkSettings::Create { .. } => Expression::Array(vec![expr::traversal([
-            "aws_security_group",
-            &format!("{label}_workload"),
-            "id",
-        ])]),
+        NetworkSettings::Create { .. } => expr::raw(format!(
+            "var.network_mode == \"create-new\" ? [aws_security_group.{label}_workload[0].id] : var.network_mode == \"use-existing\" ? var.security_group_ids : []"
+        )),
         NetworkSettings::ByoVpcAws { .. } => expr::raw(format!("var.{label}_security_group_ids")),
         _ => expr::raw("[]"),
     }
 }
 
-/// VPC ID expression — created VPC when this stack creates the VPC, BYO
+/// VPC ID expression: created VPC when this stack creates the VPC, existing
 /// variable otherwise.
 pub fn vpc_id_expr(ctx: &EmitContext<'_>) -> Expression {
     let Some((label, network)) = default_network(ctx) else {
         return expr::raw("null");
     };
     match &network.settings {
-        NetworkSettings::Create { .. } => expr::traversal(["aws_vpc", label, "id"]),
+        NetworkSettings::Create { .. } => expr::raw(format!(
+            "var.network_mode == \"create-new\" ? aws_vpc.{label}[0].id : var.network_mode == \"use-existing\" ? var.vpc_id : null"
+        )),
         NetworkSettings::ByoVpcAws { .. } => expr::raw(format!("var.{label}_vpc_id")),
         _ => expr::raw("null"),
     }

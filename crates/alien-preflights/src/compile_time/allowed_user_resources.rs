@@ -23,7 +23,7 @@ impl CompileTimeCheck for AllowedUserResourcesCheck {
     }
 
     async fn check(&self, stack: &Stack, _platform: Platform) -> Result<CheckResult> {
-        let allowed_types = HashSet::from([
+        let allowed_user_types = HashSet::from([
             "worker",
             "daemon",
             "storage",
@@ -35,19 +35,20 @@ impl CompileTimeCheck for AllowedUserResourcesCheck {
             "container",
             "service-account",
         ]);
-
         let mut errors = Vec::new();
 
         for (resource_id, resource_entry) in stack.resources() {
             let resource_type_value = resource_entry.config.resource_type();
             let resource_type = resource_type_value.0.as_ref();
 
-            if !allowed_types.contains(resource_type) {
+            let is_allowed_user_type = allowed_user_types.contains(resource_type);
+
+            if !is_allowed_user_type {
                 errors.push(format!(
                     "Resource '{}' has type '{}' which is not allowed. User-defined resources must be one of: {}",
                     resource_id,
                     resource_type,
-                    allowed_types.iter().map(|s| format!("'{}'", s)).collect::<Vec<_>>().join(", ")
+                    allowed_user_types.iter().map(|s| format!("'{}'", s)).collect::<Vec<_>>().join(", ")
                 ));
             }
         }
@@ -63,7 +64,9 @@ impl CompileTimeCheck for AllowedUserResourcesCheck {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::{ResourceEntry, ResourceLifecycle, Storage, Worker, WorkerCode};
+    use alien_core::{
+        RemoteStackManagement, ResourceEntry, ResourceLifecycle, Storage, Worker, WorkerCode,
+    };
     use indexmap::IndexMap;
 
     #[tokio::test]
@@ -81,7 +84,7 @@ mod tests {
             "test-storage".to_string(),
             ResourceEntry {
                 config: alien_core::Resource::new(storage),
-                lifecycle: ResourceLifecycle::Frozen,
+                lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
             },
@@ -127,7 +130,7 @@ mod tests {
             "invalid-resource".to_string(),
             ResourceEntry {
                 config: invalid_resource,
-                lifecycle: ResourceLifecycle::Frozen,
+                lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
             },
@@ -145,5 +148,34 @@ mod tests {
         assert!(!result.success);
         assert!(!result.errors.is_empty());
         assert!(result.errors[0].contains("network"));
+    }
+
+    #[tokio::test]
+    async fn test_allows_frozen_setup_resources() {
+        let mut resources = IndexMap::new();
+        resources.insert(
+            "remote-stack-management".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(
+                    RemoteStackManagement::new("remote-stack-management".to_string()).build(),
+                ),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                remote_access: false,
+            },
+        );
+
+        let stack = Stack {
+            id: "test-stack".to_string(),
+            resources,
+            permissions: alien_core::permissions::PermissionsConfig::default(),
+            supported_platforms: None,
+        };
+
+        let check = AllowedUserResourcesCheck;
+        let result = check.check(&stack, Platform::Aws).await.unwrap();
+        assert!(!result.success);
+        assert!(!result.errors.is_empty());
+        assert!(result.errors[0].contains("remote-stack-management"));
     }
 }

@@ -5,7 +5,7 @@ use crate::{
     emitters::aws::helpers::{required_logical_id, resource_config, tags},
     template::{CfExpression, CfResource},
 };
-use alien_core::{import::EmitContext, Worker, WorkerTrigger, Queue, Result};
+use alien_core::{import::EmitContext, Queue, Result, Worker, WorkerTrigger};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AwsQueueEmitter;

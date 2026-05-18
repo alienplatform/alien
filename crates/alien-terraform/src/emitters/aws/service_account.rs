@@ -16,7 +16,7 @@ use crate::{
     },
     expr,
 };
-use alien_core::{import::EmitContext, Build, Worker, Result, ServiceAccount};
+use alien_core::{import::EmitContext, Build, Result, ServiceAccount, Worker};
 use hcl::expr::Expression;
 use std::collections::BTreeSet;
 

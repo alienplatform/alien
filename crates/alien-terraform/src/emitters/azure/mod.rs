@@ -14,7 +14,6 @@
 pub mod artifact_registry;
 pub mod build;
 pub mod container_apps_environment;
-pub mod worker;
 pub mod helpers;
 pub mod kv;
 pub mod network;
@@ -27,11 +26,11 @@ pub mod service_bus_namespace;
 pub mod storage;
 pub mod storage_account;
 pub mod vault;
+pub mod worker;
 
 pub use artifact_registry::AzureArtifactRegistryEmitter;
 pub use build::AzureBuildEmitter;
 pub use container_apps_environment::AzureContainerAppsEnvironmentEmitter;
-pub use worker::AzureWorkerEmitter;
 pub use kv::AzureKvEmitter;
 pub use network::AzureNetworkEmitter;
 pub use queue::AzureQueueEmitter;
@@ -43,3 +42,4 @@ pub use service_bus_namespace::AzureServiceBusNamespaceEmitter;
 pub use storage::AzureStorageEmitter;
 pub use storage_account::AzureStorageAccountEmitter;
 pub use vault::AzureVaultEmitter;
+pub use worker::AzureWorkerEmitter;

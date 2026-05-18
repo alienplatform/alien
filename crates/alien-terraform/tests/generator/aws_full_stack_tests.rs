@@ -6,10 +6,9 @@
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
-    ArtifactRegistry, Build, Worker, WorkerCode, WorkerTrigger, Ingress, Kv,
-    ManagementPermissions, Network, NetworkSettings, PermissionProfile, Queue,
-    RemoteStackManagement, ResourceLifecycle, ServiceAccount, Stack, StackSettings, Storage,
-    UpdatesMode, Vault,
+    ArtifactRegistry, Build, Ingress, Kv, ManagementPermissions, Network, NetworkSettings,
+    PermissionProfile, Queue, RemoteStackManagement, ResourceLifecycle, ServiceAccount, Stack,
+    StackSettings, Storage, UpdatesMode, Vault, Worker, WorkerCode, WorkerTrigger,
 };
 use alien_terraform::TerraformTarget;
 
@@ -54,10 +53,7 @@ fn aws_full_stack_renders_audit_ready_module() {
         .link(&assets)
         .link(&metadata)
         .link(&secrets)
-        .trigger(WorkerTrigger::storage(
-            &assets,
-            vec!["created".to_string()],
-        ))
+        .trigger(WorkerTrigger::storage(&assets, vec!["created".to_string()]))
         .build();
 
     let worker = Worker::new("worker".to_string())

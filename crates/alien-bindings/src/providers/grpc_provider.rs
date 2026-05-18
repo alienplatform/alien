@@ -1,14 +1,13 @@
 use crate::{
     error::{Error, ErrorData},
     providers::{
-        artifact_registry::grpc::GrpcArtifactRegistry, build::grpc::GrpcBuild,
-        worker::grpc::GrpcWorker, kv::grpc::GrpcKv, queue::grpc::GrpcQueue,
-        service_account::grpc::GrpcServiceAccount, storage::grpc::GrpcStorage,
-        vault::grpc::GrpcVault,
+        artifact_registry::grpc::GrpcArtifactRegistry, build::grpc::GrpcBuild, kv::grpc::GrpcKv,
+        queue::grpc::GrpcQueue, service_account::grpc::GrpcServiceAccount,
+        storage::grpc::GrpcStorage, vault::grpc::GrpcVault, worker::grpc::GrpcWorker,
     },
     traits::{
-        ArtifactRegistry, BindingsProviderApi, Build, Container, Worker, Kv, Queue,
-        ServiceAccount, Storage, Vault,
+        ArtifactRegistry, BindingsProviderApi, Build, Container, Kv, Queue, ServiceAccount,
+        Storage, Vault, Worker,
     },
 };
 use alien_error::{AlienError, Context, IntoAlienError};

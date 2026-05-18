@@ -1,5 +1,5 @@
 use crate::{
-    error::{map_cloud_client_error, Error, ErrorData, Result},
+    error::{map_cloud_client_error, ErrorData, Result},
     traits::{
         ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions,
         AwsCrossAccountAccess, Binding, ComputeServiceType, CrossAccountAccess,
@@ -9,18 +9,17 @@ use crate::{
 use alien_aws_clients::{
     ecr::{
         CreateRepositoryRequest, DescribeRepositoriesRequest, EcrApi, EcrClient,
-        GetAuthorizationTokenRequest, GetRepositoryPolicyRequest, SetRepositoryPolicyRequest,
+        GetRepositoryPolicyRequest, SetRepositoryPolicyRequest,
     },
-    sts::{AssumeRoleRequest, StsApi, StsClient},
     AwsClientConfigExt as _, AwsCredentialProvider,
 };
-use alien_core::bindings::{ArtifactRegistryBinding, EcrArtifactRegistryBinding};
-use alien_error::{AlienError, Context, ContextError, IntoAlienError};
+use alien_core::bindings::ArtifactRegistryBinding;
+use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
 use base64::engine::{general_purpose::STANDARD as BASE64, Engine as _};
-use chrono::{DateTime, Utc};
+use chrono::DateTime;
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use tokio::time::{sleep, Duration, Instant};
 use tracing::{info, warn};
 
 /// AWS ECR implementation of the ArtifactRegistry binding.
@@ -113,6 +112,32 @@ impl EcrArtifactRegistry {
         } else {
             repo_name.to_string()
         }
+    }
+
+    fn repository_lookup_names(&self, repo_id: &str) -> Vec<String> {
+        let is_prefixed = !self.repository_prefix.is_empty()
+            && repo_id.starts_with(&format!("{}-", self.repository_prefix));
+
+        if is_prefixed || self.repository_prefix.is_empty() {
+            vec![repo_id.to_string()]
+        } else {
+            vec![repo_id.to_string(), self.make_full_repo_name(repo_id)]
+        }
+    }
+
+    fn repository_uri(&self, full_repo_name: &str) -> String {
+        format!(
+            "{}.dkr.ecr.{}.amazonaws.com/{}",
+            self.credentials.account_id(),
+            self.credentials.region(),
+            full_repo_name
+        )
+    }
+
+    fn arn_account_id(arn: &str) -> Option<&str> {
+        arn.split(':')
+            .nth(4)
+            .filter(|account_id| !account_id.is_empty())
     }
 
     /// Internal helper to set the complete ECR policy from an AwsCrossAccountAccess configuration
@@ -251,6 +276,55 @@ impl EcrArtifactRegistry {
         );
         Ok(())
     }
+
+    async fn wait_for_repository_with_client(
+        &self,
+        ecr_client: &EcrClient,
+        repo_name: &str,
+        region: &str,
+    ) -> Result<()> {
+        let deadline = Instant::now() + Duration::from_secs(300);
+
+        loop {
+            let request = DescribeRepositoriesRequest::builder()
+                .repository_names(vec![repo_name.to_string()])
+                .build();
+
+            let current_status = match ecr_client.describe_repositories(request).await {
+                Ok(response) => {
+                    if response
+                        .repositories
+                        .iter()
+                        .any(|repository| repository.repository_name == repo_name)
+                    {
+                        info!(
+                            repo_name = %repo_name,
+                            region = %region,
+                            "Replicated ECR repository is ready"
+                        );
+                        return Ok(());
+                    }
+                    "DescribeRepositories response did not include the repository".to_string()
+                }
+                Err(error) => error.to_string(),
+            };
+
+            if Instant::now() >= deadline {
+                return Err(AlienError::new(ErrorData::Timeout {
+                    operation_context: format!(
+                        "Waiting for replicated ECR repository '{}' in {}",
+                        repo_name, region
+                    ),
+                    details: format!(
+                        "ECR did not make the replicated repository available within 300s; last status: {}",
+                        current_status
+                    ),
+                }));
+            }
+
+            sleep(Duration::from_secs(5)).await;
+        }
+    }
 }
 
 impl Binding for EcrArtifactRegistry {}
@@ -314,13 +388,71 @@ impl ArtifactRegistry for EcrArtifactRegistry {
             .repository_name(full_repo_name.clone())
             .build();
 
-        let response = ecr_client.create_repository(request).await.map_err(|e| {
-            map_cloud_client_error(
-                e,
-                format!("Failed to create ECR repository '{}'", full_repo_name),
-                Some(repo_name.to_string()),
-            )
-        })?;
+        let response = match ecr_client.create_repository(request.clone()).await {
+            Ok(response) => response,
+            Err(e) if self.push_role_arn.is_some() => {
+                warn!(
+                    repo_name = %repo_name,
+                    full_repo_name = %full_repo_name,
+                    error = %e,
+                    "Failed to create ECR repository with push role, retrying with base credentials"
+                );
+
+                let direct_ecr_client = alien_aws_clients::ecr::EcrClient::new(
+                    crate::http_client::create_http_client(),
+                    self.credentials.clone(),
+                );
+                match direct_ecr_client.create_repository(request).await {
+                    Ok(response) => response,
+                    Err(e) => {
+                        let error = map_cloud_client_error(
+                            e,
+                            format!("Failed to create ECR repository '{}'", full_repo_name),
+                            Some(repo_name.to_string()),
+                        );
+
+                        if matches!(error.http_status_code, Some(409)) {
+                            info!(
+                                repo_name = %repo_name,
+                                full_repo_name = %full_repo_name,
+                                "ECR repository already exists"
+                            );
+
+                            return Ok(RepositoryResponse {
+                                name: full_repo_name.clone(),
+                                uri: Some(self.repository_uri(&full_repo_name)),
+                                created_at: None,
+                            });
+                        }
+
+                        return Err(error);
+                    }
+                }
+            }
+            Err(e) => {
+                let error = map_cloud_client_error(
+                    e,
+                    format!("Failed to create ECR repository '{}'", full_repo_name),
+                    Some(repo_name.to_string()),
+                );
+
+                if matches!(error.http_status_code, Some(409)) {
+                    info!(
+                        repo_name = %repo_name,
+                        full_repo_name = %full_repo_name,
+                        "ECR repository already exists"
+                    );
+
+                    return Ok(RepositoryResponse {
+                        name: full_repo_name.clone(),
+                        uri: Some(self.repository_uri(&full_repo_name)),
+                        created_at: None,
+                    });
+                }
+
+                return Err(error);
+            }
+        };
 
         info!(
             repo_name = %repo_name,
@@ -344,14 +476,13 @@ impl ArtifactRegistry for EcrArtifactRegistry {
     }
 
     async fn get_repository(&self, repo_id: &str) -> Result<RepositoryResponse> {
-        // `repo_id` is the routable name returned by `create_repository`
-        // (already `{prefix}-{logical}`). The binding never re-prefixes —
-        // the contract is documented in `traits::RepositoryResponse::name`.
-        let full_repo_name = repo_id.to_string();
+        // Prefer the routable name returned by `create_repository`, but also
+        // accept the logical repository name used by older callers.
+        let lookup_names = self.repository_lookup_names(repo_id);
 
         info!(
             repo_id = %repo_id,
-            full_repo_name = %full_repo_name,
+            lookup_names = ?lookup_names,
             "Getting ECR repository details"
         );
 
@@ -391,55 +522,68 @@ impl ArtifactRegistry for EcrArtifactRegistry {
                 })?,
         );
 
-        let request = DescribeRepositoriesRequest::builder()
-            .repository_names(vec![full_repo_name.clone()])
-            .build();
+        let last_lookup_index = lookup_names.len().saturating_sub(1);
+        for (index, full_repo_name) in lookup_names.iter().enumerate() {
+            let request = DescribeRepositoriesRequest::builder()
+                .repository_names(vec![full_repo_name.clone()])
+                .build();
 
-        let response = ecr_client
-            .describe_repositories(request)
-            .await
-            .map_err(|e| {
-                map_cloud_client_error(
-                    e,
-                    format!(
-                        "Failed to get ECR repository details for '{}'",
-                        full_repo_name
-                    ),
-                    Some(repo_id.to_string()),
-                )
-            })?;
+            let response = match ecr_client.describe_repositories(request).await {
+                Ok(response) => response,
+                Err(e) => {
+                    let error = map_cloud_client_error(
+                        e,
+                        format!(
+                            "Failed to get ECR repository details for '{}'",
+                            full_repo_name
+                        ),
+                        Some(repo_id.to_string()),
+                    );
 
-        if response.repositories.is_empty() {
-            warn!(
+                    if index < last_lookup_index
+                        && matches!(error.http_status_code, Some(403 | 404))
+                    {
+                        continue;
+                    }
+
+                    return Err(error);
+                }
+            };
+
+            if response.repositories.is_empty() {
+                continue;
+            }
+
+            let repository = &response.repositories[0];
+            let created_at = if repository.created_at > 0.0 {
+                DateTime::from_timestamp(repository.created_at as i64, 0).map(|dt| dt.to_rfc3339())
+            } else {
+                None
+            };
+
+            info!(
                 repo_id = %repo_id,
                 full_repo_name = %full_repo_name,
-                "ECR repository not found"
+                repo_uri = %repository.repository_uri,
+                "ECR repository details retrieved"
             );
 
-            return Err(AlienError::new(ErrorData::ResourceNotFound {
-                resource_id: repo_id.to_string(),
-            }));
+            return Ok(RepositoryResponse {
+                name: repository.repository_name.clone(),
+                uri: Some(repository.repository_uri.clone()),
+                created_at,
+            });
         }
 
-        let repository = &response.repositories[0];
-        let created_at = if repository.created_at > 0.0 {
-            DateTime::from_timestamp(repository.created_at as i64, 0).map(|dt| dt.to_rfc3339())
-        } else {
-            None
-        };
-
-        info!(
+        warn!(
             repo_id = %repo_id,
-            full_repo_name = %full_repo_name,
-            repo_uri = %repository.repository_uri,
-            "ECR repository details retrieved"
+            lookup_names = ?lookup_names,
+            "ECR repository not found"
         );
 
-        Ok(RepositoryResponse {
-            name: repository.repository_name.clone(),
-            uri: Some(repository.repository_uri.clone()),
-            created_at,
-        })
+        Err(AlienError::new(ErrorData::ResourceNotFound {
+            resource_id: repo_id.to_string(),
+        }))
     }
 
     async fn add_cross_account_access(
@@ -536,39 +680,27 @@ impl ArtifactRegistry for EcrArtifactRegistry {
             if *region == source_region {
                 continue; // Already set on source region above.
             }
-            match self.credentials.with_region(region).await {
-                Ok(target_creds) => {
-                    let http_client = crate::http_client::create_http_client();
-                    let target_ecr = EcrClient::new(http_client, target_creds);
-                    match self
-                        .set_full_policy_with_client(&target_ecr, &full_repo_name, &merged_access)
-                        .await
-                    {
-                        Ok(()) => {
-                            info!(
-                                repo_name = %full_repo_name,
-                                region = %region,
-                                "ECR cross-account policy set on replicated repo"
-                            );
-                        }
-                        Err(e) => {
-                            warn!(
-                                repo_name = %full_repo_name,
-                                region = %region,
-                                error = %e,
-                                "Failed to set ECR policy on replicated repo (may not exist yet)"
-                            );
-                        }
-                    }
-                }
-                Err(e) => {
-                    warn!(
-                        region = %region,
-                        error = %e,
-                        "Failed to create credentials for target region"
-                    );
-                }
-            }
+
+            let target_creds = self.credentials.with_region(region).await.map_err(|e| {
+                map_cloud_client_error(
+                    e,
+                    format!("Failed to create ECR credentials for region '{}'", region),
+                    Some(full_repo_name.clone()),
+                )
+            })?;
+            let http_client = crate::http_client::create_http_client();
+            let target_ecr = EcrClient::new(http_client, target_creds);
+
+            self.wait_for_repository_with_client(&target_ecr, &full_repo_name, region)
+                .await?;
+            self.set_full_policy_with_client(&target_ecr, &full_repo_name, &merged_access)
+                .await?;
+
+            info!(
+                repo_name = %full_repo_name,
+                region = %region,
+                "ECR cross-account policy set on replicated repo"
+            );
         }
 
         Ok(())
@@ -792,10 +924,27 @@ impl ArtifactRegistry for EcrArtifactRegistry {
             "Generating ECR credentials by assuming role"
         );
 
-        // Get the role ARN (optional for single-account deployments)
+        // Get the role ARN (optional for single-account deployments).
+        //
+        // Same-account push is performed inside the trusted manager process.
+        // Prefer base credentials there so a regional ECR repository does not
+        // fail behind a role policy scoped to another region.
         let role_arn = match permissions {
             ArtifactRegistryPermissions::Pull => self.pull_role_arn.as_ref(),
-            ArtifactRegistryPermissions::PushPull => self.push_role_arn.as_ref(),
+            ArtifactRegistryPermissions::PushPull => {
+                self.push_role_arn.as_ref().filter(|role_arn| {
+                    match Self::arn_account_id(role_arn) {
+                        Some(account_id) if account_id == self.credentials.account_id() => {
+                            info!(
+                                role_arn = %role_arn,
+                                "Using direct credentials for same-account ECR push access"
+                            );
+                            false
+                        }
+                        _ => true,
+                    }
+                })
+            }
         };
 
         // When a role ARN is configured, assume it for cross-account access.

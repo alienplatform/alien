@@ -30,6 +30,7 @@ alien-error = { workspace = true, features = ["axum"] }
 alien-commands = { workspace = true, features = ["server", "test-utils"] }
 alien-bindings = { workspace = true, features = ["aws", "gcp", "azure", "test", "local"] }
 alien-deployment = { workspace = true }
+alien-preflights = { workspace = true }
 alien-infra = { workspace = true, features = ["test-utils", "aws", "gcp", "azure"] }
 alien-local = { workspace = true }
 

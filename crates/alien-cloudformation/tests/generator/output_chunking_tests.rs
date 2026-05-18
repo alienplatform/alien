@@ -11,9 +11,7 @@ use alien_cloudformation::{
     generate_cloudformation_template, to_yaml, CfExpression, CfOutput, CloudFormationOptions,
     RegistrationMode,
 };
-use alien_core::{
-    Worker, WorkerCode, ResourceLifecycle, Stack, StackSettings, ToolchainConfig,
-};
+use alien_core::{ResourceLifecycle, Stack, StackSettings, ToolchainConfig, Worker, WorkerCode};
 
 const OUTPUT_RESOURCES: &str = "DeploymentResources";
 

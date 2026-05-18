@@ -18,8 +18,13 @@ Metadata:
     - Label:
         default: Network
       Parameters:
+      - NetworkMode
       - VpcCidr
       - AvailabilityZones
+      - VpcId
+      - PublicSubnetIds
+      - PrivateSubnetIds
+      - SecurityGroupIds
     - Label:
         default: Domains
       Parameters:
@@ -46,15 +51,25 @@ Metadata:
       HostedZoneId:
         default: Hosted zone ID
       ManagingAccountId:
-        default: Manager AWS account ID
+        default: Manager account ID
       ManagingRoleArn:
         default: Manager role ARN
+      NetworkMode:
+        default: Network
+      PrivateSubnetIds:
+        default: Private subnet IDs
+      PublicSubnetIds:
+        default: Public subnet IDs
+      SecurityGroupIds:
+        default: Security group IDs
       TelemetryMode:
         default: Telemetry
       UpdatesMode:
         default: Updates
       VpcCidr:
         default: VPC CIDR
+      VpcId:
+        default: VPC ID
 Parameters:
   DeploymentGroupToken:
     Type: String
@@ -62,11 +77,19 @@ Parameters:
     NoEcho: true
   ManagingRoleArn:
     Type: String
-    Description: AWS IAM role ARN for the manager identity allowed to assume generated management roles.
+    Description: Manager IAM role ARN allowed to assume generated management roles.
   ManagingAccountId:
     Type: String
-    Description: AWS account ID hosting the manager. Referenced by stack-side IAM policies that scope cross-account ECR pulls. Empty disables those grants.
+    Description: Account ID hosting the manager. Referenced by stack-side IAM policies that scope cross-account image pulls. Empty disables those grants.
     Default: ''
+  NetworkMode:
+    Type: String
+    Description: Choose whether this setup creates a new network, uses an existing network, or uses the default network.
+    Default: create-new
+    AllowedValues:
+    - create-new
+    - use-existing
+    - use-default
   VpcCidr:
     Type: String
     Description: CIDR for created VPCs. Empty uses the generated default.
@@ -79,15 +102,34 @@ Parameters:
     - 1
     - 2
     - 3
+  VpcId:
+    Type: String
+    Description: Existing VPC ID. Required when Network is use-existing.
+    Default: ''
+  PublicSubnetIds:
+    Type: CommaDelimitedList
+    Description: Existing public subnet IDs.
+    Default: ''
+  PrivateSubnetIds:
+    Type: CommaDelimitedList
+    Description: Existing private subnet IDs.
+    Default: ''
+  SecurityGroupIds:
+    Type: CommaDelimitedList
+    Description: Existing security group IDs.
+    Default: ''
   DomainName:
     Type: String
     Description: Optional domain name for public endpoints. Empty disables custom domains.
+    Default: ''
   HostedZoneId:
     Type: String
     Description: Optional Route 53 hosted zone ID for the domain.
+    Default: ''
   CertificateArn:
     Type: String
     Description: Optional ACM certificate ARN for the domain.
+    Default: ''
   UpdatesMode:
     Type: String
     Description: How updates are applied after import.
@@ -111,15 +153,35 @@ Parameters:
     - "off"
     - "on"
 Conditions:
-  NetworkCreateUseAz2:
+  NetworkModeCreate:
+    Fn::Equals:
+    - Ref: NetworkMode
+    - create-new
+  NetworkModeUseExisting:
+    Fn::Equals:
+    - Ref: NetworkMode
+    - use-existing
+  NetworkUseAz2:
     Fn::Not:
     - Fn::Equals:
       - Ref: AvailabilityZones
       - 1
-  NetworkCreateUseAz3:
+  NetworkUseAz3:
     Fn::Equals:
     - Ref: AvailabilityZones
     - 3
+  NetworkCreateUseAz2:
+    Fn::And:
+    - Fn::Equals:
+      - Ref: NetworkMode
+      - create-new
+    - Condition: NetworkUseAz2
+  NetworkCreateUseAz3:
+    Fn::And:
+    - Fn::Equals:
+      - Ref: NetworkMode
+      - create-new
+    - Condition: NetworkUseAz3
   HasVpcCidr:
     Fn::Not:
     - Fn::Equals:
@@ -151,6 +213,7 @@ Resources:
         Value: default-network
       - Key: AlienResourceType
         Value: network
+    Condition: NetworkModeCreate
   DefaultNetworkInternetGateway:
     Type: AWS::EC2::InternetGateway
     Properties:
@@ -164,6 +227,7 @@ Resources:
         Value: default-network
       - Key: AlienResourceType
         Value: network
+    Condition: NetworkModeCreate
   DefaultNetworkVpcGatewayAttachment:
     Type: AWS::EC2::VPCGatewayAttachment
     Properties:
@@ -171,6 +235,7 @@ Resources:
         Ref: DefaultNetworkVpc
       InternetGatewayId:
         Ref: DefaultNetworkInternetGateway
+    Condition: NetworkModeCreate
   DefaultNetworkPublicSubnet1:
     Type: AWS::EC2::Subnet
     Properties:
@@ -201,6 +266,7 @@ Resources:
         Value: default-network
       - Key: AlienResourceType
         Value: network
+    Condition: NetworkModeCreate
   DefaultNetworkPrivateSubnet1:
     Type: AWS::EC2::Subnet
     Properties:
@@ -230,6 +296,7 @@ Resources:
         Value: default-network
       - Key: AlienResourceType
         Value: network
+    Condition: NetworkModeCreate
   DefaultNetworkPublicSubnet2:
     Type: AWS::EC2::Subnet
     Properties:
@@ -367,6 +434,7 @@ Resources:
         Value: default-network
       - Key: AlienResourceType
         Value: network
+    Condition: NetworkModeCreate
   DefaultNetworkPublicDefaultRoute:
     Type: AWS::EC2::Route
     Properties:
@@ -377,6 +445,7 @@ Resources:
         Ref: DefaultNetworkInternetGateway
     DependsOn:
     - DefaultNetworkVpcGatewayAttachment
+    Condition: NetworkModeCreate
   DefaultNetworkPrivateRouteTable:
     Type: AWS::EC2::RouteTable
     Properties:
@@ -392,10 +461,12 @@ Resources:
         Value: default-network
       - Key: AlienResourceType
         Value: network
+    Condition: NetworkModeCreate
   DefaultNetworkNatEip:
     Type: AWS::EC2::EIP
     Properties:
       Domain: vpc
+    Condition: NetworkModeCreate
   DefaultNetworkNatGateway:
     Type: AWS::EC2::NatGateway
     Properties:
@@ -415,6 +486,7 @@ Resources:
         Value: default-network
       - Key: AlienResourceType
         Value: network
+    Condition: NetworkModeCreate
   DefaultNetworkPrivateDefaultRoute:
     Type: AWS::EC2::Route
     Properties:
@@ -425,6 +497,7 @@ Resources:
         Ref: DefaultNetworkNatGateway
     DependsOn:
     - DefaultNetworkNatGateway
+    Condition: NetworkModeCreate
   DefaultNetworkPublicSubnet1RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
@@ -432,6 +505,7 @@ Resources:
         Ref: DefaultNetworkPublicSubnet1
       RouteTableId:
         Ref: DefaultNetworkPublicRouteTable
+    Condition: NetworkModeCreate
   DefaultNetworkPrivateSubnet1RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
@@ -439,6 +513,7 @@ Resources:
         Ref: DefaultNetworkPrivateSubnet1
       RouteTableId:
         Ref: DefaultNetworkPrivateRouteTable
+    Condition: NetworkModeCreate
   DefaultNetworkPublicSubnet2RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
@@ -490,6 +565,7 @@ Resources:
         Value: default-network
       - Key: AlienResourceType
         Value: network
+    Condition: NetworkModeCreate
   ExecutionSaRole:
     Type: AWS::IAM::Role
     Properties:
@@ -572,7 +648,7 @@ Resources:
             Effect: Allow
             Resource:
             - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*
-            Sid: FunctionProvision1
+            Sid: WorkerProvision1
           - Action:
             - lambda:AddPermission
             - lambda:CreateAlias
@@ -614,13 +690,13 @@ Resources:
             Effect: Allow
             Resource:
             - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*
-            Sid: FunctionProvision2
+            Sid: WorkerProvision2
           - Action:
             - iam:PassRole
             Effect: Allow
             Resource:
             - Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*-sa
-            Sid: FunctionProvision3
+            Sid: WorkerProvision3
           - Action:
             - iam:GetRolePolicy
             - iam:ListRolePolicies
@@ -633,13 +709,13 @@ Resources:
             Effect: Allow
             Resource:
             - Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*
-            Sid: FunctionProvision4
+            Sid: WorkerProvision4
           - Action:
             - ecr:GetAuthorizationToken
             Effect: Allow
             Resource:
             - '*'
-            Sid: FunctionProvision5
+            Sid: WorkerProvision5
           - Action:
             - ecr:BatchGetImage
             - ecr:GetDownloadUrlForLayer
@@ -655,7 +731,7 @@ Resources:
                   - Fn::Split:
                     - ':'
                     - Ref: ManagingRoleArn
-            Sid: FunctionProvision6
+            Sid: WorkerProvision6
           - Action:
             - apigateway:POST
             Condition:
@@ -667,7 +743,7 @@ Resources:
             Resource:
             - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis
             - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/tags/*
-            Sid: FunctionProvision7
+            Sid: WorkerProvision7
           - Action:
             - apigateway:POST
             Condition:
@@ -678,7 +754,7 @@ Resources:
             Effect: Allow
             Resource:
             - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*
-            Sid: FunctionProvision8
+            Sid: WorkerProvision8
           - Action:
             - apigateway:TagResource
             Condition:
@@ -692,7 +768,7 @@ Resources:
             - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*/stages
             - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*/stages/*
             - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*
-            Sid: FunctionProvision9
+            Sid: WorkerProvision9
           - Action:
             - apigateway:DELETE
             - apigateway:GET
@@ -707,7 +783,7 @@ Resources:
             Resource:
             - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*
             - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*
-            Sid: FunctionProvision10
+            Sid: WorkerProvision10
           - Action:
             - events:PutRule
             - events:TagResource
@@ -719,7 +795,7 @@ Resources:
             Effect: Allow
             Resource:
             - Fn::Sub: arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${AWS::StackName}-*
-            Sid: FunctionProvision11
+            Sid: WorkerProvision11
           - Action:
             - events:DeleteRule
             - events:DescribeRule
@@ -733,7 +809,7 @@ Resources:
             Effect: Allow
             Resource:
             - Fn::Sub: arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${AWS::StackName}-*
-            Sid: FunctionProvision12
+            Sid: WorkerProvision12
           - Action:
             - s3:GetBucketAcl
             - s3:GetBucketLocation
@@ -1094,7 +1170,7 @@ Resources:
         Ref: AWS::Region
       SetupTarget: aws
       SetupFingerprint: test
-      SetupFingerprintVersion: '1'
+      SetupFingerprintVersion: 1
       ManagementConfig:
         platform: aws
         managingRoleArn:
@@ -1108,14 +1184,28 @@ Resources:
         heartbeats:
           Ref: HeartbeatsMode
         network:
-          type: create
-          cidr:
-            Fn::If:
-            - HasVpcCidr
-            - Ref: VpcCidr
-            - Ref: AWS::NoValue
-          availabilityZones:
-            Ref: AvailabilityZones
+          Fn::If:
+          - NetworkModeCreate
+          - type: create
+            cidr:
+              Fn::If:
+              - HasVpcCidr
+              - Ref: VpcCidr
+              - Ref: AWS::NoValue
+            availabilityZones:
+              Ref: AvailabilityZones
+          - Fn::If:
+            - NetworkModeUseExisting
+            - type: byo-vpc-aws
+              vpcId:
+                Ref: VpcId
+              publicSubnetIds:
+                Ref: PublicSubnetIds
+              privateSubnetIds:
+                Ref: PrivateSubnetIds
+              securityGroupIds:
+                Ref: SecurityGroupIds
+            - type: use-default
         domains:
           Fn::If:
           - HasDomainName
@@ -1132,66 +1222,86 @@ Resources:
       - id: default-network
         type: network
         importData:
-          vpcId:
-            Ref: DefaultNetworkVpc
-          cidrBlock:
-            Fn::GetAtt:
-            - DefaultNetworkVpc
-            - CidrBlock
-          internetGatewayId:
-            Ref: DefaultNetworkInternetGateway
-          natGatewayId:
-            Ref: DefaultNetworkNatGateway
-          eipAllocationId:
-            Fn::GetAtt:
-            - DefaultNetworkNatEip
-            - AllocationId
-          publicSubnetIds:
-          - Ref: DefaultNetworkPublicSubnet1
-          - Fn::If:
-            - NetworkCreateUseAz2
-            - Ref: DefaultNetworkPublicSubnet2
-            - Ref: AWS::NoValue
-          - Fn::If:
-            - NetworkCreateUseAz3
-            - Ref: DefaultNetworkPublicSubnet3
-            - Ref: AWS::NoValue
-          privateSubnetIds:
-          - Ref: DefaultNetworkPrivateSubnet1
-          - Fn::If:
-            - NetworkCreateUseAz2
-            - Ref: DefaultNetworkPrivateSubnet2
-            - Ref: AWS::NoValue
-          - Fn::If:
-            - NetworkCreateUseAz3
-            - Ref: DefaultNetworkPrivateSubnet3
-            - Ref: AWS::NoValue
-          publicRouteTableId:
-            Ref: DefaultNetworkPublicRouteTable
-          privateRouteTableId:
-            Ref: DefaultNetworkPrivateRouteTable
-          securityGroupId:
-            Ref: DefaultNetworkSecurityGroup
-          availabilityZones:
-          - Fn::Select:
-            - 0
-            - Fn::GetAZs:
-                Ref: AWS::Region
-          - Fn::If:
-            - NetworkCreateUseAz2
+          Fn::If:
+          - NetworkModeCreate
+          - vpcId:
+              Ref: DefaultNetworkVpc
+            cidrBlock:
+              Fn::GetAtt:
+              - DefaultNetworkVpc
+              - CidrBlock
+            internetGatewayId:
+              Ref: DefaultNetworkInternetGateway
+            natGatewayId:
+              Ref: DefaultNetworkNatGateway
+            eipAllocationId:
+              Fn::GetAtt:
+              - DefaultNetworkNatEip
+              - AllocationId
+            publicSubnetIds:
+            - Ref: DefaultNetworkPublicSubnet1
+            - Fn::If:
+              - NetworkCreateUseAz2
+              - Ref: DefaultNetworkPublicSubnet2
+              - Ref: AWS::NoValue
+            - Fn::If:
+              - NetworkCreateUseAz3
+              - Ref: DefaultNetworkPublicSubnet3
+              - Ref: AWS::NoValue
+            privateSubnetIds:
+            - Ref: DefaultNetworkPrivateSubnet1
+            - Fn::If:
+              - NetworkCreateUseAz2
+              - Ref: DefaultNetworkPrivateSubnet2
+              - Ref: AWS::NoValue
+            - Fn::If:
+              - NetworkCreateUseAz3
+              - Ref: DefaultNetworkPrivateSubnet3
+              - Ref: AWS::NoValue
+            publicRouteTableId:
+              Ref: DefaultNetworkPublicRouteTable
+            privateRouteTableId:
+              Ref: DefaultNetworkPrivateRouteTable
+            securityGroupId:
+              Ref: DefaultNetworkSecurityGroup
+            availabilityZones:
             - Fn::Select:
-              - 1
+              - 0
               - Fn::GetAZs:
                   Ref: AWS::Region
-            - Ref: AWS::NoValue
+            - Fn::If:
+              - NetworkUseAz2
+              - Fn::Select:
+                - 1
+                - Fn::GetAZs:
+                    Ref: AWS::Region
+              - Ref: AWS::NoValue
+            - Fn::If:
+              - NetworkUseAz3
+              - Fn::Select:
+                - 2
+                - Fn::GetAZs:
+                    Ref: AWS::Region
+              - Ref: AWS::NoValue
+            isByoVpc: false
           - Fn::If:
-            - NetworkCreateUseAz3
-            - Fn::Select:
-              - 2
-              - Fn::GetAZs:
-                  Ref: AWS::Region
-            - Ref: AWS::NoValue
-          isByoVpc: false
+            - NetworkModeUseExisting
+            - vpcId:
+                Ref: VpcId
+              publicSubnetIds:
+                Ref: PublicSubnetIds
+              privateSubnetIds:
+                Ref: PrivateSubnetIds
+              securityGroupId:
+                Fn::Select:
+                - 0
+                - Ref: SecurityGroupIds
+              availabilityZones: []
+              isByoVpc: true
+            - publicSubnetIds: []
+              privateSubnetIds: []
+              availabilityZones: []
+              isByoVpc: true
       - id: execution-sa
         type: service-account
         importData:
@@ -1285,20 +1395,6 @@ Resources:
           buildEnvVars:
             PROFILE: release
     DependsOn:
-    - DefaultNetworkVpc
-    - DefaultNetworkInternetGateway
-    - DefaultNetworkVpcGatewayAttachment
-    - DefaultNetworkPublicSubnet1
-    - DefaultNetworkPrivateSubnet1
-    - DefaultNetworkPublicRouteTable
-    - DefaultNetworkPublicDefaultRoute
-    - DefaultNetworkPrivateRouteTable
-    - DefaultNetworkNatEip
-    - DefaultNetworkNatGateway
-    - DefaultNetworkPrivateDefaultRoute
-    - DefaultNetworkPublicSubnet1RouteTableAssociation
-    - DefaultNetworkPrivateSubnet1RouteTableAssociation
-    - DefaultNetworkSecurityGroup
     - ExecutionSaRole
     - ManagementRole
     - Assets
@@ -1332,7 +1428,7 @@ Outputs:
     Value: test
     Description: Setup compatibility fingerprint.
   DeploymentSetupFingerprintVersion:
-    Value: '1'
+    Value: 1
     Description: Setup fingerprint algorithm version.
   DeploymentManagementConfig:
     Value:
@@ -1352,14 +1448,28 @@ Outputs:
         heartbeats:
           Ref: HeartbeatsMode
         network:
-          type: create
-          cidr:
-            Fn::If:
-            - HasVpcCidr
-            - Ref: VpcCidr
-            - Ref: AWS::NoValue
-          availabilityZones:
-            Ref: AvailabilityZones
+          Fn::If:
+          - NetworkModeCreate
+          - type: create
+            cidr:
+              Fn::If:
+              - HasVpcCidr
+              - Ref: VpcCidr
+              - Ref: AWS::NoValue
+            availabilityZones:
+              Ref: AvailabilityZones
+          - Fn::If:
+            - NetworkModeUseExisting
+            - type: byo-vpc-aws
+              vpcId:
+                Ref: VpcId
+              publicSubnetIds:
+                Ref: PublicSubnetIds
+              privateSubnetIds:
+                Ref: PrivateSubnetIds
+              securityGroupIds:
+                Ref: SecurityGroupIds
+            - type: use-default
         domains:
           Fn::If:
           - HasDomainName
@@ -1379,66 +1489,86 @@ Outputs:
       - id: default-network
         type: network
         importData:
-          vpcId:
-            Ref: DefaultNetworkVpc
-          cidrBlock:
-            Fn::GetAtt:
-            - DefaultNetworkVpc
-            - CidrBlock
-          internetGatewayId:
-            Ref: DefaultNetworkInternetGateway
-          natGatewayId:
-            Ref: DefaultNetworkNatGateway
-          eipAllocationId:
-            Fn::GetAtt:
-            - DefaultNetworkNatEip
-            - AllocationId
-          publicSubnetIds:
-          - Ref: DefaultNetworkPublicSubnet1
-          - Fn::If:
-            - NetworkCreateUseAz2
-            - Ref: DefaultNetworkPublicSubnet2
-            - Ref: AWS::NoValue
-          - Fn::If:
-            - NetworkCreateUseAz3
-            - Ref: DefaultNetworkPublicSubnet3
-            - Ref: AWS::NoValue
-          privateSubnetIds:
-          - Ref: DefaultNetworkPrivateSubnet1
-          - Fn::If:
-            - NetworkCreateUseAz2
-            - Ref: DefaultNetworkPrivateSubnet2
-            - Ref: AWS::NoValue
-          - Fn::If:
-            - NetworkCreateUseAz3
-            - Ref: DefaultNetworkPrivateSubnet3
-            - Ref: AWS::NoValue
-          publicRouteTableId:
-            Ref: DefaultNetworkPublicRouteTable
-          privateRouteTableId:
-            Ref: DefaultNetworkPrivateRouteTable
-          securityGroupId:
-            Ref: DefaultNetworkSecurityGroup
-          availabilityZones:
-          - Fn::Select:
-            - 0
-            - Fn::GetAZs:
-                Ref: AWS::Region
-          - Fn::If:
-            - NetworkCreateUseAz2
+          Fn::If:
+          - NetworkModeCreate
+          - vpcId:
+              Ref: DefaultNetworkVpc
+            cidrBlock:
+              Fn::GetAtt:
+              - DefaultNetworkVpc
+              - CidrBlock
+            internetGatewayId:
+              Ref: DefaultNetworkInternetGateway
+            natGatewayId:
+              Ref: DefaultNetworkNatGateway
+            eipAllocationId:
+              Fn::GetAtt:
+              - DefaultNetworkNatEip
+              - AllocationId
+            publicSubnetIds:
+            - Ref: DefaultNetworkPublicSubnet1
+            - Fn::If:
+              - NetworkCreateUseAz2
+              - Ref: DefaultNetworkPublicSubnet2
+              - Ref: AWS::NoValue
+            - Fn::If:
+              - NetworkCreateUseAz3
+              - Ref: DefaultNetworkPublicSubnet3
+              - Ref: AWS::NoValue
+            privateSubnetIds:
+            - Ref: DefaultNetworkPrivateSubnet1
+            - Fn::If:
+              - NetworkCreateUseAz2
+              - Ref: DefaultNetworkPrivateSubnet2
+              - Ref: AWS::NoValue
+            - Fn::If:
+              - NetworkCreateUseAz3
+              - Ref: DefaultNetworkPrivateSubnet3
+              - Ref: AWS::NoValue
+            publicRouteTableId:
+              Ref: DefaultNetworkPublicRouteTable
+            privateRouteTableId:
+              Ref: DefaultNetworkPrivateRouteTable
+            securityGroupId:
+              Ref: DefaultNetworkSecurityGroup
+            availabilityZones:
             - Fn::Select:
-              - 1
+              - 0
               - Fn::GetAZs:
                   Ref: AWS::Region
-            - Ref: AWS::NoValue
+            - Fn::If:
+              - NetworkUseAz2
+              - Fn::Select:
+                - 1
+                - Fn::GetAZs:
+                    Ref: AWS::Region
+              - Ref: AWS::NoValue
+            - Fn::If:
+              - NetworkUseAz3
+              - Fn::Select:
+                - 2
+                - Fn::GetAZs:
+                    Ref: AWS::Region
+              - Ref: AWS::NoValue
+            isByoVpc: false
           - Fn::If:
-            - NetworkCreateUseAz3
-            - Fn::Select:
-              - 2
-              - Fn::GetAZs:
-                  Ref: AWS::Region
-            - Ref: AWS::NoValue
-          isByoVpc: false
+            - NetworkModeUseExisting
+            - vpcId:
+                Ref: VpcId
+              publicSubnetIds:
+                Ref: PublicSubnetIds
+              privateSubnetIds:
+                Ref: PrivateSubnetIds
+              securityGroupId:
+                Fn::Select:
+                - 0
+                - Ref: SecurityGroupIds
+              availabilityZones: []
+              isByoVpc: true
+            - publicSubnetIds: []
+              privateSubnetIds: []
+              availabilityZones: []
+              isByoVpc: true
       - id: execution-sa
         type: service-account
         importData:

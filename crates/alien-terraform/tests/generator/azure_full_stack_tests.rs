@@ -7,9 +7,9 @@
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
     ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup, AzureServiceBusNamespace,
-    AzureStorageAccount, Build, Worker, WorkerCode, Ingress, Kv, ManagementPermissions,
-    Network, NetworkSettings, PermissionProfile, Queue, RemoteStackManagement, ResourceLifecycle,
-    ServiceAccount, Stack, StackSettings, Storage, UpdatesMode, Vault,
+    AzureStorageAccount, Build, Ingress, Kv, ManagementPermissions, Network, NetworkSettings,
+    PermissionProfile, Queue, RemoteStackManagement, ResourceLifecycle, ServiceAccount, Stack,
+    StackSettings, Storage, UpdatesMode, Vault, Worker, WorkerCode,
 };
 use alien_terraform::TerraformTarget;
 

@@ -1364,10 +1364,7 @@ async fn test_function_http_access(#[case] ctx: impl FunctionTestContext) {
             provider_name
         ));
 
-    info!(
-        "[{}] Worker URL retrieved: {}",
-        provider_name, function_url
-    );
+    info!("[{}] Worker URL retrieved: {}", provider_name, function_url);
 
     // Validate URL format
     assert!(

@@ -34,8 +34,9 @@ use axum::{
 
 use alien_core::{
     import::{ImportContext, StackImportRequest, StackImportResponse},
-    AwsEnvironmentInfo, AzureEnvironmentInfo, EnvironmentInfo, GcpEnvironmentInfo, Platform,
-    RuntimeMetadata, Stack, StackResourceState, StackState,
+    AwsEnvironmentInfo, AzureEnvironmentInfo, DeploymentConfig, EnvironmentInfo,
+    EnvironmentVariablesSnapshot, ExternalBindings, GcpEnvironmentInfo, Platform, RuntimeMetadata,
+    Stack, StackResourceState, StackState,
 };
 use alien_error::AlienError;
 
@@ -149,17 +150,22 @@ pub async fn stack_import(
         },
     };
 
-    let stack = match resolve_stack(&release, req.platform) {
+    let source_stack = match resolve_stack(&release, req.platform) {
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
 
-    let stack_state = match build_stack_state(&state, &subject, &req, stack) {
+    let prepared_stack = match prepare_import_stack(source_stack.clone(), &req).await {
+        Ok(stack) => stack,
+        Err(e) => return e.into_response(),
+    };
+
+    let stack_state = match build_stack_state(&state, &subject, &req, &prepared_stack) {
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
     let environment_info = infer_import_environment_info(&req);
-    let runtime_metadata = import_runtime_metadata(stack);
+    let runtime_metadata = import_runtime_metadata(&prepared_stack);
 
     match state
         .deployment_store
@@ -353,7 +359,7 @@ fn can_accept_reimport(
         existing.status.as_str(),
         "initial-setup" | "provisioning" | "update-pending" | "updating"
     ) {
-        return idempotent;
+        return true;
     }
 
     matches!(
@@ -417,6 +423,56 @@ fn import_runtime_metadata(stack: &Stack) -> RuntimeMetadata {
         prepared_stack: Some(stack.clone()),
         ..RuntimeMetadata::default()
     }
+}
+
+async fn prepare_import_stack(
+    source_stack: Stack,
+    req: &StackImportRequest,
+) -> crate::error::Result<Stack> {
+    let runner = alien_preflights::runner::PreflightRunner::new();
+    runner
+        .run_template_preflights(&source_stack, req.platform)
+        .await
+        .map_err(|err| {
+            AlienError::new(ErrorData::BadRequest {
+                reason: format!(
+                    "Source stack failed setup import preflights: {}",
+                    err.message
+                ),
+            })
+        })?;
+
+    let stack_state = StackState::new(req.platform);
+    let config = DeploymentConfig {
+        stack_settings: req.stack_settings.clone(),
+        management_config: Some(req.management_config.clone()),
+        environment_variables: EnvironmentVariablesSnapshot {
+            variables: Vec::new(),
+            hash: "empty".to_string(),
+            created_at: "1970-01-01T00:00:00Z".to_string(),
+        },
+        allow_frozen_changes: false,
+        compute_backend: None,
+        external_bindings: ExternalBindings::default(),
+        public_urls: None,
+        domain_metadata: None,
+        monitoring: None,
+        manager_url: None,
+        deployment_token: None,
+        native_image_host: None,
+    };
+
+    runner
+        .apply_mutations(source_stack, &stack_state, &config)
+        .await
+        .map_err(|err| {
+            AlienError::new(ErrorData::BadRequest {
+                reason: format!(
+                    "Failed to derive expected setup stack from import settings: {}",
+                    err.message
+                ),
+            })
+        })
 }
 
 fn infer_import_environment_info(req: &StackImportRequest) -> Option<EnvironmentInfo> {

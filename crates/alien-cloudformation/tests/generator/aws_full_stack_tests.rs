@@ -7,10 +7,9 @@
 use super::helpers::render_built_ins;
 use alien_cloudformation::RegistrationMode;
 use alien_core::{
-    ArtifactRegistry, Build, Worker, WorkerCode, WorkerTrigger, Ingress, Kv,
-    ManagementPermissions, Network, NetworkSettings, PermissionProfile, Queue,
-    RemoteStackManagement, ResourceLifecycle, ServiceAccount, Stack, StackSettings, Storage,
-    UpdatesMode, Vault,
+    ArtifactRegistry, Build, Ingress, Kv, ManagementPermissions, Network, NetworkSettings,
+    PermissionProfile, Queue, RemoteStackManagement, ResourceLifecycle, ServiceAccount, Stack,
+    StackSettings, Storage, UpdatesMode, Vault, Worker, WorkerCode, WorkerTrigger,
 };
 
 const LAMBDA_ARN: &str = "arn:aws:lambda:us-east-1:123456789012:function:alien-import";

@@ -7,9 +7,10 @@
 
 use crate::template::{CfExpression, CfResource};
 use alien_core::{
-    import::EmitContext, ErrorData, Worker, Network, NetworkSettings, Queue, ResourceDefinition,
-    ResourceRef, ResourceType, Result, ServiceAccount, Storage, Vault, ALIEN_MANAGED_BY_TAG_KEY,
-    ALIEN_MANAGED_BY_TAG_VALUE, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
+    import::EmitContext, ErrorData, Network, NetworkSettings, Queue, ResourceDefinition,
+    ResourceRef, ResourceType, Result, ServiceAccount, Storage, Vault, Worker,
+    ALIEN_MANAGED_BY_TAG_KEY, ALIEN_MANAGED_BY_TAG_VALUE, ALIEN_RESOURCE_TAG_KEY,
+    ALIEN_STACK_TAG_KEY,
 };
 use alien_error::AlienError;
 use indexmap::IndexMap;
@@ -25,7 +26,11 @@ pub const PARAM_SECURITY_GROUP_IDS: &str = "SecurityGroupIds";
 
 pub const CONDITION_NETWORK_CREATE_AZ2: &str = "NetworkCreateUseAz2";
 pub const CONDITION_NETWORK_CREATE_AZ3: &str = "NetworkCreateUseAz3";
+const CONDITION_NETWORK_AZ2: &str = "NetworkUseAz2";
+const CONDITION_NETWORK_AZ3: &str = "NetworkUseAz3";
 pub const CONDITION_HAS_VPC_CIDR: &str = "HasVpcCidr";
+const CONDITION_NETWORK_MODE_CREATE: &str = "NetworkModeCreate";
+const CONDITION_NETWORK_MODE_USE_EXISTING: &str = "NetworkModeUseExisting";
 
 pub const INLINE_POLICY_NAME: &str = "alien-managed-policy";
 
@@ -178,25 +183,33 @@ pub fn availability_zone_names() -> CfExpression {
     CfExpression::list([
         select(0, get_azs()),
         CfExpression::if_(
-            CONDITION_NETWORK_CREATE_AZ2,
+            CONDITION_NETWORK_AZ2,
             select(1, get_azs()),
             CfExpression::no_value(),
         ),
         CfExpression::if_(
-            CONDITION_NETWORK_CREATE_AZ3,
+            CONDITION_NETWORK_AZ3,
             select(2, get_azs()),
             CfExpression::no_value(),
         ),
     ])
 }
 
-/// VPC ID expression — created VPC ref, BYO VPC parameter, or nothing.
+/// VPC ID expression: created VPC ref, existing VPC parameter, or nothing.
 pub fn vpc_id_expr(ctx: &EmitContext<'_>) -> CfExpression {
     let Some((network_id, network)) = default_network(ctx) else {
         return CfExpression::ref_("VpcId");
     };
     match &network.settings {
-        NetworkSettings::Create { .. } => CfExpression::ref_(format!("{network_id}Vpc")),
+        NetworkSettings::Create { .. } => CfExpression::if_(
+            CONDITION_NETWORK_MODE_CREATE,
+            CfExpression::ref_(format!("{network_id}Vpc")),
+            CfExpression::if_(
+                CONDITION_NETWORK_MODE_USE_EXISTING,
+                CfExpression::ref_("VpcId"),
+                CfExpression::no_value(),
+            ),
+        ),
         NetworkSettings::UseDefault
         | NetworkSettings::ByoVpcAws { .. }
         | NetworkSettings::ByoVpcGcp { .. }
@@ -205,13 +218,21 @@ pub fn vpc_id_expr(ctx: &EmitContext<'_>) -> CfExpression {
 }
 
 /// Private subnet IDs expression — uses created VPC subnets when this
-/// stack creates the VPC, BYO parameter otherwise.
+/// stack creates the VPC, existing subnet parameter otherwise.
 pub fn private_subnet_ids_expr(ctx: &EmitContext<'_>) -> CfExpression {
     let Some((network_id, network)) = default_network(ctx) else {
         return CfExpression::ref_(PARAM_PRIVATE_SUBNET_IDS);
     };
     match &network.settings {
-        NetworkSettings::Create { .. } => subnet_refs(network_id, "PrivateSubnet"),
+        NetworkSettings::Create { .. } => CfExpression::if_(
+            CONDITION_NETWORK_MODE_CREATE,
+            subnet_refs(network_id, "PrivateSubnet"),
+            CfExpression::if_(
+                CONDITION_NETWORK_MODE_USE_EXISTING,
+                CfExpression::ref_(PARAM_PRIVATE_SUBNET_IDS),
+                CfExpression::no_value(),
+            ),
+        ),
         NetworkSettings::UseDefault
         | NetworkSettings::ByoVpcAws { .. }
         | NetworkSettings::ByoVpcGcp { .. }
@@ -219,15 +240,22 @@ pub fn private_subnet_ids_expr(ctx: &EmitContext<'_>) -> CfExpression {
     }
 }
 
-/// Security-group IDs expression — created SG ref or BYO parameter.
+/// Security-group IDs expression: created security group ref or existing
+/// security group parameter.
 pub fn security_group_ids_expr(ctx: &EmitContext<'_>) -> CfExpression {
     let Some((network_id, network)) = default_network(ctx) else {
         return CfExpression::ref_(PARAM_SECURITY_GROUP_IDS);
     };
     match &network.settings {
-        NetworkSettings::Create { .. } => {
-            CfExpression::list([CfExpression::ref_(format!("{network_id}SecurityGroup"))])
-        }
+        NetworkSettings::Create { .. } => CfExpression::if_(
+            CONDITION_NETWORK_MODE_CREATE,
+            CfExpression::list([CfExpression::ref_(format!("{network_id}SecurityGroup"))]),
+            CfExpression::if_(
+                CONDITION_NETWORK_MODE_USE_EXISTING,
+                CfExpression::ref_(PARAM_SECURITY_GROUP_IDS),
+                CfExpression::no_value(),
+            ),
+        ),
         NetworkSettings::UseDefault
         | NetworkSettings::ByoVpcAws { .. }
         | NetworkSettings::ByoVpcGcp { .. }

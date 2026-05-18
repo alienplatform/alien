@@ -100,14 +100,17 @@ locals {
 === import.tf ===
 resource "terraform_data" "deployment_stack_import" {
   input = {
-    platform               = local.deployment_platform
-    deployment_group_token = var.deployment_group_token
-    deployment_name        = var.deployment_name == "" ? var.stack_name : var.deployment_name
-    stack_prefix           = var.stack_name
-    manager_url            = var.manager_url
-    management_config      = local.deployment_management_config
-    stack_settings         = local.deployment_stack_settings
-    resources              = local.deployment_resources
+    platform                  = local.deployment_platform
+    deployment_group_token    = var.deployment_group_token
+    deployment_name           = var.deployment_name == "" ? var.stack_name : var.deployment_name
+    stack_prefix              = var.stack_name
+    setup_target              = ""
+    setup_fingerprint         = ""
+    setup_fingerprint_version = 0
+    manager_url               = var.manager_url
+    management_config         = local.deployment_management_config
+    stack_settings            = local.deployment_stack_settings
+    resources                 = local.deployment_resources
   }
 }
 
@@ -130,6 +133,21 @@ output "deployment_platform" {
 output "deployment_region" {
   value       = local.deployment_region
   description = "Target cloud region or location."
+}
+
+output "deployment_setup_target" {
+  value       = ""
+  description = "Setup target."
+}
+
+output "deployment_setup_fingerprint" {
+  value       = ""
+  description = "Setup compatibility fingerprint."
+}
+
+output "deployment_setup_fingerprint_version" {
+  value       = 0
+  description = "Setup fingerprint algorithm version."
 }
 
 output "deployment_management_config" {

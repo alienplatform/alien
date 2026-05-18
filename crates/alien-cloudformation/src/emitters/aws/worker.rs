@@ -22,11 +22,11 @@ use crate::{
     template::{CfExpression, CfResource},
 };
 use alien_core::{
-    crontab_to_eventbridge::crontab_to_eventbridge, worker_runtime_environment_contract,
-    import::EmitContext, render_runtime_environment_plan, validate_runtime_environment_user_map,
-    ErrorData, Worker, WorkerCode, WorkerTrigger, Ingress, NetworkSettings, Platform, Result,
+    crontab_to_eventbridge::crontab_to_eventbridge, import::EmitContext,
+    render_runtime_environment_plan, validate_runtime_environment_user_map,
+    worker_runtime_environment_contract, ErrorData, Ingress, NetworkSettings, Platform, Result,
     RuntimeEnvironmentBindingEntry, RuntimeEnvironmentBindingSource, RuntimeEnvironmentRenderer,
-    RuntimeEnvironmentValue, Storage,
+    RuntimeEnvironmentValue, Storage, Worker, WorkerCode, WorkerTrigger,
 };
 use alien_error::AlienError;
 use indexmap::IndexMap;
@@ -637,10 +637,7 @@ fn storage_permission_statement_ids(function: &Worker, logical_id: &str) -> Vec<
         .collect()
 }
 
-fn eventbridge_permission_statement_ids(
-    function: &Worker,
-    logical_id: &str,
-) -> Vec<CfExpression> {
+fn eventbridge_permission_statement_ids(function: &Worker, logical_id: &str) -> Vec<CfExpression> {
     let mut index = 0usize;
     let mut ids = Vec::new();
     for trigger in &function.triggers {

@@ -2,12 +2,12 @@
 pub mod artifact_registry;
 pub mod build;
 pub mod container;
-pub mod worker;
 pub mod kv;
 pub mod queue;
 pub mod service_account;
 pub mod storage;
 pub mod vault;
+pub mod worker;
 
 // gRPC provider (cross-service)
 #[cfg(feature = "grpc")]

@@ -16,9 +16,7 @@ use tracing::{debug, error, info, warn};
 use crate::error::{ErrorData, Result};
 use crate::wait_until::WaitUntilContext;
 use crate::{BindingsMode, BindingsProvider, BindingsProviderApi, WaitUntil};
-use alien_core::{
-    ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME, ENV_ALIEN_CURRENT_WORKER_BINDING_NAME,
-};
+use alien_core::{ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME, ENV_ALIEN_CURRENT_WORKER_BINDING_NAME};
 use alien_error::{AlienError, Context, IntoAlienError};
 
 #[cfg(feature = "grpc")]
@@ -808,8 +806,7 @@ impl AlienContext {
 
     /// Gets the current worker binding if available.
     pub async fn get_current_worker(&self) -> Result<Option<Arc<dyn crate::traits::Worker>>> {
-        if let Some(current_worker_name) =
-            self.env_vars.get(ENV_ALIEN_CURRENT_WORKER_BINDING_NAME)
+        if let Some(current_worker_name) = self.env_vars.get(ENV_ALIEN_CURRENT_WORKER_BINDING_NAME)
         {
             Ok(Some(
                 self.bindings_provider

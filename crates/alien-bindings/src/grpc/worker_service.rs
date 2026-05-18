@@ -38,10 +38,7 @@ impl WorkerGrpcServer {
         WorkerServiceServer::new(self)
     }
 
-    async fn get_worker_binding(
-        &self,
-        binding_name: &str,
-    ) -> Result<Arc<dyn AlienWorker>, Status> {
+    async fn get_worker_binding(&self, binding_name: &str) -> Result<Arc<dyn AlienWorker>, Status> {
         self.provider
             .load_worker(binding_name)
             .await

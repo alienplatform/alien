@@ -297,11 +297,11 @@ resource "google_service_account" "management" {
   description  = "${var.stack_name} cross-account management service account"
 }
 
-resource "google_project_iam_custom_role" "management_functionmanagement" {
+resource "google_project_iam_custom_role" "management_workermanagement" {
   count       = var.gcp_use_existing_custom_roles ? 0 : 1
   project     = var.gcp_project
-  role_id     = format("%s_management_functionManagement_%s", substr(replace(var.stack_name, "-", "_"), 0, 12), substr(sha1(format("%s-management-functionManagement", var.stack_name)), 0, 8))
-  title       = "Function Management"
+  role_id     = format("%s_management_workerManagement_%s", substr(replace(var.stack_name, "-", "_"), 0, 12), substr(sha1(format("%s-management-workerManagement", var.stack_name)), 0, 8))
+  title       = "Worker Management"
   description = "Allows managing function configuration, versions, aliases, and monitoring"
   stage       = "GA"
   permissions = [
@@ -373,9 +373,9 @@ resource "google_project_iam_custom_role" "management_functionmanagement" {
   ]
 }
 
-resource "google_project_iam_member" "management_functionmanagement_binding_0" {
+resource "google_project_iam_member" "management_workermanagement_binding_0" {
   project = var.gcp_project
-  role    = var.gcp_use_existing_custom_roles ? format("projects/%s/roles/functionManagement", var.gcp_project) : google_project_iam_custom_role.management_functionmanagement[0].name
+  role    = var.gcp_use_existing_custom_roles ? format("projects/%s/roles/workerManagement", var.gcp_project) : google_project_iam_custom_role.management_workermanagement[0].name
   member  = "serviceAccount:${google_service_account.management.email}"
 }
 
@@ -529,15 +529,14 @@ resource "google_firestore_database" "metadata" {
 }
 
 === secrets.tf ===
-resource "google_project_iam_custom_role" "management_vaultdatawrite" {
+resource "google_project_iam_custom_role" "management_secrets_vaultdatawrite" {
   count       = var.gcp_use_existing_custom_roles ? 0 : 1
   project     = var.gcp_project
-  role_id     = format("%s_management_vaultDataWrite_%s", substr(replace(var.stack_name, "-", "_"), 0, 12), substr(sha1(format("%s-management-vaultDataWrite", var.stack_name)), 0, 8))
+  role_id     = format("%s_management_s_vaultDataWrite_%s", substr(replace(var.stack_name, "-", "_"), 0, 12), substr(sha1(format("%s-management_secrets-vaultDataWrite", var.stack_name)), 0, 8))
   title       = "Vault Data Write"
   description = "Allows creating, updating, and deleting individual secrets within vault"
   stage       = "GA"
   permissions = [
-    "secretmanager.versions.access",
     "secretmanager.secrets.get",
     "secretmanager.secrets.create",
     "secretmanager.versions.add",
@@ -545,9 +544,9 @@ resource "google_project_iam_custom_role" "management_vaultdatawrite" {
   ]
 }
 
-resource "google_project_iam_member" "management_vaultdatawrite_binding_0" {
+resource "google_project_iam_member" "management_secrets_vaultdatawrite_binding_0" {
   project = var.gcp_project
-  role    = var.gcp_use_existing_custom_roles ? format("projects/%s/roles/vaultDataWrite", var.gcp_project) : google_project_iam_custom_role.management_vaultdatawrite[0].name
+  role    = var.gcp_use_existing_custom_roles ? format("projects/%s/roles/vaultDataWrite", var.gcp_project) : google_project_iam_custom_role.management_secrets_vaultdatawrite[0].name
   member  = "serviceAccount:${google_service_account.management.email}"
 
   condition {
@@ -608,8 +607,8 @@ resource "time_sleep" "gcp_iam_propagation" {
     google_project_iam_member.execution_sa_storagedataread_binding_0,
     google_project_iam_custom_role.execution_sa_queuedatawrite,
     google_project_iam_member.execution_sa_queuedatawrite_binding_0,
-    google_project_iam_custom_role.management_functionmanagement,
-    google_project_iam_member.management_functionmanagement_binding_0,
+    google_project_iam_custom_role.management_workermanagement,
+    google_project_iam_member.management_workermanagement_binding_0,
     google_project_iam_custom_role.management_storageheartbeat,
     google_project_iam_member.management_storageheartbeat_binding_0,
     google_project_iam_custom_role.management_queueheartbeat,
@@ -618,22 +617,25 @@ resource "time_sleep" "gcp_iam_propagation" {
     google_project_iam_member.management_kvheartbeat_binding_0,
     google_service_account_iam_member.management_manager_token_creator,
     google_service_account_iam_member.management_manager_user,
-    google_project_iam_custom_role.management_vaultdatawrite,
-    google_project_iam_member.management_vaultdatawrite_binding_0
+    google_project_iam_custom_role.management_secrets_vaultdatawrite,
+    google_project_iam_member.management_secrets_vaultdatawrite_binding_0
   ]
 }
 
 === import.tf ===
 resource "terraform_data" "deployment_stack_import" {
   input = {
-    platform               = local.deployment_platform
-    deployment_group_token = var.deployment_group_token
-    deployment_name        = var.deployment_name == "" ? var.stack_name : var.deployment_name
-    stack_prefix           = var.stack_name
-    manager_url            = var.manager_url
-    management_config      = local.deployment_management_config
-    stack_settings         = local.deployment_stack_settings
-    resources              = local.deployment_resources
+    platform                  = local.deployment_platform
+    deployment_group_token    = var.deployment_group_token
+    deployment_name           = var.deployment_name == "" ? var.stack_name : var.deployment_name
+    stack_prefix              = var.stack_name
+    setup_target              = ""
+    setup_fingerprint         = ""
+    setup_fingerprint_version = 0
+    manager_url               = var.manager_url
+    management_config         = local.deployment_management_config
+    stack_settings            = local.deployment_stack_settings
+    resources                 = local.deployment_resources
   }
   depends_on = [
     google_compute_network.default_network,
@@ -647,8 +649,8 @@ resource "terraform_data" "deployment_stack_import" {
     google_project_iam_custom_role.execution_sa_queuedatawrite,
     google_project_iam_member.execution_sa_queuedatawrite_binding_0,
     google_service_account.management,
-    google_project_iam_custom_role.management_functionmanagement,
-    google_project_iam_member.management_functionmanagement_binding_0,
+    google_project_iam_custom_role.management_workermanagement,
+    google_project_iam_member.management_workermanagement_binding_0,
     google_project_iam_custom_role.management_storageheartbeat,
     google_project_iam_member.management_storageheartbeat_binding_0,
     google_project_iam_custom_role.management_queueheartbeat,
@@ -661,8 +663,8 @@ resource "terraform_data" "deployment_stack_import" {
     google_pubsub_topic.jobs,
     google_pubsub_subscription.jobs,
     google_firestore_database.metadata,
-    google_project_iam_custom_role.management_vaultdatawrite,
-    google_project_iam_member.management_vaultdatawrite_binding_0,
+    google_project_iam_custom_role.management_secrets_vaultdatawrite,
+    google_project_iam_member.management_secrets_vaultdatawrite_binding_0,
     google_artifact_registry_repository.registry,
     google_service_account.registry_pull,
     google_artifact_registry_repository_iam_member.registry_pull_iam,
@@ -691,6 +693,21 @@ output "deployment_platform" {
 output "deployment_region" {
   value       = local.deployment_region
   description = "Target cloud region or location."
+}
+
+output "deployment_setup_target" {
+  value       = ""
+  description = "Setup target."
+}
+
+output "deployment_setup_fingerprint" {
+  value       = ""
+  description = "Setup compatibility fingerprint."
+}
+
+output "deployment_setup_fingerprint_version" {
+  value       = 0
+  description = "Setup fingerprint algorithm version."
 }
 
 output "deployment_management_config" {

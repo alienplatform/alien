@@ -7,8 +7,8 @@
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
-    ArtifactRegistry, Build, CapacityGroup, ComputeCluster, ErrorData, Worker, WorkerCode,
-    WorkerTrigger, Ingress, Platform, Queue, ResourceLifecycle, Stack, StackSettings, Storage,
+    ArtifactRegistry, Build, CapacityGroup, ComputeCluster, ErrorData, Ingress, Platform, Queue,
+    ResourceLifecycle, Stack, StackSettings, Storage, Worker, WorkerCode, WorkerTrigger,
 };
 use alien_terraform::{generate_terraform_module, TerraformOptions, TerraformTarget, TfRegistry};
 
@@ -97,10 +97,7 @@ fn gcp_function_with_queue_and_schedule_triggers() {
                 .permissions("execution".to_string())
                 .trigger(WorkerTrigger::queue(&jobs))
                 .trigger(WorkerTrigger::schedule("*/5 * * * *"))
-                .trigger(WorkerTrigger::storage(
-                    &assets,
-                    vec!["created".to_string()],
-                ))
+                .trigger(WorkerTrigger::storage(&assets, vec!["created".to_string()]))
                 .timeout_seconds(60)
                 .memory_mb(512)
                 .build(),

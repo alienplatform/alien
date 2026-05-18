@@ -1,7 +1,7 @@
 use alien_core::permissions::PermissionSetReference;
 use alien_core::{
-    Worker, WorkerCode, ManagementPermissions, PermissionProfile, PermissionsConfig,
-    ResourceLifecycle, Stack, Storage,
+    ManagementPermissions, PermissionProfile, PermissionsConfig, ResourceLifecycle, Stack, Storage,
+    Worker, WorkerCode,
 };
 use indexmap::IndexMap;
 use std::fs;

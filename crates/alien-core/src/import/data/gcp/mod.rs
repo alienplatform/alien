@@ -1,7 +1,6 @@
 pub mod artifact_registry;
 pub mod build;
 pub mod compute_cluster;
-pub mod worker;
 pub mod kv;
 pub mod network;
 pub mod queue;
@@ -10,11 +9,11 @@ pub mod service_account;
 pub mod service_activation;
 pub mod storage;
 pub mod vault;
+pub mod worker;
 
 pub use artifact_registry::*;
 pub use build::*;
 pub use compute_cluster::*;
-pub use worker::*;
 pub use kv::*;
 pub use network::*;
 pub use queue::*;
@@ -23,3 +22,4 @@ pub use service_account::*;
 pub use service_activation::*;
 pub use storage::*;
 pub use vault::*;
+pub use worker::*;

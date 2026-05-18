@@ -19,8 +19,7 @@ use crate::{
     expr,
 };
 use alien_core::{
-    import::EmitContext, AzureServiceBusNamespace, ErrorData, Worker, WorkerTrigger, Queue,
-    Result,
+    import::EmitContext, AzureServiceBusNamespace, ErrorData, Queue, Result, Worker, WorkerTrigger,
 };
 use alien_error::AlienError;
 use hcl::expr::Expression;

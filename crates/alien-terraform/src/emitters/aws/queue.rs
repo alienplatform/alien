@@ -6,7 +6,7 @@ use crate::{
     emitters::aws::helpers::{downcast, required_label, stack_name_template, tags},
     expr,
 };
-use alien_core::{import::EmitContext, Worker, WorkerTrigger, Queue, Result};
+use alien_core::{import::EmitContext, Queue, Result, Worker, WorkerTrigger};
 use hcl::expr::Expression;
 
 #[derive(Debug, Clone, Copy, Default)]

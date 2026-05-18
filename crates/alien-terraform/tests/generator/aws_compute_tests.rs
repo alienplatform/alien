@@ -7,8 +7,8 @@
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
-    ArtifactRegistry, Build, CapacityGroup, ComputeCluster, ErrorData, Worker, WorkerCode,
-    Ingress, Platform, ResourceLifecycle, Stack, StackSettings,
+    ArtifactRegistry, Build, CapacityGroup, ComputeCluster, ErrorData, Ingress, Platform,
+    ResourceLifecycle, Stack, StackSettings, Worker, WorkerCode,
 };
 use alien_terraform::{generate_terraform_module, TerraformOptions, TerraformTarget, TfRegistry};
 

@@ -24,8 +24,8 @@ use crate::{
     registry::TfRegistry,
 };
 use alien_core::{
-    import::EmitContext, AzureContainerAppsEnvironment, ErrorData, Worker, WorkerCode, Ingress,
-    Result, ServiceAccount,
+    import::EmitContext, AzureContainerAppsEnvironment, ErrorData, Ingress, Result, ServiceAccount,
+    Worker, WorkerCode,
 };
 use alien_error::AlienError;
 use hcl::{

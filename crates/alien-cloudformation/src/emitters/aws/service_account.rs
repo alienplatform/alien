@@ -13,7 +13,7 @@ use crate::{
     },
     template::{CfExpression, CfResource},
 };
-use alien_core::{import::EmitContext, Build, ErrorData, Worker, Result, ServiceAccount};
+use alien_core::{import::EmitContext, Build, ErrorData, Result, ServiceAccount, Worker};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{
     generators::AwsCloudFormationPermissionsGenerator, BindingTarget, PermissionContext,

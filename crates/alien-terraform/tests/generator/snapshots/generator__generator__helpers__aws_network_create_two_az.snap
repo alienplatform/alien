@@ -59,8 +59,50 @@ variable "managing_role_arn" {
 
 variable "managing_account_id" {
   type        = string
-  description = "AWS account ID hosting the manager. Referenced by stack-side IAM policies that scope cross-account ECR pulls. Empty disables those grants."
+  description = "Account ID hosting the manager. Referenced by stack-side IAM policies that scope cross-account image pulls. Empty disables those grants."
   default     = ""
+}
+
+variable "network_mode" {
+  type        = string
+  description = "Choose whether this setup creates a new network, uses an existing network, or uses the default network. Values: create-new, use-existing, use-default."
+  default     = "create-new"
+}
+
+variable "vpc_cidr" {
+  type        = string
+  description = "CIDR for a newly-created network. Empty uses 10.42.0.0/16."
+  default     = ""
+}
+
+variable "availability_zones" {
+  type        = number
+  description = "Number of availability zones to use when creating a new network."
+  default     = 2
+}
+
+variable "vpc_id" {
+  type        = string
+  description = "Existing VPC ID. Required when network is use-existing."
+  default     = ""
+}
+
+variable "public_subnet_ids" {
+  type        = list(string)
+  description = "Existing public subnet IDs. Required when network is use-existing."
+  default     = []
+}
+
+variable "private_subnet_ids" {
+  type        = list(string)
+  description = "Existing private subnet IDs. Required when network is use-existing."
+  default     = []
+}
+
+variable "security_group_ids" {
+  type        = list(string)
+  description = "Existing security group IDs. Required when network is use-existing."
+  default     = []
 }
 
 === providers.tf ===
@@ -81,23 +123,23 @@ locals {
     platform        = "aws"
     managingRoleArn = var.managing_role_arn
   }
-  deployment_stack_settings = jsondecode(var.stack_settings_json)
+  deployment_stack_settings = merge(jsondecode(var.stack_settings_json), { network = (var.network_mode == "create-new" ? { type = "create", cidr = var.vpc_cidr == "" ? null : var.vpc_cidr, availabilityZones = var.availability_zones } : var.network_mode == "use-existing" ? { type = "byo-vpc-aws", vpcId = var.vpc_id, publicSubnetIds = var.public_subnet_ids, privateSubnetIds = var.private_subnet_ids, securityGroupIds = var.security_group_ids } : { type = "use-default" }) })
   deployment_resources = [
     {
       id   = "default-network"
       type = "network"
       importData = {
-        vpcId               = aws_vpc.default_network.id
-        cidrBlock           = aws_vpc.default_network.cidr_block
-        internetGatewayId   = aws_internet_gateway.default_network.id
-        natGatewayId        = aws_nat_gateway.default_network.id
-        eipAllocationId     = aws_eip.default_network_nat.id
-        publicSubnetIds     = aws_subnet.default_network_public[*].id
-        privateSubnetIds    = aws_subnet.default_network_private[*].id
-        publicRouteTableId  = aws_route_table.default_network_public.id
-        privateRouteTableId = aws_route_table.default_network_private.id
-        securityGroupId     = aws_security_group.default_network_workload.id
-        availabilityZones   = slice(data.aws_availability_zones.available.names, 0, 2)
+        vpcId               = var.network_mode == "create-new" ? aws_vpc.default_network[0].id : var.network_mode == "use-existing" ? var.vpc_id : null
+        cidrBlock           = var.network_mode == "create-new" ? aws_vpc.default_network[0].cidr_block : null
+        internetGatewayId   = var.network_mode == "create-new" ? aws_internet_gateway.default_network[0].id : null
+        natGatewayId        = var.network_mode == "create-new" ? aws_nat_gateway.default_network[0].id : null
+        eipAllocationId     = var.network_mode == "create-new" ? aws_eip.default_network_nat[0].id : null
+        publicSubnetIds     = var.network_mode == "create-new" ? aws_subnet.default_network_public[*].id : var.network_mode == "use-existing" ? var.public_subnet_ids : []
+        privateSubnetIds    = var.network_mode == "create-new" ? aws_subnet.default_network_private[*].id : var.network_mode == "use-existing" ? var.private_subnet_ids : []
+        publicRouteTableId  = var.network_mode == "create-new" ? aws_route_table.default_network_public[0].id : null
+        privateRouteTableId = var.network_mode == "create-new" ? aws_route_table.default_network_private[0].id : null
+        securityGroupId     = var.network_mode == "create-new" ? aws_security_group.default_network_workload[0].id : var.network_mode == "use-existing" ? try(var.security_group_ids[0], null) : null
+        availabilityZones   = var.network_mode == "use-default" ? [] : slice(data.aws_availability_zones.available.names, 0, 2)
         isByoVpc            = false
       }
     }
@@ -110,7 +152,8 @@ data "aws_availability_zones" "available" {
 }
 
 resource "aws_vpc" "default_network" {
-  cidr_block           = "10.42.0.0/16"
+  count                = var.network_mode == "create-new" ? 1 : 0
+  cidr_block           = var.vpc_cidr == "" ? "10.42.0.0/16" : var.vpc_cidr
   enable_dns_support   = true
   enable_dns_hostnames = true
   tags = {
@@ -122,7 +165,8 @@ resource "aws_vpc" "default_network" {
 }
 
 resource "aws_internet_gateway" "default_network" {
-  vpc_id = aws_vpc.default_network.id
+  count  = var.network_mode == "create-new" ? 1 : 0
+  vpc_id = aws_vpc.default_network[0].id
   tags = {
     "alien.dev/managed-by" = "alien"
     "alien.dev/stack"      = var.stack_name
@@ -132,9 +176,9 @@ resource "aws_internet_gateway" "default_network" {
 }
 
 resource "aws_subnet" "default_network_public" {
-  count                   = 2
-  vpc_id                  = aws_vpc.default_network.id
-  cidr_block              = cidrsubnet(aws_vpc.default_network.cidr_block, 8, count.index)
+  count                   = var.network_mode == "create-new" ? var.availability_zones : 0
+  vpc_id                  = aws_vpc.default_network[0].id
+  cidr_block              = cidrsubnet(aws_vpc.default_network[0].cidr_block, 8, count.index)
   availability_zone       = data.aws_availability_zones.available.names[count.index]
   map_public_ip_on_launch = true
   tags = {
@@ -146,9 +190,9 @@ resource "aws_subnet" "default_network_public" {
 }
 
 resource "aws_subnet" "default_network_private" {
-  count             = 2
-  vpc_id            = aws_vpc.default_network.id
-  cidr_block        = cidrsubnet(aws_vpc.default_network.cidr_block, 8, count.index + 2)
+  count             = var.network_mode == "create-new" ? var.availability_zones : 0
+  vpc_id            = aws_vpc.default_network[0].id
+  cidr_block        = cidrsubnet(aws_vpc.default_network[0].cidr_block, 8, count.index + var.availability_zones)
   availability_zone = data.aws_availability_zones.available.names[count.index]
   tags = {
     "alien.dev/managed-by" = "alien"
@@ -159,6 +203,7 @@ resource "aws_subnet" "default_network_private" {
 }
 
 resource "aws_eip" "default_network_nat" {
+  count  = var.network_mode == "create-new" ? 1 : 0
   domain = "vpc"
   tags = {
     "alien.dev/managed-by" = "alien"
@@ -169,7 +214,8 @@ resource "aws_eip" "default_network_nat" {
 }
 
 resource "aws_nat_gateway" "default_network" {
-  allocation_id = aws_eip.default_network_nat.id
+  count         = var.network_mode == "create-new" ? 1 : 0
+  allocation_id = aws_eip.default_network_nat[0].id
   subnet_id     = aws_subnet.default_network_public[0].id
   tags = {
     "alien.dev/managed-by" = "alien"
@@ -180,11 +226,12 @@ resource "aws_nat_gateway" "default_network" {
 }
 
 resource "aws_route_table" "default_network_public" {
-  vpc_id = aws_vpc.default_network.id
+  count  = var.network_mode == "create-new" ? 1 : 0
+  vpc_id = aws_vpc.default_network[0].id
 
   route {
     cidr_block = "0.0.0.0/0"
-    gateway_id = aws_internet_gateway.default_network.id
+    gateway_id = aws_internet_gateway.default_network[0].id
   }
 
   tags = {
@@ -196,11 +243,12 @@ resource "aws_route_table" "default_network_public" {
 }
 
 resource "aws_route_table" "default_network_private" {
-  vpc_id = aws_vpc.default_network.id
+  count  = var.network_mode == "create-new" ? 1 : 0
+  vpc_id = aws_vpc.default_network[0].id
 
   route {
     cidr_block     = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.default_network.id
+    nat_gateway_id = aws_nat_gateway.default_network[0].id
   }
 
   tags = {
@@ -212,21 +260,22 @@ resource "aws_route_table" "default_network_private" {
 }
 
 resource "aws_route_table_association" "default_network_public" {
-  count          = 2
+  count          = var.network_mode == "create-new" ? var.availability_zones : 0
   subnet_id      = aws_subnet.default_network_public[count.index].id
-  route_table_id = aws_route_table.default_network_public.id
+  route_table_id = aws_route_table.default_network_public[0].id
 }
 
 resource "aws_route_table_association" "default_network_private" {
-  count          = 2
+  count          = var.network_mode == "create-new" ? var.availability_zones : 0
   subnet_id      = aws_subnet.default_network_private[count.index].id
-  route_table_id = aws_route_table.default_network_private.id
+  route_table_id = aws_route_table.default_network_private[0].id
 }
 
 resource "aws_security_group" "default_network_workload" {
+  count       = var.network_mode == "create-new" ? 1 : 0
   name_prefix = "${var.stack_name}-workload-"
   description = "Private workload security group"
-  vpc_id      = aws_vpc.default_network.id
+  vpc_id      = aws_vpc.default_network[0].id
 
   egress {
     from_port = 0
@@ -248,14 +297,17 @@ resource "aws_security_group" "default_network_workload" {
 === import.tf ===
 resource "terraform_data" "deployment_stack_import" {
   input = {
-    platform               = local.deployment_platform
-    deployment_group_token = var.deployment_group_token
-    deployment_name        = var.deployment_name == "" ? var.stack_name : var.deployment_name
-    stack_prefix           = var.stack_name
-    manager_url            = var.manager_url
-    management_config      = local.deployment_management_config
-    stack_settings         = local.deployment_stack_settings
-    resources              = local.deployment_resources
+    platform                  = local.deployment_platform
+    deployment_group_token    = var.deployment_group_token
+    deployment_name           = var.deployment_name == "" ? var.stack_name : var.deployment_name
+    stack_prefix              = var.stack_name
+    setup_target              = ""
+    setup_fingerprint         = ""
+    setup_fingerprint_version = 0
+    manager_url               = var.manager_url
+    management_config         = local.deployment_management_config
+    stack_settings            = local.deployment_stack_settings
+    resources                 = local.deployment_resources
   }
   depends_on = [
     aws_vpc.default_network,
@@ -291,6 +343,21 @@ output "deployment_platform" {
 output "deployment_region" {
   value       = local.deployment_region
   description = "Target cloud region or location."
+}
+
+output "deployment_setup_target" {
+  value       = ""
+  description = "Setup target."
+}
+
+output "deployment_setup_fingerprint" {
+  value       = ""
+  description = "Setup compatibility fingerprint."
+}
+
+output "deployment_setup_fingerprint_version" {
+  value       = 0
+  description = "Setup fingerprint algorithm version."
 }
 
 output "deployment_management_config" {

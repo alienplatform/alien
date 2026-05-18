@@ -3,7 +3,7 @@
 //! Three modes:
 //!
 //! * `UseDefault` — emit nothing (controller falls back to default VPC).
-//! * `ByoVpcAws` — emit nothing (BYO IDs are passed via variables; the
+//! * `ByoVpcAws` — emit nothing (existing network IDs are passed via variables; the
 //!   variables themselves are added to `variables.tf` via the
 //!   generator's per-target variables list).
 //! * `Create` — full topology: VPC, public + private subnets across N
@@ -33,7 +33,7 @@ impl TfEmitter for AwsNetworkEmitter {
             NetworkSettings::ByoVpcAws { .. } => {
                 // Declare the availability-zones data source so the
                 // `availabilityZones` field in import data resolves —
-                // the BYO topology itself is supplied via variables.
+                // the existing topology itself is supplied via variables.
                 let mut fragment = TfFragment::default();
                 fragment.data_blocks.push(crate::block::data_block(
                     "aws_availability_zones",
@@ -106,47 +106,67 @@ impl TfEmitter for AwsNetworkEmitter {
                 ("isByoVpc", Expression::Bool(true)),
             ]),
             NetworkSettings::Create { .. } => expr::object([
-                ("vpcId", expr::traversal(["aws_vpc", label, "id"])),
+                ("vpcId", expr::raw(format!(
+                    "var.network_mode == \"create-new\" ? aws_vpc.{label}[0].id : var.network_mode == \"use-existing\" ? var.vpc_id : null"
+                ))),
                 (
                     "cidrBlock",
-                    expr::traversal(["aws_vpc", label, "cidr_block"]),
+                    expr::raw(format!(
+                        "var.network_mode == \"create-new\" ? aws_vpc.{label}[0].cidr_block : null"
+                    )),
                 ),
                 (
                     "internetGatewayId",
-                    expr::traversal(["aws_internet_gateway", label, "id"]),
+                    expr::raw(format!(
+                        "var.network_mode == \"create-new\" ? aws_internet_gateway.{label}[0].id : null"
+                    )),
                 ),
                 (
                     "natGatewayId",
-                    expr::traversal(["aws_nat_gateway", label, "id"]),
+                    expr::raw(format!(
+                        "var.network_mode == \"create-new\" ? aws_nat_gateway.{label}[0].id : null"
+                    )),
                 ),
                 (
                     "eipAllocationId",
-                    expr::traversal(["aws_eip", &format!("{label}_nat"), "id"]),
+                    expr::raw(format!(
+                        "var.network_mode == \"create-new\" ? aws_eip.{label}_nat[0].id : null"
+                    )),
                 ),
                 (
                     "publicSubnetIds",
-                    expr::raw(format!("aws_subnet.{label}_public[*].id")),
+                    expr::raw(format!(
+                        "var.network_mode == \"create-new\" ? aws_subnet.{label}_public[*].id : var.network_mode == \"use-existing\" ? var.public_subnet_ids : []"
+                    )),
                 ),
                 (
                     "privateSubnetIds",
-                    expr::raw(format!("aws_subnet.{label}_private[*].id")),
+                    expr::raw(format!(
+                        "var.network_mode == \"create-new\" ? aws_subnet.{label}_private[*].id : var.network_mode == \"use-existing\" ? var.private_subnet_ids : []"
+                    )),
                 ),
                 (
                     "publicRouteTableId",
-                    expr::traversal(["aws_route_table", &format!("{label}_public"), "id"]),
+                    expr::raw(format!(
+                        "var.network_mode == \"create-new\" ? aws_route_table.{label}_public[0].id : null"
+                    )),
                 ),
                 (
                     "privateRouteTableId",
-                    expr::traversal(["aws_route_table", &format!("{label}_private"), "id"]),
+                    expr::raw(format!(
+                        "var.network_mode == \"create-new\" ? aws_route_table.{label}_private[0].id : null"
+                    )),
                 ),
                 (
                     "securityGroupId",
-                    expr::traversal(["aws_security_group", &format!("{label}_workload"), "id"]),
+                    expr::raw(format!(
+                        "var.network_mode == \"create-new\" ? aws_security_group.{label}_workload[0].id : var.network_mode == \"use-existing\" ? try(var.security_group_ids[0], null) : null"
+                    )),
                 ),
                 (
                     "availabilityZones",
                     expr::raw(format!(
-                        "slice(data.aws_availability_zones.available.names, 0, {})",
+                        "var.network_mode == \"use-default\" ? [] : slice(data.aws_availability_zones.available.names, 0, {})",
                         cmp_az_count_expr(&network.settings)
                     )),
                 ),
@@ -174,7 +194,7 @@ fn create_topology(
     ctx: &EmitContext<'_>,
     label: &str,
     cidr: Option<String>,
-    az_count: u8,
+    _az_count: u8,
 ) -> TfFragment {
     let mut fragment = TfFragment::default();
     let cidr = cidr.unwrap_or_else(|| "10.42.0.0/16".to_string());
@@ -189,7 +209,14 @@ fn create_topology(
         "aws_vpc",
         label,
         [
-            attr("cidr_block", Expression::String(cidr.clone())),
+            attr(
+                "count",
+                expr::raw("var.network_mode == \"create-new\" ? 1 : 0"),
+            ),
+            attr(
+                "cidr_block",
+                expr::raw(format!("var.vpc_cidr == \"\" ? \"{cidr}\" : var.vpc_cidr")),
+            ),
             attr("enable_dns_support", Expression::Bool(true)),
             attr("enable_dns_hostnames", Expression::Bool(true)),
             attr("tags", tags(ctx, "network")),
@@ -200,7 +227,11 @@ fn create_topology(
         "aws_internet_gateway",
         label,
         [
-            attr("vpc_id", expr::traversal(["aws_vpc", label, "id"])),
+            attr(
+                "count",
+                expr::raw("var.network_mode == \"create-new\" ? 1 : 0"),
+            ),
+            attr("vpc_id", expr::raw(format!("aws_vpc.{label}[0].id"))),
             attr("tags", tags(ctx, "network")),
         ],
     ));
@@ -211,13 +242,15 @@ fn create_topology(
         [
             attr(
                 "count",
-                Expression::Number(hcl::Number::from(i64::from(az_count))),
+                expr::raw(format!(
+                    "var.network_mode == \"create-new\" ? var.availability_zones : 0"
+                )),
             ),
-            attr("vpc_id", expr::traversal(["aws_vpc", label, "id"])),
+            attr("vpc_id", expr::raw(format!("aws_vpc.{label}[0].id"))),
             attr(
                 "cidr_block",
                 expr::raw(format!(
-                    "cidrsubnet(aws_vpc.{label}.cidr_block, 8, count.index)"
+                    "cidrsubnet(aws_vpc.{label}[0].cidr_block, 8, count.index)"
                 )),
             ),
             attr(
@@ -235,13 +268,13 @@ fn create_topology(
         [
             attr(
                 "count",
-                Expression::Number(hcl::Number::from(i64::from(az_count))),
+                expr::raw("var.network_mode == \"create-new\" ? var.availability_zones : 0"),
             ),
-            attr("vpc_id", expr::traversal(["aws_vpc", label, "id"])),
+            attr("vpc_id", expr::raw(format!("aws_vpc.{label}[0].id"))),
             attr(
                 "cidr_block",
                 expr::raw(format!(
-                    "cidrsubnet(aws_vpc.{label}.cidr_block, 8, count.index + {az_count})"
+                    "cidrsubnet(aws_vpc.{label}[0].cidr_block, 8, count.index + var.availability_zones)"
                 )),
             ),
             attr(
@@ -256,6 +289,10 @@ fn create_topology(
         "aws_eip",
         &format!("{label}_nat"),
         [
+            attr(
+                "count",
+                expr::raw("var.network_mode == \"create-new\" ? 1 : 0"),
+            ),
             attr("domain", Expression::String("vpc".to_string())),
             attr("tags", tags(ctx, "network")),
         ],
@@ -266,8 +303,12 @@ fn create_topology(
         label,
         [
             attr(
+                "count",
+                expr::raw("var.network_mode == \"create-new\" ? 1 : 0"),
+            ),
+            attr(
                 "allocation_id",
-                expr::traversal(["aws_eip", &format!("{label}_nat"), "id"]),
+                expr::raw(format!("aws_eip.{label}_nat[0].id")),
             ),
             attr(
                 "subnet_id",
@@ -281,14 +322,18 @@ fn create_topology(
         "aws_route_table",
         &format!("{label}_public"),
         [
-            attr("vpc_id", expr::traversal(["aws_vpc", label, "id"])),
+            attr(
+                "count",
+                expr::raw("var.network_mode == \"create-new\" ? 1 : 0"),
+            ),
+            attr("vpc_id", expr::raw(format!("aws_vpc.{label}[0].id"))),
             nested_block(
                 "route",
                 vec![
                     attr("cidr_block", Expression::String("0.0.0.0/0".to_string())),
                     attr(
                         "gateway_id",
-                        expr::traversal(["aws_internet_gateway", label, "id"]),
+                        expr::raw(format!("aws_internet_gateway.{label}[0].id")),
                     ),
                 ],
             ),
@@ -300,14 +345,18 @@ fn create_topology(
         "aws_route_table",
         &format!("{label}_private"),
         [
-            attr("vpc_id", expr::traversal(["aws_vpc", label, "id"])),
+            attr(
+                "count",
+                expr::raw("var.network_mode == \"create-new\" ? 1 : 0"),
+            ),
+            attr("vpc_id", expr::raw(format!("aws_vpc.{label}[0].id"))),
             nested_block(
                 "route",
                 vec![
                     attr("cidr_block", Expression::String("0.0.0.0/0".to_string())),
                     attr(
                         "nat_gateway_id",
-                        expr::traversal(["aws_nat_gateway", label, "id"]),
+                        expr::raw(format!("aws_nat_gateway.{label}[0].id")),
                     ),
                 ],
             ),
@@ -326,7 +375,7 @@ fn create_topology(
             [
                 attr(
                     "count",
-                    Expression::Number(hcl::Number::from(i64::from(az_count))),
+                    expr::raw("var.network_mode == \"create-new\" ? var.availability_zones : 0"),
                 ),
                 attr(
                     "subnet_id",
@@ -334,7 +383,7 @@ fn create_topology(
                 ),
                 attr(
                     "route_table_id",
-                    expr::traversal(["aws_route_table", &table_label, "id"]),
+                    expr::raw(format!("aws_route_table.{table_label}[0].id")),
                 ),
             ],
         ));
@@ -345,6 +394,10 @@ fn create_topology(
         &format!("{label}_workload"),
         [
             attr(
+                "count",
+                expr::raw("var.network_mode == \"create-new\" ? 1 : 0"),
+            ),
+            attr(
                 "name_prefix",
                 crate::emitters::aws::helpers::stack_name_template("workload-"),
             ),
@@ -352,7 +405,7 @@ fn create_topology(
                 "description",
                 Expression::String("Private workload security group".to_string()),
             ),
-            attr("vpc_id", expr::traversal(["aws_vpc", label, "id"])),
+            attr("vpc_id", expr::raw(format!("aws_vpc.{label}[0].id"))),
             nested_block(
                 "egress",
                 vec![

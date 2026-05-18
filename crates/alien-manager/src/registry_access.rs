@@ -4,7 +4,7 @@
 //! during sync/reconcile. AWS ECR and GCP GAR use IAM-based cross-account
 //! access; Azure ACR uses pull tokens generated via `generate_credentials`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use alien_bindings::{
@@ -16,7 +16,7 @@ use alien_bindings::{
 };
 use alien_core::{
     AwsEnvironmentInfo, DeploymentState, DeploymentStatus, EnvironmentInfo, GcpEnvironmentInfo,
-    Platform, RemoteStackManagementOutputs, RuntimeMetadata, StackState,
+    Platform, RemoteStackManagementOutputs, RuntimeMetadata, Stack, StackState, Worker, WorkerCode,
 };
 use tracing::{debug, info, warn};
 
@@ -190,30 +190,109 @@ pub async fn reconcile_registry_access(
         }
     };
 
-    // The shared deployment-image repository is named after
-    // `upstream_repository_prefix()` — the same identifier the proxy routes
-    // pushes to and `alien release` writes images to. Empty means the
-    // platform has no such repo (Azure ACR pushes to the registry root;
-    // Local doesn't support cross-account).
-    let repo_id = artifact_registry.upstream_repository_prefix();
-    if repo_id.is_empty() {
+    let repo_ids = repository_ids_for_access(artifact_registry.as_ref(), state);
+    if repo_ids.is_empty() {
         return;
     }
 
     // AWS/GCP: grant IAM-based cross-account access.
-    let granted = ensure_registry_access(
-        artifact_registry.as_ref(),
-        &repo_id,
-        environment_info,
-        state.stack_state.as_ref(),
-    )
-    .await;
+    let mut granted = true;
+    for repo_id in repo_ids {
+        granted &= ensure_registry_access(
+            artifact_registry.as_ref(),
+            &repo_id,
+            environment_info,
+            state.stack_state.as_ref(),
+        )
+        .await;
+    }
 
     if granted {
         let rm = state
             .runtime_metadata
             .get_or_insert_with(RuntimeMetadata::default);
         rm.registry_access_granted = true;
+    }
+}
+
+fn repository_ids_for_access(
+    artifact_registry: &dyn ArtifactRegistry,
+    state: &DeploymentState,
+) -> Vec<String> {
+    let prefix = artifact_registry.upstream_repository_prefix();
+    if prefix.is_empty() {
+        return Vec::new();
+    }
+
+    if matches!(
+        state.environment_info.as_ref().map(EnvironmentInfo::platform),
+        Some(Platform::Aws)
+    ) {
+        let mut repo_ids = HashSet::new();
+        collect_worker_image_repositories(state, &prefix, &mut repo_ids);
+        if repo_ids.is_empty() {
+            repo_ids.insert(prefix);
+        }
+        let mut repo_ids: Vec<_> = repo_ids.into_iter().collect();
+        repo_ids.sort();
+        return repo_ids;
+    }
+
+    let repo_ids = HashSet::from([prefix]);
+    let mut repo_ids: Vec<_> = repo_ids.into_iter().collect();
+    repo_ids.sort();
+    repo_ids
+}
+
+fn collect_worker_image_repositories(
+    state: &DeploymentState,
+    prefix: &str,
+    repo_ids: &mut HashSet<String>,
+) {
+    if let Some(release) = &state.current_release {
+        collect_worker_image_repositories_from_stack(&release.stack, prefix, repo_ids);
+    }
+    if let Some(release) = &state.target_release {
+        collect_worker_image_repositories_from_stack(&release.stack, prefix, repo_ids);
+    }
+    if let Some(runtime_metadata) = &state.runtime_metadata {
+        if let Some(stack) = &runtime_metadata.prepared_stack {
+            collect_worker_image_repositories_from_stack(stack, prefix, repo_ids);
+        }
+    }
+}
+
+fn collect_worker_image_repositories_from_stack(
+    stack: &Stack,
+    prefix: &str,
+    repo_ids: &mut HashSet<String>,
+) {
+    for (_id, entry) in stack.resources() {
+        let Some(worker) = entry.config.downcast_ref::<Worker>() else {
+            continue;
+        };
+        let WorkerCode::Image { image } = &worker.code else {
+            continue;
+        };
+        if let Some(repo_id) = ecr_repository_from_image(image, prefix) {
+            repo_ids.insert(repo_id);
+        }
+    }
+}
+
+fn ecr_repository_from_image(image: &str, prefix: &str) -> Option<String> {
+    let without_scheme = alien_core::image_rewrite::strip_url_scheme(image);
+    let (_host, path) = without_scheme.split_once('/')?;
+    let path_without_digest = path.split_once('@').map_or(path, |(path, _)| path);
+    let repository = match path_without_digest.rsplit_once(':') {
+        Some((repo, tag)) if !repo.contains(':') && !tag.contains('/') => repo,
+        _ => path_without_digest,
+    };
+
+    if repository == prefix || repository.starts_with(&format!("{prefix}-")) {
+        Some(repository.to_string())
+    } else {
+        None
     }
 }
 

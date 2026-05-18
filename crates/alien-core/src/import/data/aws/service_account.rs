@@ -11,5 +11,6 @@ pub struct AwsServiceAccountImportData {
     /// IAM role ARN.
     pub role_arn: String,
     /// Whether stack-level permissions were attached by the generated stack.
+    #[serde(deserialize_with = "crate::import::data::deserialize_bool_from_bool_or_string")]
     pub stack_permissions_applied: bool,
 }

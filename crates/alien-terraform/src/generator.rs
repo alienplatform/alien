@@ -94,7 +94,7 @@ impl TerraformRegistration {
     }
 }
 
-/// Per-network-resource extra variables (e.g. BYO VPC ids for AWS).
+/// Per-network-resource extra variables (e.g. existing VPC ids for AWS).
 /// Computed once and threaded into `variables.tf`.
 struct NetworkVariables {
     /// `(name, description, default)` entries for `variables.tf`.
@@ -122,22 +122,22 @@ fn network_extra_variables(stack: &Stack, labels: &IndexMap<String, String>) -> 
         {
             extra_string_vars.push((
                 format!("{label}_vpc_id"),
-                "BYO VPC id supplied by the customer.".to_string(),
+                "Existing VPC ID supplied by the customer.".to_string(),
                 Some(Expression::String(vpc_id.clone())),
             ));
             extra_list_vars.push((
                 format!("{label}_public_subnet_ids"),
-                "BYO public subnet ids supplied by the customer.".to_string(),
+                "Existing public subnet IDs supplied by the customer.".to_string(),
                 Some(public_subnet_ids.clone()),
             ));
             extra_list_vars.push((
                 format!("{label}_private_subnet_ids"),
-                "BYO private subnet ids supplied by the customer.".to_string(),
+                "Existing private subnet IDs supplied by the customer.".to_string(),
                 Some(private_subnet_ids.clone()),
             ));
             extra_list_vars.push((
                 format!("{label}_security_group_ids"),
-                "BYO security group ids supplied by the customer.".to_string(),
+                "Existing security group IDs supplied by the customer.".to_string(),
                 Some(security_group_ids.clone()),
             ));
         }
@@ -628,9 +628,51 @@ fn variables_body(
         )));
         blocks.push(nested(variable_block(
             "managing_account_id",
-            "AWS account ID hosting the manager. Referenced by stack-side IAM policies that scope cross-account ECR pulls. Empty disables those grants.",
+            "Account ID hosting the manager. Referenced by stack-side IAM policies that scope cross-account image pulls. Empty disables those grants.",
             Some(Expression::String(String::new())),
             false,
+        )));
+    }
+    if matches!(target.platform(), alien_core::Platform::Aws)
+        && has_dynamic_aws_network_settings(stack_settings.network.as_ref())
+    {
+        blocks.push(nested(variable_block(
+            "network_mode",
+            "Choose whether this setup creates a new network, uses an existing network, or uses the default network. Values: create-new, use-existing, use-default.",
+            Some(Expression::String("create-new".to_string())),
+            false,
+        )));
+        blocks.push(nested(variable_block(
+            "vpc_cidr",
+            "CIDR for a newly-created network. Empty uses 10.42.0.0/16.",
+            Some(Expression::String(String::new())),
+            false,
+        )));
+        blocks.push(nested(number_variable_block(
+            "availability_zones",
+            "Number of availability zones to use when creating a new network.",
+            Some(2),
+        )));
+        blocks.push(nested(variable_block(
+            "vpc_id",
+            "Existing VPC ID. Required when network is use-existing.",
+            Some(Expression::String(String::new())),
+            false,
+        )));
+        blocks.push(nested(list_variable_block(
+            "public_subnet_ids",
+            "Existing public subnet IDs. Required when network is use-existing.",
+            Some(vec![]),
+        )));
+        blocks.push(nested(list_variable_block(
+            "private_subnet_ids",
+            "Existing private subnet IDs. Required when network is use-existing.",
+            Some(vec![]),
+        )));
+        blocks.push(nested(list_variable_block(
+            "security_group_ids",
+            "Existing security group IDs. Required when network is use-existing.",
+            Some(vec![]),
         )));
     }
     if matches!(target.platform(), alien_core::Platform::Gcp) {
@@ -771,6 +813,24 @@ fn bool_variable_block(name: &str, description: &str, default: Option<bool>) -> 
     }
 }
 
+fn number_variable_block(name: &str, description: &str, default: Option<i64>) -> Block {
+    let mut body: Vec<Structure> = vec![
+        attr("type", expr::raw("number")),
+        attr("description", Expression::String(description.to_string())),
+    ];
+    if let Some(default) = default {
+        body.push(attr(
+            "default",
+            Expression::Number(hcl::Number::from(default)),
+        ));
+    }
+    Block {
+        identifier: Identifier::sanitized("variable"),
+        labels: vec![BlockLabel::String(name.to_string())],
+        body: Body::from(body),
+    }
+}
+
 fn variable_block(
     name: &str,
     description: &str,
@@ -850,7 +910,7 @@ fn providers_body(target: TerraformTarget) -> Body {
 
 fn locals_body(
     target: TerraformTarget,
-    _stack_settings: &StackSettings,
+    stack_settings: &StackSettings,
     imported_resources: Vec<Expression>,
     extra: &IndexMap<String, Expression>,
 ) -> Result<Body> {
@@ -871,7 +931,7 @@ fn locals_body(
     ));
     body.push(attr(
         "deployment_stack_settings",
-        expr::raw("jsondecode(var.stack_settings_json)"),
+        stack_settings_expression(target, stack_settings),
     ));
     body.push(attr(
         "deployment_resources",
@@ -952,6 +1012,48 @@ fn management_config_expression(target: TerraformTarget) -> Expression {
     expr::object(object.into_iter().map(|(k, v)| (k, v)))
 }
 
+fn stack_settings_expression(
+    target: TerraformTarget,
+    stack_settings: &StackSettings,
+) -> Expression {
+    if !matches!(target.platform(), alien_core::Platform::Aws)
+        || !has_dynamic_aws_network_settings(stack_settings.network.as_ref())
+    {
+        return expr::raw("jsondecode(var.stack_settings_json)");
+    }
+
+    expr::raw(
+        r#"merge(jsondecode(var.stack_settings_json), {
+  network = (
+    var.network_mode == "create-new" ? {
+      type              = "create"
+      cidr              = var.vpc_cidr == "" ? null : var.vpc_cidr
+      availabilityZones = var.availability_zones
+    } : var.network_mode == "use-existing" ? {
+      type             = "byo-vpc-aws"
+      vpcId            = var.vpc_id
+      publicSubnetIds  = var.public_subnet_ids
+      privateSubnetIds = var.private_subnet_ids
+      securityGroupIds = var.security_group_ids
+    } : {
+      type = "use-default"
+    }
+  )
+})"#,
+    )
+}
+
+fn has_dynamic_aws_network_settings(network: Option<&NetworkSettings>) -> bool {
+    matches!(
+        network,
+        Some(
+            NetworkSettings::Create { .. }
+                | NetworkSettings::UseDefault
+                | NetworkSettings::ByoVpcAws { .. }
+        )
+    )
+}
+
 fn import_body(registration: Option<&TerraformRegistration>, depends_on: &[Expression]) -> Body {
     let depends_on_attr = (!depends_on.is_empty()).then(|| {
         attr(
@@ -1022,11 +1124,19 @@ fn import_body(registration: Option<&TerraformRegistration>, depends_on: &[Expre
             ("stack_prefix", expr::raw("var.stack_name")),
             (
                 "setup_target",
-                Expression::String(registration.map(|r| r.setup_target.clone()).unwrap_or_default()),
+                Expression::String(
+                    registration
+                        .map(|r| r.setup_target.clone())
+                        .unwrap_or_default(),
+                ),
             ),
             (
                 "setup_fingerprint",
-                Expression::String(registration.map(|r| r.setup_fingerprint.clone()).unwrap_or_default()),
+                Expression::String(
+                    registration
+                        .map(|r| r.setup_fingerprint.clone())
+                        .unwrap_or_default(),
+                ),
             ),
             (
                 "setup_fingerprint_version",

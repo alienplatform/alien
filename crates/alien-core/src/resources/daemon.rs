@@ -15,7 +15,10 @@ pub enum DaemonCode {
     #[serde(rename_all = "camelCase")]
     Image { image: String },
     #[serde(rename_all = "camelCase")]
-    Source { src: String, toolchain: ToolchainConfig },
+    Source {
+        src: String,
+        toolchain: ToolchainConfig,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Builder)]

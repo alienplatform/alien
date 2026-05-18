@@ -18,5 +18,6 @@ pub struct GcpRemoteStackManagementImportData {
     pub service_account_unique_id: String,
     /// Whether the management role binding was attached by the
     /// generated stack.
+    #[serde(deserialize_with = "crate::import::data::deserialize_bool_from_bool_or_string")]
     pub management_permissions_applied: bool,
 }

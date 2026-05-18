@@ -59,19 +59,61 @@ variable "managing_role_arn" {
 
 variable "managing_account_id" {
   type        = string
-  description = "AWS account ID hosting the manager. Referenced by stack-side IAM policies that scope cross-account ECR pulls. Empty disables those grants."
+  description = "Account ID hosting the manager. Referenced by stack-side IAM policies that scope cross-account image pulls. Empty disables those grants."
   default     = ""
+}
+
+variable "network_mode" {
+  type        = string
+  description = "Choose whether this setup creates a new network, uses an existing network, or uses the default network. Values: create-new, use-existing, use-default."
+  default     = "create-new"
+}
+
+variable "vpc_cidr" {
+  type        = string
+  description = "CIDR for a newly-created network. Empty uses 10.42.0.0/16."
+  default     = ""
+}
+
+variable "availability_zones" {
+  type        = number
+  description = "Number of availability zones to use when creating a new network."
+  default     = 2
+}
+
+variable "vpc_id" {
+  type        = string
+  description = "Existing VPC ID. Required when network is use-existing."
+  default     = ""
+}
+
+variable "public_subnet_ids" {
+  type        = list(string)
+  description = "Existing public subnet IDs. Required when network is use-existing."
+  default     = []
+}
+
+variable "private_subnet_ids" {
+  type        = list(string)
+  description = "Existing private subnet IDs. Required when network is use-existing."
+  default     = []
+}
+
+variable "security_group_ids" {
+  type        = list(string)
+  description = "Existing security group IDs. Required when network is use-existing."
+  default     = []
 }
 
 variable "default_network_vpc_id" {
   type        = string
-  description = "BYO VPC id supplied by the customer."
+  description = "Existing VPC ID supplied by the customer."
   default     = "vpc-0123456789abcdef0"
 }
 
 variable "default_network_public_subnet_ids" {
   type        = list(string)
-  description = "BYO public subnet ids supplied by the customer."
+  description = "Existing public subnet IDs supplied by the customer."
   default = [
     "subnet-public-a"
   ]
@@ -79,7 +121,7 @@ variable "default_network_public_subnet_ids" {
 
 variable "default_network_private_subnet_ids" {
   type        = list(string)
-  description = "BYO private subnet ids supplied by the customer."
+  description = "Existing private subnet IDs supplied by the customer."
   default = [
     "subnet-private-a"
   ]
@@ -87,7 +129,7 @@ variable "default_network_private_subnet_ids" {
 
 variable "default_network_security_group_ids" {
   type        = list(string)
-  description = "BYO security group ids supplied by the customer."
+  description = "Existing security group IDs supplied by the customer."
   default = [
     "sg-0123456789abcdef0"
   ]
@@ -111,7 +153,7 @@ locals {
     platform        = "aws"
     managingRoleArn = var.managing_role_arn
   }
-  deployment_stack_settings = jsondecode(var.stack_settings_json)
+  deployment_stack_settings = merge(jsondecode(var.stack_settings_json), { network = (var.network_mode == "create-new" ? { type = "create", cidr = var.vpc_cidr == "" ? null : var.vpc_cidr, availabilityZones = var.availability_zones } : var.network_mode == "use-existing" ? { type = "byo-vpc-aws", vpcId = var.vpc_id, publicSubnetIds = var.public_subnet_ids, privateSubnetIds = var.private_subnet_ids, securityGroupIds = var.security_group_ids } : { type = "use-default" }) })
   deployment_resources = [
     {
       id   = "default-network"
@@ -142,14 +184,17 @@ data "aws_availability_zones" "available" {
 === import.tf ===
 resource "terraform_data" "deployment_stack_import" {
   input = {
-    platform               = local.deployment_platform
-    deployment_group_token = var.deployment_group_token
-    deployment_name        = var.deployment_name == "" ? var.stack_name : var.deployment_name
-    stack_prefix           = var.stack_name
-    manager_url            = var.manager_url
-    management_config      = local.deployment_management_config
-    stack_settings         = local.deployment_stack_settings
-    resources              = local.deployment_resources
+    platform                  = local.deployment_platform
+    deployment_group_token    = var.deployment_group_token
+    deployment_name           = var.deployment_name == "" ? var.stack_name : var.deployment_name
+    stack_prefix              = var.stack_name
+    setup_target              = ""
+    setup_fingerprint         = ""
+    setup_fingerprint_version = 0
+    manager_url               = var.manager_url
+    management_config         = local.deployment_management_config
+    stack_settings            = local.deployment_stack_settings
+    resources                 = local.deployment_resources
   }
 }
 
@@ -172,6 +217,21 @@ output "deployment_platform" {
 output "deployment_region" {
   value       = local.deployment_region
   description = "Target cloud region or location."
+}
+
+output "deployment_setup_target" {
+  value       = ""
+  description = "Setup target."
+}
+
+output "deployment_setup_fingerprint" {
+  value       = ""
+  description = "Setup compatibility fingerprint."
+}
+
+output "deployment_setup_fingerprint_version" {
+  value       = 0
+  description = "Setup fingerprint algorithm version."
 }
 
 output "deployment_management_config" {

@@ -16,16 +16,16 @@
 use crate::{
     block::{attr, block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
-    emitters::worker_environment::{worker_environment, GcpWorkerEnvironmentRenderer},
     emitters::gcp::helpers::{
         downcast, label_for_ref, labels, required_label, service_account_email,
     },
+    emitters::worker_environment::{worker_environment, GcpWorkerEnvironmentRenderer},
     expr,
     registry::TfRegistry,
 };
 use alien_core::{
-    crontab_to_eventbridge::crontab_to_eventbridge, import::EmitContext, ErrorData, Worker,
-    WorkerCode, WorkerTrigger, Ingress, Result,
+    crontab_to_eventbridge::crontab_to_eventbridge, import::EmitContext, ErrorData, Ingress,
+    Result, Worker, WorkerCode, WorkerTrigger,
 };
 use alien_error::AlienError;
 use hcl::expr::Expression;

@@ -32,8 +32,7 @@ impl KubernetesWorker {
             .into_value(&binding_name, "service_name")
             .context(ErrorData::BindingConfigInvalid {
                 binding_name: binding_name.clone(),
-                reason: "Failed to extract service_name from Kubernetes worker binding"
-                    .to_string(),
+                reason: "Failed to extract service_name from Kubernetes worker binding".to_string(),
             })?;
 
         let service_port = binding
@@ -41,8 +40,7 @@ impl KubernetesWorker {
             .into_value(&binding_name, "service_port")
             .context(ErrorData::BindingConfigInvalid {
                 binding_name: binding_name.clone(),
-                reason: "Failed to extract service_port from Kubernetes worker binding"
-                    .to_string(),
+                reason: "Failed to extract service_port from Kubernetes worker binding".to_string(),
             })?;
 
         let public_url = binding

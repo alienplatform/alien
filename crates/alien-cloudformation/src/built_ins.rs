@@ -5,15 +5,15 @@
 
 use crate::{
     emitters::aws::{
-        AwsArtifactRegistryEmitter, AwsBuildEmitter, AwsWorkerEmitter, AwsKvEmitter,
-        AwsNetworkEmitter, AwsQueueEmitter, AwsRemoteStackManagementEmitter,
-        AwsServiceAccountEmitter, AwsStorageEmitter, AwsVaultEmitter,
+        AwsArtifactRegistryEmitter, AwsBuildEmitter, AwsKvEmitter, AwsNetworkEmitter,
+        AwsQueueEmitter, AwsRemoteStackManagementEmitter, AwsServiceAccountEmitter,
+        AwsStorageEmitter, AwsVaultEmitter, AwsWorkerEmitter,
     },
     registry::CfRegistry,
 };
 use alien_core::{
-    ArtifactRegistry, Build, Worker, Kv, Network, Platform, Queue, RemoteStackManagement,
-    ResourceType, ServiceAccount, Storage, Vault,
+    ArtifactRegistry, Build, Kv, Network, Platform, Queue, RemoteStackManagement, ResourceType,
+    ServiceAccount, Storage, Vault, Worker,
 };
 
 pub(crate) fn register_aws(registry: &mut CfRegistry) {
