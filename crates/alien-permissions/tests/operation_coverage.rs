@@ -14,10 +14,13 @@ fn critical_e2e_provider_operations_are_declared() {
         OperationCoverage {
             permission_set_id: "worker/provision",
             aws_actions: &[
-                "lambda:CreateWorker",
+                "lambda:CreateFunction",
+                "acm:ImportCertificate",
+                "acm:AddTagsToCertificate",
                 "iam:PassRole",
                 "iam:PutRolePolicy",
                 "apigateway:POST",
+                "apigateway:PUT",
                 "apigateway:TagResource",
                 "events:PutRule",
                 "events:TagResource",
@@ -42,8 +45,8 @@ fn critical_e2e_provider_operations_are_declared() {
         OperationCoverage {
             permission_set_id: "worker/heartbeat",
             aws_actions: &[
-                "lambda:GetWorker",
-                "lambda:GetWorkerConfiguration",
+                "lambda:GetFunction",
+                "lambda:GetFunctionConfiguration",
                 "lambda:ListTags",
                 "ecr:GetAuthorizationToken",
             ],
@@ -82,6 +85,10 @@ fn critical_e2e_provider_operations_are_declared() {
                 "ecr:CreateRepository",
                 "ecr:GetRepositoryPolicy",
                 "ecr:SetRepositoryPolicy",
+                "iam:CreateRole",
+                "iam:PutRolePolicy",
+                "iam:ListAttachedRolePolicies",
+                "iam:DeleteRole",
             ],
             gcp_permissions: &[
                 "artifactregistry.repositories.create",
@@ -104,7 +111,7 @@ fn critical_e2e_provider_operations_are_declared() {
             ],
             azure_actions: &[],
             azure_data_actions: &[
-                "Microsoft.KeyVault/vaults/secrets/getSecret/action",
+                "Microsoft.KeyVault/vaults/secrets/readMetadata/action",
                 "Microsoft.KeyVault/vaults/secrets/setSecret/action",
                 "Microsoft.KeyVault/vaults/secrets/delete",
             ],

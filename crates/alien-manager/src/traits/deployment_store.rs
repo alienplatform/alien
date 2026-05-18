@@ -3,8 +3,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use alien_core::{
-    import::ImportSourceKind, DeleteScope, DeploymentState, EnvironmentInfo, EnvironmentVariable,
-    ManagementConfig, Platform, RuntimeMetadata, StackSettings, StackState,
+    import::ImportSourceKind, DeleteScope, DeploymentConfig, DeploymentState, EnvironmentInfo,
+    EnvironmentVariable, ManagementConfig, Platform, RuntimeMetadata, StackSettings, StackState,
 };
 use alien_error::AlienError;
 
@@ -43,6 +43,14 @@ pub struct DeploymentRecord {
     /// In standalone/E2E mode this is None — the credential resolver derives it from bindings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub management_config: Option<ManagementConfig>,
+    /// Full config supplied by an external control plane.
+    ///
+    /// Platform mode builds deployment config from database-backed domain,
+    /// monitoring, Horizon, and token state. The manager must preserve that
+    /// config instead of reconstructing a standalone config from the flattened
+    /// record fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deployment_config: Option<DeploymentConfig>,
     /// Raw deployment token for proxy pull auth.
     /// Set during deployment creation. Used by the deployment loop to
     /// configure registry credentials (Container App secrets, K8s imagePullSecrets).
@@ -79,6 +87,10 @@ impl std::fmt::Debug for DeploymentRecord {
                 &self.user_environment_variables,
             )
             .field("management_config", &self.management_config)
+            .field(
+                "deployment_config",
+                &self.deployment_config.as_ref().map(|_| "[PRESENT]"),
+            )
             .field(
                 "deployment_token",
                 &self.deployment_token.as_ref().map(|_| "[REDACTED]"),

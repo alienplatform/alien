@@ -33,6 +33,31 @@
             "resources": ["arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/${resourceName}-*"]
           }
         }
+      },
+      {
+        "grant": {
+          "actions": [
+            "iam:CreateRole",
+            "iam:GetRole",
+            "iam:TagRole",
+            "iam:UpdateAssumeRolePolicy",
+            "iam:PutRolePolicy",
+            "iam:GetRolePolicy",
+            "iam:ListRolePolicies",
+            "iam:DeleteRolePolicy",
+            "iam:ListAttachedRolePolicies",
+            "iam:DetachRolePolicy",
+            "iam:DeleteRole"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${resourceName}-*"]
+          }
+        }
       }
     ],
     "gcp": [

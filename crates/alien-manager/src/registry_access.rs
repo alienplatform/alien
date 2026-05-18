@@ -225,7 +225,10 @@ fn repository_ids_for_access(
     }
 
     if matches!(
-        state.environment_info.as_ref().map(EnvironmentInfo::platform),
+        state
+            .environment_info
+            .as_ref()
+            .map(EnvironmentInfo::platform),
         Some(Platform::Aws)
     ) {
         let mut repo_ids = HashSet::new();

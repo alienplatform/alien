@@ -106,7 +106,7 @@ pub fn generate_aws_initial_setup_policy(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::{Worker, WorkerCode, ResourceLifecycle, Storage};
+    use alien_core::{ResourceLifecycle, Storage, Worker, WorkerCode};
 
     fn test_function(name: &str) -> Worker {
         Worker::new(name.to_string())

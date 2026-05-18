@@ -25,7 +25,7 @@
       },
       {
         "grant": {
-          "actions": ["acm:ImportCertificate"]
+          "actions": ["acm:ImportCertificate", "acm:AddTagsToCertificate"]
         },
         "binding": {
           "stack": {
@@ -51,7 +51,7 @@
       },
       {
         "grant": {
-          "actions": ["acm:DeleteCertificate", "acm:DescribeCertificate"]
+          "actions": ["acm:AddTagsToCertificate", "acm:DeleteCertificate", "acm:DescribeCertificate"]
         },
         "binding": {
           "stack": {

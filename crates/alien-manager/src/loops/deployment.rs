@@ -8,10 +8,12 @@
 //! 5. Releases the lock (via `DeploymentStore::release`)
 
 use std::collections::HashMap;
+use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use futures::FutureExt;
 use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
 
@@ -37,6 +39,16 @@ use crate::transports::ManagerTransport;
 const MAX_STEPS_PER_TICK: usize = 100;
 /// Suggested delay threshold (ms) — if step suggests waiting longer, yield.
 const SUGGESTED_DELAY_THRESHOLD_MS: u64 = 500;
+
+fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> &str {
+    if let Some(message) = payload.downcast_ref::<&'static str>() {
+        message
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.as_str()
+    } else {
+        "<non-string panic payload>"
+    }
+}
 
 fn active_work_statuses() -> Vec<String> {
     vec![
@@ -141,7 +153,12 @@ impl DeploymentLoop {
         );
 
         loop {
-            self.tick().await;
+            if let Err(payload) = AssertUnwindSafe(self.tick()).catch_unwind().await {
+                error!(
+                    panic = panic_payload_message(payload.as_ref()),
+                    "Deployment loop tick panicked"
+                );
+            }
             tokio::time::sleep(Duration::from_secs(self.config.deployment_interval_secs)).await;
         }
     }
@@ -359,35 +376,42 @@ impl DeploymentLoop {
             }
         };
 
-        // Deployment token for registry pull auth.
-        // Source of truth: DeploymentRecord.deployment_token field.
-        // - Standalone: set during deployment creation (POST /deployments)
-        // - Platform: extracted from sync/acquire response
-        // - Agent: set from Authorization header in sync handler
-        let deployment_token = deployment.deployment_token.clone();
+        let native_image_host = crate::registry_access::derive_native_image_host(
+            &self.server_bindings.bindings_provider,
+            &self.server_bindings.target_bindings_providers,
+            &deployment.platform,
+        )
+        .await;
 
-        let config = DeploymentConfig {
-            stack_settings: deployment.stack_settings.clone(),
-            management_config,
-            environment_variables,
-            allow_frozen_changes: false,
-            compute_backend: None,
-            external_bindings: deployment
-                .stack_settings
-                .external_bindings
-                .clone()
-                .unwrap_or_default(),
-            public_urls: None,
-            domain_metadata: None,
-            monitoring: None,
-            manager_url: Some(self.config.base_url()),
-            deployment_token,
-            native_image_host: crate::registry_access::derive_native_image_host(
-                &self.server_bindings.bindings_provider,
-                &self.server_bindings.target_bindings_providers,
-                &deployment.platform,
-            )
-            .await,
+        let config = if let Some(mut config) = deployment.deployment_config.clone() {
+            if config.management_config.is_none() {
+                config.management_config = management_config;
+            }
+            if config.deployment_token.is_none() {
+                config.deployment_token = deployment.deployment_token.clone();
+            }
+            config.manager_url = Some(self.config.base_url());
+            config.native_image_host = native_image_host;
+            config
+        } else {
+            DeploymentConfig {
+                stack_settings: deployment.stack_settings.clone(),
+                management_config,
+                environment_variables,
+                allow_frozen_changes: false,
+                compute_backend: None,
+                external_bindings: deployment
+                    .stack_settings
+                    .external_bindings
+                    .clone()
+                    .unwrap_or_default(),
+                public_urls: None,
+                domain_metadata: None,
+                monitoring: None,
+                manager_url: Some(self.config.base_url()),
+                deployment_token: deployment.deployment_token.clone(),
+                native_image_host,
+            }
         };
 
         // 6. Build service provider.

@@ -31,6 +31,7 @@ export type { AzureQueueImportData } from "./azure-queue-import-data-schema.js";
 export type { AzureRemoteStackManagementImportData } from "./azure-remote-stack-management-import-data-schema.js";
 export type { AzureResourceGroupImportData } from "./azure-resource-group-import-data-schema.js";
 export type { AzureServiceAccountImportData } from "./azure-service-account-import-data-schema.js";
+export type { AzureServiceActivationImportData } from "./azure-service-activation-import-data-schema.js";
 export type { AzureServiceBusNamespaceImportData } from "./azure-service-bus-namespace-import-data-schema.js";
 export type { AzureStorageAccountImportData } from "./azure-storage-account-import-data-schema.js";
 export type { AzureStorageImportData } from "./azure-storage-import-data-schema.js";
@@ -86,6 +87,7 @@ export type { GcpPlatformPermission } from "./gcp-platform-permission-schema.js"
 export type { GcpQueueImportData } from "./gcp-queue-import-data-schema.js";
 export type { GcpRemoteStackManagementImportData } from "./gcp-remote-stack-management-import-data-schema.js";
 export type { GcpServiceAccountImportData } from "./gcp-service-account-import-data-schema.js";
+export type { GcpServiceActivationImportData } from "./gcp-service-activation-import-data-schema.js";
 export type { GcpStorageImportData } from "./gcp-storage-import-data-schema.js";
 export type { GcpVaultImportData } from "./gcp-vault-import-data-schema.js";
 export type { GcpWorkerImportData } from "./gcp-worker-import-data-schema.js";
@@ -197,6 +199,7 @@ export { AzureQueueImportDataSchema } from "./azure-queue-import-data-schema.js"
 export { AzureRemoteStackManagementImportDataSchema } from "./azure-remote-stack-management-import-data-schema.js";
 export { AzureResourceGroupImportDataSchema } from "./azure-resource-group-import-data-schema.js";
 export { AzureServiceAccountImportDataSchema } from "./azure-service-account-import-data-schema.js";
+export { AzureServiceActivationImportDataSchema } from "./azure-service-activation-import-data-schema.js";
 export { AzureServiceBusNamespaceImportDataSchema } from "./azure-service-bus-namespace-import-data-schema.js";
 export { AzureStorageAccountImportDataSchema } from "./azure-storage-account-import-data-schema.js";
 export { AzureStorageImportDataSchema } from "./azure-storage-import-data-schema.js";
@@ -252,6 +255,7 @@ export { GcpPlatformPermissionSchema } from "./gcp-platform-permission-schema.js
 export { GcpQueueImportDataSchema } from "./gcp-queue-import-data-schema.js";
 export { GcpRemoteStackManagementImportDataSchema } from "./gcp-remote-stack-management-import-data-schema.js";
 export { GcpServiceAccountImportDataSchema } from "./gcp-service-account-import-data-schema.js";
+export { GcpServiceActivationImportDataSchema } from "./gcp-service-activation-import-data-schema.js";
 export { GcpStorageImportDataSchema } from "./gcp-storage-import-data-schema.js";
 export { GcpVaultImportDataSchema } from "./gcp-vault-import-data-schema.js";
 export { GcpWorkerImportDataSchema } from "./gcp-worker-import-data-schema.js";

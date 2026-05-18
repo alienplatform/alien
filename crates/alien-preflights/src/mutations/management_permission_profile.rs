@@ -197,7 +197,7 @@ mod tests {
     use super::*;
     use alien_core::permissions::{ManagementPermissions, PermissionsConfig};
     use alien_core::{
-        CapacityGroup, ComputeCluster, Container, ContainerCode, DeploymentModel,
+        ArtifactRegistry, CapacityGroup, ComputeCluster, Container, ContainerCode, DeploymentModel,
         EnvironmentVariablesSnapshot, ExternalBindings, HeartbeatsMode, ResourceEntry,
         ResourceLifecycle, ResourceSpec, StackSettings, StackState, Storage, TelemetryMode, Worker,
         WorkerCode,
@@ -570,6 +570,59 @@ mod tests {
                 assert!(!permission_names.contains(&"container/management".to_string()));
                 assert!(permission_names.contains(&"compute-cluster/management".to_string()));
                 assert!(!permission_names.contains(&"compute-cluster/provision".to_string()));
+            }
+            _ => panic!("Expected Extend management permissions"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_frozen_artifact_registry_gets_management_permissions() {
+        let registry = ArtifactRegistry::new("registry".to_string()).build();
+
+        let mut resources = IndexMap::new();
+        resources.insert(
+            "registry".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(registry),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                remote_access: false,
+            },
+        );
+
+        let stack = Stack {
+            id: "test-stack".to_string(),
+            resources,
+            permissions: PermissionsConfig {
+                profiles: IndexMap::new(),
+                management: ManagementPermissions::Auto,
+            },
+            supported_platforms: None,
+        };
+
+        let stack_state = StackState::new(Platform::Aws);
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+
+        let mutation = ManagementPermissionProfileMutation;
+        let result_stack = mutation.mutate(stack, &stack_state, &config).await.unwrap();
+
+        match result_stack.management() {
+            ManagementPermissions::Extend(profile) => {
+                let permission_names: Vec<String> = profile
+                    .0
+                    .get("*")
+                    .unwrap()
+                    .iter()
+                    .map(|perm_ref| perm_ref.id().to_string())
+                    .collect();
+
+                assert!(permission_names.contains(&"artifact-registry/management".to_string()));
+                assert!(!permission_names.contains(&"artifact-registry/provision".to_string()));
             }
             _ => panic!("Expected Extend management permissions"),
         }

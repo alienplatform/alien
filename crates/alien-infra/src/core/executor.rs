@@ -687,16 +687,16 @@ impl StackExecutor {
                                 );
                             }
                             ResourceStatus::Provisioning => {
-                                // Delete-then-recreate: the resource is stuck mid-provisioning
-                                // with stale config. Since transition_to_delete_start() is now
-                                // unconditional, we can safely interrupt it.
+                                // Do not interrupt a create that is already in flight. Desired
+                                // config can legitimately drift while a controller is still
+                                // provisioning, for example when deployment-level env injection
+                                // gains concrete runtime values. Let the create finish or fail;
+                                // once stable, the normal update/failure recovery path reconciles
+                                // the latest desired config.
                                 info!(
-                                    "Config changed for '{}' during Provisioning, planning delete-then-recreate",
+                                    "Config changed for '{}' during Provisioning, deferring until resource is stable",
                                     resource_id
                                 );
-                                plan_result.deletes.push(resource_id.clone());
-                                plan_result.creates.retain(|id| id != resource_id);
-                                plan_result.updates.remove(resource_id);
                             }
                             _ => {
                                 // Updating, Deleting -- wait for stable before acting

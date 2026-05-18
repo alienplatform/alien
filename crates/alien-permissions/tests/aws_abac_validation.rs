@@ -378,8 +378,10 @@ fn action_requires_tag_condition(action: &str) -> bool {
     matches!(
         action,
         "acm:ImportCertificate"
+            | "acm:AddTagsToCertificate"
             | "acm:DeleteCertificate"
             | "apigateway:POST"
+            | "apigateway:PUT"
             | "apigateway:TagResource"
             | "autoscaling:CreateAutoScalingGroup"
             | "autoscaling:DeleteAutoScalingGroup"
@@ -428,6 +430,6 @@ fn action_requires_tag_condition(action: &str) -> bool {
             | "elasticloadbalancing:DeleteLoadBalancer"
             | "elasticloadbalancing:DeleteTargetGroup"
             | "events:PutRule"
-            | "lambda:CreateWorker"
+            | "lambda:CreateFunction"
     )
 }

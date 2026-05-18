@@ -9,7 +9,7 @@ use crate::core::{azure_permissions_helper::AzurePermissionsHelper, ResourceCont
 use crate::error::{ErrorData, Result};
 use alien_azure_clients::authorization::Scope;
 use alien_client_core::ErrorData as CloudClientErrorData;
-use alien_core::permissions::PermissionSetReference;
+use alien_core::permissions::{PermissionProfile, PermissionSetReference};
 use alien_core::PermissionSet;
 use alien_core::RemoteStackManagement;
 use alien_error::{AlienError, Context, ContextError as _, IntoAlienError};
@@ -1020,7 +1020,7 @@ impl ResourcePermissionsHelper {
         ctx: &ResourceControllerContext<'_>,
         resource_id: &str,
         resource_name: &str,
-        resource_type: &str,
+        _resource_type: &str,
         generator: &AwsRuntimePermissionsGenerator,
         permission_context: &PermissionContext,
     ) -> Result<()> {
@@ -1029,23 +1029,8 @@ impl ResourcePermissionsHelper {
             None => return Ok(()),
         };
 
-        let type_prefix = format!("{}/", resource_type);
-
-        // Combine resource-specific and wildcard management permissions
-        let mut combined_refs: Vec<PermissionSetReference> = Vec::new();
-
-        if let Some(permission_set_refs) = management_profile.0.get(resource_id) {
-            combined_refs.extend(permission_set_refs.iter().cloned());
-        }
-
-        if let Some(wildcard_refs) = management_profile.0.get("*") {
-            combined_refs.extend(
-                wildcard_refs
-                    .iter()
-                    .filter(|r| r.id().starts_with(&type_prefix))
-                    .cloned(),
-            );
-        }
+        let combined_refs =
+            Self::aws_management_resource_permission_refs(management_profile, resource_id);
 
         if combined_refs.is_empty() {
             return Ok(());
@@ -1162,6 +1147,23 @@ impl ResourcePermissionsHelper {
         }
 
         Ok(())
+    }
+
+    fn aws_management_resource_permission_refs(
+        management_profile: &PermissionProfile,
+        resource_id: &str,
+    ) -> Vec<PermissionSetReference> {
+        // On AWS the RemoteStackManagement role policy is the stack-level
+        // grant point for wildcard management permissions. Re-applying those
+        // wildcard-derived permissions as per-resource inline policies duplicates
+        // authority and can exceed IAM's per-role inline policy quota. Resource
+        // controllers only attach management permissions explicitly scoped to
+        // this resource ID.
+        management_profile
+            .0
+            .get(resource_id)
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Get the AWS IAM role name for a service account permission profile
@@ -1298,5 +1300,55 @@ impl ResourcePermissionsHelper {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::permissions::{PermissionProfile, PermissionSetReference};
+    use indexmap::IndexMap;
+
+    #[test]
+    fn aws_management_resource_permissions_ignore_wildcard_scope() {
+        let mut profile = IndexMap::new();
+        profile.insert(
+            "*".to_string(),
+            vec![PermissionSetReference::from_name(
+                "worker/heartbeat".to_string(),
+            )],
+        );
+        profile.insert(
+            "worker-a".to_string(),
+            vec![PermissionSetReference::from_name(
+                "worker/invoke".to_string(),
+            )],
+        );
+
+        let refs = ResourcePermissionsHelper::aws_management_resource_permission_refs(
+            &PermissionProfile(profile),
+            "worker-a",
+        );
+
+        let ids: Vec<_> = refs.iter().map(|r| r.id().to_string()).collect();
+        assert_eq!(ids, vec!["worker/invoke"]);
+    }
+
+    #[test]
+    fn aws_management_resource_permissions_empty_without_resource_scope() {
+        let mut profile = IndexMap::new();
+        profile.insert(
+            "*".to_string(),
+            vec![PermissionSetReference::from_name(
+                "worker/heartbeat".to_string(),
+            )],
+        );
+
+        let refs = ResourcePermissionsHelper::aws_management_resource_permission_refs(
+            &PermissionProfile(profile),
+            "worker-a",
+        );
+
+        assert!(refs.is_empty());
     }
 }

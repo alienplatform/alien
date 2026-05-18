@@ -265,6 +265,7 @@ mod tests {
             setup_fingerprint_version: None,
             user_environment_variables: None,
             management_config: None,
+            deployment_config: None,
             deployment_token: None,
             retry_requested: false,
             locked_by: None,

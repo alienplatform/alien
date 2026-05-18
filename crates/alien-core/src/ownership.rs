@@ -68,8 +68,8 @@ pub fn ownership_policy_for_resource_type(resource_type: &str) -> ResourceOwners
         "function" | "container-cluster" => removed_resource_type(),
         "worker" | "daemon" | "container" => live_only(),
         "compute-cluster" => frozen_with_management(),
-        "artifact-registry"
-        | "build"
+        "artifact-registry" => frozen_with_management(),
+        "build"
         | "network"
         | "remote-stack-management"
         | "service-account"
@@ -125,12 +125,14 @@ mod tests {
 
     #[test]
     fn compute_cluster_is_frozen_with_management() {
-        let policy = ownership_policy_for_resource_type("compute-cluster");
-        assert_eq!(policy.default_lifecycle(), ResourceLifecycle::Frozen);
-        assert!(policy.allows_lifecycle(ResourceLifecycle::Frozen));
-        assert!(!policy.allows_lifecycle(ResourceLifecycle::Live));
-        assert!(policy.should_emit_in_setup(ResourceLifecycle::Frozen));
-        assert!(policy.frozen_requires_management());
+        for resource_type in ["compute-cluster", "artifact-registry"] {
+            let policy = ownership_policy_for_resource_type(resource_type);
+            assert_eq!(policy.default_lifecycle(), ResourceLifecycle::Frozen);
+            assert!(policy.allows_lifecycle(ResourceLifecycle::Frozen));
+            assert!(!policy.allows_lifecycle(ResourceLifecycle::Live));
+            assert!(policy.should_emit_in_setup(ResourceLifecycle::Frozen));
+            assert!(policy.frozen_requires_management());
+        }
     }
 
     #[test]
@@ -158,7 +160,6 @@ mod tests {
     #[test]
     fn setup_resources_are_frozen_only() {
         for resource_type in [
-            "artifact-registry",
             "build",
             "network",
             "remote-stack-management",

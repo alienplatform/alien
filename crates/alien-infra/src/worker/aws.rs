@@ -45,7 +45,7 @@ impl AwsWorkerController {
     fn resolve_domain_info(
         ctx: &ResourceControllerContext<'_>,
         resource_id: &str,
-    ) -> Result<DomainInfo> {
+    ) -> Result<Option<DomainInfo>> {
         let stack_settings = &ctx.deployment_config.stack_settings;
         if let Some(custom) = stack_settings
             .domains
@@ -65,38 +65,29 @@ impl AwsWorkerController {
                     })
                 })?;
 
-            return Ok(DomainInfo {
+            return Ok(Some(DomainInfo {
                 fqdn: custom.domain.clone(),
                 certificate_id: None,
                 certificate_arn: Some(cert_arn),
                 uses_custom_domain: true,
-            });
+            }));
         }
 
-        let metadata = ctx
+        let Some(resource) = ctx
             .deployment_config
             .domain_metadata
             .as_ref()
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::ResourceConfigInvalid {
-                    message: "Domain metadata missing for public resource".to_string(),
-                    resource_id: Some(resource_id.to_string()),
-                })
-            })?;
+            .and_then(|metadata| metadata.resources.get(resource_id))
+        else {
+            return Ok(None);
+        };
 
-        let resource = metadata.resources.get(resource_id).ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: "Domain metadata missing for resource".to_string(),
-                resource_id: Some(resource_id.to_string()),
-            })
-        })?;
-
-        Ok(DomainInfo {
+        Ok(Some(DomainInfo {
             fqdn: resource.fqdn.clone(),
             certificate_id: Some(resource.certificate_id.clone()),
             certificate_arn: None,
             uses_custom_domain: false,
-        })
+        }))
     }
 
     fn ensure_domain_info(
@@ -113,8 +104,8 @@ impl AwsWorkerController {
             return Ok(true);
         }
 
-        match Self::resolve_domain_info(ctx, resource_id) {
-            Ok(domain_info) => {
+        match Self::resolve_domain_info(ctx, resource_id)? {
+            Some(domain_info) => {
                 self.fqdn = Some(domain_info.fqdn.clone());
                 self.domain_name = Some(domain_info.fqdn.clone());
                 self.certificate_id = domain_info.certificate_id;
@@ -130,7 +121,7 @@ impl AwsWorkerController {
                 }
                 Ok(true)
             }
-            Err(_) => Ok(false),
+            None => Ok(false),
         }
     }
 }
@@ -282,8 +273,8 @@ impl AwsWorkerController {
         function_tags.insert("Name".to_string(), aws_worker_name.clone());
 
         if cfg.ingress == Ingress::Public {
-            match Self::resolve_domain_info(ctx, &cfg.id) {
-                Ok(domain_info) => {
+            match Self::resolve_domain_info(ctx, &cfg.id)? {
+                Some(domain_info) => {
                     self.fqdn = Some(domain_info.fqdn.clone());
                     self.certificate_id = domain_info.certificate_id;
                     self.certificate_arn = domain_info.certificate_arn;
@@ -298,7 +289,7 @@ impl AwsWorkerController {
                         .and_then(|urls| urls.get(&cfg.id).cloned())
                         .or_else(|| Some(format!("https://{}", domain_info.fqdn)));
                 }
-                Err(_) => {
+                None => {
                     // Standalone mode: no domain metadata available.
                     // Use API Gateway with its default endpoint URL (no custom domain).
                     // The URL will be set after API Gateway creation.
@@ -390,7 +381,8 @@ impl AwsWorkerController {
 
         if is_active {
             if worker_config.ingress == Ingress::Public {
-                let next_state = if self.uses_custom_domain || self.certificate_id.is_some() {
+                let has_domain_info = self.ensure_domain_info(ctx, &worker_config.id)?;
+                let next_state = if has_domain_info {
                     // Platform mode: wait for certificate then create API Gateway + custom domain
                     WaitingForCertificate
                 } else {

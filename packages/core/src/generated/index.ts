@@ -31,6 +31,7 @@ export type { AzureQueueImportData } from "./zod/azure-queue-import-data-schema.
 export type { AzureRemoteStackManagementImportData } from "./zod/azure-remote-stack-management-import-data-schema.js";
 export type { AzureResourceGroupImportData } from "./zod/azure-resource-group-import-data-schema.js";
 export type { AzureServiceAccountImportData } from "./zod/azure-service-account-import-data-schema.js";
+export type { AzureServiceActivationImportData } from "./zod/azure-service-activation-import-data-schema.js";
 export type { AzureServiceBusNamespaceImportData } from "./zod/azure-service-bus-namespace-import-data-schema.js";
 export type { AzureStorageAccountImportData } from "./zod/azure-storage-account-import-data-schema.js";
 export type { AzureStorageImportData } from "./zod/azure-storage-import-data-schema.js";
@@ -86,6 +87,7 @@ export type { GcpPlatformPermission } from "./zod/gcp-platform-permission-schema
 export type { GcpQueueImportData } from "./zod/gcp-queue-import-data-schema.js";
 export type { GcpRemoteStackManagementImportData } from "./zod/gcp-remote-stack-management-import-data-schema.js";
 export type { GcpServiceAccountImportData } from "./zod/gcp-service-account-import-data-schema.js";
+export type { GcpServiceActivationImportData } from "./zod/gcp-service-activation-import-data-schema.js";
 export type { GcpStorageImportData } from "./zod/gcp-storage-import-data-schema.js";
 export type { GcpVaultImportData } from "./zod/gcp-vault-import-data-schema.js";
 export type { GcpWorkerImportData } from "./zod/gcp-worker-import-data-schema.js";
@@ -197,6 +199,7 @@ export { AzureQueueImportDataSchema } from "./zod/azure-queue-import-data-schema
 export { AzureRemoteStackManagementImportDataSchema } from "./zod/azure-remote-stack-management-import-data-schema.js";
 export { AzureResourceGroupImportDataSchema } from "./zod/azure-resource-group-import-data-schema.js";
 export { AzureServiceAccountImportDataSchema } from "./zod/azure-service-account-import-data-schema.js";
+export { AzureServiceActivationImportDataSchema } from "./zod/azure-service-activation-import-data-schema.js";
 export { AzureServiceBusNamespaceImportDataSchema } from "./zod/azure-service-bus-namespace-import-data-schema.js";
 export { AzureStorageAccountImportDataSchema } from "./zod/azure-storage-account-import-data-schema.js";
 export { AzureStorageImportDataSchema } from "./zod/azure-storage-import-data-schema.js";
@@ -252,6 +255,7 @@ export { GcpPlatformPermissionSchema } from "./zod/gcp-platform-permission-schem
 export { GcpQueueImportDataSchema } from "./zod/gcp-queue-import-data-schema.js";
 export { GcpRemoteStackManagementImportDataSchema } from "./zod/gcp-remote-stack-management-import-data-schema.js";
 export { GcpServiceAccountImportDataSchema } from "./zod/gcp-service-account-import-data-schema.js";
+export { GcpServiceActivationImportDataSchema } from "./zod/gcp-service-activation-import-data-schema.js";
 export { GcpStorageImportDataSchema } from "./zod/gcp-storage-import-data-schema.js";
 export { GcpVaultImportDataSchema } from "./zod/gcp-vault-import-data-schema.js";
 export { GcpWorkerImportDataSchema } from "./zod/gcp-worker-import-data-schema.js";
