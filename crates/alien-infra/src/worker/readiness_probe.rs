@@ -3,18 +3,34 @@ use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_core::Worker;
 use alien_error::AlienError;
-use std::time::Duration;
-use tracing::{info, warn};
+use std::{net::SocketAddr, time::Duration};
+use tokio::net::lookup_host;
+use tracing::{debug, info, warn};
 
 // Readiness probe configuration constants
 pub const READINESS_PROBE_MAX_ATTEMPTS: u32 = 10;
 pub const READINESS_PROBE_REQUEST_TIMEOUT_SECONDS: u64 = 30;
 pub const READINESS_PROBE_MAX_BACKOFF_SECONDS: u64 = 60;
 
+#[derive(Debug, Clone)]
+pub struct ReadinessProbeDnsOverride {
+    pub host: String,
+    pub target_dns_name: String,
+    pub port: u16,
+}
+
 /// Runs a readiness probe for a worker.
 /// Returns Ok(()) if the probe succeeds, or an error if it fails.
 /// This worker should be called from within retry logic in the controllers.
 pub async fn run_readiness_probe(ctx: &ResourceControllerContext<'_>, url: &str) -> Result<()> {
+    run_readiness_probe_with_dns_override(ctx, url, None).await
+}
+
+pub async fn run_readiness_probe_with_dns_override(
+    ctx: &ResourceControllerContext<'_>,
+    url: &str,
+    dns_override: Option<ReadinessProbeDnsOverride>,
+) -> Result<()> {
     let worker_config = ctx.desired_resource_config::<Worker>()?;
     let probe_config = match &worker_config.readiness_probe {
         Some(probe) => probe,
@@ -31,9 +47,9 @@ pub async fn run_readiness_probe(ctx: &ResourceControllerContext<'_>, url: &str)
 
     // Construct the full URL for the probe
     let probe_url = format!("{}{}", url.trim_end_matches('/'), &probe_config.path);
+    let client = build_readiness_probe_client(&worker_config, &probe_url, dns_override).await?;
 
     // Perform the HTTP request
-    let client = reqwest::Client::new();
     let method = match probe_config.method {
         alien_core::HttpMethod::Get => reqwest::Method::GET,
         alien_core::HttpMethod::Post => reqwest::Method::POST,
@@ -86,6 +102,68 @@ pub async fn run_readiness_probe(ctx: &ResourceControllerContext<'_>, url: &str)
             }))
         }
     }
+}
+
+async fn build_readiness_probe_client(
+    worker_config: &Worker,
+    probe_url: &str,
+    dns_override: Option<ReadinessProbeDnsOverride>,
+) -> Result<reqwest::Client> {
+    let mut builder = reqwest::Client::builder();
+
+    if let Some(override_config) = dns_override {
+        let addrs = lookup_readiness_probe_target(
+            worker_config,
+            probe_url,
+            &override_config.target_dns_name,
+            override_config.port,
+        )
+        .await?;
+
+        debug!(
+            name = %worker_config.id,
+            host = %override_config.host,
+            target = %override_config.target_dns_name,
+            addrs = ?addrs,
+            "Using readiness probe DNS override"
+        );
+
+        builder = builder.resolve_to_addrs(&override_config.host, &addrs);
+    }
+
+    builder.build().map_err(|err| {
+        AlienError::new(ErrorData::ReadinessProbeFailure {
+            resource_id: worker_config.id.clone(),
+            reason: format!("Failed to build HTTP client: {err}"),
+            probe_url: probe_url.to_string(),
+        })
+    })
+}
+
+async fn lookup_readiness_probe_target(
+    worker_config: &Worker,
+    probe_url: &str,
+    target_dns_name: &str,
+    port: u16,
+) -> Result<Vec<SocketAddr>> {
+    let addrs = lookup_host((target_dns_name, port)).await.map_err(|err| {
+        AlienError::new(ErrorData::ReadinessProbeFailure {
+            resource_id: worker_config.id.clone(),
+            reason: format!("Failed to resolve readiness probe target '{target_dns_name}': {err}"),
+            probe_url: probe_url.to_string(),
+        })
+    })?;
+
+    let addrs = addrs.collect::<Vec<_>>();
+    if addrs.is_empty() {
+        return Err(AlienError::new(ErrorData::ReadinessProbeFailure {
+            resource_id: worker_config.id.clone(),
+            reason: format!("Readiness probe target '{target_dns_name}' resolved no addresses"),
+            probe_url: probe_url.to_string(),
+        }));
+    }
+
+    Ok(addrs)
 }
 
 #[cfg(test)]

@@ -8,7 +8,9 @@ use crate::core::split_certificate_chain;
 use crate::core::ResourceController;
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use crate::worker::readiness_probe::{run_readiness_probe, READINESS_PROBE_MAX_ATTEMPTS};
+use crate::worker::readiness_probe::{
+    run_readiness_probe_with_dns_override, ReadinessProbeDnsOverride, READINESS_PROBE_MAX_ATTEMPTS,
+};
 use alien_aws_clients::apigatewayv2::{
     CreateApiMappingRequest, CreateApiRequest, CreateDomainNameRequest, CreateIntegrationRequest,
     CreateRouteRequest, CreateStageRequest, DomainNameConfiguration,
@@ -32,6 +34,27 @@ use alien_macros::controller;
 /// Generates the full, prefixed AWS resource name.
 fn get_aws_worker_name(prefix: &str, name: &str) -> String {
     format!("{}-{}", prefix, name)
+}
+
+fn readiness_probe_dns_override(
+    url: &str,
+    fqdn: Option<&str>,
+    load_balancer: Option<&LoadBalancerState>,
+) -> Option<ReadinessProbeDnsOverride> {
+    let fqdn = fqdn?;
+    let endpoint = load_balancer?.endpoint.as_ref()?;
+    let parsed = reqwest::Url::parse(url).ok()?;
+    let url_host = parsed.host_str()?;
+
+    if url_host != fqdn {
+        return None;
+    }
+
+    Some(ReadinessProbeDnsOverride {
+        host: fqdn.to_string(),
+        target_dns_name: endpoint.dns_name.clone(),
+        port: parsed.port_or_known_default().unwrap_or(443),
+    })
 }
 
 fn eventbridge_tags(prefix: &str, resource_id: &str) -> Vec<EventBridgeTag> {
@@ -1052,7 +1075,13 @@ impl AwsWorkerController {
         // Only run readiness probe if configured and we have a URL (for public workers)
         if worker_config.readiness_probe.is_some() && worker_config.ingress == Ingress::Public {
             if let Some(url) = &self.url {
-                match run_readiness_probe(ctx, url).await {
+                let dns_override = readiness_probe_dns_override(
+                    url,
+                    self.fqdn.as_deref(),
+                    self.load_balancer.as_ref(),
+                );
+
+                match run_readiness_probe_with_dns_override(ctx, url, dns_override).await {
                     Ok(()) => {
                         // Probe succeeded, proceed to Ready
                     }
@@ -1955,7 +1984,13 @@ impl AwsWorkerController {
         // Only run readiness probe if configured and we have a URL (for public workers)
         if worker_config.readiness_probe.is_some() && worker_config.ingress == Ingress::Public {
             if let Some(url) = &self.url {
-                match run_readiness_probe(ctx, url).await {
+                let dns_override = readiness_probe_dns_override(
+                    url,
+                    self.fqdn.as_deref(),
+                    self.load_balancer.as_ref(),
+                );
+
+                match run_readiness_probe_with_dns_override(ctx, url, dns_override).await {
                     Ok(()) => {
                         // Probe succeeded, proceed to Ready
                     }
