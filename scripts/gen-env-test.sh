@@ -64,6 +64,7 @@ gcp_target_region=$(jq_val target_gcp_region)
 e2e_gcp_network_name=$(jq_val e2e_gcp_network_name)
 e2e_gcp_subnet_name=$(jq_val e2e_gcp_subnet_name)
 e2e_gcp_network_region=$(jq_val e2e_gcp_network_region)
+e2e_gcp_use_existing_custom_roles=$(jq_val e2e_gcp_use_existing_custom_roles)
 
 gcp_management_identity_email=$(jq_val gcp_management_identity_email)
 gcp_management_identity_unique_id=$(jq_val gcp_management_identity_unique_id)
@@ -162,6 +163,7 @@ GOOGLE_TARGET_REGION='${gcp_target_region}'
 ALIEN_E2E_GCP_NETWORK_NAME='${e2e_gcp_network_name}'
 ALIEN_E2E_GCP_SUBNET_NAME='${e2e_gcp_subnet_name}'
 ALIEN_E2E_GCP_REGION='${e2e_gcp_network_region}'
+ALIEN_E2E_GCP_USE_EXISTING_CUSTOM_ROLES='${e2e_gcp_use_existing_custom_roles}'
 
 # GCP - Management Identity
 GOOGLE_MANAGEMENT_IDENTITY_EMAIL='${gcp_management_identity_email}'
