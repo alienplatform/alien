@@ -516,8 +516,7 @@ mod tests {
         let request = CreateDomainNameRequest {
             domain_name: "worker.example.com".to_string(),
             domain_name_configurations: vec![DomainNameConfiguration {
-                certificate_arn: "arn:aws:acm:us-east-2:123456789012:certificate/test"
-                    .to_string(),
+                certificate_arn: "arn:aws:acm:us-east-2:123456789012:certificate/test".to_string(),
                 endpoint_type: "REGIONAL".to_string(),
                 security_policy: "TLS_1_2".to_string(),
                 api_gateway_domain_name: None,

@@ -1072,6 +1072,10 @@ expression: schemas
         "description": "Region where the trigger runs.",
         "type": "string"
       },
+      "serviceAccountEmail": {
+        "description": "Service account email Cloud Build uses when running builds.",
+        "type": "string"
+      },
       "triggerId": {
         "description": "Cloud Build trigger ID.",
         "type": "string"
@@ -1085,6 +1089,7 @@ expression: schemas
       "buildEnvVars",
       "projectId",
       "region",
+      "serviceAccountEmail",
       "triggerId",
       "triggerName"
     ],

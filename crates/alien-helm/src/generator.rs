@@ -10,8 +10,8 @@ use crate::{
     registry::HelmRegistry,
 };
 use alien_core::{
-    import::EmitContext, ErrorData, Worker, Ingress, Platform, ResourceLifecycle, Result, Stack,
-    StackSettings,
+    import::EmitContext, ErrorData, Ingress, Platform, ResourceLifecycle, Result, Stack,
+    StackSettings, Worker,
 };
 use alien_error::{Context, IntoAlienError};
 use indexmap::IndexMap;
@@ -780,7 +780,7 @@ fn ensure_trailing_newline(mut value: String) -> String {
 mod tests {
     use super::*;
     use alien_core::{
-        WorkerCode, WorkerTrigger, PermissionProfile, Queue, ResourceLifecycle, Storage,
+        PermissionProfile, Queue, ResourceLifecycle, Storage, WorkerCode, WorkerTrigger,
     };
 
     fn sample_stack() -> Stack {

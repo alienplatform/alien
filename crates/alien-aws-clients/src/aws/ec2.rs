@@ -140,6 +140,10 @@ pub trait Ec2Api: Send + Sync + std::fmt::Debug {
         &self,
         request: DescribeSecurityGroupsRequest,
     ) -> Result<DescribeSecurityGroupsResponse>;
+    async fn describe_network_interfaces(
+        &self,
+        request: DescribeNetworkInterfacesRequest,
+    ) -> Result<DescribeNetworkInterfacesResponse>;
     async fn create_security_group(
         &self,
         request: CreateSecurityGroupRequest,
@@ -1150,6 +1154,42 @@ impl Ec2Api for Ec2Client {
         }
 
         self.send_form(form_data, "DescribeSecurityGroups", "SecurityGroup")
+            .await
+    }
+
+    async fn describe_network_interfaces(
+        &self,
+        request: DescribeNetworkInterfacesRequest,
+    ) -> Result<DescribeNetworkInterfacesResponse> {
+        let mut form_data = HashMap::new();
+        form_data.insert(
+            "Action".to_string(),
+            "DescribeNetworkInterfaces".to_string(),
+        );
+        form_data.insert("Version".to_string(), "2016-11-15".to_string());
+
+        if let Some(network_interface_ids) = &request.network_interface_ids {
+            for (i, network_interface_id) in network_interface_ids.iter().enumerate() {
+                form_data.insert(
+                    format!("NetworkInterfaceId.{}", i + 1),
+                    network_interface_id.clone(),
+                );
+            }
+        }
+
+        if let Some(filters) = &request.filters {
+            Self::add_filters(&mut form_data, filters);
+        }
+
+        if let Some(max_results) = request.max_results {
+            form_data.insert("MaxResults".to_string(), max_results.to_string());
+        }
+
+        if let Some(next_token) = &request.next_token {
+            form_data.insert("NextToken".to_string(), next_token.clone());
+        }
+
+        self.send_form(form_data, "DescribeNetworkInterfaces", "NetworkInterface")
             .await
     }
 
@@ -2548,6 +2588,63 @@ pub struct SecurityGroup {
     pub ip_permissions_egress: Option<IpPermissionSet>,
     #[serde(rename = "tagSet")]
     pub tag_set: Option<TagSet>,
+}
+
+/// Request to describe network interfaces.
+#[derive(Debug, Clone, Serialize, Builder, Default)]
+pub struct DescribeNetworkInterfacesRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network_interface_ids: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filters: Option<Vec<Filter>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_results: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_token: Option<String>,
+}
+
+/// Response from describing network interfaces.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DescribeNetworkInterfacesResponse {
+    #[serde(rename = "networkInterfaceSet")]
+    pub network_interface_set: Option<NetworkInterfaceSet>,
+    #[serde(rename = "nextToken")]
+    pub next_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkInterfaceSet {
+    #[serde(rename = "item", default)]
+    pub items: Vec<NetworkInterface>,
+}
+
+/// Represents an EC2 network interface.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkInterface {
+    pub network_interface_id: Option<String>,
+    pub status: Option<String>,
+    pub description: Option<String>,
+    pub subnet_id: Option<String>,
+    pub vpc_id: Option<String>,
+    #[serde(rename = "groupSet")]
+    pub group_set: Option<GroupIdentifierSet>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupIdentifierSet {
+    #[serde(rename = "item", default)]
+    pub items: Vec<GroupIdentifier>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupIdentifier {
+    pub group_id: Option<String>,
+    pub group_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -4,7 +4,7 @@
 
 use super::helpers::{assert_helm_valid, render, snapshot_chart};
 use alien_core::{
-    Worker, WorkerCode, Ingress, PermissionProfile, ResourceLifecycle, Stack, StackSettings,
+    Ingress, PermissionProfile, ResourceLifecycle, Stack, StackSettings, Worker, WorkerCode,
 };
 
 #[test]

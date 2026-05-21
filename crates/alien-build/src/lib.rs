@@ -4,8 +4,8 @@ pub mod settings;
 pub mod toolchain;
 
 use alien_core::{
-    alien_event, AlienEvent, BinaryTarget, Container, ContainerCode, Worker, WorkerCode,
-    Platform, Stack, ToolchainConfig,
+    alien_event, AlienEvent, BinaryTarget, Container, ContainerCode, Platform, Stack,
+    ToolchainConfig, Worker, WorkerCode,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_preflights::runner::PreflightRunner;
@@ -218,9 +218,13 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
 
                         // Check if we're already cancelled
                         if cancel_token.is_cancelled() {
-                            return (resource_id.clone(), func, Err(AlienError::new(ErrorData::BuildCanceled {
-                                resource_name: func_id.clone()
-                            })));
+                            return (
+                                resource_id.clone(),
+                                func,
+                                Err(AlienError::new(ErrorData::BuildCanceled {
+                                    resource_name: func_id.clone(),
+                                })),
+                            );
                         }
 
                         // Build for all targets (handles both single and multiple targets)

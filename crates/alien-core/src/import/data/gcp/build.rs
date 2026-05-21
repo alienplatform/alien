@@ -18,4 +18,6 @@ pub struct GcpBuildImportData {
     pub trigger_name: String,
     /// Environment variables stamped into the trigger's substitutions.
     pub build_env_vars: HashMap<String, String>,
+    /// Service account email Cloud Build uses when running builds.
+    pub service_account_email: String,
 }

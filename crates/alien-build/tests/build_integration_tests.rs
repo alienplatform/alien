@@ -2,9 +2,7 @@ use alien_build::{
     build_stack,
     settings::{BuildSettings, PlatformBuildSettings},
 };
-use alien_core::{
-    permissions::PermissionProfile, Worker, WorkerCode, Ingress, ResourceLifecycle,
-};
+use alien_core::{permissions::PermissionProfile, Ingress, ResourceLifecycle, Worker, WorkerCode};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use tempfile::tempdir;

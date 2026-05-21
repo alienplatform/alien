@@ -3,8 +3,8 @@ use alien_build::{
     settings::{BuildSettings, PlatformBuildSettings, PushSettings},
 };
 use alien_core::{
-    permissions::PermissionProfile, Worker, WorkerCode, Ingress, Platform, ResourceLifecycle,
-    Storage,
+    permissions::PermissionProfile, Ingress, Platform, ResourceLifecycle, Storage, Worker,
+    WorkerCode,
 };
 use dockdash::{test_utils::setup_local_registry, ClientProtocol, PushOptions, RegistryAuth};
 use std::collections::HashMap;

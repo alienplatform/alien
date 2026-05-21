@@ -14,7 +14,7 @@ use alien_commands::dispatchers::{
     ServiceBusCommandDispatcher,
 };
 use alien_commands::{LeaseRequest, LeaseResponse};
-use alien_core::{ClientConfig, WorkerOutputs, Platform};
+use alien_core::{ClientConfig, Platform, WorkerOutputs};
 use alien_infra::ClientConfigExt;
 use reqwest::Client;
 use std::sync::Arc;

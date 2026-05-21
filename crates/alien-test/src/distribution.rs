@@ -1335,7 +1335,7 @@ async fn terraform_output_json(workdir: &Path, env: &[(String, String)]) -> anyh
     serde_json::from_slice(&output.stdout).context("Failed to parse terraform output JSON")
 }
 
-/// Terraform can finish before GCP custom roles and IAM bindings are visible.
+/// Terraform can finish before GCP IAM bindings are visible.
 /// Probe the same two-hop chain the manager uses before deployment starts:
 /// management credentials -> configured manager SA -> imported stack management SA.
 async fn wait_for_gcp_management_permissions(
@@ -2020,11 +2020,10 @@ mod tests {
             .map(|(_, contents)| contents)
             .collect::<String>();
 
-        assert!(rendered
-            .contains("google_project_iam_custom_role.remote_stack_management_workerprovision"));
-        assert!(rendered.contains("\"resourcemanager.projects.get\""));
-        assert!(rendered.contains("\"run.services.create\""));
-        assert!(rendered.contains("\"iam.serviceAccounts.actAs\""));
+        assert!(rendered.contains("roles/run.admin"));
+        assert!(rendered.contains("roles/iam.serviceAccountUser"));
+        assert!(rendered.contains("roles/artifactregistry.reader"));
+        assert!(rendered.contains("roles/cloudbuild.builds.editor"));
     }
 
     #[tokio::test]
@@ -2055,28 +2054,26 @@ mod tests {
             .iter()
             .map(|(_, contents)| contents)
             .collect::<String>();
-        let custom_role_declarations = rendered
+        let iam_member_declarations = rendered
             .lines()
-            .filter(|line| line.contains("resource \"google_project_iam_custom_role\""))
+            .filter(|line| line.contains("resource \"google_project_iam_member\""))
             .collect::<Vec<_>>();
-        let unique_custom_role_declarations = custom_role_declarations
+        let unique_iam_member_declarations = iam_member_declarations
             .iter()
             .copied()
             .collect::<std::collections::HashSet<_>>();
 
         assert_eq!(
-            unique_custom_role_declarations.len(),
-            custom_role_declarations.len(),
-            "GCP custom role declarations should be unique: {custom_role_declarations:?}"
+            unique_iam_member_declarations.len(),
+            iam_member_declarations.len(),
+            "GCP IAM member declarations should be unique: {iam_member_declarations:?}"
         );
         assert_eq!(
             rendered
-                .matches(
-                    "resource \"google_project_iam_custom_role\" \"remote_stack_management_vaultheartbeat\"",
-                )
+                .matches("role    = \"roles/secretmanager.viewer\"")
                 .count(),
             1,
-            "global management vault heartbeat role should be emitted once"
+            "global management vault heartbeat binding should be emitted once"
         );
     }
 
