@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
-use crate::core::{split_certificate_chain, EnvironmentVariableBuilder};
+use crate::core::{EnvironmentVariableBuilder, ResourcePermissionsHelper};
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
@@ -20,7 +20,7 @@ use alien_gcp_clients::compute::{
     TargetHttpsProxy, UrlMap,
 };
 use alien_gcp_clients::gcs::GcsNotification;
-use alien_gcp_clients::iam::Binding;
+use alien_gcp_clients::iam::{Binding, IamPolicy};
 use alien_gcp_clients::longrunning::OperationResult;
 use alien_gcp_clients::pubsub::{OidcToken, PushConfig, Subscription, Topic};
 // Note: Role controller removed - workers now use ServiceAccount and permission profiles
@@ -1271,6 +1271,9 @@ impl GcpWorkerController {
                 ),
                 resource_id: Some(cfg.id.clone()),
             })?;
+
+        self.apply_command_topic_management_permissions(ctx, &topic_short_name)
+            .await?;
 
         self.commands_topic_name = Some(topic_short_name);
         self.commands_subscription_name = Some(subscription_name);
@@ -2780,6 +2783,79 @@ impl GcpWorkerController {
 impl GcpWorkerController {
     // ─────────────── HELPER METHODS ────────────────────────────
 
+    async fn apply_command_topic_management_permissions(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        topic_name: &str,
+    ) -> Result<()> {
+        let config = ctx.desired_resource_config::<Worker>()?;
+        let command_refs: Vec<_> = ctx
+            .desired_stack
+            .management()
+            .profile()
+            .and_then(|management_profile| management_profile.0.get(&config.id))
+            .into_iter()
+            .flat_map(|refs| refs.iter())
+            .filter(|permission_set_ref| permission_set_ref.id() == "worker/dispatch-command")
+            .cloned()
+            .collect();
+
+        let gcp_config = ctx.get_gcp_config()?;
+        let mut permission_context = alien_permissions::PermissionContext::new()
+            .with_project_name(gcp_config.project_id.clone())
+            .with_region(gcp_config.region.clone())
+            .with_stack_prefix(ctx.resource_prefix.to_string())
+            .with_stack_name(ctx.desired_stack.id().to_string())
+            .with_resource_name(topic_name.to_string());
+        if let Some(ref project_number) = gcp_config.project_number {
+            permission_context = permission_context.with_project_number(project_number.clone());
+        }
+
+        let generator = alien_permissions::generators::GcpRuntimePermissionsGenerator::new();
+        let mut all_bindings = Vec::new();
+        ResourcePermissionsHelper::collect_gcp_management_bindings_for(
+            ctx,
+            &config.id,
+            topic_name,
+            &command_refs,
+            &generator,
+            &permission_context,
+            alien_permissions::generators::GcpBindingTargetScope::CurrentResource,
+            &mut all_bindings,
+        )
+        .await?;
+
+        let iam_policy = IamPolicy {
+            version: Some(3),
+            bindings: all_bindings,
+            etag: None,
+            kind: None,
+            resource_id: None,
+        };
+        let bindings_count = iam_policy.bindings.len();
+
+        let pubsub_client = ctx.service_provider.get_gcp_pubsub_client(gcp_config)?;
+        pubsub_client
+            .set_topic_iam_policy(topic_name.to_string(), iam_policy)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to apply management command permissions to Pub/Sub topic '{}'",
+                    topic_name
+                ),
+                resource_id: Some(config.id.clone()),
+            })?;
+
+        info!(
+            worker = %config.id,
+            topic = %topic_name,
+            bindings_count,
+            "Reconciled management command permissions on Pub/Sub topic"
+        );
+
+        Ok(())
+    }
+
     /// Resolve domain information for a public worker.
     /// Returns either custom domain config or auto-generated domain from metadata.
     fn resolve_domain_info(
@@ -3200,6 +3276,7 @@ impl GcpWorkerController {
             .with_project_name(gcp_config.project_id.clone())
             .with_region(gcp_config.region.clone())
             .with_stack_prefix(ctx.resource_prefix.to_string())
+            .with_stack_name(ctx.desired_stack.id().to_string())
             .with_resource_name(service_name.to_string());
         if let Some(ref project_number) = gcp_config.project_number {
             permission_context = permission_context.with_project_number(project_number.clone());
@@ -3215,7 +3292,12 @@ impl GcpWorkerController {
                 Vec::new();
 
             if let Some(permission_set_refs) = profile.0.get(&config.id) {
-                combined_refs.extend(permission_set_refs.iter().cloned());
+                combined_refs.extend(
+                    permission_set_refs
+                        .iter()
+                        .filter(|r| r.id() != "worker/dispatch-command")
+                        .cloned(),
+                );
             }
 
             if let Some(wildcard_refs) = profile.0.get("*") {
@@ -3223,6 +3305,7 @@ impl GcpWorkerController {
                     wildcard_refs
                         .iter()
                         .filter(|r| r.id().starts_with(type_prefix))
+                        .filter(|r| r.id() != "worker/dispatch-command")
                         .cloned(),
                 );
             }
@@ -3260,7 +3343,13 @@ impl GcpWorkerController {
                 Vec::new();
 
             if let Some(permission_set_refs) = management_profile.0.get(&config.id) {
-                management_refs.extend(permission_set_refs.iter().cloned());
+                management_refs.extend(
+                    permission_set_refs
+                        .iter()
+                        .filter(|r| r.id().starts_with(type_prefix))
+                        .filter(|r| r.id() != "worker/dispatch-command")
+                        .cloned(),
+                );
             }
 
             if let Some(wildcard_refs) = management_profile.0.get("*") {
@@ -3268,6 +3357,7 @@ impl GcpWorkerController {
                     wildcard_refs
                         .iter()
                         .filter(|r| r.id().starts_with(type_prefix))
+                        .filter(|r| r.id() != "worker/dispatch-command")
                         .cloned(),
                 );
             }
@@ -3281,6 +3371,7 @@ impl GcpWorkerController {
                     &management_refs,
                     &generator,
                     &permission_context,
+                    alien_permissions::generators::GcpBindingTargetScope::CurrentResource,
                     all_bindings,
                 )
                 .await?;
@@ -4286,7 +4377,7 @@ mod tests {
                 .returning(move |_| Ok(compute.clone()));
         }
 
-        // Mock IAM client for resource-scoped permissions (custom role management)
+        // Mock IAM client for resource-scoped permissions.
         let mock_iam = create_gcp_iam_mock_for_resource_permissions();
         mock_provider
             .expect_get_gcp_iam_client()

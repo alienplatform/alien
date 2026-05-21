@@ -15,7 +15,7 @@
 use alien_build::settings::{BuildSettings, PlatformBuildSettings};
 use alien_core::permissions::{PermissionProfile, PermissionsConfig};
 use alien_core::BinaryTarget;
-use alien_core::{Worker, WorkerCode, Ingress, ResourceLifecycle, ToolchainConfig};
+use alien_core::{Ingress, ResourceLifecycle, ToolchainConfig, Worker, WorkerCode};
 use alien_local::LocalBindingsProvider;
 use std::collections::HashMap;
 use std::path::PathBuf;

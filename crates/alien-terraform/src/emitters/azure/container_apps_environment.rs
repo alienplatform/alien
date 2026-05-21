@@ -47,7 +47,7 @@ impl TfEmitter for AzureContainerAppsEnvironmentEmitter {
                 attr(
                     "name",
                     expr::raw(format!(
-                        "replace(lower(\"${{var.stack_name}}-{label}-logs\"), \"_\", \"-\")"
+                        "replace(lower(\"${{local.resource_prefix}}-{label}-logs\"), \"_\", \"-\")"
                     )),
                 ),
                 attr(
@@ -71,7 +71,7 @@ impl TfEmitter for AzureContainerAppsEnvironmentEmitter {
                 attr(
                     "name",
                     expr::raw(format!(
-                        "replace(lower(\"${{var.stack_name}}-{label}\"), \"_\", \"-\")"
+                        "replace(lower(\"${{local.resource_prefix}}-{label}\"), \"_\", \"-\")"
                     )),
                 ),
                 attr(

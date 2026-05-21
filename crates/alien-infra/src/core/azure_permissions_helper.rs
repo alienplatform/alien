@@ -76,7 +76,12 @@ impl AzurePermissionsHelper {
                 Vec::new();
 
             if let Some(permission_set_refs) = profile.0.get(resource_id) {
-                combined_refs.extend(permission_set_refs.iter().cloned());
+                combined_refs.extend(
+                    permission_set_refs
+                        .iter()
+                        .filter(|r| !is_worker_command_transport_permission(resource_type, r.id()))
+                        .cloned(),
+                );
             }
 
             if let Some(wildcard_refs) = profile.0.get("*") {
@@ -84,6 +89,7 @@ impl AzurePermissionsHelper {
                     wildcard_refs
                         .iter()
                         .filter(|r| r.id().starts_with(&type_prefix))
+                        .filter(|r| !is_worker_command_transport_permission(resource_type, r.id()))
                         .cloned(),
                 );
             }
@@ -391,13 +397,18 @@ impl AzurePermissionsHelper {
 
         let mut combined_refs = Vec::new();
         if let Some(refs) = management_profile.0.get(resource_id) {
-            combined_refs.extend(refs.iter().cloned());
+            combined_refs.extend(
+                refs.iter()
+                    .filter(|r| !is_worker_command_transport_permission(resource_type, r.id()))
+                    .cloned(),
+            );
         }
         if let Some(wildcard_refs) = management_profile.0.get("*") {
             combined_refs.extend(
                 wildcard_refs
                     .iter()
                     .filter(|r| r.id().starts_with(&type_prefix))
+                    .filter(|r| !is_worker_command_transport_permission(resource_type, r.id()))
                     .cloned(),
             );
         }
@@ -659,4 +670,8 @@ impl AzurePermissionsHelper {
                 })
             })
     }
+}
+
+fn is_worker_command_transport_permission(resource_type: &str, permission_set_id: &str) -> bool {
+    resource_type == "worker" && permission_set_id == "worker/dispatch-command"
 }

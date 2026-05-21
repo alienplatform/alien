@@ -14,7 +14,7 @@
 use crate::{
     block::{attr, block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
-    emitters::azure::helpers::{downcast, required_label, stack_name_template},
+    emitters::azure::helpers::{downcast, required_label, resource_prefix_template},
     expr,
 };
 use alien_core::{import::EmitContext, ArtifactRegistry, Build, ErrorData, Result};
@@ -51,7 +51,7 @@ impl TfEmitter for AzureBuildEmitter {
         }
 
         let body: Vec<hcl::structure::Structure> = vec![
-            attr("name", stack_name_template(&build.id)),
+            attr("name", resource_prefix_template(&build.id)),
             attr(
                 "container_registry_id",
                 expr::traversal(["azurerm_container_registry", &registry_label, "id"]),

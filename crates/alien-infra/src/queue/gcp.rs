@@ -371,7 +371,7 @@ mod tests {
             .expect_get_gcp_pubsub_client()
             .returning(move |_| Ok(mock_pubsub.clone()));
 
-        // Mock IAM client for resource-scoped permissions (custom role management)
+        // Mock IAM client for resource-scoped permissions.
         let mock_iam = create_gcp_iam_mock_for_resource_permissions();
         provider
             .expect_get_gcp_iam_client()

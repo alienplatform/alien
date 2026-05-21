@@ -390,21 +390,20 @@ fn validate_gcp_permissions(
 
     // Iterate through all platform permissions in the array
     for platform_permission in gcp_platform_permissions {
-        let permissions = match &platform_permission.grant.permissions {
-            Some(permissions) => permissions,
-            None => continue, // No permissions defined for this permission, skip
-        };
-
-        let mut invalid_permissions = Vec::new();
-
-        for permission in permissions {
-            // Check if this permission exists in the GCP permissions dataset
-            if !permissions_dataset.contains(permission) {
-                invalid_permissions.push(permission.clone());
+        match platform_permission.grant.permissions.as_deref() {
+            Some([]) | None => {
+                all_invalid_permissions.push("missing permissions".to_string());
+            }
+            Some(permissions) => {
+                for permission in permissions {
+                    if !permissions_dataset.contains(permission)
+                        && !is_known_gcp_dataset_gap(permission)
+                    {
+                        all_invalid_permissions.push(permission.clone());
+                    }
+                }
             }
         }
-
-        all_invalid_permissions.extend(invalid_permissions);
     }
 
     if !all_invalid_permissions.is_empty() {
@@ -420,6 +419,10 @@ fn validate_gcp_permissions(
         permission_set.id
     );
     Ok(())
+}
+
+fn is_known_gcp_dataset_gap(permission: &str) -> bool {
+    matches!(permission, "iam.serviceAccounts.getAccessToken")
 }
 
 /// Validate Azure actions in a permission set
@@ -531,6 +534,71 @@ fn collect_permission_set_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<
             collect_permission_set_files(&path, files)?;
         } else if path.extension().and_then(|s| s.to_str()) == Some("jsonc") {
             files.push(path);
+        }
+    }
+
+    Ok(())
+}
+
+fn load_permission_set_by_id(permission_set_id: &str) -> Result<alien_core::PermissionSet> {
+    let permission_sets_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("permission-sets");
+    let file_path = permission_sets_dir
+        .join(permission_set_id)
+        .with_extension("jsonc");
+    load_permission_set(&file_path)
+}
+
+fn gcp_permissions(permission_set: &alien_core::PermissionSet) -> Vec<&str> {
+    permission_set
+        .platforms
+        .gcp
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .flat_map(|platform_permission| {
+            platform_permission
+                .grant
+                .permissions
+                .as_deref()
+                .unwrap_or_default()
+        })
+        .map(String::as_str)
+        .collect()
+}
+
+#[test]
+fn test_control_plane_permission_sets_avoid_sensitive_gcp_content_reads() -> Result<()> {
+    let storage_heartbeat = load_permission_set_by_id("storage/heartbeat")?;
+    let storage_management = load_permission_set_by_id("storage/management")?;
+    let storage_provision = load_permission_set_by_id("storage/provision")?;
+    let kv_heartbeat = load_permission_set_by_id("kv/heartbeat")?;
+    let kv_management = load_permission_set_by_id("kv/management")?;
+    let kv_provision = load_permission_set_by_id("kv/provision")?;
+    let vault_provision = load_permission_set_by_id("vault/provision")?;
+
+    for permission_set in [
+        &storage_heartbeat,
+        &storage_management,
+        &storage_provision,
+        &kv_heartbeat,
+        &kv_management,
+        &kv_provision,
+        &vault_provision,
+    ] {
+        let permissions = gcp_permissions(permission_set);
+        for forbidden in [
+            "storage.objects.get",
+            "storage.objects.list",
+            "datastore.entities.get",
+            "datastore.entities.list",
+            "secretmanager.versions.access",
+        ] {
+            assert!(
+                !permissions.contains(&forbidden),
+                "{} unexpectedly grants {}",
+                permission_set.id,
+                forbidden
+            );
         }
     }
 
@@ -710,7 +778,9 @@ fn test_permission_sets_structure() -> Result<()> {
                     || permission_set.platforms.azure.is_some();
 
                 if !has_any_platform {
-                    errors.push(format!("{}: no platforms defined", file_path.display()));
+                    if !permission_set.id.starts_with("daemon/") {
+                        errors.push(format!("{}: no platforms defined", file_path.display()));
+                    }
                 }
 
                 // Check AWS platform structure
@@ -777,7 +847,6 @@ fn test_permission_sets_structure() -> Result<()> {
                             .data_actions
                             .as_ref()
                             .map_or(false, |v| !v.is_empty());
-
                         if !has_actions && !has_permissions && !has_data_actions {
                             errors.push(format!(
                                 "{}: GCP[{}] has no grant permissions",

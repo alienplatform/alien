@@ -49,7 +49,7 @@ impl TfEmitter for AzureRemoteStackManagementEmitter {
             [
                 attr(
                     "name",
-                    expr::template("${var.stack_name}-management-identity".to_string()),
+                    expr::template("${local.resource_prefix}-management-identity".to_string()),
                 ),
                 attr(
                     "resource_group_name",
@@ -82,7 +82,7 @@ impl TfEmitter for AzureRemoteStackManagementEmitter {
                 ),
                 attr(
                     "name",
-                    expr::template("${var.stack_name}-alien-fic".to_string()),
+                    expr::template("${local.resource_prefix}-federated-credential".to_string()),
                 ),
                 attr(
                     "resource_group_name",
@@ -158,10 +158,10 @@ fn emit_management_role(
         "azurerm_role_definition",
         &format!("{label}_management_role"),
         [
-            attr("name", expr::template("${var.stack_name}-management-role".to_string())),
+            attr("name", expr::template("${local.resource_prefix}-management-role".to_string())),
             attr(
                 "role_definition_id",
-                expr::raw("uuidv5(\"oid\", \"alien:azure:mgmt-role-def:${var.stack_name}\")"),
+                expr::raw("uuidv5(\"oid\", \"deployment:azure:mgmt-role-def:${local.resource_prefix}\")"),
             ),
             attr(
                 "scope",
@@ -171,7 +171,7 @@ fn emit_management_role(
             ),
             attr(
                 "description",
-                expr::template("Management role for Alien stack '${var.stack_name}'".to_string()),
+                expr::template("Management role for deployment '${local.resource_prefix}'".to_string()),
             ),
             nested(block(
                 "permissions",
@@ -200,7 +200,7 @@ fn emit_management_identity_assignment(fragment: &mut TfFragment, label: &str) {
         [
             attr(
                 "name",
-                expr::raw("uuidv5(\"oid\", \"alien:azure:mgmt-role-assign:${var.stack_name}:uami\")"),
+                expr::raw("uuidv5(\"oid\", \"deployment:azure:mgmt-role-assign:${local.resource_prefix}:uami\")"),
             ),
             attr(
                 "scope",
@@ -235,7 +235,7 @@ fn emit_service_principal_fallback_assignment(fragment: &mut TfFragment, label: 
             ),
             attr(
                 "name",
-                expr::raw("uuidv5(\"oid\", \"alien:azure:mgmt-role-assign:${var.stack_name}:sp\")"),
+                expr::raw("uuidv5(\"oid\", \"deployment:azure:mgmt-role-assign:${local.resource_prefix}:sp\")"),
             ),
             attr(
                 "scope",
@@ -263,7 +263,7 @@ fn emit_acr_push_assignment(fragment: &mut TfFragment, label: &str) {
         [
             attr(
                 "name",
-                expr::raw("uuidv5(\"oid\", \"alien:azure:mgmt-acr-assign:${var.stack_name}\")"),
+                expr::raw("uuidv5(\"oid\", \"deployment:azure:mgmt-acr-assign:${local.resource_prefix}\")"),
             ),
             attr("scope", expr::raw("\"/subscriptions/${var.azure_subscription_id}\"")),
             attr(

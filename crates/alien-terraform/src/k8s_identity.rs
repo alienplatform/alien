@@ -145,7 +145,7 @@ fn apply_aks(fragment: &mut TfFragment, label: &str) -> Expression {
         [
             attr(
                 "name",
-                expr::template(format!("${{var.stack_name}}-{label}")),
+                expr::template(format!("${{local.resource_prefix}}-{label}")),
             ),
             attr(
                 "resource_group_name",

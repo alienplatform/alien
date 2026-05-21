@@ -292,6 +292,7 @@ impl GcpBuildController {
             .with_project_name(gcp_config.project_id.clone())
             .with_region(gcp_config.region.clone())
             .with_stack_prefix(ctx.resource_prefix.to_string())
+            .with_stack_name(ctx.desired_stack.id().to_string())
             .with_resource_name(config.id.clone());
         if let Some(ref project_number) = gcp_config.project_number {
             permission_context = permission_context.with_project_number(project_number.clone());

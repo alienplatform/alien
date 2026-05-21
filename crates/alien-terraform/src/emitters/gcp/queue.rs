@@ -8,7 +8,7 @@
 use crate::{
     block::{attr, block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
-    emitters::gcp::helpers::{downcast, labels, required_label, stack_name_template},
+    emitters::gcp::helpers::{downcast, labels, required_label, resource_prefix_template},
     expr,
 };
 use alien_core::{import::EmitContext, Queue, Result, Worker, WorkerTrigger};
@@ -26,7 +26,7 @@ impl TfEmitter for GcpQueueEmitter {
             "google_pubsub_topic",
             label,
             [
-                attr("name", stack_name_template(queue.id())),
+                attr("name", resource_prefix_template(queue.id())),
                 attr("project", expr::raw("var.gcp_project")),
                 attr("labels", labels(ctx, "queue")),
             ],
@@ -39,7 +39,7 @@ impl TfEmitter for GcpQueueEmitter {
             [
                 attr(
                     "name",
-                    expr::template(format!("${{var.stack_name}}-{}-default", queue.id())),
+                    expr::template(format!("${{local.resource_prefix}}-{}-default", queue.id())),
                 ),
                 attr("project", expr::raw("var.gcp_project")),
                 attr(

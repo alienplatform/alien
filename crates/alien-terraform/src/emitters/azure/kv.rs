@@ -109,7 +109,7 @@ fn parent_storage_account_label<'a>(ctx: &EmitContext<'a>) -> Result<&'a str> {
 /// stack name starts with a digit.
 fn table_name_expr(kv_id: &str) -> Expression {
     expr::raw(format!(
-        "substr(lower(replace(\"kv${{var.stack_name}}{}\", \"/[^A-Za-z0-9]/\", \"\")), 0, 63)",
+        "substr(lower(replace(\"kv${{local.resource_prefix}}{}\", \"/[^A-Za-z0-9]/\", \"\")), 0, 63)",
         kv_id
     ))
 }

@@ -3,7 +3,7 @@
 use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
-    emitters::aws::helpers::{downcast, required_label, stack_name_template, tags},
+    emitters::aws::helpers::{downcast, required_label, resource_prefix_template, tags},
     expr,
 };
 use alien_core::{import::EmitContext, Queue, Result, Worker, WorkerTrigger};
@@ -21,7 +21,7 @@ impl TfEmitter for AwsQueueEmitter {
             "aws_sqs_queue",
             label,
             [
-                attr("name", stack_name_template(queue.id())),
+                attr("name", resource_prefix_template(queue.id())),
                 attr("sqs_managed_sse_enabled", Expression::Bool(true)),
                 attr(
                     "visibility_timeout_seconds",

@@ -18,7 +18,9 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context};
 use alien_permissions::{
-    generators::{GcpIamBinding, GcpRuntimePermissionsGenerator},
+    generators::{
+        GcpBindingTargetScope, GcpCustomRole, GcpIamBinding, GcpRuntimePermissionsGenerator,
+    },
     BindingTarget, PermissionContext,
 };
 use hcl::{
@@ -63,60 +65,34 @@ pub fn label_for_ref<'a>(ctx: &'a EmitContext<'_>, reference: &ResourceRef) -> R
     })
 }
 
-/// `${var.stack_name}-{suffix}` HCL template expression for GCP
+/// `${local.resource_prefix}-{suffix}` HCL template expression for GCP
 /// resource names. GCP names are lowercase-hyphenated already so this
 /// matches AWS/Azure conventions byte-for-byte.
-pub fn stack_name_template(suffix: &str) -> Expression {
-    expr::template(format!("${{var.stack_name}}-{suffix}"))
+pub fn resource_prefix_template(suffix: &str) -> Expression {
+    expr::template(format!("${{local.resource_prefix}}-{suffix}"))
 }
 
 /// GCP service-account IDs are capped at 30 chars and must start with a
 /// letter and end with an alphanumeric character. Keep a readable prefix and
-/// append an 8-char hash of the full stack/resource identity so long resource
+/// append an 8-char hash of the full resource identity so long resource
 /// ids like `artifact-registry-pull` and `artifact-registry-push` do not
 /// collide after truncation.
 pub fn service_account_id_template(suffix: &str) -> Expression {
     expr::raw(format!(
-        "format(\"%s-%s\", trim(substr(replace(lower(format(\"a-%s-{suffix}\", var.stack_name)), \"_\", \"-\"), 0, 21), \"-\"), substr(sha1(replace(lower(format(\"%s-{suffix}\", var.stack_name)), \"_\", \"-\")), 0, 8))"
+        "format(\"%s-%s\", trim(substr(replace(lower(format(\"a-%s-{suffix}\", local.resource_prefix)), \"_\", \"-\"), 0, 21), \"-\"), substr(sha1(replace(lower(format(\"%s-{suffix}\", local.resource_prefix)), \"_\", \"-\")), 0, 8))"
     ))
 }
 
-/// GCP custom role ids are project-global. Scope every generated role id to
-/// the stack name and owning resource label so parallel setup tests,
-/// repeated applies, and multiple identities in one stack do not try to create
-/// the same `storageDataRead`/`functionExecute` role in the target project.
-fn custom_role_id_template(owner_label: &str, role_id: &str) -> Expression {
-    let owner_prefix = role_id_segment(owner_label, 12);
-    let role_id_prefix = role_id_segment(role_id, 26);
-    expr::raw(format!(
-        "format(\"%s_{owner_prefix}_{role_id_prefix}_%s\", substr(replace(var.stack_name, \"-\", \"_\"), 0, 12), substr(sha1(format(\"%s-{owner_label}-{role_id}\", var.stack_name)), 0, 8))"
-    ))
-}
-
-fn role_id_segment(value: &str, max_len: usize) -> String {
-    value
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || ch == '_' {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .take(max_len)
-        .collect()
-}
-
-/// Standard Alien labels block for GCP. GCP labels must be lowercase
-/// kebab-case for both keys and values, max 63 chars.
+/// Standard labels block for GCP. GCP labels must be lowercase kebab-case for
+/// both keys and values, max 63 chars.
 pub fn labels(ctx: &EmitContext<'_>, alien_resource_type: &'static str) -> Expression {
     let resource_id_label = sanitize_label_value(ctx.resource_id);
     expr::object([
-        ("managed-by", Expression::String("alien-dev".to_string())),
-        ("alien-stack-id", expr::raw("var.stack_name")),
-        ("alien-resource-id", Expression::String(resource_id_label)),
+        ("managed-by", Expression::String("deployment".to_string())),
+        ("deployment", expr::raw("local.resource_prefix")),
+        ("resource", Expression::String(resource_id_label)),
         (
-            "alien-resource-type",
+            "resource-type",
             Expression::String(alien_resource_type.to_string()),
         ),
     ])
@@ -144,6 +120,22 @@ pub fn sanitize_label_value(input: &str) -> String {
 /// `service-account` resource by permissions profile name (the
 /// `<profile>-sa` convention used across cloud emitters).
 pub fn service_account_email(ctx: &EmitContext<'_>, profile_name: &str) -> Option<Expression> {
+    service_account_attribute(ctx, profile_name, "email")
+}
+
+/// Look up the fully-qualified IAM service-account resource name for an Alien
+/// `service-account` resource. Some GCP APIs, including Cloud Build triggers,
+/// require `projects/{project}/serviceAccounts/{account}` instead of the bare
+/// email address accepted by Cloud Run and Eventarc.
+pub fn service_account_name(ctx: &EmitContext<'_>, profile_name: &str) -> Option<Expression> {
+    service_account_attribute(ctx, profile_name, "name")
+}
+
+fn service_account_attribute(
+    ctx: &EmitContext<'_>,
+    profile_name: &str,
+    attribute: &'static str,
+) -> Option<Expression> {
     let service_account_id = format!("{profile_name}-sa");
     let (_id, entry) = ctx
         .stack
@@ -151,7 +143,11 @@ pub fn service_account_email(ctx: &EmitContext<'_>, profile_name: &str) -> Optio
         .find(|(id, _entry)| id.as_str() == service_account_id)?;
     entry.config.downcast_ref::<ServiceAccount>()?;
     let label = ctx.name_for(&service_account_id)?;
-    Some(expr::traversal(["google_service_account", label, "email"]))
+    Some(expr::traversal([
+        "google_service_account",
+        label,
+        attribute,
+    ]))
 }
 
 /// Build a `google_project_iam_member` block binding `role` to
@@ -203,32 +199,17 @@ pub fn service_account_member_for_var(variable: &str) -> Expression {
 /// as `var.gcp_project` / `var.gcp_region` so the rendered HCL stays
 /// parameterised — the runtime generator interpolates them at apply
 /// time, exactly the same way the controller does.
-pub fn permission_context(label: &str) -> PermissionContext {
+pub fn permission_context(label: &str, stack_name: &str) -> PermissionContext {
     PermissionContext::new()
-        .with_stack_prefix("${var.stack_name}".to_string())
+        .with_stack_prefix("${local.resource_prefix}".to_string())
+        .with_stack_name(stack_name.to_string())
         .with_project_name("${var.gcp_project}".to_string())
         .with_project_number("${data.google_project.current.number}".to_string())
         .with_region("${var.gcp_region}".to_string())
         .with_service_account_name(label.to_string())
 }
 
-/// Emit one `google_project_iam_custom_role` + matching
-/// `google_project_iam_member` bindings for `permission_set`.
-///
-/// Mirrors the runtime path:
-///
-/// * `GcpRuntimePermissionsGenerator::generate_custom_role` produces
-///   the role definition (`role_id`, `included_permissions`, …).
-/// * `GcpRuntimePermissionsGenerator::generate_bindings` produces the
-///   bindings the controller would attach via
-///   `google_project_iam_policy`.
-///
-/// `member_override` lets callers swap the generator-derived member
-/// (`serviceAccount:<email>@<project>...`) for the actual Terraform
-/// resource reference (`serviceAccount:${google_service_account.x.email}`).
-/// The Terraform-side member is always the right answer because the
-/// controller doesn't know the email up front either; the role
-/// definition is what we want to reuse.
+/// Emit a GCP custom role plus IAM bindings for `permission_set`.
 pub fn emit_custom_role_and_bindings(
     fragment: &mut TfFragment,
     sa_label: &str,
@@ -258,52 +239,8 @@ pub fn emit_custom_role_and_bindings_for_target(
         return Ok(());
     }
 
+    let custom_roles = emit_custom_roles(fragment, permission_set, context)?;
     let generator = GcpRuntimePermissionsGenerator::new();
-    let custom_role = generator
-        .generate_custom_role(permission_set, context)
-        .context(ErrorData::GenericError {
-            message: format!(
-                "failed to generate GCP custom role for permission set '{}'",
-                permission_set.id
-            ),
-        })?;
-
-    let role_id = custom_role
-        .name
-        .rsplit('/')
-        .next()
-        .unwrap_or(&custom_role.name)
-        .to_string();
-    let role_label = format!("{sa_label}_{}", sanitize_label_value(&role_id));
-
-    fragment.resource_blocks.push(resource_block(
-        "google_project_iam_custom_role",
-        &role_label,
-        [
-            attr(
-                "count",
-                expr::raw("var.gcp_use_existing_custom_roles ? 0 : 1"),
-            ),
-            attr("project", expr::raw("var.gcp_project")),
-            attr("role_id", custom_role_id_template(sa_label, &role_id)),
-            attr("title", Expression::String(custom_role.title.clone())),
-            attr(
-                "description",
-                Expression::String(custom_role.description.clone()),
-            ),
-            attr("stage", Expression::String(custom_role.stage.clone())),
-            attr(
-                "permissions",
-                Expression::Array(
-                    custom_role
-                        .included_permissions
-                        .iter()
-                        .map(|p| Expression::String(p.clone()))
-                        .collect(),
-                ),
-            ),
-        ],
-    ));
 
     let bindings = generator
         .generate_bindings(permission_set, target, context)
@@ -315,18 +252,23 @@ pub fn emit_custom_role_and_bindings_for_target(
         })?;
 
     for (idx, binding) in bindings.bindings.into_iter().enumerate() {
-        let binding_label = if bindings_count(&binding) {
-            format!("{role_label}_binding_{idx}")
-        } else {
-            format!("{role_label}_binding")
-        };
-        let role_expression = expr::raw(format!(
-            "var.gcp_use_existing_custom_roles ? format(\"projects/%s/roles/{role_id}\", var.gcp_project) : google_project_iam_custom_role.{role_label}[0].name"
-        ));
+        let custom_role = custom_roles
+            .iter()
+            .find(|role| role.name == binding.role)
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::GenericError {
+                    message: format!(
+                        "missing generated custom role for GCP binding '{}'",
+                        binding.role
+                    ),
+                })
+            })?;
+        let role_label = custom_role_label(custom_role);
+        let binding_label = format!("{role_label}_{sa_label}_binding_{idx}",);
         push_iam_member(
             fragment,
             &binding_label,
-            role_expression,
+            expr::traversal(["google_project_iam_custom_role", &role_label, "name"]),
             member_override,
             &binding,
         )?;
@@ -335,10 +277,71 @@ pub fn emit_custom_role_and_bindings_for_target(
     Ok(())
 }
 
-fn bindings_count(_binding: &GcpIamBinding) -> bool {
-    // Always suffix bindings with their index — the conditional binding
-    // shape is symmetric with the unconditional one this way.
-    true
+pub(crate) fn emit_custom_roles(
+    fragment: &mut TfFragment,
+    permission_set: &PermissionSet,
+    context: &PermissionContext,
+) -> Result<Vec<GcpCustomRole>> {
+    let generator = GcpRuntimePermissionsGenerator::new();
+    let custom_roles = generator
+        .generate_custom_roles(permission_set, context)
+        .context(ErrorData::GenericError {
+            message: format!(
+                "failed to generate GCP custom roles for permission set '{}'",
+                permission_set.id
+            ),
+        })?;
+    for custom_role in &custom_roles {
+        let role_label = custom_role_label(custom_role);
+        let role_id = custom_role_id_template(custom_role);
+
+        fragment.resource_blocks.push(resource_block(
+            "google_project_iam_custom_role",
+            &role_label,
+            [
+                attr("project", expr::raw("var.gcp_project")),
+                attr("role_id", role_id),
+                attr("title", Expression::String(custom_role.title.clone())),
+                attr(
+                    "description",
+                    expr::template(custom_role.description.clone()),
+                ),
+                attr("stage", Expression::String(custom_role.stage.clone())),
+                attr(
+                    "permissions",
+                    Expression::Array(
+                        custom_role
+                            .included_permissions
+                            .iter()
+                            .map(|p| Expression::String(p.clone()))
+                            .collect(),
+                    ),
+                ),
+            ],
+        ));
+    }
+
+    Ok(custom_roles)
+}
+
+pub(crate) fn custom_role_label(custom_role: &GcpCustomRole) -> String {
+    let suffix = custom_role_suffix(custom_role);
+    format!("gcp_role_{}", suffix.replace('-', "_"))
+}
+
+fn custom_role_id_template(custom_role: &GcpCustomRole) -> Expression {
+    let suffix = custom_role_suffix(custom_role);
+    expr::raw(format!(
+        "format(\"role_%s_{suffix}\", substr(replace(lower(local.resource_prefix), \"-\", \"_\"), 0, 18))"
+    ))
+}
+
+fn custom_role_suffix(custom_role: &GcpCustomRole) -> String {
+    custom_role
+        .role_id
+        .strip_prefix("role_local_resource_pre_")
+        .unwrap_or(&custom_role.role_id)
+        .to_string()
 }
 
 fn push_iam_member(
@@ -348,16 +351,28 @@ fn push_iam_member(
     member_override: &Expression,
     binding: &GcpIamBinding,
 ) -> Result<()> {
-    let mut body: Vec<Structure> = vec![
-        attr("project", expr::raw("var.gcp_project")),
-        attr("role", role),
-        attr("member", member_override.clone()),
-    ];
+    let mut body: Vec<Structure> =
+        vec![attr("role", role), attr("member", member_override.clone())];
+
+    let resource_type = match binding.target {
+        GcpBindingTargetScope::Project => {
+            body.insert(0, attr("project", expr::raw("var.gcp_project")));
+            "google_project_iam_member"
+        }
+        GcpBindingTargetScope::CurrentResource => {
+            return Err(AlienError::new(ErrorData::GenericError {
+                message: format!(
+                    "cannot emit generic resource-level GCP IAM binding for role '{}'",
+                    binding.role
+                ),
+            }));
+        }
+    };
 
     if let Some(condition) = &binding.condition {
         // The expression has already been interpolated by
         // `GcpRuntimePermissionsGenerator` against the Terraform-side
-        // permission context (`var.stack_name` / `var.gcp_project` /
+        // permission context (`local.resource_prefix` / `var.gcp_project` /
         // `var.gcp_region`). Escape CEL string quotes but leave Terraform
         // `${...}` interpolation intact for apply time.
         body.push(nested(block(
@@ -376,11 +391,9 @@ fn push_iam_member(
         )));
     }
 
-    fragment.resource_blocks.push(resource_block(
-        "google_project_iam_member",
-        binding_label,
-        body,
-    ));
+    fragment
+        .resource_blocks
+        .push(resource_block(resource_type, binding_label, body));
     Ok(())
 }
 

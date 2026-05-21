@@ -11,8 +11,8 @@ use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::aws::helpers::{
-        aws_terraform_permission_context, downcast, emit_iam_role_policy, required_label,
-        service_assume_role_policy, stack_name_template, tags,
+        aws_terraform_permission_context, downcast, emit_iam_role_policy, iam_role_name_template,
+        required_label, service_assume_role_policy, tags,
     },
     expr,
 };
@@ -36,7 +36,7 @@ impl TfEmitter for AwsServiceAccountEmitter {
             "aws_iam_role",
             label,
             [
-                attr("name", stack_name_template(&service_account.id)),
+                attr("name", iam_role_name_template(&service_account.id)),
                 attr(
                     "assume_role_policy",
                     service_assume_role_policy(&services_ref),

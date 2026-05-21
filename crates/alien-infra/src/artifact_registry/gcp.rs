@@ -837,7 +837,7 @@ mod tests {
     }
 
     /// Adds common IAM mock expectations needed for resource-scoped permissions
-    /// (custom role ensure + patch flow triggered by management permission mutations).
+    /// (custom role binding flow triggered by management permission mutations).
     fn add_resource_permission_mocks(mock_iam: &mut MockIamApi) {
         mock_iam
             .expect_get_role()

@@ -16,7 +16,6 @@ use alien_error::AlienError;
 use indexmap::IndexMap;
 use serde_json::Value as JsonValue;
 
-pub const PARAM_DEPLOYMENT_GROUP_TOKEN: &str = "DeploymentGroupToken";
 pub const PARAM_MANAGING_ROLE_ARN: &str = "ManagingRoleArn";
 pub const PARAM_MANAGING_ACCOUNT_ID: &str = "ManagingAccountId";
 pub const PARAM_VPC_CIDR: &str = "VpcCidr";
@@ -82,14 +81,14 @@ pub fn stack_name(suffix: &str) -> CfExpression {
     CfExpression::sub(format!("${{AWS::StackName}}-{suffix}"))
 }
 
-/// Standard Alien resource tags.
+/// Standard resource tags.
 pub fn tags(ctx: &EmitContext<'_>) -> CfExpression {
     CfExpression::list([
         tag(ALIEN_MANAGED_BY_TAG_KEY, ALIEN_MANAGED_BY_TAG_VALUE),
         tag_expr(ALIEN_STACK_TAG_KEY, CfExpression::ref_("AWS::StackName")),
         tag(ALIEN_RESOURCE_TAG_KEY, ctx.resource_id),
         tag(
-            "AlienResourceType",
+            "resource-type",
             ctx.resource.config.resource_type().as_ref(),
         ),
     ])

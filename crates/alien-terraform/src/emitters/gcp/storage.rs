@@ -8,7 +8,7 @@
 use crate::{
     block::{attr, block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
-    emitters::gcp::helpers::{downcast, labels, required_label, stack_name_template},
+    emitters::gcp::helpers::{downcast, labels, required_label, resource_prefix_template},
     expr,
 };
 use alien_core::{import::EmitContext, LifecycleRule, Result, Storage};
@@ -65,7 +65,7 @@ impl TfEmitter for GcpStorageEmitter {
 
 fn bucket(label: &str, ctx: &EmitContext<'_>, storage: &Storage) -> hcl::structure::Block {
     let mut body: Vec<hcl::structure::Structure> = vec![
-        attr("name", stack_name_template(storage.id())),
+        attr("name", resource_prefix_template(storage.id())),
         attr("project", expr::raw("var.gcp_project")),
         attr("location", expr::raw("upper(var.gcp_region)")),
         attr("storage_class", Expression::String("STANDARD".to_string())),

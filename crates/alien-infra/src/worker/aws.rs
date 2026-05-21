@@ -15,6 +15,7 @@ use alien_aws_clients::apigatewayv2::{
     CreateApiMappingRequest, CreateApiRequest, CreateDomainNameRequest, CreateIntegrationRequest,
     CreateRouteRequest, CreateStageRequest, DomainNameConfiguration,
 };
+use alien_aws_clients::ec2::{DescribeNetworkInterfacesRequest, Filter};
 use alien_aws_clients::eventbridge::{
     EventBridgeTag, EventBridgeTarget, PutRuleRequest, PutTargetsRequest,
 };
@@ -25,7 +26,7 @@ use alien_aws_clients::lambda::{
 use alien_aws_clients::s3::{LambdaFunctionConfiguration, NotificationConfiguration};
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    standard_resource_tags, CertificateStatus, DnsRecordStatus, Ingress, Network,
+    standard_resource_tags, CertificateStatus, DnsRecordStatus, Ingress, Network, NetworkSettings,
     ResourceDefinition, ResourceOutputs, ResourceRef, ResourceStatus, Worker, WorkerOutputs,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
@@ -65,6 +66,13 @@ fn eventbridge_tags(prefix: &str, resource_id: &str) -> Vec<EventBridgeTag> {
 }
 
 impl AwsWorkerController {
+    fn should_wait_for_lambda_vpc_enis(ctx: &ResourceControllerContext<'_>) -> bool {
+        matches!(
+            ctx.deployment_config.stack_settings.network,
+            Some(NetworkSettings::Create { .. })
+        )
+    }
+
     fn resolve_domain_info(
         ctx: &ResourceControllerContext<'_>,
         resource_id: &str,
@@ -2644,11 +2652,136 @@ impl AwsWorkerController {
         // (Lambda permissions are removed when the worker is deleted)
         self.eventbridge_permission_statement_ids.clear();
 
-        // Continue to DeletingWorker state (linear flow)
+        // Detach the Lambda from the VPC before deleting it. AWS otherwise
+        // keeps Lambda-managed ENIs around after function deletion, which can
+        // block Terraform/CloudFormation from deleting customer-owned subnets.
         Ok(HandlerAction::Continue {
-            state: DeletingWorker,
+            state: DetachingVpcConfig,
             suggested_delay: None,
         })
+    }
+
+    #[handler(
+        state = DetachingVpcConfig,
+        on_failure = DeleteFailed,
+        status = ResourceStatus::Deleting,
+    )]
+    async fn detaching_vpc_config(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        let aws_worker_name = get_aws_worker_name(ctx.resource_prefix, &worker_config.id);
+
+        if self.get_vpc_config(ctx)?.is_none() {
+            return Ok(HandlerAction::Continue {
+                state: DeletingWorker,
+                suggested_delay: None,
+            });
+        }
+
+        let aws_cfg = ctx.get_aws_config()?;
+        let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
+        let function_identifier = self.arn.as_deref().unwrap_or(&aws_worker_name);
+        let request = UpdateFunctionConfigurationRequest::builder()
+            .vpc_config(
+                VpcConfig::builder()
+                    .subnet_ids(Vec::new())
+                    .security_group_ids(Vec::new())
+                    .build(),
+            )
+            .build();
+
+        match client
+            .update_function_configuration(function_identifier, request)
+            .await
+        {
+            Ok(_) => {
+                info!(worker=%worker_config.id, "Lambda VPC config detach requested");
+                Ok(HandlerAction::Continue {
+                    state: DetachVpcWaitForActive,
+                    suggested_delay: Some(Duration::from_secs(5)),
+                })
+            }
+            Err(e)
+                if matches!(
+                    e.error,
+                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
+                info!(worker=%worker_config.id, "Lambda already gone while detaching VPC config");
+                Ok(HandlerAction::Continue {
+                    state: DeletingWorker,
+                    suggested_delay: None,
+                })
+            }
+            Err(e) => Err(e.context(ErrorData::CloudPlatformError {
+                message: "Failed to detach Lambda worker from VPC".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })),
+        }
+    }
+
+    #[handler(
+        state = DetachVpcWaitForActive,
+        on_failure = DeleteFailed,
+        status = ResourceStatus::Deleting,
+    )]
+    async fn detach_vpc_wait_for_active(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        let aws_worker_name = get_aws_worker_name(ctx.resource_prefix, &worker_config.id);
+        let function_identifier = self.arn.as_deref().unwrap_or(&aws_worker_name);
+        let aws_cfg = ctx.get_aws_config()?;
+        let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
+
+        match client
+            .get_function_configuration(function_identifier, None)
+            .await
+        {
+            Ok(result)
+                if result.state.as_deref() == Some("Active")
+                    && result.last_update_status.as_deref() == Some("Successful") =>
+            {
+                Ok(HandlerAction::Continue {
+                    state: DeletingWorker,
+                    suggested_delay: None,
+                })
+            }
+            Ok(result)
+                if result.state.as_deref() == Some("Pending")
+                    || result.last_update_status.as_deref() == Some("InProgress") =>
+            {
+                Ok(HandlerAction::Stay {
+                    max_times: 60,
+                    suggested_delay: Some(Duration::from_secs(5)),
+                })
+            }
+            Ok(result) => Err(AlienError::new(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Lambda VPC detach failed. State: {:?}, Last Update: {:?}",
+                    result.state, result.last_update_status
+                ),
+                resource_id: Some(worker_config.id.clone()),
+            })),
+            Err(e)
+                if matches!(
+                    e.error,
+                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
+                Ok(HandlerAction::Continue {
+                    state: DeletingWorker,
+                    suggested_delay: None,
+                })
+            }
+            Err(e) => Err(e.context(ErrorData::CloudPlatformError {
+                message: "Failed to check Lambda VPC detach status".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })),
+        }
     }
 
     #[handler(
@@ -2722,10 +2855,17 @@ impl AwsWorkerController {
                 self.url = None;
                 self.worker_name = None;
                 self.event_source_mappings.clear();
-                Ok(HandlerAction::Continue {
-                    state: DeletingCertificate,
-                    suggested_delay: None,
-                })
+                if Self::should_wait_for_lambda_vpc_enis(ctx) {
+                    Ok(HandlerAction::Continue {
+                        state: WaitingForVpcEnisReleased,
+                        suggested_delay: Some(Duration::from_secs(10)),
+                    })
+                } else {
+                    Ok(HandlerAction::Continue {
+                        state: DeletingCertificate,
+                        suggested_delay: None,
+                    })
+                }
             }
             Ok(_) => Ok(HandlerAction::Stay {
                 max_times: 10,
@@ -2736,6 +2876,75 @@ impl AwsWorkerController {
                 resource_id: Some(worker_config.id.clone()),
             })),
         }
+    }
+
+    #[handler(
+        state = WaitingForVpcEnisReleased,
+        on_failure = DeleteFailed,
+        status = ResourceStatus::Deleting,
+    )]
+    async fn waiting_for_vpc_enis_released(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        if !Self::should_wait_for_lambda_vpc_enis(ctx) {
+            info!(
+                worker=%worker_config.id,
+                "Skipping Lambda VPC network interface wait for externally managed network"
+            );
+            return Ok(HandlerAction::Continue {
+                state: DeletingCertificate,
+                suggested_delay: None,
+            });
+        }
+
+        let aws_worker_name = get_aws_worker_name(ctx.resource_prefix, &worker_config.id);
+        let aws_cfg = ctx.get_aws_config()?;
+        let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
+
+        let result = client
+            .describe_network_interfaces(
+                DescribeNetworkInterfacesRequest::builder()
+                    .filters(vec![Filter {
+                        name: "description".to_string(),
+                        values: vec![format!("AWS Lambda VPC ENI-{}*", aws_worker_name)],
+                    }])
+                    .build(),
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to check Lambda VPC network interface cleanup".to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })?;
+
+        let network_interfaces = result
+            .network_interface_set
+            .map(|set| set.items)
+            .unwrap_or_default();
+
+        if network_interfaces.is_empty() {
+            return Ok(HandlerAction::Continue {
+                state: DeletingCertificate,
+                suggested_delay: None,
+            });
+        }
+
+        let network_interface_ids = network_interfaces
+            .iter()
+            .filter_map(|eni| eni.network_interface_id.as_deref())
+            .collect::<Vec<_>>();
+
+        info!(
+            worker=%worker_config.id,
+            network_interfaces=?network_interface_ids,
+            "Waiting for Lambda VPC network interfaces to be released"
+        );
+
+        Ok(HandlerAction::Stay {
+            max_times: 90,
+            suggested_delay: Some(Duration::from_secs(10)),
+        })
     }
 
     #[handler(

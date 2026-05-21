@@ -2,7 +2,7 @@
 //!
 //! AWS Systems Manager Parameter Store is account-and-region-scoped, not
 //! a discrete resource. The vault is realized as a name prefix
-//! (`${var.stack_name}-{vault.id}`) the controller uses for
+//! (`${local.resource_prefix}-{vault.id}`) the controller uses for
 //! `ssm:PutParameter`. ImportData carries the prefix so importers can
 //! reconstruct the namespace without a cloud lookup.
 
@@ -33,7 +33,7 @@ impl TfEmitter for AwsVaultEmitter {
 
         let mut fragment = TfFragment::default();
         let context = aws_terraform_permission_context()
-            .with_resource_name(format!("${{var.stack_name}}-{}", vault.id()));
+            .with_resource_name(format!("${{local.resource_prefix}}-{}", vault.id()));
 
         for (idx, permission_set_ref) in management_permission_refs(ctx).into_iter().enumerate() {
             if let Some(permission_set) = permission_set_ref
@@ -73,7 +73,7 @@ impl TfEmitter for AwsVaultEmitter {
             ("region", expr::raw("data.aws_region.current.region")),
             (
                 "parameterPrefix",
-                expr::template(format!("${{var.stack_name}}-{}", vault.id())),
+                expr::template(format!("${{local.resource_prefix}}-{}", vault.id())),
             ),
         ]))
     }
@@ -84,7 +84,7 @@ impl TfEmitter for AwsVaultEmitter {
             ("service", Expression::String("parameter-store".to_string())),
             (
                 "vaultPrefix",
-                expr::template(format!("${{var.stack_name}}-{}", vault.id())),
+                expr::template(format!("${{local.resource_prefix}}-{}", vault.id())),
             ),
         ])))
     }

@@ -33,7 +33,7 @@
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${managedByTag}": "alien"
+                "aws:RequestTag/${managedByTag}": "deployment"
               }
             }
           },
@@ -43,7 +43,7 @@
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${resourceTag}": "${resourceName}",
-                "aws:RequestTag/${managedByTag}": "alien"
+                "aws:RequestTag/${managedByTag}": "deployment"
               }
             }
           }
@@ -59,7 +59,7 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${managedByTag}": "alien"
+                "aws:ResourceTag/${managedByTag}": "deployment"
               }
             }
           },
@@ -69,7 +69,7 @@
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
                 "aws:ResourceTag/${resourceTag}": "${resourceName}",
-                "aws:ResourceTag/${managedByTag}": "alien"
+                "aws:ResourceTag/${managedByTag}": "deployment"
               }
             }
           }

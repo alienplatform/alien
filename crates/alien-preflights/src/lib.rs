@@ -304,8 +304,8 @@ impl PreflightRegistry {
         // Phase 2: Resource creation
         registry.add_mutation(Box::new(mutations::ComputeClusterMutation));
         registry.add_mutation(Box::new(mutations::RemoteStackManagementMutation));
-        registry.add_mutation(Box::new(mutations::ServiceAccountMutation));
         registry.add_mutation(Box::new(mutations::SecretsVaultMutation));
+        registry.add_mutation(Box::new(mutations::ServiceAccountMutation));
 
         // Phase 3: Service activations and platform infrastructure
         // These scan resource types to decide what to create, so they must see all

@@ -183,12 +183,11 @@ impl LocalWorkerManager {
             return Ok(());
         }
 
-        let entries =
-            fs::read_dir(&workers_dir)
-                .into_alien_error()
-                .context(ErrorData::Other {
-                    message: "Failed to read workers directory".to_string(),
-                })?;
+        let entries = fs::read_dir(&workers_dir)
+            .into_alien_error()
+            .context(ErrorData::Other {
+                message: "Failed to read workers directory".to_string(),
+            })?;
 
         for entry in entries {
             let entry = entry.into_alien_error().context(ErrorData::Other {
@@ -207,10 +206,7 @@ impl LocalWorkerManager {
                     )
                     .await
                     {
-                        warn!(
-                            "Failed to recover worker from {:?}: {:?}",
-                            metadata_file, e
-                        );
+                        warn!("Failed to recover worker from {:?}: {:?}", metadata_file, e);
                     }
                 }
             }
@@ -233,11 +229,12 @@ impl LocalWorkerManager {
                 message: format!("Failed to read {}", metadata_path.display()),
             })?;
 
-        let metadata: WorkerMetadata = serde_json::from_str(&contents)
-            .into_alien_error()
-            .context(ErrorData::Other {
-                message: "Failed to parse worker metadata".to_string(),
-            })?;
+        let metadata: WorkerMetadata =
+            serde_json::from_str(&contents)
+                .into_alien_error()
+                .context(ErrorData::Other {
+                    message: "Failed to parse worker metadata".to_string(),
+                })?;
 
         // Check if already running
         {
@@ -274,12 +271,11 @@ impl LocalWorkerManager {
             return Ok(());
         }
 
-        let entries =
-            fs::read_dir(&daemons_dir)
-                .into_alien_error()
-                .context(ErrorData::Other {
-                    message: "Failed to read daemons directory".to_string(),
-                })?;
+        let entries = fs::read_dir(&daemons_dir)
+            .into_alien_error()
+            .context(ErrorData::Other {
+                message: "Failed to read daemons directory".to_string(),
+            })?;
 
         for entry in entries {
             let entry = entry.into_alien_error().context(ErrorData::Other {
@@ -320,11 +316,12 @@ impl LocalWorkerManager {
                 message: format!("Failed to read {}", metadata_path.display()),
             })?;
 
-        let metadata: WorkerMetadata = serde_json::from_str(&contents)
-            .into_alien_error()
-            .context(ErrorData::Other {
-                message: "Failed to parse daemon metadata".to_string(),
-            })?;
+        let metadata: WorkerMetadata =
+            serde_json::from_str(&contents)
+                .into_alien_error()
+                .context(ErrorData::Other {
+                    message: "Failed to parse daemon metadata".to_string(),
+                })?;
 
         {
             let daemons_guard = daemons.lock().await;
@@ -530,7 +527,10 @@ impl LocalWorkerManager {
         namespace: &str,
         resource_id: &str,
     ) -> Result<()> {
-        let metadata_file = state_dir.join(namespace).join(resource_id).join("metadata.json");
+        let metadata_file = state_dir
+            .join(namespace)
+            .join(resource_id)
+            .join("metadata.json");
 
         if metadata_file.exists() {
             fs::remove_file(&metadata_file)

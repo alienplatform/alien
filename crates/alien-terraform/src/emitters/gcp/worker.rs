@@ -17,7 +17,8 @@ use crate::{
     block::{attr, block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::gcp::helpers::{
-        downcast, label_for_ref, labels, required_label, service_account_email,
+        custom_role_label, downcast, emit_custom_roles, label_for_ref, labels, permission_context,
+        required_label, service_account_email, service_account_member_for_label,
     },
     emitters::worker_environment::{worker_environment, GcpWorkerEnvironmentRenderer},
     expr,
@@ -25,9 +26,13 @@ use crate::{
 };
 use alien_core::{
     crontab_to_eventbridge::crontab_to_eventbridge, import::EmitContext, ErrorData, Ingress,
-    Result, Worker, WorkerCode, WorkerTrigger,
+    RemoteStackManagement, Result, Worker, WorkerCode, WorkerTrigger,
 };
 use alien_error::AlienError;
+use alien_permissions::{
+    generators::{GcpBindingTargetScope, GcpRuntimePermissionsGenerator},
+    BindingTarget,
+};
 use hcl::expr::Expression;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -114,7 +119,7 @@ impl TfEmitter for GcpWorkerEmitter {
         let mut service_body: Vec<hcl::structure::Structure> = vec![
             attr(
                 "name",
-                expr::template(format!("${{var.stack_name}}-{}", function.id)),
+                expr::template(format!("${{local.resource_prefix}}-{}", function.id)),
             ),
             attr("project", expr::raw("var.gcp_project")),
             attr("location", expr::raw("var.gcp_region")),
@@ -161,7 +166,7 @@ impl TfEmitter for GcpWorkerEmitter {
                             attr(
                                 "name",
                                 expr::template(format!(
-                                    "${{var.stack_name}}-{}-from-{}",
+                                    "${{local.resource_prefix}}-{}-from-{}",
                                     function.id, queue.id
                                 )),
                             ),
@@ -212,7 +217,7 @@ impl TfEmitter for GcpWorkerEmitter {
                             attr(
                                 "name",
                                 expr::template(format!(
-                                    "${{var.stack_name}}-{}-sched-{}",
+                                    "${{local.resource_prefix}}-{}-sched-{}",
                                     function.id, index
                                 )),
                             ),
@@ -250,7 +255,7 @@ impl TfEmitter for GcpWorkerEmitter {
                         attr(
                             "name",
                             expr::template(format!(
-                                "${{var.stack_name}}-{}-{}-storage",
+                                "${{local.resource_prefix}}-{}-{}-storage",
                                 function.id, storage.id
                             )),
                         ),
@@ -300,7 +305,7 @@ impl TfEmitter for GcpWorkerEmitter {
                 [
                     attr(
                         "name",
-                        expr::template(format!("${{var.stack_name}}-{}-rq", function.id)),
+                        expr::template(format!("${{local.resource_prefix}}-{}-rq", function.id)),
                     ),
                     attr("project", expr::raw("var.gcp_project")),
                     attr("labels", labels(ctx, "worker-commands")),
@@ -332,7 +337,10 @@ impl TfEmitter for GcpWorkerEmitter {
                 [
                     attr(
                         "name",
-                        expr::template(format!("${{var.stack_name}}-{}-rq-sub", function.id)),
+                        expr::template(format!(
+                            "${{local.resource_prefix}}-{}-rq-sub",
+                            function.id
+                        )),
                     ),
                     attr("project", expr::raw("var.gcp_project")),
                     attr(
@@ -348,6 +356,8 @@ impl TfEmitter for GcpWorkerEmitter {
                     nested(block("push_config", push_body)),
                 ],
             ));
+
+            emit_command_topic_management_permissions(ctx, &mut fragment, label, &topic_label)?;
         }
 
         Ok(fragment)
@@ -449,4 +459,112 @@ impl TfEmitter for GcpWorkerEmitter {
                 .map(|(key, value)| (key.as_str(), value.clone())),
         )))
     }
+}
+
+fn emit_command_topic_management_permissions(
+    ctx: &EmitContext<'_>,
+    fragment: &mut TfFragment,
+    worker_label: &str,
+    topic_label: &str,
+) -> Result<()> {
+    let Some(management_label) = remote_stack_management_label(ctx) else {
+        return Ok(());
+    };
+    let refs = command_management_permission_refs(ctx);
+    if refs.is_empty() {
+        return Ok(());
+    }
+
+    let member = service_account_member_for_label(management_label);
+    let context = permission_context(management_label, ctx.stack.id())
+        .with_resource_name(format!("${{google_pubsub_topic.{topic_label}.name}}"));
+    let generator = GcpRuntimePermissionsGenerator::new();
+
+    for permission_set_ref in refs {
+        let Some(permission_set) =
+            permission_set_ref.resolve(|name| alien_permissions::get_permission_set(name).cloned())
+        else {
+            continue;
+        };
+
+        let custom_roles = emit_custom_roles(fragment, &permission_set, &context)?;
+        let bindings = generator
+            .generate_bindings(&permission_set, BindingTarget::Resource, &context)
+            .map_err(|err| {
+                AlienError::new(ErrorData::GenericError {
+                    message: format!(
+                        "failed to generate GCP command-topic IAM bindings for '{}': {}",
+                        permission_set.id, err
+                    ),
+                })
+            })?;
+
+        for (idx, binding) in bindings.bindings.into_iter().enumerate() {
+            if binding.target != GcpBindingTargetScope::CurrentResource {
+                return Err(AlienError::new(ErrorData::GenericError {
+                    message: format!(
+                        "command permission set '{}' must produce resource-scoped GCP bindings",
+                        permission_set.id
+                    ),
+                }));
+            }
+
+            let custom_role = custom_roles
+                .iter()
+                .find(|role| role.name == binding.role)
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::GenericError {
+                        message: format!(
+                            "missing generated custom role for GCP command binding '{}'",
+                            binding.role
+                        ),
+                    })
+                })?;
+            let role_label = custom_role_label(custom_role);
+            fragment.resource_blocks.push(resource_block(
+                "google_pubsub_topic_iam_member",
+                &format!("{worker_label}_commands_management_{idx}"),
+                [
+                    attr(
+                        "topic",
+                        expr::traversal(["google_pubsub_topic", topic_label, "name"]),
+                    ),
+                    attr(
+                        "role",
+                        expr::traversal(["google_project_iam_custom_role", &role_label, "name"]),
+                    ),
+                    attr("member", member.clone()),
+                ],
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn remote_stack_management_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
+    ctx.stack.resources().find_map(|(id, entry)| {
+        if entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE {
+            ctx.name_for(id)
+        } else {
+            None
+        }
+    })
+}
+
+fn command_management_permission_refs<'a>(
+    ctx: &'a EmitContext<'_>,
+) -> Vec<&'a alien_core::permissions::PermissionSetReference> {
+    let Some(profile) = ctx.stack.management().profile() else {
+        return Vec::new();
+    };
+    profile
+        .0
+        .get(ctx.resource_id)
+        .map(|refs| {
+            refs.iter()
+                .filter(|permission_set_ref| permission_set_ref.id() == "worker/dispatch-command")
+                .collect()
+        })
+        .unwrap_or_default()
 }

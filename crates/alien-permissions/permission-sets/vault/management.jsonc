@@ -23,14 +23,25 @@
     "gcp": [
       {
         "grant": {
-          "permissions": ["secretmanager.secrets.get", "secretmanager.secrets.list"]
+          "permissions": ["secretmanager.secrets.list"]
         },
         "binding": {
           "stack": {
             "scope": "projects/${projectName}"
-          },
+          }
+        }
+      },
+      {
+        "grant": {
+          "permissions": ["secretmanager.secrets.get"]
+        },
+        "binding": {
           "resource": {
-            "scope": "projects/${projectName}/secrets/${resourceName}"
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "ResourceVaultSecretsManagement",
+              "expression": "resource.type == \"secretmanager.googleapis.com/Secret\" && resource.name.startsWith(\"projects/${projectNumber}/secrets/${resourceName}-\")"
+            }
           }
         }
       }

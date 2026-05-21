@@ -588,10 +588,7 @@ async fn run_cloudformation_aws(
             "--region",
             &target.region,
             "--parameters",
-            &format!(
-                "ParameterKey=DeploymentGroupToken,ParameterValue={}",
-                prepared.dg_token
-            ),
+            &format!("ParameterKey=Token,ParameterValue={}", prepared.dg_token),
             &format!("ParameterKey=ManagingRoleArn,ParameterValue={role_arn}"),
             &format!("ParameterKey=ManagingAccountId,ParameterValue={managing_account_id}"),
             "ParameterKey=DomainName,ParameterValue=",
@@ -1108,10 +1105,10 @@ async fn cloudformation_import_request(
         .context("DeploymentPlatform output missing")?
         .parse()
         .map_err(|error| anyhow::anyhow!("Invalid DeploymentPlatform output: {error}"))?;
-    let stack_prefix = values
-        .get("DeploymentStackPrefix")
+    let resource_prefix = values
+        .get("DeploymentResourcePrefix")
         .cloned()
-        .context("DeploymentStackPrefix output missing")?;
+        .context("DeploymentResourcePrefix output missing")?;
     let region = values
         .get("DeploymentRegion")
         .cloned()
@@ -1137,7 +1134,7 @@ async fn cloudformation_import_request(
     Ok(StackImportRequest {
         deployment_group_token: token.to_string(),
         deployment_name: stack_name.to_string(),
-        stack_prefix,
+        stack_prefix: resource_prefix,
         source_kind: Some(ImportSourceKind::CloudFormation),
         release_id: None,
         platform,
@@ -1213,7 +1210,7 @@ async fn grant_terraform_shared_env_join_permission(
         &resources,
         "remote-stack-management",
     )?;
-    let stack_prefix = terraform_output_string(outputs, "deployment_stack_prefix")?;
+    let resource_prefix = terraform_output_string(outputs, "deployment_resource_prefix")?;
 
     let azure_config = AzureClientConfig {
         subscription_id: target.subscription_id.clone(),
@@ -1241,7 +1238,7 @@ async fn grant_terraform_shared_env_join_permission(
     let assignment_id = uuid::Uuid::new_v5(
         &uuid::Uuid::NAMESPACE_OID,
         format!(
-            "alien:e2e:tf-env-join-assign:{stack_prefix}:{}",
+            "alien:e2e:tf-env-join-assign:{resource_prefix}:{}",
             management.principal_id
         )
         .as_bytes(),
@@ -1293,7 +1290,7 @@ fn terraform_import_request_from_outputs(
     let platform: Platform = terraform_output_string(output, "deployment_platform")?
         .parse()
         .map_err(|error| anyhow::anyhow!("Invalid deployment_platform output: {error}"))?;
-    let stack_prefix = terraform_output_string(output, "deployment_stack_prefix")?;
+    let resource_prefix = terraform_output_string(output, "deployment_resource_prefix")?;
     let region = terraform_output_string(output, "deployment_region")?;
     let management_config: ManagementConfig = serde_json::from_str(&terraform_output_string(
         output,
@@ -1301,7 +1298,7 @@ fn terraform_import_request_from_outputs(
     )?)?;
     let stack_settings: StackSettings = serde_json::from_str(&terraform_output_string(
         output,
-        "deployment_stack_settings",
+        "deployment_settings_json",
     )?)?;
     let resources: Vec<ImportedResource> =
         serde_json::from_str(&terraform_output_string(output, "deployment_resources")?)?;
@@ -1313,7 +1310,7 @@ fn terraform_import_request_from_outputs(
     Ok(StackImportRequest {
         deployment_group_token: token.to_string(),
         deployment_name: format!("terraform-{}", &uuid::Uuid::new_v4().to_string()[..8]),
-        stack_prefix,
+        stack_prefix: resource_prefix,
         source_kind: Some(ImportSourceKind::Terraform),
         release_id: None,
         platform,
@@ -1550,7 +1547,7 @@ async fn wait_for_azure_management_permissions(
     );
     let probe_queue_name = format!(
         "{}-iam-probe",
-        terraform_output_string(outputs, "deployment_stack_prefix")?
+        terraform_output_string(outputs, "deployment_resource_prefix")?
     );
 
     let timeout = Duration::from_secs(300);
@@ -1690,14 +1687,11 @@ fn terraform_tfvars(
 ) -> anyhow::Result<Value> {
     let mut vars = serde_json::Map::new();
     vars.insert(
-        "stack_name".to_string(),
-        Value::String(format!(
-            "alien-e2e-{}",
-            &uuid::Uuid::new_v4().to_string()[..8]
-        )),
+        "name".to_string(),
+        Value::String(format!("e2e-{}", &uuid::Uuid::new_v4().to_string()[..8])),
     );
     vars.insert(
-        "deployment_group_token".to_string(),
+        "token".to_string(),
         Value::String(prepared.dg_token.clone()),
     );
     vars.insert(

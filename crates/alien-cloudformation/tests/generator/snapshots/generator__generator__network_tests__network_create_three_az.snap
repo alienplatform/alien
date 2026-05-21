@@ -12,7 +12,7 @@ Metadata:
     - Label:
         default: Registration
       Parameters:
-      - DeploymentGroupToken
+      - Token
       - ManagingRoleArn
       - ManagingAccountId
     - Label:
@@ -42,8 +42,6 @@ Metadata:
         default: Availability zones
       CertificateArn:
         default: Certificate ARN
-      DeploymentGroupToken:
-        default: Deployment group token
       DomainName:
         default: Domain name
       HeartbeatsMode:
@@ -64,6 +62,8 @@ Metadata:
         default: Security group IDs
       TelemetryMode:
         default: Telemetry
+      Token:
+        default: Deployment token
       UpdatesMode:
         default: Updates
       VpcCidr:
@@ -71,9 +71,9 @@ Metadata:
       VpcId:
         default: VPC ID
 Parameters:
-  DeploymentGroupToken:
+  Token:
     Type: String
-    Description: Deployment-group token used when registering the resolved stack import.
+    Description: Deployment token from the deployment page.
     NoEcho: true
   ManagingRoleArn:
     Type: String
@@ -204,28 +204,28 @@ Resources:
       EnableDnsSupport: true
       EnableDnsHostnames: true
       Tags:
-      - Key: alien.dev/managed-by
-        Value: alien
-      - Key: alien.dev/stack
+      - Key: managed-by
+        Value: deployment
+      - Key: deployment
         Value:
           Ref: AWS::StackName
-      - Key: alien.dev/resource
+      - Key: resource
         Value: default-network
-      - Key: AlienResourceType
+      - Key: resource-type
         Value: network
     Condition: NetworkModeCreate
   DefaultNetworkInternetGateway:
     Type: AWS::EC2::InternetGateway
     Properties:
       Tags:
-      - Key: alien.dev/managed-by
-        Value: alien
-      - Key: alien.dev/stack
+      - Key: managed-by
+        Value: deployment
+      - Key: deployment
         Value:
           Ref: AWS::StackName
-      - Key: alien.dev/resource
+      - Key: resource
         Value: default-network
-      - Key: AlienResourceType
+      - Key: resource-type
         Value: network
     Condition: NetworkModeCreate
   DefaultNetworkVpcGatewayAttachment:
@@ -257,14 +257,14 @@ Resources:
           - 8
       MapPublicIpOnLaunch: true
       Tags:
-      - Key: alien.dev/managed-by
-        Value: alien
-      - Key: alien.dev/stack
+      - Key: managed-by
+        Value: deployment
+      - Key: deployment
         Value:
           Ref: AWS::StackName
-      - Key: alien.dev/resource
+      - Key: resource
         Value: default-network
-      - Key: AlienResourceType
+      - Key: resource-type
         Value: network
     Condition: NetworkModeCreate
   DefaultNetworkPrivateSubnet1:
@@ -287,14 +287,14 @@ Resources:
           - 6
           - 8
       Tags:
-      - Key: alien.dev/managed-by
-        Value: alien
-      - Key: alien.dev/stack
+      - Key: managed-by
+        Value: deployment
+      - Key: deployment
         Value:
           Ref: AWS::StackName
-      - Key: alien.dev/resource
+      - Key: resource
         Value: default-network
-      - Key: AlienResourceType
+      - Key: resource-type
         Value: network
     Condition: NetworkModeCreate
   DefaultNetworkPublicSubnet2:
@@ -318,14 +318,14 @@ Resources:
           - 8
       MapPublicIpOnLaunch: true
       Tags:
-      - Key: alien.dev/managed-by
-        Value: alien
-      - Key: alien.dev/stack
+      - Key: managed-by
+        Value: deployment
+      - Key: deployment
         Value:
           Ref: AWS::StackName
-      - Key: alien.dev/resource
+      - Key: resource
         Value: default-network
-      - Key: AlienResourceType
+      - Key: resource-type
         Value: network
     Condition: NetworkCreateUseAz2
   DefaultNetworkPrivateSubnet2:
@@ -348,14 +348,14 @@ Resources:
           - 6
           - 8
       Tags:
-      - Key: alien.dev/managed-by
-        Value: alien
-      - Key: alien.dev/stack
+      - Key: managed-by
+        Value: deployment
+      - Key: deployment
         Value:
           Ref: AWS::StackName
-      - Key: alien.dev/resource
+      - Key: resource
         Value: default-network
-      - Key: AlienResourceType
+      - Key: resource-type
         Value: network
     Condition: NetworkCreateUseAz2
   DefaultNetworkPublicSubnet3:
@@ -379,14 +379,14 @@ Resources:
           - 8
       MapPublicIpOnLaunch: true
       Tags:
-      - Key: alien.dev/managed-by
-        Value: alien
-      - Key: alien.dev/stack
+      - Key: managed-by
+        Value: deployment
+      - Key: deployment
         Value:
           Ref: AWS::StackName
-      - Key: alien.dev/resource
+      - Key: resource
         Value: default-network
-      - Key: AlienResourceType
+      - Key: resource-type
         Value: network
     Condition: NetworkCreateUseAz3
   DefaultNetworkPrivateSubnet3:
@@ -409,14 +409,14 @@ Resources:
           - 6
           - 8
       Tags:
-      - Key: alien.dev/managed-by
-        Value: alien
-      - Key: alien.dev/stack
+      - Key: managed-by
+        Value: deployment
+      - Key: deployment
         Value:
           Ref: AWS::StackName
-      - Key: alien.dev/resource
+      - Key: resource
         Value: default-network
-      - Key: AlienResourceType
+      - Key: resource-type
         Value: network
     Condition: NetworkCreateUseAz3
   DefaultNetworkPublicRouteTable:
@@ -425,14 +425,14 @@ Resources:
       VpcId:
         Ref: DefaultNetworkVpc
       Tags:
-      - Key: alien.dev/managed-by
-        Value: alien
-      - Key: alien.dev/stack
+      - Key: managed-by
+        Value: deployment
+      - Key: deployment
         Value:
           Ref: AWS::StackName
-      - Key: alien.dev/resource
+      - Key: resource
         Value: default-network
-      - Key: AlienResourceType
+      - Key: resource-type
         Value: network
     Condition: NetworkModeCreate
   DefaultNetworkPublicDefaultRoute:
@@ -452,14 +452,14 @@ Resources:
       VpcId:
         Ref: DefaultNetworkVpc
       Tags:
-      - Key: alien.dev/managed-by
-        Value: alien
-      - Key: alien.dev/stack
+      - Key: managed-by
+        Value: deployment
+      - Key: deployment
         Value:
           Ref: AWS::StackName
-      - Key: alien.dev/resource
+      - Key: resource
         Value: default-network
-      - Key: AlienResourceType
+      - Key: resource-type
         Value: network
     Condition: NetworkModeCreate
   DefaultNetworkNatEip:
@@ -477,14 +477,14 @@ Resources:
       SubnetId:
         Ref: DefaultNetworkPublicSubnet1
       Tags:
-      - Key: alien.dev/managed-by
-        Value: alien
-      - Key: alien.dev/stack
+      - Key: managed-by
+        Value: deployment
+      - Key: deployment
         Value:
           Ref: AWS::StackName
-      - Key: alien.dev/resource
+      - Key: resource
         Value: default-network
-      - Key: AlienResourceType
+      - Key: resource-type
         Value: network
     Condition: NetworkModeCreate
   DefaultNetworkPrivateDefaultRoute:
@@ -556,24 +556,24 @@ Resources:
       - IpProtocol: '-1'
         CidrIp: 0.0.0.0/0
       Tags:
-      - Key: alien.dev/managed-by
-        Value: alien
-      - Key: alien.dev/stack
+      - Key: managed-by
+        Value: deployment
+      - Key: deployment
         Value:
           Ref: AWS::StackName
-      - Key: alien.dev/resource
+      - Key: resource
         Value: default-network
-      - Key: AlienResourceType
+      - Key: resource-type
         Value: network
     Condition: NetworkModeCreate
 Outputs:
   DeploymentSourceKind:
     Value: cloudformation
     Description: Setup source kind.
-  DeploymentStackPrefix:
+  DeploymentResourcePrefix:
     Value:
       Ref: AWS::StackName
-    Description: Physical stack prefix.
+    Description: Stable physical resource prefix.
   DeploymentPlatform:
     Value: aws
     Description: Target platform.

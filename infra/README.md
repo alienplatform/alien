@@ -112,10 +112,10 @@ gh secret set TEST_GCP_TARGET_SA_KEY --repo alienplatform/alien < target-bootstr
 gh variable set TEST_GCP_TARGET_PROJECT_ID --repo alienplatform/alien --body "$PROJECT"
 ```
 
-When replacing an existing target project in the same Terraform Cloud workspace,
-remove the old target-project GCP resources from state before the next apply.
-The next CI setup run will recreate them in the new project and regenerate
-`.env.test` from Terraform outputs.
+When replacing the target project in the same Terraform Cloud workspace, remove
+the old target-project GCP resources from state before the next apply. The next
+CI setup run will recreate them in the new project and regenerate `.env.test`
+from Terraform outputs.
 
 ### Generating .env.test and alien-manager.test.toml
 

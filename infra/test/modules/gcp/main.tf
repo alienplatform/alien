@@ -90,7 +90,7 @@ resource "google_project_service" "target_apis" {
 
 # ── Manager SA: Execution identity ────────────────────────────────────────────
 # Runs the alien-manager process. Needs permissions for all resource types it
-# provisions, but NOT roles/owner. Uses scoped predefined roles instead.
+# provisions, but NOT roles/owner. Uses scoped bootstrap roles instead.
 
 resource "google_service_account" "manager" {
   provider     = google.management

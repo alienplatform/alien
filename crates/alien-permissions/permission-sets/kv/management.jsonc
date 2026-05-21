@@ -33,8 +33,6 @@
           "permissions": [
             "datastore.databases.get",
             "datastore.databases.list",
-            "datastore.entities.get",
-            "datastore.entities.list",
             "datastore.indexes.get",
             "datastore.indexes.list"
           ]

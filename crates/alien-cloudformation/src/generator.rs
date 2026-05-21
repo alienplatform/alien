@@ -15,7 +15,7 @@ use std::collections::HashSet;
 const TEMPLATE_VERSION: &str = "2010-09-09";
 const LANGUAGE_EXTENSIONS_TRANSFORM: &str = "AWS::LanguageExtensions";
 
-const PARAM_DEPLOYMENT_GROUP_TOKEN: &str = "DeploymentGroupToken";
+const PARAM_TOKEN: &str = "Token";
 const PARAM_MANAGING_ROLE_ARN: &str = "ManagingRoleArn";
 const PARAM_MANAGING_ACCOUNT_ID: &str = "ManagingAccountId";
 const PARAM_NETWORK_MODE: &str = "NetworkMode";
@@ -42,7 +42,7 @@ const CONDITION_HAS_VPC_CIDR: &str = "HasVpcCidr";
 const CONDITION_HAS_DOMAIN_NAME: &str = "HasDomainName";
 
 const OUTPUT_SOURCE_KIND: &str = "DeploymentSourceKind";
-const OUTPUT_STACK_PREFIX: &str = "DeploymentStackPrefix";
+const OUTPUT_RESOURCE_PREFIX: &str = "DeploymentResourcePrefix";
 const OUTPUT_PLATFORM: &str = "DeploymentPlatform";
 const OUTPUT_REGION: &str = "DeploymentRegion";
 const OUTPUT_SETUP_TARGET: &str = "DeploymentSetupTarget";
@@ -485,9 +485,9 @@ fn apply_resource_dependencies(
 
 fn add_standard_parameters(template: &mut CfTemplate, settings: &StackSettings) {
     template.parameters.insert(
-        PARAM_DEPLOYMENT_GROUP_TOKEN.to_string(),
+        PARAM_TOKEN.to_string(),
         string_parameter(
-            "Deployment-group token used when registering the resolved stack import.",
+            "Deployment token from the deployment page.",
             None,
             None,
             true,
@@ -726,7 +726,7 @@ fn add_console_interface_metadata(template: &mut CfTemplate, settings: &StackSet
     let mut parameter_groups = vec![json!({
         "Label": { "default": "Registration" },
         "Parameters": [
-            PARAM_DEPLOYMENT_GROUP_TOKEN,
+            PARAM_TOKEN,
             PARAM_MANAGING_ROLE_ARN,
             PARAM_MANAGING_ACCOUNT_ID,
         ]
@@ -747,11 +747,7 @@ fn add_console_interface_metadata(template: &mut CfTemplate, settings: &StackSet
     }));
 
     let mut parameter_labels = serde_json::Map::new();
-    insert_parameter_label(
-        &mut parameter_labels,
-        PARAM_DEPLOYMENT_GROUP_TOKEN,
-        "Deployment group token",
-    );
+    insert_parameter_label(&mut parameter_labels, PARAM_TOKEN, "Deployment token");
     insert_parameter_label(
         &mut parameter_labels,
         PARAM_MANAGING_ROLE_ARN,
@@ -857,9 +853,9 @@ fn add_custom_resource(
     // post-rendering.
     resource.properties = indexmap! {
         "ServiceToken".to_string() => service_token,
-        "DeploymentGroupToken".to_string() => CfExpression::ref_(PARAM_DEPLOYMENT_GROUP_TOKEN),
+        "Token".to_string() => CfExpression::ref_(PARAM_TOKEN),
         "DeploymentName".to_string() => CfExpression::ref_("AWS::StackName"),
-        "StackPrefix".to_string() => CfExpression::ref_("AWS::StackName"),
+        "ResourcePrefix".to_string() => CfExpression::ref_("AWS::StackName"),
         "SourceKind".to_string() => CfExpression::from("cloudformation"),
         "Platform".to_string() => CfExpression::from(Platform::Aws.as_str()),
         "Region".to_string() => CfExpression::ref_("AWS::Region"),
@@ -893,9 +889,9 @@ fn add_outputs(
         output("Setup source kind.", CfExpression::from("cloudformation")),
     );
     template.outputs.insert(
-        OUTPUT_STACK_PREFIX.to_string(),
+        OUTPUT_RESOURCE_PREFIX.to_string(),
         output(
-            "Physical stack prefix.",
+            "Stable physical resource prefix.",
             CfExpression::ref_("AWS::StackName"),
         ),
     );

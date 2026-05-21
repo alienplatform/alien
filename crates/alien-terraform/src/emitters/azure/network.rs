@@ -143,7 +143,7 @@ fn create_topology(ctx: &EmitContext<'_>, label: &str, cidr: Option<String>) -> 
         [
             attr(
                 "name",
-                expr::template(format!("${{var.stack_name}}-{label}")),
+                expr::template(format!("${{local.resource_prefix}}-{label}")),
             ),
             attr(
                 "resource_group_name",
@@ -164,7 +164,7 @@ fn create_topology(ctx: &EmitContext<'_>, label: &str, cidr: Option<String>) -> 
         [
             attr(
                 "name",
-                expr::template(format!("${{var.stack_name}}-{label}-public")),
+                expr::template(format!("${{local.resource_prefix}}-{label}-public")),
             ),
             attr(
                 "resource_group_name",
@@ -189,7 +189,7 @@ fn create_topology(ctx: &EmitContext<'_>, label: &str, cidr: Option<String>) -> 
         [
             attr(
                 "name",
-                expr::template(format!("${{var.stack_name}}-{label}-private")),
+                expr::template(format!("${{local.resource_prefix}}-{label}-private")),
             ),
             attr(
                 "resource_group_name",
@@ -214,7 +214,7 @@ fn create_topology(ctx: &EmitContext<'_>, label: &str, cidr: Option<String>) -> 
         [
             attr(
                 "name",
-                expr::template(format!("${{var.stack_name}}-{label}-nat-pip")),
+                expr::template(format!("${{local.resource_prefix}}-{label}-nat-pip")),
             ),
             attr(
                 "resource_group_name",
@@ -236,7 +236,7 @@ fn create_topology(ctx: &EmitContext<'_>, label: &str, cidr: Option<String>) -> 
         [
             attr(
                 "name",
-                expr::template(format!("${{var.stack_name}}-{label}-nat")),
+                expr::template(format!("${{local.resource_prefix}}-{label}-nat")),
             ),
             attr(
                 "resource_group_name",
@@ -288,7 +288,7 @@ fn create_topology(ctx: &EmitContext<'_>, label: &str, cidr: Option<String>) -> 
         [
             attr(
                 "name",
-                expr::template(format!("${{var.stack_name}}-{label}-workload")),
+                expr::template(format!("${{local.resource_prefix}}-{label}-workload")),
             ),
             attr(
                 "resource_group_name",

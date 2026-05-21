@@ -12,7 +12,7 @@ Metadata:
     - Label:
         default: Registration
       Parameters:
-      - DeploymentGroupToken
+      - Token
       - ManagingRoleArn
       - ManagingAccountId
     - Label:
@@ -30,8 +30,6 @@ Metadata:
     ParameterLabels:
       CertificateArn:
         default: Certificate ARN
-      DeploymentGroupToken:
-        default: Deployment group token
       DomainName:
         default: Domain name
       HeartbeatsMode:
@@ -44,12 +42,14 @@ Metadata:
         default: Manager role ARN
       TelemetryMode:
         default: Telemetry
+      Token:
+        default: Deployment token
       UpdatesMode:
         default: Updates
 Parameters:
-  DeploymentGroupToken:
+  Token:
     Type: String
-    Description: Deployment-group token used when registering the resolved stack import.
+    Description: Deployment token from the deployment page.
     NoEcho: true
   ManagingRoleArn:
     Type: String
@@ -137,14 +137,14 @@ Resources:
           ExpirationInDays: 365
           Prefix: ''
       Tags:
-      - Key: alien.dev/managed-by
-        Value: alien
-      - Key: alien.dev/stack
+      - Key: managed-by
+        Value: deployment
+      - Key: deployment
         Value:
           Ref: AWS::StackName
-      - Key: alien.dev/resource
+      - Key: resource
         Value: assets
-      - Key: AlienResourceType
+      - Key: resource-type
         Value: storage
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
@@ -181,14 +181,14 @@ Resources:
       VisibilityTimeout: 30
       MessageRetentionPeriod: 345600
       Tags:
-      - Key: alien.dev/managed-by
-        Value: alien
-      - Key: alien.dev/stack
+      - Key: managed-by
+        Value: deployment
+      - Key: deployment
         Value:
           Ref: AWS::StackName
-      - Key: alien.dev/resource
+      - Key: resource
         Value: jobs
-      - Key: AlienResourceType
+      - Key: resource-type
         Value: queue
   Metadata:
     Type: AWS::DynamoDB::Table
@@ -212,14 +212,14 @@ Resources:
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: true
       Tags:
-      - Key: alien.dev/managed-by
-        Value: alien
-      - Key: alien.dev/stack
+      - Key: managed-by
+        Value: deployment
+      - Key: deployment
         Value:
           Ref: AWS::StackName
-      - Key: alien.dev/resource
+      - Key: resource
         Value: metadata
-      - Key: AlienResourceType
+      - Key: resource-type
         Value: kv
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
@@ -227,10 +227,10 @@ Outputs:
   DeploymentSourceKind:
     Value: cloudformation
     Description: Setup source kind.
-  DeploymentStackPrefix:
+  DeploymentResourcePrefix:
     Value:
       Ref: AWS::StackName
-    Description: Physical stack prefix.
+    Description: Stable physical resource prefix.
   DeploymentPlatform:
     Value: aws
     Description: Target platform.

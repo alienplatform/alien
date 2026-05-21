@@ -78,6 +78,17 @@ fn rbac_wait_delay(deadline_epoch_secs: u64) -> Option<Duration> {
     }
 }
 
+fn management_profile_dispatches_commands(
+    ctx: &ResourceControllerContext<'_>,
+    worker_id: &str,
+) -> bool {
+    ctx.desired_stack
+        .management()
+        .profile()
+        .and_then(|profile| profile.0.get(worker_id))
+        .is_some_and(|refs| refs.iter().any(|r| r.id() == "worker/dispatch-command"))
+}
+
 fn is_azure_authorization_propagation_error(error: &AlienError<ErrorData>) -> bool {
     const AUTHORIZATION_MESSAGE_MARKERS: &[&str] = &[
         "AuthorizationFailed",
@@ -2625,7 +2636,6 @@ impl AzureWorkerController {
     ///
     /// Azure separates management plane (Contributor) from data plane — the identity
     /// that creates the queue cannot send messages without an explicit data-plane role.
-    /// This is Azure-specific; AWS/GCP don't have this separation.
     async fn assign_commands_sender_role(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
@@ -2638,6 +2648,14 @@ impl AzureWorkerController {
         use alien_azure_clients::models::authorization_role_assignments::{
             RoleAssignment, RoleAssignmentProperties, RoleAssignmentPropertiesPrincipalType,
         };
+
+        if !management_profile_dispatches_commands(ctx, &func_cfg.id) {
+            info!(
+                worker = %func_cfg.id,
+                "Skipping management command sender role because worker/dispatch-command is not granted"
+            );
+            return Ok(());
+        }
 
         let caller_principal_id = ctx
             .service_provider

@@ -2,7 +2,7 @@
 //!
 //! Splits the rendered module into one `.tf` file per Alien stack resource,
 //! plus the supporting `versions.tf` / `variables.tf` / `providers.tf` /
-//! `locals.tf` / `import.tf` / `outputs.tf`. Mapping between `alien.ts`
+//! `resource_prefix.tf` / `locals.tf` / `import.tf` / `outputs.tf`. Mapping between `alien.ts`
 //! resource ids and `.tf` files is 1:1 \u2014 reviewers find "what does the
 //! `data` storage actually become" by opening `data.tf`.
 //!
@@ -33,10 +33,11 @@ use hcl::{
     Identifier,
 };
 use indexmap::IndexMap;
+use std::collections::HashSet;
 
 /// Generated Terraform module \u2014 one `.tf` file per Alien stack resource
 /// plus the supporting framework (`versions.tf` / `variables.tf` /
-/// `providers.tf` / `locals.tf` / `import.tf` / `outputs.tf` / `README.md`).
+/// `providers.tf` / `resource_prefix.tf` / `locals.tf` / `import.tf` / `outputs.tf` / `README.md`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModuleFiles {
     /// Path -> contents, in render order. Iterating the module preserves
@@ -202,6 +203,9 @@ pub fn generate_terraform_module(
             &mut shared_locals,
         )?;
     }
+    if matches!(platform, alien_core::Platform::Gcp) {
+        dedupe_gcp_custom_role_resources(&mut per_resource);
+    }
     apply_resource_dependencies(stack, &mut per_resource);
     if matches!(platform, alien_core::Platform::Azure) {
         apply_azure_resource_group_dependency(stack, &labels, &mut per_resource);
@@ -247,6 +251,10 @@ pub fn generate_terraform_module(
     files.insert(
         "providers.tf".to_string(),
         render_body(providers_body(target))?,
+    );
+    files.insert(
+        "resource_prefix.tf".to_string(),
+        render_body(resource_prefix_body())?,
     );
     files.insert(
         "locals.tf".to_string(),
@@ -297,6 +305,27 @@ pub fn generate_terraform_module(
     let _ = format_with_terraform(&mut module);
 
     Ok(module)
+}
+
+fn dedupe_gcp_custom_role_resources(per_resource: &mut IndexMap<String, TfFragment>) {
+    let mut seen = HashSet::new();
+    for fragment in per_resource.values_mut() {
+        fragment.resource_blocks.retain(|resource| {
+            if resource.identifier.as_str() != "resource" {
+                return true;
+            }
+            let Some(provider_type) = resource.labels.first().map(|label| label.as_str()) else {
+                return true;
+            };
+            if provider_type != "google_project_iam_custom_role" {
+                return true;
+            }
+            let Some(label) = resource.labels.get(1).map(|label| label.as_str()) else {
+                return true;
+            };
+            seen.insert(label.to_string())
+        });
+    }
 }
 
 fn fragment_to_body(fragment: TfFragment) -> Body {
@@ -406,9 +435,7 @@ fn gcp_iam_resource_addresses(per_resource: &IndexMap<String, TfFragment>) -> Ve
             };
             matches!(
                 provider_type,
-                "google_project_iam_custom_role"
-                    | "google_project_iam_member"
-                    | "google_service_account_iam_member"
+                "google_project_iam_member" | "google_service_account_iam_member"
             )
         })
         .filter_map(resource_address)
@@ -547,6 +574,10 @@ fn versions_body(
             ),
         ));
     }
+    provider_attrs.push(attr(
+        "random",
+        provider_decl_attr("hashicorp/random", ">= 3.6"),
+    ));
     required.push(nested(Block {
         identifier: Identifier::sanitized("required_providers"),
         labels: vec![],
@@ -575,7 +606,7 @@ fn variables_body(
     stack_settings: &StackSettings,
 ) -> Result<Body> {
     let mut blocks: Vec<Structure> = Vec::new();
-    let stack_settings_json = serde_json::to_string(stack_settings)
+    let deployment_settings_json = serde_json::to_string(stack_settings)
         .into_alien_error()
         .map_err(|err| {
             AlienError::new(ErrorData::JsonSerializationFailed {
@@ -583,23 +614,18 @@ fn variables_body(
             })
         })?;
     blocks.push(nested(variable_block(
-        "stack_name",
-        "Stable physical-name prefix for resources created by this module.",
+        "name",
+        "Human-readable deployment name shown in the deployment portal.",
         None,
         false,
     )));
     blocks.push(nested(variable_block(
-        "deployment_name",
-        "Deployment name used when registering the resolved stack import. Defaults to stack_name.",
-        Some(Expression::String("".to_string())),
-        false,
-    )));
-    blocks.push(nested(variable_block(
-        "deployment_group_token",
-        "Deployment group token used when registering the resolved stack import.",
+        "token",
+        "Deployment token from the deployment page. This is the same token used by the deploy CLI --token flag.",
         None,
         true,
     )));
+    blocks.push(nested(resource_prefix_variable_block()));
     blocks.push(nested(variable_block(
         "manager_url",
         "Optional manager endpoint used by pull-style runtimes.",
@@ -607,9 +633,9 @@ fn variables_body(
         false,
     )));
     blocks.push(nested(variable_block(
-        "stack_settings_json",
-        "Optional JSON-encoded StackSettings override supplied by deployment installers.",
-        Some(Expression::String(stack_settings_json)),
+        "deployment_settings_json",
+        "Optional JSON-encoded deployment settings override supplied by deployment installers.",
+        Some(Expression::String(deployment_settings_json)),
         true,
     )));
 
@@ -628,7 +654,7 @@ fn variables_body(
         )));
         blocks.push(nested(variable_block(
             "managing_account_id",
-            "Account ID hosting the manager. Referenced by stack-side IAM policies that scope cross-account image pulls. Empty disables those grants.",
+            "Account ID hosting the manager. Referenced by resource-side IAM policies that scope cross-account image pulls. Empty disables those grants.",
             Some(Expression::String(String::new())),
             false,
         )));
@@ -693,11 +719,6 @@ fn variables_body(
             "Email of the manager's service account that may impersonate the management identity. Empty disables the binding.",
             Some(Expression::String(String::new())),
             false,
-        )));
-        blocks.push(nested(bool_variable_block(
-            "gcp_use_existing_custom_roles",
-            "Use pre-created project custom roles named after Alien permission sets instead of creating per-stack custom roles.",
-            Some(false),
         )));
     }
     if matches!(target.platform(), alien_core::Platform::Azure) {
@@ -798,21 +819,6 @@ fn list_variable_block(name: &str, description: &str, default: Option<Vec<String
     }
 }
 
-fn bool_variable_block(name: &str, description: &str, default: Option<bool>) -> Block {
-    let mut body: Vec<Structure> = vec![
-        attr("type", expr::raw("bool")),
-        attr("description", Expression::String(description.to_string())),
-    ];
-    if let Some(default) = default {
-        body.push(attr("default", Expression::Bool(default)));
-    }
-    Block {
-        identifier: Identifier::sanitized("variable"),
-        labels: vec![BlockLabel::String(name.to_string())],
-        body: Body::from(body),
-    }
-}
-
 fn number_variable_block(name: &str, description: &str, default: Option<i64>) -> Block {
     let mut body: Vec<Structure> = vec![
         attr("type", expr::raw("number")),
@@ -851,6 +857,41 @@ fn variable_block(
         identifier: Identifier::sanitized("variable"),
         labels: vec![BlockLabel::String(name.to_string())],
         body: Body::from(body),
+    }
+}
+
+fn resource_prefix_variable_block() -> Block {
+    Block {
+        identifier: Identifier::sanitized("variable"),
+        labels: vec![BlockLabel::String("resource_prefix".to_string())],
+        body: Body::from(vec![
+            attr("type", expr::raw("string")),
+            attr(
+                "description",
+                Expression::String(
+                    "Optional stable cloud resource prefix. Leave empty to generate one and store it in Terraform state."
+                        .to_string(),
+                ),
+            ),
+            attr("default", Expression::String("".to_string())),
+            Structure::Block(block(
+                "validation",
+                [
+                    attr(
+                        "condition",
+                        expr::raw(
+                            "var.resource_prefix == \"\" || can(regex(\"^[a-z][a-z0-9-]{1,30}[a-z0-9]$\", var.resource_prefix))",
+                        ),
+                    ),
+                    attr(
+                        "error_message",
+                        Expression::String(
+                            "resource_prefix must be empty or 3-32 characters using lowercase letters, numbers, and hyphens, starting with a letter and ending with a letter or number.".to_string(),
+                        ),
+                    ),
+                ],
+            )),
+        ]),
     }
 }
 
@@ -908,6 +949,17 @@ fn providers_body(target: TerraformTarget) -> Body {
     Body::from(structures)
 }
 
+fn resource_prefix_body() -> Body {
+    Body::from(vec![Structure::Block(resource_block(
+        "random_id",
+        "resource_prefix",
+        vec![attr(
+            "byte_length",
+            Expression::Number(hcl::Number::from(8_i64)),
+        )],
+    ))])
+}
+
 fn locals_body(
     target: TerraformTarget,
     stack_settings: &StackSettings,
@@ -916,6 +968,10 @@ fn locals_body(
 ) -> Result<Body> {
     let mut body: Vec<Structure> = Vec::new();
 
+    body.push(attr(
+        "resource_prefix",
+        expr::raw("var.resource_prefix != \"\" ? var.resource_prefix : \"a${random_id.resource_prefix.hex}\""),
+    ));
     body.push(attr(
         "deployment_platform",
         Expression::String(target.platform().as_str().to_string()),
@@ -930,7 +986,7 @@ fn locals_body(
         management_config_expression(target),
     ));
     body.push(attr(
-        "deployment_stack_settings",
+        "deployment_settings",
         stack_settings_expression(target, stack_settings),
     ));
     body.push(attr(
@@ -946,10 +1002,7 @@ fn locals_body(
             "helm_values",
             expr::object([
                 ("serviceAccounts", expr::raw("local.helm_service_accounts")),
-                (
-                    "stackSettings",
-                    expr::raw("local.deployment_stack_settings"),
-                ),
+                ("stackSettings", expr::raw("local.deployment_settings")),
             ]),
         ));
     }
@@ -1019,25 +1072,25 @@ fn stack_settings_expression(
     if !matches!(target.platform(), alien_core::Platform::Aws)
         || !has_dynamic_aws_network_settings(stack_settings.network.as_ref())
     {
-        return expr::raw("jsondecode(var.stack_settings_json)");
+        return expr::raw("jsondecode(var.deployment_settings_json)");
     }
 
     expr::raw(
-        r#"merge(jsondecode(var.stack_settings_json), {
-  network = (
-    var.network_mode == "create-new" ? {
+        r#"merge(jsondecode(var.deployment_settings_json), {
+  network = jsondecode(
+    var.network_mode == "create-new" ? jsonencode({
       type              = "create"
       cidr              = var.vpc_cidr == "" ? null : var.vpc_cidr
       availabilityZones = var.availability_zones
-    } : var.network_mode == "use-existing" ? {
+    }) : var.network_mode == "use-existing" ? jsonencode({
       type             = "byo-vpc-aws"
       vpcId            = var.vpc_id
       publicSubnetIds  = var.public_subnet_ids
       privateSubnetIds = var.private_subnet_ids
       securityGroupIds = var.security_group_ids
-    } : {
+    }) : jsonencode({
       type = "use-default"
-    }
+    })
   )
 })"#,
     )
@@ -1063,15 +1116,9 @@ fn import_body(registration: Option<&TerraformRegistration>, depends_on: &[Expre
     });
     if let Some(registration) = registration {
         let mut body = vec![
-            attr(
-                "deployment_group_token",
-                expr::raw("var.deployment_group_token"),
-            ),
-            attr(
-                "name",
-                expr::raw("var.deployment_name == \"\" ? var.stack_name : var.deployment_name"),
-            ),
-            attr("stack_prefix", expr::raw("var.stack_name")),
+            attr("token", expr::raw("var.token")),
+            attr("name", expr::raw("var.name")),
+            attr("resource_prefix", expr::raw("local.resource_prefix")),
             attr(
                 "setup_target",
                 Expression::String(registration.setup_target.clone()),
@@ -1094,8 +1141,8 @@ fn import_body(registration: Option<&TerraformRegistration>, depends_on: &[Expre
                 expr::raw("local.deployment_management_config"),
             ),
             attr(
-                "stack_settings",
-                expr::raw("local.deployment_stack_settings"),
+                "deployment_settings",
+                expr::raw("local.deployment_settings"),
             ),
             attr("resources", expr::raw("local.deployment_resources")),
         ];
@@ -1113,15 +1160,9 @@ fn import_body(registration: Option<&TerraformRegistration>, depends_on: &[Expre
         "input",
         expr::object([
             ("platform", expr::raw("local.deployment_platform")),
-            (
-                "deployment_group_token",
-                expr::raw("var.deployment_group_token"),
-            ),
-            (
-                "deployment_name",
-                expr::raw("var.deployment_name == \"\" ? var.stack_name : var.deployment_name"),
-            ),
-            ("stack_prefix", expr::raw("var.stack_name")),
+            ("token", expr::raw("var.token")),
+            ("name", expr::raw("var.name")),
+            ("resource_prefix", expr::raw("local.resource_prefix")),
             (
                 "setup_target",
                 Expression::String(
@@ -1152,8 +1193,8 @@ fn import_body(registration: Option<&TerraformRegistration>, depends_on: &[Expre
                 expr::raw("local.deployment_management_config"),
             ),
             (
-                "stack_settings",
-                expr::raw("local.deployment_stack_settings"),
+                "deployment_settings",
+                expr::raw("local.deployment_settings"),
             ),
             ("resources", expr::raw("local.deployment_resources")),
         ]),
@@ -1164,7 +1205,7 @@ fn import_body(registration: Option<&TerraformRegistration>, depends_on: &[Expre
 
     Body::from(vec![Structure::Block(resource_block(
         "terraform_data",
-        "deployment_stack_import",
+        "deployment_import",
         body,
     ))])
 }
@@ -1177,9 +1218,9 @@ fn outputs_body(target: TerraformTarget, registration: Option<&TerraformRegistra
             "Terraform module target.",
         ),
         (
-            "deployment_stack_prefix",
-            expr::raw("var.stack_name"),
-            "Physical stack prefix.",
+            "deployment_resource_prefix",
+            expr::raw("local.resource_prefix"),
+            "Stable physical resource prefix.",
         ),
         (
             "deployment_platform",
@@ -1224,9 +1265,9 @@ fn outputs_body(target: TerraformTarget, registration: Option<&TerraformRegistra
             "Manager import ManagementConfig JSON.",
         ),
         (
-            "deployment_stack_settings",
-            expr::raw("jsonencode(local.deployment_stack_settings)"),
-            "Manager import StackSettings JSON.",
+            "deployment_settings_json",
+            expr::raw("jsonencode(local.deployment_settings)"),
+            "Manager import deployment settings JSON.",
         ),
         (
             "deployment_resources",
@@ -1259,7 +1300,7 @@ fn outputs_body(target: TerraformTarget, registration: Option<&TerraformRegistra
                 attr("value", value),
                 attr("description", Expression::String(description.to_string())),
             ];
-            if name == "deployment_stack_settings" || name == "helm_values" {
+            if name == "deployment_settings_json" || name == "helm_values" {
                 body.push(attr("sensitive", Expression::Bool(true)));
             }
 
@@ -1282,19 +1323,19 @@ fn readme_md(
     let registration_note = registration
         .map(|registration| {
             format!(
-                "Self-registering setup packages create `{}`; other renderers can use `deployment_management_config` / `deployment_stack_settings` / `deployment_resources` with their own registration flow.\n",
+                "Self-registering setup packages create `{}`; other renderers can use `deployment_management_config` / `deployment_settings_json` / `deployment_resources` with their own registration flow.\n",
                 registration.provider_resource_type()
             )
         })
         .unwrap_or_else(|| {
-            "This module exposes `deployment_management_config` / `deployment_stack_settings` / `deployment_resources` for external registration flows.\n".to_string()
+            "This module exposes `deployment_management_config` / `deployment_settings_json` / `deployment_resources` for external registration flows.\n".to_string()
         });
 
     format!(
         "# Terraform module - {}\n\n\
 Target: `{}`.\n\n\
 Run:\n\n\
-```bash\nterraform init -backend=false\nterraform validate\nterraform apply -var='stack_name={}' -var='deployment_group_token=...'\n```\n\n\
+```bash\nterraform init -backend=false\nterraform validate\nterraform apply -var='name={}' -var='token=...'\n```\n\n\
 {}",
         stack.id(),
         target.name(),

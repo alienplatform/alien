@@ -88,8 +88,7 @@
             "Microsoft.Storage/storageAccounts/blobServices/containers/delete",
             "Microsoft.Storage/storageAccounts/read",
             "Microsoft.Storage/storageAccounts/blobServices/containers/read"
-          ],
-          "dataActions": ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+          ]
         },
         "binding": {
           "stack": {

@@ -4,7 +4,7 @@ use crate::error::{ErrorData, Result};
 use crate::StackMutation;
 use alien_core::{
     permissions::{PermissionProfile, PermissionSet, PermissionSetReference},
-    DeploymentConfig, Platform, ResourceEntry, ResourceLifecycle, ServiceAccount, Stack,
+    Build, DeploymentConfig, Platform, ResourceEntry, ResourceLifecycle, ServiceAccount, Stack,
     StackState,
 };
 use alien_error::Context;
@@ -69,10 +69,12 @@ impl StackMutation for ServiceAccountMutation {
                 profile_name
             );
 
+            let permission_profile =
+                with_runtime_baseline_permissions(&stack, profile_name, permission_profile);
             let permission_profile = if stack_state.platform == Platform::Aws {
-                with_aws_tag_tamper_protection(permission_profile)
+                with_aws_tag_tamper_protection(&permission_profile)
             } else {
-                permission_profile.clone()
+                permission_profile
             };
 
             // Create ServiceAccount from permission profile
@@ -133,4 +135,83 @@ fn with_aws_tag_tamper_protection(profile: &PermissionProfile) -> PermissionProf
     }
 
     profile
+}
+
+fn with_runtime_baseline_permissions(
+    stack: &Stack,
+    profile_name: &str,
+    profile: &PermissionProfile,
+) -> PermissionProfile {
+    let mut profile = profile.clone();
+
+    for entry in stack.resources.values() {
+        if let Some(worker) = entry.config.downcast_ref::<alien_core::Worker>() {
+            if worker.permissions == profile_name {
+                add_global_permission(&mut profile, "worker/execute");
+            }
+        }
+
+        if let Some(build) = entry.config.downcast_ref::<Build>() {
+            if build.permissions == profile_name {
+                add_global_permission(&mut profile, "build/execute");
+            }
+        }
+    }
+
+    profile
+}
+
+fn add_global_permission(profile: &mut PermissionProfile, permission_set_id: &'static str) {
+    let permissions = profile.0.entry("*".to_string()).or_default();
+    if !permissions
+        .iter()
+        .any(|permission| permission.id() == permission_set_id)
+    {
+        permissions.push(PermissionSetReference::from_name(permission_set_id));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::{ResourceLifecycle, Worker, WorkerCode};
+
+    #[test]
+    fn worker_profiles_get_execute_baseline() {
+        let worker = Worker::new("api".to_string())
+            .permissions("execution".to_string())
+            .code(WorkerCode::Image {
+                image: "example.com/api:latest".to_string(),
+            })
+            .build();
+        let stack = Stack::new("test-stack".to_string())
+            .add(worker, ResourceLifecycle::Live)
+            .build();
+
+        let profile =
+            with_runtime_baseline_permissions(&stack, "execution", &PermissionProfile::new());
+
+        let global = profile.0.get("*").expect("global permissions");
+        assert!(global
+            .iter()
+            .any(|permission| permission.id() == "worker/execute"));
+    }
+
+    #[test]
+    fn build_profiles_get_execute_baseline() {
+        let build = Build::new("builder".to_string())
+            .permissions("execution".to_string())
+            .build();
+        let stack = Stack::new("test-stack".to_string())
+            .add(build, ResourceLifecycle::Frozen)
+            .build();
+
+        let profile =
+            with_runtime_baseline_permissions(&stack, "execution", &PermissionProfile::new());
+
+        let global = profile.0.get("*").expect("global permissions");
+        assert!(global
+            .iter()
+            .any(|permission| permission.id() == "build/execute"));
+    }
 }

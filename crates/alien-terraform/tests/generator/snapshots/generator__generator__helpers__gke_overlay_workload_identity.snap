@@ -15,25 +15,34 @@ terraform {
       source  = "hashicorp/time"
       version = ">= 0.9"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = ">= 3.6"
+    }
   }
 }
 
 === variables.tf ===
-variable "stack_name" {
+variable "name" {
   type        = string
-  description = "Stable physical-name prefix for resources created by this module."
+  description = "Human-readable deployment name shown in the deployment portal."
 }
 
-variable "deployment_name" {
+variable "token" {
   type        = string
-  description = "Deployment name used when registering the resolved stack import. Defaults to stack_name."
-  default     = ""
-}
-
-variable "deployment_group_token" {
-  type        = string
-  description = "Deployment group token used when registering the resolved stack import."
+  description = "Deployment token from the deployment page. This is the same token used by the deploy CLI --token flag."
   sensitive   = true
+}
+
+variable "resource_prefix" {
+  type        = string
+  description = "Optional stable cloud resource prefix. Leave empty to generate one and store it in Terraform state."
+  default     = ""
+
+  validation {
+    condition     = var.resource_prefix == "" || can(regex("^[a-z][a-z0-9-]{1,30}[a-z0-9]$", var.resource_prefix))
+    error_message = "resource_prefix must be empty or 3-32 characters using lowercase letters, numbers, and hyphens, starting with a letter and ending with a letter or number."
+  }
 }
 
 variable "manager_url" {
@@ -42,9 +51,9 @@ variable "manager_url" {
   default     = ""
 }
 
-variable "stack_settings_json" {
+variable "deployment_settings_json" {
   type        = string
-  description = "Optional JSON-encoded StackSettings override supplied by deployment installers."
+  description = "Optional JSON-encoded deployment settings override supplied by deployment installers."
   default     = "{}"
   sensitive   = true
 }
@@ -66,12 +75,6 @@ variable "managing_service_account_email" {
   default     = ""
 }
 
-variable "gcp_use_existing_custom_roles" {
-  type        = bool
-  description = "Use pre-created project custom roles named after Alien permission sets instead of creating per-stack custom roles."
-  default     = false
-}
-
 variable "kubernetes_namespace" {
   type        = string
   description = "Kubernetes namespace for runtime resources."
@@ -84,8 +87,14 @@ provider "google" {
   region  = var.gcp_region
 }
 
+=== resource_prefix.tf ===
+resource "random_id" "resource_prefix" {
+  byte_length = 8
+}
+
 === locals.tf ===
 locals {
+  resource_prefix     = var.resource_prefix != "" ? var.resource_prefix : "a${random_id.resource_prefix.hex}"
   deployment_platform = "gcp"
   deployment_target   = "gke"
   deployment_region   = var.gcp_region
@@ -94,7 +103,7 @@ locals {
     projectId           = var.gcp_project
     serviceAccountEmail = var.managing_service_account_email
   }
-  deployment_stack_settings = jsondecode(var.stack_settings_json)
+  deployment_settings = jsondecode(var.deployment_settings_json)
   deployment_resources = [
     {
       id   = "data"
@@ -128,13 +137,13 @@ locals {
   }
   helm_values = {
     serviceAccounts = local.helm_service_accounts
-    stackSettings   = local.deployment_stack_settings
+    stackSettings   = local.deployment_settings
   }
 }
 
 === data.tf ===
 resource "google_storage_bucket" "data" {
-  name                        = "${var.stack_name}-data"
+  name                        = "${local.resource_prefix}-data"
   project                     = var.gcp_project
   location                    = upper(var.gcp_region)
   storage_class               = "STANDARD"
@@ -142,43 +151,58 @@ resource "google_storage_bucket" "data" {
   force_destroy               = true
   public_access_prevention    = "enforced"
   labels = {
-    "managed-by"          = "alien-dev"
-    "alien-stack-id"      = var.stack_name
-    "alien-resource-id"   = "data"
-    "alien-resource-type" = "storage"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "data"
+    "resource-type" = "storage"
   }
 }
 
 === execution_sa.tf ===
 resource "google_service_account" "execution_sa" {
   project      = var.gcp_project
-  account_id   = format("%s-%s", trim(substr(replace(lower(format("a-%s-execution_sa", var.stack_name)), "_", "-"), 0, 21), "-"), substr(sha1(replace(lower(format("%s-execution_sa", var.stack_name)), "_", "-")), 0, 8))
-  display_name = "Alien execution-sa service account"
-  description  = "${var.stack_name} stack service account for permission profile 'execution_sa'"
+  account_id   = format("%s-%s", trim(substr(replace(lower(format("a-%s-execution_sa", local.resource_prefix)), "_", "-"), 0, 21), "-"), substr(sha1(replace(lower(format("%s-execution_sa", local.resource_prefix)), "_", "-")), 0, 8))
+  display_name = "Deployment execution-sa service account"
+  description  = "${local.resource_prefix} deployment service account for permission profile 'execution_sa'"
 }
 
-resource "google_project_iam_custom_role" "execution_sa_storagedataread" {
-  count       = var.gcp_use_existing_custom_roles ? 0 : 1
+resource "google_project_iam_custom_role" "gcp_role_storage_data_read_part1" {
   project     = var.gcp_project
-  role_id     = format("%s_execution_sa_storageDataRead_%s", substr(replace(var.stack_name, "-", "_"), 0, 12), substr(sha1(format("%s-execution_sa-storageDataRead", var.stack_name)), 0, 8))
-  title       = "Storage Data Read"
-  description = "Allows reading data from storage buckets and containers"
+  role_id     = format("role_%s_storage_data_read_part1", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18))
+  title       = "gke-overlay: Storage data read (part 1)"
+  description = "Allows reading data from storage buckets and containers. Stack: gke-overlay. Deployment prefix: ${local.resource_prefix}. Permission set: storage/data-read."
   stage       = "GA"
   permissions = [
     "storage.buckets.get",
     "storage.buckets.list",
-    "storage.objects.get",
-    "storage.objects.list",
-    "storage.objects.getIamPolicy",
     "storage.multipartUploads.list",
     "storage.multipartUploads.listParts",
+    "storage.objects.get",
+    "storage.objects.getIamPolicy",
+    "storage.objects.list"
+  ]
+}
+
+resource "google_project_iam_custom_role" "gcp_role_storage_data_read_part2" {
+  project     = var.gcp_project
+  role_id     = format("role_%s_storage_data_read_part2", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18))
+  title       = "gke-overlay: Storage data read (part 2)"
+  description = "Allows reading data from storage buckets and containers. Stack: gke-overlay. Deployment prefix: ${local.resource_prefix}. Permission set: storage/data-read."
+  stage       = "GA"
+  permissions = [
     "iam.serviceAccounts.signBlob"
   ]
 }
 
-resource "google_project_iam_member" "execution_sa_storagedataread_binding_0" {
+resource "google_project_iam_member" "gcp_role_storage_data_read_part1_execution_sa_binding_0" {
   project = var.gcp_project
-  role    = var.gcp_use_existing_custom_roles ? format("projects/%s/roles/storageDataRead", var.gcp_project) : google_project_iam_custom_role.execution_sa_storagedataread[0].name
+  role    = google_project_iam_custom_role.gcp_role_storage_data_read_part1.name
+  member  = "serviceAccount:${google_service_account.execution_sa.email}"
+}
+
+resource "google_project_iam_member" "gcp_role_storage_data_read_part2_execution_sa_binding_1" {
+  project = var.gcp_project
+  role    = google_project_iam_custom_role.gcp_role_storage_data_read_part2.name
   member  = "serviceAccount:${google_service_account.execution_sa.email}"
 }
 
@@ -194,31 +218,33 @@ resource "google_service_account_iam_binding" "execution_sa_workload_identity" {
 resource "time_sleep" "gcp_iam_propagation" {
   create_duration = "120s"
   depends_on = [
-    google_project_iam_custom_role.execution_sa_storagedataread,
-    google_project_iam_member.execution_sa_storagedataread_binding_0
+    google_project_iam_member.gcp_role_storage_data_read_part1_execution_sa_binding_0,
+    google_project_iam_member.gcp_role_storage_data_read_part2_execution_sa_binding_1
   ]
 }
 
 === import.tf ===
-resource "terraform_data" "deployment_stack_import" {
+resource "terraform_data" "deployment_import" {
   input = {
     platform                  = local.deployment_platform
-    deployment_group_token    = var.deployment_group_token
-    deployment_name           = var.deployment_name == "" ? var.stack_name : var.deployment_name
-    stack_prefix              = var.stack_name
+    token                     = var.token
+    name                      = var.name
+    resource_prefix           = local.resource_prefix
     setup_target              = ""
     setup_fingerprint         = ""
     setup_fingerprint_version = 0
     manager_url               = var.manager_url
     management_config         = local.deployment_management_config
-    stack_settings            = local.deployment_stack_settings
+    deployment_settings       = local.deployment_settings
     resources                 = local.deployment_resources
   }
   depends_on = [
     google_storage_bucket.data,
     google_service_account.execution_sa,
-    google_project_iam_custom_role.execution_sa_storagedataread,
-    google_project_iam_member.execution_sa_storagedataread_binding_0,
+    google_project_iam_custom_role.gcp_role_storage_data_read_part1,
+    google_project_iam_custom_role.gcp_role_storage_data_read_part2,
+    google_project_iam_member.gcp_role_storage_data_read_part1_execution_sa_binding_0,
+    google_project_iam_member.gcp_role_storage_data_read_part2_execution_sa_binding_1,
     google_service_account_iam_binding.execution_sa_workload_identity,
     time_sleep.gcp_iam_propagation
   ]
@@ -230,9 +256,9 @@ output "deployment_target" {
   description = "Terraform module target."
 }
 
-output "deployment_stack_prefix" {
-  value       = var.stack_name
-  description = "Physical stack prefix."
+output "deployment_resource_prefix" {
+  value       = local.resource_prefix
+  description = "Stable physical resource prefix."
 }
 
 output "deployment_platform" {
@@ -265,9 +291,9 @@ output "deployment_management_config" {
   description = "Manager import ManagementConfig JSON."
 }
 
-output "deployment_stack_settings" {
-  value       = jsonencode(local.deployment_stack_settings)
-  description = "Manager import StackSettings JSON."
+output "deployment_settings_json" {
+  value       = jsonencode(local.deployment_settings)
+  description = "Manager import deployment settings JSON."
   sensitive   = true
 }
 
@@ -292,7 +318,7 @@ Run:
 ```bash
 terraform init -backend=false
 terraform validate
-terraform apply -var='stack_name=gke-overlay' -var='deployment_group_token=...'
+terraform apply -var='name=gke-overlay' -var='token=...'
 ```
 
-This module exposes `deployment_management_config` / `deployment_stack_settings` / `deployment_resources` for external registration flows.
+This module exposes `deployment_management_config` / `deployment_settings_json` / `deployment_resources` for external registration flows.

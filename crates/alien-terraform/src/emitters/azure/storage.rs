@@ -3,7 +3,7 @@
 //!
 //! Mirrors `AzureStorageController`:
 //!
-//! * Container name = `lower(replace("${var.stack_name}-{id}", "_", "-"))`
+//! * Container name = `lower(replace("${local.resource_prefix}-{id}", "_", "-"))`
 //!   — the runtime's `get_azure_container_name` helper, reproduced in HCL
 //!   so push/pull converge byte-identical.
 //! * Public access maps `storage.public_read` to the provider's
@@ -131,11 +131,11 @@ fn parent_storage_account_label<'a>(ctx: &EmitContext<'a>) -> Result<&'a str> {
 }
 
 fn container_name_expr(storage_id: &str) -> Expression {
-    // `replace(lower("${var.stack_name}-{id}"), "_", "-")` — match
+    // `replace(lower("${local.resource_prefix}-{id}"), "_", "-")` — match
     // runtime's `get_azure_container_name` so push and pull resolve to
     // the same physical container.
     expr::raw(format!(
-        "replace(lower(\"${{var.stack_name}}-{}\"), \"_\", \"-\")",
+        "replace(lower(\"${{local.resource_prefix}}-{}\"), \"_\", \"-\")",
         storage_id
     ))
 }

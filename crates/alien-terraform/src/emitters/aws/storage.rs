@@ -7,7 +7,7 @@
 use crate::{
     block::{attr, block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
-    emitters::aws::helpers::{downcast, required_label, stack_name_template, tags},
+    emitters::aws::helpers::{downcast, required_label, resource_prefix_template, tags},
     expr,
 };
 use alien_core::{import::EmitContext, LifecycleRule, Result, Storage};
@@ -73,7 +73,7 @@ fn bucket(label: &str, ctx: &EmitContext<'_>, storage: &Storage) -> hcl::structu
         "aws_s3_bucket",
         label,
         [
-            attr("bucket", stack_name_template(storage.id())),
+            attr("bucket", resource_prefix_template(storage.id())),
             attr("force_destroy", Expression::Bool(true)),
             attr("tags", tags(ctx, "storage")),
         ],

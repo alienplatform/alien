@@ -12,7 +12,7 @@ Metadata:
     - Label:
         default: Registration
       Parameters:
-      - DeploymentGroupToken
+      - Token
       - ManagingRoleArn
       - ManagingAccountId
     - Label:
@@ -30,8 +30,6 @@ Metadata:
     ParameterLabels:
       CertificateArn:
         default: Certificate ARN
-      DeploymentGroupToken:
-        default: Deployment group token
       DomainName:
         default: Domain name
       HeartbeatsMode:
@@ -44,12 +42,14 @@ Metadata:
         default: Manager role ARN
       TelemetryMode:
         default: Telemetry
+      Token:
+        default: Deployment token
       UpdatesMode:
         default: Updates
 Parameters:
-  DeploymentGroupToken:
+  Token:
     Type: String
-    Description: Deployment-group token used when registering the resolved stack import.
+    Description: Deployment token from the deployment page.
     NoEcho: true
   ManagingRoleArn:
     Type: String
@@ -130,14 +130,14 @@ Resources:
               action:
                 type: expire
       Tags:
-      - Key: alien.dev/managed-by
-        Value: alien
-      - Key: alien.dev/stack
+      - Key: managed-by
+        Value: deployment
+      - Key: deployment
         Value:
           Ref: AWS::StackName
-      - Key: alien.dev/resource
+      - Key: resource
         Value: registry
-      - Key: AlienResourceType
+      - Key: resource-type
         Value: artifact-registry
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
@@ -178,14 +178,14 @@ Resources:
               - Arn
             - Fn::Sub: arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${AWS::StackName}-registry-*
       Tags:
-      - Key: alien.dev/managed-by
-        Value: alien
-      - Key: alien.dev/stack
+      - Key: managed-by
+        Value: deployment
+      - Key: deployment
         Value:
           Ref: AWS::StackName
-      - Key: alien.dev/resource
+      - Key: resource
         Value: registry
-      - Key: AlienResourceType
+      - Key: resource-type
         Value: artifact-registry
     DependsOn:
     - RegistryRepository
@@ -232,14 +232,14 @@ Resources:
               - Arn
             - Fn::Sub: arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${AWS::StackName}-registry-*
       Tags:
-      - Key: alien.dev/managed-by
-        Value: alien
-      - Key: alien.dev/stack
+      - Key: managed-by
+        Value: deployment
+      - Key: deployment
         Value:
           Ref: AWS::StackName
-      - Key: alien.dev/resource
+      - Key: resource
         Value: registry
-      - Key: AlienResourceType
+      - Key: resource-type
         Value: artifact-registry
     DependsOn:
     - RegistryRepository
@@ -247,10 +247,10 @@ Outputs:
   DeploymentSourceKind:
     Value: cloudformation
     Description: Setup source kind.
-  DeploymentStackPrefix:
+  DeploymentResourcePrefix:
     Value:
       Ref: AWS::StackName
-    Description: Physical stack prefix.
+    Description: Stable physical resource prefix.
   DeploymentPlatform:
     Value: aws
     Description: Target platform.

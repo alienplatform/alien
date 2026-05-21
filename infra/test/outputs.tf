@@ -154,11 +154,6 @@ output "e2e_gcp_network_region" {
   sensitive = true
 }
 
-output "e2e_gcp_use_existing_custom_roles" {
-  value     = true
-  sensitive = true
-}
-
 output "gcp_management_identity_email" {
   value     = module.gcp.management_identity_email
   sensitive = true

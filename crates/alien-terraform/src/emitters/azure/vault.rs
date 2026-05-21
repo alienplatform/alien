@@ -113,7 +113,7 @@ impl TfEmitter for AzureVaultEmitter {
 /// the lower-cased `${stack}-{id}` template.
 fn vault_name_expr(vault_id: &str) -> Expression {
     expr::raw(format!(
-        "substr(lower(\"${{var.stack_name}}-{}\"), 0, 24)",
+        "substr(lower(\"${{local.resource_prefix}}-{}\"), 0, 24)",
         vault_id
     ))
 }
@@ -187,7 +187,7 @@ fn emit_management_role_definition(
             attr(
                 "role_definition_id",
                 expr::raw(&format!(
-                    "uuidv5(\"oid\", \"alien:azure:mgmt-res-role-def:${{var.stack_name}}:{}\")",
+                    "uuidv5(\"oid\", \"deployment:azure:mgmt-res-role-def:${{local.resource_prefix}}:{}\")",
                     permission_set.id
                 )),
             ),
@@ -237,7 +237,7 @@ fn emit_management_role_assignment(
             attr(
                 "name",
                 expr::raw(&format!(
-                    "uuidv5(\"oid\", \"alien:azure:mgmt-res-role-assign:${{var.stack_name}}:{}:{}\")",
+                    "uuidv5(\"oid\", \"deployment:azure:mgmt-res-role-assign:${{local.resource_prefix}}:{}:{}\")",
                     vault_id, permission_set.id
                 )),
             ),

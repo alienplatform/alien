@@ -399,7 +399,7 @@ fn create_topology(
             ),
             attr(
                 "name_prefix",
-                crate::emitters::aws::helpers::stack_name_template("workload-"),
+                crate::emitters::aws::helpers::resource_prefix_template("workload-"),
             ),
             attr(
                 "description",

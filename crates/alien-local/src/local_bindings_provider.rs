@@ -8,8 +8,8 @@
 
 use crate::error::Result;
 use crate::{
-    LocalArtifactRegistryManager, LocalContainerManager, LocalWorkerManager, LocalKvManager,
-    LocalQueueManager, LocalStorageManager, LocalVaultManager,
+    LocalArtifactRegistryManager, LocalContainerManager, LocalKvManager, LocalQueueManager,
+    LocalStorageManager, LocalVaultManager, LocalWorkerManager,
 };
 use alien_bindings::{
     error::ErrorData as BindingsErrorData,
@@ -19,8 +19,8 @@ use alien_bindings::{
         storage::local::LocalStorage, vault::local::LocalVault,
     },
     traits::{
-        ArtifactRegistry, BindingsProviderApi, Build, Container, Worker, Kv, Queue,
-        ServiceAccount, Storage, Vault,
+        ArtifactRegistry, BindingsProviderApi, Build, Container, Kv, Queue, ServiceAccount,
+        Storage, Vault, Worker,
     },
 };
 use alien_core::bindings::{KvBinding, VaultBinding};

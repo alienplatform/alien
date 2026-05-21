@@ -15,6 +15,10 @@ fn critical_e2e_provider_operations_are_declared() {
             permission_set_id: "worker/provision",
             aws_actions: &[
                 "lambda:CreateFunction",
+                "ec2:DescribeSecurityGroups",
+                "ec2:DescribeNetworkInterfaces",
+                "ec2:DescribeSubnets",
+                "ec2:DescribeVpcs",
                 "acm:ImportCertificate",
                 "acm:AddTagsToCertificate",
                 "iam:PassRole",
@@ -26,12 +30,9 @@ fn critical_e2e_provider_operations_are_declared() {
                 "events:TagResource",
             ],
             gcp_permissions: &[
-                "resourcemanager.projects.get",
-                "iam.serviceAccounts.actAs",
                 "run.services.create",
-                "run.services.get",
                 "run.services.update",
-                "run.services.delete",
+                "iam.serviceAccounts.actAs",
             ],
             azure_actions: &[
                 "Microsoft.App/containerApps/write",
@@ -50,12 +51,22 @@ fn critical_e2e_provider_operations_are_declared() {
                 "lambda:ListTags",
                 "ecr:GetAuthorizationToken",
             ],
-            gcp_permissions: &[
-                "resourcemanager.projects.get",
-                "run.services.get",
-                "run.services.getIamPolicy",
-            ],
+            gcp_permissions: &["run.services.get"],
             azure_actions: &["Microsoft.App/containerApps/read"],
+            azure_data_actions: &[],
+        },
+        OperationCoverage {
+            permission_set_id: "worker/execute",
+            aws_actions: &[
+                "logs:CreateLogGroup",
+                "logs:CreateLogStream",
+                "logs:PutLogEvents",
+                "ec2:CreateNetworkInterface",
+                "ec2:DescribeNetworkInterfaces",
+                "ec2:DeleteNetworkInterface",
+            ],
+            gcp_permissions: &["run.services.get", "logging.logEntries.create"],
+            azure_actions: &["Microsoft.ContainerRegistry/registries/read"],
             azure_data_actions: &[],
         },
         OperationCoverage {
@@ -66,12 +77,7 @@ fn critical_e2e_provider_operations_are_declared() {
                 "iam:GetRole",
                 "iam:TagRole",
             ],
-            gcp_permissions: &[
-                "iam.serviceAccounts.create",
-                "iam.roles.create",
-                "resourcemanager.projects.getIamPolicy",
-                "resourcemanager.projects.setIamPolicy",
-            ],
+            gcp_permissions: &["iam.serviceAccounts.create", "iam.roles.create"],
             azure_actions: &[
                 "Microsoft.ManagedIdentity/userAssignedIdentities/write",
                 "Microsoft.Authorization/roleDefinitions/write",
@@ -90,11 +96,7 @@ fn critical_e2e_provider_operations_are_declared() {
                 "iam:ListAttachedRolePolicies",
                 "iam:DeleteRole",
             ],
-            gcp_permissions: &[
-                "artifactregistry.repositories.create",
-                "artifactregistry.repositories.getIamPolicy",
-                "artifactregistry.repositories.setIamPolicy",
-            ],
+            gcp_permissions: &["artifactregistry.repositories.create"],
             azure_actions: &[
                 "Microsoft.ContainerRegistry/registries/write",
                 "Microsoft.ContainerRegistry/registries/read",
@@ -104,11 +106,7 @@ fn critical_e2e_provider_operations_are_declared() {
         OperationCoverage {
             permission_set_id: "vault/data-write",
             aws_actions: &["ssm:PutParameter", "ssm:DeleteParameter"],
-            gcp_permissions: &[
-                "secretmanager.secrets.create",
-                "secretmanager.versions.add",
-                "secretmanager.secrets.delete",
-            ],
+            gcp_permissions: &["secretmanager.versions.add", "secretmanager.secrets.delete"],
             azure_actions: &[],
             azure_data_actions: &[
                 "Microsoft.KeyVault/vaults/secrets/readMetadata/action",

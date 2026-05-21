@@ -11,25 +11,34 @@ terraform {
       source  = "hashicorp/azurerm"
       version = ">= 3.100"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = ">= 3.6"
+    }
   }
 }
 
 === variables.tf ===
-variable "stack_name" {
+variable "name" {
   type        = string
-  description = "Stable physical-name prefix for resources created by this module."
+  description = "Human-readable deployment name shown in the deployment portal."
 }
 
-variable "deployment_name" {
+variable "token" {
   type        = string
-  description = "Deployment name used when registering the resolved stack import. Defaults to stack_name."
-  default     = ""
-}
-
-variable "deployment_group_token" {
-  type        = string
-  description = "Deployment group token used when registering the resolved stack import."
+  description = "Deployment token from the deployment page. This is the same token used by the deploy CLI --token flag."
   sensitive   = true
+}
+
+variable "resource_prefix" {
+  type        = string
+  description = "Optional stable cloud resource prefix. Leave empty to generate one and store it in Terraform state."
+  default     = ""
+
+  validation {
+    condition     = var.resource_prefix == "" || can(regex("^[a-z][a-z0-9-]{1,30}[a-z0-9]$", var.resource_prefix))
+    error_message = "resource_prefix must be empty or 3-32 characters using lowercase letters, numbers, and hyphens, starting with a letter and ending with a letter or number."
+  }
 }
 
 variable "manager_url" {
@@ -38,9 +47,9 @@ variable "manager_url" {
   default     = ""
 }
 
-variable "stack_settings_json" {
+variable "deployment_settings_json" {
   type        = string
-  description = "Optional JSON-encoded StackSettings override supplied by deployment installers."
+  description = "Optional JSON-encoded deployment settings override supplied by deployment installers."
   default     = "{}"
   sensitive   = true
 }
@@ -104,8 +113,14 @@ provider "azurerm" {
   features {}
 }
 
+=== resource_prefix.tf ===
+resource "random_id" "resource_prefix" {
+  byte_length = 8
+}
+
 === locals.tf ===
 locals {
+  resource_prefix     = var.resource_prefix != "" ? var.resource_prefix : "a${random_id.resource_prefix.hex}"
   deployment_platform = "azure"
   deployment_target   = "aks"
   deployment_region   = var.azure_location
@@ -116,7 +131,7 @@ locals {
     oidcIssuer            = var.azure_oidc_issuer == "" ? null : var.azure_oidc_issuer
     oidcSubject           = var.azure_oidc_subject == "" ? null : var.azure_oidc_subject
   }
-  deployment_stack_settings = jsondecode(var.stack_settings_json)
+  deployment_settings = jsondecode(var.deployment_settings_json)
   deployment_resources = [
     {
       id   = "default-resource-group"
@@ -153,7 +168,7 @@ locals {
   }
   helm_values = {
     serviceAccounts = local.helm_service_accounts
-    stackSettings   = local.deployment_stack_settings
+    stackSettings   = local.deployment_settings
   }
 }
 
@@ -162,23 +177,23 @@ resource "azurerm_resource_group" "default_resource_group" {
   name     = var.azure_resource_group_name
   location = var.azure_location
   tags = {
-    "managed-by"          = "alien-dev"
-    "alien-stack-id"      = var.stack_name
-    "alien-resource-id"   = "default-resource-group"
-    "alien-resource-type" = "resource-group"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "default-resource-group"
+    "resource-type" = "resource-group"
   }
 }
 
 === execution_sa.tf ===
 resource "azurerm_user_assigned_identity" "execution_sa" {
-  name                = "${var.stack_name}-execution-sa"
+  name                = "${local.resource_prefix}-execution-sa"
   resource_group_name = var.azure_resource_group_name
   location            = var.azure_location
   tags = {
-    "managed-by"          = "alien-dev"
-    "alien-stack-id"      = var.stack_name
-    "alien-resource-id"   = "execution-sa"
-    "alien-resource-type" = "service-account"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "execution-sa"
+    "resource-type" = "service-account"
   }
   depends_on = [
     azurerm_resource_group.default_resource_group
@@ -186,8 +201,8 @@ resource "azurerm_user_assigned_identity" "execution_sa" {
 }
 
 resource "azurerm_role_definition" "execution_sa_storage_data_read" {
-  name               = "${var.stack_name}-execution-sa-0"
-  role_definition_id = uuidv5("oid", "alien:azure:stack-role-def:${var.stack_name}-execution-sa-0")
+  name               = "${local.resource_prefix}-execution-sa-0"
+  role_definition_id = uuidv5("oid", "deployment:azure:role-def:${local.resource_prefix}-execution-sa-0")
   scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
   description        = "Allows reading data from storage buckets and containers"
 
@@ -214,7 +229,7 @@ resource "azurerm_role_definition" "execution_sa_storage_data_read" {
 }
 
 resource "azurerm_role_assignment" "execution_sa_storage_data_read_assignment" {
-  name               = uuidv5("oid", "alien:azure:stack-role-assign:${azurerm_role_definition.execution_sa_storage_data_read.role_definition_resource_id}:${azurerm_user_assigned_identity.execution_sa.principal_id}")
+  name               = uuidv5("oid", "deployment:azure:role-assign:${azurerm_role_definition.execution_sa_storage_data_read.role_definition_resource_id}:${azurerm_user_assigned_identity.execution_sa.principal_id}")
   scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
   role_definition_id = azurerm_role_definition.execution_sa_storage_data_read.role_definition_resource_id
   principal_id       = azurerm_user_assigned_identity.execution_sa.principal_id
@@ -224,7 +239,7 @@ resource "azurerm_role_assignment" "execution_sa_storage_data_read_assignment" {
 }
 
 resource "azurerm_federated_identity_credential" "execution_sa_federated" {
-  name                = "${var.stack_name}-execution_sa"
+  name                = "${local.resource_prefix}-execution_sa"
   resource_group_name = var.azure_resource_group_name
   parent_id           = azurerm_user_assigned_identity.execution_sa.id
   audience = [
@@ -238,18 +253,18 @@ resource "azurerm_federated_identity_credential" "execution_sa_federated" {
 }
 
 === import.tf ===
-resource "terraform_data" "deployment_stack_import" {
+resource "terraform_data" "deployment_import" {
   input = {
     platform                  = local.deployment_platform
-    deployment_group_token    = var.deployment_group_token
-    deployment_name           = var.deployment_name == "" ? var.stack_name : var.deployment_name
-    stack_prefix              = var.stack_name
+    token                     = var.token
+    name                      = var.name
+    resource_prefix           = local.resource_prefix
     setup_target              = ""
     setup_fingerprint         = ""
     setup_fingerprint_version = 0
     manager_url               = var.manager_url
     management_config         = local.deployment_management_config
-    stack_settings            = local.deployment_stack_settings
+    deployment_settings       = local.deployment_settings
     resources                 = local.deployment_resources
   }
   depends_on = [
@@ -267,9 +282,9 @@ output "deployment_target" {
   description = "Terraform module target."
 }
 
-output "deployment_stack_prefix" {
-  value       = var.stack_name
-  description = "Physical stack prefix."
+output "deployment_resource_prefix" {
+  value       = local.resource_prefix
+  description = "Stable physical resource prefix."
 }
 
 output "deployment_platform" {
@@ -302,9 +317,9 @@ output "deployment_management_config" {
   description = "Manager import ManagementConfig JSON."
 }
 
-output "deployment_stack_settings" {
-  value       = jsonencode(local.deployment_stack_settings)
-  description = "Manager import StackSettings JSON."
+output "deployment_settings_json" {
+  value       = jsonencode(local.deployment_settings)
+  description = "Manager import deployment settings JSON."
   sensitive   = true
 }
 
@@ -329,7 +344,7 @@ Run:
 ```bash
 terraform init -backend=false
 terraform validate
-terraform apply -var='stack_name=aks-overlay' -var='deployment_group_token=...'
+terraform apply -var='name=aks-overlay' -var='token=...'
 ```
 
-This module exposes `deployment_management_config` / `deployment_stack_settings` / `deployment_resources` for external registration flows.
+This module exposes `deployment_management_config` / `deployment_settings_json` / `deployment_resources` for external registration flows.

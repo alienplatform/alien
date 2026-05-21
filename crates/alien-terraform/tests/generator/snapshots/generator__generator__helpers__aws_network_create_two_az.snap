@@ -11,25 +11,34 @@ terraform {
       source  = "hashicorp/aws"
       version = ">= 5.0"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = ">= 3.6"
+    }
   }
 }
 
 === variables.tf ===
-variable "stack_name" {
+variable "name" {
   type        = string
-  description = "Stable physical-name prefix for resources created by this module."
+  description = "Human-readable deployment name shown in the deployment portal."
 }
 
-variable "deployment_name" {
+variable "token" {
   type        = string
-  description = "Deployment name used when registering the resolved stack import. Defaults to stack_name."
-  default     = ""
-}
-
-variable "deployment_group_token" {
-  type        = string
-  description = "Deployment group token used when registering the resolved stack import."
+  description = "Deployment token from the deployment page. This is the same token used by the deploy CLI --token flag."
   sensitive   = true
+}
+
+variable "resource_prefix" {
+  type        = string
+  description = "Optional stable cloud resource prefix. Leave empty to generate one and store it in Terraform state."
+  default     = ""
+
+  validation {
+    condition     = var.resource_prefix == "" || can(regex("^[a-z][a-z0-9-]{1,30}[a-z0-9]$", var.resource_prefix))
+    error_message = "resource_prefix must be empty or 3-32 characters using lowercase letters, numbers, and hyphens, starting with a letter and ending with a letter or number."
+  }
 }
 
 variable "manager_url" {
@@ -38,9 +47,9 @@ variable "manager_url" {
   default     = ""
 }
 
-variable "stack_settings_json" {
+variable "deployment_settings_json" {
   type        = string
-  description = "Optional JSON-encoded StackSettings override supplied by deployment installers."
+  description = "Optional JSON-encoded deployment settings override supplied by deployment installers."
   default     = "{\"network\":{\"type\":\"create\",\"cidr\":\"10.42.0.0/16\",\"availability_zones\":2}}"
   sensitive   = true
 }
@@ -59,7 +68,7 @@ variable "managing_role_arn" {
 
 variable "managing_account_id" {
   type        = string
-  description = "Account ID hosting the manager. Referenced by stack-side IAM policies that scope cross-account image pulls. Empty disables those grants."
+  description = "Account ID hosting the manager. Referenced by resource-side IAM policies that scope cross-account image pulls. Empty disables those grants."
   default     = ""
 }
 
@@ -114,8 +123,14 @@ data "aws_caller_identity" "current" {}
 
 data "aws_region" "current" {}
 
+=== resource_prefix.tf ===
+resource "random_id" "resource_prefix" {
+  byte_length = 8
+}
+
 === locals.tf ===
 locals {
+  resource_prefix     = var.resource_prefix != "" ? var.resource_prefix : "a${random_id.resource_prefix.hex}"
   deployment_platform = "aws"
   deployment_target   = "aws"
   deployment_region   = data.aws_region.current.region
@@ -123,7 +138,7 @@ locals {
     platform        = "aws"
     managingRoleArn = var.managing_role_arn
   }
-  deployment_stack_settings = merge(jsondecode(var.stack_settings_json), { network = (var.network_mode == "create-new" ? { type = "create", cidr = var.vpc_cidr == "" ? null : var.vpc_cidr, availabilityZones = var.availability_zones } : var.network_mode == "use-existing" ? { type = "byo-vpc-aws", vpcId = var.vpc_id, publicSubnetIds = var.public_subnet_ids, privateSubnetIds = var.private_subnet_ids, securityGroupIds = var.security_group_ids } : { type = "use-default" }) })
+  deployment_settings = merge(jsondecode(var.deployment_settings_json), { network = jsondecode(var.network_mode == "create-new" ? jsonencode({ type = "create", cidr = var.vpc_cidr == "" ? null : var.vpc_cidr, availabilityZones = var.availability_zones }) : var.network_mode == "use-existing" ? jsonencode({ type = "byo-vpc-aws", vpcId = var.vpc_id, publicSubnetIds = var.public_subnet_ids, privateSubnetIds = var.private_subnet_ids, securityGroupIds = var.security_group_ids }) : jsonencode({ type = "use-default" })) })
   deployment_resources = [
     {
       id   = "default-network"
@@ -157,10 +172,10 @@ resource "aws_vpc" "default_network" {
   enable_dns_support   = true
   enable_dns_hostnames = true
   tags = {
-    "alien.dev/managed-by" = "alien"
-    "alien.dev/stack"      = var.stack_name
-    "alien.dev/resource"   = "default-network"
-    AlienResourceType      = "network"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "default-network"
+    "resource-type" = "network"
   }
 }
 
@@ -168,10 +183,10 @@ resource "aws_internet_gateway" "default_network" {
   count  = var.network_mode == "create-new" ? 1 : 0
   vpc_id = aws_vpc.default_network[0].id
   tags = {
-    "alien.dev/managed-by" = "alien"
-    "alien.dev/stack"      = var.stack_name
-    "alien.dev/resource"   = "default-network"
-    AlienResourceType      = "network"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "default-network"
+    "resource-type" = "network"
   }
 }
 
@@ -182,10 +197,10 @@ resource "aws_subnet" "default_network_public" {
   availability_zone       = data.aws_availability_zones.available.names[count.index]
   map_public_ip_on_launch = true
   tags = {
-    "alien.dev/managed-by" = "alien"
-    "alien.dev/stack"      = var.stack_name
-    "alien.dev/resource"   = "default-network"
-    AlienResourceType      = "network"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "default-network"
+    "resource-type" = "network"
   }
 }
 
@@ -195,10 +210,10 @@ resource "aws_subnet" "default_network_private" {
   cidr_block        = cidrsubnet(aws_vpc.default_network[0].cidr_block, 8, count.index + var.availability_zones)
   availability_zone = data.aws_availability_zones.available.names[count.index]
   tags = {
-    "alien.dev/managed-by" = "alien"
-    "alien.dev/stack"      = var.stack_name
-    "alien.dev/resource"   = "default-network"
-    AlienResourceType      = "network"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "default-network"
+    "resource-type" = "network"
   }
 }
 
@@ -206,10 +221,10 @@ resource "aws_eip" "default_network_nat" {
   count  = var.network_mode == "create-new" ? 1 : 0
   domain = "vpc"
   tags = {
-    "alien.dev/managed-by" = "alien"
-    "alien.dev/stack"      = var.stack_name
-    "alien.dev/resource"   = "default-network"
-    AlienResourceType      = "network"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "default-network"
+    "resource-type" = "network"
   }
 }
 
@@ -218,10 +233,10 @@ resource "aws_nat_gateway" "default_network" {
   allocation_id = aws_eip.default_network_nat[0].id
   subnet_id     = aws_subnet.default_network_public[0].id
   tags = {
-    "alien.dev/managed-by" = "alien"
-    "alien.dev/stack"      = var.stack_name
-    "alien.dev/resource"   = "default-network"
-    AlienResourceType      = "network"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "default-network"
+    "resource-type" = "network"
   }
 }
 
@@ -235,10 +250,10 @@ resource "aws_route_table" "default_network_public" {
   }
 
   tags = {
-    "alien.dev/managed-by" = "alien"
-    "alien.dev/stack"      = var.stack_name
-    "alien.dev/resource"   = "default-network"
-    AlienResourceType      = "network"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "default-network"
+    "resource-type" = "network"
   }
 }
 
@@ -252,10 +267,10 @@ resource "aws_route_table" "default_network_private" {
   }
 
   tags = {
-    "alien.dev/managed-by" = "alien"
-    "alien.dev/stack"      = var.stack_name
-    "alien.dev/resource"   = "default-network"
-    AlienResourceType      = "network"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "default-network"
+    "resource-type" = "network"
   }
 }
 
@@ -273,7 +288,7 @@ resource "aws_route_table_association" "default_network_private" {
 
 resource "aws_security_group" "default_network_workload" {
   count       = var.network_mode == "create-new" ? 1 : 0
-  name_prefix = "${var.stack_name}-workload-"
+  name_prefix = "${local.resource_prefix}-workload-"
   description = "Private workload security group"
   vpc_id      = aws_vpc.default_network[0].id
 
@@ -287,26 +302,26 @@ resource "aws_security_group" "default_network_workload" {
   }
 
   tags = {
-    "alien.dev/managed-by" = "alien"
-    "alien.dev/stack"      = var.stack_name
-    "alien.dev/resource"   = "default-network"
-    AlienResourceType      = "network"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "default-network"
+    "resource-type" = "network"
   }
 }
 
 === import.tf ===
-resource "terraform_data" "deployment_stack_import" {
+resource "terraform_data" "deployment_import" {
   input = {
     platform                  = local.deployment_platform
-    deployment_group_token    = var.deployment_group_token
-    deployment_name           = var.deployment_name == "" ? var.stack_name : var.deployment_name
-    stack_prefix              = var.stack_name
+    token                     = var.token
+    name                      = var.name
+    resource_prefix           = local.resource_prefix
     setup_target              = ""
     setup_fingerprint         = ""
     setup_fingerprint_version = 0
     manager_url               = var.manager_url
     management_config         = local.deployment_management_config
-    stack_settings            = local.deployment_stack_settings
+    deployment_settings       = local.deployment_settings
     resources                 = local.deployment_resources
   }
   depends_on = [
@@ -330,9 +345,9 @@ output "deployment_target" {
   description = "Terraform module target."
 }
 
-output "deployment_stack_prefix" {
-  value       = var.stack_name
-  description = "Physical stack prefix."
+output "deployment_resource_prefix" {
+  value       = local.resource_prefix
+  description = "Stable physical resource prefix."
 }
 
 output "deployment_platform" {
@@ -365,9 +380,9 @@ output "deployment_management_config" {
   description = "Manager import ManagementConfig JSON."
 }
 
-output "deployment_stack_settings" {
-  value       = jsonencode(local.deployment_stack_settings)
-  description = "Manager import StackSettings JSON."
+output "deployment_settings_json" {
+  value       = jsonencode(local.deployment_settings)
+  description = "Manager import deployment settings JSON."
   sensitive   = true
 }
 
@@ -386,7 +401,7 @@ Run:
 ```bash
 terraform init -backend=false
 terraform validate
-terraform apply -var='stack_name=acme-net' -var='deployment_group_token=...'
+terraform apply -var='name=acme-net' -var='token=...'
 ```
 
-This module exposes `deployment_management_config` / `deployment_stack_settings` / `deployment_resources` for external registration flows.
+This module exposes `deployment_management_config` / `deployment_settings_json` / `deployment_resources` for external registration flows.

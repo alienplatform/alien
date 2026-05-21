@@ -6,10 +6,6 @@ import * as alien from "@alienplatform/core"
 // S3 on AWS, Cloud Storage on GCP, Blob Storage on Azure
 const storage = new alien.Storage("data").build()
 
-// alien.Queue
-// alien.Kv
-// alien.Postgres
-
 // Writer container
 const writer = new alien.Container("writer")
   .code({

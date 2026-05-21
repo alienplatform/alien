@@ -1,0 +1,53 @@
+{
+  "id": "worker/dispatch-command",
+  "description": "Allows dispatching Alien command messages to workers",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": ["lambda:InvokeFunction", "lambda:InvokeAsync"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${stackPrefix}-*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${resourceName}"]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": ["pubsub.topics.publish"]
+        },
+        // GCP workers receive management-dispatched commands through an internal
+        // Pub/Sub topic owned by the worker controller.
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": { "scope": "projects/${projectName}/topics/${resourceName}" }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.ServiceBus/namespaces/read",
+            "Microsoft.ServiceBus/namespaces/queues/read"
+          ],
+          "dataActions": ["Microsoft.ServiceBus/namespaces/messages/send/action"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ServiceBus/namespaces/${resourceName}-sb/queues/${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

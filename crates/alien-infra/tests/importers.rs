@@ -24,7 +24,7 @@ use alien_core::import::{
         AwsKvImportData, AwsRemoteStackManagementImportData, AwsServiceAccountImportData,
         AwsStorageImportData, AzureContainerAppsEnvironmentImportData,
         AzureRemoteStackManagementImportData, AzureResourceGroupImportData, AzureStorageImportData,
-        GcpKvImportData, GcpServiceActivationImportData, GcpStorageImportData,
+        GcpBuildImportData, GcpKvImportData, GcpServiceActivationImportData, GcpStorageImportData,
     },
     ImportContext,
 };
@@ -39,6 +39,7 @@ use alien_core::{
 };
 use alien_infra::ImporterRegistry;
 use serde_json::json;
+use std::collections::HashMap;
 
 /// Build a `ResourceEntry` whose `config` is `T`. The importer reads
 /// `ctx.resource.config` to derive the resource_type written into the
@@ -264,6 +265,51 @@ fn gcp_kv_round_trip() {
             "projectId": "my-project",
             "databaseId": "alien-stack-settings",
             "collectionName": "settings",
+        }))
+    );
+}
+
+#[test]
+fn gcp_build_round_trip() {
+    let entry = entry(
+        Build::new("builder".to_string())
+            .permissions("build-execution".to_string())
+            .environment(HashMap::from([(
+                "TEST_VAR".to_string(),
+                "test-value".to_string(),
+            )]))
+            .build(),
+    );
+    let data = GcpBuildImportData {
+        project_id: "my-project".to_string(),
+        region: "us-central1".to_string(),
+        trigger_id: "12345678-1234-1234-1234-123456789abc".to_string(),
+        trigger_name: "alien-stack-builder".to_string(),
+        build_env_vars: HashMap::from([("TEST_VAR".to_string(), "test-value".to_string())]),
+        service_account_email: "builder@my-project.iam.gserviceaccount.com".to_string(),
+    };
+    let state = run_through_registry(
+        &Build::RESOURCE_TYPE,
+        Platform::Gcp,
+        serde_json::to_value(&data).unwrap(),
+        &entry,
+        "us-central1",
+        &gcp_management_config(),
+    );
+    assert_running_with_internal_state(&state);
+    assert_eq!(
+        internal_state(&state)["buildConfigId"],
+        "alien-stack-builder"
+    );
+    assert_eq!(
+        state.remote_binding_params,
+        Some(json!({
+            "service": "cloudbuild",
+            "buildEnvVars": {
+                "TEST_VAR": "test-value",
+            },
+            "serviceAccount": "builder@my-project.iam.gserviceaccount.com",
+            "monitoring": null,
         }))
     );
 }

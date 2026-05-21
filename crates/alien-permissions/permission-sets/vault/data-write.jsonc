@@ -23,9 +23,21 @@
     "gcp": [
       {
         "grant": {
+          "permissions": ["secretmanager.secrets.create"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
+      },
+      {
+        "grant": {
           "permissions": [
             "secretmanager.secrets.get",
-            "secretmanager.secrets.create",
             "secretmanager.versions.add",
             "secretmanager.secrets.delete"
           ]
@@ -35,14 +47,14 @@
             "scope": "projects/${projectName}",
             "condition": {
               "title": "StackVaultSecrets",
-              "expression": "resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-\")"
+              "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-\")"
             }
           },
           "resource": {
             "scope": "projects/${projectName}",
             "condition": {
               "title": "ResourceVaultSecrets",
-              "expression": "resource.name.startsWith(\"projects/${projectNumber}/secrets/${resourceName}-\")"
+              "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${projectNumber}/secrets/${resourceName}-\")"
             }
           }
         }

@@ -4,11 +4,7 @@
 //!
 //! 1. Create a `google_service_account` for the management identity.
 //! 2. For every permission set in `ctx.stack.management().profile()`,
-//!    emit a `google_project_iam_custom_role` + matching
-//!    `google_project_iam_member` binding through
-//!    [`emit_custom_role_and_bindings`]. The role contents come
-//!    straight from `GcpRuntimePermissionsGenerator::generate_custom_role`,
-//!    so apply-time and TF-time bind identical role schemas.
+//!    emit matching custom-role `google_project_iam_member` bindings.
 //! 3. Grant `roles/iam.serviceAccountTokenCreator` +
 //!    `roles/iam.serviceAccountUser` on the management SA to the
 //!    caller-supplied manager identity (`var.managing_service_account_email`).
@@ -47,12 +43,13 @@ impl TfEmitter for GcpRemoteStackManagementEmitter {
                 attr("account_id", account_id_template),
                 attr(
                     "display_name",
-                    expr::template("Alien stack management identity".to_string()),
+                    expr::template("Deployment management identity".to_string()),
                 ),
                 attr(
                     "description",
                     expr::template(
-                        "${var.stack_name} cross-account management service account".to_string(),
+                        "${local.resource_prefix} cross-account management service account"
+                            .to_string(),
                     ),
                 ),
             ],
@@ -63,12 +60,8 @@ impl TfEmitter for GcpRemoteStackManagementEmitter {
             [attr("project_id", expr::raw("var.gcp_project"))],
         ));
 
-        // Per-permission-set custom roles + bindings, derived from the
-        // stack's management profile via alien-permissions. Matches
-        // exactly what GcpRemoteStackManagementController emits at run
-        // time.
         let member = service_account_member_for_label(label);
-        let context = permission_context(label);
+        let context = permission_context(label, ctx.stack.id());
         if let Some(profile) = ctx.stack.management().profile() {
             for permission_set_ref in global_permission_refs(profile) {
                 if let Some(permission_set) = permission_set_ref

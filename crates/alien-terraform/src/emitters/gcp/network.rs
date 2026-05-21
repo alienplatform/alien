@@ -158,7 +158,7 @@ fn create_topology(label: &str, cidr: Option<String>) -> TfFragment {
         [
             attr(
                 "name",
-                crate::emitters::gcp::helpers::stack_name_template(label),
+                crate::emitters::gcp::helpers::resource_prefix_template(label),
             ),
             attr("project", expr::raw("var.gcp_project")),
             attr("auto_create_subnetworks", Expression::Bool(false)),
@@ -172,7 +172,7 @@ fn create_topology(label: &str, cidr: Option<String>) -> TfFragment {
         [
             attr(
                 "name",
-                expr::template(format!("${{var.stack_name}}-{label}-workload")),
+                expr::template(format!("${{local.resource_prefix}}-{label}-workload")),
             ),
             attr("project", expr::raw("var.gcp_project")),
             attr("region", expr::raw("var.gcp_region")),
@@ -191,7 +191,7 @@ fn create_topology(label: &str, cidr: Option<String>) -> TfFragment {
         [
             attr(
                 "name",
-                expr::template(format!("${{var.stack_name}}-{label}-router")),
+                expr::template(format!("${{local.resource_prefix}}-{label}-router")),
             ),
             attr("project", expr::raw("var.gcp_project")),
             attr("region", expr::raw("var.gcp_region")),
@@ -208,7 +208,7 @@ fn create_topology(label: &str, cidr: Option<String>) -> TfFragment {
         [
             attr(
                 "name",
-                expr::template(format!("${{var.stack_name}}-{label}-nat")),
+                expr::template(format!("${{local.resource_prefix}}-{label}-nat")),
             ),
             attr("project", expr::raw("var.gcp_project")),
             attr("region", expr::raw("var.gcp_region")),
@@ -240,7 +240,7 @@ fn create_topology(label: &str, cidr: Option<String>) -> TfFragment {
         [
             attr(
                 "name",
-                expr::template(format!("${{var.stack_name}}-{label}-internal")),
+                expr::template(format!("${{local.resource_prefix}}-{label}-internal")),
             ),
             attr("project", expr::raw("var.gcp_project")),
             attr(

@@ -7,7 +7,7 @@
 use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
-    emitters::gcp::helpers::{downcast, required_label, stack_name_template},
+    emitters::gcp::helpers::{downcast, required_label, resource_prefix_template},
     expr,
 };
 use alien_core::{import::EmitContext, Kv, Result};
@@ -25,7 +25,7 @@ impl TfEmitter for GcpKvEmitter {
             "google_firestore_database",
             label,
             [
-                attr("name", stack_name_template(kv.id())),
+                attr("name", resource_prefix_template(kv.id())),
                 attr("project", expr::raw("var.gcp_project")),
                 attr("location_id", expr::raw("var.gcp_region")),
                 attr("type", Expression::String("FIRESTORE_NATIVE".to_string())),

@@ -100,6 +100,7 @@ fn generate_auto_management_profile(
 ) -> Result<Option<PermissionProfile>> {
     // Generate management permission set IDs based on stack resources
     let mut permission_set_ids = BTreeSet::new();
+    let mut resource_permission_set_ids: IndexMap<String, BTreeSet<String>> = IndexMap::new();
     let platform = stack_state.platform;
 
     if platform == Platform::Aws {
@@ -107,7 +108,7 @@ fn generate_auto_management_profile(
     }
 
     // Iterate through all resources in the stack to determine required management permissions
-    for (_, resource_entry) in stack.resources() {
+    for (resource_id, resource_entry) in stack.resources() {
         let resource_type_value = resource_entry.config.resource_type();
         let resource_type = resource_type_value.0.as_ref();
         let policy = ownership_policy_for_resource_type(resource_type);
@@ -140,21 +141,22 @@ fn generate_auto_management_profile(
             permission_set_ids.insert(format!("{}/telemetry", resource_type));
         }
 
-        // Add commands-specific permissions for workers with commands_enabled = true
+        // Add command dispatch permissions for workers with commands_enabled = true.
         if resource_type == "worker" {
             if let Some(worker) = resource_entry.config.downcast_ref::<Worker>() {
                 if worker.commands_enabled {
                     match platform {
-                        Platform::Aws => {
-                            // On AWS: worker/invoke for Lambda InvokeWorker API
-                            permission_set_ids.insert("worker/invoke".to_string());
-                        }
-                        Platform::Gcp | Platform::Azure => {
-                            // On GCP/Azure: queue/data-write for Pub/Sub and Service Bus
-                            permission_set_ids.insert("queue/data-write".to_string());
+                        Platform::Aws | Platform::Gcp | Platform::Azure => {
+                            // Preflights author the explicit command dispatch grant for
+                            // this concrete worker. Each cloud maps it to that worker's
+                            // platform command transport.
+                            resource_permission_set_ids
+                                .entry(resource_id.clone())
+                                .or_default()
+                                .insert("worker/dispatch-command".to_string());
                         }
                         _ => {
-                            // Other platforms like Kubernetes and Local use HTTP polling, no additional permissions needed
+                            // Other platforms like Kubernetes and Local use HTTP polling.
                         }
                     }
                 }
@@ -163,31 +165,49 @@ fn generate_auto_management_profile(
     }
 
     // Only create management permissions if there are resources that need management
-    if permission_set_ids.is_empty() {
+    if permission_set_ids.is_empty() && resource_permission_set_ids.is_empty() {
         return Ok(None);
+    }
+
+    fn resolve_permission_refs(
+        permission_set_ids: BTreeSet<String>,
+    ) -> Vec<PermissionSetReference> {
+        let mut valid_permission_refs = Vec::new();
+        for permission_set_id in permission_set_ids {
+            if get_permission_set(&permission_set_id).is_some() {
+                valid_permission_refs.push(PermissionSetReference::from_name(permission_set_id));
+            } else {
+                // Log warning but continue - allows system to work even if some permission sets are missing
+                tracing::debug!(
+                    permission_set_id = %permission_set_id,
+                    "Management permission set not found in registry, skipping"
+                );
+            }
+        }
+        valid_permission_refs
     }
 
     // Validate permission sets exist in registry and filter out missing ones
-    let mut valid_permission_refs = Vec::new();
-    for permission_set_id in permission_set_ids {
-        if get_permission_set(&permission_set_id).is_some() {
-            valid_permission_refs.push(PermissionSetReference::from_name(permission_set_id));
-        } else {
-            // Log warning but continue - allows system to work even if some permission sets are missing
-            tracing::debug!(
-                permission_set_id = %permission_set_id,
-                "Management permission set not found in registry, skipping"
-            );
+    let valid_permission_refs = resolve_permission_refs(permission_set_ids);
+
+    // Create the management permission profile. Auto lifecycle permissions are
+    // wildcard-scoped; command dispatch grants are scoped to the concrete worker
+    // whose command transport they target.
+    let mut management_permissions = IndexMap::new();
+    if !valid_permission_refs.is_empty() {
+        management_permissions.insert("*".to_string(), valid_permission_refs);
+    }
+
+    for (resource_id, permission_set_ids) in resource_permission_set_ids {
+        let valid_resource_refs = resolve_permission_refs(permission_set_ids);
+        if !valid_resource_refs.is_empty() {
+            management_permissions.insert(resource_id, valid_resource_refs);
         }
     }
 
-    if valid_permission_refs.is_empty() {
+    if management_permissions.is_empty() {
         return Ok(None);
     }
-
-    // Create the management permission profile with global scope
-    let mut management_permissions = IndexMap::new();
-    management_permissions.insert("*".to_string(), valid_permission_refs);
 
     Ok(Some(PermissionProfile(management_permissions)))
 }
@@ -694,7 +714,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_commands_enabled_function_permissions() {
-        // Test AWS platform - should add worker/invoke
+        // Test AWS platform - should add resource-scoped worker/dispatch-command.
         let arc_function = Worker::new("arc-worker".to_string())
             .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
@@ -743,15 +763,22 @@ mod tests {
                     .map(|perm_ref| perm_ref.id().to_string())
                     .collect();
 
-                // Should have live resource permissions and worker/invoke for Commands.
+                // Should have live resource permissions globally; command dispatch is resource-scoped.
                 assert!(permission_names.contains(&"worker/provision".to_string()));
                 assert!(!permission_names.contains(&"worker/management".to_string()));
-                assert!(permission_names.contains(&"worker/invoke".to_string()));
+                assert!(!permission_names.contains(&"worker/dispatch-command".to_string()));
+
+                let worker_permissions = profile.0.get("arc-worker").unwrap();
+                let worker_permission_names: Vec<String> = worker_permissions
+                    .iter()
+                    .map(|perm_ref| perm_ref.id().to_string())
+                    .collect();
+                assert!(worker_permission_names.contains(&"worker/dispatch-command".to_string()));
             }
             _ => panic!("Expected Extend management permissions"),
         }
 
-        // Test GCP platform - should add queue/data-write
+        // Test GCP platform - should author an explicit command dispatch grant.
         let stack_state_gcp = StackState::new(Platform::Gcp);
         let config_gcp = DeploymentConfig::builder()
             .stack_settings(StackSettings::default())
@@ -801,10 +828,17 @@ mod tests {
                     .map(|perm_ref| perm_ref.id().to_string())
                     .collect();
 
-                // Should have live resource permissions and queue/data-write for Commands.
+                // Should have live resource permissions globally; command dispatch is resource-scoped.
                 assert!(permission_names.contains(&"worker/provision".to_string()));
                 assert!(!permission_names.contains(&"worker/management".to_string()));
-                assert!(permission_names.contains(&"queue/data-write".to_string()));
+                assert!(!permission_names.contains(&"worker/dispatch-command".to_string()));
+
+                let worker_permissions = profile.0.get("arc-worker").unwrap();
+                let worker_permission_names: Vec<String> = worker_permissions
+                    .iter()
+                    .map(|perm_ref| perm_ref.id().to_string())
+                    .collect();
+                assert!(worker_permission_names.contains(&"worker/dispatch-command".to_string()));
             }
             _ => panic!("Expected Extend management permissions"),
         }

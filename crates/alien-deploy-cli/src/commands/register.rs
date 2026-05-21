@@ -54,7 +54,7 @@ pub struct RegisterArgs {
     #[arg(long, env = "ALIEN_MANAGER_URL")]
     pub manager_url: String,
 
-    /// Deployment-group token authorizing the import.
+    /// Deployment token authorizing the import.
     #[arg(long, env = "ALIEN_TOKEN")]
     pub token: String,
 
@@ -202,7 +202,7 @@ async fn fetch_cloudformation_outputs(region: &str, stack_name: &str) -> Result<
             };
             match key {
                 "DeploymentSourceKind" => outputs.source_kind = Some(value.to_string()),
-                "DeploymentStackPrefix" => {
+                "DeploymentResourcePrefix" => {
                     outputs.stack_prefix = Some(value.to_string());
                 }
                 "DeploymentPlatform" => outputs.platform = Some(value.to_string()),
@@ -288,7 +288,7 @@ fn build_import_request(
     })?;
     let stack_prefix = outputs.stack_prefix.clone().ok_or_else(|| {
         AlienError::new(ErrorData::ConfigurationError {
-            message: format!("DeploymentStackPrefix output not found in stack '{stack_name}'"),
+            message: format!("DeploymentResourcePrefix output not found in stack '{stack_name}'"),
         })
     })?;
     let setup_target = outputs.setup_target.clone().ok_or_else(|| {

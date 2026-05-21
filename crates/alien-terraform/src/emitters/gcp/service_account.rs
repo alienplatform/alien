@@ -1,15 +1,9 @@
-//! GCP ServiceAccount — IAM service account + per-permission-set custom
-//! roles + project-level bindings.
+//! GCP ServiceAccount — IAM service account + custom-role project-level bindings.
 //!
 //! Mirrors what `GcpServiceAccountController` does at runtime:
 //!
 //! 1. `google_service_account` for the identity.
-//! 2. One `google_project_iam_custom_role` per `PermissionSet` attached
-//!    via `stack_permission_sets`, with the exact `included_permissions`
-//!    list that `GcpRuntimePermissionsGenerator::generate_custom_role`
-//!    would produce — so push and pull paths converge on the same role
-//!    schema.
-//! 3. One `google_project_iam_member` per binding, derived from
+//! 2. One `google_project_iam_member` per custom-role binding, derived from
 //!    `GcpRuntimePermissionsGenerator::generate_bindings`. Conditional
 //!    bindings emit a `condition { }` block.
 //!
@@ -46,12 +40,12 @@ impl TfEmitter for GcpServiceAccountEmitter {
                 attr("account_id", account_id_template),
                 attr(
                     "display_name",
-                    expr::template(format!("Alien {} service account", service_account.id)),
+                    expr::template(format!("Deployment {} service account", service_account.id)),
                 ),
                 attr(
                     "description",
                     expr::template(format!(
-                        "${{var.stack_name}} stack service account for permission profile '{label}'"
+                        "${{local.resource_prefix}} deployment service account for permission profile '{label}'"
                     )),
                 ),
             ],
@@ -60,12 +54,8 @@ impl TfEmitter for GcpServiceAccountEmitter {
         // Member expression for re-use by all bindings.
         let member = service_account_member_for_label(label);
 
-        // Per-permission-set custom roles + project-level bindings,
-        // produced through the runtime permissions generator so the
-        // emitted Terraform mirrors what the controller would do at
-        // apply time.
         for permission_set in &service_account.stack_permission_sets {
-            let context = permission_context(label);
+            let context = permission_context(label, ctx.stack.id());
             emit_custom_role_and_bindings(&mut fragment, label, &member, permission_set, &context)?;
         }
 

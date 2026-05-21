@@ -5,9 +5,9 @@ use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::aws::helpers::{
-        downcast, jsonencode, label_for_ref, nested_block, private_subnet_ids_expr, required_label,
-        security_group_ids_expr, service_account_role_arn, service_assume_role_policy,
-        stack_name_template, tags,
+        downcast, iam_role_name_template, jsonencode, label_for_ref, nested_block,
+        private_subnet_ids_expr, required_label, resource_prefix_template, security_group_ids_expr,
+        service_account_role_arn, service_assume_role_policy, tags,
     },
     emitters::worker_environment::{worker_environment, AwsWorkerEnvironmentRenderer},
     expr,
@@ -56,7 +56,10 @@ impl TfEmitter for AwsWorkerEmitter {
                     "aws_iam_role",
                     &role_label,
                     [
-                        attr("name", stack_name_template(&format!("{}-fn", function.id))),
+                        attr(
+                            "name",
+                            iam_role_name_template(&format!("{}-fn", function.id)),
+                        ),
                         attr(
                             "assume_role_policy",
                             service_assume_role_policy(&["lambda.amazonaws.com"]),
@@ -87,7 +90,10 @@ impl TfEmitter for AwsWorkerEmitter {
             [
                 attr(
                     "name",
-                    expr::template(format!("/aws/lambda/${{var.stack_name}}-{}", function.id)),
+                    expr::template(format!(
+                        "/aws/lambda/${{local.resource_prefix}}-{}",
+                        function.id
+                    )),
                 ),
                 attr(
                     "retention_in_days",
@@ -98,7 +104,7 @@ impl TfEmitter for AwsWorkerEmitter {
         ));
 
         let mut function_body = vec![
-            attr("function_name", stack_name_template(&function.id)),
+            attr("function_name", resource_prefix_template(&function.id)),
             attr("package_type", Expression::String("Image".to_string())),
             attr("image_uri", Expression::String(image.clone())),
             attr("role", role_arn.clone()),
@@ -391,7 +397,7 @@ fn link_permission_statements(
             (
                 "Resource",
                 expr::template(format!(
-                    "arn:aws:ssm:${{data.aws_region.current.region}}:${{data.aws_caller_identity.current.account_id}}:parameter/${{var.stack_name}}-{}/*",
+                    "arn:aws:ssm:${{data.aws_region.current.region}}:${{data.aws_caller_identity.current.account_id}}:parameter/${{local.resource_prefix}}-{}/*",
                     link.id
                 )),
             ),
@@ -459,7 +465,7 @@ fn storage_trigger_resources(function: &Worker, label: &str) -> Result<Vec<hcl::
             "aws_lambda_permission",
             &stmt_id,
             [
-                attr("statement_id", stack_name_template(&stmt_id)),
+                attr("statement_id", resource_prefix_template(&stmt_id)),
                 attr(
                     "action",
                     Expression::String("lambda:InvokeFunction".to_string()),
@@ -510,7 +516,7 @@ fn schedule_trigger_resources(
             [
                 attr(
                     "name",
-                    stack_name_template(&format!("{}-schedule-{index}", function.id)),
+                    resource_prefix_template(&format!("{}-schedule-{index}", function.id)),
                 ),
                 attr("schedule_expression", Expression::String(schedule.clone())),
                 attr("state", Expression::String("ENABLED".to_string())),
@@ -572,7 +578,7 @@ fn public_api_resources(label: &str) -> Vec<hcl::structure::Block> {
             "aws_apigatewayv2_api",
             label,
             [
-                attr("name", stack_name_template(&format!("{label}-api"))),
+                attr("name", resource_prefix_template(&format!("{label}-api"))),
                 attr("protocol_type", Expression::String("HTTP".to_string())),
             ],
         ),

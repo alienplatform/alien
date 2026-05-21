@@ -1,6 +1,6 @@
 {
   "id": "aws/tag-tamper-protection",
-  "description": "Prevents runtime identities from changing Alien boundary tags.",
+  "description": "Prevents runtime identities from changing deployment boundary tags.",
   "platforms": {
     "aws": [
       {
@@ -26,7 +26,7 @@
             "resources": ["*"],
             "condition": {
               "ForAnyValue:StringLike": {
-                "aws:TagKeys": "alien.dev/*"
+                "aws:TagKeys": "${stackTag}"
               }
             }
           },
@@ -34,7 +34,7 @@
             "resources": ["*"],
             "condition": {
               "ForAnyValue:StringLike": {
-                "aws:TagKeys": "alien.dev/*"
+                "aws:TagKeys": "${stackTag}"
               }
             }
           }
@@ -43,7 +43,7 @@
       {
         // S3 buckets are tagged immediately after CreateBucket because S3 has
         // no portable tag-on-create path in our client. Once the boundary tag
-        // exists, runtime identities may not rewrite Alien-owned tag keys.
+        // exists, runtime identities may not rewrite deployment boundary tag keys.
         "effect": "Deny",
         "grant": {
           "actions": ["s3:PutBucketTagging"]
@@ -56,7 +56,7 @@
                 "aws:ResourceTag/${stackTag}": "*"
               },
               "ForAnyValue:StringLike": {
-                "aws:TagKeys": "alien.dev/*"
+                "aws:TagKeys": "${stackTag}"
               }
             }
           },
@@ -67,7 +67,7 @@
                 "aws:ResourceTag/${stackTag}": "*"
               },
               "ForAnyValue:StringLike": {
-                "aws:TagKeys": "alien.dev/*"
+                "aws:TagKeys": "${stackTag}"
               }
             }
           }

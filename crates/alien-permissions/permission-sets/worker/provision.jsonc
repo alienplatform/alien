@@ -13,7 +13,7 @@
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${managedByTag}": "alien"
+                "aws:RequestTag/${managedByTag}": "deployment"
               }
             }
           },
@@ -23,7 +23,7 @@
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${resourceTag}": "${resourceName}",
-                "aws:RequestTag/${managedByTag}": "alien"
+                "aws:RequestTag/${managedByTag}": "deployment"
               }
             }
           }
@@ -72,7 +72,7 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${managedByTag}": "alien"
+                "aws:ResourceTag/${managedByTag}": "deployment"
               }
             }
           },
@@ -82,9 +82,30 @@
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
                 "aws:ResourceTag/${resourceTag}": "${resourceName}",
-                "aws:ResourceTag/${managedByTag}": "alien"
+                "aws:ResourceTag/${managedByTag}": "deployment"
               }
             }
+          }
+        }
+      },
+      {
+        // Lambda validates VPC configuration during CreateFunction and calls
+        // these EC2 discovery APIs on behalf of the caller. AWS requires
+        // Resource: "*" for these read-only APIs.
+        "grant": {
+          "actions": [
+            "ec2:DescribeSecurityGroups",
+            "ec2:DescribeNetworkInterfaces",
+            "ec2:DescribeSubnets",
+            "ec2:DescribeVpcs"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
           }
         }
       },
@@ -118,7 +139,7 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${managedByTag}": "alien"
+                "aws:ResourceTag/${managedByTag}": "deployment"
               }
             }
           },
@@ -127,7 +148,7 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${managedByTag}": "alien"
+                "aws:ResourceTag/${managedByTag}": "deployment"
               }
             }
           }
@@ -180,7 +201,7 @@
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${managedByTag}": "alien"
+                "aws:RequestTag/${managedByTag}": "deployment"
               }
             }
           },
@@ -190,7 +211,7 @@
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${resourceTag}": "${resourceName}",
-                "aws:RequestTag/${managedByTag}": "alien"
+                "aws:RequestTag/${managedByTag}": "deployment"
               }
             }
           }
@@ -211,7 +232,7 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${managedByTag}": "alien"
+                "aws:ResourceTag/${managedByTag}": "deployment"
               }
             }
           },
@@ -221,7 +242,7 @@
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
                 "aws:ResourceTag/${resourceTag}": "${resourceName}",
-                "aws:ResourceTag/${managedByTag}": "alien"
+                "aws:ResourceTag/${managedByTag}": "deployment"
               }
             }
           }
@@ -242,7 +263,7 @@
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${managedByTag}": "alien"
+                "aws:RequestTag/${managedByTag}": "deployment"
               }
             }
           },
@@ -256,7 +277,7 @@
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${resourceTag}": "${resourceName}",
-                "aws:RequestTag/${managedByTag}": "alien"
+                "aws:RequestTag/${managedByTag}": "deployment"
               }
             }
           }
@@ -277,7 +298,7 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${managedByTag}": "alien"
+                "aws:ResourceTag/${managedByTag}": "deployment"
               }
             }
           },
@@ -291,7 +312,7 @@
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
                 "aws:ResourceTag/${resourceTag}": "${resourceName}",
-                "aws:ResourceTag/${managedByTag}": "alien"
+                "aws:ResourceTag/${managedByTag}": "deployment"
               }
             }
           }
@@ -314,7 +335,7 @@
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${managedByTag}": "alien"
+                "aws:RequestTag/${managedByTag}": "deployment"
               }
             }
           },
@@ -330,7 +351,7 @@
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${resourceTag}": "${resourceName}",
-                "aws:RequestTag/${managedByTag}": "alien"
+                "aws:RequestTag/${managedByTag}": "deployment"
               }
             }
           }
@@ -352,7 +373,7 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${managedByTag}": "alien"
+                "aws:ResourceTag/${managedByTag}": "deployment"
               }
             }
           },
@@ -367,7 +388,7 @@
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
                 "aws:ResourceTag/${resourceTag}": "${resourceName}",
-                "aws:ResourceTag/${managedByTag}": "alien"
+                "aws:ResourceTag/${managedByTag}": "deployment"
               }
             }
           }
@@ -384,7 +405,7 @@
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${managedByTag}": "alien"
+                "aws:RequestTag/${managedByTag}": "deployment"
               }
             }
           },
@@ -394,7 +415,7 @@
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${resourceTag}": "${resourceName}",
-                "aws:RequestTag/${managedByTag}": "alien"
+                "aws:RequestTag/${managedByTag}": "deployment"
               }
             }
           }
@@ -415,7 +436,7 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${managedByTag}": "alien"
+                "aws:ResourceTag/${managedByTag}": "deployment"
               }
             }
           },
@@ -425,7 +446,7 @@
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
                 "aws:ResourceTag/${resourceTag}": "${resourceName}",
-                "aws:ResourceTag/${managedByTag}": "alien"
+                "aws:ResourceTag/${managedByTag}": "deployment"
               }
             }
           }

@@ -10,6 +10,7 @@ use indexmap::IndexMap;
 pub fn create_test_context() -> PermissionContext {
     PermissionContext::new()
         .with_stack_prefix("my-stack")
+        .with_stack_name("byoc-database")
         .with_resource_name("my-stack-payments-data")
         .with_project_name("my-project")
         .with_project_number("123456789012")
@@ -122,9 +123,9 @@ pub fn create_gcp_storage_data_read_permission_set() -> PermissionSet {
                 grant: PermissionGrant {
                     actions: None,
                     permissions: Some(vec![
+                        "storage.buckets.get".to_string(),
                         "storage.objects.get".to_string(),
                         "storage.objects.list".to_string(),
-                        "storage.buckets.get".to_string(),
                     ]),
                     data_actions: None,
                 },

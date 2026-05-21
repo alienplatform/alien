@@ -7,11 +7,11 @@
 //!   `azurerm_user_assigned_identity` rather than the `email` of a
 //!   `google_service_account`).
 //! * `tags` map literal in HCL — the Azure portal calls them tags, not
-//!   labels, but the Alien-managed key set is identical.
+//!   labels, but the generated key set is identical.
 //! * Resource names lowercase + sanitised to Azure's per-service rules.
 //!   The two we have to handle in HCL today: storage account names are
 //!   `[a-z0-9]{3,24}` (no hyphens, lowercase), and role assignment names
-//!   are `uuidv5("dns", "${stack_name}-${role}-${principal}")` so they
+//!   are `uuidv5("dns", "${resource_prefix}-${role}-${principal}")` so they
 //!   stay stable across applies.
 //!
 //! When the runtime controller surface in
@@ -74,24 +74,21 @@ pub fn label_for_ref<'a>(ctx: &'a EmitContext<'_>, reference: &ResourceRef) -> R
     })
 }
 
-/// `${var.stack_name}-{suffix}` template. Azure resources accept hyphenated
+/// `${local.resource_prefix}-{suffix}` template. Azure resources accept hyphenated
 /// kebab-case names except where noted (see [`storage_account_name`]).
-pub fn stack_name_template(suffix: &str) -> Expression {
-    expr::template(format!("${{var.stack_name}}-{suffix}"))
+pub fn resource_prefix_template(suffix: &str) -> Expression {
+    expr::template(format!("${{local.resource_prefix}}-{suffix}"))
 }
 
-/// Standard Alien tags map for Azure. Same key set as GCP labels — the
-/// `tags` block accepts arbitrary string values, no kebab-case constraint.
+/// Standard tags map for Azure. Same key set as GCP labels — the `tags` block
+/// accepts arbitrary string values, no kebab-case constraint.
 pub fn tags(ctx: &EmitContext<'_>, alien_resource_type: &'static str) -> Expression {
     expr::object([
-        ("managed-by", Expression::String("alien-dev".to_string())),
-        ("alien-stack-id", expr::raw("var.stack_name")),
+        ("managed-by", Expression::String("deployment".to_string())),
+        ("deployment", expr::raw("local.resource_prefix")),
+        ("resource", Expression::String(ctx.resource_id.to_string())),
         (
-            "alien-resource-id",
-            Expression::String(ctx.resource_id.to_string()),
-        ),
-        (
-            "alien-resource-type",
+            "resource-type",
             Expression::String(alien_resource_type.to_string()),
         ),
     ])
@@ -182,7 +179,7 @@ pub fn binding_string_value(
 /// correctly.
 ///
 /// The Azure permission context carries:
-/// * `stack_prefix` → `${var.stack_name}` (matches AWS / GCP).
+/// * `stack_prefix` → `${local.resource_prefix}` (matches AWS / GCP).
 /// * `subscription_id` → `${var.azure_subscription_id}` — the
 ///   `subscriptions/<sub>/...` segment of every Azure resource ID.
 /// * `resource_group` → `${var.azure_resource_group}`.
@@ -196,7 +193,7 @@ pub fn binding_string_value(
 ///   `kv` / `vault` emitters without re-deriving it.
 pub fn permission_context(label: &str) -> PermissionContext {
     PermissionContext::new()
-        .with_stack_prefix("${var.stack_name}".to_string())
+        .with_stack_prefix("${local.resource_prefix}".to_string())
         .with_subscription_id("${var.azure_subscription_id}".to_string())
         .with_resource_group("${var.azure_resource_group_name}".to_string())
         .with_managing_subscription_id("${var.azure_subscription_id}".to_string())
@@ -217,7 +214,7 @@ pub fn permission_context(label: &str) -> PermissionContext {
 /// ```hcl
 /// locals {
 ///   alien_storage_account_name = substr(
-///     replace(lower("${var.stack_name}default"), "-", ""),
+///     replace(lower("${local.resource_prefix}default"), "-", ""),
 ///     0,
 ///     24,
 ///   )
@@ -228,11 +225,11 @@ pub fn permission_context(label: &str) -> PermissionContext {
 /// generator emits a single `locals.tf` and any per-resource override
 /// would silently drift between cloud-discovery and the executor.
 pub fn storage_account_name_local() -> Expression {
-    expr::raw("substr(replace(lower(\"${var.stack_name}default\"), \"-\", \"\"), 0, 24)")
+    expr::raw("substr(replace(lower(\"${local.resource_prefix}default\"), \"-\", \"\"), 0, 24)")
 }
 
 /// Emit `azurerm_role_definition` + `azurerm_role_assignment` blocks for
-/// `permission_set`. Mirror of the GCP `emit_custom_role_and_bindings`
+/// `permission_set`. Mirror of the GCP custom-role binding
 /// helper.
 ///
 /// `principal_id_expr` is intentionally an explicit parameter — the GCP
@@ -241,7 +238,7 @@ pub fn storage_account_name_local() -> Expression {
 /// `azurerm_user_assigned_identity`) and the call sites need to be able
 /// to override it (e.g. AKS workload identity overlay).
 ///
-/// Role assignment names use `uuidv5("dns", "{stack_name}-{role}-{principal}")`
+/// Role assignment names use `uuidv5("dns", "{resource_prefix}-{role}-{principal}")`
 /// so they stay stable across applies — Azure rejects role assignments
 /// with non-GUID names.
 pub fn emit_role_definition_and_assignments(
@@ -268,7 +265,7 @@ pub fn emit_role_definition_and_assignments(
         })?;
 
     let role_label = format!("{sa_label}_{}", sanitize_role_label(&permission_set.id));
-    let role_name = format!("${{var.stack_name}}-{service_account_id}-{role_index}");
+    let role_name = format!("${{local.resource_prefix}}-{service_account_id}-{role_index}");
 
     fragment.resource_blocks.push(resource_block(
         "azurerm_role_definition",
@@ -278,7 +275,7 @@ pub fn emit_role_definition_and_assignments(
             attr(
                 "role_definition_id",
                 expr::raw(&format!(
-                    "uuidv5(\"oid\", \"alien:azure:stack-role-def:{role_name}\")"
+                    "uuidv5(\"oid\", \"deployment:azure:role-def:{role_name}\")"
                 )),
             ),
             attr(
@@ -357,7 +354,7 @@ pub fn emit_role_definition_and_assignments(
             attr(
                 "name",
                 expr::raw(&format!(
-                    "uuidv5(\"oid\", \"alien:azure:stack-role-assign:${{azurerm_role_definition.{role_label}.role_definition_resource_id}}:${{{}}}\")",
+                    "uuidv5(\"oid\", \"deployment:azure:role-assign:${{azurerm_role_definition.{role_label}.role_definition_resource_id}}:${{{}}}\")",
                     render_expression_for_uuidv5(&principal_id_expr)
                 )),
             ),

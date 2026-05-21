@@ -216,9 +216,9 @@ fn add_vault_read_permissions_to_compute_profiles(
     Ok(())
 }
 
-/// Add vault data permissions to the management profile for the secrets vault.
-/// This allows the management service to sync Alien-managed secrets without
-/// granting access to user-declared vaults.
+/// Author explicit vault data permissions into the management profile for this vault.
+/// The generator treats these like any other management grant; the preflight is
+/// the permission author.
 fn add_vault_permissions_to_management(stack: &mut Stack, vault_name: &str) -> Result<()> {
     use alien_core::permissions::ManagementPermissions;
 
@@ -229,7 +229,7 @@ fn add_vault_permissions_to_management(stack: &mut Stack, vault_name: &str) -> R
     {
         debug!(
             vault_name = %vault_name,
-            "Skipping secrets vault management permissions because remote stack management is not present"
+            "Skipping concrete vault management permissions because remote stack management is not present"
         );
         return Ok(());
     }
@@ -239,7 +239,7 @@ fn add_vault_permissions_to_management(stack: &mut Stack, vault_name: &str) -> R
 
     match current_management {
         ManagementPermissions::Auto | ManagementPermissions::Extend(_) => {
-            // For Auto or Extend, add data access only to the Alien-managed secrets vault.
+            // For Auto or Extend, author data access on this concrete vault resource.
             // This will be merged with auto-generated permissions by ManagementPermissionProfileMutation
             let vault_read_permission = PermissionSetReference::from_name("vault/data-read");
             let vault_write_permission = PermissionSetReference::from_name("vault/data-write");
@@ -260,7 +260,7 @@ fn add_vault_permissions_to_management(stack: &mut Stack, vault_name: &str) -> R
                 vault_permissions.push(vault_read_permission);
                 debug!(
                     vault_name = %vault_name,
-                    "Added vault/data-read to management profile for secrets vault resource"
+                    "Added vault/data-read to management profile for concrete vault resource"
                 );
             }
             if !vault_permissions
@@ -270,14 +270,14 @@ fn add_vault_permissions_to_management(stack: &mut Stack, vault_name: &str) -> R
                 vault_permissions.push(vault_write_permission);
                 debug!(
                     vault_name = %vault_name,
-                    "Added vault/data-write to management profile for secrets vault resource"
+                    "Added vault/data-write to management profile for concrete vault resource"
                 );
             }
             stack.permissions.management = ManagementPermissions::Extend(management_profile);
         }
         ManagementPermissions::Override(_) => {
             // Don't modify override - user has full control.
-            debug!("Skipping secrets vault management permissions - management permissions are overridden");
+            debug!("Skipping concrete vault management permissions - management permissions are overridden");
         }
     }
 

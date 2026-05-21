@@ -750,9 +750,7 @@ impl GcpStorageController {
 impl GcpStorageController {
     /// Applies resource-scoped permissions to the bucket from stack permission profiles.
     ///
-    /// This first ensures the required GCP custom roles exist (they are referenced
-    /// by the IAM bindings but not created by any other controller), then collects
-    /// and applies the bindings to the bucket.
+    /// Collects custom-role bindings and applies them to the bucket.
     async fn apply_resource_scoped_permissions(
         &self,
         ctx: &ResourceControllerContext<'_>,
@@ -763,7 +761,7 @@ impl GcpStorageController {
 
         let config = ctx.desired_resource_config::<Storage>()?;
 
-        // Collect resource-scoped bindings (this also ensures any required custom roles exist)
+        // Collect resource-scoped custom-role bindings.
         let mut all_bindings = Vec::new();
         ResourcePermissionsHelper::collect_gcp_resource_scoped_bindings(
             ctx,
@@ -1041,7 +1039,7 @@ mod tests {
             .expect_get_gcp_gcs_client()
             .returning(move |_| Ok(mock_gcs.clone()));
 
-        // Mock IAM client for resource-scoped permissions (custom role management)
+        // Mock IAM client for resource-scoped permissions.
         let mock_iam = create_gcp_iam_mock_for_resource_permissions();
         mock_provider
             .expect_get_gcp_iam_client()

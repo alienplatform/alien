@@ -8,7 +8,8 @@
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
     ArtifactRegistry, Build, CapacityGroup, ComputeCluster, ErrorData, Ingress, Platform, Queue,
-    ResourceLifecycle, Stack, StackSettings, Storage, Worker, WorkerCode, WorkerTrigger,
+    ResourceLifecycle, ServiceAccount, Stack, StackSettings, Storage, Worker, WorkerCode,
+    WorkerTrigger,
 };
 use alien_terraform::{generate_terraform_module, TerraformOptions, TerraformTarget, TfRegistry};
 
@@ -29,6 +30,10 @@ fn gcp_artifact_registry_renders_docker_repository() {
 fn gcp_build_renders_cloud_build_trigger() {
     let stack = Stack::new("acme-build".to_string())
         .add(
+            ServiceAccount::new("execution-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
             Build::new("builder".to_string())
                 .permissions("execution".to_string())
                 .environment([("PROFILE".to_string(), "release".to_string())].into())
@@ -38,6 +43,13 @@ fn gcp_build_renders_cloud_build_trigger() {
         .build();
     let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
     snapshot_module("gcp_build", &module);
+    let build_tf = module
+        .get("builder.tf")
+        .expect("builder terraform file should render");
+    assert!(
+        build_tf.contains("service_account = google_service_account.execution_sa.name"),
+        "Cloud Build trigger must use the fully-qualified service-account name",
+    );
     assert_terraform_valid(&module, "gcp_build");
 }
 

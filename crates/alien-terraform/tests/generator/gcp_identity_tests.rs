@@ -66,7 +66,8 @@ fn gcp_remote_stack_management_function_provision_role() {
     assert!(rendered.contains("\"run.services.create\""));
     assert!(rendered.contains("\"pubsub.topics.create\""));
     assert!(rendered.contains("\"storage.buckets.update\""));
-    assert!(rendered.contains("google_project_iam_custom_role.management_workerprovision"));
+    assert!(rendered.contains("google_project_iam_custom_role\" \"gcp_role_worker_provision\""));
+    assert!(!rendered.contains("roles/run.admin"));
     assert_terraform_valid(&module, "gcp_remote_stack_management_function_provision");
 }
 

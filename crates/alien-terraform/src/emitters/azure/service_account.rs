@@ -24,7 +24,7 @@ use crate::{
     emitter::{TfEmitter, TfFragment},
     emitters::azure::helpers::{
         downcast, emit_role_definition_and_assignments, permission_context, required_label,
-        stack_name_template, tags,
+        resource_prefix_template, tags,
     },
     expr,
 };
@@ -44,7 +44,7 @@ impl TfEmitter for AzureServiceAccountEmitter {
             "azurerm_user_assigned_identity",
             label,
             [
-                attr("name", stack_name_template(&service_account.id)),
+                attr("name", resource_prefix_template(&service_account.id)),
                 attr(
                     "resource_group_name",
                     expr::raw("var.azure_resource_group_name"),

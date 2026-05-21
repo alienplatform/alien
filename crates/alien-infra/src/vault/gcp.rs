@@ -7,9 +7,12 @@ use crate::core::ResourceControllerContext;
 use crate::core::ResourcePermissionsHelper;
 use crate::error::{ErrorData, Result};
 use alien_core::{ResourceOutputs, ResourceStatus, Vault, VaultOutputs};
-use alien_gcp_clients::iam::{Binding, IamPolicy};
+use alien_gcp_clients::iam::IamPolicy;
 use alien_gcp_clients::resource_manager::GetPolicyOptions;
-use alien_permissions::{generators::GcpRuntimePermissionsGenerator, PermissionContext};
+use alien_permissions::{
+    generators::{GcpBindingTargetScope, GcpRuntimePermissionsGenerator},
+    PermissionContext,
+};
 
 /// GCP Vault controller.
 ///
@@ -48,13 +51,6 @@ impl GcpVaultController {
 
         let vault_prefix = format!("{}-{}", ctx.resource_prefix, config.id);
 
-        ResourcePermissionsHelper::ensure_gcp_resource_custom_roles(
-            ctx,
-            &config.id,
-            &vault_prefix,
-            "vault",
-        )
-        .await?;
         self.apply_management_permissions(ctx, &config.id, &vault_prefix)
             .await?;
 
@@ -218,48 +214,45 @@ impl GcpVaultController {
         vault_id: &str,
         vault_prefix: &str,
     ) -> Result<()> {
-        let Some(management_profile) = ctx.desired_stack.management().profile() else {
-            return Ok(());
-        };
-
         let mut seen_ids = std::collections::HashSet::new();
         let mut management_refs = Vec::new();
-        if let Some(permission_set_refs) = management_profile.0.get(vault_id) {
-            for permission_set_ref in permission_set_refs {
-                if seen_ids.insert(permission_set_ref.id().to_string()) {
-                    management_refs.push(permission_set_ref.clone());
+        if let Some(management_profile) = ctx.desired_stack.management().profile() {
+            if let Some(permission_set_refs) = management_profile.0.get(vault_id) {
+                for permission_set_ref in permission_set_refs {
+                    if seen_ids.insert(permission_set_ref.id().to_string()) {
+                        management_refs.push(permission_set_ref.clone());
+                    }
                 }
             }
-        }
-        if let Some(wildcard_refs) = management_profile.0.get("*") {
-            for permission_set_ref in wildcard_refs
-                .iter()
-                .filter(|r| r.id().starts_with("vault/"))
-            {
-                if seen_ids.insert(permission_set_ref.id().to_string()) {
-                    management_refs.push(permission_set_ref.clone());
+            if let Some(wildcard_refs) = management_profile.0.get("*") {
+                for permission_set_ref in wildcard_refs
+                    .iter()
+                    .filter(|r| r.id().starts_with("vault/"))
+                {
+                    if seen_ids.insert(permission_set_ref.id().to_string()) {
+                        management_refs.push(permission_set_ref.clone());
+                    }
                 }
             }
-        }
-
-        if management_refs.is_empty() {
-            return Ok(());
         }
 
         let gcp_config = ctx.get_gcp_config()?;
-        let project_number = gcp_config.project_number.as_ref().ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: "GCP project number is required to scope vault management permissions"
-                    .to_string(),
-                resource_id: Some(vault_id.to_string()),
-            })
-        })?;
-        let permission_context = PermissionContext::new()
+        let mut permission_context = PermissionContext::new()
             .with_project_name(gcp_config.project_id.clone())
-            .with_project_number(project_number.clone())
             .with_region(gcp_config.region.clone())
             .with_stack_prefix(ctx.resource_prefix.to_string())
+            .with_stack_name(ctx.desired_stack.id().to_string())
             .with_resource_name(vault_prefix.to_string());
+        if !management_refs.is_empty() {
+            let project_number = gcp_config.project_number.as_ref().ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: "GCP project number is required to scope vault management permissions"
+                        .to_string(),
+                    resource_id: Some(vault_id.to_string()),
+                })
+            })?;
+            permission_context = permission_context.with_project_number(project_number.clone());
+        }
 
         let generator = GcpRuntimePermissionsGenerator::new();
         let mut new_bindings = Vec::new();
@@ -270,13 +263,16 @@ impl GcpVaultController {
             &management_refs,
             &generator,
             &permission_context,
+            GcpBindingTargetScope::Project,
             &mut new_bindings,
         )
         .await?;
 
-        if new_bindings.is_empty() {
+        let Some(management_sa_email) =
+            ResourcePermissionsHelper::get_gcp_management_service_account_email(ctx)?
+        else {
             return Ok(());
-        }
+        };
 
         let rm_client = ctx
             .service_provider
@@ -295,8 +291,28 @@ impl GcpVaultController {
                 resource_id: Some(vault_id.to_string()),
             })?;
 
+        let member = format!("serviceAccount:{management_sa_email}");
+        let owned_role_prefixes =
+            ResourcePermissionsHelper::gcp_permission_set_custom_role_name_prefixes(
+                &permission_context,
+                std::iter::once("vault/"),
+            );
         let mut all_bindings = current_policy.bindings;
-        merge_iam_bindings(&mut all_bindings, new_bindings);
+        let changed = ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
+            &mut all_bindings,
+            new_bindings,
+            &member,
+            &owned_role_prefixes,
+        );
+
+        if !changed {
+            info!(
+                vault_id = %vault_id,
+                vault_prefix = %vault_prefix,
+                "GCP vault management permissions already reconciled"
+            );
+            return Ok(());
+        }
 
         let new_policy = IamPolicy::builder()
             .version(3)
@@ -321,33 +337,5 @@ impl GcpVaultController {
         );
 
         Ok(())
-    }
-}
-
-fn merge_iam_bindings(existing_bindings: &mut Vec<Binding>, new_bindings: Vec<Binding>) {
-    for binding in existing_bindings.iter_mut() {
-        binding.members.retain(|m| !m.starts_with("deleted:"));
-    }
-    existing_bindings.retain(|binding| !binding.members.is_empty());
-
-    for new_binding in new_bindings {
-        let existing = existing_bindings.iter_mut().find(|binding| {
-            binding.role == new_binding.role
-                && match (&binding.condition, &new_binding.condition) {
-                    (None, None) => true,
-                    (Some(a), Some(b)) => a.expression == b.expression,
-                    _ => false,
-                }
-        });
-
-        if let Some(existing) = existing {
-            for member in new_binding.members {
-                if !existing.members.contains(&member) {
-                    existing.members.push(member);
-                }
-            }
-        } else {
-            existing_bindings.push(new_binding);
-        }
     }
 }

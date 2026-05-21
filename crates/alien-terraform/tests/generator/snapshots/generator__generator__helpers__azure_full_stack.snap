@@ -11,25 +11,34 @@ terraform {
       source  = "hashicorp/azurerm"
       version = ">= 3.100"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = ">= 3.6"
+    }
   }
 }
 
 === variables.tf ===
-variable "stack_name" {
+variable "name" {
   type        = string
-  description = "Stable physical-name prefix for resources created by this module."
+  description = "Human-readable deployment name shown in the deployment portal."
 }
 
-variable "deployment_name" {
+variable "token" {
   type        = string
-  description = "Deployment name used when registering the resolved stack import. Defaults to stack_name."
-  default     = ""
-}
-
-variable "deployment_group_token" {
-  type        = string
-  description = "Deployment group token used when registering the resolved stack import."
+  description = "Deployment token from the deployment page. This is the same token used by the deploy CLI --token flag."
   sensitive   = true
+}
+
+variable "resource_prefix" {
+  type        = string
+  description = "Optional stable cloud resource prefix. Leave empty to generate one and store it in Terraform state."
+  default     = ""
+
+  validation {
+    condition     = var.resource_prefix == "" || can(regex("^[a-z][a-z0-9-]{1,30}[a-z0-9]$", var.resource_prefix))
+    error_message = "resource_prefix must be empty or 3-32 characters using lowercase letters, numbers, and hyphens, starting with a letter and ending with a letter or number."
+  }
 }
 
 variable "manager_url" {
@@ -38,9 +47,9 @@ variable "manager_url" {
   default     = ""
 }
 
-variable "stack_settings_json" {
+variable "deployment_settings_json" {
   type        = string
-  description = "Optional JSON-encoded StackSettings override supplied by deployment installers."
+  description = "Optional JSON-encoded deployment settings override supplied by deployment installers."
   default     = "{\"network\":{\"type\":\"create\",\"cidr\":\"10.46.0.0/16\",\"availability_zones\":1},\"updates\":\"approval-required\"}"
   sensitive   = true
 }
@@ -92,8 +101,14 @@ provider "azurerm" {
   features {}
 }
 
+=== resource_prefix.tf ===
+resource "random_id" "resource_prefix" {
+  byte_length = 8
+}
+
 === locals.tf ===
 locals {
+  resource_prefix     = var.resource_prefix != "" ? var.resource_prefix : "a${random_id.resource_prefix.hex}"
   deployment_platform = "azure"
   deployment_target   = "azure"
   deployment_region   = var.azure_location
@@ -104,7 +119,7 @@ locals {
     oidcIssuer            = var.azure_oidc_issuer == "" ? null : var.azure_oidc_issuer
     oidcSubject           = var.azure_oidc_subject == "" ? null : var.azure_oidc_subject
   }
-  deployment_stack_settings = jsondecode(var.stack_settings_json)
+  deployment_settings = jsondecode(var.deployment_settings_json)
   deployment_resources = [
     {
       id   = "default-resource-group"
@@ -250,16 +265,16 @@ resource "azurerm_resource_group" "default_resource_group" {
   name     = var.azure_resource_group_name
   location = var.azure_location
   tags = {
-    "managed-by"          = "alien-dev"
-    "alien-stack-id"      = var.stack_name
-    "alien-resource-id"   = "default-resource-group"
-    "alien-resource-type" = "resource-group"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "default-resource-group"
+    "resource-type" = "resource-group"
   }
 }
 
 === default_storage_account.tf ===
 resource "azurerm_storage_account" "default_storage_account" {
-  name                            = substr(replace(lower("${var.stack_name}default"), "-", ""), 0, 24)
+  name                            = substr(replace(lower("${local.resource_prefix}default"), "-", ""), 0, 24)
   resource_group_name             = var.azure_resource_group_name
   location                        = var.azure_location
   account_tier                    = "Standard"
@@ -270,10 +285,10 @@ resource "azurerm_storage_account" "default_storage_account" {
   allow_nested_items_to_be_public = false
   https_traffic_only_enabled      = true
   tags = {
-    "managed-by"          = "alien-dev"
-    "alien-stack-id"      = var.stack_name
-    "alien-resource-id"   = "default-storage-account"
-    "alien-resource-type" = "storage-account"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "default-storage-account"
+    "resource-type" = "storage-account"
   }
 
   blob_properties {
@@ -288,15 +303,15 @@ resource "azurerm_storage_account" "default_storage_account" {
 
 === default_service_bus_namespace.tf ===
 resource "azurerm_servicebus_namespace" "default_service_bus_namespace" {
-  name                = format("%s-bus-%s", trim(substr(lower("a-${var.stack_name}"), 0, 37), "-"), substr(sha1(var.stack_name), 0, 8))
+  name                = format("%s-bus-%s", trim(substr(lower("a-${local.resource_prefix}"), 0, 37), "-"), substr(sha1(local.resource_prefix), 0, 8))
   resource_group_name = var.azure_resource_group_name
   location            = var.azure_location
   sku                 = "Standard"
   tags = {
-    "managed-by"          = "alien-dev"
-    "alien-stack-id"      = var.stack_name
-    "alien-resource-id"   = "default-service-bus-namespace"
-    "alien-resource-type" = "service-bus-namespace"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "default-service-bus-namespace"
+    "resource-type" = "service-bus-namespace"
   }
   depends_on = [
     azurerm_resource_group.default_resource_group
@@ -305,16 +320,16 @@ resource "azurerm_servicebus_namespace" "default_service_bus_namespace" {
 
 === default_container_apps_environment.tf ===
 resource "azurerm_log_analytics_workspace" "default_container_apps_environment_logs" {
-  name                = replace(lower("${var.stack_name}-default_container_apps_environment-logs"), "_", "-")
+  name                = replace(lower("${local.resource_prefix}-default_container_apps_environment-logs"), "_", "-")
   resource_group_name = var.azure_resource_group_name
   location            = var.azure_location
   sku                 = "PerGB2018"
   retention_in_days   = 30
   tags = {
-    "managed-by"          = "alien-dev"
-    "alien-stack-id"      = var.stack_name
-    "alien-resource-id"   = "default-container-apps-environment"
-    "alien-resource-type" = "container-apps-environment"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "default-container-apps-environment"
+    "resource-type" = "container-apps-environment"
   }
   depends_on = [
     azurerm_resource_group.default_resource_group
@@ -322,15 +337,15 @@ resource "azurerm_log_analytics_workspace" "default_container_apps_environment_l
 }
 
 resource "azurerm_container_app_environment" "default_container_apps_environment" {
-  name                       = replace(lower("${var.stack_name}-default_container_apps_environment"), "_", "-")
+  name                       = replace(lower("${local.resource_prefix}-default_container_apps_environment"), "_", "-")
   resource_group_name        = var.azure_resource_group_name
   location                   = var.azure_location
   log_analytics_workspace_id = azurerm_log_analytics_workspace.default_container_apps_environment_logs.id
   tags = {
-    "managed-by"          = "alien-dev"
-    "alien-stack-id"      = var.stack_name
-    "alien-resource-id"   = "default-container-apps-environment"
-    "alien-resource-type" = "container-apps-environment"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "default-container-apps-environment"
+    "resource-type" = "container-apps-environment"
   }
   depends_on = [
     azurerm_resource_group.default_resource_group
@@ -339,17 +354,17 @@ resource "azurerm_container_app_environment" "default_container_apps_environment
 
 === default_network.tf ===
 resource "azurerm_virtual_network" "default_network" {
-  name                = "${var.stack_name}-default_network"
+  name                = "${local.resource_prefix}-default_network"
   resource_group_name = var.azure_resource_group_name
   location            = var.azure_location
   address_space = [
     "10.46.0.0/16"
   ]
   tags = {
-    "managed-by"          = "alien-dev"
-    "alien-stack-id"      = var.stack_name
-    "alien-resource-id"   = "default-network"
-    "alien-resource-type" = "network"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "default-network"
+    "resource-type" = "network"
   }
   depends_on = [
     azurerm_resource_group.default_resource_group
@@ -357,7 +372,7 @@ resource "azurerm_virtual_network" "default_network" {
 }
 
 resource "azurerm_subnet" "default_network_public" {
-  name                 = "${var.stack_name}-default_network-public"
+  name                 = "${local.resource_prefix}-default_network-public"
   resource_group_name  = var.azure_resource_group_name
   virtual_network_name = azurerm_virtual_network.default_network.name
   address_prefixes = [
@@ -369,7 +384,7 @@ resource "azurerm_subnet" "default_network_public" {
 }
 
 resource "azurerm_subnet" "default_network_private" {
-  name                 = "${var.stack_name}-default_network-private"
+  name                 = "${local.resource_prefix}-default_network-private"
   resource_group_name  = var.azure_resource_group_name
   virtual_network_name = azurerm_virtual_network.default_network.name
   address_prefixes = [
@@ -381,16 +396,16 @@ resource "azurerm_subnet" "default_network_private" {
 }
 
 resource "azurerm_public_ip" "default_network_nat_pip" {
-  name                = "${var.stack_name}-default_network-nat-pip"
+  name                = "${local.resource_prefix}-default_network-nat-pip"
   resource_group_name = var.azure_resource_group_name
   location            = var.azure_location
   allocation_method   = "Static"
   sku                 = "Standard"
   tags = {
-    "managed-by"          = "alien-dev"
-    "alien-stack-id"      = var.stack_name
-    "alien-resource-id"   = "default-network"
-    "alien-resource-type" = "network"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "default-network"
+    "resource-type" = "network"
   }
   depends_on = [
     azurerm_resource_group.default_resource_group
@@ -398,16 +413,16 @@ resource "azurerm_public_ip" "default_network_nat_pip" {
 }
 
 resource "azurerm_nat_gateway" "default_network_nat" {
-  name                    = "${var.stack_name}-default_network-nat"
+  name                    = "${local.resource_prefix}-default_network-nat"
   resource_group_name     = var.azure_resource_group_name
   location                = var.azure_location
   sku_name                = "Standard"
   idle_timeout_in_minutes = 10
   tags = {
-    "managed-by"          = "alien-dev"
-    "alien-stack-id"      = var.stack_name
-    "alien-resource-id"   = "default-network"
-    "alien-resource-type" = "network"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "default-network"
+    "resource-type" = "network"
   }
   depends_on = [
     azurerm_resource_group.default_resource_group
@@ -431,7 +446,7 @@ resource "azurerm_subnet_nat_gateway_association" "default_network_private" {
 }
 
 resource "azurerm_network_security_group" "default_network_workload" {
-  name                = "${var.stack_name}-default_network-workload"
+  name                = "${local.resource_prefix}-default_network-workload"
   resource_group_name = var.azure_resource_group_name
   location            = var.azure_location
 
@@ -448,10 +463,10 @@ resource "azurerm_network_security_group" "default_network_workload" {
   }
 
   tags = {
-    "managed-by"          = "alien-dev"
-    "alien-stack-id"      = var.stack_name
-    "alien-resource-id"   = "default-network"
-    "alien-resource-type" = "network"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "default-network"
+    "resource-type" = "network"
   }
   depends_on = [
     azurerm_resource_group.default_resource_group
@@ -468,14 +483,14 @@ resource "azurerm_subnet_network_security_group_association" "default_network_pr
 
 === execution_sa.tf ===
 resource "azurerm_user_assigned_identity" "execution_sa" {
-  name                = "${var.stack_name}-execution-sa"
+  name                = "${local.resource_prefix}-execution-sa"
   resource_group_name = var.azure_resource_group_name
   location            = var.azure_location
   tags = {
-    "managed-by"          = "alien-dev"
-    "alien-stack-id"      = var.stack_name
-    "alien-resource-id"   = "execution-sa"
-    "alien-resource-type" = "service-account"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "execution-sa"
+    "resource-type" = "service-account"
   }
   depends_on = [
     azurerm_resource_group.default_resource_group
@@ -483,8 +498,8 @@ resource "azurerm_user_assigned_identity" "execution_sa" {
 }
 
 resource "azurerm_role_definition" "execution_sa_storage_data_read" {
-  name               = "${var.stack_name}-execution-sa-0"
-  role_definition_id = uuidv5("oid", "alien:azure:stack-role-def:${var.stack_name}-execution-sa-0")
+  name               = "${local.resource_prefix}-execution-sa-0"
+  role_definition_id = uuidv5("oid", "deployment:azure:role-def:${local.resource_prefix}-execution-sa-0")
   scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
   description        = "Allows reading data from storage buckets and containers"
 
@@ -511,7 +526,7 @@ resource "azurerm_role_definition" "execution_sa_storage_data_read" {
 }
 
 resource "azurerm_role_assignment" "execution_sa_storage_data_read_assignment" {
-  name               = uuidv5("oid", "alien:azure:stack-role-assign:${azurerm_role_definition.execution_sa_storage_data_read.role_definition_resource_id}:${azurerm_user_assigned_identity.execution_sa.principal_id}")
+  name               = uuidv5("oid", "deployment:azure:role-assign:${azurerm_role_definition.execution_sa_storage_data_read.role_definition_resource_id}:${azurerm_user_assigned_identity.execution_sa.principal_id}")
   scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
   role_definition_id = azurerm_role_definition.execution_sa_storage_data_read.role_definition_resource_id
   principal_id       = azurerm_user_assigned_identity.execution_sa.principal_id
@@ -521,8 +536,8 @@ resource "azurerm_role_assignment" "execution_sa_storage_data_read_assignment" {
 }
 
 resource "azurerm_role_definition" "execution_sa_queue_data_write" {
-  name               = "${var.stack_name}-execution-sa-1"
-  role_definition_id = uuidv5("oid", "alien:azure:stack-role-def:${var.stack_name}-execution-sa-1")
+  name               = "${local.resource_prefix}-execution-sa-1"
+  role_definition_id = uuidv5("oid", "deployment:azure:role-def:${local.resource_prefix}-execution-sa-1")
   scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
   description        = "Allows sending messages to queues and acknowledging received messages"
 
@@ -547,7 +562,7 @@ resource "azurerm_role_definition" "execution_sa_queue_data_write" {
 }
 
 resource "azurerm_role_assignment" "execution_sa_queue_data_write_assignment" {
-  name               = uuidv5("oid", "alien:azure:stack-role-assign:${azurerm_role_definition.execution_sa_queue_data_write.role_definition_resource_id}:${azurerm_user_assigned_identity.execution_sa.principal_id}")
+  name               = uuidv5("oid", "deployment:azure:role-assign:${azurerm_role_definition.execution_sa_queue_data_write.role_definition_resource_id}:${azurerm_user_assigned_identity.execution_sa.principal_id}")
   scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
   role_definition_id = azurerm_role_definition.execution_sa_queue_data_write.role_definition_resource_id
   principal_id       = azurerm_user_assigned_identity.execution_sa.principal_id
@@ -560,14 +575,14 @@ resource "azurerm_role_assignment" "execution_sa_queue_data_write_assignment" {
 data "azurerm_client_config" "management_current" {}
 
 resource "azurerm_user_assigned_identity" "management" {
-  name                = "${var.stack_name}-management-identity"
+  name                = "${local.resource_prefix}-management-identity"
   resource_group_name = var.azure_resource_group_name
   location            = var.azure_location
   tags = {
-    "managed-by"          = "alien-dev"
-    "alien-stack-id"      = var.stack_name
-    "alien-resource-id"   = "management"
-    "alien-resource-type" = "remote-stack-management"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "management"
+    "resource-type" = "remote-stack-management"
   }
   depends_on = [
     azurerm_resource_group.default_resource_group
@@ -575,10 +590,10 @@ resource "azurerm_user_assigned_identity" "management" {
 }
 
 resource "azurerm_role_definition" "management_management_role" {
-  name               = "${var.stack_name}-management-role"
-  role_definition_id = uuidv5("oid", "alien:azure:mgmt-role-def:${var.stack_name}")
+  name               = "${local.resource_prefix}-management-role"
+  role_definition_id = uuidv5("oid", "deployment:azure:mgmt-role-def:${local.resource_prefix}")
   scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
-  description        = "Management role for Alien stack '${var.stack_name}'"
+  description        = "Management role for deployment '${local.resource_prefix}'"
 
   permissions {
     actions          = []
@@ -596,7 +611,7 @@ resource "azurerm_role_definition" "management_management_role" {
 }
 
 resource "azurerm_role_assignment" "management_management_uami_assignment" {
-  name               = uuidv5("oid", "alien:azure:mgmt-role-assign:${var.stack_name}:uami")
+  name               = uuidv5("oid", "deployment:azure:mgmt-role-assign:${local.resource_prefix}:uami")
   scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
   role_definition_id = azurerm_role_definition.management_management_role.role_definition_resource_id
   principal_id       = azurerm_user_assigned_identity.management.principal_id
@@ -607,7 +622,7 @@ resource "azurerm_role_assignment" "management_management_uami_assignment" {
 
 resource "azurerm_role_assignment" "management_management_sp_assignment" {
   count              = var.azure_management_principal_id == "" ? 0 : 1
-  name               = uuidv5("oid", "alien:azure:mgmt-role-assign:${var.stack_name}:sp")
+  name               = uuidv5("oid", "deployment:azure:mgmt-role-assign:${local.resource_prefix}:sp")
   scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
   role_definition_id = azurerm_role_definition.management_management_role.role_definition_resource_id
   principal_id       = var.azure_management_principal_id
@@ -618,7 +633,7 @@ resource "azurerm_role_assignment" "management_management_sp_assignment" {
 
 resource "azurerm_federated_identity_credential" "management_fic" {
   count               = var.azure_oidc_issuer == "" || var.azure_oidc_subject == "" ? 0 : 1
-  name                = "${var.stack_name}-alien-fic"
+  name                = "${local.resource_prefix}-federated-credential"
   resource_group_name = var.azure_resource_group_name
   parent_id           = azurerm_user_assigned_identity.management.id
   audience = [
@@ -632,7 +647,7 @@ resource "azurerm_federated_identity_credential" "management_fic" {
 }
 
 resource "azurerm_role_assignment" "management_acr_push_assignment" {
-  name               = uuidv5("oid", "alien:azure:mgmt-acr-assign:${var.stack_name}")
+  name               = uuidv5("oid", "deployment:azure:mgmt-acr-assign:${local.resource_prefix}")
   scope              = "/subscriptions/${var.azure_subscription_id}"
   role_definition_id = "/subscriptions/${var.azure_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/8311e382-0749-4cb8-b61a-304f252e45ec"
   principal_id       = azurerm_user_assigned_identity.management.principal_id
@@ -643,7 +658,7 @@ resource "azurerm_role_assignment" "management_acr_push_assignment" {
 
 === assets.tf ===
 resource "azurerm_storage_container" "assets" {
-  name                  = replace(lower("${var.stack_name}-assets"), "_", "-")
+  name                  = replace(lower("${local.resource_prefix}-assets"), "_", "-")
   storage_account_name  = azurerm_storage_account.default_storage_account.name
   container_access_type = "private"
   depends_on = [
@@ -653,7 +668,7 @@ resource "azurerm_storage_container" "assets" {
 
 === jobs.tf ===
 resource "azurerm_servicebus_queue" "jobs" {
-  name                                 = "${var.stack_name}-jobs"
+  name                                 = "${local.resource_prefix}-jobs"
   namespace_id                         = azurerm_servicebus_namespace.default_service_bus_namespace.id
   partitioning_enabled                 = false
   lock_duration                        = "PT30S"
@@ -667,7 +682,7 @@ resource "azurerm_servicebus_queue" "jobs" {
 
 === metadata.tf ===
 resource "azurerm_storage_table" "metadata" {
-  name                 = substr(lower(replace("kv${var.stack_name}metadata", "/[^A-Za-z0-9]/", "")), 0, 63)
+  name                 = substr(lower(replace("kv${local.resource_prefix}metadata", "/[^A-Za-z0-9]/", "")), 0, 63)
   storage_account_name = azurerm_storage_account.default_storage_account.name
   depends_on = [
     azurerm_resource_group.default_resource_group
@@ -678,7 +693,7 @@ resource "azurerm_storage_table" "metadata" {
 data "azurerm_client_config" "secrets_current" {}
 
 resource "azurerm_key_vault" "secrets" {
-  name                          = substr(lower("${var.stack_name}-secrets"), 0, 24)
+  name                          = substr(lower("${local.resource_prefix}-secrets"), 0, 24)
   resource_group_name           = var.azure_resource_group_name
   location                      = var.azure_location
   tenant_id                     = data.azurerm_client_config.secrets_current.tenant_id
@@ -688,10 +703,10 @@ resource "azurerm_key_vault" "secrets" {
   soft_delete_retention_days    = 90
   public_network_access_enabled = true
   tags = {
-    "managed-by"          = "alien-dev"
-    "alien-stack-id"      = var.stack_name
-    "alien-resource-id"   = "secrets"
-    "alien-resource-type" = "vault"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "secrets"
+    "resource-type" = "vault"
   }
   depends_on = [
     azurerm_resource_group.default_resource_group
@@ -699,8 +714,8 @@ resource "azurerm_key_vault" "secrets" {
 }
 
 resource "azurerm_role_definition" "management_management_vault_data_write" {
-  name               = "Vault Data Write (${var.stack_name}) [mgmt]"
-  role_definition_id = uuidv5("oid", "alien:azure:mgmt-res-role-def:${var.stack_name}:vault/data-write")
+  name               = "Vault Data Write (${local.resource_prefix}) [mgmt]"
+  role_definition_id = uuidv5("oid", "deployment:azure:mgmt-res-role-def:${local.resource_prefix}:vault/data-write")
   scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
   description        = "Allows creating, updating, and deleting individual secrets within vault"
 
@@ -724,7 +739,7 @@ resource "azurerm_role_definition" "management_management_vault_data_write" {
 }
 
 resource "azurerm_role_assignment" "secrets_management_management_vault_data_write_assignment" {
-  name               = uuidv5("oid", "alien:azure:mgmt-res-role-assign:${var.stack_name}:secrets:vault/data-write")
+  name               = uuidv5("oid", "deployment:azure:mgmt-res-role-assign:${local.resource_prefix}:secrets:vault/data-write")
   scope              = azurerm_key_vault.secrets.id
   role_definition_id = azurerm_role_definition.management_management_vault_data_write.role_definition_resource_id
   principal_id       = azurerm_user_assigned_identity.management.principal_id
@@ -735,16 +750,16 @@ resource "azurerm_role_assignment" "secrets_management_management_vault_data_wri
 
 === registry.tf ===
 resource "azurerm_container_registry" "registry" {
-  name                = substr(replace(lower("${var.stack_name}registry"), "-", ""), 0, 50)
+  name                = substr(replace(lower("${local.resource_prefix}registry"), "-", ""), 0, 50)
   resource_group_name = var.azure_resource_group_name
   location            = var.azure_location
   sku                 = "Premium"
   admin_enabled       = false
   tags = {
-    "managed-by"          = "alien-dev"
-    "alien-stack-id"      = var.stack_name
-    "alien-resource-id"   = "registry"
-    "alien-resource-type" = "artifact-registry"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "registry"
+    "resource-type" = "artifact-registry"
   }
   depends_on = [
     azurerm_resource_group.default_resource_group
@@ -752,14 +767,14 @@ resource "azurerm_container_registry" "registry" {
 }
 
 resource "azurerm_user_assigned_identity" "registry_pull" {
-  name                = "${var.stack_name}-registry-pull"
+  name                = "${local.resource_prefix}-registry-pull"
   resource_group_name = var.azure_resource_group_name
   location            = var.azure_location
   tags = {
-    "managed-by"          = "alien-dev"
-    "alien-stack-id"      = var.stack_name
-    "alien-resource-id"   = "registry"
-    "alien-resource-type" = "artifact-registry"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "registry"
+    "resource-type" = "artifact-registry"
   }
   depends_on = [
     azurerm_resource_group.default_resource_group
@@ -767,7 +782,7 @@ resource "azurerm_user_assigned_identity" "registry_pull" {
 }
 
 resource "azurerm_role_assignment" "registry_pull_role" {
-  name                 = uuidv5("dns", "${var.stack_name}-registry-pull-${azurerm_user_assigned_identity.registry_pull.principal_id}")
+  name                 = uuidv5("dns", "${local.resource_prefix}-registry-pull-${azurerm_user_assigned_identity.registry_pull.principal_id}")
   scope                = azurerm_container_registry.registry.id
   role_definition_name = "AcrPull"
   principal_id         = azurerm_user_assigned_identity.registry_pull.principal_id
@@ -777,14 +792,14 @@ resource "azurerm_role_assignment" "registry_pull_role" {
 }
 
 resource "azurerm_user_assigned_identity" "registry_push" {
-  name                = "${var.stack_name}-registry-push"
+  name                = "${local.resource_prefix}-registry-push"
   resource_group_name = var.azure_resource_group_name
   location            = var.azure_location
   tags = {
-    "managed-by"          = "alien-dev"
-    "alien-stack-id"      = var.stack_name
-    "alien-resource-id"   = "registry"
-    "alien-resource-type" = "artifact-registry"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "registry"
+    "resource-type" = "artifact-registry"
   }
   depends_on = [
     azurerm_resource_group.default_resource_group
@@ -792,7 +807,7 @@ resource "azurerm_user_assigned_identity" "registry_push" {
 }
 
 resource "azurerm_role_assignment" "registry_push_role" {
-  name                 = uuidv5("dns", "${var.stack_name}-registry-push-${azurerm_user_assigned_identity.registry_push.principal_id}")
+  name                 = uuidv5("dns", "${local.resource_prefix}-registry-push-${azurerm_user_assigned_identity.registry_push.principal_id}")
   scope                = azurerm_container_registry.registry.id
   role_definition_name = "AcrPush"
   principal_id         = azurerm_user_assigned_identity.registry_push.principal_id
@@ -802,18 +817,18 @@ resource "azurerm_role_assignment" "registry_push_role" {
 }
 
 === import.tf ===
-resource "terraform_data" "deployment_stack_import" {
+resource "terraform_data" "deployment_import" {
   input = {
     platform                  = local.deployment_platform
-    deployment_group_token    = var.deployment_group_token
-    deployment_name           = var.deployment_name == "" ? var.stack_name : var.deployment_name
-    stack_prefix              = var.stack_name
+    token                     = var.token
+    name                      = var.name
+    resource_prefix           = local.resource_prefix
     setup_target              = ""
     setup_fingerprint         = ""
     setup_fingerprint_version = 0
     manager_url               = var.manager_url
     management_config         = local.deployment_management_config
-    stack_settings            = local.deployment_stack_settings
+    deployment_settings       = local.deployment_settings
     resources                 = local.deployment_resources
   }
   depends_on = [
@@ -862,9 +877,9 @@ output "deployment_target" {
   description = "Terraform module target."
 }
 
-output "deployment_stack_prefix" {
-  value       = var.stack_name
-  description = "Physical stack prefix."
+output "deployment_resource_prefix" {
+  value       = local.resource_prefix
+  description = "Stable physical resource prefix."
 }
 
 output "deployment_platform" {
@@ -897,9 +912,9 @@ output "deployment_management_config" {
   description = "Manager import ManagementConfig JSON."
 }
 
-output "deployment_stack_settings" {
-  value       = jsonencode(local.deployment_stack_settings)
-  description = "Manager import StackSettings JSON."
+output "deployment_settings_json" {
+  value       = jsonencode(local.deployment_settings)
+  description = "Manager import deployment settings JSON."
   sensitive   = true
 }
 
@@ -918,7 +933,7 @@ Run:
 ```bash
 terraform init -backend=false
 terraform validate
-terraform apply -var='stack_name=full-azure' -var='deployment_group_token=...'
+terraform apply -var='name=full-azure' -var='token=...'
 ```
 
-This module exposes `deployment_management_config` / `deployment_stack_settings` / `deployment_resources` for external registration flows.
+This module exposes `deployment_management_config` / `deployment_settings_json` / `deployment_resources` for external registration flows.

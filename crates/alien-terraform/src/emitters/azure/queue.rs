@@ -3,8 +3,8 @@
 //!
 //! Mirrors `AzureQueueController`:
 //!
-//! * Queue name = `${var.stack_name}-{id}`, matching
-//!   [`super::helpers::stack_name_template`].
+//! * Queue name = `${local.resource_prefix}-{id}`, matching
+//!   [`super::helpers::resource_prefix_template`].
 //! * Default lock duration / TTL / partitioning — the controller leaves
 //!   them at provider defaults too; rebuild stays consistent.
 //! * Parent `azurerm_servicebus_namespace` is preflight-injected as
@@ -15,7 +15,7 @@
 use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
-    emitters::azure::helpers::{downcast, required_label, stack_name_template},
+    emitters::azure::helpers::{downcast, required_label, resource_prefix_template},
     expr,
 };
 use alien_core::{
@@ -39,7 +39,7 @@ impl TfEmitter for AzureQueueEmitter {
             "azurerm_servicebus_queue",
             label,
             [
-                attr("name", stack_name_template(queue.id())),
+                attr("name", resource_prefix_template(queue.id())),
                 attr(
                     "namespace_id",
                     expr::traversal(["azurerm_servicebus_namespace", &parent_label, "id"]),

@@ -32,8 +32,8 @@ impl TfEmitter for GcpVaultEmitter {
 
         let member = service_account_member_for_label(management_label);
         let role_owner_label = format!("{management_label}_{vault_label}");
-        let context = permission_context(management_label)
-            .with_resource_name(format!("${{var.stack_name}}-{}", vault.id()));
+        let context = permission_context(management_label, ctx.stack.id())
+            .with_resource_name(format!("${{local.resource_prefix}}-{}", vault.id()));
         let mut fragment = TfFragment::default();
 
         for permission_set_ref in management_permission_refs(ctx) {
@@ -64,7 +64,7 @@ impl TfEmitter for GcpVaultEmitter {
             ("projectId", expr::raw("var.gcp_project")),
             (
                 "secretPrefix",
-                expr::template(format!("${{var.stack_name}}-{}", vault.id())),
+                expr::template(format!("${{local.resource_prefix}}-{}", vault.id())),
             ),
         ]))
     }
@@ -75,7 +75,7 @@ impl TfEmitter for GcpVaultEmitter {
             ("service", Expression::String("secret-manager".to_string())),
             (
                 "vaultPrefix",
-                expr::template(format!("${{var.stack_name}}-{}", vault.id())),
+                expr::template(format!("${{local.resource_prefix}}-{}", vault.id())),
             ),
         ])))
     }

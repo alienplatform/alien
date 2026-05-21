@@ -35,12 +35,15 @@ impl TfEmitter for GcpArtifactRegistryEmitter {
                 attr("location", expr::raw("var.gcp_region")),
                 attr(
                     "repository_id",
-                    expr::template(format!("${{var.stack_name}}-{}", registry.id)),
+                    expr::template(format!("${{local.resource_prefix}}-{}", registry.id)),
                 ),
                 attr("format", Expression::String("DOCKER".to_string())),
                 attr(
                     "description",
-                    expr::template(format!("Alien {} container artifact registry", registry.id)),
+                    expr::template(format!(
+                        "Deployment {} container artifact registry",
+                        registry.id
+                    )),
                 ),
                 attr("labels", labels(ctx, "artifact-registry")),
             ],
@@ -70,7 +73,7 @@ impl TfEmitter for GcpArtifactRegistryEmitter {
                     attr(
                         "display_name",
                         expr::template(format!(
-                            "Alien {} artifact registry {} identity",
+                            "Deployment {} artifact registry {} identity",
                             registry.id, suffix
                         )),
                     ),

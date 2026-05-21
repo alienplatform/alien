@@ -17,7 +17,7 @@ use crate::{
     emitter::{TfEmitter, TfFragment},
     emitters::azure::helpers::{
         binding_string_value, container_apps_environment_binding, downcast, required_label,
-        stack_name_template, tags,
+        resource_prefix_template, tags,
     },
     emitters::worker_environment::{worker_environment, AzureWorkerEnvironmentRenderer},
     expr,
@@ -131,7 +131,7 @@ impl TfEmitter for AzureWorkerEmitter {
         ];
 
         let mut body: Vec<Structure> = vec![
-            attr("name", stack_name_template(&function.id)),
+            attr("name", resource_prefix_template(&function.id)),
             attr(
                 "resource_group_name",
                 expr::raw("var.azure_resource_group_name"),

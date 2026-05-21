@@ -12,7 +12,7 @@ Metadata:
     - Label:
         default: Registration
       Parameters:
-      - DeploymentGroupToken
+      - Token
       - ManagingRoleArn
       - ManagingAccountId
     - Label:
@@ -42,8 +42,6 @@ Metadata:
         default: Availability zones
       CertificateArn:
         default: Certificate ARN
-      DeploymentGroupToken:
-        default: Deployment group token
       DomainName:
         default: Domain name
       HeartbeatsMode:
@@ -64,6 +62,8 @@ Metadata:
         default: Security group IDs
       TelemetryMode:
         default: Telemetry
+      Token:
+        default: Deployment token
       UpdatesMode:
         default: Updates
       VpcCidr:
@@ -71,9 +71,9 @@ Metadata:
       VpcId:
         default: VPC ID
 Parameters:
-  DeploymentGroupToken:
+  Token:
     Type: String
-    Description: Deployment-group token used when registering the resolved stack import.
+    Description: Deployment token from the deployment page.
     NoEcho: true
   ManagingRoleArn:
     Type: String
@@ -204,28 +204,28 @@ Resources:
       EnableDnsSupport: true
       EnableDnsHostnames: true
       Tags:
-      - Key: alien.dev/managed-by
-        Value: alien
-      - Key: alien.dev/stack
+      - Key: managed-by
+        Value: deployment
+      - Key: deployment
         Value:
           Ref: AWS::StackName
-      - Key: alien.dev/resource
+      - Key: resource
         Value: default-network
-      - Key: AlienResourceType
+      - Key: resource-type
         Value: network
     Condition: NetworkModeCreate
   DefaultNetworkInternetGateway:
     Type: AWS::EC2::InternetGateway
     Properties:
       Tags:
-      - Key: alien.dev/managed-by
-        Value: alien
-      - Key: alien.dev/stack
+      - Key: managed-by
+        Value: deployment
+      - Key: deployment
         Value:
           Ref: AWS::StackName
-      - Key: alien.dev/resource
+      - Key: resource
         Value: default-network
-      - Key: AlienResourceType
+      - Key: resource-type
         Value: network
     Condition: NetworkModeCreate
   DefaultNetworkVpcGatewayAttachment:
@@ -257,14 +257,14 @@ Resources:
           - 8
       MapPublicIpOnLaunch: true
       Tags:
-      - Key: alien.dev/managed-by
-        Value: alien
-      - Key: alien.dev/stack
+      - Key: managed-by
+        Value: deployment
+      - Key: deployment
         Value:
           Ref: AWS::StackName
-      - Key: alien.dev/resource
+      - Key: resource
         Value: default-network
-      - Key: AlienResourceType
+      - Key: resource-type
         Value: network
     Condition: NetworkModeCreate
   DefaultNetworkPrivateSubnet1:
@@ -287,14 +287,14 @@ Resources:
           - 6
           - 8
       Tags:
-      - Key: alien.dev/managed-by
-        Value: alien
-      - Key: alien.dev/stack
+      - Key: managed-by
+        Value: deployment
+      - Key: deployment
         Value:
           Ref: AWS::StackName
-      - Key: alien.dev/resource
+      - Key: resource
         Value: default-network
-      - Key: AlienResourceType
+      - Key: resource-type
         Value: network
     Condition: NetworkModeCreate
   DefaultNetworkPublicSubnet2:
@@ -318,14 +318,14 @@ Resources:
           - 8
       MapPublicIpOnLaunch: true
       Tags:
-      - Key: alien.dev/managed-by
-        Value: alien
-      - Key: alien.dev/stack
+      - Key: managed-by
+        Value: deployment
+      - Key: deployment
         Value:
           Ref: AWS::StackName
-      - Key: alien.dev/resource
+      - Key: resource
         Value: default-network
-      - Key: AlienResourceType
+      - Key: resource-type
         Value: network
     Condition: NetworkCreateUseAz2
   DefaultNetworkPrivateSubnet2:
@@ -348,14 +348,14 @@ Resources:
           - 6
           - 8
       Tags:
-      - Key: alien.dev/managed-by
-        Value: alien
-      - Key: alien.dev/stack
+      - Key: managed-by
+        Value: deployment
+      - Key: deployment
         Value:
           Ref: AWS::StackName
-      - Key: alien.dev/resource
+      - Key: resource
         Value: default-network
-      - Key: AlienResourceType
+      - Key: resource-type
         Value: network
     Condition: NetworkCreateUseAz2
   DefaultNetworkPublicSubnet3:
@@ -379,14 +379,14 @@ Resources:
           - 8
       MapPublicIpOnLaunch: true
       Tags:
-      - Key: alien.dev/managed-by
-        Value: alien
-      - Key: alien.dev/stack
+      - Key: managed-by
+        Value: deployment
+      - Key: deployment
         Value:
           Ref: AWS::StackName
-      - Key: alien.dev/resource
+      - Key: resource
         Value: default-network
-      - Key: AlienResourceType
+      - Key: resource-type
         Value: network
     Condition: NetworkCreateUseAz3
   DefaultNetworkPrivateSubnet3:
@@ -409,14 +409,14 @@ Resources:
           - 6
           - 8
       Tags:
-      - Key: alien.dev/managed-by
-        Value: alien
-      - Key: alien.dev/stack
+      - Key: managed-by
+        Value: deployment
+      - Key: deployment
         Value:
           Ref: AWS::StackName
-      - Key: alien.dev/resource
+      - Key: resource
         Value: default-network
-      - Key: AlienResourceType
+      - Key: resource-type
         Value: network
     Condition: NetworkCreateUseAz3
   DefaultNetworkPublicRouteTable:
@@ -425,14 +425,14 @@ Resources:
       VpcId:
         Ref: DefaultNetworkVpc
       Tags:
-      - Key: alien.dev/managed-by
-        Value: alien
-      - Key: alien.dev/stack
+      - Key: managed-by
+        Value: deployment
+      - Key: deployment
         Value:
           Ref: AWS::StackName
-      - Key: alien.dev/resource
+      - Key: resource
         Value: default-network
-      - Key: AlienResourceType
+      - Key: resource-type
         Value: network
     Condition: NetworkModeCreate
   DefaultNetworkPublicDefaultRoute:
@@ -452,14 +452,14 @@ Resources:
       VpcId:
         Ref: DefaultNetworkVpc
       Tags:
-      - Key: alien.dev/managed-by
-        Value: alien
-      - Key: alien.dev/stack
+      - Key: managed-by
+        Value: deployment
+      - Key: deployment
         Value:
           Ref: AWS::StackName
-      - Key: alien.dev/resource
+      - Key: resource
         Value: default-network
-      - Key: AlienResourceType
+      - Key: resource-type
         Value: network
     Condition: NetworkModeCreate
   DefaultNetworkNatEip:
@@ -477,14 +477,14 @@ Resources:
       SubnetId:
         Ref: DefaultNetworkPublicSubnet1
       Tags:
-      - Key: alien.dev/managed-by
-        Value: alien
-      - Key: alien.dev/stack
+      - Key: managed-by
+        Value: deployment
+      - Key: deployment
         Value:
           Ref: AWS::StackName
-      - Key: alien.dev/resource
+      - Key: resource
         Value: default-network
-      - Key: AlienResourceType
+      - Key: resource-type
         Value: network
     Condition: NetworkModeCreate
   DefaultNetworkPrivateDefaultRoute:
@@ -556,14 +556,14 @@ Resources:
       - IpProtocol: '-1'
         CidrIp: 0.0.0.0/0
       Tags:
-      - Key: alien.dev/managed-by
-        Value: alien
-      - Key: alien.dev/stack
+      - Key: managed-by
+        Value: deployment
+      - Key: deployment
         Value:
           Ref: AWS::StackName
-      - Key: alien.dev/resource
+      - Key: resource
         Value: default-network
-      - Key: AlienResourceType
+      - Key: resource-type
         Value: network
     Condition: NetworkModeCreate
   ExecutionSaRole:
@@ -606,14 +606,14 @@ Resources:
             - Fn::Sub: arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${AWS::StackName}-*
             Sid: QueueDataWrite
       Tags:
-      - Key: alien.dev/managed-by
-        Value: alien
-      - Key: alien.dev/stack
+      - Key: managed-by
+        Value: deployment
+      - Key: deployment
         Value:
           Ref: AWS::StackName
-      - Key: alien.dev/resource
+      - Key: resource
         Value: execution-sa
-      - Key: AlienResourceType
+      - Key: resource-type
         Value: service-account
   ManagementRole:
     Type: AWS::IAM::Role
@@ -642,9 +642,9 @@ Resources:
             - lambda:CreateFunction
             Condition:
               StringEquals:
-                aws:RequestTag/alien.dev/managed-by: alien
-                aws:RequestTag/alien.dev/stack:
+                aws:RequestTag/deployment:
                   Fn::Sub: ${AWS::StackName}
+                aws:RequestTag/managed-by: deployment
             Effect: Allow
             Resource:
             - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*
@@ -684,38 +684,47 @@ Resources:
             - lambda:UpdateFunctionConfiguration
             Condition:
               StringEquals:
-                aws:ResourceTag/alien.dev/managed-by: alien
-                aws:ResourceTag/alien.dev/stack:
+                aws:ResourceTag/deployment:
                   Fn::Sub: ${AWS::StackName}
+                aws:ResourceTag/managed-by: deployment
             Effect: Allow
             Resource:
             - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*
             Sid: WorkerProvision2
           - Action:
+            - ec2:DescribeNetworkInterfaces
+            - ec2:DescribeSecurityGroups
+            - ec2:DescribeSubnets
+            - ec2:DescribeVpcs
+            Effect: Allow
+            Resource:
+            - '*'
+            Sid: WorkerProvision3
+          - Action:
             - iam:PassRole
             Effect: Allow
             Resource:
             - Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*-sa
-            Sid: WorkerProvision3
+            Sid: WorkerProvision4
           - Action:
             - iam:GetRolePolicy
             - iam:ListRolePolicies
             - iam:PutRolePolicy
             Condition:
               StringEquals:
-                aws:ResourceTag/alien.dev/managed-by: alien
-                aws:ResourceTag/alien.dev/stack:
+                aws:ResourceTag/deployment:
                   Fn::Sub: ${AWS::StackName}
+                aws:ResourceTag/managed-by: deployment
             Effect: Allow
             Resource:
             - Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*
-            Sid: WorkerProvision4
+            Sid: WorkerProvision5
           - Action:
             - ecr:GetAuthorizationToken
             Effect: Allow
             Resource:
             - '*'
-            Sid: WorkerProvision5
+            Sid: WorkerProvision6
           - Action:
             - ecr:BatchGetImage
             - ecr:GetDownloadUrlForLayer
@@ -731,44 +740,76 @@ Resources:
                   - Fn::Split:
                     - ':'
                     - Ref: ManagingRoleArn
-            Sid: WorkerProvision6
+            Sid: WorkerProvision7
           - Action:
-            - apigateway:POST
+            - acm:AddTagsToCertificate
+            - acm:ImportCertificate
             Condition:
               StringEquals:
-                aws:RequestTag/alien.dev/managed-by: alien
-                aws:RequestTag/alien.dev/stack:
+                aws:RequestTag/deployment:
                   Fn::Sub: ${AWS::StackName}
+                aws:RequestTag/managed-by: deployment
+            Effect: Allow
+            Resource:
+            - Fn::Sub: arn:${AWS::Partition}:acm:${AWS::Region}:${AWS::AccountId}:certificate/*
+            Sid: WorkerProvision8
+          - Action:
+            - acm:AddTagsToCertificate
+            - acm:DeleteCertificate
+            - acm:DescribeCertificate
+            - acm:ImportCertificate
+            Condition:
+              StringEquals:
+                aws:ResourceTag/deployment:
+                  Fn::Sub: ${AWS::StackName}
+                aws:ResourceTag/managed-by: deployment
+            Effect: Allow
+            Resource:
+            - Fn::Sub: arn:${AWS::Partition}:acm:${AWS::Region}:${AWS::AccountId}:certificate/*
+            Sid: WorkerProvision9
+          - Action:
+            - apigateway:POST
+            - apigateway:PUT
+            Condition:
+              StringEquals:
+                aws:RequestTag/deployment:
+                  Fn::Sub: ${AWS::StackName}
+                aws:RequestTag/managed-by: deployment
             Effect: Allow
             Resource:
             - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis
+            - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames
             - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/tags/*
-            Sid: WorkerProvision7
+            Sid: WorkerProvision10
           - Action:
             - apigateway:POST
             Condition:
               StringEquals:
-                aws:ResourceTag/alien.dev/managed-by: alien
-                aws:ResourceTag/alien.dev/stack:
+                aws:ResourceTag/deployment:
                   Fn::Sub: ${AWS::StackName}
+                aws:ResourceTag/managed-by: deployment
             Effect: Allow
             Resource:
             - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*
-            Sid: WorkerProvision8
+            - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*
+            - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*/apimappings
+            Sid: WorkerProvision11
           - Action:
+            - apigateway:PUT
             - apigateway:TagResource
             Condition:
               StringEquals:
-                aws:RequestTag/alien.dev/managed-by: alien
-                aws:RequestTag/alien.dev/stack:
+                aws:RequestTag/deployment:
                   Fn::Sub: ${AWS::StackName}
+                aws:RequestTag/managed-by: deployment
             Effect: Allow
             Resource:
             - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*
             - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*/stages
             - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*/stages/*
             - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*
-            Sid: WorkerProvision9
+            - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/tags/*
+            Sid: WorkerProvision12
           - Action:
             - apigateway:DELETE
             - apigateway:GET
@@ -776,26 +817,28 @@ Resources:
             - apigateway:PUT
             Condition:
               StringEquals:
-                aws:ResourceTag/alien.dev/managed-by: alien
-                aws:ResourceTag/alien.dev/stack:
+                aws:ResourceTag/deployment:
                   Fn::Sub: ${AWS::StackName}
+                aws:ResourceTag/managed-by: deployment
             Effect: Allow
             Resource:
             - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*
             - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*
-            Sid: WorkerProvision10
+            - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*/apimappings
+            - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*/apimappings/*
+            Sid: WorkerProvision13
           - Action:
             - events:PutRule
             - events:TagResource
             Condition:
               StringEquals:
-                aws:RequestTag/alien.dev/managed-by: alien
-                aws:RequestTag/alien.dev/stack:
+                aws:RequestTag/deployment:
                   Fn::Sub: ${AWS::StackName}
+                aws:RequestTag/managed-by: deployment
             Effect: Allow
             Resource:
             - Fn::Sub: arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${AWS::StackName}-*
-            Sid: WorkerProvision11
+            Sid: WorkerProvision14
           - Action:
             - events:DeleteRule
             - events:DescribeRule
@@ -803,13 +846,13 @@ Resources:
             - events:RemoveTargets
             Condition:
               StringEquals:
-                aws:ResourceTag/alien.dev/managed-by: alien
-                aws:ResourceTag/alien.dev/stack:
+                aws:ResourceTag/deployment:
                   Fn::Sub: ${AWS::StackName}
+                aws:ResourceTag/managed-by: deployment
             Effect: Allow
             Resource:
             - Fn::Sub: arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${AWS::StackName}-*
-            Sid: WorkerProvision12
+            Sid: WorkerProvision15
           - Action:
             - s3:GetBucketAcl
             - s3:GetBucketLocation
@@ -852,14 +895,14 @@ Resources:
             Resource:
               Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-management
       Tags:
-      - Key: alien.dev/managed-by
-        Value: alien
-      - Key: alien.dev/stack
+      - Key: managed-by
+        Value: deployment
+      - Key: deployment
         Value:
           Ref: AWS::StackName
-      - Key: alien.dev/resource
+      - Key: resource
         Value: management
-      - Key: AlienResourceType
+      - Key: resource-type
         Value: remote-stack-management
   Assets:
     Type: AWS::S3::Bucket
@@ -881,14 +924,14 @@ Resources:
       VersioningConfiguration:
         Status: Enabled
       Tags:
-      - Key: alien.dev/managed-by
-        Value: alien
-      - Key: alien.dev/stack
+      - Key: managed-by
+        Value: deployment
+      - Key: deployment
         Value:
           Ref: AWS::StackName
-      - Key: alien.dev/resource
+      - Key: resource
         Value: assets
-      - Key: AlienResourceType
+      - Key: resource-type
         Value: storage
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
@@ -919,14 +962,14 @@ Resources:
       VisibilityTimeout: 1080
       MessageRetentionPeriod: 345600
       Tags:
-      - Key: alien.dev/managed-by
-        Value: alien
-      - Key: alien.dev/stack
+      - Key: managed-by
+        Value: deployment
+      - Key: deployment
         Value:
           Ref: AWS::StackName
-      - Key: alien.dev/resource
+      - Key: resource
         Value: jobs
-      - Key: AlienResourceType
+      - Key: resource-type
         Value: queue
   Metadata:
     Type: AWS::DynamoDB::Table
@@ -950,14 +993,14 @@ Resources:
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: true
       Tags:
-      - Key: alien.dev/managed-by
-        Value: alien
-      - Key: alien.dev/stack
+      - Key: managed-by
+        Value: deployment
+      - Key: deployment
         Value:
           Ref: AWS::StackName
-      - Key: alien.dev/resource
+      - Key: resource
         Value: metadata
-      - Key: AlienResourceType
+      - Key: resource-type
         Value: kv
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
@@ -984,14 +1027,14 @@ Resources:
               action:
                 type: expire
       Tags:
-      - Key: alien.dev/managed-by
-        Value: alien
-      - Key: alien.dev/stack
+      - Key: managed-by
+        Value: deployment
+      - Key: deployment
         Value:
           Ref: AWS::StackName
-      - Key: alien.dev/resource
+      - Key: resource
         Value: registry
-      - Key: AlienResourceType
+      - Key: resource-type
         Value: artifact-registry
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
@@ -1034,14 +1077,14 @@ Resources:
               - Arn
             - Fn::Sub: arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${AWS::StackName}-registry-*
       Tags:
-      - Key: alien.dev/managed-by
-        Value: alien
-      - Key: alien.dev/stack
+      - Key: managed-by
+        Value: deployment
+      - Key: deployment
         Value:
           Ref: AWS::StackName
-      - Key: alien.dev/resource
+      - Key: resource
         Value: registry
-      - Key: AlienResourceType
+      - Key: resource-type
         Value: artifact-registry
     DependsOn:
     - RegistryRepository
@@ -1090,14 +1133,14 @@ Resources:
               - Arn
             - Fn::Sub: arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${AWS::StackName}-registry-*
       Tags:
-      - Key: alien.dev/managed-by
-        Value: alien
-      - Key: alien.dev/stack
+      - Key: managed-by
+        Value: deployment
+      - Key: deployment
         Value:
           Ref: AWS::StackName
-      - Key: alien.dev/resource
+      - Key: resource
         Value: registry
-      - Key: AlienResourceType
+      - Key: resource-type
         Value: artifact-registry
     DependsOn:
     - RegistryRepository
@@ -1143,14 +1186,14 @@ Resources:
           GroupName:
             Ref: BuilderLogGroup
       Tags:
-      - Key: alien.dev/managed-by
-        Value: alien
-      - Key: alien.dev/stack
+      - Key: managed-by
+        Value: deployment
+      - Key: deployment
         Value:
           Ref: AWS::StackName
-      - Key: alien.dev/resource
+      - Key: resource
         Value: builder
-      - Key: AlienResourceType
+      - Key: resource-type
         Value: build
     DependsOn:
     - BuilderLogGroup
@@ -1158,11 +1201,11 @@ Resources:
     Type: AWS::CloudFormation::CustomResource
     Properties:
       ServiceToken: arn:aws:lambda:us-east-1:123456789012:function:alien-import
-      DeploymentGroupToken:
-        Ref: DeploymentGroupToken
+      Token:
+        Ref: Token
       DeploymentName:
         Ref: AWS::StackName
-      StackPrefix:
+      ResourcePrefix:
         Ref: AWS::StackName
       SourceKind: cloudformation
       Platform: aws
@@ -1410,10 +1453,10 @@ Outputs:
   DeploymentSourceKind:
     Value: cloudformation
     Description: Setup source kind.
-  DeploymentStackPrefix:
+  DeploymentResourcePrefix:
     Value:
       Ref: AWS::StackName
-    Description: Physical stack prefix.
+    Description: Stable physical resource prefix.
   DeploymentPlatform:
     Value: aws
     Description: Target platform.
