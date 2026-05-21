@@ -1,21 +1,12 @@
-# InstallContext
+# DeploymentInfoInstallContext
 
 ## Example Usage
 
 ```typescript
-import { InstallContext } from "@alienplatform/platform-api/models";
+import { DeploymentInfoInstallContext } from "@alienplatform/platform-api/models";
 
-let value: InstallContext = {
-  targets: {
-    "key": {
-      platform: "kubernetes",
-      managerUrl: "https://excitable-drug.name/",
-      managementConfig: {
-        managingTenantId: "<id>",
-        platform: "azure",
-      },
-    },
-  },
+let value: DeploymentInfoInstallContext = {
+  targets: {},
 };
 ```
 

@@ -16,8 +16,8 @@
 //!    imports start at `provisioning` so the manager can complete Live work.
 //!
 //! Naming. The caller supplies `deploymentName` for the deployment row and
-//! `stackPrefix` for physical resource names. Setup drivers typically
-//! use the same value, but the manager treats them as separate contracts. If a
+//! `resourcePrefix` for physical resource names. Setup drivers may use the
+//! same value, but the manager treats them as separate contracts. If a
 //! deployment with that name already exists in the deployment group and was
 //! also imported, the handler merges setup state. A collision
 //! with a native deployment returns 409.
@@ -34,9 +34,9 @@ use axum::{
 
 use alien_core::{
     import::{ImportContext, StackImportRequest, StackImportResponse},
-    AwsEnvironmentInfo, AzureEnvironmentInfo, DeploymentConfig, EnvironmentInfo,
-    EnvironmentVariablesSnapshot, ExternalBindings, GcpEnvironmentInfo, Platform, RuntimeMetadata,
-    Stack, StackResourceState, StackState,
+    is_valid_resource_prefix, AwsEnvironmentInfo, AzureEnvironmentInfo, DeploymentConfig,
+    EnvironmentInfo, EnvironmentVariablesSnapshot, ExternalBindings, GcpEnvironmentInfo, Platform,
+    RuntimeMetadata, Stack, StackResourceState, StackState, RESOURCE_PREFIX_ERROR_MESSAGE,
 };
 use alien_error::AlienError;
 
@@ -116,9 +116,9 @@ pub async fn stack_import(
         )
         .into_response();
     }
-    if req.stack_prefix.trim().is_empty() {
-        return ErrorData::bad_request("Stack import payload must include a non-empty stackPrefix")
-            .into_response();
+    let resource_prefix = req.resource_prefix.trim().to_string();
+    if !is_valid_resource_prefix(&resource_prefix) {
+        return ErrorData::bad_request(RESOURCE_PREFIX_ERROR_MESSAGE).into_response();
     }
 
     let dg = match state
@@ -647,7 +647,7 @@ fn build_stack_state(
     }
 
     let mut stack_state =
-        StackState::with_resource_prefix(req.platform, req.stack_prefix.trim().to_string());
+        StackState::with_resource_prefix(req.platform, req.resource_prefix.trim().to_string());
     stack_state.resources = resources;
     Ok(stack_state)
 }

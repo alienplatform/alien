@@ -13,7 +13,7 @@ let value: CloudFormationCallbackRequest = {
   responseUrl: "https://only-nun.info",
   source: {
     deploymentName: "<value>",
-    stackPrefix: "<value>",
+    resourcePrefix: "<value>",
     releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
     platform: "test",
     region: "<value>",

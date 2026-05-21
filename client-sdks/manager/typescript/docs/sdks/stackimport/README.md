@@ -38,11 +38,11 @@ async function run() {
     },
     platform: "gcp",
     region: "<value>",
+    resourcePrefix: "<value>",
     resources: [],
     setupFingerprint: "<value>",
     setupFingerprintVersion: 325467,
     setupTarget: "<value>",
-    stackPrefix: "<value>",
     stackSettings: {},
   });
 
@@ -77,11 +77,11 @@ async function run() {
     },
     platform: "gcp",
     region: "<value>",
+    resourcePrefix: "<value>",
     resources: [],
     setupFingerprint: "<value>",
     setupFingerprintVersion: 325467,
     setupTarget: "<value>",
-    stackPrefix: "<value>",
     stackSettings: {},
   });
   if (res.ok) {

@@ -1,6 +1,5 @@
 ---
 source: crates/alien-terraform/tests/generator/helpers.rs
-assertion_line: 54
 expression: buf
 ---
 === versions.tf ===
@@ -16,13 +15,23 @@ terraform {
       source  = "hashicorp/time"
       version = ">= 0.9"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = ">= 3.6"
+    }
   }
 }
 
 === variables.tf ===
-variable "stack_name" {
+variable "resource_prefix" {
   type        = string
-  description = "Stable physical-name prefix for resources created by this setup."
+  description = "Optional stable physical resource prefix. Leave empty to generate one."
+  default     = ""
+
+  validation {
+    condition     = var.resource_prefix == "" || can(regex("^[a-z][a-z0-9-]{1,38}[a-z0-9]$", var.resource_prefix))
+    error_message = "resource_prefix must be 3-40 characters: lowercase letters, numbers, and hyphens; start with a letter; end with a letter or number."
+  }
 }
 
 variable "name" {
@@ -78,9 +87,14 @@ provider "google" {
   region  = var.gcp_region
 }
 
+=== resource_prefix.tf ===
+resource "random_id" "resource_prefix" {
+  byte_length = 4
+}
+
 === locals.tf ===
 locals {
-  resource_prefix     = var.stack_name
+  resource_prefix     = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
   deployment_platform = "gcp"
   deployment_target   = "gke"
   deployment_region   = var.gcp_region
@@ -154,7 +168,7 @@ resource "google_service_account" "execution_sa" {
 
 resource "google_project_iam_custom_role" "gcp_role_storage_data_read_part1" {
   project     = var.gcp_project
-  role_id     = format("role_%s_storage_data_read_part1", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18))
+  role_id     = format("role_%s_storage_data_read_part1_%s", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18), substr(sha1(format("%s_storage_data_read_part1", replace(lower(local.resource_prefix), "-", "_"))), 0, 8))
   title       = "gke-overlay: Storage data read (part 1)"
   description = "Allows reading data from storage buckets and containers. Stack: gke-overlay. Deployment prefix: ${local.resource_prefix}. Permission set: storage/data-read."
   stage       = "GA"
@@ -171,7 +185,7 @@ resource "google_project_iam_custom_role" "gcp_role_storage_data_read_part1" {
 
 resource "google_project_iam_custom_role" "gcp_role_storage_data_read_part2" {
   project     = var.gcp_project
-  role_id     = format("role_%s_storage_data_read_part2", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18))
+  role_id     = format("role_%s_storage_data_read_part2_%s", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18), substr(sha1(format("%s_storage_data_read_part2", replace(lower(local.resource_prefix), "-", "_"))), 0, 8))
   title       = "gke-overlay: Storage data read (part 2)"
   description = "Allows reading data from storage buckets and containers. Stack: gke-overlay. Deployment prefix: ${local.resource_prefix}. Permission set: storage/data-read."
   stage       = "GA"
@@ -242,9 +256,9 @@ output "deployment_target" {
   description = "Terraform module target."
 }
 
-output "deployment_stack_prefix" {
+output "deployment_resource_prefix" {
   value       = local.resource_prefix
-  description = "Physical stack prefix."
+  description = "Physical resource prefix."
 }
 
 output "deployment_platform" {
@@ -304,7 +318,7 @@ Run:
 ```bash
 terraform init -backend=false
 terraform validate
-terraform apply -var='stack_name=gke-overlay' -var='name=gke-overlay' -var='token=...'
+terraform apply -var='name=gke-overlay' -var='token=...'
 ```
 
 This module exposes `deployment_management_config` / `deployment_stack_settings` / `deployment_resources` for external registration flows.

@@ -68,6 +68,14 @@ export type StackImportRequest = {
    */
   releaseId?: string | null | undefined;
   /**
+   * Stable physical-name prefix used by the setup package for generated
+   *
+   * @remarks
+   * resources. Runtime controllers use it when addressing imported
+   * resources.
+   */
+  resourcePrefix: string;
+  /**
    * Imported resources with typed per-resource payloads.
    */
   resources: Array<ImportedResource>;
@@ -84,14 +92,6 @@ export type StackImportRequest = {
    */
   setupTarget: string;
   sourceKind?: ImportSourceKind | null | undefined;
-  /**
-   * Stable physical-name prefix used by the setup package for
-   *
-   * @remarks
-   * generated resources. This is the Alien stack prefix, not merely a UI
-   * name: runtime controllers use it when addressing imported resources.
-   */
-  stackPrefix: string;
   /**
    * User-customizable deployment settings specified at deploy time.
    *
@@ -115,12 +115,12 @@ export type StackImportRequest$Outbound = {
   platform: string;
   region: string;
   releaseId?: string | null | undefined;
+  resourcePrefix: string;
   resources: Array<ImportedResource$Outbound>;
   setupFingerprint: string;
   setupFingerprintVersion: number;
   setupTarget: string;
   sourceKind?: string | null | undefined;
-  stackPrefix: string;
   stackSettings: StackSettings$Outbound;
 };
 
@@ -135,12 +135,12 @@ export const StackImportRequest$outboundSchema: z.ZodType<
   platform: PlatformEnum$outboundSchema,
   region: z.string(),
   releaseId: z.nullable(z.string()).optional(),
+  resourcePrefix: z.string(),
   resources: z.array(ImportedResource$outboundSchema),
   setupFingerprint: z.string(),
   setupFingerprintVersion: z.int(),
   setupTarget: z.string(),
   sourceKind: z.nullable(ImportSourceKind$outboundSchema).optional(),
-  stackPrefix: z.string(),
   stackSettings: StackSettings$outboundSchema,
 });
 

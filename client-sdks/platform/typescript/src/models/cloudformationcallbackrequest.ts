@@ -414,10 +414,7 @@ export type Source = {
    * User-chosen deployment name. Must be unique within the deployment group; the manager returns 409 on collision.
    */
   deploymentName: string;
-  /**
-   * Stable physical-name prefix used by the setup artifact.
-   */
-  stackPrefix: string;
+  resourcePrefix: string;
   /**
    * Source label for observability only — does not affect import behavior.
    */
@@ -1269,7 +1266,7 @@ export function cloudFormationCallbackRequestManagementConfigUnionToJSON(
 /** @internal */
 export type Source$Outbound = {
   deploymentName: string;
-  stackPrefix: string;
+  resourcePrefix: string;
   sourceKind?: string | undefined;
   releaseId?: string | undefined;
   platform: string;
@@ -1290,7 +1287,7 @@ export type Source$Outbound = {
 export const Source$outboundSchema: z.ZodType<Source$Outbound, Source> = z
   .object({
     deploymentName: z.string(),
-    stackPrefix: z.string(),
+    resourcePrefix: z.string(),
     sourceKind: ImportSourceKind$outboundSchema.optional(),
     releaseId: z.string().optional(),
     platform: CloudFormationCallbackRequestPlatformEnum$outboundSchema,

@@ -31,10 +31,10 @@ pub struct StackImportRequest {
     /// Helm to `{namespace}/{release}`, Terraform requires an explicit
     /// `name` attribute on the `alien_deployment` resource.
     pub deployment_name: String,
-    /// Stable physical-name prefix used by the setup package for
-    /// generated resources. This is the Alien stack prefix, not merely a UI
-    /// name: runtime controllers use it when addressing imported resources.
-    pub stack_prefix: String,
+    /// Stable physical-name prefix used by the setup package for generated
+    /// resources. Runtime controllers use it when addressing imported
+    /// resources.
+    pub resource_prefix: String,
     /// Optional source label for observability. Does not affect import
     /// behavior — the manager dispatches the same `ImporterRegistry`
     /// regardless of which setup package emitted the payload.

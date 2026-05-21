@@ -282,6 +282,9 @@ async fn prepare_distribution(
         }
     }
 
+    // The manager release must keep the same source stack shape as a normal
+    // `alien release`. Setup artifacts render from a derived stack after
+    // template mutations add setup-owned resources such as remote management.
     let render_stack = if model == DeploymentModel::Push {
         rewrite_push_distribution_images(pushed_stack.clone(), build_platform, &config)?
     } else {
@@ -293,7 +296,7 @@ async fn prepare_distribution(
         .await
         .context("Failed to apply distribution render preflights")?;
 
-    create_release(&manager, build_platform, &rendered_stack).await?;
+    create_release(&manager, build_platform, &pushed_stack).await?;
     let (group_id, dg_token) = create_deployment_group_token(&manager).await?;
 
     Ok(DistributionPrepared {
@@ -1136,7 +1139,7 @@ async fn cloudformation_import_request(
     Ok(StackImportRequest {
         deployment_group_token: token.to_string(),
         deployment_name: stack_name.to_string(),
-        stack_prefix: resource_prefix,
+        resource_prefix,
         source_kind: Some(ImportSourceKind::CloudFormation),
         release_id: None,
         platform,
@@ -1212,7 +1215,7 @@ async fn grant_terraform_shared_env_join_permission(
         &resources,
         "remote-stack-management",
     )?;
-    let resource_prefix = terraform_output_string(outputs, "deployment_stack_prefix")?;
+    let resource_prefix = terraform_output_string(outputs, "deployment_resource_prefix")?;
 
     let azure_config = AzureClientConfig {
         subscription_id: target.subscription_id.clone(),
@@ -1292,7 +1295,7 @@ fn terraform_import_request_from_outputs(
     let platform: Platform = terraform_output_string(output, "deployment_platform")?
         .parse()
         .map_err(|error| anyhow::anyhow!("Invalid deployment_platform output: {error}"))?;
-    let resource_prefix = terraform_output_string(output, "deployment_stack_prefix")?;
+    let resource_prefix = terraform_output_string(output, "deployment_resource_prefix")?;
     let region = terraform_output_string(output, "deployment_region")?;
     let management_config: ManagementConfig = serde_json::from_str(&terraform_output_string(
         output,
@@ -1312,7 +1315,7 @@ fn terraform_import_request_from_outputs(
     Ok(StackImportRequest {
         deployment_group_token: token.to_string(),
         deployment_name: format!("terraform-{}", &uuid::Uuid::new_v4().to_string()[..8]),
-        stack_prefix: resource_prefix,
+        resource_prefix,
         source_kind: Some(ImportSourceKind::Terraform),
         release_id: None,
         platform,
@@ -1549,7 +1552,7 @@ async fn wait_for_azure_management_permissions(
     );
     let probe_queue_name = format!(
         "{}-iam-probe",
-        terraform_output_string(outputs, "deployment_stack_prefix")?
+        terraform_output_string(outputs, "deployment_resource_prefix")?
     );
 
     let timeout = Duration::from_secs(300);
@@ -1954,6 +1957,59 @@ mod tests {
     use super::*;
     use alien_core::permissions::PermissionProfile;
     use alien_core::ResourceLifecycle;
+
+    fn contains_resource_type(stack: &Stack, resource_type: &str) -> bool {
+        stack
+            .resources()
+            .any(|(_, entry)| entry.config.resource_type().as_ref() == resource_type)
+    }
+
+    #[tokio::test]
+    async fn distribution_source_stack_remains_valid_after_setup_render_mutations() {
+        let source_stack = Stack::new("distribution-source".to_string())
+            .permission(
+                "execution",
+                PermissionProfile::new().global(["worker/execute"]),
+            )
+            .add(
+                Worker::new("alien-rs-worker".to_string())
+                    .permissions("execution".to_string())
+                    .code(WorkerCode::Image {
+                        image: "manager.example.com/alien-e2e:tag".to_string(),
+                    })
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let stack_settings = stack_settings_for_flow(DeploymentModel::Push);
+
+        assert!(
+            !contains_resource_type(&source_stack, "remote-stack-management"),
+            "release/source stack must not contain setup-authored resources"
+        );
+
+        let runner = alien_preflights::runner::PreflightRunner::new();
+        runner
+            .run_template_preflights(&source_stack, Platform::Aws)
+            .await
+            .expect("release/source stack should pass setup import preflights");
+
+        let rendered_stack =
+            apply_render_mutations(source_stack.clone(), Platform::Aws, &stack_settings)
+                .await
+                .expect("distribution render mutations should succeed");
+        assert!(
+            contains_resource_type(&rendered_stack, "remote-stack-management"),
+            "rendered setup artifact stack should include remote management"
+        );
+        assert!(
+            runner
+                .run_template_preflights(&rendered_stack, Platform::Aws)
+                .await
+                .is_err(),
+            "rendered setup stack is not a valid release/source stack"
+        );
+    }
 
     fn azure_config(
         subscription_id: &str,

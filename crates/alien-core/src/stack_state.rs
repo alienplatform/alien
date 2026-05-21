@@ -16,6 +16,33 @@ use uuid::Uuid;
 
 use crate::{ErrorData, Result};
 
+pub const RESOURCE_PREFIX_ERROR_MESSAGE: &str = "resourcePrefix must be 3-40 characters: lowercase letters, numbers, and hyphens; start with a letter; end with a letter or number";
+
+pub fn is_valid_resource_prefix(value: &str) -> bool {
+    if !(3..=40).contains(&value.len()) {
+        return false;
+    }
+
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !first.is_ascii_lowercase() {
+        return false;
+    }
+
+    let Some(last) = value.chars().next_back() else {
+        return false;
+    };
+    if !(last.is_ascii_lowercase() || last.is_ascii_digit()) {
+        return false;
+    }
+
+    value
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
 /// Represents the overall status of a stack based on its resource states.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]

@@ -1367,7 +1367,7 @@
         "properties": {
           "commandsUrl": {
             "type": "string",
-            "description": "Public URL for the commands API. Cloud-deployed functions use this\nto poll for pending commands instead of the agent's local sync URL.",
+            "description": "Public URL for the commands API. Cloud-deployed workers use this\nto poll for pending commands instead of the agent's local sync URL.",
             "nullable": true
           },
           "target": {}
@@ -1561,9 +1561,15 @@
                 "nullable": true
               },
               "storageGetRequest": {
-                "$ref": "#/components/schemas/PresignedRequest",
-                "description": "Pre-signed request for retrieving the body (for deployments)",
-                "nullable": true
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/PresignedRequest",
+                    "description": "Pre-signed request for retrieving the body (for deployments)"
+                  }
+                ]
               },
               "storagePutUsed": {
                 "type": "boolean",
@@ -1586,12 +1592,24 @@
             "type": "string"
           },
           "params": {
-            "$ref": "#/components/schemas/BodySpec",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BodySpec"
+              }
+            ]
           },
           "response": {
-            "$ref": "#/components/schemas/CommandResponse",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CommandResponse"
+              }
+            ]
           }
         }
       },
@@ -1682,9 +1700,15 @@
             "description": "Command identifier"
           },
           "response": {
-            "$ref": "#/components/schemas/CommandResponse",
-            "description": "Response data (only for succeeded/failed state)",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CommandResponse",
+                "description": "Response data (only for succeeded/failed state)"
+              }
+            ]
           },
           "state": {
             "$ref": "#/components/schemas/CommandState",
@@ -1770,9 +1794,15 @@
             "description": "Current command state"
           },
           "storageUpload": {
-            "$ref": "#/components/schemas/StorageUpload",
-            "description": "Storage upload info (only for storage mode)",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StorageUpload",
+                "description": "Storage upload info (only for storage mode)"
+              }
+            ]
           }
         }
       },
@@ -1816,8 +1846,14 @@
             "$ref": "#/components/schemas/Platform"
           },
           "stackSettings": {
-            "$ref": "#/components/schemas/StackSettings",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StackSettings"
+              }
+            ]
           }
         }
       },
@@ -1844,8 +1880,14 @@
         ],
         "properties": {
           "gitMetadata": {
-            "$ref": "#/components/schemas/GitMetadata",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GitMetadata"
+              }
+            ]
           },
           "projectId": {
             "type": "string",
@@ -1877,19 +1919,37 @@
         "description": "Platform-specific certificate references for custom domains.",
         "properties": {
           "aws": {
-            "$ref": "#/components/schemas/AwsCustomCertificateConfig",
-            "description": "AWS ACM certificate ARN",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AwsCustomCertificateConfig",
+                "description": "AWS ACM certificate ARN"
+              }
+            ]
           },
           "azure": {
-            "$ref": "#/components/schemas/AzureCustomCertificateConfig",
-            "description": "Azure Key Vault certificate ID",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AzureCustomCertificateConfig",
+                "description": "Azure Key Vault certificate ID"
+              }
+            ]
           },
           "gcp": {
-            "$ref": "#/components/schemas/GcpCustomCertificateConfig",
-            "description": "GCP Certificate Manager certificate name",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GcpCustomCertificateConfig",
+                "description": "GCP Certificate Manager certificate name"
+              }
+            ]
           }
         }
       },
@@ -2018,8 +2078,14 @@
             "nullable": true
           },
           "deploymentGroup": {
-            "$ref": "#/components/schemas/DeploymentGroupMinimal",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DeploymentGroupMinimal"
+              }
+            ]
           },
           "deploymentGroupId": {
             "type": "string"
@@ -2034,8 +2100,14 @@
             "type": "string"
           },
           "importSource": {
-            "$ref": "#/components/schemas/ImportSourceKind",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ImportSourceKind"
+              }
+            ]
           },
           "name": {
             "type": "string"
@@ -2300,12 +2372,24 @@
             "nullable": true
           },
           "platform": {
-            "$ref": "#/components/schemas/Platform",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Platform"
+              }
+            ]
           },
           "stackSettings": {
-            "$ref": "#/components/schemas/StackSettings",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StackSettings"
+              }
+            ]
           }
         }
       },
@@ -2865,8 +2949,14 @@
             "type": "string"
           },
           "gitMetadata": {
-            "$ref": "#/components/schemas/GitMetadataResponse",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GitMetadataResponse"
+              }
+            ]
           },
           "id": {
             "type": "string"
@@ -3028,7 +3118,7 @@
         "required": [
           "deploymentGroupToken",
           "deploymentName",
-          "stackPrefix",
+          "resourcePrefix",
           "platform",
           "region",
           "setupTarget",
@@ -3064,6 +3154,10 @@
             "description": "Optional release id that produced the setup package. When\nomitted, the manager imports against the latest release.",
             "nullable": true
           },
+          "resourcePrefix": {
+            "type": "string",
+            "description": "Stable physical-name prefix used by the setup package for generated\nresources. Runtime controllers use it when addressing imported\nresources."
+          },
           "resources": {
             "type": "array",
             "items": {
@@ -3086,13 +3180,15 @@
             "description": "Setup target this package was generated for."
           },
           "sourceKind": {
-            "$ref": "#/components/schemas/ImportSourceKind",
-            "description": "Optional source label for observability. Does not affect import\nbehavior — the manager dispatches the same `ImporterRegistry`\nregardless of which setup package emitted the payload.",
-            "nullable": true
-          },
-          "stackPrefix": {
-            "type": "string",
-            "description": "Stable physical-name prefix used by the setup package for\ngenerated resources. This is the Alien stack prefix, not merely a UI\nname: runtime controllers use it when addressing imported resources."
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ImportSourceKind",
+                "description": "Optional source label for observability. Does not affect import\nbehavior — the manager dispatches the same `ImporterRegistry`\nregardless of which setup package emitted the payload."
+              }
+            ]
           },
           "stackSettings": {
             "$ref": "#/components/schemas/StackSettings",
@@ -3149,27 +3245,51 @@
             "description": "Complete list of dependencies for this resource, including infrastructure dependencies.\nThis preserves the full dependency information from the stack definition."
           },
           "error": {
-            "$ref": "#/components/schemas/AlienError",
-            "description": "Stores the last error encountered during a failed step transition.",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AlienError",
+                "description": "Stores the last error encountered during a failed step transition."
+              }
+            ]
           },
           "lastFailedState": {
             "description": "Stores the controller state that failed, used for manual retry operations.\nThis allows resuming from the exact point where the failure occurred.\nStored as JSON to make the struct serializable and movable to alien-core."
           },
           "lifecycle": {
-            "$ref": "#/components/schemas/ResourceLifecycle",
-            "description": "The lifecycle of the resource (Frozen or Live).\nDefaults to Live if not specified.",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResourceLifecycle",
+                "description": "The lifecycle of the resource (Frozen or Live).\nDefaults to Live if not specified."
+              }
+            ]
           },
           "outputs": {
-            "$ref": "#/components/schemas/BaseResourceOutputs",
-            "description": "Outputs generated by the resource (e.g., ARN, URL, Bucket Name).",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BaseResourceOutputs",
+                "description": "Outputs generated by the resource (e.g., ARN, URL, Bucket Name)."
+              }
+            ]
           },
           "previousConfig": {
-            "$ref": "#/components/schemas/BaseResource",
-            "description": "The previous resource configuration during updates.\nThis is set when an update is initiated and cleared when the update completes or fails.",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BaseResource",
+                "description": "The previous resource configuration during updates.\nThis is set when an update is initiated and cleared when the update completes or fails."
+              }
+            ]
           },
           "remoteBindingParams": {
             "description": "Binding parameters for remote access.\nOnly populated when the resource has `remote_access: true` in its ResourceEntry.\nThis is the JSON serialization of the binding configuration (e.g., StorageBinding, VaultBinding).\nPopulated by controllers during provisioning using get_binding_params()."
@@ -3199,9 +3319,15 @@
             "description": "Deployment model: push (Manager) or pull (Agent).\nDefault: Push.\n- Push: Manager drives updates. For cloud platforms, requires cross-account\n  credentials established during initial setup. For push-mode local\n  deployments (currently `alien dev`), the manager has direct access —\n  no bootstrap needed.\n- Pull: Agent in the target environment drives updates via polling.\n  Required for Kubernetes and remote local deployments."
           },
           "domains": {
-            "$ref": "#/components/schemas/DomainSettings",
-            "description": "Domain configuration (future).",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DomainSettings",
+                "description": "Domain configuration (future)."
+              }
+            ]
           },
           "externalBindings": {
             "type": "object",
@@ -3213,9 +3339,15 @@
             "description": "How heartbeat health checks are handled.\n- off: No heartbeat permissions\n- on: Heartbeat enabled (default)"
           },
           "network": {
-            "$ref": "#/components/schemas/NetworkSettings",
-            "description": "Network configuration for the stack (VPC/VNet settings).\nIf `None`, an isolated VPC with NAT is auto-created when the stack has resources\nthat require networking (e.g., containers). Set explicitly to customize:\n`UseDefault` for the provider's default network (fast, dev/test only),\n`Create` for an isolated VPC with managed NAT (production), or `ByoVpc*`\nto reference an existing customer-managed VPC.",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/NetworkSettings",
+                "description": "Network configuration for the stack (VPC/VNet settings).\nIf `None`, an isolated VPC with NAT is auto-created when the stack has resources\nthat require networking (e.g., containers). Set explicitly to customize:\n`UseDefault` for the provider's default network (fast, dev/test only),\n`Create` for an isolated VPC with managed NAT (production), or `ByoVpc*`\nto reference an existing customer-managed VPC."
+              }
+            ]
           },
           "telemetry": {
             "$ref": "#/components/schemas/TelemetryMode",
@@ -3277,12 +3409,24 @@
         "description": "Request to store payload data directly in KV by command_id.\n\nThis bypasses the normal command lifecycle (create → dispatch → respond)\nand writes params/response directly into KV. Used by the demo service\nto populate payload data for commands created outside the command flow.",
         "properties": {
           "params": {
-            "$ref": "#/components/schemas/BodySpec",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BodySpec"
+              }
+            ]
           },
           "response": {
-            "$ref": "#/components/schemas/CommandResponse",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CommandResponse"
+              }
+            ]
           }
         }
       },

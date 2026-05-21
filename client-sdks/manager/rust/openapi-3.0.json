@@ -1367,7 +1367,7 @@
         "properties": {
           "commandsUrl": {
             "type": "string",
-            "description": "Public URL for the commands API. Cloud-deployed functions use this\nto poll for pending commands instead of the agent's local sync URL.",
+            "description": "Public URL for the commands API. Cloud-deployed workers use this\nto poll for pending commands instead of the agent's local sync URL.",
             "nullable": true
           },
           "target": {}
@@ -3028,7 +3028,7 @@
         "required": [
           "deploymentGroupToken",
           "deploymentName",
-          "stackPrefix",
+          "resourcePrefix",
           "platform",
           "region",
           "setupTarget",
@@ -3064,6 +3064,10 @@
             "description": "Optional release id that produced the setup package. When\nomitted, the manager imports against the latest release.",
             "nullable": true
           },
+          "resourcePrefix": {
+            "type": "string",
+            "description": "Stable physical-name prefix used by the setup package for generated\nresources. Runtime controllers use it when addressing imported\nresources."
+          },
           "resources": {
             "type": "array",
             "items": {
@@ -3089,10 +3093,6 @@
             "$ref": "#/components/schemas/ImportSourceKind",
             "description": "Optional source label for observability. Does not affect import\nbehavior — the manager dispatches the same `ImporterRegistry`\nregardless of which setup package emitted the payload.",
             "nullable": true
-          },
-          "stackPrefix": {
-            "type": "string",
-            "description": "Stable physical-name prefix used by the setup package for\ngenerated resources. This is the Alien stack prefix, not merely a UI\nname: runtime controllers use it when addressing imported resources."
           },
           "stackSettings": {
             "$ref": "#/components/schemas/StackSettings",

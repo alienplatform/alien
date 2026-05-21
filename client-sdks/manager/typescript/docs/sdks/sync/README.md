@@ -289,12 +289,12 @@ async function run() {
             "key": {
               "config": {
                 "id": "<id>",
-                "type": "worker",
+                "type": "function",
               },
               "dependencies": [
                 {
                   "id": "<id>",
-                  "type": "worker",
+                  "type": "function",
                 },
               ],
               "lifecycle": "live",
@@ -309,12 +309,12 @@ async function run() {
           "key": {
             "config": {
               "id": "<id>",
-              "type": "worker",
+              "type": "function",
             },
             "dependencies": [
               {
                 "id": "<id>",
-                "type": "worker",
+                "type": "function",
               },
             ],
             "error": {
@@ -324,11 +324,11 @@ async function run() {
               "retryable": false,
             },
             "outputs": {
-              "type": "worker",
+              "type": "function",
             },
             "previousConfig": {
               "id": "<id>",
-              "type": "worker",
+              "type": "function",
             },
             "status": "deleted",
             "type": "<value>",
@@ -391,12 +391,12 @@ async function run() {
             "key": {
               "config": {
                 "id": "<id>",
-                "type": "worker",
+                "type": "function",
               },
               "dependencies": [
                 {
                   "id": "<id>",
-                  "type": "worker",
+                  "type": "function",
                 },
               ],
               "lifecycle": "live",
@@ -411,12 +411,12 @@ async function run() {
           "key": {
             "config": {
               "id": "<id>",
-              "type": "worker",
+              "type": "function",
             },
             "dependencies": [
               {
                 "id": "<id>",
-                "type": "worker",
+                "type": "function",
               },
             ],
             "error": {
@@ -426,11 +426,11 @@ async function run() {
               "retryable": false,
             },
             "outputs": {
-              "type": "worker",
+              "type": "function",
             },
             "previousConfig": {
               "id": "<id>",
-              "type": "worker",
+              "type": "function",
             },
             "status": "deleted",
             "type": "<value>",

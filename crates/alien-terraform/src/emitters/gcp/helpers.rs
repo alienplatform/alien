@@ -347,8 +347,9 @@ pub(crate) fn custom_role_label(custom_role: &GcpCustomRole) -> String {
 
 fn custom_role_id_template(custom_role: &GcpCustomRole) -> Expression {
     let suffix = custom_role_suffix(custom_role);
+    let readable_suffix = custom_role_readable_id_suffix(&suffix);
     expr::raw(format!(
-        "format(\"role_%s_{suffix}\", substr(replace(lower(local.resource_prefix), \"-\", \"_\"), 0, 18))"
+        "format(\"role_%s_{readable_suffix}_%s\", substr(replace(lower(local.resource_prefix), \"-\", \"_\"), 0, 18), substr(sha1(format(\"%s_{suffix}\", replace(lower(local.resource_prefix), \"-\", \"_\"))), 0, 8))"
     ))
 }
 
@@ -358,6 +359,16 @@ fn custom_role_suffix(custom_role: &GcpCustomRole) -> String {
         .strip_prefix("role_local_resource_pre_")
         .unwrap_or(&custom_role.role_id)
         .to_string()
+}
+
+fn custom_role_readable_id_suffix(suffix: &str) -> String {
+    const MAX_SUFFIX_LEN: usize = 31;
+    let mut suffix = suffix.to_string();
+    if suffix.len() > MAX_SUFFIX_LEN {
+        suffix.truncate(MAX_SUFFIX_LEN);
+        suffix = suffix.trim_end_matches('_').to_string();
+    }
+    suffix
 }
 
 pub(crate) fn push_iam_member(

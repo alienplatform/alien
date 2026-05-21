@@ -3,6 +3,7 @@
  */
 
 import { deploymentGetInfo } from "../funcs/deploymentGetInfo.js";
+import { deploymentPrepareStack } from "../funcs/deploymentPrepareStack.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
 import * as models from "../models/index.js";
 import * as operations from "../models/operations/index.js";
@@ -10,13 +11,27 @@ import { unwrapAsync } from "../types/fp.js";
 
 export class Deployment extends ClientSDK {
   /**
-   * Get deployment information for the deployment page. Accepts both deployment-scoped and deployment-group-scoped API keys. Returns project information, package status/outputs, and either deployment or deployment group details depending on the token type. Poll this endpoint to check if packages are ready.
+   * Get deployment information for the deployment portal. Accepts both deployment-scoped and deployment-group-scoped API keys. Returns project information, package status/outputs, and either deployment or deployment group details depending on the token type. Poll this endpoint to check if packages are ready.
    */
   async getInfo(
     request?: operations.GetDeploymentInfoRequest | undefined,
     options?: RequestOptions,
   ): Promise<models.DeploymentInfo> {
     return unwrapAsync(deploymentGetInfo(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Prepare the active release stack for a deployment portal setup session. The response contains the generated stack shape plus setup compatibility metadata.
+   */
+  async prepareStack(
+    request?: operations.PrepareDeploymentStackRequest | undefined,
+    options?: RequestOptions,
+  ): Promise<models.PreparedDeploymentStack> {
+    return unwrapAsync(deploymentPrepareStack(
       this,
       request,
       options,

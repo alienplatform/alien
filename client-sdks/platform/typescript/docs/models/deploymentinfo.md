@@ -12,6 +12,7 @@ let value: DeploymentInfo = {
     name: "<value>",
   },
   workspace: {
+    id: "<id>",
     name: "<value>",
   },
   project: {
@@ -48,4 +49,4 @@ let value: DeploymentInfo = {
 | `workspace`                                                                        | [models.DeploymentInfoWorkspace](../models/deploymentinfoworkspace.md)             | :heavy_check_mark:                                                                 | N/A                                                                                |
 | `project`                                                                          | [models.DeploymentInfoProject](../models/deploymentinfoproject.md)                 | :heavy_check_mark:                                                                 | N/A                                                                                |
 | `packages`                                                                         | [models.Packages](../models/packages.md)                                           | :heavy_check_mark:                                                                 | N/A                                                                                |
-| `installContext`                                                                   | [models.InstallContext](../models/installcontext.md)                               | :heavy_check_mark:                                                                 | N/A                                                                                |
+| `installContext`                                                                   | [models.DeploymentInfoInstallContext](../models/deploymentinfoinstallcontext.md)   | :heavy_check_mark:                                                                 | N/A                                                                                |

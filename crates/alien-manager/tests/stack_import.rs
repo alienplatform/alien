@@ -242,7 +242,7 @@ fn aws_s3_import_request(
     StackImportRequest {
         deployment_group_token: "ignored".to_string(),
         deployment_name: deployment_name.to_string(),
-        stack_prefix: deployment_name.to_string(),
+        resource_prefix: deployment_name.to_string(),
         source_kind: Some(ImportSourceKind::CloudFormation),
         release_id: None,
         platform: Platform::Aws,
@@ -289,7 +289,7 @@ fn aws_remote_management_import_request(
     StackImportRequest {
         deployment_group_token: "ignored".to_string(),
         deployment_name: deployment_name.to_string(),
-        stack_prefix: deployment_name.to_string(),
+        resource_prefix: deployment_name.to_string(),
         source_kind: Some(ImportSourceKind::CloudFormation),
         release_id: None,
         platform: Platform::Aws,
@@ -324,7 +324,7 @@ fn gcp_remote_management_import_request(
     StackImportRequest {
         deployment_group_token: "ignored".to_string(),
         deployment_name: deployment_name.to_string(),
-        stack_prefix: deployment_name.to_string(),
+        resource_prefix: deployment_name.to_string(),
         source_kind: Some(ImportSourceKind::Terraform),
         release_id: None,
         platform: Platform::Gcp,
@@ -363,7 +363,7 @@ fn azure_remote_management_import_request(
     StackImportRequest {
         deployment_group_token: "ignored".to_string(),
         deployment_name: deployment_name.to_string(),
-        stack_prefix: deployment_name.to_string(),
+        resource_prefix: deployment_name.to_string(),
         source_kind: Some(ImportSourceKind::Terraform),
         release_id: None,
         platform: Platform::Azure,
@@ -809,6 +809,16 @@ async fn missing_deployment_name_returns_400() {
     let fixture = make_fixture(Some(stack_with_storage("assets"))).await;
     let mut body = aws_s3_import_request("", "us-east-1", "assets", "acme-imports");
     body.deployment_name.clear();
+
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body = {:#}", json);
+}
+
+#[tokio::test]
+async fn invalid_resource_prefix_returns_400() {
+    let fixture = make_fixture(Some(stack_with_storage("assets"))).await;
+    let mut body = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
+    body.resource_prefix = "Acme_Prod".to_string();
 
     let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "body = {:#}", json);

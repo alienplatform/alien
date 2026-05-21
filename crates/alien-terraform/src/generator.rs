@@ -254,6 +254,10 @@ pub fn generate_terraform_module(
         render_body(providers_body(target))?,
     );
     files.insert(
+        "resource_prefix.tf".to_string(),
+        render_body(resource_prefix_body())?,
+    );
+    files.insert(
         "locals.tf".to_string(),
         render_body(locals_body(
             target,
@@ -562,6 +566,10 @@ fn versions_body(
             provider_decl_attr("hashicorp/azurerm", ">= 3.100"),
         ));
     }
+    provider_attrs.push(attr(
+        "random",
+        provider_decl_attr("hashicorp/random", ">= 3.6"),
+    ));
     if let Some(registration) = registration {
         provider_attrs.push(attr(
             &registration.provider_name,
@@ -608,17 +616,12 @@ fn variables_body(
             })
         })?;
 
-    blocks.push(nested(variable_block(
-        "stack_name",
-        "Stable physical-name prefix for resources created by this setup.",
-        None,
-        false,
-    )));
+    blocks.push(nested(resource_prefix_variable_block()));
 
     if registration.is_some() {
         blocks.push(nested(variable_block(
             "deployment_name",
-            "Deployment name used when registering the resolved stack import. Defaults to stack_name.",
+            "Deployment name used when registering the resolved stack import. Defaults to the generated resource prefix.",
             Some(Expression::String(String::new())),
             false,
         )));
@@ -854,6 +857,43 @@ fn variables_body(
     Ok(Body::from(blocks))
 }
 
+fn resource_prefix_variable_block() -> Block {
+    let body = vec![
+        attr("type", expr::raw("string")),
+        attr(
+            "description",
+            Expression::String(
+                "Optional stable physical resource prefix. Leave empty to generate one."
+                    .to_string(),
+            ),
+        ),
+        attr("default", Expression::String(String::new())),
+        nested(block(
+            "validation",
+            [
+                attr(
+                    "condition",
+                    expr::raw(
+                        "var.resource_prefix == \"\" || can(regex(\"^[a-z][a-z0-9-]{1,38}[a-z0-9]$\", var.resource_prefix))",
+                    ),
+                ),
+                attr(
+                    "error_message",
+                    Expression::String(
+                        "resource_prefix must be 3-40 characters: lowercase letters, numbers, and hyphens; start with a letter; end with a letter or number."
+                            .to_string(),
+                    ),
+                ),
+            ],
+        )),
+    ];
+    Block {
+        identifier: Identifier::sanitized("variable"),
+        labels: vec![BlockLabel::String("resource_prefix".to_string())],
+        body: Body::from(body),
+    }
+}
+
 fn list_variable_block(name: &str, description: &str, default: Option<Vec<String>>) -> Block {
     let mut body: Vec<Structure> = vec![
         attr("type", expr::raw("list(string)")),
@@ -967,6 +1007,17 @@ fn providers_body(target: TerraformTarget) -> Body {
     Body::from(structures)
 }
 
+fn resource_prefix_body() -> Body {
+    Body::from(vec![Structure::Block(resource_block(
+        "random_id",
+        "resource_prefix",
+        [attr(
+            "byte_length",
+            Expression::Number(hcl::Number::from(4)),
+        )],
+    ))])
+}
+
 fn locals_body(
     target: TerraformTarget,
     stack_settings: &StackSettings,
@@ -975,7 +1026,12 @@ fn locals_body(
 ) -> Result<Body> {
     let mut body: Vec<Structure> = Vec::new();
 
-    body.push(attr("resource_prefix", expr::raw("var.stack_name")));
+    body.push(attr(
+        "resource_prefix",
+        expr::raw(
+            "var.resource_prefix == \"\" ? format(\"a%s\", random_id.resource_prefix.hex) : var.resource_prefix",
+        ),
+    ));
     body.push(attr(
         "deployment_platform",
         Expression::String(target.platform().as_str().to_string()),
@@ -1153,9 +1209,11 @@ fn import_body(registration: Option<&TerraformRegistration>, depends_on: &[Expre
             ),
             attr(
                 "name",
-                expr::raw("var.deployment_name == \"\" ? var.stack_name : var.deployment_name"),
+                expr::raw(
+                    "var.deployment_name == \"\" ? local.resource_prefix : var.deployment_name",
+                ),
             ),
-            attr("stack_prefix", expr::raw("var.stack_name")),
+            attr("resource_prefix", expr::raw("local.resource_prefix")),
             attr(
                 "setup_target",
                 Expression::String(registration.setup_target.clone()),
@@ -1249,9 +1307,9 @@ fn outputs_body(target: TerraformTarget, registration: Option<&TerraformRegistra
             "Terraform module target.",
         ),
         (
-            "deployment_stack_prefix",
+            "deployment_resource_prefix",
             expr::raw("local.resource_prefix"),
-            "Physical stack prefix.",
+            "Physical resource prefix.",
         ),
         (
             "deployment_platform",
@@ -1352,16 +1410,9 @@ fn readme_md(
     registration: Option<&TerraformRegistration>,
 ) -> String {
     let apply_args = if registration.is_some() {
-        format!(
-            "-var='stack_name={}' -var='deployment_group_token=...'",
-            stack.id()
-        )
+        "-var='deployment_group_token=...'".to_string()
     } else {
-        format!(
-            "-var='stack_name={}' -var='name={}' -var='token=...'",
-            stack.id(),
-            stack.id()
-        )
+        format!("-var='name={}' -var='token=...'", stack.id())
     };
     let registration_note = registration
         .map(|registration| {

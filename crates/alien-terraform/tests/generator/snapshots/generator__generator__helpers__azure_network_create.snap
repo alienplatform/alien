@@ -1,6 +1,5 @@
 ---
 source: crates/alien-terraform/tests/generator/helpers.rs
-assertion_line: 54
 expression: buf
 ---
 === versions.tf ===
@@ -12,13 +11,23 @@ terraform {
       source  = "hashicorp/azurerm"
       version = ">= 3.100"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = ">= 3.6"
+    }
   }
 }
 
 === variables.tf ===
-variable "stack_name" {
+variable "resource_prefix" {
   type        = string
-  description = "Stable physical-name prefix for resources created by this setup."
+  description = "Optional stable physical resource prefix. Leave empty to generate one."
+  default     = ""
+
+  validation {
+    condition     = var.resource_prefix == "" || can(regex("^[a-z][a-z0-9-]{1,38}[a-z0-9]$", var.resource_prefix))
+    error_message = "resource_prefix must be 3-40 characters: lowercase letters, numbers, and hyphens; start with a letter; end with a letter or number."
+  }
 }
 
 variable "name" {
@@ -92,9 +101,14 @@ provider "azurerm" {
   features {}
 }
 
+=== resource_prefix.tf ===
+resource "random_id" "resource_prefix" {
+  byte_length = 4
+}
+
 === locals.tf ===
 locals {
-  resource_prefix     = var.stack_name
+  resource_prefix     = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
   deployment_platform = "azure"
   deployment_target   = "azure"
   deployment_region   = var.azure_location
@@ -312,9 +326,9 @@ output "deployment_target" {
   description = "Terraform module target."
 }
 
-output "deployment_stack_prefix" {
+output "deployment_resource_prefix" {
   value       = local.resource_prefix
-  description = "Physical stack prefix."
+  description = "Physical resource prefix."
 }
 
 output "deployment_platform" {
@@ -368,7 +382,7 @@ Run:
 ```bash
 terraform init -backend=false
 terraform validate
-terraform apply -var='stack_name=acme-net' -var='name=acme-net' -var='token=...'
+terraform apply -var='name=acme-net' -var='token=...'
 ```
 
 This module exposes `deployment_management_config` / `deployment_stack_settings` / `deployment_resources` for external registration flows.

@@ -3,6 +3,7 @@
  */
 
 import { syncAcquire } from "../funcs/syncAcquire.js";
+import { syncList } from "../funcs/syncList.js";
 import { syncReconcile } from "../funcs/syncReconcile.js";
 import { syncRelease } from "../funcs/syncRelease.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
@@ -11,6 +12,20 @@ import * as operations from "../models/operations/index.js";
 import { unwrapAsync } from "../types/fp.js";
 
 export class Sync extends ClientSDK {
+  /**
+   * List full deployment records for manager operational loops. This endpoint is intentionally separate from the public deployments list, which returns lightweight UI rows.
+   */
+  async list(
+    request?: operations.SyncListRequest | undefined,
+    options?: RequestOptions,
+  ): Promise<models.SyncListResponse> {
+    return unwrapAsync(syncList(
+      this,
+      request,
+      options,
+    ));
+  }
+
   /**
    * Acquire a batch of deployments for processing. Used by Manager to atomically lock deployments matching filters. Each deployment in the batch must be released after processing.
    */

@@ -491,6 +491,10 @@ export type NewDeploymentRequest = {
    * Stack settings for deployment customization
    */
   stackSettings?: NewDeploymentRequestStackSettings | undefined;
+  /**
+   * Optional physical-name prefix for generated cloud resources. Omit to let the manager generate one.
+   */
+  resourcePrefix?: string | undefined;
 };
 
 /** @internal */
@@ -1282,6 +1286,7 @@ export type NewDeploymentRequest$Outbound = {
     | undefined;
   project: string;
   stackSettings?: NewDeploymentRequestStackSettings$Outbound | undefined;
+  resourcePrefix?: string | undefined;
 };
 
 /** @internal */
@@ -1310,6 +1315,7 @@ export const NewDeploymentRequest$outboundSchema: z.ZodType<
   project: z.string(),
   stackSettings: z.lazy(() => NewDeploymentRequestStackSettings$outboundSchema)
     .optional(),
+  resourcePrefix: z.string().optional(),
 });
 
 export function newDeploymentRequestToJSON(

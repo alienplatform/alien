@@ -109,6 +109,10 @@ export type CommandListItemResponse = {
    * Error details if command failed
    */
   error: { [k: string]: any | null } | null;
+  /**
+   * Decoded command result when available
+   */
+  result?: any | null | undefined;
   deployment?: CommandDeploymentInfo | undefined;
   project?: CommandProjectInfo | undefined;
 };
@@ -149,6 +153,7 @@ export const CommandListItemResponse$inboundSchema: z.ZodType<
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   ),
   error: z.nullable(z.record(z.string(), z.nullable(z.any()))),
+  result: z.nullable(z.any()).optional(),
   deployment: CommandDeploymentInfo$inboundSchema.optional(),
   project: CommandProjectInfo$inboundSchema.optional(),
 });

@@ -67,6 +67,7 @@ export type DeploymentInfoDeploymentGroup = {
 };
 
 export type DeploymentInfoWorkspace = {
+  id: string;
   name: string;
   avatarUrl?: string | null | undefined;
 };
@@ -557,7 +558,7 @@ export type Targets = {
   awsManagingAccountId?: string | undefined;
 };
 
-export type InstallContext = {
+export type DeploymentInfoInstallContext = {
   /**
    * Deployment-session install context by Terraform/installer target
    */
@@ -580,7 +581,7 @@ export type DeploymentInfo = {
   workspace: DeploymentInfoWorkspace;
   project: DeploymentInfoProject;
   packages: Packages;
-  installContext: InstallContext;
+  installContext: DeploymentInfoInstallContext;
 };
 
 /** @internal */
@@ -636,6 +637,7 @@ export const DeploymentInfoWorkspace$inboundSchema: z.ZodType<
   DeploymentInfoWorkspace,
   unknown
 > = z.object({
+  id: z.string(),
   name: z.string(),
   avatarUrl: z.nullable(z.string()).optional(),
 });
@@ -1207,18 +1209,20 @@ export function targetsFromJSON(
 }
 
 /** @internal */
-export const InstallContext$inboundSchema: z.ZodType<InstallContext, unknown> =
-  z.object({
-    targets: z.record(z.string(), z.lazy(() => Targets$inboundSchema)),
-  });
+export const DeploymentInfoInstallContext$inboundSchema: z.ZodType<
+  DeploymentInfoInstallContext,
+  unknown
+> = z.object({
+  targets: z.record(z.string(), z.lazy(() => Targets$inboundSchema)),
+});
 
-export function installContextFromJSON(
+export function deploymentInfoInstallContextFromJSON(
   jsonString: string,
-): SafeParseResult<InstallContext, SDKValidationError> {
+): SafeParseResult<DeploymentInfoInstallContext, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => InstallContext$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'InstallContext' from JSON`,
+    (x) => DeploymentInfoInstallContext$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInfoInstallContext' from JSON`,
   );
 }
 
@@ -1232,7 +1236,7 @@ export const DeploymentInfo$inboundSchema: z.ZodType<DeploymentInfo, unknown> =
     workspace: z.lazy(() => DeploymentInfoWorkspace$inboundSchema),
     project: z.lazy(() => DeploymentInfoProject$inboundSchema),
     packages: z.lazy(() => Packages$inboundSchema),
-    installContext: z.lazy(() => InstallContext$inboundSchema),
+    installContext: z.lazy(() => DeploymentInfoInstallContext$inboundSchema),
   });
 
 export function deploymentInfoFromJSON(

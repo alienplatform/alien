@@ -1,6 +1,5 @@
 ---
 source: crates/alien-terraform/tests/generator/helpers.rs
-assertion_line: 54
 expression: buf
 ---
 === versions.tf ===
@@ -16,13 +15,23 @@ terraform {
       source  = "hashicorp/time"
       version = ">= 0.9"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = ">= 3.6"
+    }
   }
 }
 
 === variables.tf ===
-variable "stack_name" {
+variable "resource_prefix" {
   type        = string
-  description = "Stable physical-name prefix for resources created by this setup."
+  description = "Optional stable physical resource prefix. Leave empty to generate one."
+  default     = ""
+
+  validation {
+    condition     = var.resource_prefix == "" || can(regex("^[a-z][a-z0-9-]{1,38}[a-z0-9]$", var.resource_prefix))
+    error_message = "resource_prefix must be 3-40 characters: lowercase letters, numbers, and hyphens; start with a letter; end with a letter or number."
+  }
 }
 
 variable "name" {
@@ -108,9 +117,14 @@ provider "google" {
   region  = var.gcp_region
 }
 
+=== resource_prefix.tf ===
+resource "random_id" "resource_prefix" {
+  byte_length = 4
+}
+
 === locals.tf ===
 locals {
-  resource_prefix     = var.stack_name
+  resource_prefix     = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
   deployment_platform = "gcp"
   deployment_target   = "gcp"
   deployment_region   = var.gcp_region
@@ -290,7 +304,7 @@ resource "google_service_account" "execution_sa" {
 
 resource "google_project_iam_custom_role" "gcp_role_storage_data_read_part1" {
   project     = var.gcp_project
-  role_id     = format("role_%s_storage_data_read_part1", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18))
+  role_id     = format("role_%s_storage_data_read_part1_%s", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18), substr(sha1(format("%s_storage_data_read_part1", replace(lower(local.resource_prefix), "-", "_"))), 0, 8))
   title       = "full-gcp: Storage data read (part 1)"
   description = "Allows reading data from storage buckets and containers. Stack: full-gcp. Deployment prefix: ${local.resource_prefix}. Permission set: storage/data-read."
   stage       = "GA"
@@ -307,7 +321,7 @@ resource "google_project_iam_custom_role" "gcp_role_storage_data_read_part1" {
 
 resource "google_project_iam_custom_role" "gcp_role_storage_data_read_part2" {
   project     = var.gcp_project
-  role_id     = format("role_%s_storage_data_read_part2", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18))
+  role_id     = format("role_%s_storage_data_read_part2_%s", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18), substr(sha1(format("%s_storage_data_read_part2", replace(lower(local.resource_prefix), "-", "_"))), 0, 8))
   title       = "full-gcp: Storage data read (part 2)"
   description = "Allows reading data from storage buckets and containers. Stack: full-gcp. Deployment prefix: ${local.resource_prefix}. Permission set: storage/data-read."
   stage       = "GA"
@@ -330,7 +344,7 @@ resource "google_project_iam_member" "gcp_role_storage_data_read_part2_execution
 
 resource "google_project_iam_custom_role" "gcp_role_queue_data_write" {
   project     = var.gcp_project
-  role_id     = format("role_%s_queue_data_write", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18))
+  role_id     = format("role_%s_queue_data_write_%s", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18), substr(sha1(format("%s_queue_data_write", replace(lower(local.resource_prefix), "-", "_"))), 0, 8))
   title       = "full-gcp: Queue data write"
   description = "Allows sending messages to queues and acknowledging received messages. Stack: full-gcp. Deployment prefix: ${local.resource_prefix}. Permission set: queue/data-write."
   stage       = "GA"
@@ -361,7 +375,7 @@ resource "google_service_account" "management" {
 
 resource "google_project_iam_custom_role" "gcp_role_worker_management_part1" {
   project     = var.gcp_project
-  role_id     = format("role_%s_worker_management_part1", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18))
+  role_id     = format("role_%s_worker_management_part1_%s", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18), substr(sha1(format("%s_worker_management_part1", replace(lower(local.resource_prefix), "-", "_"))), 0, 8))
   title       = "full-gcp: Worker management (part 1)"
   description = "Allows managing function configuration, versions, aliases, and monitoring. Stack: full-gcp. Deployment prefix: ${local.resource_prefix}. Permission set: worker/management."
   stage       = "GA"
@@ -414,7 +428,7 @@ resource "google_project_iam_custom_role" "gcp_role_worker_management_part1" {
 
 resource "google_project_iam_custom_role" "gcp_role_worker_management_part2" {
   project     = var.gcp_project
-  role_id     = format("role_%s_worker_management_part2", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18))
+  role_id     = format("role_%s_worker_management_part2_%s", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18), substr(sha1(format("%s_worker_management_part2", replace(lower(local.resource_prefix), "-", "_"))), 0, 8))
   title       = "full-gcp: Worker management (part 2)"
   description = "Allows managing function configuration, versions, aliases, and monitoring. Stack: full-gcp. Deployment prefix: ${local.resource_prefix}. Permission set: worker/management."
   stage       = "GA"
@@ -458,7 +472,7 @@ resource "google_project_iam_member" "gcp_role_worker_management_part2_managemen
 
 resource "google_project_iam_custom_role" "gcp_role_storage_heartbeat" {
   project     = var.gcp_project
-  role_id     = format("role_%s_storage_heartbeat", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18))
+  role_id     = format("role_%s_storage_heartbeat_%s", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18), substr(sha1(format("%s_storage_heartbeat", replace(lower(local.resource_prefix), "-", "_"))), 0, 8))
   title       = "full-gcp: Storage heartbeat"
   description = "Allows readonly monitoring and health checks for storage resources. Stack: full-gcp. Deployment prefix: ${local.resource_prefix}. Permission set: storage/heartbeat."
   stage       = "GA"
@@ -483,7 +497,7 @@ resource "google_project_iam_member" "gcp_role_storage_heartbeat_management_bind
 
 resource "google_project_iam_custom_role" "gcp_role_queue_heartbeat" {
   project     = var.gcp_project
-  role_id     = format("role_%s_queue_heartbeat", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18))
+  role_id     = format("role_%s_queue_heartbeat_%s", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18), substr(sha1(format("%s_queue_heartbeat", replace(lower(local.resource_prefix), "-", "_"))), 0, 8))
   title       = "full-gcp: Queue heartbeat"
   description = "Allows readonly monitoring and health checks for queue resources. Stack: full-gcp. Deployment prefix: ${local.resource_prefix}. Permission set: queue/heartbeat."
   stage       = "GA"
@@ -583,7 +597,7 @@ resource "google_firestore_database" "metadata" {
 === secrets.tf ===
 resource "google_project_iam_custom_role" "gcp_role_vault_data_write_part1" {
   project     = var.gcp_project
-  role_id     = format("role_%s_vault_data_write_part1", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18))
+  role_id     = format("role_%s_vault_data_write_part1_%s", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18), substr(sha1(format("%s_vault_data_write_part1", replace(lower(local.resource_prefix), "-", "_"))), 0, 8))
   title       = "full-gcp: Vault data write (part 1)"
   description = "Allows creating, updating, and deleting individual secrets within vault. Stack: full-gcp. Deployment prefix: ${local.resource_prefix}. Permission set: vault/data-write."
   stage       = "GA"
@@ -594,7 +608,7 @@ resource "google_project_iam_custom_role" "gcp_role_vault_data_write_part1" {
 
 resource "google_project_iam_custom_role" "gcp_role_vault_data_write_part2" {
   project     = var.gcp_project
-  role_id     = format("role_%s_vault_data_write_part2", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18))
+  role_id     = format("role_%s_vault_data_write_part2_%s", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18), substr(sha1(format("%s_vault_data_write_part2", replace(lower(local.resource_prefix), "-", "_"))), 0, 8))
   title       = "full-gcp: Vault data write (part 2)"
   description = "Allows creating, updating, and deleting individual secrets within vault. Stack: full-gcp. Deployment prefix: ${local.resource_prefix}. Permission set: vault/data-write."
   stage       = "GA"
@@ -746,9 +760,9 @@ output "deployment_target" {
   description = "Terraform module target."
 }
 
-output "deployment_stack_prefix" {
+output "deployment_resource_prefix" {
   value       = local.resource_prefix
-  description = "Physical stack prefix."
+  description = "Physical resource prefix."
 }
 
 output "deployment_platform" {
@@ -802,7 +816,7 @@ Run:
 ```bash
 terraform init -backend=false
 terraform validate
-terraform apply -var='stack_name=full-gcp' -var='name=full-gcp' -var='token=...'
+terraform apply -var='name=full-gcp' -var='token=...'
 ```
 
 This module exposes `deployment_management_config` / `deployment_stack_settings` / `deployment_resources` for external registration flows.

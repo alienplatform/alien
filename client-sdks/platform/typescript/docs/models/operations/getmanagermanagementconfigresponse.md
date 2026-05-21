@@ -17,19 +17,19 @@ const value: operations.GetManagerManagementConfigAws = {
 };
 ```
 
-### `operations.Gcp`
+### `operations.GetManagerManagementConfigGcp`
 
 ```typescript
-const value: operations.Gcp = {
+const value: operations.GetManagerManagementConfigGcp = {
   serviceAccountEmail: "<value>",
   platform: "gcp",
 };
 ```
 
-### `operations.Azure`
+### `operations.GetManagerManagementConfigAzure`
 
 ```typescript
-const value: operations.Azure = {
+const value: operations.GetManagerManagementConfigAzure = {
   managingTenantId: "<id>",
   platform: "azure",
 };

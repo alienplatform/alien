@@ -2813,13 +2813,12 @@ impl GcpWorkerController {
                 .map(|fqdn| format!("https://{fqdn}"))
                 .unwrap_or_else(|| url.clone());
 
-            let load_balancer_endpoint =
-                self.global_address_ip
-                    .as_ref()
-                    .map(|global_address_ip| alien_core::LoadBalancerEndpoint {
+            let load_balancer_endpoint = self.global_address_ip.as_ref().map(|global_address_ip| {
+                alien_core::LoadBalancerEndpoint {
                     dns_name: global_address_ip.clone(),
                     hosted_zone_id: None,
-                });
+                }
+            });
 
             ResourceOutputs::new(WorkerOutputs {
                 // Use the service name if available, otherwise fall back to a placeholder

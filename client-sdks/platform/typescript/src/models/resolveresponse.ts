@@ -4,8 +4,113 @@
 
 import * as z from "zod/v4";
 import { safeParse } from "../lib/schemas.js";
+import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
+
+/**
+ * Represents the target cloud platform.
+ */
+export const ResolveResponsePlatformEnum = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type ResolveResponsePlatformEnum = ClosedEnum<
+  typeof ResolveResponsePlatformEnum
+>;
+
+export type ResolveResponseManagementConfigKubernetes = {
+  platform: "kubernetes";
+};
+
+/**
+ * Azure management configuration extracted from stack settings
+ */
+export type ResolveResponseManagementConfigAzure = {
+  /**
+   * Management service principal object ID for local development fallback
+   */
+  managementPrincipalId?: string | null | undefined;
+  /**
+   * The managing Azure Tenant ID for cross-tenant access
+   */
+  managingTenantId: string;
+  /**
+   * OIDC issuer URL for federated identity credential creation
+   */
+  oidcIssuer?: string | null | undefined;
+  /**
+   * OIDC subject claim for federated identity credential creation
+   */
+  oidcSubject?: string | null | undefined;
+  platform: "azure";
+};
+
+/**
+ * GCP management configuration extracted from stack settings
+ */
+export type ResolveResponseManagementConfigGcp = {
+  /**
+   * Service account email for management roles
+   */
+  serviceAccountEmail: string;
+  platform: "gcp";
+};
+
+/**
+ * AWS management configuration extracted from stack settings
+ */
+export type ResolveResponseManagementConfigAws = {
+  /**
+   * The managing AWS IAM role ARN that can assume cross-account roles
+   */
+  managingRoleArn: string;
+  platform: "aws";
+};
+
+/**
+ * Management configuration for different cloud platforms.
+ *
+ * @remarks
+ *
+ * Platform-derived configuration for cross-account/cross-tenant access.
+ * This is NOT user-specified - it's derived from the Manager's ServiceAccount.
+ */
+export type ResolveResponseManagementConfigUnion =
+  | ResolveResponseManagementConfigAws
+  | ResolveResponseManagementConfigGcp
+  | ResolveResponseManagementConfigAzure
+  | ResolveResponseManagementConfigKubernetes;
+
+/**
+ * Target install context derived from platform-managed manager metadata. Present for cloud push platforms.
+ */
+export type ResolveResponseInstallContext = {
+  /**
+   * Represents the target cloud platform.
+   */
+  platform: ResolveResponsePlatformEnum;
+  /**
+   * Management configuration for different cloud platforms.
+   *
+   * @remarks
+   *
+   * Platform-derived configuration for cross-account/cross-tenant access.
+   * This is NOT user-specified - it's derived from the Manager's ServiceAccount.
+   */
+  managementConfig:
+    | ResolveResponseManagementConfigAws
+    | ResolveResponseManagementConfigGcp
+    | ResolveResponseManagementConfigAzure
+    | ResolveResponseManagementConfigKubernetes;
+};
 
 export type ResolveResponse = {
   /**
@@ -20,7 +125,149 @@ export type ResolveResponse = {
    * Resolved project ID
    */
   projectId: string;
+  /**
+   * Target install context derived from platform-managed manager metadata. Present for cloud push platforms.
+   */
+  installContext?: ResolveResponseInstallContext | undefined;
 };
+
+/** @internal */
+export const ResolveResponsePlatformEnum$inboundSchema: z.ZodEnum<
+  typeof ResolveResponsePlatformEnum
+> = z.enum(ResolveResponsePlatformEnum);
+
+/** @internal */
+export const ResolveResponseManagementConfigKubernetes$inboundSchema: z.ZodType<
+  ResolveResponseManagementConfigKubernetes,
+  unknown
+> = z.object({
+  platform: z.literal("kubernetes"),
+});
+
+export function resolveResponseManagementConfigKubernetesFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  ResolveResponseManagementConfigKubernetes,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ResolveResponseManagementConfigKubernetes$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'ResolveResponseManagementConfigKubernetes' from JSON`,
+  );
+}
+
+/** @internal */
+export const ResolveResponseManagementConfigAzure$inboundSchema: z.ZodType<
+  ResolveResponseManagementConfigAzure,
+  unknown
+> = z.object({
+  managementPrincipalId: z.nullable(z.string()).optional(),
+  managingTenantId: z.string(),
+  oidcIssuer: z.nullable(z.string()).optional(),
+  oidcSubject: z.nullable(z.string()).optional(),
+  platform: z.literal("azure"),
+});
+
+export function resolveResponseManagementConfigAzureFromJSON(
+  jsonString: string,
+): SafeParseResult<ResolveResponseManagementConfigAzure, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ResolveResponseManagementConfigAzure$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ResolveResponseManagementConfigAzure' from JSON`,
+  );
+}
+
+/** @internal */
+export const ResolveResponseManagementConfigGcp$inboundSchema: z.ZodType<
+  ResolveResponseManagementConfigGcp,
+  unknown
+> = z.object({
+  serviceAccountEmail: z.string(),
+  platform: z.literal("gcp"),
+});
+
+export function resolveResponseManagementConfigGcpFromJSON(
+  jsonString: string,
+): SafeParseResult<ResolveResponseManagementConfigGcp, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ResolveResponseManagementConfigGcp$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ResolveResponseManagementConfigGcp' from JSON`,
+  );
+}
+
+/** @internal */
+export const ResolveResponseManagementConfigAws$inboundSchema: z.ZodType<
+  ResolveResponseManagementConfigAws,
+  unknown
+> = z.object({
+  managingRoleArn: z.string(),
+  platform: z.literal("aws"),
+});
+
+export function resolveResponseManagementConfigAwsFromJSON(
+  jsonString: string,
+): SafeParseResult<ResolveResponseManagementConfigAws, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ResolveResponseManagementConfigAws$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ResolveResponseManagementConfigAws' from JSON`,
+  );
+}
+
+/** @internal */
+export const ResolveResponseManagementConfigUnion$inboundSchema: z.ZodType<
+  ResolveResponseManagementConfigUnion,
+  unknown
+> = z.union([
+  z.lazy(() => ResolveResponseManagementConfigAws$inboundSchema),
+  z.lazy(() => ResolveResponseManagementConfigGcp$inboundSchema),
+  z.lazy(() => ResolveResponseManagementConfigAzure$inboundSchema),
+  z.lazy(() => ResolveResponseManagementConfigKubernetes$inboundSchema),
+]);
+
+export function resolveResponseManagementConfigUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<ResolveResponseManagementConfigUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ResolveResponseManagementConfigUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ResolveResponseManagementConfigUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const ResolveResponseInstallContext$inboundSchema: z.ZodType<
+  ResolveResponseInstallContext,
+  unknown
+> = z.object({
+  platform: ResolveResponsePlatformEnum$inboundSchema,
+  managementConfig: z.union([
+    z.lazy(() => ResolveResponseManagementConfigAws$inboundSchema),
+    z.lazy(() => ResolveResponseManagementConfigGcp$inboundSchema),
+    z.lazy(() => ResolveResponseManagementConfigAzure$inboundSchema),
+    z.lazy(() => ResolveResponseManagementConfigKubernetes$inboundSchema),
+  ]),
+});
+
+export function resolveResponseInstallContextFromJSON(
+  jsonString: string,
+): SafeParseResult<ResolveResponseInstallContext, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ResolveResponseInstallContext$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ResolveResponseInstallContext' from JSON`,
+  );
+}
 
 /** @internal */
 export const ResolveResponse$inboundSchema: z.ZodType<
@@ -30,6 +277,8 @@ export const ResolveResponse$inboundSchema: z.ZodType<
   managerId: z.string(),
   managerUrl: z.string(),
   projectId: z.string(),
+  installContext: z.lazy(() => ResolveResponseInstallContext$inboundSchema)
+    .optional(),
 });
 
 export function resolveResponseFromJSON(

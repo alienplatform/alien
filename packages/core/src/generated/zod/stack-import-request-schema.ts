@@ -24,6 +24,7 @@ get "platform"(){
               },
 "region": z.string().describe("Region or location reported by the setup artifact."),
 "releaseId": z.string().describe("Optional release id that produced the setup package. When\nomitted, the manager imports against the latest release.").nullish(),
+"resourcePrefix": z.string().describe("Stable physical-name prefix used by the setup package for generated\nresources. Runtime controllers use it when addressing imported\nresources."),
 get "resources"(){
                 return z.array(ImportedResourceSchema.describe("One resolved resource import payload.")).describe("Imported resources with typed per-resource payloads.")
               },
@@ -33,7 +34,6 @@ get "resources"(){
 get "sourceKind"(){
                 return z.union([ImportSourceKindSchema, z.null()]).optional()
               },
-"stackPrefix": z.string().describe("Stable physical-name prefix used by the setup package for\ngenerated resources. This is the Alien stack prefix, not merely a UI\nname: runtime controllers use it when addressing imported resources."),
 get "stackSettings"(){
                 return StackSettingsSchema.describe("User-customizable deployment settings specified at deploy time.\n\nThese settings are provided by the customer via CloudFormation parameters,\nTerraform attributes, CLI flags, or Helm values. They customize how the\ndeployment runs and what capabilities are enabled.\n\n**Key distinction**: StackSettings is user-customizable, while ManagementConfig\nis platform-derived (from the Manager's ServiceAccount).")
               }

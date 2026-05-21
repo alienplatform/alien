@@ -5,7 +5,7 @@
 //! 2. Discover manager URL (resolve_manager for OAuth, DG endpoint for DG tokens)
 //! 3. Run step loop via manager (acquire → step → reconcile → release)
 
-use crate::commands::deployments::MonitoringMode;
+use crate::commands::deployments::{parse_resource_prefix, MonitoringMode};
 use crate::commands::{
     create_initial_deployment, fetch_dev_deployment_live_state,
     wait_for_dev_deployment_ready_with_progress,
@@ -56,6 +56,11 @@ pub struct DeployArgs {
     /// Target platform for the deployment (aws, gcp, azure)
     #[arg(long)]
     pub platform: String,
+
+    /// Physical-name prefix for generated cloud resources.
+    /// Omit to let the manager generate one.
+    #[arg(long, value_parser = parse_resource_prefix)]
+    pub resource_prefix: Option<String>,
 
     /// Allow experimental platforms (kubernetes, local)
     #[arg(long)]
@@ -305,6 +310,16 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                                 },
                             )?,
                             stack_settings: Some(stack_settings),
+                            resource_prefix: args
+                                .resource_prefix
+                                .clone()
+                                .map(TryInto::try_into)
+                                .transpose()
+                                .into_alien_error()
+                                .context(ErrorData::ValidationError {
+                                    field: "resource_prefix".to_string(),
+                                    message: "Invalid resource prefix".to_string(),
+                                })?,
                             manager_id: None,
                             pinned_release_id: None,
                             environment_variables: None,

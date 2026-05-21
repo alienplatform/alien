@@ -667,7 +667,7 @@ async function run() {
       managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
       source: {
         deploymentName: "<value>",
-        stackPrefix: "<value>",
+        resourcePrefix: "<value>",
         releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
         platform: "gcp",
         region: "<value>",
@@ -722,7 +722,7 @@ async function run() {
       managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
       source: {
         deploymentName: "<value>",
-        stackPrefix: "<value>",
+        resourcePrefix: "<value>",
         releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
         platform: "gcp",
         region: "<value>",
@@ -804,7 +804,7 @@ async function run() {
       responseUrl: "https://candid-formamide.info",
       source: {
         deploymentName: "<value>",
-        stackPrefix: "<value>",
+        resourcePrefix: "<value>",
         releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
         platform: "kubernetes",
         region: "<value>",
@@ -862,7 +862,7 @@ async function run() {
       responseUrl: "https://candid-formamide.info",
       source: {
         deploymentName: "<value>",
-        stackPrefix: "<value>",
+        resourcePrefix: "<value>",
         releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
         platform: "kubernetes",
         region: "<value>",

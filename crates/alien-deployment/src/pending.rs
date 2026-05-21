@@ -20,8 +20,12 @@ pub async fn handle_pending(
 ) -> Result<DeploymentStepResult> {
     info!("Handling Pending status");
 
-    // Step 1: Initialize stack state
-    let stack_state = StackState::new(current.platform);
+    // Step 1: Initialize stack state. Direct platform deployments may carry a
+    // user-selected resource prefix in their initial stack state.
+    let stack_state = current
+        .stack_state
+        .clone()
+        .unwrap_or_else(|| StackState::new(current.platform));
     info!(
         "Initialized stack state for platform {:?}",
         current.platform

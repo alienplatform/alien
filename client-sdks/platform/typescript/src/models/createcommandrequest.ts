@@ -31,6 +31,10 @@ export type CreateCommandRequest = {
    */
   name: string;
   /**
+   * Command parameters for public invocation
+   */
+  params?: any | null | undefined;
+  /**
    * Initial state (PENDING_UPLOAD if params require upload, PENDING if inline)
    */
   initialState?: InitialState | undefined;
@@ -52,6 +56,7 @@ export const InitialState$outboundSchema: z.ZodEnum<typeof InitialState> = z
 export type CreateCommandRequest$Outbound = {
   deploymentId: string;
   name: string;
+  params?: any | null | undefined;
   initialState?: string | undefined;
   deadline?: string | null | undefined;
   requestSizeBytes?: number | undefined;
@@ -64,6 +69,7 @@ export const CreateCommandRequest$outboundSchema: z.ZodType<
 > = z.object({
   deploymentId: z.string(),
   name: z.string(),
+  params: z.nullable(z.any()).optional(),
   initialState: InitialState$outboundSchema.optional(),
   deadline: z.nullable(z.date().transform(v => v.toISOString())).optional(),
   requestSizeBytes: z.number().optional(),

@@ -146,7 +146,7 @@ struct CfnOutputs {
     source_kind: Option<String>,
     platform: Option<String>,
     region: Option<String>,
-    stack_prefix: Option<String>,
+    resource_prefix: Option<String>,
     setup_target: Option<String>,
     setup_fingerprint: Option<String>,
     setup_fingerprint_version: Option<u32>,
@@ -203,7 +203,7 @@ async fn fetch_cloudformation_outputs(region: &str, stack_name: &str) -> Result<
             match key {
                 "DeploymentSourceKind" => outputs.source_kind = Some(value.to_string()),
                 "DeploymentResourcePrefix" => {
-                    outputs.stack_prefix = Some(value.to_string());
+                    outputs.resource_prefix = Some(value.to_string());
                 }
                 "DeploymentPlatform" => outputs.platform = Some(value.to_string()),
                 "DeploymentRegion" => outputs.region = Some(value.to_string()),
@@ -286,7 +286,7 @@ fn build_import_request(
             message: "DeploymentRegion output not found in stack".to_string(),
         })
     })?;
-    let stack_prefix = outputs.stack_prefix.clone().ok_or_else(|| {
+    let resource_prefix = outputs.resource_prefix.clone().ok_or_else(|| {
         AlienError::new(ErrorData::ConfigurationError {
             message: format!("DeploymentResourcePrefix output not found in stack '{stack_name}'"),
         })
@@ -356,7 +356,7 @@ fn build_import_request(
     Ok(StackImportRequest {
         deployment_group_token: token.to_string(),
         deployment_name: deployment_name.to_string(),
-        stack_prefix,
+        resource_prefix,
         source_kind: Some(source_kind),
         release_id: None,
         platform,
