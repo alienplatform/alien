@@ -50,6 +50,7 @@ impl ResourceImporter for GcpWorkerImporter {
             url_map_name: None,
             target_https_proxy_name: None,
             global_address_name: None,
+            global_address_ip: None,
             forwarding_rule_name: None,
             project_id: Some(data.project_id),
             region: Some(data.region),

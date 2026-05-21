@@ -209,8 +209,8 @@ async fn poll_and_dispatch(
 
 /// Find the commands push target from stack state.
 ///
-/// Iterates all resources looking for a Function with `commands_push_target` set.
-/// Only functions with `commands_enabled: true` get a push target during provisioning.
+/// Iterates all resources looking for a Worker with `commands_push_target` set.
+/// Only workers with `commands_enabled: true` get a push target during provisioning.
 fn find_push_target(stack_state: &alien_core::StackState) -> Option<String> {
     for (_resource_id, resource_state) in &stack_state.resources {
         if let Some(ref outputs) = resource_state.outputs {

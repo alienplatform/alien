@@ -9,12 +9,12 @@
 
 pub mod artifact_registry;
 pub mod build;
-pub mod function;
 pub mod kv;
 pub mod queue;
 pub mod service_account;
 pub mod storage;
 pub mod vault;
+pub mod worker;
 
 use crate::registry::HelmRegistry;
 use alien_core::{
@@ -34,7 +34,7 @@ pub fn register_built_ins(registry: &mut HelmRegistry) {
         artifact_registry::ArtifactRegistryEmitter,
     );
     registry.register(Build::RESOURCE_TYPE, p, build::BuildEmitter);
-    registry.register(Worker::RESOURCE_TYPE, p, function::FunctionEmitter);
+    registry.register(Worker::RESOURCE_TYPE, p, worker::WorkerEmitter);
     registry.register(
         ServiceAccount::RESOURCE_TYPE,
         p,

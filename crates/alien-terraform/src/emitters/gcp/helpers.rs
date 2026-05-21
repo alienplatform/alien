@@ -83,6 +83,22 @@ pub fn service_account_id_template(suffix: &str) -> Expression {
     ))
 }
 
+/// Sanitized full Artifact Registry repository ID before length capping.
+pub fn artifact_registry_repository_full_id_template(suffix: &str) -> Expression {
+    expr::raw(format!(
+        "replace(lower(format(\"%s-{suffix}\", local.resource_prefix)), \"_\", \"-\")"
+    ))
+}
+
+/// GCP Artifact Registry repository IDs are capped at 63 chars. Keep
+/// the readable deployment-prefixed name when it fits; otherwise keep a
+/// deterministic prefix and append an 8-char hash of the full name.
+pub fn artifact_registry_repository_id_from_local(local_name: &str) -> Expression {
+    expr::raw(format!(
+        "length(local.{local_name}) <= 63 ? local.{local_name} : format(\"%s-%s\", trim(substr(local.{local_name}, 0, 54), \"-\"), substr(sha1(local.{local_name}), 0, 8))"
+    ))
+}
+
 /// Standard labels block for GCP. GCP labels must be lowercase kebab-case for
 /// both keys and values, max 63 chars.
 pub fn labels(ctx: &EmitContext<'_>, alien_resource_type: &'static str) -> Expression {
@@ -344,7 +360,7 @@ fn custom_role_suffix(custom_role: &GcpCustomRole) -> String {
         .to_string()
 }
 
-fn push_iam_member(
+pub(crate) fn push_iam_member(
     fragment: &mut TfFragment,
     binding_label: &str,
     role: Expression,

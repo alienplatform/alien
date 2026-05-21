@@ -13,7 +13,7 @@ use tracing::info;
 use alien_manager::{
     stores::sqlite::{SqliteDatabase, SqliteTokenStore},
     traits::{CreateTokenParams, TokenStore, TokenType},
-    AlienManagerBuilder, ManagerConfig, ManagerTomlConfig,
+    AlienManagerBuilder, ManagerTomlConfig,
 };
 
 use crate::config::TestConfig;
@@ -56,7 +56,7 @@ pub struct TestManager {
     /// Handle to the background task running the server.
     server_handle: Option<tokio::task::JoinHandle<()>>,
     /// Ngrok tunnel handle. Kept alive so the tunnel stays open for the
-    /// duration of the test. Cloud-deployed functions poll this URL for commands.
+    /// duration of the test. Cloud-deployed workers poll this URL for commands.
     _ngrok_tunnel: Option<crate::ngrok::NgrokTunnel>,
 }
 
@@ -96,7 +96,7 @@ impl TestManager {
         let port = find_free_port();
         let url = format!("http://127.0.0.1:{}", port);
 
-        // 2b. Start ngrok tunnel if configured. Cloud-deployed functions
+        // 2b. Start ngrok tunnel if configured. Cloud-deployed workers
         //     (Lambda, Cloud Run, Container Apps) need to reach the local
         //     manager for commands polling. The ngrok URL becomes the
         //     manager's `base_url` so `ALIEN_COMMANDS_POLLING_URL` points
@@ -489,17 +489,14 @@ impl TestManager {
         config: Option<&TestConfig>,
         platforms: &[Platform],
     ) -> alien_manager::standalone_config::CommandsSection {
-        use alien_core::bindings::{
-            BindingValue, BlobStorageBinding, GcsStorageBinding, KvBinding, S3StorageBinding,
-            StorageBinding,
-        };
+        use alien_core::bindings::{BindingValue, KvBinding, S3StorageBinding, StorageBinding};
 
         let config = match config {
             Some(c) => c,
             None => return Default::default(),
         };
 
-        // Cloud platforms need cloud-backed storage for commands. Functions submit
+        // Cloud platforms need cloud-backed storage for commands. Workers submit
         // responses via the manager's API (through ngrok), and the manager reads/writes
         // to its own commands storage. We use DynamoDB + S3 for ALL cloud platforms
         // because the manager always runs with AWS credentials in the test setup.

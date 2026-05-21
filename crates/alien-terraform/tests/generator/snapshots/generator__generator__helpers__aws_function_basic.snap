@@ -1,5 +1,6 @@
 ---
 source: crates/alien-terraform/tests/generator/helpers.rs
+assertion_line: 54
 expression: buf
 ---
 === versions.tf ===
@@ -11,14 +12,15 @@ terraform {
       source  = "hashicorp/aws"
       version = ">= 5.0"
     }
-    random = {
-      source  = "hashicorp/random"
-      version = ">= 3.6"
-    }
   }
 }
 
 === variables.tf ===
+variable "stack_name" {
+  type        = string
+  description = "Stable physical-name prefix for resources created by this setup."
+}
+
 variable "name" {
   type        = string
   description = "Human-readable deployment name shown in the deployment portal."
@@ -30,26 +32,15 @@ variable "token" {
   sensitive   = true
 }
 
-variable "resource_prefix" {
-  type        = string
-  description = "Optional stable cloud resource prefix. Leave empty to generate one and store it in Terraform state."
-  default     = ""
-
-  validation {
-    condition     = var.resource_prefix == "" || can(regex("^[a-z][a-z0-9-]{1,30}[a-z0-9]$", var.resource_prefix))
-    error_message = "resource_prefix must be empty or 3-32 characters using lowercase letters, numbers, and hyphens, starting with a letter and ending with a letter or number."
-  }
-}
-
 variable "manager_url" {
   type        = string
   description = "Optional manager endpoint used by pull-style runtimes."
   default     = ""
 }
 
-variable "deployment_settings_json" {
+variable "stack_settings_json" {
   type        = string
-  description = "Optional JSON-encoded deployment settings override supplied by deployment installers."
+  description = "Optional JSON-encoded StackSettings override supplied by deployment installers."
   default     = "{}"
   sensitive   = true
 }
@@ -81,14 +72,9 @@ data "aws_caller_identity" "current" {}
 
 data "aws_region" "current" {}
 
-=== resource_prefix.tf ===
-resource "random_id" "resource_prefix" {
-  byte_length = 8
-}
-
 === locals.tf ===
 locals {
-  resource_prefix     = var.resource_prefix != "" ? var.resource_prefix : "a${random_id.resource_prefix.hex}"
+  resource_prefix     = var.stack_name
   deployment_platform = "aws"
   deployment_target   = "aws"
   deployment_region   = data.aws_region.current.region
@@ -96,7 +82,7 @@ locals {
     platform        = "aws"
     managingRoleArn = var.managing_role_arn
   }
-  deployment_settings  = jsondecode(var.deployment_settings_json)
+  deployment_settings  = jsondecode(var.stack_settings_json)
   deployment_resources = []
 }
 
@@ -112,7 +98,7 @@ resource "terraform_data" "deployment_import" {
     setup_fingerprint_version = 0
     manager_url               = var.manager_url
     management_config         = local.deployment_management_config
-    deployment_settings       = local.deployment_settings
+    stack_settings            = local.deployment_settings
     resources                 = local.deployment_resources
   }
 }
@@ -123,9 +109,9 @@ output "deployment_target" {
   description = "Terraform module target."
 }
 
-output "deployment_resource_prefix" {
+output "deployment_stack_prefix" {
   value       = local.resource_prefix
-  description = "Stable physical resource prefix."
+  description = "Physical stack prefix."
 }
 
 output "deployment_platform" {
@@ -158,9 +144,9 @@ output "deployment_management_config" {
   description = "Manager import ManagementConfig JSON."
 }
 
-output "deployment_settings_json" {
+output "deployment_stack_settings" {
   value       = jsonencode(local.deployment_settings)
-  description = "Manager import deployment settings JSON."
+  description = "Manager import StackSettings JSON."
   sensitive   = true
 }
 
@@ -179,7 +165,7 @@ Run:
 ```bash
 terraform init -backend=false
 terraform validate
-terraform apply -var='name=acme-fn' -var='token=...'
+terraform apply -var='stack_name=acme-fn' -var='name=acme-fn' -var='token=...'
 ```
 
-This module exposes `deployment_management_config` / `deployment_settings_json` / `deployment_resources` for external registration flows.
+This module exposes `deployment_management_config` / `deployment_stack_settings` / `deployment_resources` for external registration flows.

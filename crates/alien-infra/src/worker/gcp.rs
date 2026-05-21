@@ -30,10 +30,100 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
+use sha2::{Digest, Sha256};
+
+const CLOUD_RUN_SERVICE_NAME_MAX_LEN: usize = 49;
+const GCP_RESOURCE_NAME_MAX_LEN: usize = 63;
+const GCP_RESOURCE_NAME_HASH_LEN: usize = 8;
 
 /// Generates the Cloud Run service name from stack prefix and worker ID
 fn get_cloudrun_service_name(prefix: &str, name: &str) -> String {
-    format!("{}-{}", prefix, name)
+    let raw = format!("{}-{}", prefix, name);
+    let sanitized = sanitize_gcp_resource_name(&raw);
+
+    if sanitized == raw && sanitized.len() <= CLOUD_RUN_SERVICE_NAME_MAX_LEN {
+        return sanitized;
+    }
+
+    stable_hashed_gcp_resource_name(&raw, &sanitized, CLOUD_RUN_SERVICE_NAME_MAX_LEN)
+}
+
+fn get_gcp_worker_resource_name(prefix: &str, worker_id: &str, suffix: &str) -> String {
+    let raw = format!("{prefix}-{worker_id}-{suffix}");
+    let sanitized = sanitize_gcp_resource_name(&raw);
+
+    if sanitized == raw && sanitized.len() <= GCP_RESOURCE_NAME_MAX_LEN {
+        return sanitized;
+    }
+
+    stable_hashed_gcp_resource_name(&raw, &sanitized, GCP_RESOURCE_NAME_MAX_LEN)
+}
+
+fn sanitize_gcp_resource_name(raw: &str) -> String {
+    let mut name = String::with_capacity(raw.len());
+    let mut last_was_dash = false;
+
+    for ch in raw.chars() {
+        let normalized = match ch {
+            'a'..='z' | '0'..='9' => Some(ch),
+            'A'..='Z' => Some(ch.to_ascii_lowercase()),
+            '-' => Some('-'),
+            _ => Some('-'),
+        };
+
+        if let Some(ch) = normalized {
+            if ch == '-' {
+                if !last_was_dash && !name.is_empty() {
+                    name.push(ch);
+                }
+                last_was_dash = true;
+            } else {
+                name.push(ch);
+                last_was_dash = false;
+            }
+        }
+    }
+
+    while name.ends_with('-') {
+        name.pop();
+    }
+
+    if !name
+        .chars()
+        .next()
+        .map(|ch| ch.is_ascii_lowercase())
+        .unwrap_or(false)
+    {
+        name.insert_str(0, "a-");
+    }
+
+    name
+}
+
+fn stable_hashed_gcp_resource_name(raw: &str, sanitized: &str, max_len: usize) -> String {
+    let hash = stable_name_hash(raw);
+    let max_stem_len = max_len - GCP_RESOURCE_NAME_HASH_LEN - "-".len();
+    let mut stem = sanitized
+        .chars()
+        .take(max_stem_len)
+        .collect::<String>()
+        .trim_end_matches('-')
+        .to_string();
+
+    if stem.is_empty() {
+        stem = "a".to_string();
+    }
+
+    format!("{stem}-{hash}")
+}
+
+fn stable_name_hash(raw: &str) -> String {
+    let digest = Sha256::digest(raw.as_bytes());
+    digest
+        .iter()
+        .take(GCP_RESOURCE_NAME_HASH_LEN / 2)
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 /// Domain information for a worker.
@@ -94,6 +184,8 @@ pub struct GcpWorkerController {
     pub(crate) target_https_proxy_name: Option<String>,
     /// The global static IP address name
     pub(crate) global_address_name: Option<String>,
+    /// The global static IP address value
+    pub(crate) global_address_ip: Option<String>,
     /// The forwarding rule name
     pub(crate) forwarding_rule_name: Option<String>,
 
@@ -464,7 +556,8 @@ impl GcpWorkerController {
         let gcp_config = ctx.get_gcp_config()?;
         let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
 
-        let ssl_cert_name = format!("{}-{}-cert", ctx.resource_prefix, worker_config.id);
+        let ssl_cert_name =
+            get_gcp_worker_resource_name(ctx.resource_prefix, &worker_config.id, "cert");
 
         let ssl_certificate = SslCertificate::builder()
             .name(ssl_cert_name.clone())
@@ -530,7 +623,7 @@ impl GcpWorkerController {
             })
         })?;
 
-        let neg_name = format!("{}-{}-neg", ctx.resource_prefix, worker_config.id);
+        let neg_name = get_gcp_worker_resource_name(ctx.resource_prefix, &worker_config.id, "neg");
 
         // Create serverless NEG pointing to Cloud Run service
         // According to GCP API: https://docs.cloud.google.com/compute/docs/reference/rest/v1/networkEndpointGroups
@@ -595,7 +688,8 @@ impl GcpWorkerController {
             })
         })?;
 
-        let backend_service_name = format!("{}-{}-backend", ctx.resource_prefix, worker_config.id);
+        let backend_service_name =
+            get_gcp_worker_resource_name(ctx.resource_prefix, &worker_config.id, "backend");
 
         let neg_url = format!(
             "projects/{}/regions/{}/networkEndpointGroups/{}",
@@ -663,7 +757,8 @@ impl GcpWorkerController {
             })
         })?;
 
-        let url_map_name = format!("{}-{}-urlmap", ctx.resource_prefix, worker_config.id);
+        let url_map_name =
+            get_gcp_worker_resource_name(ctx.resource_prefix, &worker_config.id, "urlmap");
 
         let backend_service_url = format!(
             "projects/{}/global/backendServices/{}",
@@ -733,7 +828,8 @@ impl GcpWorkerController {
             })
         })?;
 
-        let proxy_name = format!("{}-{}-https-proxy", ctx.resource_prefix, worker_config.id);
+        let proxy_name =
+            get_gcp_worker_resource_name(ctx.resource_prefix, &worker_config.id, "https-proxy");
 
         let url_map_url = format!(
             "projects/{}/global/urlMaps/{}",
@@ -795,7 +891,8 @@ impl GcpWorkerController {
         let gcp_config = ctx.get_gcp_config()?;
         let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
 
-        let address_name = format!("{}-{}-ip", ctx.resource_prefix, worker_config.id);
+        let address_name =
+            get_gcp_worker_resource_name(ctx.resource_prefix, &worker_config.id, "ip");
 
         // Create global static IP address
         let address = Address::builder()
@@ -846,37 +943,26 @@ impl GcpWorkerController {
         let gcp_config = ctx.get_gcp_config()?;
         let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
 
-        let proxy_name = self.target_https_proxy_name.as_ref().ok_or_else(|| {
+        let proxy_name = self.target_https_proxy_name.clone().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceControllerConfigError {
                 resource_id: worker_config.id.clone(),
                 message: "Target HTTPS proxy name not set".to_string(),
             })
         })?;
 
-        let address_name = self.global_address_name.as_ref().ok_or_else(|| {
+        let address_name = self.global_address_name.clone().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceControllerConfigError {
                 resource_id: worker_config.id.clone(),
                 message: "Global address name not set".to_string(),
             })
         })?;
 
-        // Get the IP address
-        let address = compute_client
-            .get_global_address(address_name.clone())
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to get global address".to_string(),
-                resource_id: Some(worker_config.id.clone()),
-            })?;
+        let ip_address = self
+            .ensure_global_address_ip(ctx, &worker_config.id, &address_name)
+            .await?;
 
-        let ip_address = address.address.ok_or_else(|| {
-            AlienError::new(ErrorData::CloudPlatformError {
-                message: "Global address has no IP".to_string(),
-                resource_id: Some(worker_config.id.clone()),
-            })
-        })?;
-
-        let forwarding_rule_name = format!("{}-{}-https", ctx.resource_prefix, worker_config.id);
+        let forwarding_rule_name =
+            get_gcp_worker_resource_name(ctx.resource_prefix, &worker_config.id, "https");
 
         let proxy_url = format!(
             "projects/{}/global/targetHttpsProxies/{}",
@@ -926,6 +1012,11 @@ impl GcpWorkerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let worker_config = ctx.desired_resource_config::<Worker>()?;
+        if let Some(address_name) = self.global_address_name.clone() {
+            self.ensure_global_address_ip(ctx, &worker_config.id, &address_name)
+                .await?;
+        }
+
         let metadata = ctx
             .deployment_config
             .domain_metadata
@@ -1528,7 +1619,11 @@ impl GcpWorkerController {
             .take(16)
             .collect::<String>()
             .to_lowercase();
-        let ssl_cert_name = format!("{}-{}-cert-{}", ctx.resource_prefix, cfg.id, issued_suffix);
+        let ssl_cert_name = get_gcp_worker_resource_name(
+            ctx.resource_prefix,
+            &cfg.id,
+            &format!("cert-{issued_suffix}"),
+        );
         let gcp_config = ctx.get_gcp_config()?;
         let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
 
@@ -2333,6 +2428,7 @@ impl GcpWorkerController {
             }
 
             self.global_address_name = None;
+            self.global_address_ip = None;
         }
 
         // Clear domain-related state
@@ -2711,19 +2807,19 @@ impl GcpWorkerController {
 
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         self.url.as_ref().map(|url| {
-            // If we have a custom domain with HTTPS load balancer, use the FQDN
-            // Otherwise, use the Cloud Run URL
-            let load_balancer_endpoint = if let Some(fqdn) = &self.fqdn {
-                Some(alien_core::LoadBalancerEndpoint {
-                    dns_name: fqdn.clone(),
-                    hosted_zone_id: None, // GCP doesn't use hosted zones like AWS
-                })
-            } else {
-                Some(alien_core::LoadBalancerEndpoint {
-                    dns_name: url.clone(),
+            let public_url = self
+                .fqdn
+                .as_ref()
+                .map(|fqdn| format!("https://{fqdn}"))
+                .unwrap_or_else(|| url.clone());
+
+            let load_balancer_endpoint =
+                self.global_address_ip
+                    .as_ref()
+                    .map(|global_address_ip| alien_core::LoadBalancerEndpoint {
+                    dns_name: global_address_ip.clone(),
                     hosted_zone_id: None,
-                })
-            };
+                });
 
             ResourceOutputs::new(WorkerOutputs {
                 // Use the service name if available, otherwise fall back to a placeholder
@@ -2731,7 +2827,7 @@ impl GcpWorkerController {
                     .service_name
                     .clone()
                     .unwrap_or_else(|| "unknown".to_string()),
-                url: Some(url.clone()),
+                url: Some(public_url),
                 identifier: self.service_name.clone(),
                 load_balancer_endpoint,
                 commands_push_target: self.commands_topic_name.clone(),
@@ -2949,6 +3045,37 @@ impl GcpWorkerController {
             }
             Err(_) => Ok(false),
         }
+    }
+
+    async fn ensure_global_address_ip(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+        address_name: &str,
+    ) -> Result<String> {
+        if let Some(ip_address) = &self.global_address_ip {
+            return Ok(ip_address.clone());
+        }
+
+        let gcp_config = ctx.get_gcp_config()?;
+        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let address = compute_client
+            .get_global_address(address_name.to_string())
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to get global address".to_string(),
+                resource_id: Some(resource_id.to_string()),
+            })?;
+
+        let ip_address = address.address.ok_or_else(|| {
+            AlienError::new(ErrorData::CloudPlatformError {
+                message: "Global address has no IP".to_string(),
+                resource_id: Some(resource_id.to_string()),
+            })
+        })?;
+
+        self.global_address_ip = Some(ip_address.clone());
+        Ok(ip_address)
     }
 
     async fn build_cloud_run_service(
@@ -4036,6 +4163,7 @@ impl GcpWorkerController {
             url_map_name: None,
             target_https_proxy_name: None,
             global_address_name: None,
+            global_address_ip: None,
             forwarding_rule_name: None,
             project_id: Some("test-project".to_string()),
             region: Some("us-central1".to_string()),
@@ -4070,6 +4198,10 @@ mod tests {
     use httpmock::{prelude::*, Mock};
     use rstest::rstest;
 
+    use super::{
+        get_cloudrun_service_name, get_gcp_worker_resource_name, CLOUD_RUN_SERVICE_NAME_MAX_LEN,
+        GCP_RESOURCE_NAME_MAX_LEN,
+    };
     use crate::core::MockPlatformServiceProvider;
     use crate::core::{
         controller_test::{SingleControllerExecutor, SingleControllerExecutorBuilder},
@@ -4078,6 +4210,72 @@ mod tests {
     use crate::worker::readiness_probe::test_utils::create_readiness_probe_mock;
     use crate::worker::{fixtures::*, GcpWorkerController};
     use crate::GcpWorkerState;
+
+    #[test]
+    fn cloudrun_service_name_preserves_valid_short_names() {
+        assert_eq!(
+            get_cloudrun_service_name("test-stack", "worker"),
+            "test-stack-worker"
+        );
+    }
+
+    #[test]
+    fn cloudrun_service_name_caps_long_e2e_names_with_stable_hash() {
+        let service_name = get_cloudrun_service_name(
+            "e2e-gcp-terraform-worker-mpfa2f19-15fb",
+            "test-alien-ts-function",
+        );
+
+        assert!(service_name.len() <= CLOUD_RUN_SERVICE_NAME_MAX_LEN);
+        assert!(service_name.starts_with("e"));
+        assert!(!service_name.ends_with('-'));
+        assert!(service_name
+            .chars()
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-'));
+        assert_eq!(
+            service_name,
+            get_cloudrun_service_name(
+                "e2e-gcp-terraform-worker-mpfa2f19-15fb",
+                "test-alien-ts-function",
+            )
+        );
+    }
+
+    #[test]
+    fn cloudrun_service_name_sanitizes_invalid_input() {
+        let service_name = get_cloudrun_service_name("123_Test.Stack", "Worker_Name_");
+
+        assert!(service_name.len() <= CLOUD_RUN_SERVICE_NAME_MAX_LEN);
+        assert!(service_name.starts_with('a'));
+        assert!(!service_name.ends_with('-'));
+        assert!(service_name
+            .chars()
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-'));
+    }
+
+    #[test]
+    fn gcp_worker_resource_name_caps_long_certificate_names_with_stable_hash() {
+        let cert_name = get_gcp_worker_resource_name(
+            "e2e-gcp-terraform-worker-mpfgzubr-tux",
+            "test-alien-ts-function",
+            "cert",
+        );
+
+        assert!(cert_name.len() <= GCP_RESOURCE_NAME_MAX_LEN);
+        assert!(cert_name.starts_with('e'));
+        assert!(!cert_name.ends_with('-'));
+        assert!(cert_name
+            .chars()
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-'));
+        assert_eq!(
+            cert_name,
+            get_gcp_worker_resource_name(
+                "e2e-gcp-terraform-worker-mpfgzubr-tux",
+                "test-alien-ts-function",
+                "cert",
+            )
+        );
+    }
 
     fn create_test_domain_metadata(resource_id: &str) -> DomainMetadata {
         let mut resources = HashMap::new();
@@ -4588,6 +4786,8 @@ mod tests {
     #[case::complete_test(function_complete_test())]
     #[tokio::test]
     async fn test_create_and_delete_flow_succeeds(#[case] worker: Worker) {
+        let worker_id = worker.id.clone();
+        let worker_ingress = worker.ingress.clone();
         let function_name = format!("test-{}", worker.id);
         let (mock_provider, _mock_server, domain_metadata) =
             setup_mocks_for_function(&worker, &function_name, true);
@@ -4614,6 +4814,17 @@ mod tests {
         let function_outputs = outputs.downcast_ref::<WorkerOutputs>().unwrap();
         assert!(function_outputs.identifier.is_some());
         assert!(function_outputs.worker_name.starts_with("test-"));
+        if worker_ingress == Ingress::Public {
+            let expected_url = format!("https://{}.test.example.com", worker_id);
+            assert_eq!(function_outputs.url.as_deref(), Some(expected_url.as_str()));
+            assert_eq!(
+                function_outputs
+                    .load_balancer_endpoint
+                    .as_ref()
+                    .map(|endpoint| endpoint.dns_name.as_str()),
+                Some("203.0.113.1")
+            );
+        }
 
         // Delete the worker
         executor.delete().unwrap();
@@ -5111,6 +5322,7 @@ mod tests {
             url_map_name: None,
             target_https_proxy_name: None,
             global_address_name: None,
+            global_address_ip: None,
             forwarding_rule_name: None,
             commands_topic_name: None,
             commands_subscription_name: None,

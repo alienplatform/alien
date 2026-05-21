@@ -93,7 +93,7 @@ impl AsyncTestContext for GrpcProviderTestContext {
         let temp_data_dir = tempfile::tempdir()
             .expect("Failed to create temp dir for ALIEN_DATA_DIR (gRPC server)");
 
-        // Mock function binding for gRPC - this will simulate a local HTTP endpoint
+        // Mock worker binding for gRPC - this will simulate a local HTTP endpoint
         let server_binding =
             WorkerBinding::lambda("test-worker".to_string(), "us-east-1".to_string());
 
@@ -1083,13 +1083,13 @@ impl AsyncTestContext for AzureProviderTestContext {
                 client_secret,
             } => (client_id.clone(), client_secret.clone()),
             alien_azure_clients::AzureCredentials::AccessToken { .. } => {
-                panic!("AccessToken credentials not supported in function binding tests")
+                panic!("AccessToken credentials not supported in worker binding tests")
             }
             alien_azure_clients::AzureCredentials::WorkloadIdentity { client_id, .. } => {
-                panic!("WorkloadIdentity credentials not fully supported in function binding tests, client_id: {}", client_id)
+                panic!("WorkloadIdentity credentials not fully supported in worker binding tests, client_id: {}", client_id)
             }
             alien_azure_clients::AzureCredentials::ManagedIdentity { client_id, .. } => {
-                panic!("ManagedIdentity credentials not supported in function binding tests, client_id: {}", client_id)
+                panic!("ManagedIdentity credentials not supported in worker binding tests, client_id: {}", client_id)
             }
         };
 

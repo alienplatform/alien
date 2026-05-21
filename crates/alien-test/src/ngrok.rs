@@ -1,6 +1,6 @@
 //! Ngrok tunnel for E2E tests.
 //!
-//! Cloud-deployed functions (Cloud Run, Lambda, Container Apps) need to reach
+//! Cloud-deployed workers (Cloud Run, Lambda, Container Apps) need to reach
 //! the local manager's commands endpoint over the internet. This module starts
 //! an ngrok tunnel that forwards traffic from a public URL to the local manager.
 //!

@@ -2,7 +2,7 @@
 //!
 //! Splits the rendered module into one `.tf` file per Alien stack resource,
 //! plus the supporting `versions.tf` / `variables.tf` / `providers.tf` /
-//! `resource_prefix.tf` / `locals.tf` / `import.tf` / `outputs.tf`. Mapping between `alien.ts`
+//! `locals.tf` / `import.tf` / `outputs.tf`. Mapping between `alien.ts`
 //! resource ids and `.tf` files is 1:1 \u2014 reviewers find "what does the
 //! `data` storage actually become" by opening `data.tf`.
 //!
@@ -37,7 +37,7 @@ use std::collections::HashSet;
 
 /// Generated Terraform module \u2014 one `.tf` file per Alien stack resource
 /// plus the supporting framework (`versions.tf` / `variables.tf` /
-/// `providers.tf` / `resource_prefix.tf` / `locals.tf` / `import.tf` / `outputs.tf` / `README.md`).
+/// `providers.tf` / `locals.tf` / `import.tf` / `outputs.tf` / `README.md`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModuleFiles {
     /// Path -> contents, in render order. Iterating the module preserves
@@ -246,15 +246,12 @@ pub fn generate_terraform_module(
             target,
             &network_vars,
             &options.stack_settings,
+            options.registration.as_ref(),
         )?)?,
     );
     files.insert(
         "providers.tf".to_string(),
         render_body(providers_body(target))?,
-    );
-    files.insert(
-        "resource_prefix.tf".to_string(),
-        render_body(resource_prefix_body())?,
     );
     files.insert(
         "locals.tf".to_string(),
@@ -574,10 +571,6 @@ fn versions_body(
             ),
         ));
     }
-    provider_attrs.push(attr(
-        "random",
-        provider_decl_attr("hashicorp/random", ">= 3.6"),
-    ));
     required.push(nested(Block {
         identifier: Identifier::sanitized("required_providers"),
         labels: vec![],
@@ -604,28 +597,51 @@ fn variables_body(
     target: TerraformTarget,
     network_vars: &NetworkVariables,
     stack_settings: &StackSettings,
+    registration: Option<&TerraformRegistration>,
 ) -> Result<Body> {
     let mut blocks: Vec<Structure> = Vec::new();
-    let deployment_settings_json = serde_json::to_string(stack_settings)
+    let stack_settings_default = serde_json::to_string(stack_settings)
         .into_alien_error()
         .map_err(|err| {
             AlienError::new(ErrorData::JsonSerializationFailed {
                 reason: format!("failed to serialize StackSettings: {err}"),
             })
         })?;
+
     blocks.push(nested(variable_block(
-        "name",
-        "Human-readable deployment name shown in the deployment portal.",
+        "stack_name",
+        "Stable physical-name prefix for resources created by this setup.",
         None,
         false,
     )));
-    blocks.push(nested(variable_block(
-        "token",
-        "Deployment token from the deployment page. This is the same token used by the deploy CLI --token flag.",
-        None,
-        true,
-    )));
-    blocks.push(nested(resource_prefix_variable_block()));
+
+    if registration.is_some() {
+        blocks.push(nested(variable_block(
+            "deployment_name",
+            "Deployment name used when registering the resolved stack import. Defaults to stack_name.",
+            Some(Expression::String(String::new())),
+            false,
+        )));
+        blocks.push(nested(variable_block(
+            "deployment_group_token",
+            "Deployment group token used when registering the resolved stack import.",
+            None,
+            true,
+        )));
+    } else {
+        blocks.push(nested(variable_block(
+            "name",
+            "Human-readable deployment name shown in the deployment portal.",
+            None,
+            false,
+        )));
+        blocks.push(nested(variable_block(
+            "token",
+            "Deployment token from the deployment page. This is the same token used by the deploy CLI --token flag.",
+            None,
+            true,
+        )));
+    }
     blocks.push(nested(variable_block(
         "manager_url",
         "Optional manager endpoint used by pull-style runtimes.",
@@ -633,9 +649,9 @@ fn variables_body(
         false,
     )));
     blocks.push(nested(variable_block(
-        "deployment_settings_json",
-        "Optional JSON-encoded deployment settings override supplied by deployment installers.",
-        Some(Expression::String(deployment_settings_json)),
+        "stack_settings_json",
+        "Optional JSON-encoded StackSettings override supplied by deployment installers.",
+        Some(Expression::String(stack_settings_default)),
         true,
     )));
 
@@ -720,6 +736,43 @@ fn variables_body(
             Some(Expression::String(String::new())),
             false,
         )));
+        if has_dynamic_gcp_network_settings(stack_settings.network.as_ref()) {
+            blocks.push(nested(variable_block(
+                "network_mode",
+                "Choose whether this setup creates a new network, uses an existing network, or uses the default network. Values: create-new, use-existing, use-default.",
+                Some(Expression::String("create-new".to_string())),
+                false,
+            )));
+            blocks.push(nested(variable_block(
+                "network_cidr",
+                "CIDR for a newly-created network. Empty uses 10.44.0.0/16.",
+                Some(Expression::String(String::new())),
+                false,
+            )));
+            blocks.push(nested(number_variable_block(
+                "availability_zones",
+                "Reserved for cross-cloud network-mode parity. GCP creates one regional subnet.",
+                Some(2),
+            )));
+            blocks.push(nested(variable_block(
+                "network_name",
+                "Existing VPC network name. Required when network is use-existing.",
+                Some(Expression::String(String::new())),
+                false,
+            )));
+            blocks.push(nested(variable_block(
+                "subnet_name",
+                "Existing subnet name. Required when network is use-existing.",
+                Some(Expression::String(String::new())),
+                false,
+            )));
+            blocks.push(nested(variable_block(
+                "network_region",
+                "Existing subnet region. Empty uses gcp_region.",
+                Some(Expression::String(String::new())),
+                false,
+            )));
+        }
     }
     if matches!(target.platform(), alien_core::Platform::Azure) {
         blocks.push(nested(variable_block(
@@ -860,41 +913,6 @@ fn variable_block(
     }
 }
 
-fn resource_prefix_variable_block() -> Block {
-    Block {
-        identifier: Identifier::sanitized("variable"),
-        labels: vec![BlockLabel::String("resource_prefix".to_string())],
-        body: Body::from(vec![
-            attr("type", expr::raw("string")),
-            attr(
-                "description",
-                Expression::String(
-                    "Optional stable cloud resource prefix. Leave empty to generate one and store it in Terraform state."
-                        .to_string(),
-                ),
-            ),
-            attr("default", Expression::String("".to_string())),
-            Structure::Block(block(
-                "validation",
-                [
-                    attr(
-                        "condition",
-                        expr::raw(
-                            "var.resource_prefix == \"\" || can(regex(\"^[a-z][a-z0-9-]{1,30}[a-z0-9]$\", var.resource_prefix))",
-                        ),
-                    ),
-                    attr(
-                        "error_message",
-                        Expression::String(
-                            "resource_prefix must be empty or 3-32 characters using lowercase letters, numbers, and hyphens, starting with a letter and ending with a letter or number.".to_string(),
-                        ),
-                    ),
-                ],
-            )),
-        ]),
-    }
-}
-
 fn providers_body(target: TerraformTarget) -> Body {
     let mut structures: Vec<Structure> = Vec::new();
     match target.platform() {
@@ -949,17 +967,6 @@ fn providers_body(target: TerraformTarget) -> Body {
     Body::from(structures)
 }
 
-fn resource_prefix_body() -> Body {
-    Body::from(vec![Structure::Block(resource_block(
-        "random_id",
-        "resource_prefix",
-        vec![attr(
-            "byte_length",
-            Expression::Number(hcl::Number::from(8_i64)),
-        )],
-    ))])
-}
-
 fn locals_body(
     target: TerraformTarget,
     stack_settings: &StackSettings,
@@ -968,10 +975,7 @@ fn locals_body(
 ) -> Result<Body> {
     let mut body: Vec<Structure> = Vec::new();
 
-    body.push(attr(
-        "resource_prefix",
-        expr::raw("var.resource_prefix != \"\" ? var.resource_prefix : \"a${random_id.resource_prefix.hex}\""),
-    ));
+    body.push(attr("resource_prefix", expr::raw("var.stack_name")));
     body.push(attr(
         "deployment_platform",
         Expression::String(target.platform().as_str().to_string()),
@@ -1069,31 +1073,54 @@ fn stack_settings_expression(
     target: TerraformTarget,
     stack_settings: &StackSettings,
 ) -> Expression {
-    if !matches!(target.platform(), alien_core::Platform::Aws)
-        || !has_dynamic_aws_network_settings(stack_settings.network.as_ref())
-    {
-        return expr::raw("jsondecode(var.deployment_settings_json)");
-    }
-
-    expr::raw(
-        r#"merge(jsondecode(var.deployment_settings_json), {
+    match target.platform() {
+        alien_core::Platform::Aws
+            if has_dynamic_aws_network_settings(stack_settings.network.as_ref()) =>
+        {
+            return expr::raw(format!(
+                r#"merge(jsondecode(var.stack_settings_json), {{
   network = jsondecode(
-    var.network_mode == "create-new" ? jsonencode({
+    var.network_mode == "create-new" ? jsonencode({{
       type              = "create"
       cidr              = var.vpc_cidr == "" ? null : var.vpc_cidr
       availabilityZones = var.availability_zones
-    }) : var.network_mode == "use-existing" ? jsonencode({
+    }}) : var.network_mode == "use-existing" ? jsonencode({{
       type             = "byo-vpc-aws"
       vpcId            = var.vpc_id
       publicSubnetIds  = var.public_subnet_ids
       privateSubnetIds = var.private_subnet_ids
       securityGroupIds = var.security_group_ids
-    }) : jsonencode({
+    }}) : jsonencode({{
       type = "use-default"
-    })
+    }})
   )
-})"#,
-    )
+}})"#
+            ));
+        }
+        alien_core::Platform::Gcp
+            if has_dynamic_gcp_network_settings(stack_settings.network.as_ref()) =>
+        {
+            return expr::raw(format!(
+                r#"merge(jsondecode(var.stack_settings_json), {{
+  network = jsondecode(
+    var.network_mode == "create-new" ? jsonencode({{
+      type              = "create"
+      cidr              = var.network_cidr == "" ? null : var.network_cidr
+      availabilityZones = var.availability_zones
+    }}) : var.network_mode == "use-existing" ? jsonencode({{
+      type        = "byo-vpc-gcp"
+      networkName = var.network_name
+      subnetName  = var.subnet_name
+      region      = var.network_region == "" ? var.gcp_region : var.network_region
+    }}) : jsonencode({{
+      type = "use-default"
+    }})
+  )
+}})"#
+            ));
+        }
+        _ => return expr::raw("jsondecode(var.stack_settings_json)"),
+    }
 }
 
 fn has_dynamic_aws_network_settings(network: Option<&NetworkSettings>) -> bool {
@@ -1107,6 +1134,10 @@ fn has_dynamic_aws_network_settings(network: Option<&NetworkSettings>) -> bool {
     )
 }
 
+fn has_dynamic_gcp_network_settings(network: Option<&NetworkSettings>) -> bool {
+    matches!(network, Some(NetworkSettings::Create { .. }))
+}
+
 fn import_body(registration: Option<&TerraformRegistration>, depends_on: &[Expression]) -> Body {
     let depends_on_attr = (!depends_on.is_empty()).then(|| {
         attr(
@@ -1116,9 +1147,15 @@ fn import_body(registration: Option<&TerraformRegistration>, depends_on: &[Expre
     });
     if let Some(registration) = registration {
         let mut body = vec![
-            attr("token", expr::raw("var.token")),
-            attr("name", expr::raw("var.name")),
-            attr("resource_prefix", expr::raw("local.resource_prefix")),
+            attr(
+                "deployment_group_token",
+                expr::raw("var.deployment_group_token"),
+            ),
+            attr(
+                "name",
+                expr::raw("var.deployment_name == \"\" ? var.stack_name : var.deployment_name"),
+            ),
+            attr("stack_prefix", expr::raw("var.stack_name")),
             attr(
                 "setup_target",
                 Expression::String(registration.setup_target.clone()),
@@ -1140,10 +1177,7 @@ fn import_body(registration: Option<&TerraformRegistration>, depends_on: &[Expre
                 "management_config",
                 expr::raw("local.deployment_management_config"),
             ),
-            attr(
-                "deployment_settings",
-                expr::raw("local.deployment_settings"),
-            ),
+            attr("stack_settings", expr::raw("local.deployment_settings")),
             attr("resources", expr::raw("local.deployment_resources")),
         ];
         if let Some(depends_on_attr) = depends_on_attr {
@@ -1192,10 +1226,7 @@ fn import_body(registration: Option<&TerraformRegistration>, depends_on: &[Expre
                 "management_config",
                 expr::raw("local.deployment_management_config"),
             ),
-            (
-                "deployment_settings",
-                expr::raw("local.deployment_settings"),
-            ),
+            ("stack_settings", expr::raw("local.deployment_settings")),
             ("resources", expr::raw("local.deployment_resources")),
         ]),
     )];
@@ -1218,9 +1249,9 @@ fn outputs_body(target: TerraformTarget, registration: Option<&TerraformRegistra
             "Terraform module target.",
         ),
         (
-            "deployment_resource_prefix",
+            "deployment_stack_prefix",
             expr::raw("local.resource_prefix"),
-            "Stable physical resource prefix.",
+            "Physical stack prefix.",
         ),
         (
             "deployment_platform",
@@ -1265,9 +1296,9 @@ fn outputs_body(target: TerraformTarget, registration: Option<&TerraformRegistra
             "Manager import ManagementConfig JSON.",
         ),
         (
-            "deployment_settings_json",
+            "deployment_stack_settings",
             expr::raw("jsonencode(local.deployment_settings)"),
-            "Manager import deployment settings JSON.",
+            "Manager import StackSettings JSON.",
         ),
         (
             "deployment_resources",
@@ -1300,7 +1331,7 @@ fn outputs_body(target: TerraformTarget, registration: Option<&TerraformRegistra
                 attr("value", value),
                 attr("description", Expression::String(description.to_string())),
             ];
-            if name == "deployment_settings_json" || name == "helm_values" {
+            if name == "deployment_stack_settings" || name == "helm_values" {
                 body.push(attr("sensitive", Expression::Bool(true)));
             }
 
@@ -1320,26 +1351,38 @@ fn readme_md(
     target: TerraformTarget,
     registration: Option<&TerraformRegistration>,
 ) -> String {
+    let apply_args = if registration.is_some() {
+        format!(
+            "-var='stack_name={}' -var='deployment_group_token=...'",
+            stack.id()
+        )
+    } else {
+        format!(
+            "-var='stack_name={}' -var='name={}' -var='token=...'",
+            stack.id(),
+            stack.id()
+        )
+    };
     let registration_note = registration
         .map(|registration| {
             format!(
-                "Self-registering setup packages create `{}`; other renderers can use `deployment_management_config` / `deployment_settings_json` / `deployment_resources` with their own registration flow.\n",
+                "Self-registering setup packages create `{}`; other renderers can use `deployment_management_config` / `deployment_stack_settings` / `deployment_resources` with their own registration flow.\n",
                 registration.provider_resource_type()
             )
         })
         .unwrap_or_else(|| {
-            "This module exposes `deployment_management_config` / `deployment_settings_json` / `deployment_resources` for external registration flows.\n".to_string()
+            "This module exposes `deployment_management_config` / `deployment_stack_settings` / `deployment_resources` for external registration flows.\n".to_string()
         });
 
     format!(
         "# Terraform module - {}\n\n\
 Target: `{}`.\n\n\
 Run:\n\n\
-```bash\nterraform init -backend=false\nterraform validate\nterraform apply -var='name={}' -var='token=...'\n```\n\n\
+```bash\nterraform init -backend=false\nterraform validate\nterraform apply {}\n```\n\n\
 {}",
         stack.id(),
         target.name(),
-        stack.id(),
+        apply_args,
         registration_note
     )
 }

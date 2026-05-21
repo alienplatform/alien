@@ -584,7 +584,7 @@ pub struct WorkerInvokeRequest {
     pub timeout: Option<Duration>,
 }
 
-/// Response from function invocation
+/// Response from worker invocation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
@@ -597,10 +597,10 @@ pub struct WorkerInvokeResponse {
     pub body: Vec<u8>,
 }
 
-/// A trait for function bindings that enable direct worker-to-worker calls
+/// A trait for worker bindings that enable direct worker-to-worker calls.
 #[async_trait]
 pub trait Worker: Binding {
-    /// Invoke a function with HTTP request data.
+    /// Invoke a worker with HTTP request data.
     ///
     /// This enables direct, low-latency worker-to-worker communication within
     /// the same cloud environment, bypassing Commands for internal calls.
@@ -612,9 +612,9 @@ pub trait Worker: Binding {
     /// - Kubernetes: HTTP call to internal service
     async fn invoke(&self, request: WorkerInvokeRequest) -> Result<WorkerInvokeResponse>;
 
-    /// Get the public URL of the function, if available.
+    /// Get the public URL of the worker, if available.
     ///
-    /// Returns the function's public URL if it exists and is accessible.
+    /// Returns the worker's public URL if it exists and is accessible.
     /// This is useful for exposing public endpoints or getting URLs for
     /// external integration.
     ///

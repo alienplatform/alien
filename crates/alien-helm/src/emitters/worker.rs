@@ -1,15 +1,15 @@
-//! Function emitter — Functions become K8s Deployments + (when
+//! Worker emitter — Workers become K8s Deployments + (when
 //! `Ingress::Public`) a Service. The chart-level Deployment template
 //! handles the actual K8s-native shape; this emitter contributes nothing
-//! to `infrastructure.<id>` because Functions ARE the workload.
+//! to `infrastructure.<id>` because Workers ARE the workload.
 
 use crate::emitter::{HelmEmitter, HelmFragment};
 use alien_core::{import::EmitContext, Result};
 
 #[derive(Debug, Default)]
-pub struct FunctionEmitter;
+pub struct WorkerEmitter;
 
-impl HelmEmitter for FunctionEmitter {
+impl HelmEmitter for WorkerEmitter {
     fn emit(&self, _ctx: &EmitContext<'_>) -> Result<HelmFragment> {
         Ok(HelmFragment::empty())
     }

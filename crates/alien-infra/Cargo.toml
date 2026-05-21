@@ -55,6 +55,7 @@ reqwest = { workspace = true, features = ["json", "rustls-tls-webpki-roots"] }
 futures = { workspace = true }
 futures-util = { workspace = true }
 heck = { workspace = true }
+sha2 = { workspace = true }
 serde_yaml = { workspace = true }
 uuid = { workspace = true, features = ["v4", "v5", "serde"] }
 k8s-openapi = { version = "0.25.0", features = ["v1_33"] }

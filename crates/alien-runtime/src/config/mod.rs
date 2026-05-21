@@ -124,7 +124,7 @@ impl RuntimeConfig {
         let commands_polling = None;
 
         // When running from CLI (standalone binary), build LogExporter from environment
-        // Function controllers (AWS/GCP/Azure/Kubernetes) set OTEL_* env vars
+        // Worker controllers (AWS/GCP/Azure/Kubernetes) set OTEL_* env vars
         let log_exporter = if let Some(endpoint) = std::env::var("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT")
             .or_else(|_| std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT"))
             .ok()

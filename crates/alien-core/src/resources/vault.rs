@@ -12,7 +12,7 @@ use std::fmt::Debug;
 /// - GCP: Secret Manager with prefixed secret names
 /// - Azure: Key Vault resource
 ///
-/// The vault acts as a namespace for secrets and controls access permissions for functions and services.
+/// The vault acts as a namespace for secrets and controls access permissions for workers and services.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Builder)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

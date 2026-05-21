@@ -15,13 +15,19 @@ use crate::{
     block::{attr, data_block, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::gcp::helpers::{
-        downcast, emit_custom_role_and_bindings, permission_context, required_label,
-        service_account_id_template, service_account_member_for_label,
+        custom_role_label, downcast, emit_custom_roles, permission_context, push_iam_member,
+        required_label, service_account_id_template, service_account_member_for_label,
     },
     expr,
 };
 use alien_core::{
-    import::EmitContext, PermissionProfile, PermissionSetReference, RemoteStackManagement, Result,
+    import::EmitContext, ErrorData, PermissionProfile, PermissionSet, PermissionSetReference,
+    RemoteStackManagement, Result,
+};
+use alien_error::AlienError;
+use alien_permissions::{
+    generators::{GcpBindingTargetScope, GcpRuntimePermissionsGenerator},
+    BindingTarget, PermissionContext,
 };
 use hcl::expr::Expression;
 
@@ -67,7 +73,7 @@ impl TfEmitter for GcpRemoteStackManagementEmitter {
                 if let Some(permission_set) = permission_set_ref
                     .resolve(|name| alien_permissions::get_permission_set(name).cloned())
                 {
-                    emit_custom_role_and_bindings(
+                    emit_project_management_bindings(
                         &mut fragment,
                         label,
                         &member,
@@ -128,6 +134,59 @@ impl TfEmitter for GcpRemoteStackManagementEmitter {
             ("managementPermissionsApplied", Expression::Bool(true)),
         ]))
     }
+}
+
+fn emit_project_management_bindings(
+    fragment: &mut TfFragment,
+    label: &str,
+    member: &Expression,
+    permission_set: &PermissionSet,
+    context: &PermissionContext,
+) -> Result<()> {
+    if permission_set.platforms.gcp.is_none() {
+        return Ok(());
+    }
+
+    let custom_roles = emit_custom_roles(fragment, permission_set, context)?;
+    let generator = GcpRuntimePermissionsGenerator::new();
+    let bindings = generator
+        .generate_bindings(permission_set, BindingTarget::Stack, context)
+        .map_err(|err| {
+            AlienError::new(ErrorData::GenericError {
+                message: format!(
+                    "failed to generate GCP remote management IAM bindings for '{}': {}",
+                    permission_set.id, err
+                ),
+            })
+        })?;
+
+    for (idx, binding) in bindings.bindings.into_iter().enumerate() {
+        if binding.target != GcpBindingTargetScope::Project {
+            continue;
+        }
+
+        let custom_role = custom_roles
+            .iter()
+            .find(|role| role.name == binding.role)
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::GenericError {
+                    message: format!(
+                        "missing generated custom role for GCP remote management binding '{}'",
+                        binding.role
+                    ),
+                })
+            })?;
+        let role_label = custom_role_label(custom_role);
+        push_iam_member(
+            fragment,
+            &format!("{role_label}_{label}_binding_{idx}"),
+            expr::traversal(["google_project_iam_custom_role", &role_label, "name"]),
+            member,
+            &binding,
+        )?;
+    }
+
+    Ok(())
 }
 
 fn global_permission_refs(profile: &PermissionProfile) -> Vec<&PermissionSetReference> {

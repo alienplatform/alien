@@ -1376,7 +1376,7 @@
               "string",
               "null"
             ],
-            "description": "Public URL for the commands API. Cloud-deployed functions use this\nto poll for pending commands instead of the agent's local sync URL."
+            "description": "Public URL for the commands API. Cloud-deployed workers use this\nto poll for pending commands instead of the agent's local sync URL."
           },
           "target": {}
         }

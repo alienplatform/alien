@@ -9,6 +9,8 @@ use std::{collections::BTreeMap, path::Path, sync::Arc, time::Duration};
 use alien_azure_clients::{
     AzureServiceBusManagementClient, AzureTokenCache, ServiceBusManagementApi,
 };
+#[cfg(test)]
+use alien_core::Vault;
 use alien_core::{
     import::{
         AzureRemoteStackManagementImportData, AzureServiceBusNamespaceImportData,
@@ -18,8 +20,8 @@ use alien_core::{
     AwsManagementConfig, AzureClientConfig, AzureCredentials, AzureManagementConfig,
     DeploymentConfig, DeploymentModel as StackDeploymentModel, EnvironmentVariablesSnapshot,
     ExternalBinding, ExternalBindings, GcpClientConfig, GcpCredentials, GcpImpersonationConfig,
-    GcpManagementConfig, ManagementConfig, Platform, Stack, StackSettings, StackState, Vault,
-    Worker, WorkerCode,
+    GcpManagementConfig, ManagementConfig, Platform, Stack, StackSettings, StackState, Worker,
+    WorkerCode,
 };
 use alien_gcp_clients::{GcpClientConfigExt, ResourceManagerApi};
 use anyhow::Context;
@@ -1210,7 +1212,7 @@ async fn grant_terraform_shared_env_join_permission(
         &resources,
         "remote-stack-management",
     )?;
-    let resource_prefix = terraform_output_string(outputs, "deployment_resource_prefix")?;
+    let resource_prefix = terraform_output_string(outputs, "deployment_stack_prefix")?;
 
     let azure_config = AzureClientConfig {
         subscription_id: target.subscription_id.clone(),
@@ -1290,7 +1292,7 @@ fn terraform_import_request_from_outputs(
     let platform: Platform = terraform_output_string(output, "deployment_platform")?
         .parse()
         .map_err(|error| anyhow::anyhow!("Invalid deployment_platform output: {error}"))?;
-    let resource_prefix = terraform_output_string(output, "deployment_resource_prefix")?;
+    let resource_prefix = terraform_output_string(output, "deployment_stack_prefix")?;
     let region = terraform_output_string(output, "deployment_region")?;
     let management_config: ManagementConfig = serde_json::from_str(&terraform_output_string(
         output,
@@ -1298,7 +1300,7 @@ fn terraform_import_request_from_outputs(
     )?)?;
     let stack_settings: StackSettings = serde_json::from_str(&terraform_output_string(
         output,
-        "deployment_settings_json",
+        "deployment_stack_settings",
     )?)?;
     let resources: Vec<ImportedResource> =
         serde_json::from_str(&terraform_output_string(output, "deployment_resources")?)?;
@@ -1547,7 +1549,7 @@ async fn wait_for_azure_management_permissions(
     );
     let probe_queue_name = format!(
         "{}-iam-probe",
-        terraform_output_string(outputs, "deployment_resource_prefix")?
+        terraform_output_string(outputs, "deployment_stack_prefix")?
     );
 
     let timeout = Duration::from_secs(300);

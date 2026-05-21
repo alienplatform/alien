@@ -172,5 +172,5 @@ async fn push_azure_typescript(ctx: &mut AzurePushTypeScript) {
 }
 
 // Note: Local push tests are not included because the local platform only
-// supports pull (container) model through the manager pipeline. Push (function)
+// supports pull (container) model through the manager pipeline. Push (worker)
 // model on local requires `alien dev` which bypasses the deployment pipeline.

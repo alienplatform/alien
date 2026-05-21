@@ -53,7 +53,7 @@ fn test_subject() -> Subject {
     }
 }
 
-/// Build a typed Stack with a single Function resource pointing at the given image.
+/// Build a typed Stack with a single Worker resource pointing at the given image.
 fn test_stack(stack_id: &str, function_id: &str, image_uri: &str) -> Stack {
     let function = Worker::new(function_id.to_string())
         .code(WorkerCode::Image {

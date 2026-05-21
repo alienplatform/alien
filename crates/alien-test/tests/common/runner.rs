@@ -52,7 +52,7 @@ pub async fn check_all_bindings(
             Binding::Kv => bindings::check_kv(deployment).await?,
             Binding::Vault => bindings::check_vault(deployment).await?,
             Binding::Queue => bindings::check_queue(deployment).await?,
-            Binding::Function => bindings::check_function(deployment).await?,
+            Binding::Worker => bindings::check_worker(deployment).await?,
             Binding::Container => bindings::check_container(deployment).await?,
             Binding::WaitUntil => bindings::check_wait_until(deployment).await?,
             Binding::Build => bindings::check_build(deployment).await?,
