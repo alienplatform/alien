@@ -874,13 +874,13 @@ fn resource_prefix_variable_block() -> Block {
                 attr(
                     "condition",
                     expr::raw(
-                        "var.resource_prefix == \"\" || can(regex(\"^[a-z][a-z0-9-]{1,38}[a-z0-9]$\", var.resource_prefix))",
+                        "var.resource_prefix == \"\" || can(regex(\"^[a-z](?:[a-z0-9]|-(?=[a-z0-9])){1,38}[a-z0-9]$\", var.resource_prefix))",
                     ),
                 ),
                 attr(
                     "error_message",
                     Expression::String(
-                        "resource_prefix must be 3-40 characters: lowercase letters, numbers, and hyphens; start with a letter; end with a letter or number."
+                        "resource_prefix must be 3-40 characters: lowercase letters, numbers, and hyphens; start with a letter; end with a letter or number; and not contain consecutive hyphens."
                             .to_string(),
                     ),
                 ),

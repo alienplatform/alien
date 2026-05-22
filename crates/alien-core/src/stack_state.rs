@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 use crate::{ErrorData, Result};
 
-pub const RESOURCE_PREFIX_ERROR_MESSAGE: &str = "resourcePrefix must be 3-40 characters: lowercase letters, numbers, and hyphens; start with a letter; end with a letter or number";
+pub const RESOURCE_PREFIX_ERROR_MESSAGE: &str = "resourcePrefix must be 3-40 characters: lowercase letters, numbers, and hyphens; start with a letter; end with a letter or number; and not contain consecutive hyphens";
 
 pub fn is_valid_resource_prefix(value: &str) -> bool {
     if !(3..=40).contains(&value.len()) {
@@ -38,9 +38,18 @@ pub fn is_valid_resource_prefix(value: &str) -> bool {
         return false;
     }
 
-    value
-        .chars()
-        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    let mut previous_was_hyphen = false;
+    for c in value.chars() {
+        if !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
+            return false;
+        }
+        if c == '-' && previous_was_hyphen {
+            return false;
+        }
+        previous_was_hyphen = c == '-';
+    }
+
+    true
 }
 
 /// Represents the overall status of a stack based on its resource states.
@@ -367,6 +376,30 @@ fn is_zero(num: &u32) -> bool {
 mod tests {
     use super::*;
     use crate::{ResourceType, Storage, StorageOutputs, Worker, WorkerCode, WorkerOutputs};
+
+    #[test]
+    fn resource_prefix_validation_accepts_canonical_prefixes() {
+        for prefix in ["abc", "a-b", "acme-prod", "a1-b2-c3", "a1234567890"] {
+            assert!(is_valid_resource_prefix(prefix), "{prefix}");
+        }
+    }
+
+    #[test]
+    fn resource_prefix_validation_rejects_non_canonical_prefixes() {
+        for prefix in [
+            "",
+            "ab",
+            "a-",
+            "-ab",
+            "Aab",
+            "a_b",
+            "a--b",
+            "a.b",
+            "a1234567890123456789012345678901234567890",
+        ] {
+            assert!(!is_valid_resource_prefix(prefix), "{prefix}");
+        }
+    }
 
     #[test]
     fn test_get_resource_outputs_success() {

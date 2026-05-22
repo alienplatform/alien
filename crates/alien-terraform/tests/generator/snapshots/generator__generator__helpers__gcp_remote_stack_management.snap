@@ -29,8 +29,8 @@ variable "resource_prefix" {
   default     = ""
 
   validation {
-    condition     = var.resource_prefix == "" || can(regex("^[a-z][a-z0-9-]{1,38}[a-z0-9]$", var.resource_prefix))
-    error_message = "resource_prefix must be 3-40 characters: lowercase letters, numbers, and hyphens; start with a letter; end with a letter or number."
+    condition     = var.resource_prefix == "" || can(regex("^[a-z](?:[a-z0-9]|-(?=[a-z0-9])){1,38}[a-z0-9]$", var.resource_prefix))
+    error_message = "resource_prefix must be 3-40 characters: lowercase letters, numbers, and hyphens; start with a letter; end with a letter or number; and not contain consecutive hyphens."
   }
 }
 
