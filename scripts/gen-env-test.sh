@@ -27,16 +27,24 @@ jq_val_target_options_env() {
   local output_name="$1"
   local cloud="$2"
   jq_val "$output_name" | jq -r --arg cloud "$cloud" '
+    def env_value:
+      if type == "array" then
+        join(",")
+      elif type == "string" then
+        . as $value
+        | (try ($value | fromjson | tojson) catch $value)
+        | gsub("\r"; "\\r")
+        | gsub("\n"; "\\n")
+      else
+        tostring
+      end;
+
     to_entries[]
     | .key as $alias
     | ($alias | ascii_upcase | gsub("[^A-Z0-9]"; "_")) as $alias_env
     | .value
     | to_entries[]
-    | "ALIEN_TARGET_" + $cloud + "_" + $alias_env + "_" + .key + "=" + (
-        if (.value | type) == "array" then (.value | join(","))
-        else (.value | tostring)
-        end
-      )
+    | "ALIEN_TARGET_" + $cloud + "_" + $alias_env + "_" + .key + "=" + (.value | env_value)
   '
 }
 quote_env() {
