@@ -116,6 +116,7 @@ async fn prepare_stack_for_render(
         allow_frozen_changes: false,
         compute_backend: None,
         external_bindings: ExternalBindings::default(),
+        base_platform: None,
         public_urls: None,
         domain_metadata: None,
         monitoring: None,

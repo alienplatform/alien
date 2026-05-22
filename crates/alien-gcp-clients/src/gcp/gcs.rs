@@ -87,6 +87,9 @@ pub trait GcsApi: Send + Sync + Debug {
         notification: GcsNotification,
     ) -> Result<GcsNotification>;
 
+    /// List Pub/Sub notification configurations on a bucket.
+    async fn list_notifications(&self, bucket_name: String) -> Result<ListNotificationsResponse>;
+
     /// Delete a notification configuration from a bucket.
     async fn delete_notification(&self, bucket_name: String, notification_id: String)
         -> Result<()>;
@@ -449,6 +452,23 @@ impl GcsApi for GcsClient {
         .await
     }
 
+    async fn list_notifications(&self, bucket_name: String) -> Result<ListNotificationsResponse> {
+        let url = format!(
+            "{}/b/{}/notificationConfigs",
+            self.get_api_base_url(),
+            bucket_name
+        );
+        let builder = self.http.get(url);
+        auth_send_json(
+            builder,
+            &self.auth().await?,
+            "ListNotifications",
+            &bucket_name,
+            "GCS",
+        )
+        .await
+    }
+
     async fn delete_notification(
         &self,
         bucket_name: String,
@@ -685,6 +705,17 @@ pub struct ListObjectsResponse {
     #[builder(default)]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub items: Vec<Object>,
+}
+
+/// Response for listing GCS Pub/Sub notification configurations.
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct ListNotificationsResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[builder(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<GcsNotification>,
 }
 
 /// GCS Pub/Sub notification configuration.

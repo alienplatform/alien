@@ -28,19 +28,28 @@
     "gcp": [
       {
         "grant": {
+          "permissions": ["pubsub.topics.get", "pubsub.topics.update", "pubsub.topics.list"]
+        },
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": {
+            "scope": "projects/${projectName}/topics/${resourceName}"
+          }
+        }
+      },
+      {
+        "grant": {
           "permissions": [
-            "pubsub.topics.get",
-            "pubsub.topics.update",
-            "pubsub.topics.list",
             "pubsub.subscriptions.get",
             "pubsub.subscriptions.update",
             "pubsub.subscriptions.list"
           ]
         },
-        // Pub/Sub does not support IAM conditions for any operation. All conditions silently fail.
         "binding": {
           "stack": { "scope": "projects/${projectName}" },
-          "resource": { "scope": "projects/${projectName}" }
+          "resource": {
+            "scope": "projects/${projectName}/subscriptions/${resourceName}"
+          }
         }
       }
     ],

@@ -7,7 +7,8 @@
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
-    Kv, LifecycleRule, Queue, ResourceLifecycle, Stack, StackSettings, Storage, Vault,
+    Kv, LifecycleRule, PermissionProfile, PermissionsConfig, Queue, ResourceLifecycle,
+    ServiceAccount, Stack, StackSettings, Storage, Vault,
 };
 use alien_terraform::TerraformTarget;
 
@@ -80,6 +81,36 @@ fn gcp_queue_renders_pubsub_topic_and_subscription() {
     let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
     snapshot_module("gcp_queue_minimal", &module);
     assert_terraform_valid(&module, "gcp_queue_minimal");
+}
+
+#[test]
+fn gcp_queue_permission_profile_splits_topic_and_subscription_iam() {
+    let stack = Stack::new("acme-queue".to_string())
+        .permissions(PermissionsConfig::new().with_profile(
+            "execution",
+            PermissionProfile::new().resource("jobs", ["queue/data-write"]),
+        ))
+        .add(
+            Queue::new("jobs".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            ServiceAccount::new("execution-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
+    let rendered = module
+        .iter()
+        .map(|(_, contents)| contents)
+        .collect::<String>();
+
+    assert!(rendered.contains("google_pubsub_topic_iam_member"));
+    assert!(rendered.contains("roles/pubsub.publisher"));
+    assert!(rendered.contains("google_pubsub_subscription_iam_member"));
+    assert!(rendered.contains("roles/pubsub.subscriber"));
+    assert!(rendered.contains("roles/pubsub.viewer"));
+    assert_terraform_valid(&module, "gcp_queue_permission_profile");
 }
 
 #[test]

@@ -24,6 +24,33 @@ module "gcp" {
   target_region         = var.google_target_region
 }
 
+module "gcp_target_1" {
+  source = "./modules/gcp-target"
+
+  providers = {
+    google.management = google.management
+    google.target     = google.target_1
+  }
+
+  management_project_id = var.google_management_project_id
+  target_project_id     = var.google_target_1_project_id
+  target_region         = var.google_target_1_region
+}
+
+module "gcp_target_3" {
+  count  = var.google_target_3_enabled ? 1 : 0
+  source = "./modules/gcp-target"
+
+  providers = {
+    google.management = google.management
+    google.target     = google.target_3
+  }
+
+  management_project_id = var.google_management_project_id
+  target_project_id     = var.google_target_3_project_id
+  target_region         = var.google_target_3_region
+}
+
 module "azure" {
   source = "./modules/azure"
 

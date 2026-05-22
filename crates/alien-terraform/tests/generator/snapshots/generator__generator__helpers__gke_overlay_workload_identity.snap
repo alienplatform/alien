@@ -29,7 +29,7 @@ variable "resource_prefix" {
   default     = ""
 
   validation {
-    condition     = var.resource_prefix == "" || can(regex("^[a-z](?:[a-z0-9]|-(?=[a-z0-9])){1,38}[a-z0-9]$", var.resource_prefix))
+    condition     = var.resource_prefix == "" || (can(regex("^[a-z][a-z0-9-]{1,38}[a-z0-9]$", var.resource_prefix)) && length(regexall("--", var.resource_prefix)) == 0)
     error_message = "resource_prefix must be 3-40 characters: lowercase letters, numbers, and hyphens; start with a letter; end with a letter or number; and not contain consecutive hyphens."
   }
 }
@@ -81,6 +81,16 @@ variable "kubernetes_namespace" {
   default     = "default"
 }
 
+variable "gke_cluster_name" {
+  type        = string
+  description = "Existing GKE cluster name that Helm will install into."
+}
+
+variable "gke_cluster_location" {
+  type        = string
+  description = "Existing GKE cluster location (region or zone)."
+}
+
 === providers.tf ===
 provider "google" {
   project = var.gcp_project
@@ -94,10 +104,11 @@ resource "random_id" "resource_prefix" {
 
 === locals.tf ===
 locals {
-  resource_prefix     = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
-  deployment_platform = "gcp"
-  deployment_target   = "gke"
-  deployment_region   = var.gcp_region
+  resource_prefix          = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
+  deployment_platform      = "kubernetes"
+  deployment_base_platform = "gcp"
+  deployment_target        = "gke"
+  deployment_region        = var.gcp_region
   deployment_management_config = {
     platform            = "gcp"
     projectId           = var.gcp_project
@@ -136,8 +147,10 @@ locals {
     }
   }
   helm_values = {
-    serviceAccounts = local.helm_service_accounts
-    stackSettings   = local.deployment_settings
+    serviceAccounts      = local.helm_service_accounts
+    stackSettings        = local.deployment_settings
+    basePlatform         = local.deployment_base_platform
+    serviceAccountPrefix = local.resource_prefix
   }
 }
 
@@ -159,6 +172,11 @@ resource "google_storage_bucket" "data" {
 }
 
 === execution_sa.tf ===
+data "google_container_cluster" "target" {
+  name     = var.gke_cluster_name
+  location = var.gke_cluster_location
+}
+
 resource "google_service_account" "execution_sa" {
   project      = var.gcp_project
   account_id   = format("%s-%s", trim(substr(replace(lower(format("a-%s-execution_sa", local.resource_prefix)), "_", "-"), 0, 21), "-"), substr(sha1(replace(lower(format("%s-execution_sa", local.resource_prefix)), "_", "-")), 0, 8))
@@ -210,7 +228,7 @@ resource "google_service_account_iam_binding" "execution_sa_workload_identity" {
   service_account_id = google_service_account.execution_sa.name
   role               = "roles/iam.workloadIdentityUser"
   members = [
-    "serviceAccount:${var.gcp_project}.svc.id.goog[${var.kubernetes_namespace}/execution_sa]"
+    "serviceAccount:${data.google_container_cluster.target.workload_identity_config[0].workload_pool}[${var.kubernetes_namespace}/execution_sa]"
   ]
 }
 
@@ -300,6 +318,11 @@ output "deployment_stack_settings" {
 output "deployment_resources" {
   value       = jsonencode(local.deployment_resources)
   description = "Manager import resources JSON."
+}
+
+output "deployment_base_platform" {
+  value       = local.deployment_base_platform
+  description = "Base cloud platform for Kubernetes targets."
 }
 
 output "helm_values" {

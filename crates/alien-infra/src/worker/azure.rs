@@ -50,8 +50,14 @@ const AZURE_COMMANDS_INFRASTRUCTURE_AUTH_WAIT_SECS: u64 = 300;
 #[cfg(test)]
 const AZURE_COMMANDS_INFRASTRUCTURE_AUTH_WAIT_SECS: u64 = 0;
 
+#[cfg(not(test))]
+const AZURE_CONTAINER_APPS_ENVIRONMENT_WAKE_WAIT_SECS: u64 = 600;
+#[cfg(test)]
+const AZURE_CONTAINER_APPS_ENVIRONMENT_WAKE_WAIT_SECS: u64 = 0;
+
 const AZURE_RBAC_WAIT_POLL_SECS: u64 = 10;
 const AZURE_RBAC_WAIT_MAX_ATTEMPTS: u32 = 1_000;
+const AZURE_CONTAINER_APPS_ENVIRONMENT_WAKE_POLL_SECS: u64 = 30;
 
 fn current_unix_timestamp_secs() -> u64 {
     SystemTime::now()
@@ -74,6 +80,19 @@ fn rbac_wait_delay(deadline_epoch_secs: u64) -> Option<Duration> {
     } else {
         Some(Duration::from_secs(
             remaining.min(AZURE_RBAC_WAIT_POLL_SECS),
+        ))
+    }
+}
+
+fn container_apps_environment_wake_delay(deadline_epoch_secs: u64) -> Option<Duration> {
+    let now = current_unix_timestamp_secs();
+    let remaining = deadline_epoch_secs.saturating_sub(now);
+
+    if remaining == 0 {
+        None
+    } else {
+        Some(Duration::from_secs(
+            remaining.min(AZURE_CONTAINER_APPS_ENVIRONMENT_WAKE_POLL_SECS),
         ))
     }
 }
@@ -160,6 +179,30 @@ fn is_azure_authorization_propagation_error(error: &AlienError<ErrorData>) -> bo
     false
 }
 
+fn is_azure_container_apps_environment_waking_error(error: &AlienError<ErrorData>) -> bool {
+    fn matches_layer(message: &str, context: Option<&serde_json::Value>) -> bool {
+        let context_text = context.map(|value| value.to_string()).unwrap_or_default();
+        message.contains("ContainerAppEnvironmentDisabled")
+            || message.contains("environment is stopped due to a long period of inactivity")
+            || context_text.contains("ContainerAppEnvironmentDisabled")
+            || context_text.contains("environment is stopped due to a long period of inactivity")
+    }
+
+    if matches_layer(&error.message, error.context.as_ref()) {
+        return true;
+    }
+
+    let mut source = error.source.as_deref();
+    while let Some(layer) = source {
+        if matches_layer(&layer.message, layer.context.as_ref()) {
+            return true;
+        }
+        source = layer.source.as_deref();
+    }
+
+    false
+}
+
 /// Get the Key Vault name for importing certificates.
 /// For now, we use a simple naming convention. In the future, this could be extracted from infrastructure requirements.
 fn get_keyvault_name_for_function(ctx: &ResourceControllerContext<'_>) -> Result<String> {
@@ -187,6 +230,11 @@ struct DomainInfo {
     certificate_id: Option<String>,
     keyvault_cert_id: Option<String>,
     uses_custom_domain: bool,
+}
+
+enum DaprComponentOperation {
+    Completed,
+    LongRunning(Duration),
 }
 
 /// Converts PEM-encoded private key and certificate chain to PKCS#12 format for Azure Key Vault.
@@ -319,6 +367,9 @@ pub struct AzureWorkerController {
     /// Deadline for retrying commands infrastructure creation while Azure IAM grants propagate.
     #[serde(default)]
     pub(crate) commands_infrastructure_auth_wait_until_epoch_secs: Option<u64>,
+    /// Deadline for retrying Container Apps Environment operations while Azure wakes an idle environment.
+    #[serde(default)]
+    pub(crate) container_apps_environment_wake_wait_until_epoch_secs: Option<u64>,
     /// Deadline before creating the Container App after pre-created RBAC assignments.
     #[serde(default)]
     pub(crate) pre_container_app_rbac_wait_until_epoch_secs: Option<u64>,
@@ -328,6 +379,9 @@ pub struct AzureWorkerController {
     /// Whether the current update flow changed the workload and should wait for RBAC propagation.
     #[serde(default)]
     pub(crate) update_rbac_wait_required: bool,
+    /// Whether the current update flow has already deleted old Dapr trigger components.
+    #[serde(default)]
+    pub(crate) update_dapr_components_deleted: bool,
 }
 
 // ≡ Lifecycle implementation ===================================================
@@ -346,10 +400,13 @@ impl AzureWorkerController {
         let func_cfg = ctx.desired_resource_config::<Worker>()?;
         info!(name=%func_cfg.id, "Initiating Azure Container App worker creation");
 
-        self.pre_container_app_rbac_wait_until_epoch_secs = None;
-        self.ready_rbac_wait_until_epoch_secs = None;
-        self.commands_infrastructure_auth_wait_until_epoch_secs = None;
-        self.update_rbac_wait_required = false;
+        if self.container_app_name.is_none() {
+            self.pre_container_app_rbac_wait_until_epoch_secs = None;
+            self.ready_rbac_wait_until_epoch_secs = None;
+            self.commands_infrastructure_auth_wait_until_epoch_secs = None;
+            self.container_apps_environment_wake_wait_until_epoch_secs = None;
+            self.update_rbac_wait_required = false;
+        }
 
         // Product limitation: Only allow at most one queue trigger per worker
         let queue_trigger_count = func_cfg
@@ -381,8 +438,15 @@ impl AzureWorkerController {
                 .setup_commands_infrastructure(ctx, azure_cfg, func_cfg, &container_app_name)
                 .await
             {
-                Ok(()) => {
+                Ok(DaprComponentOperation::Completed) => {
                     self.commands_infrastructure_auth_wait_until_epoch_secs = None;
+                    self.container_apps_environment_wake_wait_until_epoch_secs = None;
+                }
+                Ok(DaprComponentOperation::LongRunning(delay)) => {
+                    return Ok(HandlerAction::Continue {
+                        state: WaitingForPreCreateCommandsDaprComponentOperation,
+                        suggested_delay: Some(delay),
+                    });
                 }
                 Err(e) if is_azure_authorization_propagation_error(&e) => {
                     let deadline = ensure_rbac_wait_deadline(
@@ -405,6 +469,27 @@ impl AzureWorkerController {
 
                     return Err(e);
                 }
+                Err(e) if is_azure_container_apps_environment_waking_error(&e) => {
+                    let deadline = ensure_rbac_wait_deadline(
+                        &mut self.container_apps_environment_wake_wait_until_epoch_secs,
+                        AZURE_CONTAINER_APPS_ENVIRONMENT_WAKE_WAIT_SECS,
+                    );
+
+                    if let Some(delay) = container_apps_environment_wake_delay(deadline) {
+                        warn!(
+                            name=%func_cfg.id,
+                            remaining_secs=deadline.saturating_sub(current_unix_timestamp_secs()),
+                            error=%e,
+                            "Azure Container Apps Environment is waking; retrying commands infrastructure"
+                        );
+                        return Ok(HandlerAction::Stay {
+                            max_times: AZURE_RBAC_WAIT_MAX_ATTEMPTS,
+                            suggested_delay: Some(delay),
+                        });
+                    }
+
+                    return Err(e);
+                }
                 Err(e) => return Err(e),
             }
         }
@@ -417,6 +502,64 @@ impl AzureWorkerController {
             state: WaitingBeforeContainerAppCreation,
             suggested_delay: None,
         })
+    }
+
+    #[handler(
+        state = WaitingForPreCreateCommandsDaprComponentOperation,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn waiting_for_pre_create_commands_dapr_component_operation(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let func_cfg = ctx.desired_resource_config::<Worker>()?;
+        let operation_url = self.pending_operation_url.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::InfrastructureError {
+                message: "No pending operation URL recorded for commands Dapr component"
+                    .to_string(),
+                operation: Some(
+                    "waiting_for_pre_create_commands_dapr_component_operation".to_string(),
+                ),
+                resource_id: Some(func_cfg.id.clone()),
+            })
+        })?;
+
+        let azure_cfg = ctx.get_azure_config()?;
+        let operation_client = ctx
+            .service_provider
+            .get_azure_long_running_operation_client(azure_cfg)?;
+        let lro = LongRunningOperation {
+            url: operation_url,
+            retry_after: self.pending_operation_retry_after.map(Duration::from_secs),
+            location_url: None,
+        };
+
+        let status = operation_client
+            .check_status(&lro, "CreateOrUpdateDaprComponent", &func_cfg.id)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Azure ARM operation failed for commands Dapr component".to_string(),
+                resource_id: Some(func_cfg.id.clone()),
+            })?;
+
+        if status.is_some() {
+            self.pending_operation_url = None;
+            self.pending_operation_retry_after = None;
+            Ok(HandlerAction::Continue {
+                state: CreateStart,
+                suggested_delay: None,
+            })
+        } else {
+            let delay = self
+                .pending_operation_retry_after
+                .map(Duration::from_secs)
+                .unwrap_or(Duration::from_secs(15));
+            Ok(HandlerAction::Stay {
+                max_times: 100,
+                suggested_delay: Some(delay),
+            })
+        }
     }
 
     #[handler(
@@ -987,37 +1130,133 @@ impl AzureWorkerController {
             match trigger {
                 alien_core::WorkerTrigger::Queue { queue } => {
                     info!(worker=%func_cfg.id, queue=%queue.id, "Creating Dapr Service Bus component");
-                    self.create_dapr_service_bus_component(
-                        ctx,
-                        &container_app_name,
-                        &func_cfg,
-                        queue,
-                    )
-                    .await?;
+                    let operation = match self
+                        .create_dapr_service_bus_component(
+                            ctx,
+                            &container_app_name,
+                            &func_cfg,
+                            queue,
+                        )
+                        .await
+                    {
+                        Ok(operation) => operation,
+                        Err(e) => {
+                            if is_azure_container_apps_environment_waking_error(&e) {
+                                let deadline = ensure_rbac_wait_deadline(
+                                    &mut self.container_apps_environment_wake_wait_until_epoch_secs,
+                                    AZURE_CONTAINER_APPS_ENVIRONMENT_WAKE_WAIT_SECS,
+                                );
+                                if let Some(delay) = container_apps_environment_wake_delay(deadline)
+                                {
+                                    warn!(
+                                        worker=%func_cfg.id,
+                                        error=%e,
+                                        remaining_secs=deadline.saturating_sub(current_unix_timestamp_secs()),
+                                        "Azure Container Apps Environment is waking; retrying Dapr component creation"
+                                    );
+                                    return Ok(HandlerAction::Stay {
+                                        max_times: AZURE_RBAC_WAIT_MAX_ATTEMPTS,
+                                        suggested_delay: Some(delay),
+                                    });
+                                }
+                            }
+                            return Err(e);
+                        }
+                    };
+                    if let DaprComponentOperation::LongRunning(delay) = operation {
+                        return Ok(HandlerAction::Continue {
+                            state: WaitingForDaprComponentCreateOperation,
+                            suggested_delay: Some(delay),
+                        });
+                    }
                     created_any = true;
                 }
                 alien_core::WorkerTrigger::Storage { storage, events } => {
                     info!(worker=%func_cfg.id, storage=%storage.id, "Creating Dapr blob storage component");
-                    self.create_dapr_blob_storage_component(
-                        ctx,
-                        &container_app_name,
-                        &func_cfg,
-                        storage,
-                        events,
-                    )
-                    .await?;
+                    let operation = match self
+                        .create_dapr_blob_storage_component(
+                            ctx,
+                            &container_app_name,
+                            &func_cfg,
+                            storage,
+                            events,
+                        )
+                        .await
+                    {
+                        Ok(operation) => operation,
+                        Err(e) => {
+                            if is_azure_container_apps_environment_waking_error(&e) {
+                                let deadline = ensure_rbac_wait_deadline(
+                                    &mut self.container_apps_environment_wake_wait_until_epoch_secs,
+                                    AZURE_CONTAINER_APPS_ENVIRONMENT_WAKE_WAIT_SECS,
+                                );
+                                if let Some(delay) = container_apps_environment_wake_delay(deadline)
+                                {
+                                    warn!(
+                                        worker=%func_cfg.id,
+                                        error=%e,
+                                        remaining_secs=deadline.saturating_sub(current_unix_timestamp_secs()),
+                                        "Azure Container Apps Environment is waking; retrying Dapr component creation"
+                                    );
+                                    return Ok(HandlerAction::Stay {
+                                        max_times: AZURE_RBAC_WAIT_MAX_ATTEMPTS,
+                                        suggested_delay: Some(delay),
+                                    });
+                                }
+                            }
+                            return Err(e);
+                        }
+                    };
+                    if let DaprComponentOperation::LongRunning(delay) = operation {
+                        return Ok(HandlerAction::Continue {
+                            state: WaitingForDaprComponentCreateOperation,
+                            suggested_delay: Some(delay),
+                        });
+                    }
                     created_any = true;
                 }
                 alien_core::WorkerTrigger::Schedule { cron } => {
                     info!(worker=%func_cfg.id, cron=%cron, "Creating Dapr cron component");
-                    self.create_dapr_cron_component(
-                        ctx,
-                        &container_app_name,
-                        &func_cfg,
-                        cron,
-                        cron_index,
-                    )
-                    .await?;
+                    let operation = match self
+                        .create_dapr_cron_component(
+                            ctx,
+                            &container_app_name,
+                            &func_cfg,
+                            cron,
+                            cron_index,
+                        )
+                        .await
+                    {
+                        Ok(operation) => operation,
+                        Err(e) => {
+                            if is_azure_container_apps_environment_waking_error(&e) {
+                                let deadline = ensure_rbac_wait_deadline(
+                                    &mut self.container_apps_environment_wake_wait_until_epoch_secs,
+                                    AZURE_CONTAINER_APPS_ENVIRONMENT_WAKE_WAIT_SECS,
+                                );
+                                if let Some(delay) = container_apps_environment_wake_delay(deadline)
+                                {
+                                    warn!(
+                                        worker=%func_cfg.id,
+                                        error=%e,
+                                        remaining_secs=deadline.saturating_sub(current_unix_timestamp_secs()),
+                                        "Azure Container Apps Environment is waking; retrying Dapr component creation"
+                                    );
+                                    return Ok(HandlerAction::Stay {
+                                        max_times: AZURE_RBAC_WAIT_MAX_ATTEMPTS,
+                                        suggested_delay: Some(delay),
+                                    });
+                                }
+                            }
+                            return Err(e);
+                        }
+                    };
+                    if let DaprComponentOperation::LongRunning(delay) = operation {
+                        return Ok(HandlerAction::Continue {
+                            state: WaitingForDaprComponentCreateOperation,
+                            suggested_delay: Some(delay),
+                        });
+                    }
                     cron_index += 1;
                     created_any = true;
                 }
@@ -1027,12 +1266,68 @@ impl AzureWorkerController {
         if !created_any {
             info!(worker=%func_cfg.id, "No triggers found, skipping Dapr component creation");
         }
+        self.container_apps_environment_wake_wait_until_epoch_secs = None;
 
         // Go to commands infrastructure next
         Ok(HandlerAction::Continue {
             state: CreatingCommandsInfrastructure,
             suggested_delay: None,
         })
+    }
+
+    #[handler(
+        state = WaitingForDaprComponentCreateOperation,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn waiting_for_dapr_component_create_operation(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let func_cfg = ctx.desired_resource_config::<Worker>()?;
+        let operation_url = self.pending_operation_url.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::InfrastructureError {
+                message: "No pending operation URL recorded for Dapr component".to_string(),
+                operation: Some("waiting_for_dapr_component_create_operation".to_string()),
+                resource_id: Some(func_cfg.id.clone()),
+            })
+        })?;
+
+        let azure_cfg = ctx.get_azure_config()?;
+        let operation_client = ctx
+            .service_provider
+            .get_azure_long_running_operation_client(azure_cfg)?;
+        let lro = LongRunningOperation {
+            url: operation_url,
+            retry_after: self.pending_operation_retry_after.map(Duration::from_secs),
+            location_url: None,
+        };
+
+        let status = operation_client
+            .check_status(&lro, "CreateOrUpdateDaprComponent", &func_cfg.id)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Azure ARM operation failed for Dapr component creation".to_string(),
+                resource_id: Some(func_cfg.id.clone()),
+            })?;
+
+        if status.is_some() {
+            self.pending_operation_url = None;
+            self.pending_operation_retry_after = None;
+            Ok(HandlerAction::Continue {
+                state: ConfiguringDaprComponents,
+                suggested_delay: None,
+            })
+        } else {
+            let delay = self
+                .pending_operation_retry_after
+                .map(Duration::from_secs)
+                .unwrap_or(Duration::from_secs(15));
+            Ok(HandlerAction::Stay {
+                max_times: 100,
+                suggested_delay: Some(delay),
+            })
+        }
     }
 
     #[handler(
@@ -1225,7 +1520,7 @@ impl AzureWorkerController {
             .service_provider
             .get_azure_container_apps_client(azure_config)?;
 
-        client
+        match client
             .create_or_update_dapr_component(
                 &env_resource_group_name,
                 &environment_name,
@@ -1233,13 +1528,47 @@ impl AzureWorkerController {
                 &dapr_component,
             )
             .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to create commands Dapr component '{}'",
-                    component_name
-                ),
-                resource_id: Some(func_cfg.id.clone()),
-            })?;
+        {
+            Ok(OperationResult::Completed(_)) => {
+                self.container_apps_environment_wake_wait_until_epoch_secs = None;
+            }
+            Ok(OperationResult::LongRunning(lro)) => {
+                self.pending_operation_url = Some(lro.url.clone());
+                self.pending_operation_retry_after = lro.retry_after.map(|d| d.as_secs());
+                return Ok(HandlerAction::Continue {
+                    state: WaitingForCommandsDaprComponentOperation,
+                    suggested_delay: Some(lro.retry_after.unwrap_or(Duration::from_secs(15))),
+                });
+            }
+            Err(e) => {
+                let e = e.context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to create commands Dapr component '{}'",
+                        component_name
+                    ),
+                    resource_id: Some(func_cfg.id.clone()),
+                });
+                if is_azure_container_apps_environment_waking_error(&e) {
+                    let deadline = ensure_rbac_wait_deadline(
+                        &mut self.container_apps_environment_wake_wait_until_epoch_secs,
+                        AZURE_CONTAINER_APPS_ENVIRONMENT_WAKE_WAIT_SECS,
+                    );
+                    if let Some(delay) = container_apps_environment_wake_delay(deadline) {
+                        warn!(
+                            worker=%func_cfg.id,
+                            error=%e,
+                            remaining_secs=deadline.saturating_sub(current_unix_timestamp_secs()),
+                            "Azure Container Apps Environment is waking; retrying commands Dapr component"
+                        );
+                        return Ok(HandlerAction::Stay {
+                            max_times: AZURE_RBAC_WAIT_MAX_ATTEMPTS,
+                            suggested_delay: Some(delay),
+                        });
+                    }
+                }
+                return Err(e);
+            }
+        }
 
         self.commands_namespace_name = Some(namespace_name.clone());
         self.commands_queue_name = Some(queue_name);
@@ -1264,6 +1593,62 @@ impl AzureWorkerController {
             state: ApplyingPermissions,
             suggested_delay: None,
         })
+    }
+
+    #[handler(
+        state = WaitingForCommandsDaprComponentOperation,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn waiting_for_commands_dapr_component_operation(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let func_cfg = ctx.desired_resource_config::<Worker>()?;
+        let operation_url = self.pending_operation_url.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::InfrastructureError {
+                message: "No pending operation URL recorded for commands Dapr component"
+                    .to_string(),
+                operation: Some("waiting_for_commands_dapr_component_operation".to_string()),
+                resource_id: Some(func_cfg.id.clone()),
+            })
+        })?;
+
+        let azure_cfg = ctx.get_azure_config()?;
+        let operation_client = ctx
+            .service_provider
+            .get_azure_long_running_operation_client(azure_cfg)?;
+        let lro = LongRunningOperation {
+            url: operation_url,
+            retry_after: self.pending_operation_retry_after.map(Duration::from_secs),
+            location_url: None,
+        };
+
+        let status = operation_client
+            .check_status(&lro, "CreateOrUpdateDaprComponent", &func_cfg.id)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Azure ARM operation failed for commands Dapr component".to_string(),
+                resource_id: Some(func_cfg.id.clone()),
+            })?;
+
+        if status.is_some() {
+            self.pending_operation_url = None;
+            self.pending_operation_retry_after = None;
+            Ok(HandlerAction::Continue {
+                state: CreatingCommandsInfrastructure,
+                suggested_delay: None,
+            })
+        } else {
+            let delay = self
+                .pending_operation_retry_after
+                .map(Duration::from_secs)
+                .unwrap_or(Duration::from_secs(15));
+            Ok(HandlerAction::Stay {
+                max_times: 100,
+                suggested_delay: Some(delay),
+            })
+        }
     }
 
     #[handler(
@@ -1632,6 +2017,7 @@ impl AzureWorkerController {
         let func_cfg = ctx.desired_resource_config::<Worker>()?;
         let previous_cfg = ctx.previous_resource_config::<Worker>()?;
         self.ready_rbac_wait_until_epoch_secs = None;
+        self.update_dapr_components_deleted = false;
         if func_cfg == previous_cfg {
             self.update_rbac_wait_required = false;
             return Ok(HandlerAction::Continue {
@@ -1862,46 +2248,152 @@ impl AzureWorkerController {
         if triggers_changed {
             info!(worker=%current_config.id, "Worker triggers changed, updating Dapr components");
 
-            // For simplicity, we'll delete old components and create new ones
-            // In a production system, you might want to do a more sophisticated diff
-            self.delete_all_dapr_components(ctx).await?;
+            if !self.update_dapr_components_deleted {
+                // Trigger components are keyed by trigger shape. Delete the previous
+                // set once, then recreate desired components across possible ARM LROs.
+                self.delete_all_dapr_components(ctx).await?;
+                self.update_dapr_components_deleted = true;
+            }
 
             // Recreate components for ALL triggers
             let mut cron_index = 0usize;
             for trigger in &current_config.triggers {
                 match trigger {
                     alien_core::WorkerTrigger::Queue { queue } => {
-                        self.create_dapr_service_bus_component(
-                            ctx,
-                            &container_app_name,
-                            &current_config,
-                            queue,
-                        )
-                        .await?;
+                        let operation = match self
+                            .create_dapr_service_bus_component(
+                                ctx,
+                                &container_app_name,
+                                &current_config,
+                                queue,
+                            )
+                            .await
+                        {
+                            Ok(operation) => operation,
+                            Err(e) => {
+                                if is_azure_container_apps_environment_waking_error(&e) {
+                                    let deadline = ensure_rbac_wait_deadline(
+                                        &mut self
+                                            .container_apps_environment_wake_wait_until_epoch_secs,
+                                        AZURE_CONTAINER_APPS_ENVIRONMENT_WAKE_WAIT_SECS,
+                                    );
+                                    if let Some(delay) =
+                                        container_apps_environment_wake_delay(deadline)
+                                    {
+                                        warn!(
+                                            worker=%current_config.id,
+                                            error=%e,
+                                            remaining_secs=deadline.saturating_sub(current_unix_timestamp_secs()),
+                                            "Azure Container Apps Environment is waking; retrying Dapr component update"
+                                        );
+                                        return Ok(HandlerAction::Stay {
+                                            max_times: AZURE_RBAC_WAIT_MAX_ATTEMPTS,
+                                            suggested_delay: Some(delay),
+                                        });
+                                    }
+                                }
+                                return Err(e);
+                            }
+                        };
+                        if let DaprComponentOperation::LongRunning(delay) = operation {
+                            return Ok(HandlerAction::Continue {
+                                state: WaitingForDaprComponentUpdateOperation,
+                                suggested_delay: Some(delay),
+                            });
+                        }
                     }
                     alien_core::WorkerTrigger::Storage { storage, events } => {
-                        self.create_dapr_blob_storage_component(
-                            ctx,
-                            &container_app_name,
-                            &current_config,
-                            storage,
-                            events,
-                        )
-                        .await?;
+                        let operation = match self
+                            .create_dapr_blob_storage_component(
+                                ctx,
+                                &container_app_name,
+                                &current_config,
+                                storage,
+                                events,
+                            )
+                            .await
+                        {
+                            Ok(operation) => operation,
+                            Err(e) => {
+                                if is_azure_container_apps_environment_waking_error(&e) {
+                                    let deadline = ensure_rbac_wait_deadline(
+                                        &mut self
+                                            .container_apps_environment_wake_wait_until_epoch_secs,
+                                        AZURE_CONTAINER_APPS_ENVIRONMENT_WAKE_WAIT_SECS,
+                                    );
+                                    if let Some(delay) =
+                                        container_apps_environment_wake_delay(deadline)
+                                    {
+                                        warn!(
+                                            worker=%current_config.id,
+                                            error=%e,
+                                            remaining_secs=deadline.saturating_sub(current_unix_timestamp_secs()),
+                                            "Azure Container Apps Environment is waking; retrying Dapr component update"
+                                        );
+                                        return Ok(HandlerAction::Stay {
+                                            max_times: AZURE_RBAC_WAIT_MAX_ATTEMPTS,
+                                            suggested_delay: Some(delay),
+                                        });
+                                    }
+                                }
+                                return Err(e);
+                            }
+                        };
+                        if let DaprComponentOperation::LongRunning(delay) = operation {
+                            return Ok(HandlerAction::Continue {
+                                state: WaitingForDaprComponentUpdateOperation,
+                                suggested_delay: Some(delay),
+                            });
+                        }
                     }
                     alien_core::WorkerTrigger::Schedule { cron } => {
-                        self.create_dapr_cron_component(
-                            ctx,
-                            &container_app_name,
-                            &current_config,
-                            cron,
-                            cron_index,
-                        )
-                        .await?;
+                        let operation = match self
+                            .create_dapr_cron_component(
+                                ctx,
+                                &container_app_name,
+                                &current_config,
+                                cron,
+                                cron_index,
+                            )
+                            .await
+                        {
+                            Ok(operation) => operation,
+                            Err(e) => {
+                                if is_azure_container_apps_environment_waking_error(&e) {
+                                    let deadline = ensure_rbac_wait_deadline(
+                                        &mut self
+                                            .container_apps_environment_wake_wait_until_epoch_secs,
+                                        AZURE_CONTAINER_APPS_ENVIRONMENT_WAKE_WAIT_SECS,
+                                    );
+                                    if let Some(delay) =
+                                        container_apps_environment_wake_delay(deadline)
+                                    {
+                                        warn!(
+                                            worker=%current_config.id,
+                                            error=%e,
+                                            remaining_secs=deadline.saturating_sub(current_unix_timestamp_secs()),
+                                            "Azure Container Apps Environment is waking; retrying Dapr component update"
+                                        );
+                                        return Ok(HandlerAction::Stay {
+                                            max_times: AZURE_RBAC_WAIT_MAX_ATTEMPTS,
+                                            suggested_delay: Some(delay),
+                                        });
+                                    }
+                                }
+                                return Err(e);
+                            }
+                        };
+                        if let DaprComponentOperation::LongRunning(delay) = operation {
+                            return Ok(HandlerAction::Continue {
+                                state: WaitingForDaprComponentUpdateOperation,
+                                suggested_delay: Some(delay),
+                            });
+                        }
                         cron_index += 1;
                     }
                 }
             }
+            self.container_apps_environment_wake_wait_until_epoch_secs = None;
         } else {
             info!(worker=%current_config.id, "No trigger changes detected");
         }
@@ -1915,6 +2407,61 @@ impl AzureWorkerController {
             Ok(HandlerAction::Continue {
                 state: UpdateRunningReadinessProbe,
                 suggested_delay: None,
+            })
+        }
+    }
+
+    #[handler(
+        state = WaitingForDaprComponentUpdateOperation,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn waiting_for_dapr_component_update_operation(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let func_cfg = ctx.desired_resource_config::<Worker>()?;
+        let operation_url = self.pending_operation_url.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::InfrastructureError {
+                message: "No pending operation URL recorded for Dapr component update".to_string(),
+                operation: Some("waiting_for_dapr_component_update_operation".to_string()),
+                resource_id: Some(func_cfg.id.clone()),
+            })
+        })?;
+
+        let azure_cfg = ctx.get_azure_config()?;
+        let operation_client = ctx
+            .service_provider
+            .get_azure_long_running_operation_client(azure_cfg)?;
+        let lro = LongRunningOperation {
+            url: operation_url,
+            retry_after: self.pending_operation_retry_after.map(Duration::from_secs),
+            location_url: None,
+        };
+
+        let status = operation_client
+            .check_status(&lro, "CreateOrUpdateDaprComponent", &func_cfg.id)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Azure ARM operation failed for Dapr component update".to_string(),
+                resource_id: Some(func_cfg.id.clone()),
+            })?;
+
+        if status.is_some() {
+            self.pending_operation_url = None;
+            self.pending_operation_retry_after = None;
+            Ok(HandlerAction::Continue {
+                state: UpdateDaprComponents,
+                suggested_delay: None,
+            })
+        } else {
+            let delay = self
+                .pending_operation_retry_after
+                .map(Duration::from_secs)
+                .unwrap_or(Duration::from_secs(15));
+            Ok(HandlerAction::Stay {
+                max_times: 100,
+                suggested_delay: Some(delay),
             })
         }
     }
@@ -2473,7 +3020,7 @@ impl AzureWorkerController {
         azure_config: &alien_azure_clients::AzureClientConfig,
         func_cfg: &alien_core::Worker,
         container_app_name: &str,
-    ) -> Result<()> {
+    ) -> Result<DaprComponentOperation> {
         let env_outputs = get_container_apps_environment_outputs(ctx.state)?;
         let env_resource_group_name = env_outputs.resource_group_name.clone();
         let environment_name = env_outputs.environment_name.clone();
@@ -2597,7 +3144,7 @@ impl AzureWorkerController {
             .service_provider
             .get_azure_container_apps_client(azure_config)?;
 
-        client
+        match client
             .create_or_update_dapr_component(
                 &env_resource_group_name,
                 &environment_name,
@@ -2611,7 +3158,16 @@ impl AzureWorkerController {
                     component_name
                 ),
                 resource_id: Some(func_cfg.id.clone()),
-            })?;
+            })? {
+            OperationResult::Completed(_) => {}
+            OperationResult::LongRunning(lro) => {
+                self.pending_operation_url = Some(lro.url.clone());
+                self.pending_operation_retry_after = lro.retry_after.map(|d| d.as_secs());
+                return Ok(DaprComponentOperation::LongRunning(
+                    lro.retry_after.unwrap_or(Duration::from_secs(15)),
+                ));
+            }
+        }
 
         self.commands_namespace_name = Some(namespace_name.clone());
         self.commands_queue_name = Some(queue_name);
@@ -2628,7 +3184,7 @@ impl AzureWorkerController {
         .await?;
 
         info!(worker=%func_cfg.id, "Commands infrastructure pre-created successfully");
-        Ok(())
+        Ok(DaprComponentOperation::Completed)
     }
 
     /// Assign the built-in Azure Service Bus Data Sender role to the deploying identity
@@ -3294,7 +3850,7 @@ impl AzureWorkerController {
         container_app_name: &str,
         worker_config: &alien_core::Worker,
         queue_ref: &alien_core::ResourceRef,
-    ) -> Result<()> {
+    ) -> Result<DaprComponentOperation> {
         use alien_azure_clients::models::managed_environments_dapr_components::{
             DaprComponent, DaprComponentProperties, DaprMetadata,
         };
@@ -3396,7 +3952,7 @@ impl AzureWorkerController {
             .service_provider
             .get_azure_container_apps_client(&azure_config)?;
 
-        client
+        match client
             .create_or_update_dapr_component(
                 &resource_group_name,
                 &environment_name,
@@ -3410,9 +3966,20 @@ impl AzureWorkerController {
                     component_name, queue_ref.id
                 ),
                 resource_id: Some(worker_config.id.clone()),
-            })?;
+            })? {
+            OperationResult::Completed(_) => {}
+            OperationResult::LongRunning(lro) => {
+                self.pending_operation_url = Some(lro.url.clone());
+                self.pending_operation_retry_after = lro.retry_after.map(|d| d.as_secs());
+                return Ok(DaprComponentOperation::LongRunning(
+                    lro.retry_after.unwrap_or(Duration::from_secs(15)),
+                ));
+            }
+        }
 
-        self.dapr_components.push(component_name.clone());
+        if !self.dapr_components.contains(&component_name) {
+            self.dapr_components.push(component_name.clone());
+        }
 
         info!(
             worker=%worker_config.id,
@@ -3420,7 +3987,7 @@ impl AzureWorkerController {
             "Successfully created Dapr Service Bus component"
         );
 
-        Ok(())
+        Ok(DaprComponentOperation::Completed)
     }
 
     /// Creates a Dapr blob storage input binding for a storage trigger
@@ -3431,7 +3998,7 @@ impl AzureWorkerController {
         worker_config: &alien_core::Worker,
         storage_ref: &alien_core::ResourceRef,
         _events: &[String],
-    ) -> Result<()> {
+    ) -> Result<DaprComponentOperation> {
         use alien_azure_clients::models::managed_environments_dapr_components::{
             DaprComponent, DaprComponentProperties, DaprMetadata,
         };
@@ -3522,7 +4089,7 @@ impl AzureWorkerController {
             .service_provider
             .get_azure_container_apps_client(&azure_config)?;
 
-        client
+        match client
             .create_or_update_dapr_component(
                 &resource_group_name,
                 &environment_name,
@@ -3536,9 +4103,20 @@ impl AzureWorkerController {
                     component_name, storage_ref.id
                 ),
                 resource_id: Some(worker_config.id.clone()),
-            })?;
+            })? {
+            OperationResult::Completed(_) => {}
+            OperationResult::LongRunning(lro) => {
+                self.pending_operation_url = Some(lro.url.clone());
+                self.pending_operation_retry_after = lro.retry_after.map(|d| d.as_secs());
+                return Ok(DaprComponentOperation::LongRunning(
+                    lro.retry_after.unwrap_or(Duration::from_secs(15)),
+                ));
+            }
+        }
 
-        self.dapr_components.push(component_name.clone());
+        if !self.dapr_components.contains(&component_name) {
+            self.dapr_components.push(component_name.clone());
+        }
 
         info!(
             worker=%worker_config.id,
@@ -3546,7 +4124,7 @@ impl AzureWorkerController {
             "Successfully created Dapr blob storage component"
         );
 
-        Ok(())
+        Ok(DaprComponentOperation::Completed)
     }
 
     /// Creates a Dapr cron input binding for a schedule trigger
@@ -3557,7 +4135,7 @@ impl AzureWorkerController {
         worker_config: &alien_core::Worker,
         cron: &str,
         index: usize,
-    ) -> Result<()> {
+    ) -> Result<DaprComponentOperation> {
         use alien_azure_clients::models::managed_environments_dapr_components::{
             DaprComponent, DaprComponentProperties, DaprMetadata,
         };
@@ -3601,7 +4179,7 @@ impl AzureWorkerController {
             .service_provider
             .get_azure_container_apps_client(&azure_config)?;
 
-        client
+        match client
             .create_or_update_dapr_component(
                 &resource_group_name,
                 &environment_name,
@@ -3615,9 +4193,20 @@ impl AzureWorkerController {
                     component_name, cron
                 ),
                 resource_id: Some(worker_config.id.clone()),
-            })?;
+            })? {
+            OperationResult::Completed(_) => {}
+            OperationResult::LongRunning(lro) => {
+                self.pending_operation_url = Some(lro.url.clone());
+                self.pending_operation_retry_after = lro.retry_after.map(|d| d.as_secs());
+                return Ok(DaprComponentOperation::LongRunning(
+                    lro.retry_after.unwrap_or(Duration::from_secs(15)),
+                ));
+            }
+        }
 
-        self.dapr_components.push(component_name.clone());
+        if !self.dapr_components.contains(&component_name) {
+            self.dapr_components.push(component_name.clone());
+        }
 
         info!(
             worker=%worker_config.id,
@@ -3626,7 +4215,7 @@ impl AzureWorkerController {
             "Successfully created Dapr cron component"
         );
 
-        Ok(())
+        Ok(DaprComponentOperation::Completed)
     }
 
     /// Deletes all Dapr components using best-effort approach
@@ -3718,9 +4307,11 @@ impl AzureWorkerController {
             commands_sender_role_assignment_id: None,
             commands_receiver_role_assignment_id: None,
             commands_infrastructure_auth_wait_until_epoch_secs: None,
+            container_apps_environment_wake_wait_until_epoch_secs: None,
             pre_container_app_rbac_wait_until_epoch_secs: None,
             ready_rbac_wait_until_epoch_secs: None,
             update_rbac_wait_required: false,
+            update_dapr_components_deleted: false,
             _internal_stay_count: None,
         }
     }
@@ -4914,9 +5505,11 @@ mod tests {
             commands_sender_role_assignment_id: None,
             commands_receiver_role_assignment_id: None,
             commands_infrastructure_auth_wait_until_epoch_secs: None,
+            container_apps_environment_wake_wait_until_epoch_secs: None,
             pre_container_app_rbac_wait_until_epoch_secs: None,
             ready_rbac_wait_until_epoch_secs: None,
             update_rbac_wait_required: false,
+            update_dapr_components_deleted: false,
             _internal_stay_count: None,
         };
 

@@ -46,9 +46,11 @@ impl ResourceImporter for AzureWorkerImporter {
             commands_sender_role_assignment_id: None,
             commands_receiver_role_assignment_id: None,
             commands_infrastructure_auth_wait_until_epoch_secs: None,
+            container_apps_environment_wake_wait_until_epoch_secs: None,
             pre_container_app_rbac_wait_until_epoch_secs: None,
             ready_rbac_wait_until_epoch_secs: None,
             update_rbac_wait_required: false,
+            update_dapr_components_deleted: false,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)

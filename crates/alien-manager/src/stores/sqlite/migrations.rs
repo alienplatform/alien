@@ -16,6 +16,7 @@ pub(crate) enum Deployments {
     Name,
     DeploymentGroupId,
     Platform,
+    BasePlatform,
     Status,
     StackSettings,
     StackState,
@@ -114,6 +115,7 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
                     .not_null(),
             )
             .col(ColumnDef::new(Deployments::Platform).text().not_null())
+            .col(ColumnDef::new(Deployments::BasePlatform).text())
             .col(ColumnDef::new(Deployments::Status).text().not_null())
             .col(ColumnDef::new(Deployments::StackSettings).text().not_null())
             .col(ColumnDef::new(Deployments::StackState).text())
@@ -306,6 +308,7 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
         "ALTER TABLE deployments ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'default'",
         "ALTER TABLE deployments ADD COLUMN project_id TEXT NOT NULL DEFAULT 'default'",
         "ALTER TABLE deployments ADD COLUMN import_source TEXT",
+        "ALTER TABLE deployments ADD COLUMN base_platform TEXT",
         "ALTER TABLE releases ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'default'",
         "ALTER TABLE releases ADD COLUMN project_id TEXT NOT NULL DEFAULT 'default'",
         "ALTER TABLE deployment_groups ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'default'",

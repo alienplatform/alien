@@ -83,6 +83,7 @@ resource "google_project_service" "target_apis" {
     "secretmanager.googleapis.com",
     "pubsub.googleapis.com",
     "firestore.googleapis.com",
+    "cloudscheduler.googleapis.com",
   ])
   service            = each.key
   disable_on_destroy = false

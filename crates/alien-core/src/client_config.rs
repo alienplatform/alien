@@ -523,6 +523,10 @@ pub enum ClientConfig {
     Gcp(Box<GcpClientConfig>),
     Azure(Box<AzureClientConfig>),
     Kubernetes(Box<KubernetesClientConfig>),
+    KubernetesCloud {
+        kubernetes: Box<KubernetesClientConfig>,
+        cloud: Box<ClientConfig>,
+    },
     Local {
         /// State directory for local resources and deployment state
         state_directory: String,
@@ -540,8 +544,25 @@ impl ClientConfig {
             ClientConfig::Gcp(_) => Platform::Gcp,
             ClientConfig::Azure(_) => Platform::Azure,
             ClientConfig::Kubernetes(_) => Platform::Kubernetes,
+            ClientConfig::KubernetesCloud { .. } => Platform::Kubernetes,
             ClientConfig::Local { .. } => Platform::Local,
             ClientConfig::Test => Platform::Test,
+        }
+    }
+
+    pub fn config_for_platform(&self, platform: Platform) -> Option<ClientConfig> {
+        match self {
+            ClientConfig::KubernetesCloud { kubernetes, cloud } => {
+                if platform == Platform::Kubernetes {
+                    Some(ClientConfig::Kubernetes(kubernetes.clone()))
+                } else if cloud.platform() == platform {
+                    Some((**cloud).clone())
+                } else {
+                    None
+                }
+            }
+            config if config.platform() == platform => Some(config.clone()),
+            _ => None,
         }
     }
 

@@ -324,6 +324,7 @@ impl CloudProxyTest {
                     name: "cloud-proxy-deploy".to_string(),
                     deployment_group_id: dg.id.clone(),
                     platform,
+                    base_platform: None,
                     stack_settings: StackSettings {
                         deployment_model: DeploymentModel::Pull,
                         ..Default::default()

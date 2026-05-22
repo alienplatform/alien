@@ -193,6 +193,7 @@ async fn run_deployment_continuously(state: &AgentState) -> Result<usize> {
     // Resolve client config once (it doesn't change between steps)
     let client_config = resolve_client_config(
         current.platform,
+        enriched_config.base_platform.or(state.config.base_platform),
         &state.config.data_dir,
         state.config.namespace.clone(),
         state.config.sync.as_ref(),
@@ -269,6 +270,9 @@ async fn enrich_config(
     if let Some(ref stack_settings) = agent_config.stack_settings {
         config.stack_settings = stack_settings.clone();
     }
+    if config.base_platform.is_none() {
+        config.base_platform = agent_config.base_platform;
+    }
 
     // Inject commands polling env vars only for K8s/Local containers.
     // Serverless functions (Lambda, Cloud Run, Container Apps) receive commands
@@ -342,18 +346,33 @@ async fn enrich_config(
 /// Resolve client config based on platform
 async fn resolve_client_config(
     platform: Platform,
+    base_platform: Option<Platform>,
     data_dir: &str,
     namespace: Option<String>,
     _sync_config: Option<&crate::config::SyncConfig>,
 ) -> Result<ClientConfig> {
     match platform {
         Platform::Kubernetes => {
-            Ok(ClientConfig::Kubernetes(Box::new(
-                KubernetesClientConfig::InCluster {
+            let kubernetes = KubernetesClientConfig::InCluster {
                     namespace,
                     additional_headers: None,
-                },
-            )))
+            };
+            if let Some(base_platform) = base_platform {
+                let cloud = ClientConfig::from_std_env(base_platform)
+                    .await
+                    .context(ErrorData::ConfigurationError {
+                        message: format!(
+                            "Failed to create {} base client config for Kubernetes deployment",
+                            base_platform
+                        ),
+                    })?;
+                Ok(ClientConfig::KubernetesCloud {
+                    kubernetes: Box::new(kubernetes),
+                    cloud: Box::new(cloud),
+                })
+            } else {
+                Ok(ClientConfig::Kubernetes(Box::new(kubernetes)))
+            }
         }
         Platform::Local => {
             // No artifact_registry_config needed — the deployment token for proxy

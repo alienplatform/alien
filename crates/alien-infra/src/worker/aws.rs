@@ -21,7 +21,8 @@ use alien_aws_clients::eventbridge::{
 };
 use alien_aws_clients::lambda::{
     AddPermissionRequest, CreateFunctionRequest, Environment, FunctionCode,
-    UpdateFunctionCodeRequest, UpdateFunctionConfigurationRequest, VpcConfig,
+    ListEventSourceMappingsRequest, UpdateFunctionCodeRequest, UpdateFunctionConfigurationRequest,
+    VpcConfig,
 };
 use alien_aws_clients::s3::{LambdaFunctionConfiguration, NotificationConfiguration};
 use alien_client_core::ErrorData as CloudClientErrorData;
@@ -63,6 +64,27 @@ fn eventbridge_tags(prefix: &str, resource_id: &str) -> Vec<EventBridgeTag> {
         .into_iter()
         .map(|(key, value)| EventBridgeTag { key, value })
         .collect()
+}
+
+fn is_remote_resource_conflict(error: &AlienError<CloudClientErrorData>) -> bool {
+    matches!(
+        &error.error,
+        Some(CloudClientErrorData::RemoteResourceConflict { .. })
+    )
+}
+
+fn replace_lambda_notification_config(
+    notification_config: &mut NotificationConfiguration,
+    replacement: LambdaFunctionConfiguration,
+) {
+    if let Some(replacement_id) = replacement.id.as_ref() {
+        notification_config
+            .lambda_function_configurations
+            .retain(|config| config.id.as_ref() != Some(replacement_id));
+    }
+    notification_config
+        .lambda_function_configurations
+        .push(replacement);
 }
 
 impl AwsWorkerController {
@@ -1323,16 +1345,28 @@ impl AwsWorkerController {
                     .source_arn(format!("arn:aws:s3:::{}", bucket_name))
                     .build();
 
-                lambda_client
+                match lambda_client
                     .add_permission(worker_name, permission_request)
                     .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to add S3 invoke permission for storage '{}'",
-                            storage_ref.id
-                        ),
-                        resource_id: Some(config.id.clone()),
-                    })?;
+                {
+                    Ok(_) => {}
+                    Err(e) if is_remote_resource_conflict(&e) => {
+                        info!(
+                            worker=%config.id,
+                            statement_id=%statement_id,
+                            "S3 invoke permission already exists; treating as created"
+                        );
+                    }
+                    Err(e) => {
+                        return Err(e.context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Failed to add S3 invoke permission for storage '{}'",
+                                storage_ref.id
+                            ),
+                            resource_id: Some(config.id.clone()),
+                        }));
+                    }
+                }
 
                 // Get current notification config and merge in new Lambda config
                 let s3_client = ctx.service_provider.get_aws_s3_client(aws_cfg).await?;
@@ -1357,7 +1391,8 @@ impl AwsWorkerController {
                     })
                     .collect();
 
-                notification_config.lambda_function_configurations.push(
+                replace_lambda_notification_config(
+                    &mut notification_config,
                     LambdaFunctionConfiguration {
                         id: Some(statement_id.clone()),
                         lambda_function_arn: function_arn.to_string(),
@@ -1377,7 +1412,9 @@ impl AwsWorkerController {
                         resource_id: Some(config.id.clone()),
                     })?;
 
-                self.s3_permission_statement_ids.push(statement_id.clone());
+                if !self.s3_permission_statement_ids.contains(&statement_id) {
+                    self.s3_permission_statement_ids.push(statement_id.clone());
+                }
                 info!(
                     worker=%config.id,
                     storage=%storage_ref.id,
@@ -1467,16 +1504,28 @@ impl AwsWorkerController {
                     .source_arn(rule_arn)
                     .build();
 
-                lambda_client
+                match lambda_client
                     .add_permission(worker_name, permission_request)
                     .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to add EventBridge invoke permission for rule '{}'",
-                            rule_name
-                        ),
-                        resource_id: Some(config.id.clone()),
-                    })?;
+                {
+                    Ok(_) => {}
+                    Err(e) if is_remote_resource_conflict(&e) => {
+                        info!(
+                            worker=%config.id,
+                            statement_id=%statement_id,
+                            "EventBridge invoke permission already exists; treating as created"
+                        );
+                    }
+                    Err(e) => {
+                        return Err(e.context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Failed to add EventBridge invoke permission for rule '{}'",
+                                rule_name
+                            ),
+                            resource_id: Some(config.id.clone()),
+                        }));
+                    }
+                }
 
                 // Add Lambda as the target of the rule
                 eventbridge_client
@@ -1496,9 +1545,16 @@ impl AwsWorkerController {
                         resource_id: Some(config.id.clone()),
                     })?;
 
-                self.eventbridge_rule_names.push(rule_name.clone());
-                self.eventbridge_permission_statement_ids
-                    .push(statement_id.clone());
+                if !self.eventbridge_rule_names.contains(&rule_name) {
+                    self.eventbridge_rule_names.push(rule_name.clone());
+                }
+                if !self
+                    .eventbridge_permission_statement_ids
+                    .contains(&statement_id)
+                {
+                    self.eventbridge_permission_statement_ids
+                        .push(statement_id.clone());
+                }
                 info!(
                     worker=%config.id,
                     rule_name=%rule_name,
@@ -2186,16 +2242,28 @@ impl AwsWorkerController {
                         .source_arn(format!("arn:aws:s3:::{}", bucket_name))
                         .build();
 
-                    lambda_client
+                    match lambda_client
                         .add_permission(worker_name, permission_request)
                         .await
-                        .context(ErrorData::CloudPlatformError {
-                            message: format!(
-                                "Failed to add S3 invoke permission for storage '{}'",
-                                storage_ref.id
-                            ),
-                            resource_id: Some(current_config.id.clone()),
-                        })?;
+                    {
+                        Ok(_) => {}
+                        Err(e) if is_remote_resource_conflict(&e) => {
+                            info!(
+                                worker=%current_config.id,
+                                statement_id=%statement_id,
+                                "S3 invoke permission already exists; treating as created"
+                            );
+                        }
+                        Err(e) => {
+                            return Err(e.context(ErrorData::CloudPlatformError {
+                                message: format!(
+                                    "Failed to add S3 invoke permission for storage '{}'",
+                                    storage_ref.id
+                                ),
+                                resource_id: Some(current_config.id.clone()),
+                            }));
+                        }
+                    }
 
                     let s3_client = ctx.service_provider.get_aws_s3_client(aws_cfg).await?;
                     let mut notification_config = s3_client
@@ -2218,7 +2286,8 @@ impl AwsWorkerController {
                         })
                         .collect();
 
-                    notification_config.lambda_function_configurations.push(
+                    replace_lambda_notification_config(
+                        &mut notification_config,
                         LambdaFunctionConfiguration {
                             id: Some(statement_id.clone()),
                             lambda_function_arn: function_arn.to_string(),
@@ -2238,7 +2307,9 @@ impl AwsWorkerController {
                             resource_id: Some(current_config.id.clone()),
                         })?;
 
-                    self.s3_permission_statement_ids.push(statement_id);
+                    if !self.s3_permission_statement_ids.contains(&statement_id) {
+                        self.s3_permission_statement_ids.push(statement_id);
+                    }
                 }
             }
 
@@ -2287,16 +2358,28 @@ impl AwsWorkerController {
                         .source_arn(rule_arn)
                         .build();
 
-                    lambda_client
+                    match lambda_client
                         .add_permission(worker_name, permission_request)
                         .await
-                        .context(ErrorData::CloudPlatformError {
-                            message: format!(
-                                "Failed to add EventBridge invoke permission for rule '{}'",
-                                rule_name
-                            ),
-                            resource_id: Some(current_config.id.clone()),
-                        })?;
+                    {
+                        Ok(_) => {}
+                        Err(e) if is_remote_resource_conflict(&e) => {
+                            info!(
+                                worker=%current_config.id,
+                                statement_id=%statement_id,
+                                "EventBridge invoke permission already exists; treating as created"
+                            );
+                        }
+                        Err(e) => {
+                            return Err(e.context(ErrorData::CloudPlatformError {
+                                message: format!(
+                                    "Failed to add EventBridge invoke permission for rule '{}'",
+                                    rule_name
+                                ),
+                                resource_id: Some(current_config.id.clone()),
+                            }));
+                        }
+                    }
 
                     eventbridge_client
                         .put_targets(PutTargetsRequest {
@@ -2315,8 +2398,15 @@ impl AwsWorkerController {
                             resource_id: Some(current_config.id.clone()),
                         })?;
 
-                    self.eventbridge_rule_names.push(rule_name);
-                    self.eventbridge_permission_statement_ids.push(statement_id);
+                    if !self.eventbridge_rule_names.contains(&rule_name) {
+                        self.eventbridge_rule_names.push(rule_name);
+                    }
+                    if !self
+                        .eventbridge_permission_statement_ids
+                        .contains(&statement_id)
+                    {
+                        self.eventbridge_permission_statement_ids.push(statement_id);
+                    }
                 }
             }
         } else {
@@ -3144,6 +3234,45 @@ impl AwsWorkerController {
             })
         })?;
 
+        let existing_mappings = lambda_client
+            .list_event_source_mappings(ListEventSourceMappingsRequest {
+                event_source_arn: Some(queue_arn.clone()),
+                function_name: Some(worker_name.clone()),
+                marker: None,
+                max_items: None,
+            })
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to list event source mappings for queue '{}'",
+                    queue_name
+                ),
+                resource_id: Some(worker_config.id.clone()),
+            })?;
+
+        if let Some(existing_mapping) = existing_mappings
+            .event_source_mappings
+            .unwrap_or_default()
+            .into_iter()
+            .find(|mapping| {
+                mapping.event_source_arn.as_deref() == Some(queue_arn.as_str())
+                    && mapping.function_arn.as_deref() == Some(worker_name.as_str())
+            })
+        {
+            if let Some(uuid) = existing_mapping.uuid {
+                if !self.event_source_mappings.contains(&uuid) {
+                    self.event_source_mappings.push(uuid.clone());
+                }
+                info!(
+                    worker=%worker_config.id,
+                    queue_arn=%queue_arn,
+                    uuid=%uuid,
+                    "SQS event source mapping already exists; treating as created"
+                );
+                return Ok(());
+            }
+        }
+
         let request = alien_aws_clients::lambda::CreateEventSourceMappingRequest::builder()
             .event_source_arn(queue_arn.clone())
             .function_name(worker_name.clone())
@@ -3151,19 +3280,58 @@ impl AwsWorkerController {
             .enabled(true)
             .build();
 
-        let response = lambda_client
-            .create_event_source_mapping(request)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to create event source mapping for queue '{}'",
-                    queue_name
-                ),
-                resource_id: Some(worker_config.id.clone()),
-            })?;
+        let response = match lambda_client.create_event_source_mapping(request).await {
+            Ok(response) => response,
+            Err(e) if is_remote_resource_conflict(&e) => {
+                let existing_mappings = lambda_client
+                    .list_event_source_mappings(ListEventSourceMappingsRequest {
+                        event_source_arn: Some(queue_arn.clone()),
+                        function_name: Some(worker_name.clone()),
+                        marker: None,
+                        max_items: None,
+                    })
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to list event source mappings for queue '{}' after conflict",
+                            queue_name
+                        ),
+                        resource_id: Some(worker_config.id.clone()),
+                    })?;
+
+                existing_mappings
+                    .event_source_mappings
+                    .unwrap_or_default()
+                    .into_iter()
+                    .find(|mapping| {
+                        mapping.event_source_arn.as_deref() == Some(queue_arn.as_str())
+                            && mapping.function_arn.as_deref() == Some(worker_name.as_str())
+                    })
+                    .ok_or_else(|| {
+                        AlienError::new(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Event source mapping for queue '{}' already exists but could not be found",
+                                queue_name
+                            ),
+                            resource_id: Some(worker_config.id.clone()),
+                        })
+                    })?
+            }
+            Err(e) => {
+                return Err(e.context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to create event source mapping for queue '{}'",
+                        queue_name
+                    ),
+                    resource_id: Some(worker_config.id.clone()),
+                }));
+            }
+        };
 
         if let Some(uuid) = response.uuid {
-            self.event_source_mappings.push(uuid.clone());
+            if !self.event_source_mappings.contains(&uuid) {
+                self.event_source_mappings.push(uuid.clone());
+            }
             info!(
                 worker=%worker_config.id,
                 queue_arn=%queue_arn,

@@ -390,6 +390,9 @@ impl DeploymentLoop {
             if config.deployment_token.is_none() {
                 config.deployment_token = deployment.deployment_token.clone();
             }
+            if config.base_platform.is_none() {
+                config.base_platform = deployment.base_platform;
+            }
             config.manager_url = Some(self.config.base_url());
             config.native_image_host = native_image_host;
             config
@@ -405,6 +408,7 @@ impl DeploymentLoop {
                     .external_bindings
                     .clone()
                     .unwrap_or_default(),
+                base_platform: deployment.base_platform,
                 public_urls: None,
                 domain_metadata: None,
                 monitoring: None,

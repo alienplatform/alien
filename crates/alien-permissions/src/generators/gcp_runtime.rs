@@ -46,6 +46,18 @@ pub enum GcpBindingTargetScope {
     CurrentResource,
 }
 
+/// Resource family for current-resource IAM bindings that need provider-specific routing.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum GcpBindingResourceKind {
+    /// Pub/Sub topic IAM policy.
+    PubsubTopic,
+    /// Pub/Sub subscription IAM policy.
+    PubsubSubscription,
+    /// Artifact Registry repository IAM policy.
+    ArtifactRegistryRepository,
+}
+
 /// GCP IAM policy binding.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -56,6 +68,9 @@ pub struct GcpIamBinding {
     pub members: Vec<String>,
     /// IAM policy scope where this role should be bound.
     pub target: GcpBindingTargetScope,
+    /// Resource family for current-resource IAM policy routing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resource_kind: Option<GcpBindingResourceKind>,
     /// Optional condition for conditional IAM.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub condition: Option<GcpIamCondition>,
@@ -279,6 +294,7 @@ impl GcpRuntimePermissionsGenerator {
             };
 
             let target = binding_target_scope(binding_spec);
+            let resource_kind = binding_resource_kind(binding_spec);
             let condition = self.binding_condition(binding_spec, context)?;
 
             if let Some(predefined_roles) = &platform_permission.grant.predefined_roles {
@@ -287,6 +303,7 @@ impl GcpRuntimePermissionsGenerator {
                         role: predefined_role.clone(),
                         members: vec![service_account.clone()],
                         target,
+                        resource_kind,
                         condition: condition.clone(),
                     });
                 }
@@ -310,6 +327,7 @@ impl GcpRuntimePermissionsGenerator {
                 role: custom_role.name.clone(),
                 members: vec![service_account.clone()],
                 target,
+                resource_kind,
                 condition,
             });
             if !custom_roles
@@ -557,6 +575,20 @@ fn binding_target_scope(binding_spec: &GcpBindingSpec) -> GcpBindingTargetScope 
         Some(project_scope) if !project_scope.contains('/') => GcpBindingTargetScope::Project,
         _ => GcpBindingTargetScope::CurrentResource,
     }
+}
+
+fn binding_resource_kind(binding_spec: &GcpBindingSpec) -> Option<GcpBindingResourceKind> {
+    let scope = binding_spec.scope.trim();
+    if scope.contains("/topics/") {
+        return Some(GcpBindingResourceKind::PubsubTopic);
+    }
+    if scope.contains("/subscriptions/") {
+        return Some(GcpBindingResourceKind::PubsubSubscription);
+    }
+    if scope.contains("/repositories/") {
+        return Some(GcpBindingResourceKind::ArtifactRegistryRepository);
+    }
+    None
 }
 
 fn dedupe_bindings(bindings: Vec<GcpIamBinding>) -> Vec<GcpIamBinding> {

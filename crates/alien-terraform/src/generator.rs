@@ -550,6 +550,9 @@ fn versions_body(
     let mut provider_attrs: Vec<Structure> = Vec::new();
     if matches!(target.platform(), alien_core::Platform::Aws) {
         provider_attrs.push(attr("aws", provider_decl_attr("hashicorp/aws", ">= 5.0")));
+        if matches!(target, TerraformTarget::Eks) {
+            provider_attrs.push(attr("tls", provider_decl_attr("hashicorp/tls", ">= 4.0")));
+        }
     }
     if matches!(target.platform(), alien_core::Platform::Gcp) {
         provider_attrs.push(attr(
@@ -828,14 +831,42 @@ fn variables_body(
             Some(Expression::String("default".to_string())),
             false,
         )));
-        if matches!(target, TerraformTarget::Aks) {
-            blocks.push(nested(variable_block(
-                "aks_oidc_issuer_url",
-                "OIDC issuer URL of the AKS cluster (read from `az aks show` and supplied by the customer).",
-                Some(Expression::String(String::new())),
-                false,
-            )));
-        }
+    }
+    if matches!(target, TerraformTarget::Eks) {
+        blocks.push(nested(variable_block(
+            "eks_cluster_name",
+            "Existing EKS cluster name that Helm will install into.",
+            None,
+            false,
+        )));
+    }
+    if matches!(target, TerraformTarget::Gke) {
+        blocks.push(nested(variable_block(
+            "gke_cluster_name",
+            "Existing GKE cluster name that Helm will install into.",
+            None,
+            false,
+        )));
+        blocks.push(nested(variable_block(
+            "gke_cluster_location",
+            "Existing GKE cluster location (region or zone).",
+            None,
+            false,
+        )));
+    }
+    if matches!(target, TerraformTarget::Aks) {
+        blocks.push(nested(variable_block(
+            "aks_cluster_name",
+            "Existing AKS cluster name that Helm will install into.",
+            None,
+            false,
+        )));
+        blocks.push(nested(variable_block(
+            "aks_cluster_resource_group_name",
+            "Resource group containing the existing AKS cluster.",
+            None,
+            false,
+        )));
     }
 
     for (name, description, default) in &network_vars.extra_string_vars {
@@ -874,7 +905,7 @@ fn resource_prefix_variable_block() -> Block {
                 attr(
                     "condition",
                     expr::raw(
-                        "var.resource_prefix == \"\" || can(regex(\"^[a-z](?:[a-z0-9]|-(?=[a-z0-9])){1,38}[a-z0-9]$\", var.resource_prefix))",
+                        "var.resource_prefix == \"\" || (can(regex(\"^[a-z][a-z0-9-]{1,38}[a-z0-9]$\", var.resource_prefix)) && length(regexall(\"--\", var.resource_prefix)) == 0)",
                     ),
                 ),
                 attr(
@@ -1034,8 +1065,22 @@ fn locals_body(
     ));
     body.push(attr(
         "deployment_platform",
-        Expression::String(target.platform().as_str().to_string()),
+        Expression::String(
+            if target.is_kubernetes() {
+                alien_core::Platform::Kubernetes
+            } else {
+                target.platform()
+            }
+            .as_str()
+            .to_string(),
+        ),
     ));
+    if target.is_kubernetes() {
+        body.push(attr(
+            "deployment_base_platform",
+            Expression::String(target.platform().as_str().to_string()),
+        ));
+    }
     body.push(attr(
         "deployment_target",
         Expression::String(target.name().to_string()),
@@ -1063,6 +1108,8 @@ fn locals_body(
             expr::object([
                 ("serviceAccounts", expr::raw("local.helm_service_accounts")),
                 ("stackSettings", expr::raw("local.deployment_settings")),
+                ("basePlatform", expr::raw("local.deployment_base_platform")),
+                ("serviceAccountPrefix", expr::raw("local.resource_prefix")),
             ]),
         ));
     }
@@ -1376,6 +1423,11 @@ fn outputs_body(target: TerraformTarget, registration: Option<&TerraformRegistra
     }
     if target.is_kubernetes() {
         outputs.push((
+            "deployment_base_platform",
+            expr::raw("local.deployment_base_platform"),
+            "Base cloud platform for Kubernetes targets.",
+        ));
+        outputs.push((
             "helm_values",
             expr::raw("jsonencode(local.helm_values)"),
             "Helm values JSON for the manager-fetch Kubernetes install.",
@@ -1470,5 +1522,15 @@ mod tests {
         let outputs =
             render_body(outputs_body(TerraformTarget::Aws, Some(&registration))).expect("outputs");
         assert!(outputs.contains("example_app_deployment.this.deployment_id"));
+    }
+
+    #[test]
+    fn resource_prefix_validation_uses_terraform_supported_regex() {
+        let variables = render_body(Body::from(vec![nested(resource_prefix_variable_block())]))
+            .expect("variables render");
+
+        assert!(variables.contains("^[a-z][a-z0-9-]{1,38}[a-z0-9]$"));
+        assert!(variables.contains("length(regexall(\"--\", var.resource_prefix)) == 0"));
+        assert!(!variables.contains("(?="));
     }
 }

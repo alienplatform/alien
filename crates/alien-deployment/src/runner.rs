@@ -337,6 +337,7 @@ mod tests {
                 created_at: "2026-01-01T00:00:00Z".to_string(),
             },
             external_bindings: alien_core::ExternalBindings::default(),
+            base_platform: None,
             compute_backend: None,
             allow_frozen_changes: false,
             domain_metadata: None,

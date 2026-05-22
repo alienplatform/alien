@@ -35,11 +35,12 @@ impl SqliteDeploymentStore {
     }
 
     /// All columns needed for deployment queries (must match parse_deployment order).
-    const DEPLOYMENT_COLUMNS: [Deployments; 25] = [
+    const DEPLOYMENT_COLUMNS: [Deployments; 26] = [
         Deployments::Id,
         Deployments::Name,
         Deployments::DeploymentGroupId,
         Deployments::Platform,
+        Deployments::BasePlatform,
         Deployments::Status,
         Deployments::StackSettings,
         Deployments::StackState,
@@ -67,10 +68,14 @@ impl SqliteDeploymentStore {
         let p = RowParser::new(row);
         let platform_str: String = p.string(3, "platform")?;
         let platform: Platform = platform_str.parse().map_err(|e: String| db_error(&e))?;
+        let base_platform = p
+            .optional_string(4, "base_platform")?
+            .map(|value| value.parse().map_err(|e: String| db_error(&e)))
+            .transpose()?;
 
         // Parse user environment variables from JSON TEXT column
         let import_source = p
-            .optional_string(11, "import_source")?
+            .optional_string(12, "import_source")?
             .map(|source| serde_json::from_value(serde_json::Value::String(source)))
             .transpose()
             .into_alien_error()
@@ -79,43 +84,44 @@ impl SqliteDeploymentStore {
             })?;
 
         let user_environment_variables: Option<Vec<EnvironmentVariable>> =
-            p.optional_json(15, "environment_variables")?;
+            p.optional_json(16, "environment_variables")?;
 
-        let retry_requested_int: i64 = p.optional_i64(17, "retry_requested")?.unwrap_or(0);
+        let retry_requested_int: i64 = p.optional_i64(18, "retry_requested")?.unwrap_or(0);
 
         Ok(DeploymentRecord {
             id: p.string(0, "id")?,
             name: p.string(1, "name")?,
             deployment_group_id: p.string(2, "deployment_group_id")?,
             platform,
-            status: p.string(4, "status")?,
-            stack_settings: p.json(5, "stack_settings")?,
-            stack_state: p.optional_json(6, "stack_state")?,
-            environment_info: p.optional_json(7, "environment_info")?,
-            runtime_metadata: p.optional_json(8, "runtime_metadata")?,
-            current_release_id: p.optional_string(9, "current_release_id")?,
-            desired_release_id: p.optional_string(10, "desired_release_id")?,
+            base_platform,
+            status: p.string(5, "status")?,
+            stack_settings: p.json(6, "stack_settings")?,
+            stack_state: p.optional_json(7, "stack_state")?,
+            environment_info: p.optional_json(8, "environment_info")?,
+            runtime_metadata: p.optional_json(9, "runtime_metadata")?,
+            current_release_id: p.optional_string(10, "current_release_id")?,
+            desired_release_id: p.optional_string(11, "desired_release_id")?,
             import_source,
-            setup_target: p.optional_string(12, "setup_target")?,
-            setup_fingerprint: p.optional_string(13, "setup_fingerprint")?,
+            setup_target: p.optional_string(13, "setup_target")?,
+            setup_fingerprint: p.optional_string(14, "setup_fingerprint")?,
             setup_fingerprint_version: p
-                .optional_i64(14, "setup_fingerprint_version")?
+                .optional_i64(15, "setup_fingerprint_version")?
                 .map(|value| value as u32),
             user_environment_variables,
-            deployment_token: p.optional_string(16, "deployment_token")?,
+            deployment_token: p.optional_string(17, "deployment_token")?,
             management_config: None,
             deployment_config: None,
             retry_requested: retry_requested_int != 0,
-            locked_by: p.optional_string(18, "locked_by")?,
-            locked_at: p.optional_datetime(19, "locked_at")?,
-            created_at: p.datetime(20, "created_at")?,
-            updated_at: p.optional_datetime(21, "updated_at")?,
-            error: p.optional_json(22, "error")?,
+            locked_by: p.optional_string(19, "locked_by")?,
+            locked_at: p.optional_datetime(20, "locked_at")?,
+            created_at: p.datetime(21, "created_at")?,
+            updated_at: p.optional_datetime(22, "updated_at")?,
+            error: p.optional_json(23, "error")?,
             workspace_id: p
-                .optional_string(23, "workspace_id")?
+                .optional_string(24, "workspace_id")?
                 .unwrap_or_else(|| "default".to_string()),
             project_id: p
-                .optional_string(24, "project_id")?
+                .optional_string(25, "project_id")?
                 .unwrap_or_else(|| "default".to_string()),
         })
     }
@@ -226,6 +232,7 @@ impl DeploymentStore for SqliteDeploymentStore {
             name: params.name,
             deployment_group_id: params.deployment_group_id,
             platform: params.platform,
+            base_platform: None,
             status: "pending".to_string(),
             stack_settings: params.stack_settings,
             stack_state: None,
@@ -302,6 +309,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                 Deployments::Name,
                 Deployments::DeploymentGroupId,
                 Deployments::Platform,
+                Deployments::BasePlatform,
                 Deployments::Status,
                 Deployments::StackSettings,
                 Deployments::StackState,
@@ -317,6 +325,10 @@ impl DeploymentStore for SqliteDeploymentStore {
                 params.name.clone().into(),
                 params.deployment_group_id.clone().into(),
                 params.platform.as_str().to_string().into(),
+                params
+                    .base_platform
+                    .map(|platform| platform.as_str().to_string())
+                    .into(),
                 params.status.clone().into(),
                 stack_settings_json.into(),
                 stack_state_json.into(),
@@ -330,6 +342,10 @@ impl DeploymentStore for SqliteDeploymentStore {
 
             if let Some(ref release_id) = params.current_release_id {
                 columns.push(Deployments::CurrentReleaseId);
+                values.push(release_id.clone().into());
+            }
+            if let Some(ref release_id) = params.desired_release_id {
+                columns.push(Deployments::DesiredReleaseId);
                 values.push(release_id.clone().into());
             }
 
@@ -370,13 +386,14 @@ impl DeploymentStore for SqliteDeploymentStore {
             name: params.name,
             deployment_group_id: params.deployment_group_id,
             platform: params.platform,
+            base_platform: params.base_platform,
             status: params.status,
             stack_settings: params.stack_settings,
             stack_state: Some(params.stack_state),
             environment_info: params.environment_info,
             runtime_metadata: Some(params.runtime_metadata),
             current_release_id: params.current_release_id,
-            desired_release_id: None,
+            desired_release_id: params.desired_release_id,
             import_source: params.import_source,
             setup_target: Some(params.setup_target),
             setup_fingerprint: Some(params.setup_fingerprint),

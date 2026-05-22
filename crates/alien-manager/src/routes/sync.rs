@@ -585,6 +585,7 @@ async fn agent_sync(
                                 .clone()
                                 .unwrap_or_default(),
                         )
+                        .maybe_base_platform(deployment.base_platform)
                         .maybe_manager_url(Some(manager_url))
                         .maybe_deployment_token(agent_token)
                         .maybe_native_image_host(native_image_host)
@@ -712,6 +713,7 @@ async fn initialize(
                         name,
                         deployment_group_id: dg_id.clone(),
                         platform,
+                        base_platform: None,
                         stack_settings: settings,
                         environment_variables: None,
                         deployment_token: dep_token,

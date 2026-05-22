@@ -88,6 +88,26 @@ on:
         description: "Run local agent in foreground (no service install, no sudo)"
         type: boolean
         default: true
+      aws_target:
+        description: "AWS target account"
+        type: choice
+        default: aws-target-1
+        options:
+          - aws-target-1
+      gcp_target:
+        description: "GCP target project"
+        type: choice
+        default: gcp-target-3
+        options:
+          - gcp-target-1
+          - gcp-target-2
+          - gcp-target-3
+      azure_target:
+        description: "Azure target subscription"
+        type: choice
+        default: azure-target-1
+        options:
+          - azure-target-1
   merge_group:
   pull_request:
     types: [opened, reopened, synchronize, labeled]
@@ -548,6 +568,9 @@ jobs:
           # vars.* are not auto-masked by GitHub (only secrets.* are)
           echo "::add-mask::${{ vars.TEST_GCP_MGMT_PROJECT_ID }}"
           echo "::add-mask::${{ vars.TEST_GCP_TARGET_PROJECT_ID }}"
+          echo "::add-mask::${{ vars.TEST_GCP_TARGET_1_PROJECT_ID }}"
+          echo "::add-mask::${{ vars.TEST_GCP_TARGET_2_PROJECT_ID }}"
+          echo "::add-mask::${{ vars.TEST_GCP_TARGET_3_PROJECT_ID }}"
 
       - name: Terraform init
         working-directory: infra/test
@@ -568,6 +591,10 @@ jobs:
           TF_VAR_google_management_project_id: ${{ vars.TEST_GCP_MGMT_PROJECT_ID }}
           TF_VAR_google_target_service_account_key: ${{ secrets.TEST_GCP_TARGET_SA_KEY }}
           TF_VAR_google_target_project_id: ${{ vars.TEST_GCP_TARGET_PROJECT_ID }}
+          TF_VAR_google_target_1_service_account_key: ${{ secrets.TEST_GCP_TARGET_1_SA_KEY }}
+          TF_VAR_google_target_1_project_id: ${{ vars.TEST_GCP_TARGET_1_PROJECT_ID }}
+          TF_VAR_google_target_3_service_account_key: ${{ secrets.TEST_GCP_TARGET_3_SA_KEY }}
+          TF_VAR_google_target_3_project_id: ${{ vars.TEST_GCP_TARGET_3_PROJECT_ID }}
           TF_VAR_azure_management_subscription_id: ${{ secrets.TEST_AZURE_MGMT_SUBSCRIPTION_ID }}
           TF_VAR_azure_management_tenant_id: ${{ secrets.TEST_AZURE_MGMT_TENANT_ID }}
           TF_VAR_azure_management_client_id: ${{ secrets.TEST_AZURE_MGMT_CLIENT_ID }}
@@ -591,6 +618,17 @@ jobs:
       - name: Generate .env.test
         run: |
           ./scripts/gen-env-test.sh
+          cp .env.test .env.test.1password
+          ./scripts/select-e2e-targets.sh \
+            --env-file .env.test.1password \
+            --aws aws-target-1 \
+            --gcp gcp-target-3 \
+            --azure azure-target-1
+          ./scripts/select-e2e-targets.sh \
+            --env-file .env.test \
+            --aws "${{ inputs.aws_target || 'aws-target-1' }}" \
+            --gcp "${{ inputs.gcp_target || 'gcp-target-3' }}" \
+            --azure "${{ inputs.azure_target || 'azure-target-1' }}"
           echo "--- verifying .env.test exists ---"
           ls -la .env.test
           wc -l .env.test
@@ -617,6 +655,20 @@ jobs:
           if-no-files-found: error
           include-hidden-files: true
           retention-days: 1
+
+      - name: Install 1Password CLI
+        uses: 1password/install-cli-action@v1
+
+      - name: Upload .env.test to 1Password (for local dev)
+        run: |
+          if op document get alien-test-env --vault "$OP_VAULT_NAME" > /dev/null 2>&1; then
+            op document edit alien-test-env .env.test.1password --vault "$OP_VAULT_NAME"
+          else
+            op document create .env.test.1password --title alien-test-env --vault "$OP_VAULT_NAME"
+          fi
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          OP_VAULT_NAME: ${{ secrets.OP_VAULT_NAME }}
 
   # ── E2E push test matrix ───────────────────────────────────────────
 
@@ -1084,19 +1136,27 @@ jobs:
   # orphaned cloud resources in the dedicated test target accounts.
 
   cleanup:
-    needs: [compute-matrix, push-test, cloudformation-test, terraform-test, local-test]
+    needs: [compute-matrix, setup, push-test, cloudformation-test, terraform-test, local-test]
     if: always() && needs.compute-matrix.outputs.skip_cleanup != 'true'
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 30
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Download .env.test
+        uses: actions/download-artifact@v4
+        with:
+          name: env-test-e2e
+
       - name: Clean up AWS resources
         if: always()
         continue-on-error: true
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.TEST_AWS_TARGET_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.TEST_AWS_TARGET_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: us-east-2
         run: |
+          set -a && source .env.test && set +a
+          export AWS_ACCESS_KEY_ID="$AWS_TARGET_ACCESS_KEY_ID"
+          export AWS_SECRET_ACCESS_KEY="$AWS_TARGET_SECRET_ACCESS_KEY"
+          export AWS_SESSION_TOKEN="${AWS_TARGET_SESSION_TOKEN:-}"
+          export AWS_DEFAULT_REGION="$AWS_TARGET_REGION"
           echo "Deleting CloudFormation stacks in target account..."
           STACKS=$(aws cloudformation list-stacks \
             --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE ROLLBACK_COMPLETE \
@@ -1158,27 +1218,26 @@ jobs:
       - name: Clean up GCP resources
         if: always()
         continue-on-error: true
-        env:
-          GCP_TARGET_PROJECT_ID: ${{ vars.TEST_GCP_TARGET_PROJECT_ID }}
         run: |
-          echo '${{ secrets.TEST_GCP_TARGET_SA_KEY }}' > /tmp/gcp-key.json
+          set -a && source .env.test && set +a
+          echo "$GOOGLE_TARGET_SERVICE_ACCOUNT_KEY" > /tmp/gcp-key.json
           gcloud auth activate-service-account --key-file=/tmp/gcp-key.json --quiet || true
-          gcloud config set project "$GCP_TARGET_PROJECT_ID" --quiet || true
+          gcloud config set project "$GOOGLE_TARGET_PROJECT_ID" --quiet || true
 
           echo "Deleting Cloud Run services in target project..."
-          SERVICES=$(gcloud run services list --platform=managed --region=us-east4 \
+          SERVICES=$(gcloud run services list --platform=managed --region="$GOOGLE_TARGET_REGION" \
             --format='value(name)' 2>/dev/null) || true
           for svc in $SERVICES; do
             echo "Deleting Cloud Run service: $svc"
-            gcloud run services delete "$svc" --platform=managed --region=us-east4 --quiet || true
+            gcloud run services delete "$svc" --platform=managed --region="$GOOGLE_TARGET_REGION" --quiet || true
           done
 
           echo "Deleting orphaned Cloud Functions in target project..."
-          FUNCTIONS=$(gcloud functions list --regions=us-east4 \
+          FUNCTIONS=$(gcloud functions list --regions="$GOOGLE_TARGET_REGION" \
             --format='value(name)' 2>/dev/null) || true
           for fn in $FUNCTIONS; do
             echo "Deleting Cloud Function: $fn"
-            gcloud functions delete "$fn" --region=us-east4 --quiet || true
+            gcloud functions delete "$fn" --region="$GOOGLE_TARGET_REGION" --quiet || true
           done
 
           echo "Deleting orphaned Pub/Sub topics with alien- prefix..."
@@ -1214,16 +1273,12 @@ jobs:
       - name: Clean up Azure resources
         if: always()
         continue-on-error: true
-        env:
-          AZURE_SUBSCRIPTION_ID: ${{ secrets.TEST_AZURE_TARGET_SUBSCRIPTION_ID }}
-          AZURE_TENANT_ID: ${{ secrets.TEST_AZURE_TARGET_TENANT_ID }}
-          AZURE_CLIENT_ID: ${{ secrets.TEST_AZURE_TARGET_CLIENT_ID }}
-          AZURE_CLIENT_SECRET: ${{ secrets.TEST_AZURE_TARGET_CLIENT_SECRET }}
         run: |
+          set -a && source .env.test && set +a
           az login --service-principal \
-            -u "$AZURE_CLIENT_ID" -p "$AZURE_CLIENT_SECRET" --tenant "$AZURE_TENANT_ID" \
+            -u "$AZURE_TARGET_CLIENT_ID" -p "$AZURE_TARGET_CLIENT_SECRET" --tenant "$AZURE_TARGET_TENANT_ID" \
             --output none || true
-          az account set --subscription "$AZURE_SUBSCRIPTION_ID" || true
+          az account set --subscription "$AZURE_TARGET_SUBSCRIPTION_ID" || true
 
           echo "Deleting resource groups in target subscription (excluding shared env)..."
           GROUPS=$(az group list --query "[?!starts_with(name, 'alien-e2e-shared-')].name" -o tsv 2>/dev/null) || true

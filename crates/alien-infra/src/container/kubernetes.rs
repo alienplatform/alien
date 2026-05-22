@@ -13,8 +13,9 @@ use alien_macros::controller;
 
 use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec, StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
-    Container as K8sContainer, ContainerPort, EnvVar, PersistentVolumeClaim,
-    PersistentVolumeClaimSpec, PodSpec, PodTemplateSpec, ResourceRequirements, Volume, VolumeMount,
+    Container as K8sContainer, ContainerPort, EnvVar, LocalObjectReference, PersistentVolumeClaim,
+    PersistentVolumeClaimSpec, PodSpec, PodTemplateSpec, ResourceRequirements, Secret, Volume,
+    VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
@@ -40,6 +41,67 @@ fn generate_kubernetes_container_name(resource_prefix: &str, id: &str) -> String
         combined[..63].to_string()
     } else {
         combined
+    }
+}
+
+async fn create_registry_pull_secret(
+    secrets_client: &std::sync::Arc<dyn alien_k8s_clients::SecretsApi>,
+    namespace: &str,
+    secret_name: &str,
+    proxy_host: &str,
+    deployment_token: &str,
+) -> Result<()> {
+    use base64::engine::{general_purpose::STANDARD as BASE64, Engine as _};
+
+    let auth = BASE64.encode(format!("deployment:{deployment_token}"));
+    let docker_config = serde_json::json!({
+        "auths": {
+            proxy_host: {
+                "username": "deployment",
+                "password": deployment_token,
+                "auth": auth,
+            }
+        }
+    });
+
+    let docker_config_bytes = serde_json::to_vec(&docker_config)
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to serialize Docker config".to_string(),
+            resource_id: None,
+        })?;
+
+    let secret = Secret {
+        metadata: ObjectMeta {
+            name: Some(secret_name.to_string()),
+            namespace: Some(namespace.to_string()),
+            ..Default::default()
+        },
+        type_: Some("kubernetes.io/dockerconfigjson".to_string()),
+        data: Some({
+            let mut data = BTreeMap::new();
+            data.insert(
+                ".dockerconfigjson".to_string(),
+                k8s_openapi::ByteString(docker_config_bytes),
+            );
+            data
+        }),
+        ..Default::default()
+    };
+
+    match secrets_client.create_secret(namespace, &secret).await {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            let err = format!("{e}");
+            if err.contains("AlreadyExists") || err.contains("409") {
+                Ok(())
+            } else {
+                Err(e.context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to create registry pull secret '{secret_name}'"),
+                    resource_id: None,
+                }))
+            }
+        }
     }
 }
 
@@ -115,6 +177,37 @@ impl KubernetesContainerController {
         // Generate ServiceAccount name following Helm naming convention
         let service_account_name =
             generate_service_account_name(&ctx.resource_prefix, config.get_permissions());
+        let image_pull_secret_name = if matches!(config.code, ContainerCode::Image { .. }) {
+            let token = ctx.deployment_config.deployment_token.as_ref().ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceControllerConfigError {
+                    resource_id: config.id.clone(),
+                    message: "deployment_token is required for Kubernetes to pull images from the registry proxy".to_string(),
+                })
+            })?;
+            let manager_url = ctx.deployment_config.manager_url.as_ref().ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceControllerConfigError {
+                    resource_id: config.id.clone(),
+                    message: "manager_url is required for Kubernetes registry pull credentials"
+                        .to_string(),
+                })
+            })?;
+            let secret_name = format!("{}-registry", container_name);
+            let secrets_client = ctx
+                .service_provider
+                .get_kubernetes_secrets_client(kubernetes_config)
+                .await?;
+            create_registry_pull_secret(
+                &secrets_client,
+                &namespace,
+                &secret_name,
+                manager_url,
+                token,
+            )
+            .await?;
+            Some(secret_name)
+        } else {
+            None
+        };
 
         self.is_stateful = config.stateful;
         self.workload_name = Some(container_name.clone());
@@ -131,6 +224,7 @@ impl KubernetesContainerController {
                     &container_name,
                     &namespace,
                     &service_account_name,
+                    image_pull_secret_name.as_deref(),
                     ctx,
                 )
                 .await?;
@@ -156,6 +250,7 @@ impl KubernetesContainerController {
                     &container_name,
                     &namespace,
                     &service_account_name,
+                    image_pull_secret_name.as_deref(),
                     ctx,
                 )
                 .await?;
@@ -395,6 +490,37 @@ impl KubernetesContainerController {
 
         let service_account_name =
             generate_service_account_name(&ctx.resource_prefix, config.get_permissions());
+        let image_pull_secret_name = if matches!(config.code, ContainerCode::Image { .. }) {
+            let token = ctx.deployment_config.deployment_token.as_ref().ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceControllerConfigError {
+                    resource_id: config.id.clone(),
+                    message: "deployment_token is required for Kubernetes to pull images from the registry proxy".to_string(),
+                })
+            })?;
+            let manager_url = ctx.deployment_config.manager_url.as_ref().ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceControllerConfigError {
+                    resource_id: config.id.clone(),
+                    message: "manager_url is required for Kubernetes registry pull credentials"
+                        .to_string(),
+                })
+            })?;
+            let secret_name = format!("{}-registry", workload_name);
+            let secrets_client = ctx
+                .service_provider
+                .get_kubernetes_secrets_client(kubernetes_config)
+                .await?;
+            create_registry_pull_secret(
+                &secrets_client,
+                namespace,
+                &secret_name,
+                manager_url,
+                token,
+            )
+            .await?;
+            Some(secret_name)
+        } else {
+            None
+        };
         let deployment_client = ctx
             .service_provider
             .get_kubernetes_deployment_client(kubernetes_config)
@@ -415,7 +541,14 @@ impl KubernetesContainerController {
 
             let resource_version = existing.metadata.resource_version.clone();
             let mut new_statefulset = self
-                .build_statefulset(config, workload_name, namespace, &service_account_name, ctx)
+                .build_statefulset(
+                    config,
+                    workload_name,
+                    namespace,
+                    &service_account_name,
+                    image_pull_secret_name.as_deref(),
+                    ctx,
+                )
                 .await?;
             new_statefulset.metadata.resource_version = resource_version;
 
@@ -438,7 +571,14 @@ impl KubernetesContainerController {
 
             let resource_version = existing.metadata.resource_version.clone();
             let mut new_deployment = self
-                .build_deployment(config, workload_name, namespace, &service_account_name, ctx)
+                .build_deployment(
+                    config,
+                    workload_name,
+                    namespace,
+                    &service_account_name,
+                    image_pull_secret_name.as_deref(),
+                    ctx,
+                )
                 .await?;
             new_deployment.metadata.resource_version = resource_version;
 
@@ -800,11 +940,12 @@ impl KubernetesContainerController {
         container_name: &str,
         namespace: &str,
         service_account_name: &str,
+        image_pull_secret_name: Option<&str>,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<Deployment> {
         let labels = self.build_labels(container_name);
         let pod_spec = self
-            .build_pod_spec(config, service_account_name, ctx)
+            .build_pod_spec(config, service_account_name, image_pull_secret_name, ctx)
             .await?;
 
         let deployment = Deployment {
@@ -842,11 +983,12 @@ impl KubernetesContainerController {
         container_name: &str,
         namespace: &str,
         service_account_name: &str,
+        image_pull_secret_name: Option<&str>,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<StatefulSet> {
         let labels = self.build_labels(container_name);
         let pod_spec = self
-            .build_pod_spec(config, service_account_name, ctx)
+            .build_pod_spec(config, service_account_name, image_pull_secret_name, ctx)
             .await?;
 
         // Build volume claim templates for persistent storage
@@ -917,6 +1059,7 @@ impl KubernetesContainerController {
         &self,
         config: &Container,
         service_account_name: &str,
+        image_pull_secret_name: Option<&str>,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<PodSpec> {
         // Determine the container image
@@ -1078,6 +1221,11 @@ impl KubernetesContainerController {
         let pod_spec = PodSpec {
             service_account_name: Some(service_account_name.to_string()),
             containers: vec![container],
+            image_pull_secrets: image_pull_secret_name.map(|name| {
+                vec![LocalObjectReference {
+                    name: name.to_string(),
+                }]
+            }),
             volumes: if volumes.is_empty() {
                 None
             } else {

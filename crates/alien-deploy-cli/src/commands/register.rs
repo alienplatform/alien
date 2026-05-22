@@ -360,6 +360,7 @@ fn build_import_request(
         source_kind: Some(source_kind),
         release_id: None,
         platform,
+        base_platform: None,
         region,
         setup_target,
         setup_fingerprint,

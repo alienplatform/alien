@@ -41,6 +41,10 @@ pub struct DeploymentConfig {
     /// Optional for cloud platforms (override specific resources).
     #[serde(default)]
     pub external_bindings: ExternalBindings,
+    /// Cloud platform that owns imported base infrastructure for a Kubernetes
+    /// runtime deployment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_platform: Option<crate::Platform>,
     /// Public URLs for exposed resources (optional override for all platforms).
     ///
     /// - **Kubernetes**: Pre-computed by Helm from services config (highly recommended)

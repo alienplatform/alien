@@ -87,6 +87,7 @@ async fn azure_remote_management_dependencies_do_not_cycle() {
             image: "test-image:latest".to_string(),
         })
         .permissions("test-permissions".to_string())
+        .commands_enabled(true)
         .build();
 
     let queue = Queue::new("test-queue".to_string()).build();
@@ -128,6 +129,10 @@ async fn azure_remote_management_dependencies_do_not_cycle() {
         alien_core::AzureServiceBusNamespace::RESOURCE_TYPE,
         "default-service-bus-namespace",
     );
+    let service_bus_activation = ResourceRef::new(
+        alien_core::ServiceActivation::RESOURCE_TYPE,
+        "enable-servicebus",
+    );
 
     let resource_group_deps = &result
         .resources
@@ -152,6 +157,8 @@ async fn azure_remote_management_dependencies_do_not_cycle() {
     let worker_deps = &result.resources.get("test-worker").unwrap().dependencies;
     assert!(worker_deps.contains(&resource_group));
     assert!(worker_deps.contains(&remote_management));
+    assert!(worker_deps.contains(&service_bus_activation));
+    assert!(worker_deps.contains(&service_bus_namespace));
 
     let queue_deps = &result.resources.get("test-queue").unwrap().dependencies;
     assert!(queue_deps.contains(&resource_group));

@@ -1,7 +1,7 @@
 mod common;
 
 use alien_permissions::{
-    generators::{GcpBindingTargetScope, GcpRuntimePermissionsGenerator},
+    generators::{GcpBindingResourceKind, GcpBindingTargetScope, GcpRuntimePermissionsGenerator},
     get_permission_set, BindingTarget,
 };
 use common::*;
@@ -139,13 +139,25 @@ fn gcp_multi_entry_permission_sets_keep_project_and_resource_roles_separate() {
         .generate_custom_roles(permission_set, &context)
         .expect("should generate split custom roles");
     let bindings = generator
-        .generate_bindings(permission_set, BindingTarget::Resource, &context)
+        .generate_bindings(permission_set, BindingTarget::Stack, &context)
         .expect("should generate split bindings");
 
     let project_binding = bindings
         .bindings
         .iter()
-        .find(|binding| binding.target == GcpBindingTargetScope::Project)
+        .find(|binding| {
+            binding.target == GcpBindingTargetScope::Project
+                && roles
+                    .iter()
+                    .find(|role| role.name == binding.role)
+                    .is_some_and(|role| {
+                        role.included_permissions
+                            == vec![
+                                "iam.serviceAccounts.actAs",
+                                "iam.serviceAccounts.getAccessToken",
+                            ]
+                    })
+        })
         .expect("project-scoped helper binding");
     let project_role = roles
         .iter()
@@ -163,6 +175,78 @@ fn gcp_multi_entry_permission_sets_keep_project_and_resource_roles_separate() {
         .included_permissions
         .iter()
         .any(|permission| permission.starts_with("artifactregistry.")));
+}
+
+#[test]
+fn gcp_queue_data_write_resource_bindings_split_topic_and_subscription() {
+    let generator = GcpRuntimePermissionsGenerator::new();
+    let permission_set = get_permission_set("queue/data-write").expect("permission set exists");
+    let context = create_test_context().with_resource_name("jobs");
+
+    let result = generator
+        .generate_bindings(permission_set, BindingTarget::Resource, &context)
+        .expect("should generate split queue bindings");
+
+    assert_eq!(result.bindings.len(), 3);
+    let topic_roles: Vec<_> = result
+        .bindings
+        .iter()
+        .filter(|binding| binding.resource_kind == Some(GcpBindingResourceKind::PubsubTopic))
+        .map(|binding| binding.role.as_str())
+        .collect();
+    let subscription_roles: Vec<_> = result
+        .bindings
+        .iter()
+        .filter(|binding| binding.resource_kind == Some(GcpBindingResourceKind::PubsubSubscription))
+        .map(|binding| binding.role.as_str())
+        .collect();
+
+    assert_eq!(topic_roles, vec!["roles/pubsub.publisher"]);
+    assert_eq!(
+        subscription_roles,
+        vec!["roles/pubsub.subscriber", "roles/pubsub.viewer"]
+    );
+    assert!(result
+        .bindings
+        .iter()
+        .all(|binding| binding.target == GcpBindingTargetScope::CurrentResource));
+}
+
+#[test]
+fn gcp_artifact_registry_pull_resource_binding_omits_project_helper_binding() {
+    let generator = GcpRuntimePermissionsGenerator::new();
+    let permission_set =
+        get_permission_set("artifact-registry/pull").expect("permission set exists");
+    let context = create_test_context().with_resource_name("app-images");
+
+    let result = generator
+        .generate_bindings(permission_set, BindingTarget::Resource, &context)
+        .expect("should generate repository-only resource binding");
+
+    assert_eq!(result.bindings.len(), 1);
+    assert_eq!(
+        result.bindings[0].resource_kind,
+        Some(GcpBindingResourceKind::ArtifactRegistryRepository)
+    );
+    assert_eq!(
+        result.bindings[0].target,
+        GcpBindingTargetScope::CurrentResource
+    );
+}
+
+#[test]
+fn gcp_artifact_registry_management_stack_binding_is_project_scoped() {
+    let generator = GcpRuntimePermissionsGenerator::new();
+    let permission_set =
+        get_permission_set("artifact-registry/management").expect("permission set exists");
+    let context = create_test_context();
+
+    let result = generator
+        .generate_bindings(permission_set, BindingTarget::Stack, &context)
+        .expect("should generate project-scoped stack binding");
+
+    assert_eq!(result.bindings.len(), 1);
+    assert_eq!(result.bindings[0].target, GcpBindingTargetScope::Project);
 }
 
 #[test]

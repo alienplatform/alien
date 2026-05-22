@@ -448,6 +448,7 @@ async fn apply_render_mutations(
         allow_frozen_changes: false,
         compute_backend: None,
         external_bindings: ExternalBindings::default(),
+        base_platform: None,
         public_urls: None,
         domain_metadata: None,
         monitoring: None,
@@ -896,7 +897,7 @@ async fn write_manager_fetch_values(
     let mut values = terraform_helm_values(terraform_outputs)?;
     let values_object = values
         .as_object_mut()
-        .context("alien_helm_values output must be a JSON object")?;
+        .context("helm_values output must be a JSON object")?;
     values_object.insert(
         "management".to_string(),
         serde_json::json!({
@@ -920,8 +921,8 @@ async fn write_manager_fetch_values(
 }
 
 fn terraform_helm_values(outputs: &Value) -> anyhow::Result<Value> {
-    serde_json::from_str(&terraform_output_string(outputs, "alien_helm_values")?)
-        .context("Failed to parse terraform output alien_helm_values")
+    serde_json::from_str(&terraform_output_string(outputs, "helm_values")?)
+        .context("Failed to parse terraform output helm_values")
 }
 
 fn runtime_values() -> anyhow::Result<Value> {
@@ -1143,6 +1144,7 @@ async fn cloudformation_import_request(
         source_kind: Some(ImportSourceKind::CloudFormation),
         release_id: None,
         platform,
+        base_platform: None,
         region,
         setup_target,
         setup_fingerprint,
@@ -1295,6 +1297,21 @@ fn terraform_import_request_from_outputs(
     let platform: Platform = terraform_output_string(output, "deployment_platform")?
         .parse()
         .map_err(|error| anyhow::anyhow!("Invalid deployment_platform output: {error}"))?;
+    let base_platform = terraform_output_string(output, "deployment_base_platform")
+        .ok()
+        .and_then(|value| {
+            if value.trim().is_empty() || value.trim() == "null" {
+                None
+            } else {
+                Some(value)
+            }
+        })
+        .map(|value| {
+            value.parse().map_err(|error| {
+                anyhow::anyhow!("Invalid deployment_base_platform output: {error}")
+            })
+        })
+        .transpose()?;
     let resource_prefix = terraform_output_string(output, "deployment_resource_prefix")?;
     let region = terraform_output_string(output, "deployment_region")?;
     let management_config: ManagementConfig = serde_json::from_str(&terraform_output_string(
@@ -1319,6 +1336,7 @@ fn terraform_import_request_from_outputs(
         source_kind: Some(ImportSourceKind::Terraform),
         release_id: None,
         platform,
+        base_platform,
         region,
         setup_target,
         setup_fingerprint,

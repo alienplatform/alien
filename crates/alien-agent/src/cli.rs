@@ -34,6 +34,9 @@ pub struct Args {
     #[arg(long, env = "PLATFORM", value_parser = parse_platform)]
     pub platform: Platform,
 
+    #[arg(long, env = "BASE_PLATFORM", value_parser = parse_platform)]
+    pub base_platform: Option<Platform>,
+
     #[arg(long, env = "SYNC_URL")]
     pub sync_url: Option<String>,
 
@@ -259,6 +262,7 @@ async fn run(args: Args, init_hook: InitHook) -> Result<()> {
 
     let agent_config = AgentConfig::builder()
         .platform(args.platform)
+        .maybe_base_platform(args.base_platform)
         .maybe_sync(sync_config)
         .data_dir(data_dir)
         .encryption_key(encryption_key)

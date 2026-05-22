@@ -27,18 +27,24 @@
     "gcp": [
       {
         "grant": {
-          "predefinedRoles": [
-            "roles/pubsub.publisher",
-            "roles/pubsub.subscriber",
-            "roles/pubsub.viewer"
-          ]
+          "predefinedRoles": ["roles/pubsub.publisher"]
         },
-        // GCP IAM conditions with resource.type/resource.name do not evaluate correctly
-        // for pubsub.topics.publish and pubsub.subscriptions.consume at runtime.
-        // Access is scoped per-stack via the service account identity instead.
         "binding": {
           "stack": { "scope": "projects/${projectName}" },
-          "resource": { "scope": "projects/${projectName}" }
+          "resource": {
+            "scope": "projects/${projectName}/topics/${resourceName}"
+          }
+        }
+      },
+      {
+        "grant": {
+          "predefinedRoles": ["roles/pubsub.subscriber", "roles/pubsub.viewer"]
+        },
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": {
+            "scope": "projects/${projectName}/subscriptions/${resourceName}"
+          }
         }
       }
     ],

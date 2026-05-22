@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
@@ -41,6 +41,21 @@ fn is_remote_resource_conflict(error: &AlienError<CloudClientErrorData>) -> bool
         &error.error,
         Some(CloudClientErrorData::RemoteResourceConflict { .. })
     )
+}
+
+fn same_unordered_strings(left: &[String], right: &[String]) -> bool {
+    left.iter().collect::<HashSet<_>>() == right.iter().collect::<HashSet<_>>()
+}
+
+fn gcs_notification_matches_existing(
+    existing: &GcsNotification,
+    desired: &GcsNotification,
+) -> bool {
+    existing.topic == desired.topic
+        && same_unordered_strings(&existing.event_types, &desired.event_types)
+        && existing.payload_format == desired.payload_format
+        && existing.object_name_prefix == desired.object_name_prefix
+        && existing.custom_attributes == desired.custom_attributes
 }
 
 /// Generates the Cloud Run service name from stack prefix and worker ID
@@ -1194,18 +1209,32 @@ impl GcpWorkerController {
                 state: None,
             };
 
-            scheduler_client
+            match scheduler_client
                 .create_job(gcp_config.region.clone(), job_id.clone(), job)
                 .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to create Cloud Scheduler job '{}' for worker '{}'",
-                        job_id, cfg.id
-                    ),
-                    resource_id: Some(cfg.id.clone()),
-                })?;
+            {
+                Ok(_) => {}
+                Err(e) if is_remote_resource_conflict(&e) => {
+                    info!(
+                        worker=%cfg.id,
+                        job=%job_id,
+                        "Cloud Scheduler job already exists; treating as created"
+                    );
+                }
+                Err(e) => {
+                    return Err(e.context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to create Cloud Scheduler job '{}' for worker '{}'",
+                            job_id, cfg.id
+                        ),
+                        resource_id: Some(cfg.id.clone()),
+                    }));
+                }
+            }
 
-            self.scheduler_job_names.push(job_full_name);
+            if !self.scheduler_job_names.contains(&job_full_name) {
+                self.scheduler_job_names.push(job_full_name);
+            }
 
             info!(
                 worker=%cfg.id,
@@ -2017,18 +2046,32 @@ impl GcpWorkerController {
                         state: None,
                     };
 
-                    scheduler_client
+                    match scheduler_client
                         .create_job(gcp_config.region.clone(), job_id.clone(), job)
                         .await
-                        .context(ErrorData::CloudPlatformError {
-                            message: format!(
-                                "Failed to create Cloud Scheduler job '{}' for worker '{}'",
-                                job_id, current_config.id
-                            ),
-                            resource_id: Some(current_config.id.clone()),
-                        })?;
+                    {
+                        Ok(_) => {}
+                        Err(e) if is_remote_resource_conflict(&e) => {
+                            info!(
+                                worker=%current_config.id,
+                                job=%job_id,
+                                "Cloud Scheduler job already exists; treating as created"
+                            );
+                        }
+                        Err(e) => {
+                            return Err(e.context(ErrorData::CloudPlatformError {
+                                message: format!(
+                                    "Failed to create Cloud Scheduler job '{}' for worker '{}'",
+                                    job_id, current_config.id
+                                ),
+                                resource_id: Some(current_config.id.clone()),
+                            }));
+                        }
+                    }
 
-                    self.scheduler_job_names.push(job_full_name);
+                    if !self.scheduler_job_names.contains(&job_full_name) {
+                        self.scheduler_job_names.push(job_full_name);
+                    }
                 }
             }
         } else {
@@ -3765,18 +3808,32 @@ impl GcpWorkerController {
             "Creating Pub/Sub push subscription"
         );
 
-        pubsub_client
+        match pubsub_client
             .create_subscription(subscription_name.clone(), subscription)
             .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to create push subscription '{}' for queue '{}'",
-                    subscription_name, queue_ref.id
-                ),
-                resource_id: Some(worker_config.id.clone()),
-            })?;
+        {
+            Ok(_) => {}
+            Err(e) if is_remote_resource_conflict(&e) => {
+                info!(
+                    worker=%worker_config.id,
+                    subscription=%subscription_name,
+                    "Pub/Sub push subscription already exists; treating as created"
+                );
+            }
+            Err(e) => {
+                return Err(e.context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to create push subscription '{}' for queue '{}'",
+                        subscription_name, queue_ref.id
+                    ),
+                    resource_id: Some(worker_config.id.clone()),
+                }));
+            }
+        }
 
-        self.push_subscriptions.push(subscription_name.clone());
+        if !self.push_subscriptions.contains(&subscription_name) {
+            self.push_subscriptions.push(subscription_name.clone());
+        }
 
         info!(
             worker=%worker_config.id,
@@ -3905,19 +3962,33 @@ impl GcpWorkerController {
             "Creating Pub/Sub topic for storage notifications"
         );
 
-        pubsub_client
+        match pubsub_client
             .create_topic(topic_short_name.clone(), Topic::default())
             .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to create storage notification topic '{}'",
-                    topic_short_name
-                ),
-                resource_id: Some(worker_config.id.clone()),
-            })?;
+        {
+            Ok(_) => {}
+            Err(e) if is_remote_resource_conflict(&e) => {
+                info!(
+                    worker=%worker_config.id,
+                    topic=%topic_short_name,
+                    "Storage notification topic already exists; treating as created"
+                );
+            }
+            Err(e) => {
+                return Err(e.context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to create storage notification topic '{}'",
+                        topic_short_name
+                    ),
+                    resource_id: Some(worker_config.id.clone()),
+                }));
+            }
+        }
 
-        self.storage_notification_topics
-            .push(topic_short_name.clone());
+        if !self.storage_notification_topics.contains(&topic_short_name) {
+            self.storage_notification_topics
+                .push(topic_short_name.clone());
+        }
 
         // 2. Grant the GCS service agent publish permissions on the topic
         //    The GCS service agent email uses the project ID as a fallback when
@@ -3978,22 +4049,51 @@ impl GcpWorkerController {
             custom_attributes: std::collections::HashMap::new(),
         };
 
-        let created_notification = gcs_client
-            .insert_notification(bucket_name.clone(), notification)
+        let existing_notification = gcs_client
+            .list_notifications(bucket_name.clone())
             .await
             .context(ErrorData::CloudPlatformError {
                 message: format!(
-                    "Failed to create GCS notification on bucket '{}' for worker '{}'",
+                    "Failed to list GCS notifications on bucket '{}' for worker '{}'",
                     bucket_name, worker_config.id
                 ),
                 resource_id: Some(worker_config.id.clone()),
-            })?;
+            })?
+            .items
+            .into_iter()
+            .find(|existing| gcs_notification_matches_existing(existing, &notification));
+
+        let created_notification = if let Some(existing_notification) = existing_notification {
+            info!(
+                worker=%worker_config.id,
+                storage=%storage_ref.id,
+                bucket=%bucket_name,
+                notification_id=?existing_notification.id,
+                "GCS notification already exists; treating as created"
+            );
+            existing_notification
+        } else {
+            gcs_client
+                .insert_notification(bucket_name.clone(), notification)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to create GCS notification on bucket '{}' for worker '{}'",
+                        bucket_name, worker_config.id
+                    ),
+                    resource_id: Some(worker_config.id.clone()),
+                })?
+        };
 
         if let Some(notification_id) = &created_notification.id {
-            self.gcs_notification_ids.push(GcsNotificationTracker {
-                bucket_name: bucket_name.clone(),
-                notification_id: notification_id.clone(),
-            });
+            if !self.gcs_notification_ids.iter().any(|tracker| {
+                tracker.bucket_name == *bucket_name && tracker.notification_id == *notification_id
+            }) {
+                self.gcs_notification_ids.push(GcsNotificationTracker {
+                    bucket_name: bucket_name.clone(),
+                    notification_id: notification_id.clone(),
+                });
+            }
         }
 
         // 4. Create a push subscription to the Cloud Run URL
@@ -4059,18 +4159,32 @@ impl GcpWorkerController {
             "Creating Pub/Sub push subscription for storage trigger"
         );
 
-        pubsub_client
+        match pubsub_client
             .create_subscription(subscription_name.clone(), subscription)
             .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to create push subscription '{}' for storage trigger '{}'",
-                    subscription_name, storage_ref.id
-                ),
-                resource_id: Some(worker_config.id.clone()),
-            })?;
+        {
+            Ok(_) => {}
+            Err(e) if is_remote_resource_conflict(&e) => {
+                info!(
+                    worker=%worker_config.id,
+                    subscription=%subscription_name,
+                    "Storage trigger push subscription already exists; treating as created"
+                );
+            }
+            Err(e) => {
+                return Err(e.context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to create push subscription '{}' for storage trigger '{}'",
+                        subscription_name, storage_ref.id
+                    ),
+                    resource_id: Some(worker_config.id.clone()),
+                }));
+            }
+        }
 
-        self.push_subscriptions.push(subscription_name);
+        if !self.push_subscriptions.contains(&subscription_name) {
+            self.push_subscriptions.push(subscription_name);
+        }
 
         info!(
             worker=%worker_config.id,

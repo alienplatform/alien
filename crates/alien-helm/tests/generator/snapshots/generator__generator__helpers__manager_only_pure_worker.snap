@@ -49,6 +49,9 @@ stackSettings: null
 
 infrastructure: null
 
+basePlatform: null
+serviceAccountPrefix: ""
+
 services:
   api:
     type: clusterIp
@@ -112,6 +115,8 @@ ephemeralStorage:
       "additionalProperties": true
     },
     "infrastructure": { "type": ["object", "null"] },
+    "basePlatform": { "type": ["string", "null"], "enum": ["aws", "gcp", "azure", null] },
+    "serviceAccountPrefix": { "type": "string" },
     "services": { "type": "object" },
     "publicUrls": { "type": "object", "additionalProperties": { "type": "string" } },
     "persistentStorage": { "type": "object" },
@@ -172,7 +177,8 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- end -}}
 
 {{- define "alien.serviceAccountName" -}}
-{{- printf "%s-%s" (include "alien.fullname" .root) .name | trunc 63 | trimSuffix "-" -}}
+{{- $prefix := default (include "alien.fullname" .root) .root.Values.serviceAccountPrefix -}}
+{{- printf "%s-%s-sa" $prefix .name | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
 === templates/serviceaccount.yaml ===
@@ -305,6 +311,10 @@ spec:
           env:
             - name: PLATFORM
               value: kubernetes
+            {{- if .Values.basePlatform }}
+            - name: BASE_PLATFORM
+              value: {{ .Values.basePlatform | quote }}
+            {{- end }}
             - name: SYNC_URL
               value: {{ .Values.management.url | quote }}
             - name: AGENT_NAME

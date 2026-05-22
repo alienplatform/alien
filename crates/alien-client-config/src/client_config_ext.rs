@@ -187,6 +187,8 @@ impl ClientConfigExt for ClientConfig {
             ClientConfig::Azure(_) => Platform::Azure,
             #[cfg(feature = "kubernetes")]
             ClientConfig::Kubernetes(_) => Platform::Kubernetes,
+            #[cfg(feature = "kubernetes")]
+            ClientConfig::KubernetesCloud { .. } => Platform::Kubernetes,
             ClientConfig::Test => Platform::Test,
             ClientConfig::Local { .. } => Platform::Local,
             // This should never be reached when no features are enabled,

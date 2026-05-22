@@ -303,6 +303,11 @@ pub struct StackResourceState {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lifecycle: Option<ResourceLifecycle>,
 
+    /// Platform whose controller owns this resource state. Defaults to the
+    /// containing stack platform when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controller_platform: Option<Platform>,
+
     /// Complete list of dependencies for this resource, including infrastructure dependencies.
     /// This preserves the full dependency information from the stack definition.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -341,6 +346,7 @@ impl StackResourceState {
             retry_attempt: 0,
             error: None,
             lifecycle,
+            controller_platform: None,
             dependencies,
             last_failed_state: None,
             remote_binding_params: None,

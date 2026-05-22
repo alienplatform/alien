@@ -11,6 +11,10 @@ terraform {
       source  = "hashicorp/aws"
       version = ">= 5.0"
     }
+    tls = {
+      source  = "hashicorp/tls"
+      version = ">= 4.0"
+    }
     random = {
       source  = "hashicorp/random"
       version = ">= 3.6"
@@ -25,7 +29,7 @@ variable "resource_prefix" {
   default     = ""
 
   validation {
-    condition     = var.resource_prefix == "" || can(regex("^[a-z](?:[a-z0-9]|-(?=[a-z0-9])){1,38}[a-z0-9]$", var.resource_prefix))
+    condition     = var.resource_prefix == "" || (can(regex("^[a-z][a-z0-9-]{1,38}[a-z0-9]$", var.resource_prefix)) && length(regexall("--", var.resource_prefix)) == 0)
     error_message = "resource_prefix must be 3-40 characters: lowercase letters, numbers, and hyphens; start with a letter; end with a letter or number; and not contain consecutive hyphens."
   }
 }
@@ -78,6 +82,11 @@ variable "kubernetes_namespace" {
   default     = "default"
 }
 
+variable "eks_cluster_name" {
+  type        = string
+  description = "Existing EKS cluster name that Helm will install into."
+}
+
 === providers.tf ===
 provider "aws" {
   region = var.aws_region
@@ -94,10 +103,11 @@ resource "random_id" "resource_prefix" {
 
 === locals.tf ===
 locals {
-  resource_prefix     = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
-  deployment_platform = "aws"
-  deployment_target   = "eks"
-  deployment_region   = data.aws_region.current.region
+  resource_prefix          = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
+  deployment_platform      = "kubernetes"
+  deployment_base_platform = "aws"
+  deployment_target        = "eks"
+  deployment_region        = data.aws_region.current.region
   deployment_management_config = {
     platform        = "aws"
     managingRoleArn = var.managing_role_arn
@@ -123,6 +133,7 @@ locals {
     }
   ]
   alien_kubernetes_namespace = var.kubernetes_namespace
+  eks_oidc_issuer_host_path  = trimprefix(data.aws_eks_cluster.target.identity[0].oidc[0].issuer, "https://")
   helm_service_accounts = {
     execution_sa = {
       annotations = {
@@ -132,8 +143,10 @@ locals {
     }
   }
   helm_values = {
-    serviceAccounts = local.helm_service_accounts
-    stackSettings   = local.deployment_settings
+    serviceAccounts      = local.helm_service_accounts
+    stackSettings        = local.deployment_settings
+    basePlatform         = local.deployment_base_platform
+    serviceAccountPrefix = local.resource_prefix
   }
 }
 
@@ -181,9 +194,49 @@ resource "aws_s3_bucket_policy" "data" {
 }
 
 === execution_sa.tf ===
+data "aws_eks_cluster" "target" {
+  name = var.eks_cluster_name
+}
+
+data "tls_certificate" "eks_oidc" {
+  url = data.aws_eks_cluster.target.identity[0].oidc[0].issuer
+}
+
+data "aws_iam_policy_document" "execution_sa_assume_role" {
+  statement {
+    effect = "Allow"
+    actions = [
+      "sts:AssumeRoleWithWebIdentity"
+    ]
+
+    principals {
+      type = "Federated"
+      identifiers = [
+        aws_iam_openid_connect_provider.target.arn
+      ]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "${local.eks_oidc_issuer_host_path}:sub"
+      values = [
+        "system:serviceaccount:${var.kubernetes_namespace}:execution_sa"
+      ]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "${local.eks_oidc_issuer_host_path}:aud"
+      values = [
+        "sts.amazonaws.com"
+      ]
+    }
+  }
+}
+
 resource "aws_iam_role" "execution_sa" {
   name               = length(format("%s-%s", local.resource_prefix, "execution-sa")) <= 64 ? format("%s-%s", local.resource_prefix, "execution-sa") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "execution-sa"), 0, 55), substr(sha1(format("%s-%s", local.resource_prefix, "execution-sa")), 0, 8))
-  assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { Service = ["codebuild.amazonaws.com", "ec2.amazonaws.com", "lambda.amazonaws.com"] }, Action = "sts:AssumeRole" }] })
+  assume_role_policy = data.aws_iam_policy_document.execution_sa_assume_role.json
   tags = {
     "managed-by"    = "deployment"
     deployment      = local.resource_prefix
@@ -196,6 +249,16 @@ resource "aws_iam_role_policy" "execution_sa_set_0" {
   name   = "storage-data-read-0"
   role   = aws_iam_role.execution_sa.id
   policy = jsonencode({ Statement = [{ Action = ["s3:ListBucket", "s3:GetObject", "s3:GetObjectVersion", "s3:GetObjectAcl"], Effect = "Allow", Resource = ["arn:aws:s3:::${local.resource_prefix}-*", "arn:aws:s3:::${local.resource_prefix}-*/*"], Sid = "StorageDataRead" }], Version = "2012-10-17" })
+}
+
+resource "aws_iam_openid_connect_provider" "target" {
+  url = data.aws_eks_cluster.target.identity[0].oidc[0].issuer
+  client_id_list = [
+    "sts.amazonaws.com"
+  ]
+  thumbprint_list = [
+    data.tls_certificate.eks_oidc.certificates[0].sha1_fingerprint
+  ]
 }
 
 === import.tf ===
@@ -220,7 +283,8 @@ resource "terraform_data" "deployment_import" {
     aws_s3_bucket_public_access_block.data,
     aws_s3_bucket_policy.data,
     aws_iam_role.execution_sa,
-    aws_iam_role_policy.execution_sa_set_0
+    aws_iam_role_policy.execution_sa_set_0,
+    aws_iam_openid_connect_provider.target
   ]
 }
 
@@ -274,6 +338,11 @@ output "deployment_stack_settings" {
 output "deployment_resources" {
   value       = jsonencode(local.deployment_resources)
   description = "Manager import resources JSON."
+}
+
+output "deployment_base_platform" {
+  value       = local.deployment_base_platform
+  description = "Base cloud platform for Kubernetes targets."
 }
 
 output "helm_values" {

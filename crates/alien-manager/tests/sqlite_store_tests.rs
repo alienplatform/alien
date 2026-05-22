@@ -69,6 +69,7 @@ async fn create_test_deployment(
                 name: name.to_string(),
                 deployment_group_id: group_id.to_string(),
                 platform,
+                base_platform: None,
                 stack_settings: StackSettings::default(),
                 environment_variables: None,
                 deployment_token: None,

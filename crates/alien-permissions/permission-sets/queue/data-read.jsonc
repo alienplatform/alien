@@ -23,12 +23,11 @@
         "grant": {
           "predefinedRoles": ["roles/pubsub.subscriber", "roles/pubsub.viewer"]
         },
-        // GCP IAM conditions with resource.type/resource.name do not evaluate correctly
-        // for pubsub.subscriptions.consume at runtime.
-        // Access is scoped per-stack via the service account identity instead.
         "binding": {
           "stack": { "scope": "projects/${projectName}" },
-          "resource": { "scope": "projects/${projectName}" }
+          "resource": {
+            "scope": "projects/${projectName}/subscriptions/${resourceName}"
+          }
         }
       }
     ],

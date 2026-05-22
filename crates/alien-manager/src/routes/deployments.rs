@@ -330,6 +330,7 @@ async fn create_deployment(
                 name: req.name,
                 deployment_group_id: deployment_group_id.clone(),
                 platform: req.platform,
+                base_platform: None,
                 stack_settings: req.stack_settings.unwrap_or_default(),
                 environment_variables: req.environment_variables,
                 deployment_token: Some(raw_token.clone()),

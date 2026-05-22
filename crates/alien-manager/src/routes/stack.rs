@@ -150,7 +150,8 @@ pub async fn stack_import(
         },
     };
 
-    let source_stack = match resolve_stack(&release, req.platform) {
+    let import_platform = req.base_platform.unwrap_or(req.platform);
+    let source_stack = match resolve_stack(&release, import_platform) {
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
@@ -292,12 +293,14 @@ pub async fn stack_import(
         name: deployment_name,
         deployment_group_id: deployment_group_id.clone(),
         platform: req.platform,
+        base_platform: req.base_platform,
         stack_settings: req.stack_settings.clone(),
         stack_state: stack_state.clone(),
         environment_info,
         runtime_metadata,
         status: "provisioning".to_string(),
-        current_release_id: Some(release.id.clone()),
+        current_release_id: None,
+        desired_release_id: Some(release.id.clone()),
         import_source: req.source_kind,
         setup_target: req.setup_target.clone(),
         setup_fingerprint: req.setup_fingerprint.clone(),
@@ -430,8 +433,9 @@ async fn prepare_import_stack(
     req: &StackImportRequest,
 ) -> crate::error::Result<Stack> {
     let runner = alien_preflights::runner::PreflightRunner::new();
+    let import_platform = req.base_platform.unwrap_or(req.platform);
     runner
-        .run_template_preflights(&source_stack, req.platform)
+        .run_template_preflights(&source_stack, import_platform)
         .await
         .map_err(|err| {
             AlienError::new(ErrorData::BadRequest {
@@ -442,7 +446,7 @@ async fn prepare_import_stack(
             })
         })?;
 
-    let stack_state = StackState::new(req.platform);
+    let stack_state = StackState::new(import_platform);
     let config = DeploymentConfig {
         stack_settings: req.stack_settings.clone(),
         management_config: Some(req.management_config.clone()),
@@ -454,6 +458,7 @@ async fn prepare_import_stack(
         allow_frozen_changes: false,
         compute_backend: None,
         external_bindings: ExternalBindings::default(),
+        base_platform: req.base_platform,
         public_urls: None,
         domain_metadata: None,
         monitoring: None,
@@ -476,7 +481,7 @@ async fn prepare_import_stack(
 }
 
 fn infer_import_environment_info(req: &StackImportRequest) -> Option<EnvironmentInfo> {
-    match req.platform {
+    match req.base_platform.unwrap_or(req.platform) {
         Platform::Aws => infer_aws_account_id(req).map(|account_id| {
             EnvironmentInfo::Aws(AwsEnvironmentInfo {
                 account_id,
@@ -601,12 +606,13 @@ fn build_stack_state(
     let mut resources: HashMap<String, StackResourceState> = HashMap::new();
 
     for imported in &req.resources {
+        let import_platform = req.base_platform.unwrap_or(req.platform);
         let entry = stack.resources.get(&imported.id).ok_or_else(|| {
             AlienError::new(ErrorData::BadRequest {
                 reason: format!(
                     "Imported resource '{}' is not present in the active stack \
                      for platform '{}' — release the stack before importing it",
-                    imported.id, req.platform
+                    imported.id, import_platform
                 ),
             })
         })?;
@@ -619,15 +625,15 @@ fn build_stack_state(
         // by stringifying once rather than introducing a passthrough variant
         // on the manager's surface that would have to be kept in sync with
         // every importer-side error code.
-        let resource_state = state
+        let mut resource_state = state
             .import_registry
             .run(
                 &imported.resource_type,
-                req.platform,
+                import_platform,
                 imported.import_data.clone(),
                 &ImportContext {
                     resource_id: &imported.id,
-                    platform: req.platform,
+                    platform: import_platform,
                     region: &req.region,
                     stack_settings: &req.stack_settings,
                     management_config: &req.management_config,
@@ -638,10 +644,11 @@ fn build_stack_state(
                 AlienError::new(ErrorData::BadRequest {
                     reason: format!(
                         "Failed to import resource '{}' (type='{}', platform='{}'): {}",
-                        imported.id, imported.resource_type, req.platform, err.message
+                        imported.id, imported.resource_type, import_platform, err.message
                     ),
                 })
             })?;
+        resource_state.controller_platform = Some(import_platform);
 
         resources.insert(imported.id.clone(), resource_state);
     }

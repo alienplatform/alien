@@ -1029,6 +1029,13 @@ impl ResourceControllerContext<'_> {
     pub fn get_aws_config(&self) -> crate::Result<&AwsClientConfig> {
         match self.client_config {
             ClientConfig::Aws(ref config) => Ok(config.as_ref()),
+            ClientConfig::KubernetesCloud { ref cloud, .. } => match cloud.as_ref() {
+                ClientConfig::Aws(config) => Ok(config.as_ref()),
+                _ => Err(AlienError::new(ErrorData::ClientConfigMismatch {
+                    required_platform: alien_core::Platform::Aws,
+                    found_platform: cloud.platform(),
+                })),
+            },
             _ => Err(AlienError::new(ErrorData::ClientConfigMismatch {
                 required_platform: alien_core::Platform::Aws,
                 found_platform: self.client_config.platform(),
@@ -1040,6 +1047,13 @@ impl ResourceControllerContext<'_> {
     pub fn get_gcp_config(&self) -> crate::Result<&GcpClientConfig> {
         match self.client_config {
             ClientConfig::Gcp(ref config) => Ok(config.as_ref()),
+            ClientConfig::KubernetesCloud { ref cloud, .. } => match cloud.as_ref() {
+                ClientConfig::Gcp(config) => Ok(config.as_ref()),
+                _ => Err(AlienError::new(ErrorData::ClientConfigMismatch {
+                    required_platform: alien_core::Platform::Gcp,
+                    found_platform: cloud.platform(),
+                })),
+            },
             _ => Err(AlienError::new(ErrorData::ClientConfigMismatch {
                 required_platform: alien_core::Platform::Gcp,
                 found_platform: self.client_config.platform(),
@@ -1051,6 +1065,13 @@ impl ResourceControllerContext<'_> {
     pub fn get_azure_config(&self) -> crate::Result<&AzureClientConfig> {
         match self.client_config {
             ClientConfig::Azure(ref config) => Ok(config.as_ref()),
+            ClientConfig::KubernetesCloud { ref cloud, .. } => match cloud.as_ref() {
+                ClientConfig::Azure(config) => Ok(config.as_ref()),
+                _ => Err(AlienError::new(ErrorData::ClientConfigMismatch {
+                    required_platform: alien_core::Platform::Azure,
+                    found_platform: cloud.platform(),
+                })),
+            },
             _ => Err(AlienError::new(ErrorData::ClientConfigMismatch {
                 required_platform: alien_core::Platform::Azure,
                 found_platform: self.client_config.platform(),
@@ -1061,6 +1082,7 @@ impl ResourceControllerContext<'_> {
     pub fn get_kubernetes_config(&self) -> crate::Result<&KubernetesClientConfig> {
         match self.client_config {
             ClientConfig::Kubernetes(ref config) => Ok(config.as_ref()),
+            ClientConfig::KubernetesCloud { ref kubernetes, .. } => Ok(kubernetes.as_ref()),
             _ => Err(AlienError::new(ErrorData::ClientConfigMismatch {
                 required_platform: alien_core::Platform::Kubernetes,
                 found_platform: self.client_config.platform(),

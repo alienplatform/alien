@@ -357,6 +357,31 @@ impl ResourcePermissionsHelper {
         resource_type: &str,
         all_bindings: &mut Vec<Binding>,
     ) -> Result<()> {
+        let mut iam_bindings = Vec::new();
+        Self::collect_gcp_resource_scoped_iam_bindings(
+            ctx,
+            resource_id,
+            resource_name,
+            resource_type,
+            &mut iam_bindings,
+        )
+        .await?;
+        all_bindings.extend(
+            iam_bindings
+                .into_iter()
+                .map(Self::gcp_policy_binding_from_iam_binding),
+        );
+        Ok(())
+    }
+
+    /// Collect GCP resource-scoped IAM bindings with generator metadata intact.
+    pub async fn collect_gcp_resource_scoped_iam_bindings(
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+        resource_name: &str,
+        resource_type: &str,
+        all_bindings: &mut Vec<GcpIamBinding>,
+    ) -> Result<()> {
         let permission_context = Self::build_gcp_permission_context(ctx, resource_name)?;
         let generator = GcpRuntimePermissionsGenerator::new();
         let type_prefix = format!("{}/", resource_type);
@@ -485,7 +510,7 @@ impl ResourcePermissionsHelper {
         permission_set_refs: &[alien_core::permissions::PermissionSetReference],
         generator: &GcpRuntimePermissionsGenerator,
         permission_context: &PermissionContext,
-        all_bindings: &mut Vec<Binding>,
+        all_bindings: &mut Vec<GcpIamBinding>,
     ) -> Result<()> {
         // Get the service account for this profile
         let service_account_email = Self::get_gcp_service_account_email(ctx, profile_name)?;
@@ -518,7 +543,7 @@ impl ResourcePermissionsHelper {
             let member = format!("serviceAccount:{}", service_account_email);
             let bindings_count = bindings_result.bindings.len();
             for binding in bindings_result.bindings {
-                Self::push_gcp_binding_for_target(
+                Self::push_gcp_iam_binding_for_target(
                     all_bindings,
                     binding,
                     &member,
@@ -607,7 +632,7 @@ impl ResourcePermissionsHelper {
         resource_type: &str,
         generator: &GcpRuntimePermissionsGenerator,
         permission_context: &PermissionContext,
-        all_bindings: &mut Vec<Binding>,
+        all_bindings: &mut Vec<GcpIamBinding>,
     ) -> Result<()> {
         let management_profile = match ctx.desired_stack.management().profile() {
             Some(profile) => profile,
@@ -694,7 +719,7 @@ impl ResourcePermissionsHelper {
 
             let bindings_count = bindings_result.bindings.len();
             for binding in bindings_result.bindings {
-                Self::push_gcp_binding_for_target(
+                Self::push_gcp_iam_binding_for_target(
                     all_bindings,
                     binding,
                     &member,
@@ -1215,6 +1240,43 @@ impl ResourcePermissionsHelper {
         });
 
         Ok(())
+    }
+
+    fn push_gcp_iam_binding_for_target(
+        all_bindings: &mut Vec<GcpIamBinding>,
+        mut binding: GcpIamBinding,
+        member: &str,
+        expected_target: GcpBindingTargetScope,
+        permission_set_id: &str,
+        resource_id: &str,
+    ) -> Result<()> {
+        if binding.target != expected_target {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: format!(
+                    "GCP permission set '{}' produced a {:?} IAM binding where {:?} was required",
+                    permission_set_id, binding.target, expected_target
+                ),
+                resource_id: Some(resource_id.to_string()),
+            }));
+        }
+
+        binding.members = vec![member.to_string()];
+        all_bindings.push(binding);
+
+        Ok(())
+    }
+
+    pub fn gcp_policy_binding_from_iam_binding(binding: GcpIamBinding) -> Binding {
+        Binding {
+            role: binding.role,
+            members: binding.members,
+            condition: binding.condition.map(|cond| alien_gcp_clients::iam::Expr {
+                expression: cond.expression,
+                title: Some(cond.title),
+                description: Some(cond.description),
+                location: None,
+            }),
+        }
     }
 }
 

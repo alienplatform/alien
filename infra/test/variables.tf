@@ -56,18 +56,60 @@ variable "google_management_region" {
 
 # GCP - Target
 variable "google_target_service_account_key" {
-  description = "GCP target project service account key JSON"
+  description = "GCP target-2 project service account key JSON"
   type        = string
   sensitive   = true
 }
 
 variable "google_target_project_id" {
-  description = "GCP target project ID"
+  description = "GCP target-2 project ID"
   type        = string
 }
 
 variable "google_target_region" {
-  description = "GCP target project region"
+  description = "GCP target-2 project region"
+  type        = string
+  default     = "us-east4"
+}
+
+variable "google_target_1_service_account_key" {
+  description = "GCP target-1 project service account key JSON"
+  type        = string
+  sensitive   = true
+}
+
+variable "google_target_1_project_id" {
+  description = "GCP target-1 project ID"
+  type        = string
+}
+
+variable "google_target_1_region" {
+  description = "GCP target-1 project region"
+  type        = string
+  default     = "us-east4"
+}
+
+variable "google_target_3_enabled" {
+  description = "Whether to provision GCP target-3"
+  type        = bool
+  default     = true
+}
+
+variable "google_target_3_service_account_key" {
+  description = "GCP target-3 project service account key JSON"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "google_target_3_project_id" {
+  description = "GCP target-3 project ID"
+  type        = string
+  default     = ""
+}
+
+variable "google_target_3_region" {
+  description = "GCP target-3 project region"
   type        = string
   default     = "us-east4"
 }

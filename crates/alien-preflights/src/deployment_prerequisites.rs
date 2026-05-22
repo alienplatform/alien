@@ -158,6 +158,7 @@ mod tests {
             allow_frozen_changes: false,
             compute_backend: None,
             external_bindings: Default::default(),
+            base_platform: None,
             public_urls: None,
             domain_metadata: None,
             monitoring: None,

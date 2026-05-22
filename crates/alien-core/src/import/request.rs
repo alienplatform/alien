@@ -46,6 +46,10 @@ pub struct StackImportRequest {
     pub release_id: Option<String>,
     /// Platform being imported.
     pub platform: Platform,
+    /// Optional base cloud platform for Kubernetes setup targets such as
+    /// EKS/GKE/AKS. The runtime platform remains Kubernetes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_platform: Option<Platform>,
     /// Region or location reported by the setup artifact.
     pub region: String,
     /// Setup target this package was generated for.

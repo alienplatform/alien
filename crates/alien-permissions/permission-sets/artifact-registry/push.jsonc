@@ -78,7 +78,7 @@
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}/locations/${region}"
+            "scope": "projects/${projectName}"
           },
           "resource": {
             "scope": "projects/${projectName}/locations/${region}/repositories/${resourceName}"
@@ -91,9 +91,6 @@
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}"
-          },
-          "resource": {
             "scope": "projects/${projectName}"
           }
         }

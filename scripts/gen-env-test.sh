@@ -22,6 +22,27 @@ jq_val() { printf '%s' "$TF" | jq -er --arg key "$1" '.[$key].value // empty'; }
 # This is required because Windows PowerShell reads .env.test line-by-line.
 jq_val_json() { jq_val "$1" | jq -c .; }
 jq_val_csv() { jq_val "$1" | jq -er 'join(",")'; }
+jq_val_target_aliases() { jq_val "$1" | jq -er 'keys | join(",")'; }
+jq_val_target_options_env() {
+  local output_name="$1"
+  local cloud="$2"
+  jq_val "$output_name" | jq -r --arg cloud "$cloud" '
+    to_entries[]
+    | .key as $alias
+    | ($alias | ascii_upcase | gsub("[^A-Z0-9]"; "_")) as $alias_env
+    | .value
+    | to_entries[]
+    | "ALIEN_TARGET_" + $cloud + "_" + $alias_env + "_" + .key + "=" + (
+        if (.value | type) == "array" then (.value | join(","))
+        else (.value | tostring)
+        end
+      )
+  '
+}
+quote_env() {
+  local value="$1"
+  printf "'%s'" "${value//\'/\'\\\'\'}"
+}
 
 # Capture all values into variables before writing so we can safely
 # single-quote them in the output (single-quoted values are literal in
@@ -114,6 +135,10 @@ e2e_azure_vnet_resource_id=$(jq_val e2e_azure_vnet_resource_id)
 e2e_azure_public_subnet_name=$(jq_val e2e_azure_public_subnet_name)
 e2e_azure_private_subnet_name=$(jq_val e2e_azure_private_subnet_name)
 
+aws_target_aliases=$(jq_val_target_aliases aws_target_options)
+gcp_target_aliases=$(jq_val_target_aliases gcp_target_options)
+azure_target_aliases=$(jq_val_target_aliases azure_target_options)
+
 cat > .env.test <<EOF
 # AWS - Management
 AWS_MANAGEMENT_REGION='${aws_management_region}'
@@ -198,6 +223,8 @@ AZURE_TARGET_SUBSCRIPTION_ID='${azure_target_subscription_id}'
 AZURE_TARGET_TENANT_ID='${azure_target_tenant_id}'
 AZURE_TARGET_CLIENT_ID='${azure_target_client_id}'
 AZURE_TARGET_CLIENT_SECRET='${azure_target_client_secret}'
+AZURE_TARGET_REGION='${azure_management_region}'
+AZURE_TARGET_RESOURCE_GROUP='${azure_shared_container_env_resource_group}'
 
 AZURE_REGION='${azure_management_region}'
 
@@ -234,6 +261,29 @@ AXIOM_OTLP_ENDPOINT='${AXIOM_OTLP_ENDPOINT:-https://api.axiom.co/v1/logs}'
 AXIOM_TOKEN='${AXIOM_TOKEN:?AXIOM_TOKEN environment variable must be set}'
 AXIOM_DATASET='${AXIOM_DATASET:-dev}'
 EOF
+
+{
+  echo ""
+  echo "# E2E target selection"
+  echo "ALIEN_TEST_TARGETS_AWS=$(quote_env "$aws_target_aliases")"
+  echo "ALIEN_TEST_TARGETS_GCP=$(quote_env "$gcp_target_aliases")"
+  echo "ALIEN_TEST_TARGETS_AZURE=$(quote_env "$azure_target_aliases")"
+  echo "ALIEN_TEST_DEFAULT_TARGET_AWS='aws-target-1'"
+  echo "ALIEN_TEST_DEFAULT_TARGET_GCP='gcp-target-3'"
+  echo "ALIEN_TEST_DEFAULT_TARGET_AZURE='azure-target-1'"
+
+  while IFS='=' read -r key value; do
+    printf "%s=%s\n" "$key" "$(quote_env "$value")"
+  done < <(jq_val_target_options_env aws_target_options AWS)
+
+  while IFS='=' read -r key value; do
+    printf "%s=%s\n" "$key" "$(quote_env "$value")"
+  done < <(jq_val_target_options_env gcp_target_options GCP)
+
+  while IFS='=' read -r key value; do
+    printf "%s=%s\n" "$key" "$(quote_env "$value")"
+  done < <(jq_val_target_options_env azure_target_options AZURE)
+} >> .env.test
 
 # ── Generate alien-manager.toml for test validation ─────────────────────────
 # This config must match the ManagerTomlConfig schema (kebab-case field names,

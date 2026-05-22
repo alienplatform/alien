@@ -31,8 +31,8 @@ use crate::{
 };
 use alien_core::ClientConfig;
 use alien_core::{
-    alien_event, AlienEvent, Resource, ResourceLifecycle, ResourceRef, ResourceStatus, Stack,
-    StackResourceState, StackState,
+    alien_event, AlienEvent, Platform, Resource, ResourceLifecycle, ResourceRef, ResourceStatus,
+    Stack, StackResourceState, StackState,
 };
 
 /// Represents the outcome of a planning phase, identifying necessary changes.
@@ -127,6 +127,28 @@ pub struct StackExecutor {
 }
 
 const MAX_RETRIES: u32 = 10;
+
+fn controller_platform_for_entry(
+    stack_platform: Platform,
+    base_platform: Option<Platform>,
+    lifecycle: ResourceLifecycle,
+) -> Platform {
+    if stack_platform == Platform::Kubernetes && lifecycle == ResourceLifecycle::Frozen {
+        base_platform.unwrap_or(stack_platform)
+    } else {
+        stack_platform
+    }
+}
+
+fn controller_platform_for_state(stack_platform: Platform, state: &StackResourceState) -> Platform {
+    state.controller_platform.unwrap_or_else(|| {
+        controller_platform_for_entry(
+            stack_platform,
+            None,
+            state.lifecycle.unwrap_or(ResourceLifecycle::Live),
+        )
+    })
+}
 
 fn is_best_effort_delete_error(err: &AlienError<ErrorData>) -> bool {
     is_best_effort_delete_code(&err.code, err.http_status_code)
@@ -250,6 +272,7 @@ impl StackExecutor {
         let deployment_config = config.deployment_config.clone();
         let lifecycle_filter = config.lifecycle_filter;
         let platform = client_config.platform();
+        let base_platform = deployment_config.base_platform;
 
         let mut graph = DiGraph::<String, ()>::new();
         let mut resource_map = HashMap::new();
@@ -312,11 +335,13 @@ impl StackExecutor {
 
             // Ensure that a controller exists for the resource on the specified platform.
             let resource_type = resource_entry.config.resource_type();
+            let controller_platform =
+                controller_platform_for_entry(platform, base_platform, resource_entry.lifecycle);
             resource_registry
-                .get_controller(resource_type.clone(), platform)
+                .get_controller(resource_type.clone(), controller_platform)
                 .context(ErrorData::ControllerNotAvailable {
                     resource_type,
-                    platform,
+                    platform: controller_platform,
                 })?;
         }
 
@@ -912,6 +937,12 @@ impl StackExecutor {
                 resource_lifecycle,
                 desired_config.dependencies.clone(),
             );
+            let mut pending_view = pending_view;
+            pending_view.controller_platform = Some(controller_platform_for_entry(
+                next_state.platform,
+                self.deployment_config.base_platform,
+                desired_config.lifecycle,
+            ));
             initial_transitions.insert(resource_id.clone(), pending_view);
         }
 
@@ -1284,9 +1315,11 @@ impl StackExecutor {
 
                 // Get the controller for this resource type
                 let resource_type = context_resource.resource_type();
+                let controller_platform =
+                    controller_platform_for_state(next_state.platform, &current_resource_state);
                 let controller = self
                     .resource_registry
-                    .get_controller(resource_type, next_state.platform)?;
+                    .get_controller(resource_type, controller_platform)?;
 
                 // Controllers now implement Default, so we get a fresh instance with the default state
                 let initial_status = controller.get_status();
@@ -1296,6 +1329,7 @@ impl StackExecutor {
                 current_resource_state.set_internal_controller(Some(controller))?;
                 current_resource_state.status = initial_status;
                 current_resource_state.outputs = initial_outputs;
+                current_resource_state.controller_platform = Some(controller_platform);
                 current_resource_state.error = None;
                 current_resource_state.retry_attempt = 0;
 
@@ -1322,10 +1356,22 @@ impl StackExecutor {
                 continue;
             }
 
+            let controller_platform =
+                controller_platform_for_state(next_state.platform, &current_resource_state);
+            let controller_client_config = self
+                .client_config
+                .config_for_platform(controller_platform)
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::ClientConfigMismatch {
+                        required_platform: controller_platform,
+                        found_platform: self.client_config.platform(),
+                    })
+                })?;
+
             let context = ResourceControllerContext {
                 desired_config: &context_resource,
-                platform: next_state.platform,
-                client_config: self.client_config.clone(),
+                platform: controller_platform,
+                client_config: controller_client_config,
                 state: &next_state,
                 resource_prefix: &next_state.resource_prefix,
                 registry: &self.resource_registry,

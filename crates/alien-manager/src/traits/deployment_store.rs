@@ -22,6 +22,8 @@ pub struct DeploymentRecord {
     pub name: String,
     pub deployment_group_id: String,
     pub platform: Platform,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_platform: Option<Platform>,
     pub status: String,
     pub stack_settings: StackSettings,
     pub stack_state: Option<StackState>,
@@ -111,6 +113,7 @@ pub struct CreateDeploymentParams {
     pub name: String,
     pub deployment_group_id: String,
     pub platform: Platform,
+    pub base_platform: Option<Platform>,
     pub stack_settings: StackSettings,
     pub environment_variables: Option<Vec<EnvironmentVariable>>,
     /// Raw deployment token for proxy pull auth.
@@ -124,6 +127,7 @@ pub struct CreateImportedDeploymentParams {
     pub name: String,
     pub deployment_group_id: String,
     pub platform: Platform,
+    pub base_platform: Option<Platform>,
     pub stack_settings: StackSettings,
     pub stack_state: StackState,
     pub environment_info: Option<EnvironmentInfo>,
@@ -132,6 +136,7 @@ pub struct CreateImportedDeploymentParams {
     /// `"provisioning"` so the manager can complete layer-3 runtime work.
     pub status: String,
     pub current_release_id: Option<String>,
+    pub desired_release_id: Option<String>,
     pub import_source: Option<ImportSourceKind>,
     pub setup_target: String,
     pub setup_fingerprint: String,

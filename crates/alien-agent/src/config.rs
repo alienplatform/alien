@@ -30,6 +30,9 @@ pub struct AgentConfig {
     /// Target cloud platform
     pub platform: Platform,
 
+    /// Optional base cloud platform for cloud-backed Kubernetes.
+    pub base_platform: Option<Platform>,
+
     /// Sync configuration (None = airgapped mode)
     pub sync: Option<SyncConfig>,
 

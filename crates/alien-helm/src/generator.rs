@@ -225,7 +225,7 @@ runtime:
     );
 
     append_service_accounts(&mut yaml, analysis);
-    yaml.push_str("\nstackSettings: null\n\ninfrastructure: null\n");
+    yaml.push_str("\nstackSettings: null\n\ninfrastructure: null\n\nbasePlatform: null\nserviceAccountPrefix: \"\"\n");
     append_services(&mut yaml, analysis);
     yaml.push_str("\npublicUrls: {}\n");
 
@@ -335,6 +335,8 @@ fn values_schema_json() -> String {
       "additionalProperties": true
     },
     "infrastructure": { "type": ["object", "null"] },
+    "basePlatform": { "type": ["string", "null"], "enum": ["aws", "gcp", "azure", null] },
+    "serviceAccountPrefix": { "type": "string" },
     "services": { "type": "object" },
     "publicUrls": { "type": "object", "additionalProperties": { "type": "string" } },
     "persistentStorage": { "type": "object" },
@@ -398,7 +400,8 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- end -}}
 
 {{- define "alien.serviceAccountName" -}}
-{{- printf "%s-%s" (include "alien.fullname" .root) .name | trunc 63 | trimSuffix "-" -}}
+{{- $prefix := default (include "alien.fullname" .root) .root.Values.serviceAccountPrefix -}}
+{{- printf "%s-%s-sa" $prefix .name | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 "#
     .to_string()
@@ -549,6 +552,10 @@ spec:
           env:
             - name: PLATFORM
               value: kubernetes
+            {{- if .Values.basePlatform }}
+            - name: BASE_PLATFORM
+              value: {{ .Values.basePlatform | quote }}
+            {{- end }}
             - name: SYNC_URL
               value: {{ .Values.management.url | quote }}
             - name: AGENT_NAME

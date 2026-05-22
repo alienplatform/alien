@@ -43,6 +43,20 @@ provider "google" {
   region      = var.google_target_region
 }
 
+provider "google" {
+  alias       = "target_1"
+  credentials = var.google_target_1_service_account_key
+  project     = var.google_target_1_project_id
+  region      = var.google_target_1_region
+}
+
+provider "google" {
+  alias       = "target_3"
+  credentials = var.google_target_3_service_account_key
+  project     = var.google_target_3_project_id
+  region      = var.google_target_3_region
+}
+
 provider "azurerm" {
   alias           = "management"
   subscription_id = var.azure_management_subscription_id

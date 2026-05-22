@@ -112,7 +112,12 @@ impl InfrastructureDependenciesMutation {
         }
 
         if !is_infrastructure_resource {
-            dependencies.extend(self.get_resource_specific_dependencies(resource_type, platform));
+            dependencies.extend(self.get_resource_specific_dependencies(
+                stack,
+                resource_id,
+                resource_type,
+                platform,
+            ));
         }
 
         dependencies
@@ -121,19 +126,39 @@ impl InfrastructureDependenciesMutation {
     /// Get resource-specific dependencies for a resource type and platform
     fn get_resource_specific_dependencies(
         &self,
+        stack: &Stack,
+        resource_id: &str,
         resource_type: &alien_core::ResourceType,
         platform: Platform,
     ) -> Vec<ResourceRef> {
         match (platform, resource_type.as_ref()) {
             // Azure dependencies
             (Platform::Azure, "worker") => {
-                vec![
+                let mut dependencies = vec![
                     ResourceRef::new(alien_core::ServiceActivation::RESOURCE_TYPE, "enable-app"),
                     ResourceRef::new(
                         alien_core::AzureContainerAppsEnvironment::RESOURCE_TYPE,
                         "default-container-env",
                     ),
-                ]
+                ];
+
+                if stack
+                    .resources
+                    .get(resource_id)
+                    .and_then(|entry| entry.config.downcast_ref::<alien_core::Worker>())
+                    .is_some_and(|worker| worker.commands_enabled)
+                {
+                    dependencies.push(ResourceRef::new(
+                        alien_core::ServiceActivation::RESOURCE_TYPE,
+                        "enable-servicebus",
+                    ));
+                    dependencies.push(ResourceRef::new(
+                        alien_core::AzureServiceBusNamespace::RESOURCE_TYPE,
+                        "default-service-bus-namespace",
+                    ));
+                }
+
+                dependencies
             }
             (Platform::Azure, "build") => {
                 vec![

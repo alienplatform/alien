@@ -293,6 +293,7 @@ async fn setup() -> TestSetup {
                 name: "test-deployment".to_string(),
                 deployment_group_id: dg.id.clone(),
                 platform: Platform::Local,
+                base_platform: None,
                 stack_settings: alien_core::StackSettings {
                     deployment_model: alien_core::DeploymentModel::Pull,
                     ..Default::default()

@@ -5,8 +5,12 @@ use crate::error::{ErrorData, Result};
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{Queue, QueueOutputs, ResourceOutputs, ResourceStatus};
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_gcp_clients::pubsub::{Subscription, Topic};
+use alien_gcp_clients::{
+    iam::IamPolicy,
+    pubsub::{Subscription, Topic},
+};
 use alien_macros::{controller, flow_entry, handler, terminal_state};
+use alien_permissions::generators::GcpBindingResourceKind;
 use std::time::Duration;
 use tracing::info;
 
@@ -105,70 +109,64 @@ impl GcpQueueController {
 
         info!(resource_id = %config.id(), "Applying resource-scoped permissions");
 
-        // Apply resource-scoped permissions from the stack
         if let Some(topic_name) = &self.topic_name {
             use crate::core::ResourcePermissionsHelper;
 
             let gcp_config = ctx.get_gcp_config()?;
+            let mut iam_bindings = Vec::new();
+            ResourcePermissionsHelper::collect_gcp_resource_scoped_iam_bindings(
+                ctx,
+                &config.id,
+                topic_name,
+                "queue",
+                &mut iam_bindings,
+            )
+            .await?;
 
             // Apply IAM permissions to the topic
             {
                 let client = ctx.service_provider.get_gcp_pubsub_client(gcp_config)?;
                 let topic_name_owned = topic_name.clone();
-                let config_id_owned = config.id.clone();
-                ResourcePermissionsHelper::apply_gcp_resource_scoped_permissions(
-                    ctx,
-                    &config.id,
-                    topic_name,
-                    "Queue topic",
-                    "queue",
-                    client,
-                    |client, iam_policy| async move {
-                        client
-                            .set_topic_iam_policy(topic_name_owned.clone(), iam_policy)
-                            .await
-                            .context(ErrorData::CloudPlatformError {
-                                message: format!(
-                                    "Failed to apply IAM policy to Pub/Sub topic '{}'",
-                                    topic_name_owned
-                                ),
-                                resource_id: Some(config_id_owned),
-                            })?;
-                        info!(topic = %topic_name_owned, "Applied IAM policy to topic");
-                        Ok(())
-                    },
-                )
-                .await?;
+                let iam_policy =
+                    gcp_iam_policy_for_kind(&iam_bindings, GcpBindingResourceKind::PubsubTopic);
+                if !iam_policy.bindings.is_empty() {
+                    let config_id_owned = config.id.clone();
+                    client
+                        .set_topic_iam_policy(topic_name_owned.clone(), iam_policy)
+                        .await
+                        .context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Failed to apply IAM policy to Pub/Sub topic '{}'",
+                                topic_name_owned
+                            ),
+                            resource_id: Some(config_id_owned),
+                        })?;
+                    info!(topic = %topic_name_owned, "Applied IAM policy to topic");
+                }
             }
 
             // Apply IAM permissions to the subscription
             if let Some(subscription_name) = &self.subscription_name {
                 let client = ctx.service_provider.get_gcp_pubsub_client(gcp_config)?;
                 let sub_name_owned = subscription_name.clone();
-                let config_id_owned = config.id.clone();
-                ResourcePermissionsHelper::apply_gcp_resource_scoped_permissions(
-                    ctx,
-                    &config.id,
-                    subscription_name,
-                    "Queue subscription",
-                    "queue",
-                    client,
-                    |client, iam_policy| async move {
-                        client
-                            .set_subscription_iam_policy(sub_name_owned.clone(), iam_policy)
-                            .await
-                            .context(ErrorData::CloudPlatformError {
-                                message: format!(
-                                    "Failed to apply IAM policy to Pub/Sub subscription '{}'",
-                                    sub_name_owned
-                                ),
-                                resource_id: Some(config_id_owned),
-                            })?;
-                        info!(subscription = %sub_name_owned, "Applied IAM policy to subscription");
-                        Ok(())
-                    },
-                )
-                .await?;
+                let iam_policy = gcp_iam_policy_for_kind(
+                    &iam_bindings,
+                    GcpBindingResourceKind::PubsubSubscription,
+                );
+                if !iam_policy.bindings.is_empty() {
+                    let config_id_owned = config.id.clone();
+                    client
+                        .set_subscription_iam_policy(sub_name_owned.clone(), iam_policy)
+                        .await
+                        .context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Failed to apply IAM policy to Pub/Sub subscription '{}'",
+                                sub_name_owned
+                            ),
+                            resource_id: Some(config_id_owned),
+                        })?;
+                    info!(subscription = %sub_name_owned, "Applied IAM policy to subscription");
+                }
             }
         }
 
@@ -327,6 +325,24 @@ impl GcpQueueController {
         } else {
             Ok(None)
         }
+    }
+}
+
+fn gcp_iam_policy_for_kind(
+    bindings: &[alien_permissions::generators::GcpIamBinding],
+    kind: GcpBindingResourceKind,
+) -> IamPolicy {
+    IamPolicy {
+        version: Some(3),
+        bindings: bindings
+            .iter()
+            .filter(|binding| binding.resource_kind == Some(kind))
+            .cloned()
+            .map(crate::core::ResourcePermissionsHelper::gcp_policy_binding_from_iam_binding)
+            .collect(),
+        etag: None,
+        kind: None,
+        resource_id: None,
     }
 }
 
