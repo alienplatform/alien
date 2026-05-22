@@ -391,24 +391,6 @@ resource "google_project_iam_member" "target_roles" {
   member   = "serviceAccount:${google_service_account.target.email}"
 }
 
-resource "google_project_iam_custom_role" "target_artifact_registry_iam" {
-  provider = google.target
-  role_id  = "alien_target_artifact_registry_iam"
-  title    = "Alien Target Artifact Registry IAM"
-  project  = var.target_project_id
-  permissions = [
-    "artifactregistry.repositories.getIamPolicy",
-    "artifactregistry.repositories.setIamPolicy",
-  ]
-}
-
-resource "google_project_iam_member" "target_artifact_registry_iam" {
-  provider = google.target
-  project  = var.target_project_id
-  role     = google_project_iam_custom_role.target_artifact_registry_iam.id
-  member   = "serviceAccount:${google_service_account.target.email}"
-}
-
 # The target SA needs limited access to the management project for
 # push_initial_setup() — service activation and cross-project IAM operations.
 locals {
