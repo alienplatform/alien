@@ -536,6 +536,7 @@
             "compute.globalAddresses.create",
             "compute.globalAddresses.delete",
             "compute.globalAddresses.get",
+            "compute.globalAddresses.use",
             "compute.globalForwardingRules.create",
             "compute.globalForwardingRules.delete",
             "compute.globalForwardingRules.get"

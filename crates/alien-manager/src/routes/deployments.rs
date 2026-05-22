@@ -10,8 +10,9 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use alien_core::{
-    import::ImportSourceKind, ContainerOutputs, DeleteScope, EnvironmentVariable, Platform,
-    StackSettings, WorkerOutputs,
+    import::ImportSourceKind, is_valid_resource_prefix, ContainerOutputs, DeleteScope,
+    EnvironmentVariable, Platform, StackSettings, StackState, WorkerOutputs,
+    RESOURCE_PREFIX_ERROR_MESSAGE,
 };
 
 use crate::error::ErrorData;
@@ -35,6 +36,8 @@ pub struct CreateDeploymentRequest {
     pub stack_settings: Option<StackSettings>,
     #[serde(default)]
     pub environment_variables: Option<Vec<EnvironmentVariable>>,
+    #[serde(default)]
+    pub resource_prefix: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -321,6 +324,18 @@ async fn create_deployment(
 
     // Create the deployment first (token is set after).
     let (raw_token, key_prefix, key_hash) = ids::generate_token(TokenType::Deployment.prefix());
+    let stack_state = match req.resource_prefix {
+        Some(resource_prefix) => {
+            if !is_valid_resource_prefix(&resource_prefix) {
+                return ErrorData::bad_request(RESOURCE_PREFIX_ERROR_MESSAGE).into_response();
+            }
+            Some(StackState::with_resource_prefix(
+                req.platform.clone(),
+                resource_prefix,
+            ))
+        }
+        None => None,
+    };
 
     let mut deployment = match state
         .deployment_store
@@ -332,6 +347,7 @@ async fn create_deployment(
                 platform: req.platform,
                 base_platform: None,
                 stack_settings: req.stack_settings.unwrap_or_default(),
+                stack_state,
                 environment_variables: req.environment_variables,
                 deployment_token: Some(raw_token.clone()),
             },

@@ -6,7 +6,10 @@ use crate::core::EnvironmentVariableBuilder;
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_client_core::ErrorData as CloudClientErrorData;
-use alien_core::{ResourceOutputs, ResourceStatus, Worker, WorkerCode, WorkerOutputs};
+use alien_core::{
+    kubernetes_resource_name, kubernetes_service_account_name, ResourceOutputs, ResourceStatus,
+    Worker, WorkerCode, WorkerOutputs,
+};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
 
@@ -15,54 +18,6 @@ use k8s_openapi::api::core::v1::{
     Container, ContainerPort, EnvVar, LocalObjectReference, PodSpec, PodTemplateSpec, Secret,
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
-
-/// Generates a Kubernetes resource name from the stack prefix and worker ID.
-fn generate_kubernetes_function_name(resource_prefix: &str, id: &str) -> String {
-    // Kubernetes names must be lowercase and follow DNS-1123 label requirements
-    let clean_prefix = resource_prefix
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '-')
-        .collect::<String>()
-        .to_lowercase();
-    let clean_id = id
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '-')
-        .collect::<String>()
-        .to_lowercase();
-
-    let combined = format!("{}-{}", clean_prefix, clean_id);
-
-    // Truncate to 63 characters if necessary (Kubernetes limit)
-    if combined.len() > 63 {
-        combined[..63].to_string()
-    } else {
-        combined
-    }
-}
-
-/// Generates the ServiceAccount name following Helm naming convention.
-/// Format: {release-name}-{permission-profile}-sa
-fn generate_service_account_name(resource_prefix: &str, permission_profile: &str) -> String {
-    let clean_prefix = resource_prefix
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '-')
-        .collect::<String>()
-        .to_lowercase();
-    let clean_profile = permission_profile
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '-')
-        .collect::<String>()
-        .to_lowercase();
-
-    let combined = format!("{}-{}-sa", clean_prefix, clean_profile);
-
-    // Truncate to 63 characters if necessary
-    if combined.len() > 63 {
-        combined[..63].to_string()
-    } else {
-        combined
-    }
-}
 
 #[controller]
 pub struct KubernetesWorkerController {
@@ -93,7 +48,7 @@ impl KubernetesWorkerController {
 
         info!(id=%config.id, "Initiating Kubernetes Worker creation");
 
-        let function_name = generate_kubernetes_function_name(&ctx.resource_prefix, &config.id);
+        let function_name = kubernetes_resource_name(&ctx.resource_prefix, &config.id);
         let namespace = self.get_kubernetes_namespace(ctx)?;
 
         // Store data needed for binding construction
@@ -109,7 +64,7 @@ impl KubernetesWorkerController {
 
         // Generate ServiceAccount name following Helm naming convention
         let service_account_name =
-            generate_service_account_name(&ctx.resource_prefix, config.get_permissions());
+            kubernetes_service_account_name(&ctx.resource_prefix, config.get_permissions());
 
         // Create a Docker config Secret so kubelet can authenticate when pulling
         // from the manager's registry. Required for image-based deployments.
@@ -357,7 +312,7 @@ impl KubernetesWorkerController {
         let resource_version = existing.metadata.resource_version.clone();
 
         let service_account_name =
-            generate_service_account_name(&ctx.resource_prefix, config.get_permissions());
+            kubernetes_service_account_name(&ctx.resource_prefix, config.get_permissions());
         // Registry pull secret is required for image-based deployments.
         let image_pull_secret_name = if matches!(config.code, WorkerCode::Image { .. }) {
             if ctx.deployment_config.deployment_token.is_none() {
@@ -896,44 +851,44 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_generate_kubernetes_function_name() {
+    fn test_kubernetes_function_name() {
         // Test basic functionality
         assert_eq!(
-            generate_kubernetes_function_name("my-stack", "my-func"),
+            kubernetes_resource_name("my-stack", "my-func"),
             "my-stack-my-func"
         );
 
         // Test character filtering and lowercasing
         assert_eq!(
-            generate_kubernetes_function_name("My_Stack!", "Test#123"),
-            "mystack-test123"
+            kubernetes_resource_name("My_Stack!", "Test#123"),
+            "my-stack-test-123"
         );
 
         // Test length truncation
         let long_prefix = "a".repeat(50);
         let long_id = "b".repeat(20);
-        let result = generate_kubernetes_function_name(&long_prefix, &long_id);
+        let result = kubernetes_resource_name(&long_prefix, &long_id);
         assert!(result.len() <= 63);
         assert!(result.starts_with("aaa"));
     }
 
     #[test]
-    fn test_generate_service_account_name() {
+    fn test_kubernetes_service_account_name() {
         // Test basic functionality
         assert_eq!(
-            generate_service_account_name("my-app", "reader"),
+            kubernetes_service_account_name("my-app", "reader"),
             "my-app-reader-sa"
         );
 
         // Test character filtering
         assert_eq!(
-            generate_service_account_name("My_App!", "Writer#Profile"),
-            "myapp-writerprofile-sa"
+            kubernetes_service_account_name("My_App!", "Writer#Profile"),
+            "my-app-writer-profile-sa"
         );
 
         // Test length truncation
         let long_prefix = "a".repeat(50);
-        let result = generate_service_account_name(&long_prefix, "reader");
+        let result = kubernetes_service_account_name(&long_prefix, "reader");
         assert!(result.len() <= 63);
     }
 }

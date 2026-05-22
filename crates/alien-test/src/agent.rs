@@ -91,6 +91,8 @@ pub struct TestAlienAgent {
     pub helm_namespace: Option<String>,
     /// Kubeconfig path for Helm installs.
     pub kubeconfig: Option<String>,
+    /// Kube context for Helm installs.
+    pub kube_context: Option<String>,
     /// Native process child handle (if started via `start_local_process`).
     pub child_process: Option<tokio::process::Child>,
     /// Temp data directory for native agent (cleaned up on drop).
@@ -182,6 +184,7 @@ impl TestAlienAgent {
             helm_release: None,
             helm_namespace: None,
             kubeconfig: None,
+            kube_context: None,
             child_process: None,
             data_dir: None,
             sync_token_file: None,
@@ -267,6 +270,7 @@ impl TestAlienAgent {
             helm_release: None,
             helm_namespace: None,
             kubeconfig: None,
+            kube_context: None,
             child_process: Some(child),
             data_dir: Some(data_dir),
             sync_token_file: Some(sync_token_file),
@@ -335,6 +339,7 @@ impl TestAlienAgent {
             helm_release: Some(release_name.to_string()),
             helm_namespace: Some(namespace.to_string()),
             kubeconfig: kubeconfig.map(String::from),
+            kube_context: None,
             child_process: None,
             data_dir: None,
             sync_token_file: None,
@@ -356,6 +361,7 @@ impl TestAlienAgent {
         release_name: &str,
         namespace: &str,
         kubeconfig: Option<&str>,
+        kube_context: Option<&str>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         info!(
             %release_name,
@@ -381,6 +387,9 @@ impl TestAlienAgent {
         if let Some(kc) = kubeconfig {
             cmd.env("KUBECONFIG", kc);
         }
+        if let Some(context) = kube_context {
+            cmd.arg("--kube-context").arg(context);
+        }
 
         let output = cmd.output().await?;
 
@@ -396,6 +405,7 @@ impl TestAlienAgent {
             helm_release: Some(release_name.to_string()),
             helm_namespace: Some(namespace.to_string()),
             kubeconfig: kubeconfig.map(String::from),
+            kube_context: kube_context.map(String::from),
             child_process: None,
             data_dir: None,
             sync_token_file: None,
@@ -442,7 +452,13 @@ impl TestAlienAgent {
             .as_deref()
             .ok_or("Missing Helm namespace")?;
 
-        crate::cleanup::cleanup_helm_release(release, namespace, self.kubeconfig.as_deref()).await
+        crate::cleanup::cleanup_helm_release(
+            release,
+            namespace,
+            self.kubeconfig.as_deref(),
+            self.kube_context.as_deref(),
+        )
+        .await
     }
 }
 
@@ -454,6 +470,7 @@ impl TestAlienAgent {
             helm_release: None,
             helm_namespace: None,
             kubeconfig: None,
+            kube_context: None,
             child_process: None,
             data_dir: None,
             sync_token_file: None,

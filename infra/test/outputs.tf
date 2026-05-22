@@ -127,6 +127,12 @@ output "aws_target_options" {
       ALIEN_TEST_AWS_ECR_REPOSITORY            = split(":", module.aws.lambda_image_uri)[0]
       E2E_AWS_AR_PUSH_ROLE_ARN                 = module.aws.e2e_ar_push_role_arn
       E2E_AWS_AR_PULL_ROLE_ARN                 = module.aws.e2e_ar_pull_role_arn
+      ALIEN_TEST_K8S_NAMESPACE_PREFIX          = var.e2e_k8s_namespace_prefix
+      ALIEN_TEST_K8S_INGRESS_CLASS             = var.e2e_k8s_ingress_class
+      ALIEN_TEST_K8S_PUBLIC_HOST_SUFFIX        = var.e2e_k8s_public_host_suffix
+      ALIEN_TEST_K8S_TLS_SECRET_NAME           = var.e2e_k8s_tls_secret_name
+      ALIEN_TEST_EKS_CLUSTER_NAME              = var.e2e_eks_cluster_name
+      ALIEN_TEST_EKS_KUBE_CONTEXT              = var.e2e_eks_kube_context
     }
   }
   sensitive = true
@@ -226,6 +232,13 @@ output "gcp_target_options" {
         ALIEN_E2E_GCP_NETWORK_NAME        = module.gcp_target_1.e2e_network_name
         ALIEN_E2E_GCP_SUBNET_NAME         = module.gcp_target_1.e2e_subnet_name
         ALIEN_E2E_GCP_REGION              = module.gcp_target_1.e2e_network_region
+        ALIEN_TEST_K8S_NAMESPACE_PREFIX   = var.e2e_k8s_namespace_prefix
+        ALIEN_TEST_K8S_INGRESS_CLASS      = var.e2e_k8s_ingress_class
+        ALIEN_TEST_K8S_PUBLIC_HOST_SUFFIX = var.e2e_k8s_public_host_suffix
+        ALIEN_TEST_K8S_TLS_SECRET_NAME    = var.e2e_k8s_tls_secret_name
+        ALIEN_TEST_GKE_CLUSTER_NAME       = var.e2e_gke_cluster_name
+        ALIEN_TEST_GKE_CLUSTER_LOCATION   = var.e2e_gke_cluster_location
+        ALIEN_TEST_GKE_KUBE_CONTEXT       = var.e2e_gke_kube_context
       }
       gcp-target-2 = {
         GOOGLE_TARGET_SERVICE_ACCOUNT_KEY = module.gcp.target_service_account_key
@@ -234,6 +247,13 @@ output "gcp_target_options" {
         ALIEN_E2E_GCP_NETWORK_NAME        = module.gcp.e2e_network_name
         ALIEN_E2E_GCP_SUBNET_NAME         = module.gcp.e2e_subnet_name
         ALIEN_E2E_GCP_REGION              = module.gcp.e2e_network_region
+        ALIEN_TEST_K8S_NAMESPACE_PREFIX   = var.e2e_k8s_namespace_prefix
+        ALIEN_TEST_K8S_INGRESS_CLASS      = var.e2e_k8s_ingress_class
+        ALIEN_TEST_K8S_PUBLIC_HOST_SUFFIX = var.e2e_k8s_public_host_suffix
+        ALIEN_TEST_K8S_TLS_SECRET_NAME    = var.e2e_k8s_tls_secret_name
+        ALIEN_TEST_GKE_CLUSTER_NAME       = var.e2e_gke_cluster_name
+        ALIEN_TEST_GKE_CLUSTER_LOCATION   = var.e2e_gke_cluster_location
+        ALIEN_TEST_GKE_KUBE_CONTEXT       = var.e2e_gke_kube_context
       }
     },
     var.google_target_3_enabled ? {
@@ -244,6 +264,13 @@ output "gcp_target_options" {
         ALIEN_E2E_GCP_NETWORK_NAME        = module.gcp_target_3[0].e2e_network_name
         ALIEN_E2E_GCP_SUBNET_NAME         = module.gcp_target_3[0].e2e_subnet_name
         ALIEN_E2E_GCP_REGION              = module.gcp_target_3[0].e2e_network_region
+        ALIEN_TEST_K8S_NAMESPACE_PREFIX   = var.e2e_k8s_namespace_prefix
+        ALIEN_TEST_K8S_INGRESS_CLASS      = var.e2e_k8s_ingress_class
+        ALIEN_TEST_K8S_PUBLIC_HOST_SUFFIX = var.e2e_k8s_public_host_suffix
+        ALIEN_TEST_K8S_TLS_SECRET_NAME    = var.e2e_k8s_tls_secret_name
+        ALIEN_TEST_GKE_CLUSTER_NAME       = var.e2e_gke_cluster_name
+        ALIEN_TEST_GKE_CLUSTER_LOCATION   = var.e2e_gke_cluster_location
+        ALIEN_TEST_GKE_KUBE_CONTEXT       = var.e2e_gke_kube_context
       }
     } : {}
   )
@@ -433,6 +460,13 @@ output "azure_target_options" {
       ALIEN_E2E_AZURE_VNET_RESOURCE_ID          = module.azure.e2e_vnet_resource_id
       ALIEN_E2E_AZURE_PUBLIC_SUBNET_NAME        = module.azure.e2e_public_subnet_name
       ALIEN_E2E_AZURE_PRIVATE_SUBNET_NAME       = module.azure.e2e_private_subnet_name
+      ALIEN_TEST_K8S_NAMESPACE_PREFIX           = var.e2e_k8s_namespace_prefix
+      ALIEN_TEST_K8S_INGRESS_CLASS              = var.e2e_k8s_ingress_class
+      ALIEN_TEST_K8S_PUBLIC_HOST_SUFFIX         = var.e2e_k8s_public_host_suffix
+      ALIEN_TEST_K8S_TLS_SECRET_NAME            = var.e2e_k8s_tls_secret_name
+      ALIEN_TEST_AKS_CLUSTER_NAME               = var.e2e_aks_cluster_name
+      ALIEN_TEST_AKS_CLUSTER_RESOURCE_GROUP     = var.e2e_aks_cluster_resource_group
+      ALIEN_TEST_AKS_KUBE_CONTEXT               = var.e2e_aks_kube_context
     }
   }
   sensitive = true

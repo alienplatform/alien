@@ -28,6 +28,9 @@ pub use tags::*;
 mod load_balancer;
 pub use load_balancer::*;
 
+mod kubernetes_naming;
+pub use kubernetes_naming::*;
+
 mod resources;
 pub use resources::*;
 

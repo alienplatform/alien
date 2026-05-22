@@ -10,7 +10,8 @@ use crate::{
     emitter::{TfEmitter, TfFragment},
     emitters::gcp::helpers::{
         artifact_registry_repository_full_id_template, artifact_registry_repository_id_from_local,
-        custom_role_label, downcast, emit_custom_roles, labels, permission_context, required_label,
+        binding_label_for_role, downcast, emit_custom_roles_for_bindings, labels,
+        permission_context, required_label, role_expression_for_binding,
         service_account_id_template, service_account_member_for_label,
     },
     expr,
@@ -201,32 +202,22 @@ fn emit_management_repository_bindings(
             continue;
         }
 
-        let custom_roles = emit_custom_roles(fragment, &permission_set, &context)?;
-        let bindings = generator
-            .generate_bindings(&permission_set, BindingTarget::Resource, &context)
+        let grant_plan = generator
+            .generate_grant_plan(&permission_set, BindingTarget::Resource, &context)
             .map_err(|err| {
                 AlienError::new(ErrorData::GenericError {
                     message: format!(
-                        "failed to generate GCP artifact-registry IAM bindings for '{}': {}",
+                        "failed to generate GCP artifact-registry IAM grant plan for '{}': {}",
                         permission_set.id, err
                     ),
                 })
             })?;
+        let bindings = grant_plan.bindings_for_target(GcpBindingTargetScope::CurrentResource);
+        let custom_roles = emit_custom_roles_for_bindings(fragment, &grant_plan, &bindings)?;
 
-        for (idx, binding) in bindings.bindings.into_iter().enumerate() {
-            let custom_role = custom_roles
-                .iter()
-                .find(|role| role.name == binding.role)
-                .ok_or_else(|| {
-                    AlienError::new(ErrorData::GenericError {
-                        message: format!(
-                            "missing generated custom role for GCP artifact-registry binding '{}'",
-                            binding.role
-                        ),
-                    })
-                })?;
-            let role_label = custom_role_label(custom_role);
-            let role = expr::traversal(["google_project_iam_custom_role", &role_label, "name"]);
+        for (idx, binding) in bindings.into_iter().enumerate() {
+            let role_label = binding_label_for_role(&binding.role, &custom_roles)?;
+            let role = role_expression_for_binding(&binding.role, &custom_roles)?;
 
             match binding.target {
                 GcpBindingTargetScope::Project => {}
@@ -325,37 +316,23 @@ fn emit_repository_bindings_for_member(
     let context = permission_context(member_label, stack_name).with_resource_name(format!(
         "${{google_artifact_registry_repository.{registry_label}.name}}"
     ));
-    let custom_roles = emit_custom_roles(fragment, permission_set, &context)?;
     let generator = GcpRuntimePermissionsGenerator::new();
-    let bindings = generator
-        .generate_bindings(permission_set, BindingTarget::Resource, &context)
+    let grant_plan = generator
+        .generate_grant_plan(permission_set, BindingTarget::Resource, &context)
         .map_err(|err| {
             AlienError::new(ErrorData::GenericError {
                 message: format!(
-                    "failed to generate GCP artifact-registry IAM bindings for '{}': {}",
+                    "failed to generate GCP artifact-registry IAM grant plan for '{}': {}",
                     permission_set.id, err
                 ),
             })
         })?;
+    let bindings = grant_plan.bindings_for_target(GcpBindingTargetScope::CurrentResource);
+    let custom_roles = emit_custom_roles_for_bindings(fragment, &grant_plan, &bindings)?;
 
-    for (idx, binding) in bindings.bindings.into_iter().enumerate() {
-        if binding.target != GcpBindingTargetScope::CurrentResource {
-            continue;
-        }
-
-        let custom_role = custom_roles
-            .iter()
-            .find(|role| role.name == binding.role)
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::GenericError {
-                    message: format!(
-                        "missing generated custom role for GCP artifact-registry binding '{}'",
-                        binding.role
-                    ),
-                })
-            })?;
-        let role_label = custom_role_label(custom_role);
-        let role = expr::traversal(["google_project_iam_custom_role", &role_label, "name"]);
+    for (idx, binding) in bindings.into_iter().enumerate() {
+        let role_label = binding_label_for_role(&binding.role, &custom_roles)?;
+        let role = role_expression_for_binding(&binding.role, &custom_roles)?;
         let mut body = vec![
             attr("project", expr::raw("var.gcp_project")),
             attr(

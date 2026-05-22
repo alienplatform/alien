@@ -8,6 +8,23 @@ use std::env;
 use alien_core::{NetworkSettings, Platform};
 use anyhow::{bail, Context};
 
+const E2E_SLOT_ENV: &str = "ALIEN_E2E_SLOT";
+const E2E_SLOT_MESSAGE: &str = "Set ALIEN_E2E_SLOT to one of 01..10, e.g. ALIEN_E2E_SLOT=03";
+
+pub fn e2e_resource_prefix() -> anyhow::Result<String> {
+    let slot = env::var(E2E_SLOT_ENV).context(E2E_SLOT_MESSAGE)?;
+    e2e_resource_prefix_from_slot(&slot)
+}
+
+pub fn e2e_resource_prefix_from_slot(slot: &str) -> anyhow::Result<String> {
+    match slot {
+        "01" | "02" | "03" | "04" | "05" | "06" | "07" | "08" | "09" | "10" => {
+            Ok(format!("e2e-{slot}"))
+        }
+        _ => bail!(E2E_SLOT_MESSAGE),
+    }
+}
+
 /// AWS credentials for a single role (management or target).
 #[derive(Debug, Clone)]
 pub struct AwsConfig {
@@ -132,6 +149,43 @@ pub struct E2eArtifactRegistryConfig {
     pub azure_acr_repository: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct KubernetesRuntimeConfig {
+    pub kubeconfig: String,
+    pub kube_context: Option<String>,
+    pub namespace_prefix: String,
+    pub ingress_class: Option<String>,
+    pub public_host_suffix: Option<String>,
+    pub tls_secret_name: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct EksKubernetesConfig {
+    pub runtime: KubernetesRuntimeConfig,
+    pub cluster_name: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct GkeKubernetesConfig {
+    pub runtime: KubernetesRuntimeConfig,
+    pub cluster_name: String,
+    pub cluster_location: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct AksKubernetesConfig {
+    pub runtime: KubernetesRuntimeConfig,
+    pub cluster_name: String,
+    pub cluster_resource_group_name: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct KubernetesTestConfig {
+    pub eks: Option<EksKubernetesConfig>,
+    pub gke: Option<GkeKubernetesConfig>,
+    pub aks: Option<AksKubernetesConfig>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum E2eNetworkMode {
     None,
@@ -154,6 +208,7 @@ pub struct TestConfig {
     pub azure_target: Option<AzureConfig>,
     pub azure_resources: AzureTestResources,
     pub e2e_artifact_registry: E2eArtifactRegistryConfig,
+    pub kubernetes: KubernetesTestConfig,
     pub e2e_network_mode: E2eNetworkMode,
 }
 
@@ -177,6 +232,7 @@ impl TestConfig {
             azure_target: Self::load_azure_target(),
             azure_resources: Self::load_azure_resources(),
             e2e_artifact_registry: Self::load_e2e_artifact_registry(),
+            kubernetes: Self::load_kubernetes(),
             e2e_network_mode: Self::load_e2e_network_mode(),
         };
         config.mask_ci_secrets();
@@ -466,6 +522,62 @@ impl TestConfig {
         }
     }
 
+    fn load_kubernetes() -> KubernetesTestConfig {
+        KubernetesTestConfig {
+            eks: env_opt("ALIEN_TEST_EKS_CLUSTER_NAME").and_then(|cluster_name| {
+                Some(EksKubernetesConfig {
+                    runtime: Self::load_kubernetes_runtime("EKS")?,
+                    cluster_name,
+                })
+            }),
+            gke: match (
+                env_opt("ALIEN_TEST_GKE_CLUSTER_NAME"),
+                env_opt("ALIEN_TEST_GKE_CLUSTER_LOCATION"),
+            ) {
+                (Some(cluster_name), Some(cluster_location)) => {
+                    Self::load_kubernetes_runtime("GKE").map(|runtime| GkeKubernetesConfig {
+                        runtime,
+                        cluster_name,
+                        cluster_location,
+                    })
+                }
+                _ => None,
+            },
+            aks: match (
+                env_opt("ALIEN_TEST_AKS_CLUSTER_NAME"),
+                env_opt("ALIEN_TEST_AKS_CLUSTER_RESOURCE_GROUP"),
+            ) {
+                (Some(cluster_name), Some(cluster_resource_group_name)) => {
+                    Self::load_kubernetes_runtime("AKS").map(|runtime| AksKubernetesConfig {
+                        runtime,
+                        cluster_name,
+                        cluster_resource_group_name,
+                    })
+                }
+                _ => None,
+            },
+        }
+    }
+
+    fn load_kubernetes_runtime(provider: &str) -> Option<KubernetesRuntimeConfig> {
+        let kubeconfig = env_opt(&format!("ALIEN_TEST_{provider}_KUBECONFIG"))
+            .or_else(|| env_opt("ALIEN_TEST_K8S_KUBECONFIG"))
+            .or_else(|| env_opt("KUBECONFIG"))?;
+        Some(KubernetesRuntimeConfig {
+            kubeconfig,
+            kube_context: env_opt(&format!("ALIEN_TEST_{provider}_KUBE_CONTEXT"))
+                .or_else(|| env_opt("ALIEN_TEST_K8S_KUBE_CONTEXT")),
+            namespace_prefix: env_opt("ALIEN_TEST_K8S_NAMESPACE_PREFIX")
+                .unwrap_or_else(|| "alien-test".to_string()),
+            ingress_class: env_opt(&format!("ALIEN_TEST_{provider}_INGRESS_CLASS"))
+                .or_else(|| env_opt("ALIEN_TEST_K8S_INGRESS_CLASS")),
+            public_host_suffix: env_opt(&format!("ALIEN_TEST_{provider}_PUBLIC_HOST_SUFFIX"))
+                .or_else(|| env_opt("ALIEN_TEST_K8S_PUBLIC_HOST_SUFFIX")),
+            tls_secret_name: env_opt(&format!("ALIEN_TEST_{provider}_TLS_SECRET_NAME"))
+                .or_else(|| env_opt("ALIEN_TEST_K8S_TLS_SECRET_NAME")),
+        })
+    }
+
     // -- CI secret masking ----------------------------------------------------
 
     /// In GitHub Actions, emit `::add-mask::` for every sensitive value so
@@ -552,6 +664,29 @@ impl TestConfig {
         mask_opt(&e2e.gcp_ar_push_sa_email);
         mask_opt(&e2e.azure_acr_repository);
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::e2e_resource_prefix_from_slot;
+
+    #[test]
+    fn e2e_resource_prefix_accepts_bounded_slots() {
+        assert_eq!(e2e_resource_prefix_from_slot("01").unwrap(), "e2e-01");
+        assert_eq!(e2e_resource_prefix_from_slot("10").unwrap(), "e2e-10");
+    }
+
+    #[test]
+    fn e2e_resource_prefix_rejects_unbounded_slots() {
+        assert!(e2e_resource_prefix_from_slot("1").is_err());
+        assert!(e2e_resource_prefix_from_slot("00").is_err());
+        assert!(e2e_resource_prefix_from_slot("11").is_err());
+        assert!(e2e_resource_prefix_from_slot("random").is_err());
+    }
+}
+
+fn env_opt(name: &str) -> Option<String> {
+    env::var(name).ok().filter(|value| !value.trim().is_empty())
 }
 
 fn required_env(name: &str) -> anyhow::Result<String> {

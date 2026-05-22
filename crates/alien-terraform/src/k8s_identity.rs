@@ -24,7 +24,10 @@ use crate::{
     expr,
     target::TerraformTarget,
 };
-use alien_core::{Result, ServiceAccount, Stack};
+use alien_core::{
+    permission_profile_from_service_account_id, RemoteStackManagement, Result, ServiceAccount,
+    Stack,
+};
 use hcl::expr::Expression;
 use indexmap::IndexMap;
 
@@ -39,20 +42,24 @@ pub(crate) fn overlay_per_resource(
         return Ok(());
     }
 
-    let mut sa_labels: Vec<(String, String)> = Vec::new();
+    let mut service_accounts: Vec<(String, String, String)> = Vec::new();
     for (resource_id, entry) in stack.resources() {
-        if entry.config.downcast_ref::<ServiceAccount>().is_none() {
+        let Some(service_account) = entry.config.downcast_ref::<ServiceAccount>() else {
             continue;
-        }
+        };
         let Some(label) = resource_labels.get(resource_id) else {
             continue;
         };
-        sa_labels.push((resource_id.clone(), label.clone()));
+        service_accounts.push((
+            resource_id.clone(),
+            label.clone(),
+            permission_profile_from_service_account_id(service_account.id()),
+        ));
     }
 
     let mut helm_service_accounts: Vec<(String, Expression)> = Vec::new();
     let mut target_cluster_data_added = false;
-    for (resource_id, label) in &sa_labels {
+    for (resource_id, label, permission_profile) in &service_accounts {
         let Some(fragment) = per_resource.get_mut(resource_id) else {
             continue;
         };
@@ -60,30 +67,46 @@ pub(crate) fn overlay_per_resource(
             add_target_cluster_data(fragment, target);
             target_cluster_data_added = true;
         }
+        let service_account_name = terraform_service_account_name_expr(permission_profile);
         let helm_value = match target {
-            TerraformTarget::Eks => Some(apply_eks(fragment, label)),
+            TerraformTarget::Eks => Some(apply_eks(fragment, label, &service_account_name)),
             // GKE / AKS overlays land alongside the GCP / Azure
             // service-account emitters under T4 / T5 — wiring is below
             // but currently dormant until those cloud emitters exist.
             TerraformTarget::Gke if has_block(fragment, "google_service_account") => {
-                Some(apply_gke(fragment, label))
+                Some(apply_gke(fragment, label, &service_account_name))
             }
             TerraformTarget::Aks if has_block(fragment, "azurerm_user_assigned_identity") => {
-                Some(apply_aks(fragment, label))
+                Some(apply_aks(fragment, label, &service_account_name))
             }
             _ => None,
         };
         if let Some(value) = helm_value {
-            helm_service_accounts.push((label.clone(), value));
+            helm_service_accounts.push((permission_profile.clone(), value));
         }
     }
 
-    if !sa_labels.is_empty() {
+    if !service_accounts.is_empty() {
         shared_locals.insert(
             "alien_kubernetes_namespace".to_string(),
             expr::raw("var.kubernetes_namespace"),
         );
     }
+    shared_locals.insert(
+        "helm_service_accounts".to_string(),
+        expr::object(helm_service_accounts),
+    );
+    let helm_manager_service_account = overlay_manager_service_account(
+        stack,
+        target,
+        resource_labels,
+        per_resource,
+        &mut target_cluster_data_added,
+    );
+    shared_locals.insert(
+        "helm_manager_service_account".to_string(),
+        helm_manager_service_account.unwrap_or_else(|| service_account_values([], [])),
+    );
     if target == TerraformTarget::Eks && target_cluster_data_added {
         shared_locals.insert(
             "eks_oidc_issuer_host_path".to_string(),
@@ -92,12 +115,50 @@ pub(crate) fn overlay_per_resource(
             ),
         );
     }
-    shared_locals.insert(
-        "helm_service_accounts".to_string(),
-        expr::object(helm_service_accounts),
-    );
 
     Ok(())
+}
+
+fn overlay_manager_service_account(
+    stack: &Stack,
+    target: TerraformTarget,
+    resource_labels: &IndexMap<String, String>,
+    per_resource: &mut IndexMap<String, TfFragment>,
+    target_cluster_data_added: &mut bool,
+) -> Option<Expression> {
+    let manager_service_account_name = "${local.resource_prefix}-manager-sa".to_string();
+    for (resource_id, entry) in stack.resources() {
+        if entry
+            .config
+            .downcast_ref::<RemoteStackManagement>()
+            .is_none()
+        {
+            continue;
+        }
+        let label = resource_labels.get(resource_id)?;
+        let fragment = per_resource.get_mut(resource_id)?;
+        if !*target_cluster_data_added {
+            add_target_cluster_data(fragment, target);
+            *target_cluster_data_added = true;
+        }
+        return match target {
+            TerraformTarget::Eks if has_block(fragment, "aws_iam_role") => {
+                Some(apply_eks(fragment, label, &manager_service_account_name))
+            }
+            TerraformTarget::Gke if has_block(fragment, "google_service_account") => {
+                Some(apply_gke(fragment, label, &manager_service_account_name))
+            }
+            TerraformTarget::Aks if has_block(fragment, "azurerm_user_assigned_identity") => {
+                Some(apply_aks(fragment, label, &manager_service_account_name))
+            }
+            _ => Some(service_account_values([], [])),
+        };
+    }
+    None
+}
+
+fn terraform_service_account_name_expr(permission_profile: &str) -> String {
+    format!("${{local.resource_prefix}}-{permission_profile}-sa")
 }
 
 fn add_target_cluster_data(fragment: &mut TfFragment, target: TerraformTarget) {
@@ -170,7 +231,7 @@ fn add_aks_cluster_data(fragment: &mut TfFragment) {
     ));
 }
 
-fn apply_eks(fragment: &mut TfFragment, label: &str) -> Expression {
+fn apply_eks(fragment: &mut TfFragment, label: &str, service_account_name: &str) -> Expression {
     fragment.data_blocks.push(data_block(
         "aws_iam_policy_document",
         &format!("{label}_assume_role"),
@@ -207,7 +268,7 @@ fn apply_eks(fragment: &mut TfFragment, label: &str) -> Expression {
                         attr(
                             "values",
                             Expression::Array(vec![expr::template(format!(
-                                "system:serviceaccount:${{var.kubernetes_namespace}}:{label}"
+                                "system:serviceaccount:${{var.kubernetes_namespace}}:{service_account_name}"
                             ))]),
                         ),
                     ],
@@ -248,7 +309,7 @@ fn apply_eks(fragment: &mut TfFragment, label: &str) -> Expression {
     )
 }
 
-fn apply_gke(fragment: &mut TfFragment, label: &str) -> Expression {
+fn apply_gke(fragment: &mut TfFragment, label: &str, service_account_name: &str) -> Expression {
     // Workload Identity binding: the IAM service account allows the
     // Kubernetes service account to impersonate it.
     fragment.resource_blocks.push(resource_block(
@@ -266,7 +327,7 @@ fn apply_gke(fragment: &mut TfFragment, label: &str) -> Expression {
             attr(
                 "members",
                 Expression::Array(vec![expr::template(format!(
-                    "serviceAccount:${{data.google_container_cluster.target.workload_identity_config[0].workload_pool}}[${{var.kubernetes_namespace}}/{label}]"
+                    "serviceAccount:${{data.google_container_cluster.target.workload_identity_config[0].workload_pool}}[${{var.kubernetes_namespace}}/{service_account_name}]"
                 ))]),
             ),
         ],
@@ -281,7 +342,7 @@ fn apply_gke(fragment: &mut TfFragment, label: &str) -> Expression {
     )
 }
 
-fn apply_aks(fragment: &mut TfFragment, label: &str) -> Expression {
+fn apply_aks(fragment: &mut TfFragment, label: &str, service_account_name: &str) -> Expression {
     // Federated Identity Credential: trusts the AKS cluster's OIDC
     // issuer for the Kubernetes service-account subject.
     fragment.resource_blocks.push(resource_block(
@@ -313,7 +374,7 @@ fn apply_aks(fragment: &mut TfFragment, label: &str) -> Expression {
             attr(
                 "subject",
                 expr::template(format!(
-                    "system:serviceaccount:${{var.kubernetes_namespace}}:{label}"
+                    "system:serviceaccount:${{var.kubernetes_namespace}}:{service_account_name}"
                 )),
             ),
         ],

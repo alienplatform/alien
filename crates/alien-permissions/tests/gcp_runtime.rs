@@ -2,7 +2,7 @@ mod common;
 
 use alien_permissions::{
     generators::{GcpBindingResourceKind, GcpBindingTargetScope, GcpRuntimePermissionsGenerator},
-    get_permission_set, BindingTarget,
+    get_permission_set, list_permission_set_ids, BindingTarget,
 };
 use common::*;
 use rstest::rstest;
@@ -249,6 +249,97 @@ fn gcp_artifact_registry_management_stack_binding_is_project_scoped() {
     assert_eq!(result.bindings[0].target, GcpBindingTargetScope::Project);
 }
 
+#[rstest]
+#[case::data_read("storage/data-read")]
+#[case::data_write("storage/data-write")]
+fn gcp_storage_resource_grant_plan_isolates_project_sign_blob_helper(
+    #[case] permission_set_id: &str,
+) {
+    let generator = GcpRuntimePermissionsGenerator::new();
+    let permission_set = get_permission_set(permission_set_id).expect("permission set exists");
+    let context = create_test_context().with_resource_name("app-bucket");
+
+    let grant_plan = generator
+        .generate_grant_plan(permission_set, BindingTarget::Resource, &context)
+        .expect("should generate storage grant plan");
+
+    let resource_bindings = grant_plan.bindings_for_target(GcpBindingTargetScope::CurrentResource);
+    let project_bindings = grant_plan.bindings_for_target(GcpBindingTargetScope::Project);
+
+    assert_eq!(resource_bindings.len(), 1);
+    assert_eq!(project_bindings.len(), 1);
+
+    let resource_roles = grant_plan.custom_roles_for_bindings(&resource_bindings);
+    assert_eq!(resource_roles.len(), 1);
+    assert!(resource_roles[0]
+        .included_permissions
+        .iter()
+        .any(|permission| permission == "storage.objects.get"));
+
+    let project_roles = grant_plan.custom_roles_for_bindings(&project_bindings);
+    assert_eq!(project_roles.len(), 1);
+    assert_eq!(
+        project_roles[0].included_permissions,
+        vec!["iam.serviceAccounts.signBlob"]
+    );
+    assert!(!project_roles[0]
+        .included_permissions
+        .iter()
+        .any(|permission| permission.starts_with("storage.objects.")));
+}
+
+#[test]
+fn gcp_resource_target_project_bindings_do_not_include_sensitive_data_permissions() {
+    let generator = GcpRuntimePermissionsGenerator::new();
+    let context = create_test_context().with_resource_name("current-resource");
+    let mut mixed_target_sets = Vec::new();
+
+    for permission_set_id in list_permission_set_ids() {
+        let permission_set = get_permission_set(permission_set_id).expect("permission set exists");
+        if permission_set.platforms.gcp.is_none() {
+            continue;
+        }
+
+        let grant_plan = generator
+            .generate_grant_plan(permission_set, BindingTarget::Resource, &context)
+            .expect("GCP resource grant plan should compile");
+        let resource_bindings =
+            grant_plan.bindings_for_target(GcpBindingTargetScope::CurrentResource);
+        let project_bindings = grant_plan.bindings_for_target(GcpBindingTargetScope::Project);
+        let is_mixed_target = !resource_bindings.is_empty() && !project_bindings.is_empty();
+        if is_mixed_target {
+            mixed_target_sets.push(permission_set_id.to_string());
+        }
+
+        if !is_mixed_target || !is_resource_data_permission_set(permission_set_id) {
+            continue;
+        }
+
+        let project_roles = grant_plan.custom_roles_for_bindings(&project_bindings);
+        for role in project_roles {
+            assert!(
+                !role
+                    .included_permissions
+                    .iter()
+                    .any(|permission| is_sensitive_resource_data_permission(permission)),
+                "permission set '{}' project-scoped role '{}' included sensitive data permissions: {:?}",
+                permission_set_id,
+                role.role_id,
+                role.included_permissions
+            );
+        }
+    }
+
+    assert!(
+        mixed_target_sets.contains(&"storage/data-read".to_string()),
+        "storage/data-read should exercise mixed resource/project grant envelopes"
+    );
+    assert!(
+        mixed_target_sets.contains(&"storage/data-write".to_string()),
+        "storage/data-write should exercise mixed resource/project grant envelopes"
+    );
+}
+
 #[test]
 fn gcp_single_custom_role_helper_rejects_multi_entry_sets() {
     let generator = GcpRuntimePermissionsGenerator::new();
@@ -450,4 +541,23 @@ fn gcp_permission_grant_rejects_invalid_predefined_role_name() {
         .unwrap_err()
         .to_string()
         .contains("invalid predefined role"));
+}
+
+fn is_sensitive_resource_data_permission(permission: &str) -> bool {
+    matches!(
+        permission,
+        "storage.objects.get"
+            | "storage.objects.list"
+            | "secretmanager.versions.access"
+            | "datastore.entities.get"
+            | "datastore.entities.list"
+            | "pubsub.subscriptions.consume"
+    )
+}
+
+fn is_resource_data_permission_set(permission_set_id: &str) -> bool {
+    permission_set_id.starts_with("storage/")
+        || permission_set_id.starts_with("vault/")
+        || permission_set_id.starts_with("kv/")
+        || permission_set_id.starts_with("queue/")
 }

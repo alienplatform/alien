@@ -115,6 +115,7 @@ pub struct CreateDeploymentParams {
     pub platform: Platform,
     pub base_platform: Option<Platform>,
     pub stack_settings: StackSettings,
+    pub stack_state: Option<StackState>,
     pub environment_variables: Option<Vec<EnvironmentVariable>>,
     /// Raw deployment token for proxy pull auth.
     pub deployment_token: Option<String>,

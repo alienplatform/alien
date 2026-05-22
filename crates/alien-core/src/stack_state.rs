@@ -620,6 +620,7 @@ mod tests {
             dependencies: Vec::new(),
             last_failed_state: None,
             remote_binding_params: None,
+            controller_platform: None,
         };
 
         stack_state

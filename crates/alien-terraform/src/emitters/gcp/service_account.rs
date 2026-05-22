@@ -14,13 +14,15 @@ use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::gcp::helpers::{
-        binding_label_for_role, downcast, emit_custom_roles, permission_context, push_iam_member,
-        required_label, role_expression_for_binding, service_account_id_template,
+        binding_label_for_role, downcast, emit_custom_roles_for_bindings, permission_context,
+        push_iam_member, required_label, role_expression_for_binding, service_account_id_template,
         service_account_member_for_label,
     },
     expr,
 };
-use alien_core::{import::EmitContext, ErrorData, PermissionSet, Result, ServiceAccount};
+use alien_core::{
+    import::EmitContext, ErrorData, PermissionSet, PermissionSetReference, Result, ServiceAccount,
+};
 use alien_error::AlienError;
 use alien_permissions::{
     generators::{GcpBindingTargetScope, GcpRuntimePermissionsGenerator},
@@ -62,7 +64,38 @@ impl TfEmitter for GcpServiceAccountEmitter {
 
         for permission_set in &service_account.stack_permission_sets {
             let context = permission_context(label, ctx.stack.id());
-            emit_project_stack_bindings(&mut fragment, label, &member, permission_set, &context)?;
+            emit_project_bindings(
+                &mut fragment,
+                label,
+                &member,
+                permission_set,
+                &context,
+                BindingTarget::Stack,
+            )?;
+        }
+
+        if let Some(profile_name) = service_account.id.strip_suffix("-sa") {
+            if let Some(profile) = ctx.stack.permission_profiles().get(profile_name) {
+                for (resource_id, permission_set_refs) in &profile.0 {
+                    if resource_id == "*" {
+                        continue;
+                    }
+                    let context = permission_context(label, ctx.stack.id())
+                        .with_resource_name(format!("${{local.resource_prefix}}-{resource_id}"));
+                    for permission_set_ref in permission_set_refs {
+                        if let Some(permission_set) = resolve_permission_set(permission_set_ref) {
+                            emit_project_bindings(
+                                &mut fragment,
+                                label,
+                                &member,
+                                &permission_set,
+                                &context,
+                                BindingTarget::Resource,
+                            )?;
+                        }
+                    }
+                }
+            }
         }
 
         Ok(fragment)
@@ -103,35 +136,33 @@ impl TfEmitter for GcpServiceAccountEmitter {
     }
 }
 
-fn emit_project_stack_bindings(
+fn emit_project_bindings(
     fragment: &mut TfFragment,
     label: &str,
     member: &Expression,
     permission_set: &PermissionSet,
     context: &PermissionContext,
+    binding_target: BindingTarget,
 ) -> Result<()> {
     if permission_set.platforms.gcp.is_none() {
         return Ok(());
     }
 
-    let custom_roles = emit_custom_roles(fragment, permission_set, context)?;
     let generator = GcpRuntimePermissionsGenerator::new();
-    let bindings = generator
-        .generate_bindings(permission_set, BindingTarget::Stack, context)
+    let grant_plan = generator
+        .generate_grant_plan(permission_set, binding_target, context)
         .map_err(|err| {
             AlienError::new(ErrorData::GenericError {
                 message: format!(
-                    "failed to generate GCP service-account IAM bindings for '{}': {}",
+                    "failed to generate GCP service-account IAM grant plan for '{}': {}",
                     permission_set.id, err
                 ),
             })
         })?;
+    let bindings = grant_plan.bindings_for_target(GcpBindingTargetScope::Project);
+    let custom_roles = emit_custom_roles_for_bindings(fragment, &grant_plan, &bindings)?;
 
-    for (idx, binding) in bindings.bindings.into_iter().enumerate() {
-        if binding.target != GcpBindingTargetScope::Project {
-            continue;
-        }
-
+    for (idx, binding) in bindings.into_iter().enumerate() {
         let role_label = binding_label_for_role(&binding.role, &custom_roles)?;
         let role = role_expression_for_binding(&binding.role, &custom_roles)?;
         push_iam_member(
@@ -144,4 +175,8 @@ fn emit_project_stack_bindings(
     }
 
     Ok(())
+}
+
+fn resolve_permission_set(permission_set_ref: &PermissionSetReference) -> Option<PermissionSet> {
+    permission_set_ref.resolve(|name| alien_permissions::get_permission_set(name).cloned())
 }

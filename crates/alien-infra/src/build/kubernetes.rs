@@ -5,56 +5,16 @@ use tracing::{debug, info};
 use crate::core::{EnvironmentVariableBuilder, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
 use alien_client_core::ErrorData as CloudClientErrorData;
-use alien_core::{Build, BuildOutputs, ResourceOutputs, ResourceStatus};
+use alien_core::{
+    kubernetes_build_service_account_name, kubernetes_resource_name, Build, BuildOutputs,
+    ResourceOutputs, ResourceStatus,
+};
 use alien_error::{AlienError, Context, ContextError};
 use alien_macros::controller;
 
 use k8s_openapi::api::batch::v1::{Job, JobSpec};
 use k8s_openapi::api::core::v1::{Container, EnvVar, PodSpec, PodTemplateSpec};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
-
-/// Generates a Kubernetes Job name from the stack prefix and build ID.
-fn generate_kubernetes_build_name(resource_prefix: &str, id: &str) -> String {
-    // Kubernetes names must be lowercase and follow DNS-1123 label requirements
-    let clean_prefix = resource_prefix
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '-')
-        .collect::<String>()
-        .to_lowercase();
-    let clean_id = id
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '-')
-        .collect::<String>()
-        .to_lowercase();
-
-    let combined = format!("{}-build-{}", clean_prefix, clean_id);
-
-    // Truncate to 63 characters if necessary (Kubernetes limit)
-    if combined.len() > 63 {
-        combined[..63].to_string()
-    } else {
-        combined
-    }
-}
-
-/// Generates the ServiceAccount name for builds following Helm naming convention.
-/// Format: {release-name}-build-sa
-fn generate_build_service_account_name(resource_prefix: &str) -> String {
-    let clean_prefix = resource_prefix
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '-')
-        .collect::<String>()
-        .to_lowercase();
-
-    let combined = format!("{}-build-sa", clean_prefix);
-
-    // Truncate to 63 characters if necessary
-    if combined.len() > 63 {
-        combined[..63].to_string()
-    } else {
-        combined
-    }
-}
 
 /// Kubernetes Build controller that creates Jobs for executing builds.
 ///
@@ -88,11 +48,12 @@ impl KubernetesBuildController {
 
         info!(id=%config.id, "Initiating Kubernetes Build Job creation");
 
-        let job_name = generate_kubernetes_build_name(&ctx.resource_prefix, &config.id);
+        let job_name =
+            kubernetes_resource_name(&ctx.resource_prefix, &format!("build-{}", config.id));
         let namespace = self.get_kubernetes_namespace(ctx)?;
 
         // Generate ServiceAccount name following Helm naming convention
-        let service_account_name = generate_build_service_account_name(&ctx.resource_prefix);
+        let service_account_name = kubernetes_build_service_account_name(&ctx.resource_prefix);
 
         // Create the Job
         let job_client = ctx
@@ -394,7 +355,8 @@ impl KubernetesBuildController {
         let kubernetes_config = ctx.get_kubernetes_config()?;
         let config = ctx.desired_resource_config::<Build>()?;
 
-        let job_name = generate_kubernetes_build_name(&ctx.resource_prefix, &config.id);
+        let job_name =
+            kubernetes_resource_name(&ctx.resource_prefix, &format!("build-{}", config.id));
         let namespace = self.namespace.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceControllerConfigError {
                 resource_id: config.id.clone(),
@@ -402,7 +364,7 @@ impl KubernetesBuildController {
             })
         })?;
 
-        let service_account_name = generate_build_service_account_name(&ctx.resource_prefix);
+        let service_account_name = kubernetes_build_service_account_name(&ctx.resource_prefix);
 
         info!(job_name=%job_name, namespace=%namespace, "Recreating Build Job with updated config");
 
@@ -844,43 +806,43 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_generate_kubernetes_build_name() {
+    fn test_kubernetes_build_name() {
         // Test basic functionality
         assert_eq!(
-            generate_kubernetes_build_name("my-stack", "my-build"),
+            kubernetes_resource_name("my-stack", "build-my-build"),
             "my-stack-build-my-build"
         );
 
         // Test character filtering and lowercasing
         assert_eq!(
-            generate_kubernetes_build_name("My_Stack!", "Test#123"),
-            "mystack-build-test123"
+            kubernetes_resource_name("My_Stack!", "build-Test#123"),
+            "my-stack-build-test-123"
         );
 
         // Test length truncation
         let long_prefix = "a".repeat(50);
         let long_id = "b".repeat(20);
-        let result = generate_kubernetes_build_name(&long_prefix, &long_id);
+        let result = kubernetes_resource_name(&long_prefix, &format!("build-{long_id}"));
         assert!(result.len() <= 63);
     }
 
     #[test]
-    fn test_generate_build_service_account_name() {
+    fn test_kubernetes_build_service_account_name() {
         // Test basic functionality
         assert_eq!(
-            generate_build_service_account_name("my-app"),
+            kubernetes_build_service_account_name("my-app"),
             "my-app-build-sa"
         );
 
         // Test character filtering
         assert_eq!(
-            generate_build_service_account_name("My_App!"),
-            "myapp-build-sa"
+            kubernetes_build_service_account_name("My_App!"),
+            "my-app-build-sa"
         );
 
         // Test length truncation
         let long_prefix = "a".repeat(60);
-        let result = generate_build_service_account_name(&long_prefix);
+        let result = kubernetes_build_service_account_name(&long_prefix);
         assert!(result.len() <= 63);
     }
 }

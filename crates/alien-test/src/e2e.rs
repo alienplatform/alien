@@ -540,6 +540,7 @@ async fn start_generated_helm_agent(
         &format!("e2e-agent-{}", &uuid::Uuid::new_v4().to_string()[..8]),
         "alien-test",
         None,
+        None,
     )
     .await
     .map_err(|error| {
@@ -786,12 +787,16 @@ pub async fn deploy_test_app(
         }
     }
 
+    let resource_prefix = crate::config::e2e_resource_prefix()?;
+    info!(%resource_prefix, "Using E2E resource prefix");
+
     let create_body = alien_manager_api::types::CreateDeploymentRequest {
         name: deployment_name.clone(),
         platform: api_platform,
         deployment_group_id: Some(group_id.to_string()),
         stack_settings: Some(stack_settings),
         environment_variables: None,
+        resource_prefix: Some(resource_prefix),
     };
 
     let resp = manager

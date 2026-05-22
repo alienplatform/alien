@@ -17,8 +17,9 @@ use crate::{
     block::{attr, block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::gcp::helpers::{
-        custom_role_label, downcast, emit_custom_roles, label_for_ref, labels, permission_context,
-        required_label, service_account_email, service_account_member_for_label,
+        downcast, emit_custom_roles_for_bindings, label_for_ref, labels, permission_context,
+        required_label, role_expression_for_binding, service_account_email,
+        service_account_member_for_label,
     },
     emitters::worker_environment::{worker_environment, GcpWorkerEnvironmentRenderer},
     expr,
@@ -487,45 +488,21 @@ fn emit_command_topic_management_permissions(
             continue;
         };
 
-        let custom_roles = emit_custom_roles(fragment, &permission_set, &context)?;
-        let bindings = generator
-            .generate_bindings(&permission_set, BindingTarget::Resource, &context)
+        let grant_plan = generator
+            .generate_grant_plan(&permission_set, BindingTarget::Resource, &context)
             .map_err(|err| {
                 AlienError::new(ErrorData::GenericError {
                     message: format!(
-                        "failed to generate GCP command-topic IAM bindings for '{}': {}",
+                        "failed to generate GCP command-topic IAM grant plan for '{}': {}",
                         permission_set.id, err
                     ),
                 })
             })?;
+        let bindings = grant_plan.bindings_for_target(GcpBindingTargetScope::CurrentResource);
+        let custom_roles = emit_custom_roles_for_bindings(fragment, &grant_plan, &bindings)?;
 
-        for (idx, binding) in bindings.bindings.into_iter().enumerate() {
-            if binding.target != GcpBindingTargetScope::CurrentResource {
-                return Err(AlienError::new(ErrorData::GenericError {
-                    message: format!(
-                        "command permission set '{}' must produce resource-scoped GCP bindings",
-                        permission_set.id
-                    ),
-                }));
-            }
-
-            let role = if binding.role.starts_with("roles/") {
-                Expression::String(binding.role.clone())
-            } else {
-                let custom_role = custom_roles
-                    .iter()
-                    .find(|role| role.name == binding.role)
-                    .ok_or_else(|| {
-                        AlienError::new(ErrorData::GenericError {
-                            message: format!(
-                                "missing generated custom role for GCP command binding '{}'",
-                                binding.role
-                            ),
-                        })
-                    })?;
-                let role_label = custom_role_label(custom_role);
-                expr::traversal(["google_project_iam_custom_role", &role_label, "name"])
-            };
+        for (idx, binding) in bindings.into_iter().enumerate() {
+            let role = role_expression_for_binding(&binding.role, &custom_roles)?;
             fragment.resource_blocks.push(resource_block(
                 "google_pubsub_topic_iam_member",
                 &format!("{worker_label}_commands_management_{idx}"),

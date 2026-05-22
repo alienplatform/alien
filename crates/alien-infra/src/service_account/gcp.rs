@@ -3,7 +3,10 @@ use tracing::info;
 
 use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
-use alien_core::{ResourceOutputs, ResourceStatus, ServiceAccount, ServiceAccountOutputs};
+use alien_core::{
+    permissions::PermissionSetReference, PermissionSet, ResourceOutputs, ResourceStatus,
+    ServiceAccount, ServiceAccountOutputs,
+};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_gcp_clients::iam::{
     Binding, CreateServiceAccountRequest, IamPolicy, ServiceAccount as GcpServiceAccount,
@@ -378,45 +381,44 @@ impl GcpServiceAccountController {
         let mut new_bindings = Vec::new();
 
         for permission_set in &config.stack_permission_sets {
-            ResourcePermissionsHelper::ensure_single_gcp_custom_role(
+            self.collect_project_bindings_for_permission_set(
                 ctx,
+                &generator,
                 permission_set,
+                BindingTarget::Stack,
                 &permission_context,
+                &mut new_bindings,
             )
             .await?;
+        }
 
-            let bindings = generator
-                .generate_bindings(permission_set, BindingTarget::Stack, &permission_context)
-                .context(ErrorData::InfrastructureError {
-                    message: format!(
-                        "Failed to generate IAM bindings for stack permission set '{}'",
-                        permission_set.id
-                    ),
-                    operation: Some("sync_stack_role_bindings".to_string()),
-                    resource_id: Some(config.id.clone()),
-                })?;
+        if let Some(profile_name) = config.id.strip_suffix("-sa") {
+            if let Some(profile) = ctx.desired_stack.permissions.profiles.get(profile_name) {
+                for (resource_id, permission_set_refs) in &profile.0 {
+                    if resource_id == "*" {
+                        continue;
+                    }
+                    let resource_context = permission_context
+                        .clone()
+                        .with_resource_name(format!("{}-{}", ctx.resource_prefix, resource_id));
 
-            for binding in bindings.bindings {
-                if binding.target != GcpBindingTargetScope::Project {
-                    return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                        message: format!(
-                            "GCP stack permission set '{}' produced a {:?} IAM binding where Project was required",
-                            permission_set.id, binding.target
-                        ),
-                        resource_id: Some(config.id.clone()),
-                    }));
+                    for permission_set_ref in permission_set_refs {
+                        let permission_set = Self::resolve_permission_set(
+                            permission_set_ref,
+                            profile_name,
+                            &config.id,
+                        )?;
+                        self.collect_project_bindings_for_permission_set(
+                            ctx,
+                            &generator,
+                            &permission_set,
+                            BindingTarget::Resource,
+                            &resource_context,
+                            &mut new_bindings,
+                        )
+                        .await?;
+                    }
                 }
-
-                new_bindings.push(Binding {
-                    role: binding.role,
-                    members: binding.members,
-                    condition: binding.condition.map(|cond| alien_gcp_clients::iam::Expr {
-                        expression: cond.expression,
-                        title: Some(cond.title),
-                        description: Some(cond.description),
-                        location: None,
-                    }),
-                });
             }
         }
 
@@ -486,6 +488,69 @@ impl GcpServiceAccountController {
         );
 
         Ok(())
+    }
+
+    async fn collect_project_bindings_for_permission_set(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        generator: &GcpRuntimePermissionsGenerator,
+        permission_set: &PermissionSet,
+        binding_target: BindingTarget,
+        permission_context: &PermissionContext,
+        new_bindings: &mut Vec<Binding>,
+    ) -> Result<()> {
+        if permission_set.platforms.gcp.is_none() {
+            return Ok(());
+        }
+
+        let config = ctx.desired_resource_config::<ServiceAccount>()?;
+        let grant_plan = generator
+            .generate_grant_plan(permission_set, binding_target, permission_context)
+            .context(ErrorData::InfrastructureError {
+                message: format!(
+                    "Failed to generate IAM grant plan for permission set '{}'",
+                    permission_set.id
+                ),
+                operation: Some("sync_stack_role_bindings".to_string()),
+                resource_id: Some(config.id.clone()),
+            })?;
+        let project_bindings = grant_plan.bindings_for_target(GcpBindingTargetScope::Project);
+        if project_bindings.is_empty() {
+            return Ok(());
+        }
+        let selected_custom_roles = grant_plan.custom_roles_for_bindings(&project_bindings);
+        ResourcePermissionsHelper::ensure_gcp_custom_roles(
+            ctx,
+            &permission_set.id,
+            selected_custom_roles,
+        )
+        .await?;
+
+        for binding in project_bindings {
+            new_bindings
+                .push(ResourcePermissionsHelper::gcp_policy_binding_from_iam_binding(binding));
+        }
+
+        Ok(())
+    }
+
+    fn resolve_permission_set(
+        permission_set_ref: &PermissionSetReference,
+        profile_name: &str,
+        service_account_id: &str,
+    ) -> Result<PermissionSet> {
+        permission_set_ref
+            .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: format!(
+                        "Permission set '{}' not found for profile '{}'",
+                        permission_set_ref.id(),
+                        profile_name
+                    ),
+                    resource_id: Some(service_account_id.to_string()),
+                })
+            })
     }
 
     async fn apply_resource_permissions_to_service_account(

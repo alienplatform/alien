@@ -9,8 +9,8 @@ use crate::{
     block::{attr, block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::gcp::helpers::{
-        binding_label_for_role, downcast, emit_custom_roles, labels, permission_context,
-        required_label, resource_prefix_template, role_expression_for_binding,
+        binding_label_for_role, downcast, emit_custom_roles_for_bindings, labels,
+        permission_context, required_label, resource_prefix_template, role_expression_for_binding,
         service_account_member_for_label,
     },
     expr,
@@ -18,7 +18,7 @@ use crate::{
 use alien_core::{import::EmitContext, ErrorData, Queue, Result, Worker, WorkerTrigger};
 use alien_error::AlienError;
 use alien_permissions::{
-    generators::{GcpBindingResourceKind, GcpRuntimePermissionsGenerator},
+    generators::{GcpBindingResourceKind, GcpBindingTargetScope, GcpRuntimePermissionsGenerator},
     BindingTarget,
 };
 use hcl::expr::Expression;
@@ -135,19 +135,20 @@ fn emit_queue_iam(ctx: &EmitContext<'_>, fragment: &mut TfFragment, label: &str)
                 continue;
             }
 
-            let custom_roles = emit_custom_roles(fragment, &permission_set, &context)?;
-            let bindings = generator
-                .generate_bindings(&permission_set, BindingTarget::Resource, &context)
+            let grant_plan = generator
+                .generate_grant_plan(&permission_set, BindingTarget::Resource, &context)
                 .map_err(|err| {
                     AlienError::new(ErrorData::GenericError {
                         message: format!(
-                            "failed to generate GCP queue IAM bindings for '{}': {}",
+                            "failed to generate GCP queue IAM grant plan for '{}': {}",
                             permission_set.id, err
                         ),
                     })
                 })?;
+            let bindings = grant_plan.bindings_for_target(GcpBindingTargetScope::CurrentResource);
+            let custom_roles = emit_custom_roles_for_bindings(fragment, &grant_plan, &bindings)?;
 
-            for (idx, binding) in bindings.bindings.into_iter().enumerate() {
+            for (idx, binding) in bindings.into_iter().enumerate() {
                 let Some(resource_kind) = binding.resource_kind else {
                     continue;
                 };

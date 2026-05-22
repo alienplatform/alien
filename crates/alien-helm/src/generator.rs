@@ -10,8 +10,8 @@ use crate::{
     registry::HelmRegistry,
 };
 use alien_core::{
-    import::EmitContext, ErrorData, Ingress, Platform, ResourceLifecycle, Result, Stack,
-    StackSettings, Worker,
+    import::EmitContext, Container, ErrorData, ExposeProtocol, Ingress, Platform,
+    ResourceLifecycle, Result, Stack, StackSettings, Worker,
 };
 use alien_error::{Context, IntoAlienError};
 use indexmap::IndexMap;
@@ -65,6 +65,8 @@ pub fn generate_helm_chart(stack: &Stack, options: HelmOptions<'_>) -> Result<He
     files.insert("templates/configmap.yaml".to_string(), configmap_tpl());
     files.insert("templates/deployment.yaml".to_string(), deployment_tpl());
     files.insert("templates/service.yaml".to_string(), service_tpl());
+    files.insert("templates/app-service.yaml".to_string(), app_service_tpl());
+    files.insert("templates/app-ingress.yaml".to_string(), app_ingress_tpl());
 
     // Per-resource extra templates contributed by emitters.
     for (path, contents) in &analysis.extra_templates {
@@ -134,6 +136,21 @@ impl ChartAnalysis {
                 if function.ingress == Ingress::Public {
                     analysis.services.push(ServiceValue {
                         id: resource_id.clone(),
+                        component: "worker".to_string(),
+                        target_port: 8080,
+                    });
+                }
+            }
+            if let Some(container) = entry.config.downcast_ref::<Container>() {
+                if let Some(port) = container
+                    .ports
+                    .iter()
+                    .find(|port| port.expose == Some(ExposeProtocol::Http))
+                {
+                    analysis.services.push(ServiceValue {
+                        id: resource_id.clone(),
+                        component: "container".to_string(),
+                        target_port: port.port,
                     });
                 }
             }
@@ -180,6 +197,8 @@ impl ChartAnalysis {
 #[derive(Debug)]
 struct ServiceValue {
     id: String,
+    component: String,
+    target_port: u16,
 }
 
 fn chart_yaml(chart_name: &str, stack: &Stack) -> String {
@@ -225,7 +244,7 @@ runtime:
     );
 
     append_service_accounts(&mut yaml, analysis);
-    yaml.push_str("\nstackSettings: null\n\ninfrastructure: null\n\nbasePlatform: null\nserviceAccountPrefix: \"\"\n");
+    yaml.push_str("\nstackSettings: null\n\ninfrastructure: null\n\nbasePlatform: null\nserviceAccountPrefix: \"\"\nmanagerServiceAccount:\n  annotations: {}\n  labels: {}\n");
     append_services(&mut yaml, analysis);
     yaml.push_str("\npublicUrls: {}\n");
 
@@ -286,8 +305,10 @@ fn append_services(yaml: &mut String, analysis: &ChartAnalysis) {
     } else {
         for service in &analysis.services {
             yaml.push_str(&format!(
-                "  {}:\n    type: clusterIp\n    port: 80\n    targetPort: 8080\n    host: \"\"\n    tls:\n      enabled: false\n      secretName: \"\"\n    ingress:\n      className: \"\"\n      annotations: {{}}\n",
-                yaml_key(&service.id)
+                "  {}:\n    type: clusterIp\n    port: 80\n    targetPort: {}\n    component: {}\n    host: \"\"\n    publicUrl: \"\"\n    tls:\n      enabled: false\n      secretName: \"\"\n    ingress:\n      className: \"\"\n      annotations: {{}}\n",
+                yaml_key(&service.id),
+                service.target_port,
+                yaml_string(&service.component)
             ));
         }
     }
@@ -314,6 +335,13 @@ fn values_schema_json() -> String {
       }
     },
     "runtime": { "type": "object" },
+    "managerServiceAccount": {
+      "type": "object",
+      "properties": {
+        "annotations": { "type": "object", "additionalProperties": { "type": "string" } },
+        "labels": { "type": "object", "additionalProperties": { "type": "string" } }
+      }
+    },
     "serviceAccounts": {
       "type": "object",
       "additionalProperties": {
@@ -396,12 +424,21 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- end -}}
 
 {{- define "alien.managerServiceAccountName" -}}
-{{ include "alien.fullname" . }}-manager
+{{- $prefix := default (include "alien.fullname" .) .Values.serviceAccountPrefix -}}
+{{- $raw := printf "%s-manager-sa" $prefix | lower -}}
+{{- regexReplaceAll "[^a-z0-9-]" $raw "-" | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
 {{- define "alien.serviceAccountName" -}}
 {{- $prefix := default (include "alien.fullname" .root) .root.Values.serviceAccountPrefix -}}
-{{- printf "%s-%s-sa" $prefix .name | trunc 63 | trimSuffix "-" -}}
+{{- $raw := printf "%s-%s-sa" $prefix .name | lower -}}
+{{- regexReplaceAll "[^a-z0-9-]" $raw "-" | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{- define "alien.resourceName" -}}
+{{- $prefix := default (include "alien.fullname" .root) .root.Values.serviceAccountPrefix -}}
+{{- $raw := printf "%s-%s" $prefix .name | lower -}}
+{{- regexReplaceAll "[^a-z0-9-]" $raw "-" | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 "#
     .to_string()
@@ -414,6 +451,13 @@ metadata:
   name: {{ include "alien.managerServiceAccountName" . }}
   labels:
     {{- include "alien.labels" . | nindent 4 }}
+    {{- with .Values.managerServiceAccount.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.managerServiceAccount.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 ---
 {{- range $name, $account := .Values.serviceAccounts }}
 apiVersion: v1
@@ -506,7 +550,9 @@ fn configmap_tpl() -> String {
     r#"{{- $defaultStackSettings := dict "deploymentModel" "pull" "updates" .Values.management.updates "telemetry" .Values.management.telemetry "heartbeats" .Values.management.healthChecks -}}
 {{- $publicUrls := dict -}}
 {{- range $id, $service := .Values.services -}}
-{{- if $service.host -}}
+{{- if $service.publicUrl -}}
+{{- $_ := set $publicUrls $id $service.publicUrl -}}
+{{- else if $service.host -}}
 {{- $_ := set $publicUrls $id (printf "https://%s" $service.host) -}}
 {{- end -}}
 {{- end -}}
@@ -623,6 +669,73 @@ spec:
     - name: http
       port: {{ .Values.runtime.api.port }}
       targetPort: http
+{{- end }}
+"#
+    .to_string()
+}
+
+fn app_service_tpl() -> String {
+    r#"{{- range $id, $service := .Values.services }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "alien.resourceName" (dict "root" $ "name" $id) }}
+  labels:
+    {{- include "alien.labels" $ | nindent 4 }}
+    alien.dev/resource-id: {{ $id | quote }}
+spec:
+  type: {{ if eq $service.type "loadBalancer" }}LoadBalancer{{ else }}ClusterIP{{ end }}
+  selector:
+    app: {{ include "alien.resourceName" (dict "root" $ "name" $id) }}
+    managed-by: alien
+    component: {{ $service.component | quote }}
+  ports:
+    - name: http
+      port: {{ default 80 $service.port }}
+      targetPort: {{ default 8080 $service.targetPort }}
+---
+{{- end }}
+"#
+    .to_string()
+}
+
+fn app_ingress_tpl() -> String {
+    r#"{{- range $id, $service := .Values.services }}
+{{- if $service.host }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "alien.resourceName" (dict "root" $ "name" $id) }}
+  labels:
+    {{- include "alien.labels" $ | nindent 4 }}
+    alien.dev/resource-id: {{ $id | quote }}
+  {{- with $service.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if $service.ingress.className }}
+  ingressClassName: {{ $service.ingress.className | quote }}
+  {{- end }}
+  {{- if and $service.tls.enabled $service.tls.secretName }}
+  tls:
+    - hosts:
+        - {{ $service.host | quote }}
+      secretName: {{ $service.tls.secretName | quote }}
+  {{- end }}
+  rules:
+    - host: {{ $service.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "alien.resourceName" (dict "root" $ "name" $id) }}
+                port:
+                  number: {{ default 80 $service.port }}
+---
+{{- end }}
 {{- end }}
 "#
     .to_string()

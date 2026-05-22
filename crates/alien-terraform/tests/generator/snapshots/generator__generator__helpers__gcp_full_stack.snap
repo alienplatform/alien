@@ -569,6 +569,12 @@ resource "google_storage_bucket" "assets" {
   }
 }
 
+resource "google_storage_bucket_iam_member" "gcp_role_storage_heartbeat_assets_management_storage_0" {
+  bucket = google_storage_bucket.assets.name
+  role   = google_project_iam_custom_role.gcp_role_storage_heartbeat.name
+  member = "serviceAccount:${google_service_account.management.email}"
+}
+
 === jobs.tf ===
 resource "google_pubsub_topic" "jobs" {
   name    = "${local.resource_prefix}-jobs"
@@ -789,6 +795,7 @@ resource "terraform_data" "deployment_import" {
     google_service_account_iam_member.management_manager_token_creator,
     google_service_account_iam_member.management_manager_user,
     google_storage_bucket.assets,
+    google_storage_bucket_iam_member.gcp_role_storage_heartbeat_assets_management_storage_0,
     google_pubsub_topic.jobs,
     google_pubsub_subscription.jobs,
     google_pubsub_topic_iam_member.gcp_role_queue_heartbeat_part1_jobs_management_topic_0,

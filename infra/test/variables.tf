@@ -167,3 +167,78 @@ variable "azure_target_client_secret" {
   type        = string
   sensitive   = true
 }
+
+# Shared Kubernetes clusters used by Terraform -> Helm distribution E2Es.
+# These values describe long-lived test clusters. Individual test runs create
+# random namespaces inside them; tests do not create or destroy clusters.
+variable "e2e_k8s_namespace_prefix" {
+  description = "Namespace prefix for Kubernetes distribution E2E runs."
+  type        = string
+  default     = "alien-test"
+}
+
+variable "e2e_k8s_ingress_class" {
+  description = "IngressClass name used by Kubernetes distribution E2Es."
+  type        = string
+  default     = ""
+}
+
+variable "e2e_k8s_public_host_suffix" {
+  description = "DNS suffix for per-test Kubernetes public hosts."
+  type        = string
+  default     = ""
+}
+
+variable "e2e_k8s_tls_secret_name" {
+  description = "Optional TLS secret present in each test namespace."
+  type        = string
+  default     = ""
+}
+
+variable "e2e_eks_cluster_name" {
+  description = "Shared EKS cluster name for Terraform EKS Helm E2Es."
+  type        = string
+  default     = ""
+}
+
+variable "e2e_eks_kube_context" {
+  description = "Optional kubeconfig context for the shared EKS cluster."
+  type        = string
+  default     = ""
+}
+
+variable "e2e_gke_cluster_name" {
+  description = "Shared GKE cluster name for Terraform GKE Helm E2Es."
+  type        = string
+  default     = ""
+}
+
+variable "e2e_gke_cluster_location" {
+  description = "Shared GKE cluster region or zone for Terraform GKE Helm E2Es."
+  type        = string
+  default     = ""
+}
+
+variable "e2e_gke_kube_context" {
+  description = "Optional kubeconfig context for the shared GKE cluster."
+  type        = string
+  default     = ""
+}
+
+variable "e2e_aks_cluster_name" {
+  description = "Shared AKS cluster name for Terraform AKS Helm E2Es."
+  type        = string
+  default     = ""
+}
+
+variable "e2e_aks_cluster_resource_group" {
+  description = "Resource group containing the shared AKS cluster."
+  type        = string
+  default     = ""
+}
+
+variable "e2e_aks_kube_context" {
+  description = "Optional kubeconfig context for the shared AKS cluster."
+  type        = string
+  default     = ""
+}

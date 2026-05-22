@@ -1877,6 +1877,12 @@
           "platform": {
             "$ref": "#/components/schemas/Platform"
           },
+          "resourcePrefix": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "stackSettings": {
             "oneOf": [
               {
@@ -3226,6 +3232,17 @@
           "resources"
         ],
         "properties": {
+          "basePlatform": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Platform",
+                "description": "Optional base cloud platform for Kubernetes setup targets such as\nEKS/GKE/AKS. The runtime platform remains Kubernetes."
+              }
+            ]
+          },
           "deploymentGroupToken": {
             "type": "string",
             "description": "Deployment-group token authorizing the import."
@@ -3335,6 +3352,17 @@
           "config": {
             "$ref": "#/components/schemas/BaseResource",
             "description": "The current resource configuration."
+          },
+          "controllerPlatform": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Platform",
+                "description": "Platform whose controller owns this resource state. Defaults to the\ncontaining stack platform when absent."
+              }
+            ]
           },
           "dependencies": {
             "type": "array",

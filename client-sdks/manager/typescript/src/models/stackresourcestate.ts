@@ -13,6 +13,7 @@ import {
   BaseResourceOutputs$inboundSchema,
 } from "./baseresourceoutputs.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
+import { PlatformEnum, PlatformEnum$inboundSchema } from "./platformenum.js";
 import {
   ResourceLifecycle,
   ResourceLifecycle$inboundSchema,
@@ -39,6 +40,7 @@ export type StackResourceState = {
    * Resource that can hold any resource type in the Alien system. All resources share common 'type' and 'id' fields with additional type-specific properties.
    */
   config: BaseResource;
+  controllerPlatform?: PlatformEnum | null | undefined;
   /**
    * Complete list of dependencies for this resource, including infrastructure dependencies.
    *
@@ -88,6 +90,7 @@ export const StackResourceState$inboundSchema: z.ZodType<
 > = z.object({
   _internal: z.any().optional(),
   config: BaseResource$inboundSchema,
+  controllerPlatform: z.nullable(PlatformEnum$inboundSchema).optional(),
   dependencies: z.array(ResourceRef$inboundSchema).optional(),
   error: z.nullable(AlienError$inboundSchema).optional(),
   lastFailedState: z.any().optional(),

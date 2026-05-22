@@ -170,6 +170,15 @@ impl DeploymentStore for SqliteDeploymentStore {
             .context(GenericError {
                 message: "Failed to serialize stack_settings".to_string(),
             })?;
+        let stack_state_json: Option<String> = params
+            .stack_state
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to serialize stack_state".to_string(),
+            })?;
 
         let env_vars_json: Option<String> = params
             .environment_variables
@@ -210,6 +219,11 @@ impl DeploymentStore for SqliteDeploymentStore {
                 values.push(ev_json.clone().into());
             }
 
+            if let Some(ref state_json) = stack_state_json {
+                columns.push(Deployments::StackState);
+                values.push(state_json.clone().into());
+            }
+
             if let Some(ref token) = params.deployment_token {
                 columns.push(Deployments::DeploymentToken);
                 values.push(token.clone().into());
@@ -235,7 +249,7 @@ impl DeploymentStore for SqliteDeploymentStore {
             base_platform: None,
             status: "pending".to_string(),
             stack_settings: params.stack_settings,
-            stack_state: None,
+            stack_state: params.stack_state,
             environment_info: None,
             runtime_metadata: None,
             current_release_id: None,

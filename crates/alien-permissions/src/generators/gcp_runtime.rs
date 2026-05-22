@@ -94,6 +94,30 @@ pub struct GcpGrantPlan {
     pub custom_roles: Vec<GcpCustomRole>,
 }
 
+impl GcpGrantPlan {
+    /// Return IAM bindings selected for one binding target scope.
+    pub fn bindings_for_target(&self, target: GcpBindingTargetScope) -> Vec<GcpIamBinding> {
+        self.bindings
+            .iter()
+            .filter(|binding| binding.target == target)
+            .cloned()
+            .collect()
+    }
+
+    /// Return only the custom roles referenced by `bindings`.
+    pub fn custom_roles_for_bindings(&self, bindings: &[GcpIamBinding]) -> Vec<GcpCustomRole> {
+        self.custom_roles
+            .iter()
+            .filter(|custom_role| {
+                bindings
+                    .iter()
+                    .any(|binding| binding.role == custom_role.name)
+            })
+            .cloned()
+            .collect()
+    }
+}
+
 /// GCP custom-role planner.
 pub struct GcpRuntimePermissionsGenerator;
 

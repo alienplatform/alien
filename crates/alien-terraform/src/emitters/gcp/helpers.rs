@@ -255,19 +255,20 @@ pub fn emit_custom_role_and_bindings_for_target(
         return Ok(());
     }
 
-    let custom_roles = emit_custom_roles(fragment, permission_set, context)?;
     let generator = GcpRuntimePermissionsGenerator::new();
 
-    let bindings = generator
-        .generate_bindings(permission_set, target, context)
+    let grant_plan = generator
+        .generate_grant_plan(permission_set, target, context)
         .context(ErrorData::GenericError {
             message: format!(
-                "failed to generate GCP IAM bindings for permission set '{}'",
+                "failed to generate GCP IAM grant plan for permission set '{}'",
                 permission_set.id
             ),
         })?;
+    let bindings = grant_plan.bindings_for_target(GcpBindingTargetScope::Project);
+    let custom_roles = emit_custom_roles_for_bindings(fragment, &grant_plan, &bindings)?;
 
-    for (idx, binding) in bindings.bindings.into_iter().enumerate() {
+    for (idx, binding) in bindings.into_iter().enumerate() {
         let role = role_expression_for_binding(&binding.role, &custom_roles)?;
         let role_label = binding_label_for_role(&binding.role, &custom_roles)?;
         let binding_label = format!("{role_label}_{sa_label}_binding_{idx}",);
@@ -277,21 +278,18 @@ pub fn emit_custom_role_and_bindings_for_target(
     Ok(())
 }
 
-pub(crate) fn emit_custom_roles(
+pub(crate) fn emit_custom_roles_for_bindings(
     fragment: &mut TfFragment,
-    permission_set: &PermissionSet,
-    context: &PermissionContext,
+    grant_plan: &alien_permissions::generators::GcpGrantPlan,
+    bindings: &[GcpIamBinding],
 ) -> Result<Vec<GcpCustomRole>> {
-    let generator = GcpRuntimePermissionsGenerator::new();
-    let custom_roles = generator
-        .generate_custom_roles(permission_set, context)
-        .context(ErrorData::GenericError {
-            message: format!(
-                "failed to generate GCP custom roles for permission set '{}'",
-                permission_set.id
-            ),
-        })?;
-    for custom_role in &custom_roles {
+    let custom_roles = grant_plan.custom_roles_for_bindings(bindings);
+    emit_selected_custom_roles(fragment, &custom_roles);
+    Ok(custom_roles)
+}
+
+fn emit_selected_custom_roles(fragment: &mut TfFragment, custom_roles: &[GcpCustomRole]) {
+    for custom_role in custom_roles {
         let role_label = custom_role_label(custom_role);
         let role_id = custom_role_id_template(custom_role);
 
@@ -320,8 +318,6 @@ pub(crate) fn emit_custom_roles(
             ],
         ));
     }
-
-    Ok(custom_roles)
 }
 
 pub(crate) fn custom_role_label(custom_role: &GcpCustomRole) -> String {

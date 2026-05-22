@@ -5,7 +5,10 @@ use tracing::{debug, info};
 use crate::core::{EnvironmentVariableBuilder, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
 use alien_client_core::ErrorData as CloudClientErrorData;
-use alien_core::{Daemon, DaemonCode, DaemonOutputs, ResourceOutputs, ResourceStatus};
+use alien_core::{
+    kubernetes_resource_name, kubernetes_service_account_name, Daemon, DaemonCode, DaemonOutputs,
+    ResourceOutputs, ResourceStatus,
+};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
 use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec};
@@ -13,46 +16,6 @@ use k8s_openapi::api::core::v1::{
     Container, EnvVar, LocalObjectReference, PodSpec, PodTemplateSpec, Secret,
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
-
-fn kubernetes_daemon_name(resource_prefix: &str, id: &str) -> String {
-    let clean_prefix = resource_prefix
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '-')
-        .collect::<String>()
-        .to_lowercase();
-    let clean_id = id
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '-')
-        .collect::<String>()
-        .to_lowercase();
-
-    let combined = format!("{}-{}", clean_prefix, clean_id);
-    if combined.len() > 63 {
-        combined[..63].to_string()
-    } else {
-        combined
-    }
-}
-
-fn service_account_name(resource_prefix: &str, permission_profile: &str) -> String {
-    let clean_prefix = resource_prefix
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '-')
-        .collect::<String>()
-        .to_lowercase();
-    let clean_profile = permission_profile
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '-')
-        .collect::<String>()
-        .to_lowercase();
-
-    let combined = format!("{}-{}-sa", clean_prefix, clean_profile);
-    if combined.len() > 63 {
-        combined[..63].to_string()
-    } else {
-        combined
-    }
-}
 
 #[controller]
 pub struct KubernetesDaemonController {
@@ -74,10 +37,10 @@ impl KubernetesDaemonController {
         let kubernetes_config = ctx.get_kubernetes_config()?;
         let config = ctx.desired_resource_config::<Daemon>()?;
 
-        let deployment_name = kubernetes_daemon_name(&ctx.resource_prefix, &config.id);
+        let deployment_name = kubernetes_resource_name(&ctx.resource_prefix, &config.id);
         let namespace = self.get_kubernetes_namespace(ctx)?;
         let service_account_name =
-            service_account_name(&ctx.resource_prefix, config.get_permissions());
+            kubernetes_service_account_name(&ctx.resource_prefix, config.get_permissions());
 
         let image_pull_secret_name = if matches!(config.code, DaemonCode::Image { .. }) {
             let token = ctx.deployment_config.deployment_token.as_ref().ok_or_else(|| {
@@ -231,7 +194,7 @@ impl KubernetesDaemonController {
         let resource_version = existing.metadata.resource_version.clone();
 
         let service_account_name =
-            service_account_name(&ctx.resource_prefix, config.get_permissions());
+            kubernetes_service_account_name(&ctx.resource_prefix, config.get_permissions());
         let image_pull_secret_name = if matches!(config.code, DaemonCode::Image { .. }) {
             if ctx.deployment_config.deployment_token.is_none() {
                 return Err(AlienError::new(ErrorData::ResourceConfigInvalid {

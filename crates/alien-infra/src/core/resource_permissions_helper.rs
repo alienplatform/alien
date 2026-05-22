@@ -126,6 +126,15 @@ impl ResourcePermissionsHelper {
                 resource_id: Some(permission_set.id.clone()),
             })?;
 
+        Self::ensure_gcp_custom_roles(ctx, &permission_set.id, custom_roles).await
+    }
+
+    /// Idempotently create or update the selected GCP custom roles.
+    pub async fn ensure_gcp_custom_roles(
+        ctx: &ResourceControllerContext<'_>,
+        permission_set_id: &str,
+        custom_roles: Vec<GcpCustomRole>,
+    ) -> Result<()> {
         let gcp_config = ctx.get_gcp_config()?;
         let iam_client = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
 
@@ -134,7 +143,7 @@ impl ResourcePermissionsHelper {
 
             info!(
                 role_id = %role_id,
-                permission_set = %permission_set.id,
+                permission_set = %permission_set_id,
                 permissions_count = custom_role.included_permissions.len(),
                 "Ensuring GCP custom role exists"
             );
@@ -168,7 +177,7 @@ impl ResourcePermissionsHelper {
                         .await
                         .context(ErrorData::CloudPlatformError {
                             message: format!("Failed to update existing custom role '{}'", role_id),
-                            resource_id: Some(permission_set.id.clone()),
+                            resource_id: Some(permission_set_id.to_string()),
                         })?;
                 }
                 Err(e)
@@ -182,13 +191,13 @@ impl ResourcePermissionsHelper {
                         .await
                         .context(ErrorData::CloudPlatformError {
                             message: format!("Failed to create custom role '{}'", role_id),
-                            resource_id: Some(permission_set.id.clone()),
+                            resource_id: Some(permission_set_id.to_string()),
                         })?;
                 }
                 Err(e) => {
                     return Err(e.context(ErrorData::CloudPlatformError {
                         message: format!("Failed to check existence of custom role '{}'", role_id),
-                        resource_id: Some(permission_set.id.clone()),
+                        resource_id: Some(permission_set_id.to_string()),
                     }));
                 }
             }
@@ -526,31 +535,26 @@ impl ResourcePermissionsHelper {
                     })
                 })?;
 
-            Self::ensure_single_gcp_custom_role(ctx, &permission_set, permission_context).await?;
-
-            // Generate IAM bindings for resource-scoped permissions
-            let bindings_result = generator
-                .generate_bindings(&permission_set, BindingTarget::Resource, permission_context)
+            let grant_plan = generator
+                .generate_grant_plan(&permission_set, BindingTarget::Resource, permission_context)
                 .context(ErrorData::CloudPlatformError {
                     message: format!(
-                        "Failed to generate IAM bindings for permission set '{}'",
+                        "Failed to generate IAM grant plan for permission set '{}'",
                         permission_set.id
                     ),
                     resource_id: Some(profile_name.to_string()),
                 })?;
+            let selected_bindings =
+                grant_plan.bindings_for_target(GcpBindingTargetScope::CurrentResource);
+            let selected_custom_roles = grant_plan.custom_roles_for_bindings(&selected_bindings);
+            Self::ensure_gcp_custom_roles(ctx, &permission_set.id, selected_custom_roles).await?;
 
             // Convert and add bindings
             let member = format!("serviceAccount:{}", service_account_email);
-            let bindings_count = bindings_result.bindings.len();
-            for binding in bindings_result.bindings {
-                Self::push_gcp_iam_binding_for_target(
-                    all_bindings,
-                    binding,
-                    &member,
-                    GcpBindingTargetScope::CurrentResource,
-                    &permission_set.id,
-                    profile_name,
-                )?;
+            let bindings_count = selected_bindings.len();
+            for mut binding in selected_bindings {
+                binding.members = vec![member.clone()];
+                all_bindings.push(binding);
             }
 
             info!(
@@ -705,28 +709,24 @@ impl ResourcePermissionsHelper {
                     })
                 })?;
 
-            Self::ensure_single_gcp_custom_role(ctx, &permission_set, permission_context).await?;
-
-            let bindings_result = generator
-                .generate_bindings(&permission_set, BindingTarget::Resource, permission_context)
+            let grant_plan = generator
+                .generate_grant_plan(&permission_set, BindingTarget::Resource, permission_context)
                 .context(ErrorData::CloudPlatformError {
                     message: format!(
-                        "Failed to generate IAM bindings for management permission set '{}'",
+                        "Failed to generate IAM grant plan for management permission set '{}'",
                         permission_set.id
                     ),
                     resource_id: Some(resource_id.to_string()),
                 })?;
+            let selected_bindings =
+                grant_plan.bindings_for_target(GcpBindingTargetScope::CurrentResource);
+            let selected_custom_roles = grant_plan.custom_roles_for_bindings(&selected_bindings);
+            Self::ensure_gcp_custom_roles(ctx, &permission_set.id, selected_custom_roles).await?;
 
-            let bindings_count = bindings_result.bindings.len();
-            for binding in bindings_result.bindings {
-                Self::push_gcp_iam_binding_for_target(
-                    all_bindings,
-                    binding,
-                    &member,
-                    GcpBindingTargetScope::CurrentResource,
-                    &permission_set.id,
-                    resource_id,
-                )?;
+            let bindings_count = selected_bindings.len();
+            for mut binding in selected_bindings {
+                binding.members = vec![member.clone()];
+                all_bindings.push(binding);
             }
 
             info!(
@@ -1175,20 +1175,21 @@ impl ResourcePermissionsHelper {
                     })
                 })?;
 
-            Self::ensure_single_gcp_custom_role(ctx, &permission_set, permission_context).await?;
-
-            let bindings_result = generator
-                .generate_bindings(&permission_set, BindingTarget::Resource, permission_context)
+            let grant_plan = generator
+                .generate_grant_plan(&permission_set, BindingTarget::Resource, permission_context)
                 .context(ErrorData::CloudPlatformError {
                     message: format!(
-                        "Failed to generate IAM bindings for management permission set '{}'",
+                        "Failed to generate IAM grant plan for management permission set '{}'",
                         permission_set.id
                     ),
                     resource_id: Some(resource_id.to_string()),
                 })?;
+            let selected_bindings = grant_plan.bindings_for_target(expected_target);
+            let selected_custom_roles = grant_plan.custom_roles_for_bindings(&selected_bindings);
+            Self::ensure_gcp_custom_roles(ctx, &permission_set.id, selected_custom_roles).await?;
 
-            let bindings_count = bindings_result.bindings.len();
-            for binding in bindings_result.bindings {
+            let bindings_count = selected_bindings.len();
+            for binding in selected_bindings {
                 Self::push_gcp_binding_for_target(
                     all_bindings,
                     binding,
@@ -1238,30 +1239,6 @@ impl ResourcePermissionsHelper {
                 location: None,
             }),
         });
-
-        Ok(())
-    }
-
-    fn push_gcp_iam_binding_for_target(
-        all_bindings: &mut Vec<GcpIamBinding>,
-        mut binding: GcpIamBinding,
-        member: &str,
-        expected_target: GcpBindingTargetScope,
-        permission_set_id: &str,
-        resource_id: &str,
-    ) -> Result<()> {
-        if binding.target != expected_target {
-            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: format!(
-                    "GCP permission set '{}' produced a {:?} IAM binding where {:?} was required",
-                    permission_set_id, binding.target, expected_target
-                ),
-                resource_id: Some(resource_id.to_string()),
-            }));
-        }
-
-        binding.members = vec![member.to_string()];
-        all_bindings.push(binding);
 
         Ok(())
     }

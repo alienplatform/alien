@@ -28,6 +28,7 @@ import {
  * Request body for manager-side stack import.
  */
 export type StackImportRequest = {
+  basePlatform?: PlatformEnum | null | undefined;
   /**
    * Deployment-group token authorizing the import.
    */
@@ -109,6 +110,7 @@ export type StackImportRequest = {
 
 /** @internal */
 export type StackImportRequest$Outbound = {
+  basePlatform?: string | null | undefined;
   deploymentGroupToken: string;
   deploymentName: string;
   managementConfig: ManagementConfig$Outbound;
@@ -129,6 +131,7 @@ export const StackImportRequest$outboundSchema: z.ZodType<
   StackImportRequest$Outbound,
   StackImportRequest
 > = z.object({
+  basePlatform: z.nullable(PlatformEnum$outboundSchema).optional(),
   deploymentGroupToken: z.string(),
   deploymentName: z.string(),
   managementConfig: ManagementConfig$outboundSchema,

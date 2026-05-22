@@ -15,8 +15,8 @@ use crate::{
     block::{attr, data_block, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::gcp::helpers::{
-        binding_label_for_role, downcast, emit_custom_roles, permission_context, push_iam_member,
-        required_label, role_expression_for_binding, service_account_id_template,
+        binding_label_for_role, downcast, emit_custom_roles_for_bindings, permission_context,
+        push_iam_member, required_label, role_expression_for_binding, service_account_id_template,
         service_account_member_for_label,
     },
     expr,
@@ -148,24 +148,21 @@ fn emit_project_management_bindings(
         return Ok(());
     }
 
-    let custom_roles = emit_custom_roles(fragment, permission_set, context)?;
     let generator = GcpRuntimePermissionsGenerator::new();
-    let bindings = generator
-        .generate_bindings(permission_set, BindingTarget::Stack, context)
+    let grant_plan = generator
+        .generate_grant_plan(permission_set, BindingTarget::Stack, context)
         .map_err(|err| {
             AlienError::new(ErrorData::GenericError {
                 message: format!(
-                    "failed to generate GCP remote management IAM bindings for '{}': {}",
+                    "failed to generate GCP remote management IAM grant plan for '{}': {}",
                     permission_set.id, err
                 ),
             })
         })?;
+    let bindings = grant_plan.bindings_for_target(GcpBindingTargetScope::Project);
+    let custom_roles = emit_custom_roles_for_bindings(fragment, &grant_plan, &bindings)?;
 
-    for (idx, binding) in bindings.bindings.into_iter().enumerate() {
-        if binding.target != GcpBindingTargetScope::Project {
-            continue;
-        }
-
+    for (idx, binding) in bindings.into_iter().enumerate() {
         let role_label = binding_label_for_role(&binding.role, &custom_roles)?;
         let role = role_expression_for_binding(&binding.role, &custom_roles)?;
         push_iam_member(

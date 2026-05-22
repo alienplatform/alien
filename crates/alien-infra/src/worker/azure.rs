@@ -97,6 +97,17 @@ fn container_apps_environment_wake_delay(deadline_epoch_secs: u64) -> Option<Dur
     }
 }
 
+fn retry_after_delay(retry_after_epoch_secs: u64) -> Option<Duration> {
+    let now = current_unix_timestamp_secs();
+    let remaining = retry_after_epoch_secs.saturating_sub(now);
+
+    if remaining == 0 {
+        None
+    } else {
+        Some(Duration::from_secs(remaining))
+    }
+}
+
 fn management_profile_dispatches_commands(
     ctx: &ResourceControllerContext<'_>,
     worker_id: &str,
@@ -370,6 +381,9 @@ pub struct AzureWorkerController {
     /// Deadline for retrying Container Apps Environment operations while Azure wakes an idle environment.
     #[serde(default)]
     pub(crate) container_apps_environment_wake_wait_until_epoch_secs: Option<u64>,
+    /// Next time the controller should retry a Container Apps Environment operation after an idle wake response.
+    #[serde(default)]
+    pub(crate) container_apps_environment_wake_retry_after_epoch_secs: Option<u64>,
     /// Deadline before creating the Container App after pre-created RBAC assignments.
     #[serde(default)]
     pub(crate) pre_container_app_rbac_wait_until_epoch_secs: Option<u64>,
@@ -382,6 +396,38 @@ pub struct AzureWorkerController {
     /// Whether the current update flow has already deleted old Dapr trigger components.
     #[serde(default)]
     pub(crate) update_dapr_components_deleted: bool,
+}
+
+impl AzureWorkerController {
+    fn wait_for_container_apps_environment_wake_retry(
+        &mut self,
+        worker_id: &str,
+        operation: &str,
+    ) -> Option<Duration> {
+        let retry_after = self.container_apps_environment_wake_retry_after_epoch_secs?;
+        if let Some(delay) = retry_after_delay(retry_after) {
+            debug!(
+                worker=%worker_id,
+                operation=%operation,
+                remaining_secs=retry_after.saturating_sub(current_unix_timestamp_secs()),
+                "Waiting before retrying Azure Container Apps Environment operation"
+            );
+            Some(delay)
+        } else {
+            self.container_apps_environment_wake_retry_after_epoch_secs = None;
+            None
+        }
+    }
+
+    fn record_container_apps_environment_wake_retry(
+        &mut self,
+        deadline_epoch_secs: u64,
+    ) -> Option<Duration> {
+        let delay = container_apps_environment_wake_delay(deadline_epoch_secs)?;
+        self.container_apps_environment_wake_retry_after_epoch_secs =
+            Some(current_unix_timestamp_secs().saturating_add(delay.as_secs()));
+        Some(delay)
+    }
 }
 
 // ≡ Lifecycle implementation ===================================================
@@ -398,13 +444,13 @@ impl AzureWorkerController {
     async fn create_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let azure_cfg = ctx.get_azure_config()?;
         let func_cfg = ctx.desired_resource_config::<Worker>()?;
-        info!(name=%func_cfg.id, "Initiating Azure Container App worker creation");
 
         if self.container_app_name.is_none() {
             self.pre_container_app_rbac_wait_until_epoch_secs = None;
             self.ready_rbac_wait_until_epoch_secs = None;
             self.commands_infrastructure_auth_wait_until_epoch_secs = None;
             self.container_apps_environment_wake_wait_until_epoch_secs = None;
+            self.container_apps_environment_wake_retry_after_epoch_secs = None;
             self.update_rbac_wait_required = false;
         }
 
@@ -433,6 +479,15 @@ impl AzureWorkerController {
         // assigned (giving them time to propagate during Container App creation ~30s).
         // This eliminates the race condition where the sidecar starts before permissions exist.
         self.container_app_name = Some(container_app_name.clone());
+        if let Some(delay) = self
+            .wait_for_container_apps_environment_wake_retry(&func_cfg.id, "commands infrastructure")
+        {
+            return Ok(HandlerAction::Stay {
+                max_times: AZURE_RBAC_WAIT_MAX_ATTEMPTS,
+                suggested_delay: Some(delay),
+            });
+        }
+        info!(name=%func_cfg.id, "Initiating Azure Container App worker creation");
         if func_cfg.commands_enabled {
             match self
                 .setup_commands_infrastructure(ctx, azure_cfg, func_cfg, &container_app_name)
@@ -441,6 +496,7 @@ impl AzureWorkerController {
                 Ok(DaprComponentOperation::Completed) => {
                     self.commands_infrastructure_auth_wait_until_epoch_secs = None;
                     self.container_apps_environment_wake_wait_until_epoch_secs = None;
+                    self.container_apps_environment_wake_retry_after_epoch_secs = None;
                 }
                 Ok(DaprComponentOperation::LongRunning(delay)) => {
                     return Ok(HandlerAction::Continue {
@@ -475,7 +531,8 @@ impl AzureWorkerController {
                         AZURE_CONTAINER_APPS_ENVIRONMENT_WAKE_WAIT_SECS,
                     );
 
-                    if let Some(delay) = container_apps_environment_wake_delay(deadline) {
+                    if let Some(delay) = self.record_container_apps_environment_wake_retry(deadline)
+                    {
                         warn!(
                             name=%func_cfg.id,
                             remaining_secs=deadline.saturating_sub(current_unix_timestamp_secs()),
@@ -1114,6 +1171,14 @@ impl AzureWorkerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let func_cfg = ctx.desired_resource_config::<Worker>()?;
+        if let Some(delay) = self
+            .wait_for_container_apps_environment_wake_retry(&func_cfg.id, "Dapr component creation")
+        {
+            return Ok(HandlerAction::Stay {
+                max_times: AZURE_RBAC_WAIT_MAX_ATTEMPTS,
+                suggested_delay: Some(delay),
+            });
+        }
         let container_app_name = self.container_app_name.clone().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceControllerConfigError {
                 resource_id: ctx.desired_config.id().to_string(),
@@ -1146,7 +1211,8 @@ impl AzureWorkerController {
                                     &mut self.container_apps_environment_wake_wait_until_epoch_secs,
                                     AZURE_CONTAINER_APPS_ENVIRONMENT_WAKE_WAIT_SECS,
                                 );
-                                if let Some(delay) = container_apps_environment_wake_delay(deadline)
+                                if let Some(delay) =
+                                    self.record_container_apps_environment_wake_retry(deadline)
                                 {
                                     warn!(
                                         worker=%func_cfg.id,
@@ -1190,7 +1256,8 @@ impl AzureWorkerController {
                                     &mut self.container_apps_environment_wake_wait_until_epoch_secs,
                                     AZURE_CONTAINER_APPS_ENVIRONMENT_WAKE_WAIT_SECS,
                                 );
-                                if let Some(delay) = container_apps_environment_wake_delay(deadline)
+                                if let Some(delay) =
+                                    self.record_container_apps_environment_wake_retry(deadline)
                                 {
                                     warn!(
                                         worker=%func_cfg.id,
@@ -1234,7 +1301,8 @@ impl AzureWorkerController {
                                     &mut self.container_apps_environment_wake_wait_until_epoch_secs,
                                     AZURE_CONTAINER_APPS_ENVIRONMENT_WAKE_WAIT_SECS,
                                 );
-                                if let Some(delay) = container_apps_environment_wake_delay(deadline)
+                                if let Some(delay) =
+                                    self.record_container_apps_environment_wake_retry(deadline)
                                 {
                                     warn!(
                                         worker=%func_cfg.id,
@@ -1267,6 +1335,7 @@ impl AzureWorkerController {
             info!(worker=%func_cfg.id, "No triggers found, skipping Dapr component creation");
         }
         self.container_apps_environment_wake_wait_until_epoch_secs = None;
+        self.container_apps_environment_wake_retry_after_epoch_secs = None;
 
         // Go to commands infrastructure next
         Ok(HandlerAction::Continue {
@@ -1340,6 +1409,14 @@ impl AzureWorkerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let func_cfg = ctx.desired_resource_config::<Worker>()?;
+        if let Some(delay) = self
+            .wait_for_container_apps_environment_wake_retry(&func_cfg.id, "commands Dapr component")
+        {
+            return Ok(HandlerAction::Stay {
+                max_times: AZURE_RBAC_WAIT_MAX_ATTEMPTS,
+                suggested_delay: Some(delay),
+            });
+        }
 
         if !func_cfg.commands_enabled {
             debug!(worker=%func_cfg.id, "Commands not enabled, skipping commands infrastructure");
@@ -1531,6 +1608,7 @@ impl AzureWorkerController {
         {
             Ok(OperationResult::Completed(_)) => {
                 self.container_apps_environment_wake_wait_until_epoch_secs = None;
+                self.container_apps_environment_wake_retry_after_epoch_secs = None;
             }
             Ok(OperationResult::LongRunning(lro)) => {
                 self.pending_operation_url = Some(lro.url.clone());
@@ -1553,7 +1631,8 @@ impl AzureWorkerController {
                         &mut self.container_apps_environment_wake_wait_until_epoch_secs,
                         AZURE_CONTAINER_APPS_ENVIRONMENT_WAKE_WAIT_SECS,
                     );
-                    if let Some(delay) = container_apps_environment_wake_delay(deadline) {
+                    if let Some(delay) = self.record_container_apps_environment_wake_retry(deadline)
+                    {
                         warn!(
                             worker=%func_cfg.id,
                             error=%e,
@@ -2234,6 +2313,15 @@ impl AzureWorkerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let current_config = ctx.desired_resource_config::<Worker>()?;
+        if let Some(delay) = self.wait_for_container_apps_environment_wake_retry(
+            &current_config.id,
+            "Dapr component update",
+        ) {
+            return Ok(HandlerAction::Stay {
+                max_times: AZURE_RBAC_WAIT_MAX_ATTEMPTS,
+                suggested_delay: Some(delay),
+            });
+        }
         let previous_config = ctx.previous_resource_config::<Worker>()?;
         let container_app_name = self.container_app_name.clone().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceControllerConfigError {
@@ -2278,7 +2366,7 @@ impl AzureWorkerController {
                                         AZURE_CONTAINER_APPS_ENVIRONMENT_WAKE_WAIT_SECS,
                                     );
                                     if let Some(delay) =
-                                        container_apps_environment_wake_delay(deadline)
+                                        self.record_container_apps_environment_wake_retry(deadline)
                                     {
                                         warn!(
                                             worker=%current_config.id,
@@ -2322,7 +2410,7 @@ impl AzureWorkerController {
                                         AZURE_CONTAINER_APPS_ENVIRONMENT_WAKE_WAIT_SECS,
                                     );
                                     if let Some(delay) =
-                                        container_apps_environment_wake_delay(deadline)
+                                        self.record_container_apps_environment_wake_retry(deadline)
                                     {
                                         warn!(
                                             worker=%current_config.id,
@@ -2366,7 +2454,7 @@ impl AzureWorkerController {
                                         AZURE_CONTAINER_APPS_ENVIRONMENT_WAKE_WAIT_SECS,
                                     );
                                     if let Some(delay) =
-                                        container_apps_environment_wake_delay(deadline)
+                                        self.record_container_apps_environment_wake_retry(deadline)
                                     {
                                         warn!(
                                             worker=%current_config.id,
@@ -2394,6 +2482,7 @@ impl AzureWorkerController {
                 }
             }
             self.container_apps_environment_wake_wait_until_epoch_secs = None;
+            self.container_apps_environment_wake_retry_after_epoch_secs = None;
         } else {
             info!(worker=%current_config.id, "No trigger changes detected");
         }
@@ -4308,6 +4397,7 @@ impl AzureWorkerController {
             commands_receiver_role_assignment_id: None,
             commands_infrastructure_auth_wait_until_epoch_secs: None,
             container_apps_environment_wake_wait_until_epoch_secs: None,
+            container_apps_environment_wake_retry_after_epoch_secs: None,
             pre_container_app_rbac_wait_until_epoch_secs: None,
             ready_rbac_wait_until_epoch_secs: None,
             update_rbac_wait_required: false,
@@ -5506,6 +5596,7 @@ mod tests {
             commands_receiver_role_assignment_id: None,
             commands_infrastructure_auth_wait_until_epoch_secs: None,
             container_apps_environment_wake_wait_until_epoch_secs: None,
+            container_apps_environment_wake_retry_after_epoch_secs: None,
             pre_container_app_rbac_wait_until_epoch_secs: None,
             ready_rbac_wait_until_epoch_secs: None,
             update_rbac_wait_required: false,

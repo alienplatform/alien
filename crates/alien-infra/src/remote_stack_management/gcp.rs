@@ -12,8 +12,10 @@ use alien_gcp_clients::iam::{
     Binding, CreateServiceAccountRequest, IamPolicy, ServiceAccount as GcpServiceAccount,
 };
 use alien_macros::{controller, flow_entry, handler, terminal_state};
+#[cfg(test)]
+use alien_permissions::generators::GcpIamBinding;
 use alien_permissions::{
-    generators::{GcpBindingTargetScope, GcpIamBinding, GcpRuntimePermissionsGenerator},
+    generators::{GcpBindingTargetScope, GcpRuntimePermissionsGenerator},
     get_permission_set, list_permission_set_ids, BindingTarget, PermissionContext,
 };
 
@@ -180,26 +182,27 @@ impl GcpRemoteStackManagementController {
         let mut new_bindings = Vec::new();
 
         for permission_set in &stack_sets {
-            let bindings = generator
-                .generate_bindings(permission_set, BindingTarget::Stack, &permission_context)
+            let grant_plan = generator
+                .generate_grant_plan(permission_set, BindingTarget::Stack, &permission_context)
                 .context(ErrorData::InfrastructureError {
                     message: format!(
-                        "Failed to generate IAM bindings for management permission set '{}'",
+                        "Failed to generate IAM grant plan for management permission set '{}'",
                         permission_set.id
                     ),
                     operation: Some("binding_role".to_string()),
                     resource_id: Some(config.id.clone()),
                 })?;
 
-            let project_bindings = Self::project_management_bindings(bindings.bindings);
+            let project_bindings = grant_plan.bindings_for_target(GcpBindingTargetScope::Project);
             if project_bindings.is_empty() {
                 continue;
             }
 
-            ResourcePermissionsHelper::ensure_single_gcp_custom_role(
+            let selected_custom_roles = grant_plan.custom_roles_for_bindings(&project_bindings);
+            ResourcePermissionsHelper::ensure_gcp_custom_roles(
                 ctx,
-                permission_set,
-                &permission_context,
+                &permission_set.id,
+                selected_custom_roles,
             )
             .await?;
 
@@ -650,6 +653,7 @@ impl GcpRemoteStackManagementController {
         )
     }
 
+    #[cfg(test)]
     fn project_management_bindings(bindings: Vec<GcpIamBinding>) -> Vec<GcpIamBinding> {
         bindings
             .into_iter()

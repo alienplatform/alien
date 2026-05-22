@@ -377,6 +377,9 @@ fn apply_resource_dependencies(stack: &Stack, per_resource: &mut IndexMap<String
         }
 
         for resource in &mut fragment.resource_blocks {
+            if !resource_inherits_stack_resource_dependencies(resource) {
+                continue;
+            }
             upsert_depends_on(resource, &depends_on);
         }
     }
@@ -421,6 +424,22 @@ fn resource_address(resource: &Block) -> Option<Expression> {
     let provider_type = resource.labels.first()?.as_str();
     let label = resource.labels.get(1)?.as_str();
     Some(expr::traversal([provider_type, label]))
+}
+
+fn resource_inherits_stack_resource_dependencies(resource: &Block) -> bool {
+    !is_gcp_iam_support_resource(resource)
+}
+
+fn is_gcp_iam_support_resource(resource: &Block) -> bool {
+    if resource.identifier.as_str() != "resource" {
+        return false;
+    }
+
+    let Some(provider_type) = resource.labels.first().map(|label| label.as_str()) else {
+        return false;
+    };
+
+    provider_type == "google_project_iam_custom_role" || provider_type.ends_with("_iam_member")
 }
 
 fn gcp_iam_resource_addresses(per_resource: &IndexMap<String, TfFragment>) -> Vec<Expression> {
@@ -1107,6 +1126,10 @@ fn locals_body(
             "helm_values",
             expr::object([
                 ("serviceAccounts", expr::raw("local.helm_service_accounts")),
+                (
+                    "managerServiceAccount",
+                    expr::raw("local.helm_manager_service_account"),
+                ),
                 ("stackSettings", expr::raw("local.deployment_settings")),
                 ("basePlatform", expr::raw("local.deployment_base_platform")),
                 ("serviceAccountPrefix", expr::raw("local.resource_prefix")),
@@ -1493,6 +1516,16 @@ Run:\n\n\
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_core::{Queue, RemoteStackManagement, ResourceLifecycle, ResourceRef};
+
+    fn block_has_depends_on(block: &Block) -> bool {
+        block.body.0.iter().any(|structure| {
+            matches!(
+                structure,
+                Structure::Attribute(attribute) if attribute.key.as_str() == "depends_on"
+            )
+        })
+    }
 
     #[test]
     fn registration_uses_configured_provider_identity() {
@@ -1532,5 +1565,76 @@ mod tests {
         assert!(variables.contains("^[a-z][a-z0-9-]{1,38}[a-z0-9]$"));
         assert!(variables.contains("length(regexall(\"--\", var.resource_prefix)) == 0"));
         assert!(!variables.contains("(?="));
+    }
+
+    #[test]
+    fn stack_dependencies_skip_gcp_iam_support_resources() {
+        let stack = Stack::new("test".to_string())
+            .add_with_dependencies(
+                Queue::new("queue".to_string()).build(),
+                ResourceLifecycle::Live,
+                vec![ResourceRef::new(
+                    RemoteStackManagement::RESOURCE_TYPE,
+                    "remote-stack-management",
+                )],
+            )
+            .add(
+                RemoteStackManagement::new("remote-stack-management".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+
+        let mut per_resource = IndexMap::new();
+        per_resource.insert(
+            "queue".to_string(),
+            TfFragment {
+                resource_blocks: vec![
+                    resource_block(
+                        "google_project_iam_custom_role",
+                        "gcp_role_queue_heartbeat_part1",
+                        [
+                            attr("project", expr::raw("var.gcp_project")),
+                            attr("role_id", Expression::String("role_test".to_string())),
+                        ],
+                    ),
+                    resource_block(
+                        "google_pubsub_topic",
+                        "queue",
+                        [attr("name", Expression::String("queue".to_string()))],
+                    ),
+                ],
+                ..TfFragment::default()
+            },
+        );
+        per_resource.insert(
+            "remote-stack-management".to_string(),
+            TfFragment {
+                resource_blocks: vec![resource_block(
+                    "google_project_iam_member",
+                    "gcp_role_queue_heartbeat_part1_remote_stack_management_binding_0",
+                    [
+                        attr("project", expr::raw("var.gcp_project")),
+                        attr(
+                            "role",
+                            expr::traversal([
+                                "google_project_iam_custom_role",
+                                "gcp_role_queue_heartbeat_part1",
+                                "name",
+                            ]),
+                        ),
+                    ],
+                )],
+                ..TfFragment::default()
+            },
+        );
+
+        apply_resource_dependencies(&stack, &mut per_resource);
+
+        let queue_fragment = per_resource.get("queue").expect("queue fragment");
+        let custom_role = &queue_fragment.resource_blocks[0];
+        let topic = &queue_fragment.resource_blocks[1];
+
+        assert!(!block_has_depends_on(custom_role));
+        assert!(block_has_depends_on(topic));
     }
 }

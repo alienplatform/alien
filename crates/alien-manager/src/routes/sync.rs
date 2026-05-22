@@ -715,6 +715,7 @@ async fn initialize(
                         platform,
                         base_platform: None,
                         stack_settings: settings,
+                        stack_state: None,
                         environment_variables: None,
                         deployment_token: dep_token,
                     },
