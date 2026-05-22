@@ -22,7 +22,7 @@
     "gcp": [
       {
         "grant": {
-          "permissions": ["secretmanager.secrets.list"]
+          "predefinedRoles": ["roles/secretmanager.viewer"]
         },
         "binding": {
           "stack": {
@@ -32,7 +32,7 @@
       },
       {
         "grant": {
-          "permissions": ["secretmanager.secrets.get"]
+          "predefinedRoles": ["roles/secretmanager.viewer"]
         },
         "binding": {
           "resource": {

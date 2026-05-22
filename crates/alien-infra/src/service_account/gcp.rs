@@ -441,12 +441,14 @@ impl GcpServiceAccountController {
         let member = format!("serviceAccount:{service_account_email}");
         let owned_role_prefixes =
             vec![ResourcePermissionsHelper::gcp_stack_custom_role_name_prefix(&permission_context)];
+        let owned_exact_roles = ResourcePermissionsHelper::gcp_predefined_role_names(&new_bindings);
         let mut all_bindings = current_policy.bindings;
         let changed = ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
             &mut all_bindings,
             new_bindings,
             &member,
             &owned_role_prefixes,
+            &owned_exact_roles,
         );
 
         if !changed {
@@ -570,6 +572,7 @@ impl GcpServiceAccountController {
         changed |= ResourcePermissionsHelper::remove_gcp_project_member_bindings(
             &mut current_policy.bindings,
             &member,
+            None,
             None,
         );
 

@@ -36,6 +36,13 @@ const CLOUD_RUN_SERVICE_NAME_MAX_LEN: usize = 49;
 const GCP_RESOURCE_NAME_MAX_LEN: usize = 63;
 const GCP_RESOURCE_NAME_HASH_LEN: usize = 8;
 
+fn is_remote_resource_conflict(error: &AlienError<CloudClientErrorData>) -> bool {
+    matches!(
+        &error.error,
+        Some(CloudClientErrorData::RemoteResourceConflict { .. })
+    )
+}
+
 /// Generates the Cloud Run service name from stack prefix and worker ID
 fn get_cloudrun_service_name(prefix: &str, name: &str) -> String {
     let raw = format!("{}-{}", prefix, name);
@@ -1249,22 +1256,39 @@ impl GcpWorkerController {
             gcp_config.project_id, topic_short_name
         );
 
-        info!(
-            worker=%cfg.id,
-            topic=%topic_full_name,
-            "Creating commands Pub/Sub topic"
-        );
+        if self.commands_topic_name.is_none() {
+            info!(
+                worker=%cfg.id,
+                topic=%topic_full_name,
+                "Creating commands Pub/Sub topic"
+            );
 
-        pubsub_client
-            .create_topic(topic_short_name.clone(), Topic::default())
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to create commands Pub/Sub topic '{}'",
-                    topic_short_name
-                ),
-                resource_id: Some(cfg.id.clone()),
-            })?;
+            match pubsub_client
+                .create_topic(topic_short_name.clone(), Topic::default())
+                .await
+            {
+                Ok(_) => {
+                    self.commands_topic_name = Some(topic_short_name.clone());
+                }
+                Err(e) if is_remote_resource_conflict(&e) => {
+                    info!(
+                        worker=%cfg.id,
+                        topic=%topic_short_name,
+                        "Commands Pub/Sub topic already exists, adopting it"
+                    );
+                    self.commands_topic_name = Some(topic_short_name.clone());
+                }
+                Err(e) => {
+                    return Err(e.context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to create commands Pub/Sub topic '{}'",
+                            topic_short_name
+                        ),
+                        resource_id: Some(cfg.id.clone()),
+                    }));
+                }
+            }
+        }
 
         // Create push subscription that delivers to the Cloud Run service
         let subscription_name = format!("{}-rq-sub", service_name);
@@ -1344,30 +1368,44 @@ impl GcpWorkerController {
             cloud_storage_config: None,
         };
 
-        info!(
-            worker=%cfg.id,
-            topic=%topic_full_name,
-            subscription=%subscription_name,
-            endpoint=%push_endpoint,
-            "Creating commands Pub/Sub push subscription"
-        );
+        if self.commands_subscription_name.is_none() {
+            info!(
+                worker=%cfg.id,
+                topic=%topic_full_name,
+                subscription=%subscription_name,
+                endpoint=%push_endpoint,
+                "Creating commands Pub/Sub push subscription"
+            );
 
-        pubsub_client
-            .create_subscription(subscription_name.clone(), subscription)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to create commands push subscription '{}'",
-                    subscription_name
-                ),
-                resource_id: Some(cfg.id.clone()),
-            })?;
+            match pubsub_client
+                .create_subscription(subscription_name.clone(), subscription)
+                .await
+            {
+                Ok(_) => {
+                    self.commands_subscription_name = Some(subscription_name.clone());
+                }
+                Err(e) if is_remote_resource_conflict(&e) => {
+                    info!(
+                        worker=%cfg.id,
+                        subscription=%subscription_name,
+                        "Commands Pub/Sub push subscription already exists, adopting it"
+                    );
+                    self.commands_subscription_name = Some(subscription_name.clone());
+                }
+                Err(e) => {
+                    return Err(e.context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to create commands push subscription '{}'",
+                            subscription_name
+                        ),
+                        resource_id: Some(cfg.id.clone()),
+                    }));
+                }
+            }
+        }
 
         self.apply_command_topic_management_permissions(ctx, &topic_short_name)
             .await?;
-
-        self.commands_topic_name = Some(topic_short_name);
-        self.commands_subscription_name = Some(subscription_name);
 
         info!(worker=%cfg.id, "Commands Pub/Sub infrastructure created");
 
@@ -2551,11 +2589,32 @@ impl GcpWorkerController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        let cfg = ctx.desired_resource_config::<Worker>()?;
         let gcp_config = ctx.get_gcp_config()?;
         let pubsub_client = ctx.service_provider.get_gcp_pubsub_client(gcp_config)?;
+        let derived_topic_name = cfg
+            .commands_enabled
+            .then(|| {
+                self.service_name
+                    .as_ref()
+                    .map(|service_name| format!("{service_name}-rq"))
+            })
+            .flatten();
+        let derived_subscription_name = cfg
+            .commands_enabled
+            .then(|| {
+                self.service_name
+                    .as_ref()
+                    .map(|service_name| format!("{service_name}-rq-sub"))
+            })
+            .flatten();
 
         // Delete commands subscription (best-effort)
-        if let Some(subscription_name) = self.commands_subscription_name.take() {
+        if let Some(subscription_name) = self
+            .commands_subscription_name
+            .take()
+            .or(derived_subscription_name)
+        {
             info!(subscription=%subscription_name, "Deleting commands push subscription");
             match pubsub_client
                 .delete_subscription(subscription_name.clone())
@@ -2575,7 +2634,7 @@ impl GcpWorkerController {
         }
 
         // Delete commands topic (best-effort)
-        if let Some(topic_name) = self.commands_topic_name.take() {
+        if let Some(topic_name) = self.commands_topic_name.take().or(derived_topic_name) {
             info!(topic=%topic_name, "Deleting commands Pub/Sub topic");
             match pubsub_client.delete_topic(topic_name.clone()).await {
                 Ok(_) => {

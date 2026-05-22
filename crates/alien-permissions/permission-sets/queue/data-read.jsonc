@@ -21,7 +21,7 @@
     "gcp": [
       {
         "grant": {
-          "permissions": ["pubsub.subscriptions.consume", "pubsub.subscriptions.get"]
+          "predefinedRoles": ["roles/pubsub.subscriber", "roles/pubsub.viewer"]
         },
         // GCP IAM conditions with resource.type/resource.name do not evaluate correctly
         // for pubsub.subscriptions.consume at runtime.

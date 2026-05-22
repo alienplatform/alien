@@ -231,6 +231,17 @@ impl ResourcePermissionsHelper {
             .collect()
     }
 
+    /// Return predefined GCP roles present in a desired binding plan.
+    pub fn gcp_predefined_role_names(bindings: &[Binding]) -> Vec<String> {
+        let mut roles = Vec::new();
+        for binding in bindings {
+            if binding.role.starts_with("roles/") && !roles.contains(&binding.role) {
+                roles.push(binding.role.clone());
+            }
+        }
+        roles
+    }
+
     /// Reconcile project-level IAM bindings for one principal and this stack's
     /// caller-owned custom roles. Existing caller-owned custom-role bindings for
     /// the principal are removed before desired bindings are merged, so revoked
@@ -240,11 +251,13 @@ impl ResourcePermissionsHelper {
         desired_bindings: Vec<Binding>,
         member: &str,
         owned_role_name_prefixes: &[String],
+        owned_exact_role_names: &[String],
     ) -> bool {
         let mut changed = Self::remove_gcp_project_member_bindings(
             bindings,
             member,
             Some(owned_role_name_prefixes),
+            Some(owned_exact_role_names),
         );
 
         for desired_binding in desired_bindings {
@@ -278,18 +291,22 @@ impl ResourcePermissionsHelper {
         bindings: &mut Vec<Binding>,
         member: &str,
         role_name_prefixes: Option<&[String]>,
+        exact_role_names: Option<&[String]>,
     ) -> bool {
         let deleted_member_prefix = Self::deleted_gcp_service_account_member_prefix(member);
         let mut changed = false;
 
         for binding in bindings.iter_mut() {
-            let role_matches = role_name_prefixes
-                .map(|prefixes| {
-                    prefixes
-                        .iter()
-                        .any(|prefix| binding.role.starts_with(prefix))
-                })
-                .unwrap_or(true);
+            let role_matches = match (role_name_prefixes, exact_role_names) {
+                (None, None) => true,
+                (prefixes, exact_roles) => {
+                    prefixes.is_some_and(|prefixes| {
+                        prefixes
+                            .iter()
+                            .any(|prefix| binding.role.starts_with(prefix))
+                    }) || exact_roles.is_some_and(|exact_roles| exact_roles.contains(&binding.role))
+                }
+            };
             let before = binding.members.len();
             binding.members.retain(|binding_member| {
                 let is_target_member = binding_member == member;
@@ -1283,6 +1300,7 @@ mod tests {
             }],
             "serviceAccount:app@p.iam.gserviceaccount.com",
             &owned_role_prefixes,
+            &[],
         );
 
         assert!(changed);
@@ -1346,6 +1364,7 @@ mod tests {
             }],
             "serviceAccount:management@p.iam.gserviceaccount.com",
             &vault_prefixes,
+            &[],
         );
 
         assert!(changed);
@@ -1387,6 +1406,7 @@ mod tests {
             Vec::new(),
             "serviceAccount:management@p.iam.gserviceaccount.com",
             &worker_prefixes,
+            &[],
         );
 
         assert!(changed);
@@ -1398,6 +1418,63 @@ mod tests {
                 && binding
                     .members
                     .contains(&"serviceAccount:management@p.iam.gserviceaccount.com".to_string())
+        }));
+    }
+
+    #[test]
+    fn gcp_project_member_reconciliation_removes_stale_owned_predefined_roles() {
+        let mut bindings = vec![
+            Binding {
+                role: "roles/pubsub.publisher".to_string(),
+                members: vec!["serviceAccount:app@p.iam.gserviceaccount.com".to_string()],
+                condition: None,
+            },
+            Binding {
+                role: "roles/pubsub.viewer".to_string(),
+                members: vec!["serviceAccount:app@p.iam.gserviceaccount.com".to_string()],
+                condition: None,
+            },
+            Binding {
+                role: "roles/viewer".to_string(),
+                members: vec!["serviceAccount:app@p.iam.gserviceaccount.com".to_string()],
+                condition: None,
+            },
+        ];
+
+        let owned_exact_roles = vec![
+            "roles/pubsub.publisher".to_string(),
+            "roles/pubsub.viewer".to_string(),
+        ];
+        let changed = ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
+            &mut bindings,
+            vec![Binding {
+                role: "roles/pubsub.publisher".to_string(),
+                members: vec!["serviceAccount:app@p.iam.gserviceaccount.com".to_string()],
+                condition: None,
+            }],
+            "serviceAccount:app@p.iam.gserviceaccount.com",
+            &[],
+            &owned_exact_roles,
+        );
+
+        assert!(changed);
+        assert!(bindings.iter().any(|binding| {
+            binding.role == "roles/pubsub.publisher"
+                && binding
+                    .members
+                    .contains(&"serviceAccount:app@p.iam.gserviceaccount.com".to_string())
+        }));
+        assert!(!bindings.iter().any(|binding| {
+            binding.role == "roles/pubsub.viewer"
+                && binding
+                    .members
+                    .contains(&"serviceAccount:app@p.iam.gserviceaccount.com".to_string())
+        }));
+        assert!(bindings.iter().any(|binding| {
+            binding.role == "roles/viewer"
+                && binding
+                    .members
+                    .contains(&"serviceAccount:app@p.iam.gserviceaccount.com".to_string())
         }));
     }
 }

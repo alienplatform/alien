@@ -23,7 +23,10 @@
     "gcp": [
       {
         "grant": {
-          "permissions": ["secretmanager.versions.access", "secretmanager.secrets.get"]
+          "predefinedRoles": [
+            "roles/secretmanager.viewer",
+            "roles/secretmanager.secretAccessor"
+          ]
         },
         "binding": {
           "stack": {

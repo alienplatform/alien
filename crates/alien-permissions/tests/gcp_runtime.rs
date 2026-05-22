@@ -60,16 +60,17 @@ fn gcp_permission_set_can_compile_explicit_command_permissions() {
         get_permission_set("worker/dispatch-command").expect("permission set exists");
     let context = create_test_context();
 
-    let role = generator
-        .generate_custom_role(permission_set, &context)
-        .expect("should generate worker command dispatch role");
-    assert_eq!(role.included_permissions, vec!["pubsub.topics.publish"]);
+    let roles = generator
+        .generate_custom_roles(permission_set, &context)
+        .expect("should generate worker command dispatch plan");
+    assert!(roles.is_empty());
 
     let result = generator
         .generate_bindings(permission_set, BindingTarget::Resource, &context)
         .expect("should generate queue writer bindings");
 
     assert_eq!(result.bindings.len(), 1);
+    assert_eq!(result.bindings[0].role, "roles/pubsub.publisher");
     assert!(result
         .bindings
         .iter()
@@ -214,7 +215,7 @@ fn gcp_vault_data_write_resource_condition_uses_project_number_and_vault_prefix(
         .generate_bindings(permission_set, BindingTarget::Resource, &context)
         .expect("should generate GCP vault data-write binding successfully");
 
-    assert_eq!(result.bindings.len(), 2);
+    assert_eq!(result.bindings.len(), 3);
     let create_binding = result
         .bindings
         .iter()
@@ -225,7 +226,12 @@ fn gcp_vault_data_write_resource_condition_uses_project_number_and_vault_prefix(
     let conditioned_binding = result
         .bindings
         .iter()
-        .find(|binding| binding.condition.is_some())
+        .find(|binding| {
+            binding.condition.is_some()
+                && binding
+                    .role
+                    .starts_with("projects/my-project/roles/role_my_stack_vault_data_write")
+        })
         .expect("prefix-conditioned write binding exists");
     assert!(conditioned_binding
         .role
@@ -246,9 +252,6 @@ fn gcp_vault_management_resource_binding_is_project_conditioned() {
         get_permission_set("vault/management").expect("vault/management permission set exists");
     let context = create_test_context().with_resource_name("customer-vault");
 
-    let roles = generator
-        .generate_custom_roles(permission_set, &context)
-        .expect("should generate GCP vault management roles");
     let result = generator
         .generate_bindings(permission_set, BindingTarget::Resource, &context)
         .expect("should generate GCP vault management binding successfully");
@@ -256,11 +259,7 @@ fn gcp_vault_management_resource_binding_is_project_conditioned() {
     assert_eq!(result.bindings.len(), 1);
     let binding = &result.bindings[0];
     assert_eq!(binding.target, GcpBindingTargetScope::Project);
-    let role = roles
-        .iter()
-        .find(|role| role.name == binding.role)
-        .expect("resource binding role exists");
-    assert_eq!(role.included_permissions, vec!["secretmanager.secrets.get"]);
+    assert_eq!(binding.role, "roles/secretmanager.viewer");
     let condition = binding.condition.as_ref().unwrap();
     assert_eq!(condition.title, "ResourceVaultSecretsManagement");
     assert_eq!(
@@ -316,4 +315,55 @@ fn gcp_missing_permissions_fail_closed() {
         .unwrap_err()
         .to_string()
         .contains("has no permissions"));
+}
+
+#[test]
+fn gcp_permission_grant_parses_predefined_and_residual_fields() {
+    let permission_set: alien_core::PermissionSet = json5::from_str(
+        r#"{
+            id: "queue/data-write",
+            description: "Queue writer",
+            platforms: {
+                gcp: [{
+                    binding: {
+                        stack: { scope: "projects/${projectName}" },
+                        resource: { scope: "projects/${projectName}/topics/${resourceName}" }
+                    },
+                    grant: {
+                        predefinedRoles: ["roles/pubsub.publisher"],
+                        residualPermissions: ["pubsub.topics.get"]
+                    }
+                }]
+            }
+        }"#,
+    )
+    .expect("permission set parses");
+
+    let grant = &permission_set.platforms.gcp.unwrap()[0].grant;
+    assert_eq!(
+        grant.predefined_roles.as_deref(),
+        Some(&["roles/pubsub.publisher".to_string()][..])
+    );
+    assert_eq!(
+        grant.residual_permissions.as_deref(),
+        Some(&["pubsub.topics.get".to_string()][..])
+    );
+}
+
+#[test]
+fn gcp_permission_grant_rejects_invalid_predefined_role_name() {
+    let generator = GcpRuntimePermissionsGenerator::new();
+    let mut permission_set = create_gcp_storage_data_read_permission_set();
+    let grant = &mut permission_set.platforms.gcp.as_mut().unwrap()[0].grant;
+    grant.permissions = None;
+    grant.predefined_roles = Some(vec!["pubsub.publisher".to_string()]);
+    let context = create_test_context();
+
+    let result = generator.generate_bindings(&permission_set, BindingTarget::Stack, &context);
+
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("invalid predefined role"));
 }

@@ -40,6 +40,8 @@ pub fn create_aws_storage_data_read_permission_set() -> PermissionSet {
                         "s3:ListBucket".to_string(),
                     ]),
                     permissions: None,
+                    predefined_roles: None,
+                    residual_permissions: None,
                     data_actions: None,
                 },
                 binding: BindingConfiguration {
@@ -86,6 +88,8 @@ pub fn create_aws_storage_data_read_permission_set_with_condition() -> Permissio
                         "s3:ListBucket".to_string(),
                     ]),
                     permissions: None,
+                    predefined_roles: None,
+                    residual_permissions: None,
                     data_actions: None,
                 },
                 binding: BindingConfiguration {
@@ -127,6 +131,8 @@ pub fn create_gcp_storage_data_read_permission_set() -> PermissionSet {
                         "storage.objects.get".to_string(),
                         "storage.objects.list".to_string(),
                     ]),
+                    predefined_roles: None,
+                    residual_permissions: None,
                     data_actions: None,
                 },
                 binding: BindingConfiguration {
@@ -164,7 +170,9 @@ pub fn create_azure_storage_data_read_permission_set() -> PermissionSet {
                     grant: PermissionGrant {
                         actions: Some(vec!["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read".to_string()]),
                         permissions: None,
-                        data_actions: Some(vec!["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read".to_string()]),
+                        predefined_roles: None,
+                    residual_permissions: None,
+                    data_actions: Some(vec!["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read".to_string()]),
                     },
                     binding: BindingConfiguration {
                         stack: Some(AzureBindingSpec {
@@ -192,6 +200,8 @@ pub fn create_permission_set_missing_actions() -> PermissionSet {
                 grant: PermissionGrant {
                     actions: None, // Missing actions for AWS
                     permissions: None,
+                    predefined_roles: None,
+                    residual_permissions: None,
                     data_actions: None,
                 },
                 binding: BindingConfiguration {
@@ -220,6 +230,8 @@ pub fn create_permission_set_missing_gcp_permissions() -> PermissionSet {
                 grant: PermissionGrant {
                     actions: None,
                     permissions: None, // Missing permissions for GCP
+                    predefined_roles: None,
+                    residual_permissions: None,
                     data_actions: None,
                 },
                 binding: BindingConfiguration {
@@ -268,6 +280,8 @@ pub fn create_aws_cloudformation_permission_set() -> PermissionSet {
                         "s3:ListBucket".to_string(),
                     ]),
                     permissions: None,
+                    predefined_roles: None,
+                    residual_permissions: None,
                     data_actions: None,
                 },
                 binding: BindingConfiguration {
@@ -313,7 +327,9 @@ pub fn create_aws_lambda_permission_set() -> PermissionSet {
                             "lambda:InvokeWorker".to_string(),
                         ]),
                         permissions: None,
-                        data_actions: None,
+                        predefined_roles: None,
+                    residual_permissions: None,
+                    data_actions: None,
                     },
                     binding: BindingConfiguration {
                         stack: Some(AwsBindingSpec {
@@ -339,7 +355,9 @@ pub fn create_aws_lambda_permission_set() -> PermissionSet {
                             "ecr:GetDownloadUrlForLayer".to_string(),
                         ]),
                         permissions: None,
-                        data_actions: None,
+                        predefined_roles: None,
+                    residual_permissions: None,
+                    data_actions: None,
                     },
                     binding: BindingConfiguration {
                         stack: Some(AwsBindingSpec {

@@ -268,26 +268,10 @@ pub fn emit_custom_role_and_bindings_for_target(
         })?;
 
     for (idx, binding) in bindings.bindings.into_iter().enumerate() {
-        let custom_role = custom_roles
-            .iter()
-            .find(|role| role.name == binding.role)
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::GenericError {
-                    message: format!(
-                        "missing generated custom role for GCP binding '{}'",
-                        binding.role
-                    ),
-                })
-            })?;
-        let role_label = custom_role_label(custom_role);
+        let role = role_expression_for_binding(&binding.role, &custom_roles)?;
+        let role_label = binding_label_for_role(&binding.role, &custom_roles)?;
         let binding_label = format!("{role_label}_{sa_label}_binding_{idx}",);
-        push_iam_member(
-            fragment,
-            &binding_label,
-            expr::traversal(["google_project_iam_custom_role", &role_label, "name"]),
-            member_override,
-            &binding,
-        )?;
+        push_iam_member(fragment, &binding_label, role, member_override, &binding)?;
     }
 
     Ok(())
@@ -345,11 +329,66 @@ pub(crate) fn custom_role_label(custom_role: &GcpCustomRole) -> String {
     format!("gcp_role_{}", suffix.replace('-', "_"))
 }
 
+pub(crate) fn binding_label_role_segment(role: &str) -> String {
+    if let Some(predefined) = role.strip_prefix("roles/") {
+        return predefined
+            .chars()
+            .map(|ch| {
+                if ch.is_ascii_alphanumeric() {
+                    ch.to_ascii_lowercase()
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+    }
+    role.rsplit('/').next().unwrap_or(role).replace('-', "_")
+}
+
+pub(crate) fn binding_label_for_role(role: &str, custom_roles: &[GcpCustomRole]) -> Result<String> {
+    if role.starts_with("roles/") {
+        return Ok(binding_label_role_segment(role));
+    }
+
+    let custom_role = custom_role_for_binding(role, custom_roles)?;
+    Ok(custom_role_label(custom_role))
+}
+
+pub(crate) fn role_expression_for_binding(
+    role: &str,
+    custom_roles: &[GcpCustomRole],
+) -> Result<Expression> {
+    if role.starts_with("roles/") {
+        return Ok(Expression::String(role.to_string()));
+    }
+
+    let custom_role = custom_role_for_binding(role, custom_roles)?;
+    let role_label = custom_role_label(custom_role);
+    Ok(expr::traversal([
+        "google_project_iam_custom_role",
+        &role_label,
+        "name",
+    ]))
+}
+
+fn custom_role_for_binding<'a>(
+    role: &str,
+    custom_roles: &'a [GcpCustomRole],
+) -> Result<&'a GcpCustomRole> {
+    custom_roles
+        .iter()
+        .find(|custom_role| custom_role.name == role)
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::GenericError {
+                message: format!("missing generated custom role for GCP binding '{role}'"),
+            })
+        })
+}
+
 fn custom_role_id_template(custom_role: &GcpCustomRole) -> Expression {
     let suffix = custom_role_suffix(custom_role);
-    let readable_suffix = custom_role_readable_id_suffix(&suffix);
     expr::raw(format!(
-        "format(\"role_%s_{readable_suffix}_%s\", substr(replace(lower(local.resource_prefix), \"-\", \"_\"), 0, 18), substr(sha1(format(\"%s_{suffix}\", replace(lower(local.resource_prefix), \"-\", \"_\"))), 0, 8))"
+        "format(\"role_%s_{suffix}\", substr(replace(lower(local.resource_prefix), \"-\", \"_\"), 0, 18))"
     ))
 }
 
@@ -359,16 +398,6 @@ fn custom_role_suffix(custom_role: &GcpCustomRole) -> String {
         .strip_prefix("role_local_resource_pre_")
         .unwrap_or(&custom_role.role_id)
         .to_string()
-}
-
-fn custom_role_readable_id_suffix(suffix: &str) -> String {
-    const MAX_SUFFIX_LEN: usize = 31;
-    let mut suffix = suffix.to_string();
-    if suffix.len() > MAX_SUFFIX_LEN {
-        suffix.truncate(MAX_SUFFIX_LEN);
-        suffix = suffix.trim_end_matches('_').to_string();
-    }
-    suffix
 }
 
 pub(crate) fn push_iam_member(

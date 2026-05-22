@@ -52,8 +52,6 @@
             "cloudbuild.builds.create",
             "cloudbuild.builds.update",
             "cloudbuild.workerpools.use",
-            "cloudbuild.builds.get",
-            "cloudbuild.builds.list",
             "cloudbuild.operations.get",
             "cloudbuild.operations.list"
           ]

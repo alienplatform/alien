@@ -20,7 +20,7 @@
     "gcp": [
       {
         "grant": {
-          "permissions": ["pubsub.topics.publish"]
+          "predefinedRoles": ["roles/pubsub.publisher"]
         },
         // GCP workers receive management-dispatched commands through an internal
         // Pub/Sub topic owned by the worker controller.

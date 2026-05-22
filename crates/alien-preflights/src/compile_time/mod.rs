@@ -42,5 +42,7 @@ pub use single_exposed_port_check::SingleExposedPortCheck;
 pub use single_queue_trigger::SingleQueueTriggerCheck;
 pub use trigger_edge_ownership::TriggerEdgeOwnershipCheck;
 pub use unique_resources::UniqueResourcesCheck;
-pub use valid_resource_dependencies::ValidResourceDependenciesCheck;
+pub use valid_resource_dependencies::{
+    validate_stack_dependencies, ValidResourceDependenciesCheck,
+};
 pub use worker_memory::WorkerMemoryCheck;

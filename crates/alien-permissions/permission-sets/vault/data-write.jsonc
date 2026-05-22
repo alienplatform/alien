@@ -36,9 +36,9 @@
       },
       {
         "grant": {
-          "permissions": [
+          "predefinedRoles": ["roles/secretmanager.secretVersionAdder"],
+          "residualPermissions": [
             "secretmanager.secrets.get",
-            "secretmanager.versions.add",
             "secretmanager.secrets.delete"
           ]
         },

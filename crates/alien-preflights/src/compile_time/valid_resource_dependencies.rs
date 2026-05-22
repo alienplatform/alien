@@ -17,43 +17,48 @@ impl CompileTimeCheck for ValidResourceDependenciesCheck {
     }
 
     async fn check(&self, stack: &Stack, _platform: Platform) -> Result<CheckResult> {
-        let mut errors = Vec::new();
+        Ok(validate_stack_dependencies(stack))
+    }
+}
 
-        // Build dependency graph
-        let mut graph: HashMap<String, Vec<String>> = HashMap::new();
+/// Validate explicit and implicit resource dependencies for a stack.
+pub fn validate_stack_dependencies(stack: &Stack) -> CheckResult {
+    let mut errors = Vec::new();
 
-        for (resource_id, resource_entry) in stack.resources() {
-            let mut dependencies = Vec::new();
+    // Build dependency graph
+    let mut graph: HashMap<String, Vec<String>> = HashMap::new();
 
-            // Add explicit dependencies from resource entry
-            for dep in &resource_entry.dependencies {
-                dependencies.push(dep.id().to_string());
-            }
+    for (resource_id, resource_entry) in stack.resources() {
+        let mut dependencies = Vec::new();
 
-            // Add implicit dependencies from resource configuration
-            for dep_ref in resource_entry.config.get_dependencies() {
-                dependencies.push(dep_ref.id().to_string());
-            }
-
-            graph.insert(resource_id.clone(), dependencies);
+        // Add explicit dependencies from resource entry
+        for dep in &resource_entry.dependencies {
+            dependencies.push(dep.id().to_string());
         }
 
-        // Check for circular dependencies using DFS
-        for resource_id in graph.keys() {
-            if let Some(cycle) = find_cycle(&graph, resource_id) {
-                errors.push(format!(
-                    "Circular dependency detected: {}",
-                    cycle.join(" -> ")
-                ));
-                break; // Only report one cycle to avoid noise
-            }
+        // Add implicit dependencies from resource configuration
+        for dep_ref in resource_entry.config.get_dependencies() {
+            dependencies.push(dep_ref.id().to_string());
         }
 
-        if errors.is_empty() {
-            Ok(CheckResult::success())
-        } else {
-            Ok(CheckResult::failed(errors))
+        graph.insert(resource_id.clone(), dependencies);
+    }
+
+    // Check for circular dependencies using DFS
+    for resource_id in graph.keys() {
+        if let Some(cycle) = find_cycle(&graph, resource_id) {
+            errors.push(format!(
+                "Circular dependency detected: {}",
+                cycle.join(" -> ")
+            ));
+            break; // Only report one cycle to avoid noise
         }
+    }
+
+    if errors.is_empty() {
+        CheckResult::success()
+    } else {
+        CheckResult::failed(errors)
     }
 }
 

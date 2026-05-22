@@ -20,11 +20,9 @@
     "gcp": [
       {
         "grant": {
-          "permissions": [
-            "run.routes.invoke",
-            "run.jobs.run",
-            "run.executions.cancel",
-            "run.jobs.runWithOverrides"
+          "predefinedRoles": [
+            "roles/run.invoker",
+            "roles/run.jobsExecutorWithOverrides"
           ]
         },
         // Cloud Run does not support IAM conditions (resource.name/resource.type) for any operation.

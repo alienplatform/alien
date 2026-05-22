@@ -14,8 +14,9 @@ use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::gcp::helpers::{
-        custom_role_label, downcast, emit_custom_roles, permission_context, push_iam_member,
-        required_label, service_account_id_template, service_account_member_for_label,
+        binding_label_for_role, downcast, emit_custom_roles, permission_context, push_iam_member,
+        required_label, role_expression_for_binding, service_account_id_template,
+        service_account_member_for_label,
     },
     expr,
 };
@@ -131,22 +132,12 @@ fn emit_project_stack_bindings(
             continue;
         }
 
-        let custom_role = custom_roles
-            .iter()
-            .find(|role| role.name == binding.role)
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::GenericError {
-                    message: format!(
-                        "missing generated custom role for GCP service-account binding '{}'",
-                        binding.role
-                    ),
-                })
-            })?;
-        let role_label = custom_role_label(custom_role);
+        let role_label = binding_label_for_role(&binding.role, &custom_roles)?;
+        let role = role_expression_for_binding(&binding.role, &custom_roles)?;
         push_iam_member(
             fragment,
             &format!("{role_label}_{label}_binding_{idx}"),
-            expr::traversal(["google_project_iam_custom_role", &role_label, "name"]),
+            role,
             member,
             &binding,
         )?;

@@ -85,12 +85,10 @@
     "gcp": [
       {
         "grant": {
-          "permissions": [
-            "artifactregistry.repositories.downloadArtifacts",
-            "artifactregistry.repositories.get",
-            "artifactregistry.repositories.list",
-            "logging.logEntries.create",
-            "run.services.get"
+          "predefinedRoles": [
+            "roles/artifactregistry.reader",
+            "roles/logging.logWriter",
+            "roles/run.viewer"
           ]
         },
         "binding": {

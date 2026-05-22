@@ -13,7 +13,7 @@ use alien_gcp_clients::iam::{
 };
 use alien_macros::{controller, flow_entry, handler, terminal_state};
 use alien_permissions::{
-    generators::{GcpBindingTargetScope, GcpRuntimePermissionsGenerator},
+    generators::{GcpBindingTargetScope, GcpIamBinding, GcpRuntimePermissionsGenerator},
     get_permission_set, list_permission_set_ids, BindingTarget, PermissionContext,
 };
 
@@ -180,13 +180,6 @@ impl GcpRemoteStackManagementController {
         let mut new_bindings = Vec::new();
 
         for permission_set in &stack_sets {
-            ResourcePermissionsHelper::ensure_single_gcp_custom_role(
-                ctx,
-                permission_set,
-                &permission_context,
-            )
-            .await?;
-
             let bindings = generator
                 .generate_bindings(permission_set, BindingTarget::Stack, &permission_context)
                 .context(ErrorData::InfrastructureError {
@@ -198,17 +191,19 @@ impl GcpRemoteStackManagementController {
                     resource_id: Some(config.id.clone()),
                 })?;
 
-            for binding in bindings.bindings {
-                if binding.target != GcpBindingTargetScope::Project {
-                    return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                        message: format!(
-                            "GCP management permission set '{}' produced a {:?} IAM binding where Project was required",
-                            permission_set.id, binding.target
-                        ),
-                        resource_id: Some(config.id.clone()),
-                    }));
-                }
+            let project_bindings = Self::project_management_bindings(bindings.bindings);
+            if project_bindings.is_empty() {
+                continue;
+            }
 
+            ResourcePermissionsHelper::ensure_single_gcp_custom_role(
+                ctx,
+                permission_set,
+                &permission_context,
+            )
+            .await?;
+
+            for binding in project_bindings {
                 new_bindings.push(Binding {
                     role: binding.role,
                     members: binding.members,
@@ -237,12 +232,14 @@ impl GcpRemoteStackManagementController {
 
         let member = format!("serviceAccount:{service_account_email}");
         let owned_role_prefixes = Self::global_management_role_prefixes(&permission_context);
+        let owned_exact_roles = ResourcePermissionsHelper::gcp_predefined_role_names(&new_bindings);
         let mut all_bindings = current_policy.bindings;
         let changed = ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
             &mut all_bindings,
             new_bindings,
             &member,
             &owned_role_prefixes,
+            &owned_exact_roles,
         );
 
         if changed {
@@ -478,6 +475,7 @@ impl GcpRemoteStackManagementController {
                         &mut current_policy.bindings,
                         &service_account_member,
                         None,
+                        None,
                     );
 
                     rm_client
@@ -652,6 +650,13 @@ impl GcpRemoteStackManagementController {
         )
     }
 
+    fn project_management_bindings(bindings: Vec<GcpIamBinding>) -> Vec<GcpIamBinding> {
+        bindings
+            .into_iter()
+            .filter(|binding| binding.target == GcpBindingTargetScope::Project)
+            .collect()
+    }
+
     /// Creates a controller in a ready state with mock values for testing purposes.
     #[cfg(feature = "test-utils")]
     pub fn mock_ready(service_account_name: &str) -> Self {
@@ -666,5 +671,56 @@ impl GcpRemoteStackManagementController {
             impersonation_granted: true,
             _internal_stay_count: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_permission_context() -> PermissionContext {
+        PermissionContext::new()
+            .with_stack_prefix("test-stack".to_string())
+            .with_stack_name("test-stack".to_string())
+            .with_project_name("test-project".to_string())
+            .with_region("us-central1".to_string())
+            .with_project_number("123456789012".to_string())
+    }
+
+    #[test]
+    fn project_management_bindings_skip_resource_scoped_artifact_registry_heartbeat() {
+        let permission_set = get_permission_set("artifact-registry/heartbeat").unwrap();
+        let generator = GcpRuntimePermissionsGenerator::new();
+        let bindings = generator
+            .generate_bindings(
+                permission_set,
+                BindingTarget::Stack,
+                &test_permission_context(),
+            )
+            .unwrap();
+
+        assert!(
+            GcpRemoteStackManagementController::project_management_bindings(bindings.bindings)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn project_management_bindings_keep_project_scoped_storage_heartbeat() {
+        let permission_set = get_permission_set("storage/heartbeat").unwrap();
+        let generator = GcpRuntimePermissionsGenerator::new();
+        let bindings = generator
+            .generate_bindings(
+                permission_set,
+                BindingTarget::Stack,
+                &test_permission_context(),
+            )
+            .unwrap();
+
+        let project_bindings =
+            GcpRemoteStackManagementController::project_management_bindings(bindings.bindings);
+
+        assert_eq!(project_bindings.len(), 1);
+        assert_eq!(project_bindings[0].target, GcpBindingTargetScope::Project);
     }
 }

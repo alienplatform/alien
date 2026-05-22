@@ -71,6 +71,8 @@ pub fn storage_read_permission_set() -> PermissionSet {
                         "s3:ListBucket".to_string(),
                     ]),
                     permissions: None,
+                    predefined_roles: None,
+                    residual_permissions: None,
                     data_actions: None,
                 },
                 binding: BindingConfiguration {
@@ -98,6 +100,8 @@ pub fn storage_read_permission_set() -> PermissionSet {
                         "storage.objects.list".to_string(),
                         "storage.buckets.get".to_string(),
                     ]),
+                    predefined_roles: None,
+                    residual_permissions: None,
                     data_actions: None,
                 },
                 binding: BindingConfiguration {
@@ -118,6 +122,8 @@ pub fn storage_read_permission_set() -> PermissionSet {
                 grant: PermissionGrant {
                     actions: None,
                     permissions: None,
+                    predefined_roles: None,
+                    residual_permissions: None,
                     data_actions: Some(vec![
                         "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read".to_string(),
                     ]),
@@ -150,6 +156,8 @@ pub fn storage_write_permission_set() -> PermissionSet {
                         "s3:DeleteObject".to_string(),
                     ]),
                     permissions: None,
+                    predefined_roles: None,
+                    residual_permissions: None,
                     data_actions: None,
                 },
                 binding: BindingConfiguration {
@@ -175,6 +183,8 @@ pub fn storage_write_permission_set() -> PermissionSet {
                         "storage.objects.delete".to_string(),
                         "storage.objects.update".to_string(),
                     ]),
+                    predefined_roles: None,
+                    residual_permissions: None,
                     data_actions: None,
                 },
                 binding: BindingConfiguration {
@@ -195,6 +205,8 @@ pub fn storage_write_permission_set() -> PermissionSet {
                 grant: PermissionGrant {
                     actions: None,
                     permissions: None,
+                    predefined_roles: None,
+                    residual_permissions: None,
                     data_actions: Some(vec![
                         "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write".to_string(),
                         "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/delete".to_string(),
@@ -226,6 +238,8 @@ pub fn function_execute_permission_set() -> PermissionSet {
                         "lambda:InvokeFunction".to_string(),
                     ]),
                     permissions: None,
+                    predefined_roles: None,
+                    residual_permissions: None,
                     data_actions: None,
                 },
                 binding: BindingConfiguration {
@@ -249,6 +263,8 @@ pub fn function_execute_permission_set() -> PermissionSet {
                     permissions: Some(vec![
                         "cloudfunctions.functions.invoke".to_string(),
                     ]),
+                    predefined_roles: None,
+                    residual_permissions: None,
                     data_actions: None,
                 },
                 binding: BindingConfiguration {
@@ -271,6 +287,8 @@ pub fn function_execute_permission_set() -> PermissionSet {
                         "Microsoft.Web/sites/functions/action".to_string(),
                     ]),
                     permissions: None,
+                    predefined_roles: None,
+                    residual_permissions: None,
                     data_actions: None,
                 },
                 binding: BindingConfiguration {

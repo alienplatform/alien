@@ -50,50 +50,27 @@ impl StackMutation for InfrastructureDependenciesMutation {
             platform
         );
 
-        // Get global dependencies that all resources should have
-        let global_deps = self.get_global_dependencies(&stack, platform);
-
         // Process each resource in the stack
         let resource_ids: Vec<_> = stack.resources.keys().cloned().collect();
 
         for resource_id in resource_ids {
-            if let Some(entry) = stack.resources.get_mut(&resource_id) {
-                let resource_type = entry.config.resource_type();
+            let Some(entry) = stack.resources.get(&resource_id) else {
+                continue;
+            };
+            let resource_type = entry.config.resource_type();
+            let deps =
+                self.get_dependencies_for_resource(&stack, &resource_id, &resource_type, platform);
 
-                // Add global dependencies before the infrastructure-resource
-                // check. Azure infrastructure resources such as managed
-                // identities, role definitions, storage accounts, and service
-                // bus namespaces still live inside the deployment resource
-                // group and must wait for it.
-                for global_dep in &global_deps {
-                    if global_dep.id() == resource_id {
+            if let Some(entry) = stack.resources.get_mut(&resource_id) {
+                for dependency in deps {
+                    if dependency.id() == resource_id {
                         continue;
                     }
-                    if !entry.dependencies.contains(global_dep) {
-                        entry.dependencies.push(global_dep.clone());
+                    if !entry.dependencies.contains(&dependency) {
+                        entry.dependencies.push(dependency.clone());
                         debug!(
-                            "Added global dependency {:?} to resource '{}'",
-                            global_dep, resource_id
-                        );
-                    }
-                }
-
-                // Skip resource-specific dependencies for infrastructure
-                // resources themselves; the global dependencies above are
-                // still required.
-                if self.is_infrastructure_resource(&resource_id, Some(&resource_type)) {
-                    continue;
-                }
-
-                // Add resource-specific dependencies
-                let specific_deps =
-                    self.get_resource_specific_dependencies(&resource_type, platform);
-                for specific_dep in specific_deps {
-                    if !entry.dependencies.contains(&specific_dep) {
-                        entry.dependencies.push(specific_dep.clone());
-                        debug!(
-                            "Added resource-specific dependency {:?} to resource '{}'",
-                            specific_dep, resource_id
+                            "Added infrastructure dependency {:?} to resource '{}'",
+                            dependency, resource_id
                         );
                     }
                 }
@@ -105,26 +82,37 @@ impl StackMutation for InfrastructureDependenciesMutation {
 }
 
 impl InfrastructureDependenciesMutation {
-    /// Get global dependencies that all resources should have for a platform
-    fn get_global_dependencies(&self, stack: &Stack, platform: Platform) -> Vec<ResourceRef> {
+    /// Get dependencies that should be added to a concrete resource.
+    fn get_dependencies_for_resource(
+        &self,
+        stack: &Stack,
+        resource_id: &str,
+        resource_type: &alien_core::ResourceType,
+        platform: Platform,
+    ) -> Vec<ResourceRef> {
         let mut dependencies = Vec::new();
+        let is_infrastructure_resource =
+            self.is_infrastructure_resource(resource_id, Some(resource_type));
 
-        if stack.resources.contains_key("remote-stack-management") {
+        if platform == Platform::Azure
+            && resource_id != "default-resource-group"
+            && stack.resources.contains_key("default-resource-group")
+        {
+            dependencies.push(ResourceRef::new(
+                alien_core::AzureResourceGroup::RESOURCE_TYPE,
+                "default-resource-group",
+            ));
+        }
+
+        if stack.resources.contains_key("remote-stack-management") && !is_infrastructure_resource {
             dependencies.push(ResourceRef::new(
                 RemoteStackManagement::RESOURCE_TYPE,
                 "remote-stack-management",
             ));
         }
 
-        match platform {
-            Platform::Azure => {
-                dependencies.push(ResourceRef::new(
-                    alien_core::AzureResourceGroup::RESOURCE_TYPE,
-                    "default-resource-group",
-                ));
-            }
-            // Kubernetes: namespace is created by Helm, not as a dependency
-            _ => {}
+        if !is_infrastructure_resource {
+            dependencies.extend(self.get_resource_specific_dependencies(resource_type, platform));
         }
 
         dependencies
@@ -274,6 +262,8 @@ impl InfrastructureDependenciesMutation {
             "default-resource-group"
                 | "default-container-env"
                 | "default-storage-account"
+                | "default-service-bus-namespace"
+                | "default-network"
                 | "ns"
                 | "enable-app"
                 | "enable-storage"
@@ -299,10 +289,18 @@ impl InfrastructureDependenciesMutation {
             if matches!(
                 resource_type.as_ref(),
                 "azure-resource-group"
+                    | "azure_resource_group"
                     | "azure-container-apps-environment"
+                    | "azure_container_apps_environment"
                     | "azure-storage-account"
+                    | "azure_storage_account"
+                    | "azure-service-bus-namespace"
+                    | "azure_service_bus_namespace"
                     | "kubernetes-namespace"
+                    | "kubernetes_namespace"
+                    | "network"
                     | "service-activation"
+                    | "service_activation"
                     | "remote-stack-management"
                     | "permission-profile"
                     | "service-account"

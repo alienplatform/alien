@@ -509,18 +509,23 @@ fn emit_command_topic_management_permissions(
                 }));
             }
 
-            let custom_role = custom_roles
-                .iter()
-                .find(|role| role.name == binding.role)
-                .ok_or_else(|| {
-                    AlienError::new(ErrorData::GenericError {
-                        message: format!(
-                            "missing generated custom role for GCP command binding '{}'",
-                            binding.role
-                        ),
-                    })
-                })?;
-            let role_label = custom_role_label(custom_role);
+            let role = if binding.role.starts_with("roles/") {
+                Expression::String(binding.role.clone())
+            } else {
+                let custom_role = custom_roles
+                    .iter()
+                    .find(|role| role.name == binding.role)
+                    .ok_or_else(|| {
+                        AlienError::new(ErrorData::GenericError {
+                            message: format!(
+                                "missing generated custom role for GCP command binding '{}'",
+                                binding.role
+                            ),
+                        })
+                    })?;
+                let role_label = custom_role_label(custom_role);
+                expr::traversal(["google_project_iam_custom_role", &role_label, "name"])
+            };
             fragment.resource_blocks.push(resource_block(
                 "google_pubsub_topic_iam_member",
                 &format!("{worker_label}_commands_management_{idx}"),
@@ -529,10 +534,7 @@ fn emit_command_topic_management_permissions(
                         "topic",
                         expr::traversal(["google_pubsub_topic", topic_label, "name"]),
                     ),
-                    attr(
-                        "role",
-                        expr::traversal(["google_project_iam_custom_role", &role_label, "name"]),
-                    ),
+                    attr("role", role),
                     attr("member", member.clone()),
                 ],
             ));

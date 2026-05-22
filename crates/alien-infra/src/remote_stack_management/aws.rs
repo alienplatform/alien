@@ -613,6 +613,8 @@ impl AwsRemoteStackManagementController {
                     grant: alien_core::permissions::PermissionGrant {
                         actions: Some(combined_actions),
                         permissions: None,
+                        predefined_roles: None,
+                        residual_permissions: None,
                         data_actions: None,
                     },
                     binding: alien_core::permissions::BindingConfiguration {

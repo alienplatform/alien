@@ -127,7 +127,7 @@ resource "google_service_account" "management" {
 
 resource "google_project_iam_custom_role" "gcp_role_worker_management_part1" {
   project     = var.gcp_project
-  role_id     = format("role_%s_worker_management_part1_%s", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18), substr(sha1(format("%s_worker_management_part1", replace(lower(local.resource_prefix), "-", "_"))), 0, 8))
+  role_id     = format("role_%s_worker_management_part1", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18))
   title       = "acme-mgmt: Worker management (part 1)"
   description = "Allows managing function configuration, versions, aliases, and monitoring. Stack: acme-mgmt. Deployment prefix: ${local.resource_prefix}. Permission set: worker/management."
   stage       = "GA"
@@ -180,7 +180,7 @@ resource "google_project_iam_custom_role" "gcp_role_worker_management_part1" {
 
 resource "google_project_iam_custom_role" "gcp_role_worker_management_part2" {
   project     = var.gcp_project
-  role_id     = format("role_%s_worker_management_part2_%s", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18), substr(sha1(format("%s_worker_management_part2", replace(lower(local.resource_prefix), "-", "_"))), 0, 8))
+  role_id     = format("role_%s_worker_management_part2", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18))
   title       = "acme-mgmt: Worker management (part 2)"
   description = "Allows managing function configuration, versions, aliases, and monitoring. Stack: acme-mgmt. Deployment prefix: ${local.resource_prefix}. Permission set: worker/management."
   stage       = "GA"
@@ -189,24 +189,28 @@ resource "google_project_iam_custom_role" "gcp_role_worker_management_part2" {
     "compute.backendServices.delete",
     "compute.backendServices.get",
     "compute.backendServices.update",
+    "compute.backendServices.use",
     "compute.globalAddresses.create",
     "compute.globalAddresses.delete",
     "compute.globalAddresses.get",
     "compute.globalForwardingRules.create",
     "compute.globalForwardingRules.delete",
     "compute.globalForwardingRules.get",
-    "compute.networkEndpointGroups.create",
-    "compute.networkEndpointGroups.delete",
-    "compute.networkEndpointGroups.get",
+    "compute.regionNetworkEndpointGroups.create",
+    "compute.regionNetworkEndpointGroups.delete",
+    "compute.regionNetworkEndpointGroups.get",
+    "compute.regionNetworkEndpointGroups.use",
     "compute.sslCertificates.create",
     "compute.sslCertificates.delete",
     "compute.sslCertificates.get",
     "compute.targetHttpsProxies.create",
     "compute.targetHttpsProxies.delete",
     "compute.targetHttpsProxies.get",
+    "compute.targetHttpsProxies.use",
     "compute.urlMaps.create",
     "compute.urlMaps.delete",
-    "compute.urlMaps.get"
+    "compute.urlMaps.get",
+    "compute.urlMaps.use"
   ]
 }
 
@@ -224,7 +228,7 @@ resource "google_project_iam_member" "gcp_role_worker_management_part2_managemen
 
 resource "google_project_iam_custom_role" "gcp_role_storage_heartbeat" {
   project     = var.gcp_project
-  role_id     = format("role_%s_storage_heartbeat_%s", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18), substr(sha1(format("%s_storage_heartbeat", replace(lower(local.resource_prefix), "-", "_"))), 0, 8))
+  role_id     = format("role_%s_storage_heartbeat", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18))
   title       = "acme-mgmt: Storage heartbeat"
   description = "Allows readonly monitoring and health checks for storage resources. Stack: acme-mgmt. Deployment prefix: ${local.resource_prefix}. Permission set: storage/heartbeat."
   stage       = "GA"

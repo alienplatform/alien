@@ -1,5 +1,6 @@
 ---
 source: crates/alien-terraform/tests/generator/helpers.rs
+assertion_line: 54
 expression: buf
 ---
 === versions.tf ===
@@ -304,7 +305,7 @@ resource "google_service_account" "execution_sa" {
 
 resource "google_project_iam_custom_role" "gcp_role_storage_data_read_part1" {
   project     = var.gcp_project
-  role_id     = format("role_%s_storage_data_read_part1_%s", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18), substr(sha1(format("%s_storage_data_read_part1", replace(lower(local.resource_prefix), "-", "_"))), 0, 8))
+  role_id     = format("role_%s_storage_data_read_part1", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18))
   title       = "full-gcp: Storage data read (part 1)"
   description = "Allows reading data from storage buckets and containers. Stack: full-gcp. Deployment prefix: ${local.resource_prefix}. Permission set: storage/data-read."
   stage       = "GA"
@@ -321,7 +322,7 @@ resource "google_project_iam_custom_role" "gcp_role_storage_data_read_part1" {
 
 resource "google_project_iam_custom_role" "gcp_role_storage_data_read_part2" {
   project     = var.gcp_project
-  role_id     = format("role_%s_storage_data_read_part2_%s", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18), substr(sha1(format("%s_storage_data_read_part2", replace(lower(local.resource_prefix), "-", "_"))), 0, 8))
+  role_id     = format("role_%s_storage_data_read_part2", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18))
   title       = "full-gcp: Storage data read (part 2)"
   description = "Allows reading data from storage buckets and containers. Stack: full-gcp. Deployment prefix: ${local.resource_prefix}. Permission set: storage/data-read."
   stage       = "GA"
@@ -342,22 +343,21 @@ resource "google_project_iam_member" "gcp_role_storage_data_read_part2_execution
   member  = "serviceAccount:${google_service_account.execution_sa.email}"
 }
 
-resource "google_project_iam_custom_role" "gcp_role_queue_data_write" {
-  project     = var.gcp_project
-  role_id     = format("role_%s_queue_data_write_%s", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18), substr(sha1(format("%s_queue_data_write", replace(lower(local.resource_prefix), "-", "_"))), 0, 8))
-  title       = "full-gcp: Queue data write"
-  description = "Allows sending messages to queues and acknowledging received messages. Stack: full-gcp. Deployment prefix: ${local.resource_prefix}. Permission set: queue/data-write."
-  stage       = "GA"
-  permissions = [
-    "pubsub.subscriptions.consume",
-    "pubsub.subscriptions.get",
-    "pubsub.topics.publish"
-  ]
+resource "google_project_iam_member" "pubsub_publisher_execution_sa_binding_0" {
+  project = var.gcp_project
+  role    = "roles/pubsub.publisher"
+  member  = "serviceAccount:${google_service_account.execution_sa.email}"
 }
 
-resource "google_project_iam_member" "gcp_role_queue_data_write_execution_sa_binding_0" {
+resource "google_project_iam_member" "pubsub_subscriber_execution_sa_binding_1" {
   project = var.gcp_project
-  role    = google_project_iam_custom_role.gcp_role_queue_data_write.name
+  role    = "roles/pubsub.subscriber"
+  member  = "serviceAccount:${google_service_account.execution_sa.email}"
+}
+
+resource "google_project_iam_member" "pubsub_viewer_execution_sa_binding_2" {
+  project = var.gcp_project
+  role    = "roles/pubsub.viewer"
   member  = "serviceAccount:${google_service_account.execution_sa.email}"
 }
 
@@ -375,7 +375,7 @@ resource "google_service_account" "management" {
 
 resource "google_project_iam_custom_role" "gcp_role_worker_management_part1" {
   project     = var.gcp_project
-  role_id     = format("role_%s_worker_management_part1_%s", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18), substr(sha1(format("%s_worker_management_part1", replace(lower(local.resource_prefix), "-", "_"))), 0, 8))
+  role_id     = format("role_%s_worker_management_part1", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18))
   title       = "full-gcp: Worker management (part 1)"
   description = "Allows managing function configuration, versions, aliases, and monitoring. Stack: full-gcp. Deployment prefix: ${local.resource_prefix}. Permission set: worker/management."
   stage       = "GA"
@@ -428,7 +428,7 @@ resource "google_project_iam_custom_role" "gcp_role_worker_management_part1" {
 
 resource "google_project_iam_custom_role" "gcp_role_worker_management_part2" {
   project     = var.gcp_project
-  role_id     = format("role_%s_worker_management_part2_%s", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18), substr(sha1(format("%s_worker_management_part2", replace(lower(local.resource_prefix), "-", "_"))), 0, 8))
+  role_id     = format("role_%s_worker_management_part2", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18))
   title       = "full-gcp: Worker management (part 2)"
   description = "Allows managing function configuration, versions, aliases, and monitoring. Stack: full-gcp. Deployment prefix: ${local.resource_prefix}. Permission set: worker/management."
   stage       = "GA"
@@ -437,24 +437,28 @@ resource "google_project_iam_custom_role" "gcp_role_worker_management_part2" {
     "compute.backendServices.delete",
     "compute.backendServices.get",
     "compute.backendServices.update",
+    "compute.backendServices.use",
     "compute.globalAddresses.create",
     "compute.globalAddresses.delete",
     "compute.globalAddresses.get",
     "compute.globalForwardingRules.create",
     "compute.globalForwardingRules.delete",
     "compute.globalForwardingRules.get",
-    "compute.networkEndpointGroups.create",
-    "compute.networkEndpointGroups.delete",
-    "compute.networkEndpointGroups.get",
+    "compute.regionNetworkEndpointGroups.create",
+    "compute.regionNetworkEndpointGroups.delete",
+    "compute.regionNetworkEndpointGroups.get",
+    "compute.regionNetworkEndpointGroups.use",
     "compute.sslCertificates.create",
     "compute.sslCertificates.delete",
     "compute.sslCertificates.get",
     "compute.targetHttpsProxies.create",
     "compute.targetHttpsProxies.delete",
     "compute.targetHttpsProxies.get",
+    "compute.targetHttpsProxies.use",
     "compute.urlMaps.create",
     "compute.urlMaps.delete",
-    "compute.urlMaps.get"
+    "compute.urlMaps.get",
+    "compute.urlMaps.use"
   ]
 }
 
@@ -472,7 +476,7 @@ resource "google_project_iam_member" "gcp_role_worker_management_part2_managemen
 
 resource "google_project_iam_custom_role" "gcp_role_storage_heartbeat" {
   project     = var.gcp_project
-  role_id     = format("role_%s_storage_heartbeat_%s", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18), substr(sha1(format("%s_storage_heartbeat", replace(lower(local.resource_prefix), "-", "_"))), 0, 8))
+  role_id     = format("role_%s_storage_heartbeat", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18))
   title       = "full-gcp: Storage heartbeat"
   description = "Allows readonly monitoring and health checks for storage resources. Stack: full-gcp. Deployment prefix: ${local.resource_prefix}. Permission set: storage/heartbeat."
   stage       = "GA"
@@ -497,7 +501,7 @@ resource "google_project_iam_member" "gcp_role_storage_heartbeat_management_bind
 
 resource "google_project_iam_custom_role" "gcp_role_queue_heartbeat" {
   project     = var.gcp_project
-  role_id     = format("role_%s_queue_heartbeat_%s", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18), substr(sha1(format("%s_queue_heartbeat", replace(lower(local.resource_prefix), "-", "_"))), 0, 8))
+  role_id     = format("role_%s_queue_heartbeat", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18))
   title       = "full-gcp: Queue heartbeat"
   description = "Allows readonly monitoring and health checks for queue resources. Stack: full-gcp. Deployment prefix: ${local.resource_prefix}. Permission set: queue/heartbeat."
   stage       = "GA"
@@ -597,7 +601,7 @@ resource "google_firestore_database" "metadata" {
 === secrets.tf ===
 resource "google_project_iam_custom_role" "gcp_role_vault_data_write_part1" {
   project     = var.gcp_project
-  role_id     = format("role_%s_vault_data_write_part1_%s", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18), substr(sha1(format("%s_vault_data_write_part1", replace(lower(local.resource_prefix), "-", "_"))), 0, 8))
+  role_id     = format("role_%s_vault_data_write_part1", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18))
   title       = "full-gcp: Vault data write (part 1)"
   description = "Allows creating, updating, and deleting individual secrets within vault. Stack: full-gcp. Deployment prefix: ${local.resource_prefix}. Permission set: vault/data-write."
   stage       = "GA"
@@ -608,14 +612,13 @@ resource "google_project_iam_custom_role" "gcp_role_vault_data_write_part1" {
 
 resource "google_project_iam_custom_role" "gcp_role_vault_data_write_part2" {
   project     = var.gcp_project
-  role_id     = format("role_%s_vault_data_write_part2_%s", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18), substr(sha1(format("%s_vault_data_write_part2", replace(lower(local.resource_prefix), "-", "_"))), 0, 8))
+  role_id     = format("role_%s_vault_data_write_part2", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18))
   title       = "full-gcp: Vault data write (part 2)"
   description = "Allows creating, updating, and deleting individual secrets within vault. Stack: full-gcp. Deployment prefix: ${local.resource_prefix}. Permission set: vault/data-write."
   stage       = "GA"
   permissions = [
     "secretmanager.secrets.delete",
-    "secretmanager.secrets.get",
-    "secretmanager.versions.add"
+    "secretmanager.secrets.get"
   ]
 }
 
@@ -625,7 +628,19 @@ resource "google_project_iam_member" "gcp_role_vault_data_write_part1_management
   member  = "serviceAccount:${google_service_account.management.email}"
 }
 
-resource "google_project_iam_member" "gcp_role_vault_data_write_part2_management_secrets_binding_1" {
+resource "google_project_iam_member" "secretmanager_secretversionadder_management_secrets_binding_1" {
+  project = var.gcp_project
+  role    = "roles/secretmanager.secretVersionAdder"
+  member  = "serviceAccount:${google_service_account.management.email}"
+
+  condition {
+    title       = "ResourceVaultSecrets"
+    description = "Limit to ResourceVaultSecrets"
+    expression  = "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${data.google_project.current.number}/secrets/${local.resource_prefix}-secrets-\")"
+  }
+}
+
+resource "google_project_iam_member" "gcp_role_vault_data_write_part2_management_secrets_binding_2" {
   project = var.gcp_project
   role    = google_project_iam_custom_role.gcp_role_vault_data_write_part2.name
   member  = "serviceAccount:${google_service_account.management.email}"
@@ -686,7 +701,9 @@ resource "time_sleep" "gcp_iam_propagation" {
   depends_on = [
     google_project_iam_member.gcp_role_storage_data_read_part1_execution_sa_binding_0,
     google_project_iam_member.gcp_role_storage_data_read_part2_execution_sa_binding_1,
-    google_project_iam_member.gcp_role_queue_data_write_execution_sa_binding_0,
+    google_project_iam_member.pubsub_publisher_execution_sa_binding_0,
+    google_project_iam_member.pubsub_subscriber_execution_sa_binding_1,
+    google_project_iam_member.pubsub_viewer_execution_sa_binding_2,
     google_project_iam_member.gcp_role_worker_management_part1_management_binding_0,
     google_project_iam_member.gcp_role_worker_management_part2_management_binding_1,
     google_project_iam_member.gcp_role_storage_heartbeat_management_binding_0,
@@ -694,7 +711,8 @@ resource "time_sleep" "gcp_iam_propagation" {
     google_service_account_iam_member.management_manager_token_creator,
     google_service_account_iam_member.management_manager_user,
     google_project_iam_member.gcp_role_vault_data_write_part1_management_secrets_binding_0,
-    google_project_iam_member.gcp_role_vault_data_write_part2_management_secrets_binding_1
+    google_project_iam_member.secretmanager_secretversionadder_management_secrets_binding_1,
+    google_project_iam_member.gcp_role_vault_data_write_part2_management_secrets_binding_2
   ]
 }
 
@@ -724,8 +742,9 @@ resource "terraform_data" "deployment_import" {
     google_project_iam_custom_role.gcp_role_storage_data_read_part2,
     google_project_iam_member.gcp_role_storage_data_read_part1_execution_sa_binding_0,
     google_project_iam_member.gcp_role_storage_data_read_part2_execution_sa_binding_1,
-    google_project_iam_custom_role.gcp_role_queue_data_write,
-    google_project_iam_member.gcp_role_queue_data_write_execution_sa_binding_0,
+    google_project_iam_member.pubsub_publisher_execution_sa_binding_0,
+    google_project_iam_member.pubsub_subscriber_execution_sa_binding_1,
+    google_project_iam_member.pubsub_viewer_execution_sa_binding_2,
     google_service_account.management,
     google_project_iam_custom_role.gcp_role_worker_management_part1,
     google_project_iam_custom_role.gcp_role_worker_management_part2,
@@ -744,7 +763,8 @@ resource "terraform_data" "deployment_import" {
     google_project_iam_custom_role.gcp_role_vault_data_write_part1,
     google_project_iam_custom_role.gcp_role_vault_data_write_part2,
     google_project_iam_member.gcp_role_vault_data_write_part1_management_secrets_binding_0,
-    google_project_iam_member.gcp_role_vault_data_write_part2_management_secrets_binding_1,
+    google_project_iam_member.secretmanager_secretversionadder_management_secrets_binding_1,
+    google_project_iam_member.gcp_role_vault_data_write_part2_management_secrets_binding_2,
     google_artifact_registry_repository.registry,
     google_service_account.registry_pull,
     google_artifact_registry_repository_iam_member.registry_pull_iam,

@@ -168,7 +168,7 @@ resource "google_service_account" "execution_sa" {
 
 resource "google_project_iam_custom_role" "gcp_role_storage_data_read_part1" {
   project     = var.gcp_project
-  role_id     = format("role_%s_storage_data_read_part1_%s", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18), substr(sha1(format("%s_storage_data_read_part1", replace(lower(local.resource_prefix), "-", "_"))), 0, 8))
+  role_id     = format("role_%s_storage_data_read_part1", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18))
   title       = "gke-overlay: Storage data read (part 1)"
   description = "Allows reading data from storage buckets and containers. Stack: gke-overlay. Deployment prefix: ${local.resource_prefix}. Permission set: storage/data-read."
   stage       = "GA"
@@ -185,7 +185,7 @@ resource "google_project_iam_custom_role" "gcp_role_storage_data_read_part1" {
 
 resource "google_project_iam_custom_role" "gcp_role_storage_data_read_part2" {
   project     = var.gcp_project
-  role_id     = format("role_%s_storage_data_read_part2_%s", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18), substr(sha1(format("%s_storage_data_read_part2", replace(lower(local.resource_prefix), "-", "_"))), 0, 8))
+  role_id     = format("role_%s_storage_data_read_part2", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18))
   title       = "gke-overlay: Storage data read (part 2)"
   description = "Allows reading data from storage buckets and containers. Stack: gke-overlay. Deployment prefix: ${local.resource_prefix}. Permission set: storage/data-read."
   stage       = "GA"

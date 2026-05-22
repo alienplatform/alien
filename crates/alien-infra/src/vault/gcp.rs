@@ -297,12 +297,14 @@ impl GcpVaultController {
                 &permission_context,
                 std::iter::once("vault/"),
             );
+        let owned_exact_roles = ResourcePermissionsHelper::gcp_predefined_role_names(&new_bindings);
         let mut all_bindings = current_policy.bindings;
         let changed = ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
             &mut all_bindings,
             new_bindings,
             &member,
             &owned_role_prefixes,
+            &owned_exact_roles,
         );
 
         if !changed {

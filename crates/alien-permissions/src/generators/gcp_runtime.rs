@@ -3,7 +3,7 @@ use crate::{
     variables::VariableInterpolator,
     BindingTarget, PermissionContext,
 };
-use alien_core::{GcpBindingSpec, PermissionSet};
+use alien_core::{GcpBindingSpec, PermissionGrant, PermissionSet};
 use serde::{Deserialize, Serialize};
 
 /// GCP IAM binding condition.
@@ -69,6 +69,16 @@ pub struct GcpIamBindings {
     pub bindings: Vec<GcpIamBinding>,
 }
 
+/// GCP grant plan generated from a permission set.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GcpGrantPlan {
+    /// Predefined and generated custom-role bindings.
+    pub bindings: Vec<GcpIamBinding>,
+    /// Residual custom roles that must exist before their bindings are applied.
+    pub custom_roles: Vec<GcpCustomRole>,
+}
+
 /// GCP custom-role planner.
 pub struct GcpRuntimePermissionsGenerator;
 
@@ -92,6 +102,15 @@ impl GcpRuntimePermissionsGenerator {
         let roles = self.generate_custom_roles(permission_set, context)?;
         if roles.len() == 1 {
             return Ok(roles.into_iter().next().expect("single role"));
+        }
+        if roles.is_empty() {
+            return Err(alien_error::AlienError::new(ErrorData::GeneratorError {
+                platform: "gcp".to_string(),
+                message: format!(
+                    "GCP permission set '{}' has no residual custom role",
+                    permission_set.id
+                ),
+            }));
         }
 
         Err(alien_error::AlienError::new(ErrorData::GeneratorError {
@@ -133,37 +152,28 @@ impl GcpRuntimePermissionsGenerator {
         }
 
         let mut roles: Vec<GcpCustomRole> = Vec::new();
-        let has_multiple_entries = gcp_platform_permissions.len() > 1;
+        let residual_entry_count = gcp_platform_permissions
+            .iter()
+            .filter(|entry| gcp_residual_permissions(&entry.grant).is_some_and(|p| !p.is_empty()))
+            .count();
+        let has_multiple_entries = residual_entry_count > 1;
+        let mut residual_index = 0usize;
         for (index, platform_permission) in gcp_platform_permissions.iter().enumerate() {
-            let permissions = platform_permission
-                .grant
-                .permissions
-                .as_ref()
-                .ok_or_else(|| {
-                    alien_error::AlienError::new(ErrorData::GeneratorError {
-                        platform: "gcp".to_string(),
-                        message: format!(
-                            "GCP permission set '{}' entry {} has no permissions",
-                            permission_set.id, index
-                        ),
-                    })
-                })?;
+            validate_gcp_grant(permission_set, index, &platform_permission.grant)?;
 
+            let Some(permissions) = gcp_residual_permissions(&platform_permission.grant) else {
+                continue;
+            };
             if permissions.is_empty() {
-                return Err(alien_error::AlienError::new(ErrorData::GeneratorError {
-                    platform: "gcp".to_string(),
-                    message: format!(
-                        "GCP permission set '{}' entry {} has an empty permissions list",
-                        permission_set.id, index
-                    ),
-                }));
+                continue;
             }
+            residual_index += 1;
 
             let role = self.custom_role_for_permissions(
                 permission_set,
                 permissions.clone(),
                 context,
-                role_part(index, has_multiple_entries),
+                role_part(residual_index - 1, has_multiple_entries),
             )?;
             if !roles
                 .iter()
@@ -207,6 +217,20 @@ impl GcpRuntimePermissionsGenerator {
         binding_target: BindingTarget,
         context: &PermissionContext,
     ) -> Result<GcpIamBindings> {
+        Ok(GcpIamBindings {
+            bindings: self
+                .generate_grant_plan(permission_set, binding_target, context)?
+                .bindings,
+        })
+    }
+
+    /// Generate the full GCP grant plan from a permission set and binding target.
+    pub fn generate_grant_plan(
+        &self,
+        permission_set: &PermissionSet,
+        binding_target: BindingTarget,
+        context: &PermissionContext,
+    ) -> Result<GcpGrantPlan> {
         let gcp_platform_permissions = permission_set.platforms.gcp.as_ref().ok_or_else(|| {
             alien_error::AlienError::new(ErrorData::PlatformNotSupported {
                 platform: "gcp".to_string(),
@@ -235,7 +259,16 @@ impl GcpRuntimePermissionsGenerator {
         );
 
         let mut bindings = Vec::new();
+        let mut custom_roles = Vec::new();
+        let residual_entry_count = gcp_platform_permissions
+            .iter()
+            .filter(|entry| gcp_residual_permissions(&entry.grant).is_some_and(|p| !p.is_empty()))
+            .count();
+        let has_multiple_entries = residual_entry_count > 1;
+        let mut residual_index = 0usize;
         for (index, platform_permission) in gcp_platform_permissions.iter().enumerate() {
+            validate_gcp_grant(permission_set, index, &platform_permission.grant)?;
+
             let binding_spec = match binding_target {
                 BindingTarget::Stack => platform_permission.binding.stack.as_ref(),
                 BindingTarget::Resource => platform_permission.binding.resource.as_ref(),
@@ -245,48 +278,51 @@ impl GcpRuntimePermissionsGenerator {
                 continue;
             };
 
-            let permissions = platform_permission
-                .grant
-                .permissions
-                .as_ref()
-                .ok_or_else(|| {
-                    alien_error::AlienError::new(ErrorData::GeneratorError {
-                        platform: "gcp".to_string(),
-                        message: format!(
-                            "GCP permission set '{}' entry {} has no permissions",
-                            permission_set.id, index
-                        ),
-                    })
-                })?;
+            let target = binding_target_scope(binding_spec);
+            let condition = self.binding_condition(binding_spec, context)?;
 
-            if permissions.is_empty() {
-                return Err(alien_error::AlienError::new(ErrorData::GeneratorError {
-                    platform: "gcp".to_string(),
-                    message: format!(
-                        "GCP permission set '{}' entry {} has an empty permissions list",
-                        permission_set.id, index
-                    ),
-                }));
+            if let Some(predefined_roles) = &platform_permission.grant.predefined_roles {
+                for predefined_role in predefined_roles {
+                    bindings.push(GcpIamBinding {
+                        role: predefined_role.clone(),
+                        members: vec![service_account.clone()],
+                        target,
+                        condition: condition.clone(),
+                    });
+                }
             }
 
+            let Some(permissions) = gcp_residual_permissions(&platform_permission.grant) else {
+                continue;
+            };
+            if permissions.is_empty() {
+                continue;
+            }
+
+            residual_index += 1;
             let custom_role = self.custom_role_for_permissions(
                 permission_set,
                 permissions.clone(),
                 context,
-                role_part(index, gcp_platform_permissions.len() > 1),
+                role_part(residual_index - 1, has_multiple_entries),
             )?;
-            let target = binding_target_scope(binding_spec);
-            let condition = self.binding_condition(binding_spec, context)?;
             bindings.push(GcpIamBinding {
-                role: custom_role.name,
+                role: custom_role.name.clone(),
                 members: vec![service_account.clone()],
                 target,
                 condition,
             });
+            if !custom_roles
+                .iter()
+                .any(|existing: &GcpCustomRole| existing.role_id == custom_role.role_id)
+            {
+                custom_roles.push(custom_role);
+            }
         }
 
-        Ok(GcpIamBindings {
+        Ok(GcpGrantPlan {
             bindings: dedupe_bindings(bindings),
+            custom_roles,
         })
     }
 
@@ -323,6 +359,66 @@ impl GcpRuntimePermissionsGenerator {
             expression: interpolated_expression,
         })
     }
+}
+
+fn gcp_residual_permissions(grant: &PermissionGrant) -> Option<&Vec<String>> {
+    grant
+        .residual_permissions
+        .as_ref()
+        .or(grant.permissions.as_ref())
+}
+
+fn validate_gcp_grant(
+    permission_set: &PermissionSet,
+    index: usize,
+    grant: &PermissionGrant,
+) -> Result<()> {
+    if let Some(predefined_roles) = &grant.predefined_roles {
+        if predefined_roles.is_empty() {
+            return Err(alien_error::AlienError::new(ErrorData::GeneratorError {
+                platform: "gcp".to_string(),
+                message: format!(
+                    "GCP permission set '{}' entry {} has an empty predefinedRoles list",
+                    permission_set.id, index
+                ),
+            }));
+        }
+        for role in predefined_roles {
+            if !role.starts_with("roles/") {
+                return Err(alien_error::AlienError::new(ErrorData::GeneratorError {
+                    platform: "gcp".to_string(),
+                    message: format!(
+                        "GCP permission set '{}' entry {} has invalid predefined role '{}'",
+                        permission_set.id, index, role
+                    ),
+                }));
+            }
+        }
+    }
+
+    if let Some(permissions) = gcp_residual_permissions(grant) {
+        if permissions.is_empty() {
+            return Err(alien_error::AlienError::new(ErrorData::GeneratorError {
+                platform: "gcp".to_string(),
+                message: format!(
+                    "GCP permission set '{}' entry {} has an empty permissions list",
+                    permission_set.id, index
+                ),
+            }));
+        }
+    }
+
+    if grant.predefined_roles.is_none() && gcp_residual_permissions(grant).is_none() {
+        return Err(alien_error::AlienError::new(ErrorData::GeneratorError {
+            platform: "gcp".to_string(),
+            message: format!(
+                "GCP permission set '{}' entry {} has no permissions",
+                permission_set.id, index
+            ),
+        }));
+    }
+
+    Ok(())
 }
 
 fn generate_role_id(

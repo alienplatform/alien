@@ -33,8 +33,6 @@
             "cloudbuild.workerpools.list",
             "cloudbuild.workerpools.use",
             "cloudbuild.workerpools.update",
-            "cloudbuild.builds.get",
-            "cloudbuild.builds.list",
             "cloudbuild.builds.update",
             "cloudbuild.operations.get",
             "cloudbuild.operations.list"
