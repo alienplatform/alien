@@ -108,6 +108,21 @@ on:
         default: azure-target-1
         options:
           - azure-target-1
+      e2e_slot:
+        description: "Shared E2E resource slot"
+        type: choice
+        default: "03"
+        options:
+          - "01"
+          - "02"
+          - "03"
+          - "04"
+          - "05"
+          - "06"
+          - "07"
+          - "08"
+          - "09"
+          - "10"
   merge_group:
   pull_request:
     types: [opened, reopened, synchronize, labeled]
@@ -116,6 +131,9 @@ permissions:
   contents: read
   id-token: write
   packages: write
+
+env:
+  ALIEN_E2E_SLOT: ${{ inputs.e2e_slot || '03' }}
 
 jobs:
   # ── Compute which tests, platforms, and architectures to run ────────
@@ -629,6 +647,8 @@ jobs:
             --aws "${{ inputs.aws_target || 'aws-target-1' }}" \
             --gcp "${{ inputs.gcp_target || 'gcp-target-3' }}" \
             --azure "${{ inputs.azure_target || 'azure-target-1' }}"
+          printf "\nALIEN_E2E_SLOT='%s'\n" "$ALIEN_E2E_SLOT" >> .env.test
+          printf "\nALIEN_E2E_SLOT='%s'\n" "$ALIEN_E2E_SLOT" >> .env.test.1password
           echo "--- verifying .env.test exists ---"
           ls -la .env.test
           wc -l .env.test
