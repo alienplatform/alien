@@ -210,6 +210,7 @@ mod tests {
             workspace_id: "default".to_string(),
             scope: Scope::Workspace,
             role: Role::WorkspaceAdmin,
+            scopes: Vec::new(),
             bearer_token: "bearer".to_string(),
         }
     }
@@ -225,6 +226,7 @@ mod tests {
                 deployment_group_id: dg_id.to_string(),
             },
             role: Role::DeploymentGroupDeployer,
+            scopes: Vec::new(),
             bearer_token: "bearer".to_string(),
         }
     }
@@ -240,6 +242,7 @@ mod tests {
                 deployment_id: deployment_id.to_string(),
             },
             role: Role::DeploymentManager,
+            scopes: Vec::new(),
             bearer_token: "bearer".to_string(),
         }
     }

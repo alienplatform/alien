@@ -146,6 +146,7 @@ fn record_to_subject(record: &crate::traits::token_store::TokenRecord, bearer: S
         workspace_id: "default".to_string(),
         scope,
         role,
+        scopes: Vec::new(),
         bearer_token: bearer,
     }
 }

@@ -48,6 +48,7 @@ fn test_subject() -> Subject {
         workspace_id: "default".to_string(),
         scope: Scope::Workspace,
         role: Role::WorkspaceAdmin,
+        scopes: Vec::new(),
         bearer_token: String::new(),
     }
 }
