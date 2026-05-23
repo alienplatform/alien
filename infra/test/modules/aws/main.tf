@@ -5,12 +5,17 @@ terraform {
       version               = "~> 5.0"
       configuration_aliases = [aws.management, aws.target]
     }
+    helm   = { source = "hashicorp/helm", version = "~> 2.0" }
     random = { source = "hashicorp/random", version = "~> 3.0" }
   }
 }
 
 resource "random_id" "suffix" {
   byte_length = 4
+}
+
+locals {
+  e2e_eks_cluster_name = var.e2e_eks_cluster_name != "" ? var.e2e_eks_cluster_name : "alien-e2e-${random_id.suffix.hex}"
 }
 
 data "aws_availability_zones" "target" {
@@ -49,7 +54,9 @@ resource "aws_subnet" "e2e_public" {
   map_public_ip_on_launch = true
 
   tags = {
-    Name = "alien-e2e-public-${count.index + 1}-${random_id.suffix.hex}"
+    Name                                                  = "alien-e2e-public-${count.index + 1}-${random_id.suffix.hex}"
+    "kubernetes.io/cluster/${local.e2e_eks_cluster_name}" = "shared"
+    "kubernetes.io/role/elb"                              = "1"
   }
 }
 
@@ -61,7 +68,9 @@ resource "aws_subnet" "e2e_private" {
   availability_zone = data.aws_availability_zones.target.names[count.index]
 
   tags = {
-    Name = "alien-e2e-private-${count.index + 1}-${random_id.suffix.hex}"
+    Name                                                  = "alien-e2e-private-${count.index + 1}-${random_id.suffix.hex}"
+    "kubernetes.io/cluster/${local.e2e_eks_cluster_name}" = "shared"
+    "kubernetes.io/role/internal-elb"                     = "1"
   }
 }
 
@@ -151,6 +160,205 @@ resource "aws_security_group" "e2e" {
   tags = {
     Name = "alien-e2e-${random_id.suffix.hex}"
   }
+}
+
+# ── Target: shared EKS cluster for Terraform -> Helm E2Es ────────────────────
+
+resource "aws_iam_role" "e2e_eks_cluster" {
+  provider = aws.target
+  name     = "alien-e2e-eks-cluster-${random_id.suffix.hex}"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "eks.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "e2e_eks_cluster" {
+  provider   = aws.target
+  role       = aws_iam_role.e2e_eks_cluster.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
+}
+
+resource "aws_iam_role_policy_attachment" "e2e_eks_auto_mode_cluster" {
+  provider = aws.target
+  for_each = toset([
+    "arn:aws:iam::aws:policy/AmazonEKSBlockStoragePolicy",
+    "arn:aws:iam::aws:policy/AmazonEKSComputePolicy",
+    "arn:aws:iam::aws:policy/AmazonEKSLoadBalancingPolicy",
+    "arn:aws:iam::aws:policy/AmazonEKSNetworkingPolicy",
+  ])
+
+  role       = aws_iam_role.e2e_eks_cluster.name
+  policy_arn = each.value
+}
+
+resource "aws_iam_role" "e2e_eks_node" {
+  provider = aws.target
+  name     = "alien-e2e-eks-node-${random_id.suffix.hex}"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "ec2.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "e2e_eks_node" {
+  provider = aws.target
+  for_each = toset([
+    "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPullOnly",
+    "arn:aws:iam::aws:policy/AmazonEKSWorkerNodeMinimalPolicy",
+  ])
+
+  role       = aws_iam_role.e2e_eks_node.name
+  policy_arn = each.value
+}
+
+resource "aws_eks_cluster" "e2e" {
+  provider                      = aws.target
+  name                          = local.e2e_eks_cluster_name
+  role_arn                      = aws_iam_role.e2e_eks_cluster.arn
+  version                       = var.e2e_eks_kubernetes_version
+  bootstrap_self_managed_addons = false
+
+  vpc_config {
+    subnet_ids              = concat(aws_subnet.e2e_public[*].id, aws_subnet.e2e_private[*].id)
+    endpoint_public_access  = true
+    endpoint_private_access = true
+  }
+
+  access_config {
+    authentication_mode                         = "API_AND_CONFIG_MAP"
+    bootstrap_cluster_creator_admin_permissions = true
+  }
+
+  compute_config {
+    enabled       = true
+    node_pools    = ["general-purpose", "system"]
+    node_role_arn = aws_iam_role.e2e_eks_node.arn
+  }
+
+  kubernetes_network_config {
+    elastic_load_balancing {
+      enabled = true
+    }
+  }
+
+  storage_config {
+    block_storage {
+      enabled = true
+    }
+  }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.e2e_eks_cluster,
+    aws_iam_role_policy_attachment.e2e_eks_auto_mode_cluster,
+    aws_iam_role_policy_attachment.e2e_eks_node,
+  ]
+}
+
+resource "aws_eip" "e2e_ingress" {
+  provider = aws.target
+  count    = length(aws_subnet.e2e_public)
+  domain   = "vpc"
+
+  tags = {
+    Name = "alien-e2e-ingress-${count.index + 1}-${random_id.suffix.hex}"
+  }
+}
+
+provider "helm" {
+  kubernetes {
+    host                   = aws_eks_cluster.e2e.endpoint
+    cluster_ca_certificate = base64decode(aws_eks_cluster.e2e.certificate_authority[0].data)
+
+    exec {
+      api_version = "client.authentication.k8s.io/v1beta1"
+      command     = "aws"
+      args        = ["eks", "get-token", "--cluster-name", aws_eks_cluster.e2e.name, "--region", var.target_region]
+      env = {
+        AWS_ACCESS_KEY_ID     = aws_iam_access_key.target.id
+        AWS_SECRET_ACCESS_KEY = aws_iam_access_key.target.secret
+      }
+    }
+  }
+}
+
+resource "helm_release" "e2e_ingress_nginx" {
+  name             = "ingress-nginx"
+  repository       = "https://kubernetes.github.io/ingress-nginx"
+  chart            = "ingress-nginx"
+  version          = var.e2e_ingress_nginx_chart_version
+  namespace        = "ingress-nginx"
+  create_namespace = true
+  wait             = true
+  timeout          = 600
+
+  values = [
+    yamlencode({
+      controller = {
+        ingressClass = var.e2e_k8s_ingress_class
+        ingressClassResource = {
+          enabled = true
+          name    = var.e2e_k8s_ingress_class
+        }
+        service = {
+          type = "LoadBalancer"
+          annotations = {
+            "service.beta.kubernetes.io/aws-load-balancer-eip-allocations" = join(",", aws_eip.e2e_ingress[*].id)
+            "service.beta.kubernetes.io/aws-load-balancer-nlb-target-type" = "ip"
+            "service.beta.kubernetes.io/aws-load-balancer-scheme"          = "internet-facing"
+            "service.beta.kubernetes.io/aws-load-balancer-subnets"         = join(",", aws_subnet.e2e_public[*].id)
+          }
+        }
+        resources = {
+          requests = {
+            cpu    = "100m"
+            memory = "128Mi"
+          }
+          limits = {
+            cpu    = "500m"
+            memory = "512Mi"
+          }
+        }
+        admissionWebhooks = {
+          enabled = false
+        }
+      }
+    })
+  ]
+
+  depends_on = [
+    aws_eks_access_policy_association.e2e_target_admin,
+  ]
+}
+
+resource "aws_eks_access_entry" "e2e_target" {
+  provider      = aws.target
+  cluster_name  = aws_eks_cluster.e2e.name
+  principal_arn = aws_iam_user.target.arn
+  type          = "STANDARD"
+}
+
+resource "aws_eks_access_policy_association" "e2e_target_admin" {
+  provider      = aws.target
+  cluster_name  = aws_eks_cluster.e2e.name
+  principal_arn = aws_iam_user.target.arn
+  policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+
+  access_scope {
+    type = "cluster"
+  }
+
+  depends_on = [aws_eks_access_entry.e2e_target]
 }
 
 # ── Management: IAM user ──────────────────────────────────────────────────────

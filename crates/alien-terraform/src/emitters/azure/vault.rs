@@ -12,17 +12,15 @@
 //!   module doesn't need an extra customer-supplied variable.
 
 use crate::{
-    block::{attr, block, data_block, nested, resource_block},
+    block::{attr, data_block, resource_block},
     emitter::{TfEmitter, TfFragment},
-    emitters::azure::helpers::{downcast, permission_context, required_label, tags},
+    emitters::azure::helpers::{downcast, required_label, setup_management_role_label, tags},
     expr,
 };
 use alien_core::{
-    import::EmitContext, ErrorData, PermissionProfile, PermissionSet, PermissionSetReference,
+    import::EmitContext, PermissionProfile, PermissionSet, PermissionSetReference,
     RemoteStackManagement, Result, Vault,
 };
-use alien_error::Context;
-use alien_permissions::{generators::AzureRuntimePermissionsGenerator, BindingTarget};
 use hcl::expr::Expression;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -127,8 +125,6 @@ fn emit_management_permissions(
         return Ok(());
     };
 
-    let context = permission_context(management_label)
-        .with_resource_name(format!("${{azurerm_key_vault.{vault_label}.name}}"));
     let principal_id_expr = expr::traversal([
         "azurerm_user_assigned_identity",
         management_label,
@@ -145,10 +141,7 @@ fn emit_management_permissions(
             continue;
         }
 
-        let role_label = management_role_label(management_label, &permission_set.id);
-        if should_emit_shared_role_definition(ctx, &permission_set.id) {
-            emit_management_role_definition(fragment, &role_label, &permission_set, &context)?;
-        }
+        let role_label = setup_management_role_label(&permission_set.id);
         emit_management_role_assignment(
             fragment,
             ctx.resource_id,
@@ -158,66 +151,6 @@ fn emit_management_permissions(
             &permission_set,
         );
     }
-
-    Ok(())
-}
-
-fn emit_management_role_definition(
-    fragment: &mut TfFragment,
-    role_label: &str,
-    permission_set: &PermissionSet,
-    context: &alien_permissions::PermissionContext,
-) -> Result<()> {
-    let generator = AzureRuntimePermissionsGenerator::new();
-    let mut role_definition = generator
-        .generate_role_definition(permission_set, BindingTarget::Resource, context)
-        .context(ErrorData::GenericError {
-            message: format!(
-                "failed to generate Azure management role permissions for '{}'",
-                permission_set.id
-            ),
-        })?;
-    role_definition.name = format!("{} [mgmt]", role_definition.name);
-
-    fragment.resource_blocks.push(resource_block(
-        "azurerm_role_definition",
-        role_label,
-        [
-            attr("name", expr::template(role_definition.name)),
-            attr(
-                "role_definition_id",
-                expr::raw(&format!(
-                    "uuidv5(\"oid\", \"deployment:azure:mgmt-res-role-def:${{local.resource_prefix}}:{}\")",
-                    permission_set.id
-                )),
-            ),
-            attr(
-                "scope",
-                expr::raw(
-                    "\"/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}\"",
-                ),
-            ),
-            attr("description", Expression::String(role_definition.description)),
-            nested(block(
-                "permissions",
-                [
-                    attr("actions", string_array(role_definition.actions)),
-                    attr("data_actions", string_array(role_definition.data_actions)),
-                    attr("not_actions", string_array(role_definition.not_actions)),
-                    attr(
-                        "not_data_actions",
-                        string_array(role_definition.not_data_actions),
-                    ),
-                ],
-            )),
-            attr(
-                "assignable_scopes",
-                Expression::Array(vec![expr::raw(
-                    "\"/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}\"",
-                )]),
-            ),
-        ],
-    ));
 
     Ok(())
 }
@@ -294,62 +227,4 @@ fn resource_permission_refs<'a>(
         .get(resource_id)
         .map(|refs| refs.iter().collect())
         .unwrap_or_default()
-}
-
-fn should_emit_shared_role_definition(ctx: &EmitContext<'_>, permission_set_id: &str) -> bool {
-    ctx.stack
-        .resources()
-        .find_map(|(resource_id, entry)| {
-            if entry.config.resource_type() != Vault::RESOURCE_TYPE {
-                return None;
-            }
-            let refs = management_permission_refs_for_resource(ctx, resource_id);
-            refs.iter()
-                .any(|reference| reference.id() == permission_set_id)
-                .then_some(resource_id.as_str())
-        })
-        .is_some_and(|resource_id| resource_id == ctx.resource_id)
-}
-
-fn management_permission_refs_for_resource<'a>(
-    ctx: &'a EmitContext<'_>,
-    resource_id: &str,
-) -> Vec<&'a PermissionSetReference> {
-    let Some(profile) = ctx.stack.management().profile() else {
-        return Vec::new();
-    };
-    let mut refs = Vec::new();
-    refs.extend(resource_permission_refs(profile, resource_id));
-    refs.extend(
-        profile
-            .0
-            .get("*")
-            .into_iter()
-            .flat_map(|items| items.iter())
-            .filter(|reference| reference.id().starts_with("vault/")),
-    );
-    refs
-}
-
-fn management_role_label(management_label: &str, permission_set_id: &str) -> String {
-    format!(
-        "{management_label}_management_{}",
-        sanitize_role_label(permission_set_id)
-    )
-}
-
-fn string_array(items: Vec<String>) -> Expression {
-    Expression::Array(items.into_iter().map(Expression::String).collect())
-}
-
-fn sanitize_role_label(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    for ch in input.chars() {
-        if ch.is_ascii_alphanumeric() {
-            out.push(ch.to_ascii_lowercase());
-        } else {
-            out.push('_');
-        }
-    }
-    out
 }

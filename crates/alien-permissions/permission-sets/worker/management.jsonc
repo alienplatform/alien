@@ -406,13 +406,13 @@
             "iam.serviceAccounts.setIamPolicy"
           ]
         },
-        // Cloud Run does not support IAM conditions (resource.name/resource.type) for any operation.
-        // All conditions silently fail. Stack: scope-only. Resource: scoped to specific service.
+        // This permission set covers Cloud Run, Pub/Sub, IAM, and related
+        // project-level APIs. It cannot be attached to a Cloud Run service IAM
+        // policy; resource-targeted grants are still bound at project scope and
+        // are limited by the stack role/prefix contract.
         "binding": {
           "stack": { "scope": "projects/${projectName}" },
-          "resource": {
-            "scope": "projects/${projectName}/locations/${region}/services/${resourceName}"
-          }
+          "resource": { "scope": "projects/${projectName}" }
         }
       },
       {

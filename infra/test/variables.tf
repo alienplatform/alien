@@ -89,23 +89,15 @@ variable "google_target_1_region" {
   default     = "us-east4"
 }
 
-variable "google_target_3_enabled" {
-  description = "Whether to provision GCP target-3"
-  type        = bool
-  default     = true
-}
-
 variable "google_target_3_service_account_key" {
   description = "GCP target-3 project service account key JSON"
   type        = string
   sensitive   = true
-  default     = ""
 }
 
 variable "google_target_3_project_id" {
   description = "GCP target-3 project ID"
   type        = string
-  default     = ""
 }
 
 variable "google_target_3_region" {
@@ -180,11 +172,11 @@ variable "e2e_k8s_namespace_prefix" {
 variable "e2e_k8s_ingress_class" {
   description = "IngressClass name used by Kubernetes distribution E2Es."
   type        = string
-  default     = ""
+  default     = "nginx"
 }
 
 variable "e2e_k8s_public_host_suffix" {
-  description = "DNS suffix for per-test Kubernetes public hosts."
+  description = "Optional DNS suffix override for per-test Kubernetes public hosts. If empty, infra/test emits a static-IP sslip.io suffix per cluster."
   type        = string
   default     = ""
 }
@@ -207,6 +199,12 @@ variable "e2e_eks_kube_context" {
   default     = ""
 }
 
+variable "e2e_eks_kubernetes_version" {
+  description = "Kubernetes version for the shared EKS cluster."
+  type        = string
+  default     = "1.35"
+}
+
 variable "e2e_gke_cluster_name" {
   description = "Shared GKE cluster name for Terraform GKE Helm E2Es."
   type        = string
@@ -225,6 +223,12 @@ variable "e2e_gke_kube_context" {
   default     = ""
 }
 
+variable "e2e_gke_release_channel" {
+  description = "GKE release channel for the shared GKE cluster."
+  type        = string
+  default     = "RAPID"
+}
+
 variable "e2e_aks_cluster_name" {
   description = "Shared AKS cluster name for Terraform AKS Helm E2Es."
   type        = string
@@ -241,4 +245,16 @@ variable "e2e_aks_kube_context" {
   description = "Optional kubeconfig context for the shared AKS cluster."
   type        = string
   default     = ""
+}
+
+variable "e2e_aks_kubernetes_version" {
+  description = "Kubernetes version for the shared AKS cluster."
+  type        = string
+  default     = "1.35"
+}
+
+variable "e2e_ingress_nginx_chart_version" {
+  description = "ingress-nginx Helm chart version installed into shared Kubernetes E2E clusters."
+  type        = string
+  default     = "4.15.1"
 }

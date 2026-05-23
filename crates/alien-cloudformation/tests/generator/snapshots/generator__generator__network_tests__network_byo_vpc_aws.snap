@@ -1,5 +1,6 @@
 ---
 source: crates/alien-cloudformation/tests/generator/network_tests.rs
+assertion_line: 62
 expression: yaml
 ---
 AWSTemplateFormatVersion: 2010-09-09
@@ -227,18 +228,18 @@ Outputs:
               - HasVpcCidr
               - Ref: VpcCidr
               - Ref: AWS::NoValue
-            availabilityZones:
+            availability_zones:
               Ref: AvailabilityZones
           - Fn::If:
             - NetworkModeUseExisting
             - type: byo-vpc-aws
-              vpcId:
+              vpc_id:
                 Ref: VpcId
-              publicSubnetIds:
+              public_subnet_ids:
                 Ref: PublicSubnetIds
-              privateSubnetIds:
+              private_subnet_ids:
                 Ref: PrivateSubnetIds
-              securityGroupIds:
+              security_group_ids:
                 Ref: SecurityGroupIds
             - type: use-default
         domains:

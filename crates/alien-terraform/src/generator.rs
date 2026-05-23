@@ -204,10 +204,11 @@ pub fn generate_terraform_module(
         )?;
     }
     if matches!(platform, alien_core::Platform::Gcp) {
-        dedupe_gcp_custom_role_resources(&mut per_resource);
+        dedupe_gcp_support_resources(&mut per_resource)?;
     }
     apply_resource_dependencies(stack, &mut per_resource);
     if matches!(platform, alien_core::Platform::Azure) {
+        emit_azure_setup_resource_role_definitions(&mut per_resource, stack)?;
         apply_azure_resource_group_dependency(stack, &labels, &mut per_resource);
     }
     let gcp_iam_propagation_dependencies = if matches!(platform, alien_core::Platform::Gcp) {
@@ -308,25 +309,81 @@ pub fn generate_terraform_module(
     Ok(module)
 }
 
-fn dedupe_gcp_custom_role_resources(per_resource: &mut IndexMap<String, TfFragment>) {
-    let mut seen = HashSet::new();
+fn emit_azure_setup_resource_role_definitions(
+    per_resource: &mut IndexMap<String, TfFragment>,
+    stack: &Stack,
+) -> Result<()> {
+    let Some((_resource_id, fragment)) = per_resource.iter_mut().next() else {
+        return Ok(());
+    };
+
+    crate::emitters::azure::helpers::emit_setup_resource_role_definitions(stack, fragment)
+}
+
+fn dedupe_gcp_support_resources(per_resource: &mut IndexMap<String, TfFragment>) -> Result<()> {
+    let mut seen_custom_roles = HashSet::new();
+    let mut seen_iam_member_grants = HashSet::new();
+    let mut seen_resource_addresses: IndexMap<String, Block> = IndexMap::new();
+
     for fragment in per_resource.values_mut() {
-        fragment.resource_blocks.retain(|resource| {
+        let mut retained = Vec::with_capacity(fragment.resource_blocks.len());
+        for resource in std::mem::take(&mut fragment.resource_blocks) {
             if resource.identifier.as_str() != "resource" {
-                return true;
+                retained.push(resource);
+                continue;
             }
+
             let Some(provider_type) = resource.labels.first().map(|label| label.as_str()) else {
-                return true;
+                retained.push(resource);
+                continue;
             };
-            if provider_type != "google_project_iam_custom_role" {
-                return true;
-            }
+
             let Some(label) = resource.labels.get(1).map(|label| label.as_str()) else {
-                return true;
+                retained.push(resource);
+                continue;
             };
-            seen.insert(label.to_string())
-        });
+
+            let address = format!("{provider_type}.{label}");
+            if let Some(existing) = seen_resource_addresses.get(&address) {
+                if existing != &resource {
+                    return Err(AlienError::new(ErrorData::GenericError {
+                        message: format!(
+                            "generated conflicting Terraform resources for GCP support resource '{address}'"
+                        ),
+                    }));
+                }
+                continue;
+            }
+            seen_resource_addresses.insert(address, resource.clone());
+
+            if provider_type == "google_project_iam_custom_role" {
+                if seen_custom_roles.insert(label.to_string()) {
+                    retained.push(resource);
+                }
+                continue;
+            }
+
+            if provider_type.ends_with("_iam_member") {
+                let grant_key = format!(
+                    "{provider_type}:{}",
+                    terraform_body_identity(&resource.body)
+                );
+                if seen_iam_member_grants.insert(grant_key) {
+                    retained.push(resource);
+                }
+                continue;
+            }
+
+            retained.push(resource);
+        }
+        fragment.resource_blocks = retained;
     }
+
+    Ok(())
+}
+
+fn terraform_body_identity(body: &Body) -> String {
+    format!("{body:?}")
 }
 
 fn fragment_to_body(fragment: TfFragment) -> Body {

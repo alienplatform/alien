@@ -901,9 +901,17 @@ export type DeploymentDetailResponseOverrideAwGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -971,9 +979,17 @@ export type DeploymentDetailResponseOverrideAzureGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -1071,9 +1087,17 @@ export type DeploymentDetailResponseOverrideGcpGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -1212,9 +1236,17 @@ export type DeploymentDetailResponseExtendAwGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -1282,9 +1314,17 @@ export type DeploymentDetailResponseExtendAzureGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -1382,9 +1422,17 @@ export type DeploymentDetailResponseExtendGcpGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -1531,9 +1579,17 @@ export type DeploymentDetailResponseProfileAwGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -1601,9 +1657,17 @@ export type DeploymentDetailResponseProfileAzureGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -1701,9 +1765,17 @@ export type DeploymentDetailResponseProfileGcpGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -3300,6 +3372,8 @@ export const DeploymentDetailResponseOverrideAwGrant$inboundSchema: z.ZodType<
   actions: z.nullable(z.array(z.string())).optional(),
   dataActions: z.nullable(z.array(z.string())).optional(),
   permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
 });
 
 export function deploymentDetailResponseOverrideAwGrantFromJSON(
@@ -3418,6 +3492,8 @@ export const DeploymentDetailResponseOverrideAzureGrant$inboundSchema:
     actions: z.nullable(z.array(z.string())).optional(),
     dataActions: z.nullable(z.array(z.string())).optional(),
     permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
   });
 
 export function deploymentDetailResponseOverrideAzureGrantFromJSON(
@@ -3654,6 +3730,8 @@ export const DeploymentDetailResponseOverrideGcpGrant$inboundSchema: z.ZodType<
   actions: z.nullable(z.array(z.string())).optional(),
   dataActions: z.nullable(z.array(z.string())).optional(),
   permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
 });
 
 export function deploymentDetailResponseOverrideGcpGrantFromJSON(
@@ -3880,6 +3958,8 @@ export const DeploymentDetailResponseExtendAwGrant$inboundSchema: z.ZodType<
   actions: z.nullable(z.array(z.string())).optional(),
   dataActions: z.nullable(z.array(z.string())).optional(),
   permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
 });
 
 export function deploymentDetailResponseExtendAwGrantFromJSON(
@@ -3993,6 +4073,8 @@ export const DeploymentDetailResponseExtendAzureGrant$inboundSchema: z.ZodType<
   actions: z.nullable(z.array(z.string())).optional(),
   dataActions: z.nullable(z.array(z.string())).optional(),
   permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
 });
 
 export function deploymentDetailResponseExtendAzureGrantFromJSON(
@@ -4223,6 +4305,8 @@ export const DeploymentDetailResponseExtendGcpGrant$inboundSchema: z.ZodType<
   actions: z.nullable(z.array(z.string())).optional(),
   dataActions: z.nullable(z.array(z.string())).optional(),
   permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
 });
 
 export function deploymentDetailResponseExtendGcpGrantFromJSON(
@@ -4468,6 +4552,8 @@ export const DeploymentDetailResponseProfileAwGrant$inboundSchema: z.ZodType<
   actions: z.nullable(z.array(z.string())).optional(),
   dataActions: z.nullable(z.array(z.string())).optional(),
   permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
 });
 
 export function deploymentDetailResponseProfileAwGrantFromJSON(
@@ -4581,6 +4667,8 @@ export const DeploymentDetailResponseProfileAzureGrant$inboundSchema: z.ZodType<
   actions: z.nullable(z.array(z.string())).optional(),
   dataActions: z.nullable(z.array(z.string())).optional(),
   permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
 });
 
 export function deploymentDetailResponseProfileAzureGrantFromJSON(
@@ -4814,6 +4902,8 @@ export const DeploymentDetailResponseProfileGcpGrant$inboundSchema: z.ZodType<
   actions: z.nullable(z.array(z.string())).optional(),
   dataActions: z.nullable(z.array(z.string())).optional(),
   permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
 });
 
 export function deploymentDetailResponseProfileGcpGrantFromJSON(

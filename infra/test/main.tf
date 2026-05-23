@@ -8,6 +8,11 @@ module "aws" {
 
   management_region = var.aws_management_region
   target_region     = var.aws_target_region
+
+  e2e_k8s_ingress_class           = var.e2e_k8s_ingress_class
+  e2e_eks_cluster_name            = var.e2e_eks_cluster_name
+  e2e_eks_kubernetes_version      = var.e2e_eks_kubernetes_version
+  e2e_ingress_nginx_chart_version = var.e2e_ingress_nginx_chart_version
 }
 
 module "gcp" {
@@ -22,6 +27,11 @@ module "gcp" {
   management_region     = var.google_management_region
   target_project_id     = var.google_target_project_id
   target_region         = var.google_target_region
+
+  e2e_k8s_ingress_class           = var.e2e_k8s_ingress_class
+  e2e_gke_cluster_name            = var.e2e_gke_cluster_name
+  e2e_gke_release_channel         = var.e2e_gke_release_channel
+  e2e_ingress_nginx_chart_version = var.e2e_ingress_nginx_chart_version
 }
 
 module "gcp_target_1" {
@@ -35,10 +45,14 @@ module "gcp_target_1" {
   management_project_id = var.google_management_project_id
   target_project_id     = var.google_target_1_project_id
   target_region         = var.google_target_1_region
+
+  e2e_k8s_ingress_class           = var.e2e_k8s_ingress_class
+  e2e_gke_cluster_name            = var.e2e_gke_cluster_name
+  e2e_gke_release_channel         = var.e2e_gke_release_channel
+  e2e_ingress_nginx_chart_version = var.e2e_ingress_nginx_chart_version
 }
 
 module "gcp_target_3" {
-  count  = var.google_target_3_enabled ? 1 : 0
   source = "./modules/gcp-target"
 
   providers = {
@@ -49,6 +63,11 @@ module "gcp_target_3" {
   management_project_id = var.google_management_project_id
   target_project_id     = var.google_target_3_project_id
   target_region         = var.google_target_3_region
+
+  e2e_k8s_ingress_class           = var.e2e_k8s_ingress_class
+  e2e_gke_cluster_name            = var.e2e_gke_cluster_name
+  e2e_gke_release_channel         = var.e2e_gke_release_channel
+  e2e_ingress_nginx_chart_version = var.e2e_ingress_nginx_chart_version
 }
 
 module "azure" {
@@ -57,6 +76,7 @@ module "azure" {
   providers = {
     azurerm.management = azurerm.management
     azurerm.target     = azurerm.target
+    azapi.target       = azapi.target
     azuread.management = azuread
   }
 
@@ -69,6 +89,11 @@ module "azure" {
   target_tenant_id           = var.azure_target_tenant_id
   target_client_id           = var.azure_target_client_id
   target_client_secret       = var.azure_target_client_secret
+
+  e2e_k8s_ingress_class           = var.e2e_k8s_ingress_class
+  e2e_aks_cluster_name            = var.e2e_aks_cluster_name
+  e2e_aks_kubernetes_version      = var.e2e_aks_kubernetes_version
+  e2e_ingress_nginx_chart_version = var.e2e_ingress_nginx_chart_version
 }
 
 data "aws_caller_identity" "management" {

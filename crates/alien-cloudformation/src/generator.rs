@@ -853,7 +853,7 @@ fn add_custom_resource(
     // post-rendering.
     resource.properties = indexmap! {
         "ServiceToken".to_string() => service_token,
-        "Token".to_string() => CfExpression::ref_(PARAM_TOKEN),
+        "DeploymentGroupToken".to_string() => CfExpression::ref_(PARAM_TOKEN),
         "DeploymentName".to_string() => CfExpression::ref_("AWS::StackName"),
         "ResourcePrefix".to_string() => CfExpression::ref_("AWS::StackName"),
         "SourceKind".to_string() => CfExpression::from("cloudformation"),
@@ -1057,7 +1057,7 @@ fn network_expression(network: Option<&NetworkSettings>) -> CfExpression {
                     ),
                 ),
                 (
-                    "availabilityZones",
+                    "availability_zones",
                     CfExpression::ref_(PARAM_AVAILABILITY_ZONES),
                 ),
             ]),
@@ -1065,17 +1065,17 @@ fn network_expression(network: Option<&NetworkSettings>) -> CfExpression {
                 CONDITION_NETWORK_MODE_USE_EXISTING,
                 CfExpression::object([
                     ("type", CfExpression::from("byo-vpc-aws")),
-                    ("vpcId", CfExpression::ref_(PARAM_VPC_ID)),
+                    ("vpc_id", CfExpression::ref_(PARAM_VPC_ID)),
                     (
-                        "publicSubnetIds",
+                        "public_subnet_ids",
                         CfExpression::ref_(PARAM_PUBLIC_SUBNET_IDS),
                     ),
                     (
-                        "privateSubnetIds",
+                        "private_subnet_ids",
                         CfExpression::ref_(PARAM_PRIVATE_SUBNET_IDS),
                     ),
                     (
-                        "securityGroupIds",
+                        "security_group_ids",
                         CfExpression::ref_(PARAM_SECURITY_GROUP_IDS),
                     ),
                 ]),

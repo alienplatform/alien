@@ -525,6 +525,7 @@ pub enum ClientConfig {
     Kubernetes(Box<KubernetesClientConfig>),
     KubernetesCloud {
         kubernetes: Box<KubernetesClientConfig>,
+        #[cfg_attr(feature = "openapi", schema(value_type = Object))]
         cloud: Box<ClientConfig>,
     },
     Local {

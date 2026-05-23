@@ -11,9 +11,6 @@ use alien_azure_clients::authorization::{AuthorizationApi, Scope};
 use alien_azure_clients::models::authorization_role_assignments::{
     RoleAssignment, RoleAssignmentProperties, RoleAssignmentPropertiesPrincipalType,
 };
-use alien_azure_clients::models::authorization_role_definitions::{
-    Permission, RoleDefinition, RoleDefinitionProperties,
-};
 use alien_error::{AlienError, Context};
 use alien_permissions::{
     generators::AzureRuntimePermissionsGenerator, BindingTarget, PermissionContext,
@@ -45,9 +42,8 @@ impl AzurePermissionsHelper {
     ///
     /// This method:
     /// 1. Finds permission profiles that apply to the resource
-    /// 2. Generates role definitions and assignments for each permission set
-    /// 3. Creates/updates role definitions in Azure
-    /// 4. Creates role assignments for the managed identities
+    /// 2. Resolves setup-owned role definition IDs for each permission set
+    /// 3. Creates role assignments for the managed identities
     ///
     /// # Arguments
     /// * `ctx` - Resource controller context
@@ -144,10 +140,10 @@ impl AzurePermissionsHelper {
         let managed_identity_principal_id =
             Self::get_managed_identity_principal_id_for_profile(ctx, profile_name)?;
 
-        // Prepare all permission set futures, then execute in parallel.
-        // Each permission set creates a role definition then a role assignment.
-        // Sets are independent (different UUIDs), so they can run concurrently.
-        // All operations are idempotent (deterministic UUIDs + create_or_update).
+        // Prepare all permission set futures, then execute in parallel. Runtime
+        // reconciliation only creates role assignments. The custom role
+        // definitions are setup-owned and must already exist from Terraform,
+        // CloudFormation-equivalent setup, or CLI setup.
         let azure_config = ctx.get_azure_config()?;
         let role_definition_scope =
             Self::role_definition_scope_for_assignment_scope(resource_scope);
@@ -172,7 +168,7 @@ impl AzurePermissionsHelper {
                         })
                     })?;
 
-                let mut azure_role_definition = generator
+                let azure_role_definition = generator
                     .generate_role_definition(
                         &permission_set,
                         BindingTarget::Resource,
@@ -186,52 +182,27 @@ impl AzurePermissionsHelper {
                         resource_id: Some(profile_name.to_string()),
                     })?;
 
-                let role_definition_scope_string =
-                    format!("/{}", role_definition_scope.to_scope_string(&azure_config));
-                azure_role_definition.assignable_scopes =
-                    vec![role_definition_scope_string.clone()];
-
                 info!(
                     profile = %profile_name,
                     managed_identity = %managed_identity_id,
                     permission_set = %permission_set.id,
                     role_name = %azure_role_definition.name,
-                    "Applying Azure role definition and assignment"
+                    "Applying Azure role assignment to setup-owned role definition"
                 );
 
-                // Deterministic UUID keyed on (prefix, profile, permission_set) — NOT on
-                // resource_id — so that every resource using the same permission set
-                // shares a single role definition.
+                // Must match the Terraform setup emitter exactly. The definition
+                // is intentionally keyed on (prefix, profile, permission_set),
+                // not resource_id, so every resource using the same permission
+                // set shares one setup-owned role definition.
                 let role_definition_id = Uuid::new_v5(
                     &Uuid::NAMESPACE_OID,
                     format!(
-                        "alien:azure:res-role-def:{}:{}:{}",
+                        "deployment:azure:res-role-def:{}:{}:{}",
                         ctx.resource_prefix, profile_name, permission_set.id
                     )
                     .as_bytes(),
                 )
                 .to_string();
-
-                Self::create_or_update_role_definition(
-                    &authorization_client,
-                    &role_definition_scope,
-                    &role_definition_id,
-                    &azure_role_definition,
-                )
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to create role definition for permission set '{}'",
-                        permission_set.id
-                    ),
-                    resource_id: Some(resource_id.to_string()),
-                })?;
-
-                info!(
-                    role_definition_id = %role_definition_id,
-                    role_name = %azure_role_definition.name,
-                    "Successfully created/updated Azure role definition"
-                );
 
                 // Deterministic UUID for the role assignment.
                 let role_assignment_id = Uuid::new_v5(
@@ -279,55 +250,6 @@ impl AzurePermissionsHelper {
         });
 
         futures::future::try_join_all(futures).await?;
-
-        Ok(())
-    }
-
-    /// Create or update an Azure role definition at subscription scope.
-    ///
-    /// All callers use subscription-level `assignableScopes` (Azure's
-    /// recommended approach), so multiple resources sharing the same
-    /// permission set produce identical role definitions. The PUT is
-    /// idempotent — no GET-then-merge needed.
-    async fn create_or_update_role_definition(
-        authorization_client: &Arc<dyn AuthorizationApi>,
-        scope: &Scope,
-        role_definition_id: &str,
-        azure_role_definition: &alien_permissions::generators::AzureRoleDefinition,
-    ) -> Result<()> {
-        let role_definition = RoleDefinition {
-            id: None,
-            name: None,
-            type_: None,
-            properties: Some(RoleDefinitionProperties {
-                role_name: Some(azure_role_definition.name.clone()),
-                type_: Some("CustomRole".to_string()),
-                description: Some(azure_role_definition.description.clone()),
-                assignable_scopes: azure_role_definition.assignable_scopes.clone(),
-                permissions: vec![Permission {
-                    actions: azure_role_definition.actions.clone(),
-                    not_actions: azure_role_definition.not_actions.clone(),
-                    data_actions: azure_role_definition.data_actions.clone(),
-                    not_data_actions: azure_role_definition.not_data_actions.clone(),
-                }],
-                created_by: None,
-                created_on: None,
-                updated_by: None,
-                updated_on: None,
-            }),
-        };
-
-        authorization_client
-            .create_or_update_role_definition(
-                scope,
-                role_definition_id.to_string(),
-                &role_definition,
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to create Azure role definition".to_string(),
-                resource_id: Some(azure_role_definition.name.clone()),
-            })?;
 
         Ok(())
     }
@@ -445,9 +367,8 @@ impl AzurePermissionsHelper {
         let role_definition_scope =
             Self::role_definition_scope_for_assignment_scope(resource_scope);
 
-        // Parallelize management permission sets — each set creates a role
-        // definition then a role assignment. Sets are independent (different
-        // UUIDs), so they can run concurrently. All operations are idempotent.
+        // Parallelize management permission sets. Runtime reconciliation only
+        // creates assignments to setup-owned role definitions.
         let futures = non_provision_refs.iter().map(|permission_set_ref| {
             let authorization_client = authorization_client.clone();
             let management_principal_id = management_principal_id.clone();
@@ -487,18 +408,14 @@ impl AzurePermissionsHelper {
                 // profiles reference the same permission set.
                 azure_role_definition.name = format!("{} [mgmt]", azure_role_definition.name);
 
-                let role_definition_scope_string =
-                    format!("/{}", role_definition_scope.to_scope_string(&azure_config));
-                azure_role_definition.assignable_scopes =
-                    vec![role_definition_scope_string.clone()];
-
-                // Deterministic UUID keyed on (prefix, permission_set) — NOT on
-                // resource_id — so every resource shares the same management role
-                // definition for a given permission set.
+                // Must match the Terraform setup emitter exactly. This is keyed
+                // on (prefix, permission_set), not resource_id, so every
+                // resource shares one management role definition for each
+                // permission set.
                 let role_definition_id = Uuid::new_v5(
                     &Uuid::NAMESPACE_OID,
                     format!(
-                        "alien:azure:mgmt-res-role-def:{}:{}",
+                        "deployment:azure:mgmt-res-role-def:{}:{}",
                         ctx.resource_prefix, permission_set.id
                     )
                     .as_bytes(),
@@ -509,28 +426,7 @@ impl AzurePermissionsHelper {
                     profile = "management",
                     permission_set = %permission_set.id,
                     role_definition_id = %role_definition_id,
-                    "Applying management role definition and assignment"
-                );
-
-                Self::create_or_update_role_definition(
-                    &authorization_client,
-                    &role_definition_scope,
-                    &role_definition_id,
-                    &azure_role_definition,
-                )
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to create management role definition for '{}'",
-                        permission_set.id
-                    ),
-                    resource_id: Some(resource_id.to_string()),
-                })?;
-
-                info!(
-                    role_definition_id = %role_definition_id,
-                    permission_set = %permission_set.id,
-                    "Management role definition created/updated for resource"
+                    "Applying management role assignment to setup-owned role definition"
                 );
 
                 let full_role_definition_id = format!(

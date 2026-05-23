@@ -2,20 +2,31 @@ terraform {
   required_providers {
     azurerm = {
       source                = "hashicorp/azurerm"
-      version               = "~> 3.0"
+      version               = ">= 4.46.0, < 5.0.0"
       configuration_aliases = [azurerm.management, azurerm.target]
+    }
+    azapi = {
+      source                = "Azure/azapi"
+      version               = "~> 2.4"
+      configuration_aliases = [azapi.target]
     }
     azuread = {
       source                = "hashicorp/azuread"
       version               = "~> 3.0"
       configuration_aliases = [azuread.management]
     }
+    helm   = { source = "hashicorp/helm", version = "~> 2.0" }
     random = { source = "hashicorp/random", version = "~> 3.0" }
+    time   = { source = "hashicorp/time", version = "~> 0.13" }
   }
 }
 
 resource "random_id" "suffix" {
   byte_length = 4
+}
+
+locals {
+  e2e_aks_cluster_name = var.e2e_aks_cluster_name != "" ? var.e2e_aks_cluster_name : "alien-e2e-${random_id.suffix.hex}"
 }
 
 # ── Management: Resource group ────────────────────────────────────────────────
@@ -134,6 +145,151 @@ resource "azurerm_container_app_environment" "shared_target" {
   name                = "alien-e2e-shared-${random_id.suffix.hex}"
   resource_group_name = azurerm_resource_group.shared_target.name
   location            = azurerm_resource_group.shared_target.location
+}
+
+# ── Target: shared AKS cluster for Terraform -> Helm E2Es ────────────────────
+
+resource "azurerm_public_ip" "e2e_ingress" {
+  provider            = azurerm.target
+  name                = "alien-e2e-ingress-${random_id.suffix.hex}"
+  resource_group_name = azurerm_resource_group.shared_target.name
+  location            = azurerm_resource_group.shared_target.location
+  allocation_method   = "Static"
+  sku                 = "Standard"
+}
+
+data "azurerm_client_config" "target" {
+  provider = azurerm.target
+}
+
+module "e2e_aks" {
+  source  = "Azure/avm-res-containerservice-managedcluster/azurerm"
+  version = "0.5.6"
+
+  providers = {
+    azapi   = azapi.target
+    azurerm = azurerm.target
+  }
+
+  name      = local.e2e_aks_cluster_name
+  location  = azurerm_resource_group.shared_target.location
+  parent_id = azurerm_resource_group.shared_target.id
+
+  dns_prefix         = "alien-e2e-${random_id.suffix.hex}"
+  enable_telemetry   = false
+  kubernetes_version = var.e2e_aks_kubernetes_version
+
+  sku = {
+    name = "Automatic"
+    tier = "Standard"
+  }
+
+  network_profile = {
+    load_balancer_sku   = "standard"
+    network_dataplane   = "cilium"
+    network_plugin      = "azure"
+    network_plugin_mode = "overlay"
+    network_policy      = "cilium"
+  }
+
+  role_assignments = {
+    target_admin = {
+      principal_id               = data.azurerm_client_config.target.object_id
+      role_definition_id_or_name = "Azure Kubernetes Service RBAC Cluster Admin"
+    }
+  }
+}
+
+resource "azurerm_role_assignment" "e2e_aks_network" {
+  provider             = azurerm.target
+  scope                = azurerm_resource_group.shared_target.id
+  role_definition_name = "Network Contributor"
+  principal_id         = module.e2e_aks.identity_principal_id
+}
+
+resource "time_sleep" "e2e_aks_rbac_propagation" {
+  create_duration = "90s"
+
+  depends_on = [
+    azurerm_role_assignment.e2e_aks_network,
+    module.e2e_aks,
+  ]
+}
+
+locals {
+  e2e_aks_kubeconfig = yamldecode(module.e2e_aks.kube_config)
+}
+
+provider "helm" {
+  kubernetes {
+    host                   = local.e2e_aks_kubeconfig.clusters[0].cluster.server
+    cluster_ca_certificate = base64decode(local.e2e_aks_kubeconfig.clusters[0].cluster["certificate-authority-data"])
+
+    exec {
+      api_version = "client.authentication.k8s.io/v1beta1"
+      command     = "kubelogin"
+      args = [
+        "get-token",
+        "--login",
+        "spn",
+        "--environment",
+        "AzurePublicCloud",
+        "--server-id",
+        "6dae42f8-4368-4678-94ff-3960e28e3630",
+        "--client-id",
+        var.target_client_id,
+        "--tenant-id",
+        var.target_tenant_id,
+      ]
+      env = {
+        AAD_SERVICE_PRINCIPAL_CLIENT_SECRET = var.target_client_secret
+      }
+    }
+  }
+}
+
+resource "helm_release" "e2e_ingress_nginx" {
+  name             = "ingress-nginx"
+  repository       = "https://kubernetes.github.io/ingress-nginx"
+  chart            = "ingress-nginx"
+  version          = var.e2e_ingress_nginx_chart_version
+  namespace        = "ingress-nginx"
+  create_namespace = true
+  wait             = true
+  timeout          = 600
+
+  values = [
+    yamlencode({
+      controller = {
+        ingressClass = var.e2e_k8s_ingress_class
+        ingressClassResource = {
+          enabled = true
+          name    = var.e2e_k8s_ingress_class
+        }
+        service = {
+          annotations = {
+            "service.beta.kubernetes.io/azure-load-balancer-resource-group" = azurerm_resource_group.shared_target.name
+            "service.beta.kubernetes.io/azure-pip-name"                     = azurerm_public_ip.e2e_ingress.name
+          }
+        }
+        resources = {
+          requests = {
+            cpu    = "100m"
+            memory = "128Mi"
+          }
+          limits = {
+            cpu    = "500m"
+            memory = "512Mi"
+          }
+        }
+        admissionWebhooks = {
+          enabled = false
+        }
+      }
+    })
+  ]
+
+  depends_on = [time_sleep.e2e_aks_rbac_propagation]
 }
 
 # Custom role that allows using the shared environment. Created once here; the

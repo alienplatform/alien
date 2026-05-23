@@ -58,30 +58,7 @@
     "gcp": [
       {
         "grant": {
-          "permissions": [
-            "run.services.get",
-            "run.services.list",
-            "run.services.getIamPolicy",
-            "run.revisions.get",
-            "run.revisions.list",
-            "run.operations.get",
-            "run.operations.list",
-            "run.locations.list",
-            "run.configurations.get",
-            "run.configurations.list",
-            "run.routes.get",
-            "run.routes.list",
-            "run.executions.get",
-            "run.executions.list",
-            "run.tasks.get",
-            "run.tasks.list",
-            "run.services.listEffectiveTags",
-            "run.services.listTagBindings",
-            "resourcemanager.projects.get",
-            "run.jobs.getIamPolicy",
-            "pubsub.subscriptions.get",
-            "iam.serviceAccounts.getIamPolicy"
-          ]
+          "predefinedRoles": ["roles/run.viewer"]
         },
         // Cloud Run does not support IAM conditions (resource.name/resource.type) for any operation.
         // All conditions silently fail. Stack: scope-only. Resource: scoped to specific service.
@@ -89,6 +66,28 @@
           "stack": { "scope": "projects/${projectName}" },
           "resource": {
             "scope": "projects/${projectName}/locations/${region}/services/${resourceName}"
+          }
+        }
+      },
+      {
+        "grant": {
+          "predefinedRoles": ["roles/pubsub.viewer"]
+        },
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
+      },
+      {
+        "grant": {
+          "predefinedRoles": ["roles/iam.serviceAccountViewer"]
+        },
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": {
+            "scope": "projects/${projectName}"
           }
         }
       }

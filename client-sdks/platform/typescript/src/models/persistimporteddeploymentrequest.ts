@@ -574,9 +574,17 @@ export type PersistImportedDeploymentRequestOverrideAwGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -644,9 +652,17 @@ export type PersistImportedDeploymentRequestOverrideAzureGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -744,9 +760,17 @@ export type PersistImportedDeploymentRequestOverrideGcpGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -890,9 +914,17 @@ export type PersistImportedDeploymentRequestExtendAwGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -960,9 +992,17 @@ export type PersistImportedDeploymentRequestExtendAzureGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -1060,9 +1100,17 @@ export type PersistImportedDeploymentRequestExtendGcpGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -1211,9 +1259,17 @@ export type PersistImportedDeploymentRequestProfileAwGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -1281,9 +1337,17 @@ export type PersistImportedDeploymentRequestProfileAzureGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -1381,9 +1445,17 @@ export type PersistImportedDeploymentRequestProfileGcpGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -1770,6 +1842,10 @@ export type PersistImportedDeploymentRequest = {
    * Unique identifier for the release.
    */
   currentReleaseId?: string | undefined;
+  /**
+   * Unique identifier for the release.
+   */
+  desiredReleaseId?: string | undefined;
   importSource?: ImportSourceKind | undefined;
   /**
    * Stable target key for the setup contract, e.g. aws/us-east-1
@@ -2837,6 +2913,8 @@ export type PersistImportedDeploymentRequestOverrideAwGrant$Outbound = {
   actions?: Array<string> | null | undefined;
   dataActions?: Array<string> | null | undefined;
   permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /** @internal */
@@ -2848,6 +2926,8 @@ export const PersistImportedDeploymentRequestOverrideAwGrant$outboundSchema:
     actions: z.nullable(z.array(z.string())).optional(),
     dataActions: z.nullable(z.array(z.string())).optional(),
     permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
   });
 
 export function persistImportedDeploymentRequestOverrideAwGrantToJSON(
@@ -2985,6 +3065,8 @@ export type PersistImportedDeploymentRequestOverrideAzureGrant$Outbound = {
   actions?: Array<string> | null | undefined;
   dataActions?: Array<string> | null | undefined;
   permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /** @internal */
@@ -2996,6 +3078,8 @@ export const PersistImportedDeploymentRequestOverrideAzureGrant$outboundSchema:
     actions: z.nullable(z.array(z.string())).optional(),
     dataActions: z.nullable(z.array(z.string())).optional(),
     permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
   });
 
 export function persistImportedDeploymentRequestOverrideAzureGrantToJSON(
@@ -3262,6 +3346,8 @@ export type PersistImportedDeploymentRequestOverrideGcpGrant$Outbound = {
   actions?: Array<string> | null | undefined;
   dataActions?: Array<string> | null | undefined;
   permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /** @internal */
@@ -3273,6 +3359,8 @@ export const PersistImportedDeploymentRequestOverrideGcpGrant$outboundSchema:
     actions: z.nullable(z.array(z.string())).optional(),
     dataActions: z.nullable(z.array(z.string())).optional(),
     permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
   });
 
 export function persistImportedDeploymentRequestOverrideGcpGrantToJSON(
@@ -3560,6 +3648,8 @@ export type PersistImportedDeploymentRequestExtendAwGrant$Outbound = {
   actions?: Array<string> | null | undefined;
   dataActions?: Array<string> | null | undefined;
   permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /** @internal */
@@ -3571,6 +3661,8 @@ export const PersistImportedDeploymentRequestExtendAwGrant$outboundSchema:
     actions: z.nullable(z.array(z.string())).optional(),
     dataActions: z.nullable(z.array(z.string())).optional(),
     permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
   });
 
 export function persistImportedDeploymentRequestExtendAwGrantToJSON(
@@ -3705,6 +3797,8 @@ export type PersistImportedDeploymentRequestExtendAzureGrant$Outbound = {
   actions?: Array<string> | null | undefined;
   dataActions?: Array<string> | null | undefined;
   permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /** @internal */
@@ -3716,6 +3810,8 @@ export const PersistImportedDeploymentRequestExtendAzureGrant$outboundSchema:
     actions: z.nullable(z.array(z.string())).optional(),
     dataActions: z.nullable(z.array(z.string())).optional(),
     permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
   });
 
 export function persistImportedDeploymentRequestExtendAzureGrantToJSON(
@@ -3981,6 +4077,8 @@ export type PersistImportedDeploymentRequestExtendGcpGrant$Outbound = {
   actions?: Array<string> | null | undefined;
   dataActions?: Array<string> | null | undefined;
   permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /** @internal */
@@ -3992,6 +4090,8 @@ export const PersistImportedDeploymentRequestExtendGcpGrant$outboundSchema:
     actions: z.nullable(z.array(z.string())).optional(),
     dataActions: z.nullable(z.array(z.string())).optional(),
     permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
   });
 
 export function persistImportedDeploymentRequestExtendGcpGrantToJSON(
@@ -4307,6 +4407,8 @@ export type PersistImportedDeploymentRequestProfileAwGrant$Outbound = {
   actions?: Array<string> | null | undefined;
   dataActions?: Array<string> | null | undefined;
   permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /** @internal */
@@ -4318,6 +4420,8 @@ export const PersistImportedDeploymentRequestProfileAwGrant$outboundSchema:
     actions: z.nullable(z.array(z.string())).optional(),
     dataActions: z.nullable(z.array(z.string())).optional(),
     permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
   });
 
 export function persistImportedDeploymentRequestProfileAwGrantToJSON(
@@ -4455,6 +4559,8 @@ export type PersistImportedDeploymentRequestProfileAzureGrant$Outbound = {
   actions?: Array<string> | null | undefined;
   dataActions?: Array<string> | null | undefined;
   permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /** @internal */
@@ -4466,6 +4572,8 @@ export const PersistImportedDeploymentRequestProfileAzureGrant$outboundSchema:
     actions: z.nullable(z.array(z.string())).optional(),
     dataActions: z.nullable(z.array(z.string())).optional(),
     permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
   });
 
 export function persistImportedDeploymentRequestProfileAzureGrantToJSON(
@@ -4732,6 +4840,8 @@ export type PersistImportedDeploymentRequestProfileGcpGrant$Outbound = {
   actions?: Array<string> | null | undefined;
   dataActions?: Array<string> | null | undefined;
   permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /** @internal */
@@ -4743,6 +4853,8 @@ export const PersistImportedDeploymentRequestProfileGcpGrant$outboundSchema:
     actions: z.nullable(z.array(z.string())).optional(),
     dataActions: z.nullable(z.array(z.string())).optional(),
     permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
   });
 
 export function persistImportedDeploymentRequestProfileGcpGrantToJSON(
@@ -5345,6 +5457,7 @@ export type PersistImportedDeploymentRequest$Outbound = {
   runtimeMetadata: PersistImportedDeploymentRequestRuntimeMetadata$Outbound;
   status: string;
   currentReleaseId?: string | undefined;
+  desiredReleaseId?: string | undefined;
   importSource?: string | undefined;
   setupTarget: string;
   setupFingerprint: string;
@@ -5399,6 +5512,7 @@ export const PersistImportedDeploymentRequest$outboundSchema: z.ZodType<
     "provisioning",
   ),
   currentReleaseId: z.string().optional(),
+  desiredReleaseId: z.string().optional(),
   importSource: ImportSourceKind$outboundSchema.optional(),
   setupTarget: z.string(),
   setupFingerprint: z.string(),

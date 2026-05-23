@@ -29,14 +29,16 @@ use crate::{
     expr,
 };
 use alien_core::{
-    import::EmitContext, BindingValue, ContainerAppsEnvironmentBinding, ErrorData, PermissionSet,
-    ResourceDefinition, ResourceRef, ResourceType, Result, ServiceAccount,
+    import::EmitContext, permissions::PermissionSetReference, BindingValue,
+    ContainerAppsEnvironmentBinding, ErrorData, PermissionSet, ResourceDefinition, ResourceRef,
+    ResourceType, Result, ServiceAccount, Stack,
 };
 use alien_error::{AlienError, Context};
 use alien_permissions::{
     generators::AzureRuntimePermissionsGenerator, BindingTarget, PermissionContext,
 };
 use hcl::expr::Expression;
+use std::collections::HashSet;
 
 /// Downcast `ctx.resource.config` to the typed resource definition or
 /// return a typed `UnexpectedResourceType` error.
@@ -377,6 +379,228 @@ pub fn emit_role_definition_and_assignments(
     ));
 
     Ok(())
+}
+
+/// Emit setup-owned Azure role definitions used later by live resource
+/// controllers. Runtime reconciliation creates role assignments only; these
+/// definitions must already exist and use the same deterministic UUID seeds as
+/// `AzurePermissionsHelper`.
+pub fn emit_setup_resource_role_definitions(
+    stack: &Stack,
+    fragment: &mut TfFragment,
+) -> Result<()> {
+    let mut seen_execution_roles = HashSet::new();
+    let mut seen_management_roles = HashSet::new();
+
+    for (resource_id, entry) in stack.resources() {
+        let resource_type = entry.config.resource_type();
+        let resource_type = resource_type.to_string();
+
+        for (profile_name, profile) in &stack.permissions.profiles {
+            for permission_set_ref in
+                resource_scoped_permission_refs(profile, resource_id, &resource_type)
+            {
+                let Some(permission_set) = permission_set_ref
+                    .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+                else {
+                    continue;
+                };
+                if permission_set.platforms.azure.is_none() {
+                    continue;
+                }
+                if !seen_execution_roles.insert((profile_name.clone(), permission_set.id.clone())) {
+                    continue;
+                }
+
+                emit_setup_execution_role_definition(fragment, profile_name, &permission_set)?;
+            }
+        }
+
+        let Some(management_profile) = stack.management().profile() else {
+            continue;
+        };
+        for permission_set_ref in
+            resource_scoped_permission_refs(management_profile, resource_id, &resource_type)
+                .into_iter()
+                .filter(|reference| !reference.id().ends_with("/provision"))
+        {
+            let Some(permission_set) = permission_set_ref
+                .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+            else {
+                continue;
+            };
+            if permission_set.platforms.azure.is_none() {
+                continue;
+            }
+            if !seen_management_roles.insert(permission_set.id.clone()) {
+                continue;
+            }
+
+            emit_setup_management_role_definition(fragment, &permission_set)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn resource_scoped_permission_refs<'a>(
+    profile: &'a alien_core::permissions::PermissionProfile,
+    resource_id: &str,
+    resource_type: &str,
+) -> Vec<&'a PermissionSetReference> {
+    let type_prefix = format!("{resource_type}/");
+    let mut refs = Vec::new();
+
+    if let Some(resource_refs) = profile.0.get(resource_id) {
+        refs.extend(resource_refs.iter().filter(|reference| {
+            !is_worker_command_transport_permission(resource_type, reference.id())
+        }));
+    }
+    if let Some(wildcard_refs) = profile.0.get("*") {
+        refs.extend(
+            wildcard_refs
+                .iter()
+                .filter(|reference| reference.id().starts_with(&type_prefix))
+                .filter(|reference| {
+                    !is_worker_command_transport_permission(resource_type, reference.id())
+                }),
+        );
+    }
+
+    refs
+}
+
+fn emit_setup_execution_role_definition(
+    fragment: &mut TfFragment,
+    profile_name: &str,
+    permission_set: &PermissionSet,
+) -> Result<()> {
+    let role_label = setup_execution_role_label(profile_name, &permission_set.id);
+    let mut role_definition = setup_resource_role_definition(permission_set)?;
+    role_definition.name = format!("{} [{}]", role_definition.name, profile_name);
+
+    fragment.resource_blocks.push(setup_role_definition_block(
+        &role_label,
+        expr::template(role_definition.name.clone()),
+        expr::raw(&format!(
+            "uuidv5(\"oid\", \"deployment:azure:res-role-def:${{local.resource_prefix}}:{profile_name}:{}\")",
+            permission_set.id
+        )),
+        role_definition,
+    ));
+
+    Ok(())
+}
+
+fn emit_setup_management_role_definition(
+    fragment: &mut TfFragment,
+    permission_set: &PermissionSet,
+) -> Result<()> {
+    let role_label = setup_management_role_label(&permission_set.id);
+    let mut role_definition = setup_resource_role_definition(permission_set)?;
+    role_definition.name = format!("{} [mgmt]", role_definition.name);
+
+    fragment.resource_blocks.push(setup_role_definition_block(
+        &role_label,
+        expr::template(role_definition.name.clone()),
+        expr::raw(&format!(
+            "uuidv5(\"oid\", \"deployment:azure:mgmt-res-role-def:${{local.resource_prefix}}:{}\")",
+            permission_set.id
+        )),
+        role_definition,
+    ));
+
+    Ok(())
+}
+
+fn setup_resource_role_definition(
+    permission_set: &PermissionSet,
+) -> Result<alien_permissions::generators::AzureRoleDefinition> {
+    let generator = AzureRuntimePermissionsGenerator::new();
+    let context = permission_context("setup-resource-permissions")
+        .with_resource_name("${local.resource_prefix}-setup-role-scope".to_string());
+
+    let mut role_definition = generator
+        .generate_role_definition(permission_set, BindingTarget::Resource, &context)
+        .context(ErrorData::GenericError {
+            message: format!(
+                "failed to generate setup-owned Azure role definition for permission set '{}'",
+                permission_set.id
+            ),
+        })?;
+    role_definition.assignable_scopes = vec![
+        "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
+            .to_string(),
+    ];
+    Ok(role_definition)
+}
+
+fn setup_role_definition_block(
+    label: &str,
+    name: Expression,
+    role_definition_id: Expression,
+    role_definition: alien_permissions::generators::AzureRoleDefinition,
+) -> hcl::Block {
+    resource_block(
+        "azurerm_role_definition",
+        label,
+        [
+            attr("name", name),
+            attr("role_definition_id", role_definition_id),
+            attr(
+                "scope",
+                expr::raw(
+                    "\"/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}\"",
+                ),
+            ),
+            attr("description", Expression::String(role_definition.description)),
+            nested(block(
+                "permissions",
+                [
+                    attr("actions", string_array(role_definition.actions)),
+                    attr("data_actions", string_array(role_definition.data_actions)),
+                    attr("not_actions", string_array(role_definition.not_actions)),
+                    attr(
+                        "not_data_actions",
+                        string_array(role_definition.not_data_actions),
+                    ),
+                ],
+            )),
+            attr(
+                "assignable_scopes",
+                Expression::Array(
+                    role_definition
+                        .assignable_scopes
+                        .into_iter()
+                        .map(expr::template)
+                        .collect(),
+                ),
+            ),
+        ],
+    )
+}
+
+fn setup_execution_role_label(profile_name: &str, permission_set_id: &str) -> String {
+    format!(
+        "setup_{}_{}",
+        sanitize_role_label(profile_name),
+        sanitize_role_label(permission_set_id)
+    )
+}
+
+pub fn setup_management_role_label(permission_set_id: &str) -> String {
+    format!(
+        "setup_management_{}",
+        sanitize_role_label(permission_set_id)
+    )
+}
+
+fn string_array(items: Vec<String>) -> Expression {
+    Expression::Array(items.into_iter().map(Expression::String).collect())
+}
+
+fn is_worker_command_transport_permission(resource_type: &str, permission_set_id: &str) -> bool {
+    resource_type == "worker" && permission_set_id == "worker/dispatch-command"
 }
 
 /// Sanitise a permission-set id like `storage/object-admin` into a

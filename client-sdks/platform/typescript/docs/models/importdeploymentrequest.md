@@ -52,6 +52,7 @@ const value: models.PersistImportedDeploymentRequest = {
   stackSettings: {},
   runtimeMetadata: {},
   currentReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+  desiredReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
   setupTarget: "<value>",
   setupFingerprint: "<value>",
   setupFingerprintVersion: 75885,

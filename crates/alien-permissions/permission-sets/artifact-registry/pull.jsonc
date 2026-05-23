@@ -53,15 +53,7 @@
     "gcp": [
       {
         "grant": {
-          "permissions": [
-            "artifactregistry.repositories.get",
-            "artifactregistry.repositories.list",
-            "artifactregistry.tags.get",
-            "artifactregistry.tags.list",
-            "artifactregistry.versions.get",
-            "artifactregistry.versions.list",
-            "artifactregistry.repositories.downloadArtifacts"
-          ]
+          "predefinedRoles": ["roles/artifactregistry.reader"]
         },
         "binding": {
           "stack": {

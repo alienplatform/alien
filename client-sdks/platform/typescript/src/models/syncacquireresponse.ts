@@ -89,9 +89,17 @@ export type SyncAcquireResponseCurrentReleaseOverrideAwGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -159,9 +167,17 @@ export type SyncAcquireResponseCurrentReleaseOverrideAzureGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -259,9 +275,17 @@ export type SyncAcquireResponseCurrentReleaseOverrideGcpGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -405,9 +429,17 @@ export type SyncAcquireResponseCurrentReleaseExtendAwGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -475,9 +507,17 @@ export type SyncAcquireResponseCurrentReleaseExtendAzureGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -575,9 +615,17 @@ export type SyncAcquireResponseCurrentReleaseExtendGcpGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -729,9 +777,17 @@ export type SyncAcquireResponseCurrentReleaseProfileAwGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -799,9 +855,17 @@ export type SyncAcquireResponseCurrentReleaseProfileAzureGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -899,9 +963,17 @@ export type SyncAcquireResponseCurrentReleaseProfileGcpGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -1385,9 +1457,17 @@ export type SyncAcquireResponsePreparedStackOverrideAwGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -1455,9 +1535,17 @@ export type SyncAcquireResponsePreparedStackOverrideAzureGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -1555,9 +1643,17 @@ export type SyncAcquireResponsePreparedStackOverrideGcpGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -1701,9 +1797,17 @@ export type SyncAcquireResponsePreparedStackExtendAwGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -1771,9 +1875,17 @@ export type SyncAcquireResponsePreparedStackExtendAzureGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -1871,9 +1983,17 @@ export type SyncAcquireResponsePreparedStackExtendGcpGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -2022,9 +2142,17 @@ export type SyncAcquireResponsePreparedStackProfileAwGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -2092,9 +2220,17 @@ export type SyncAcquireResponsePreparedStackProfileAzureGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -2192,9 +2328,17 @@ export type SyncAcquireResponsePreparedStackProfileGcpGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -2464,6 +2608,28 @@ export type SyncAcquireResponseStackStateConfig = {
 };
 
 /**
+ * Represents the target cloud platform.
+ */
+export const SyncAcquireResponseControllerPlatformEnum = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type SyncAcquireResponseControllerPlatformEnum = ClosedEnum<
+  typeof SyncAcquireResponseControllerPlatformEnum
+>;
+
+export type SyncAcquireResponseControllerPlatformUnion =
+  | SyncAcquireResponseControllerPlatformEnum
+  | any;
+
+/**
  * New ResourceRef that works with any resource type.
  *
  * @remarks
@@ -2653,6 +2819,11 @@ export type SyncAcquireResponseStackStateResources = {
    * Resource that can hold any resource type in the Alien system. All resources share common 'type' and 'id' fields with additional type-specific properties.
    */
   config: SyncAcquireResponseStackStateConfig;
+  controllerPlatform?:
+    | SyncAcquireResponseControllerPlatformEnum
+    | any
+    | null
+    | undefined;
   /**
    * Complete list of dependencies for this resource, including infrastructure dependencies.
    *
@@ -2824,9 +2995,17 @@ export type SyncAcquireResponseTargetReleaseOverrideAwGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -2894,9 +3073,17 @@ export type SyncAcquireResponseTargetReleaseOverrideAzureGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -2994,9 +3181,17 @@ export type SyncAcquireResponseTargetReleaseOverrideGcpGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -3140,9 +3335,17 @@ export type SyncAcquireResponseTargetReleaseExtendAwGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -3210,9 +3413,17 @@ export type SyncAcquireResponseTargetReleaseExtendAzureGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -3310,9 +3521,17 @@ export type SyncAcquireResponseTargetReleaseExtendGcpGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -3461,9 +3680,17 @@ export type SyncAcquireResponseTargetReleaseProfileAwGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -3531,9 +3758,17 @@ export type SyncAcquireResponseTargetReleaseProfileAzureGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -3631,9 +3866,17 @@ export type SyncAcquireResponseTargetReleaseProfileGcpGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -3907,6 +4150,28 @@ export type SyncAcquireResponseCurrent = {
   status: SyncAcquireResponseStatus;
   targetRelease?: SyncAcquireResponseTargetRelease | any | null | undefined;
 };
+
+/**
+ * Represents the target cloud platform.
+ */
+export const SyncAcquireResponseBasePlatformEnum = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type SyncAcquireResponseBasePlatformEnum = ClosedEnum<
+  typeof SyncAcquireResponseBasePlatformEnum
+>;
+
+export type SyncAcquireResponseBasePlatformUnion =
+  | SyncAcquireResponseBasePlatformEnum
+  | any;
 
 /**
  * Configuration for a single container worker cluster.
@@ -6529,6 +6794,7 @@ export type SyncAcquireResponseConfig = {
    * This requires running with elevated cloud credentials.
    */
   allowFrozenChanges?: boolean | undefined;
+  basePlatform?: SyncAcquireResponseBasePlatformEnum | any | null | undefined;
   computeBackend?:
     | SyncAcquireResponseComputeBackendHorizon
     | any
@@ -6791,6 +7057,8 @@ export const SyncAcquireResponseCurrentReleaseOverrideAwGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncAcquireResponseCurrentReleaseOverrideAwGrantFromJSON(
@@ -6918,6 +7186,8 @@ export const SyncAcquireResponseCurrentReleaseOverrideAzureGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncAcquireResponseCurrentReleaseOverrideAzureGrantFromJSON(
@@ -7163,6 +7433,8 @@ export const SyncAcquireResponseCurrentReleaseOverrideGcpGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncAcquireResponseCurrentReleaseOverrideGcpGrantFromJSON(
@@ -7418,6 +7690,8 @@ export const SyncAcquireResponseCurrentReleaseExtendAwGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     },
   );
 
@@ -7549,6 +7823,8 @@ export const SyncAcquireResponseCurrentReleaseExtendAzureGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncAcquireResponseCurrentReleaseExtendAzureGrantFromJSON(
@@ -7791,6 +8067,8 @@ export const SyncAcquireResponseCurrentReleaseExtendGcpGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncAcquireResponseCurrentReleaseExtendGcpGrantFromJSON(
@@ -8070,6 +8348,8 @@ export const SyncAcquireResponseCurrentReleaseProfileAwGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncAcquireResponseCurrentReleaseProfileAwGrantFromJSON(
@@ -8198,6 +8478,8 @@ export const SyncAcquireResponseCurrentReleaseProfileAzureGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncAcquireResponseCurrentReleaseProfileAzureGrantFromJSON(
@@ -8441,6 +8723,8 @@ export const SyncAcquireResponseCurrentReleaseProfileGcpGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncAcquireResponseCurrentReleaseProfileGcpGrantFromJSON(
@@ -9072,6 +9356,8 @@ export const SyncAcquireResponsePreparedStackOverrideAwGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncAcquireResponsePreparedStackOverrideAwGrantFromJSON(
@@ -9200,6 +9486,8 @@ export const SyncAcquireResponsePreparedStackOverrideAzureGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncAcquireResponsePreparedStackOverrideAzureGrantFromJSON(
@@ -9444,6 +9732,8 @@ export const SyncAcquireResponsePreparedStackOverrideGcpGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncAcquireResponsePreparedStackOverrideGcpGrantFromJSON(
@@ -9696,6 +9986,8 @@ export const SyncAcquireResponsePreparedStackExtendAwGrant$inboundSchema:
     actions: z.nullable(z.array(z.string())).optional(),
     dataActions: z.nullable(z.array(z.string())).optional(),
     permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
   });
 
 export function syncAcquireResponsePreparedStackExtendAwGrantFromJSON(
@@ -9825,6 +10117,8 @@ export const SyncAcquireResponsePreparedStackExtendAzureGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncAcquireResponsePreparedStackExtendAzureGrantFromJSON(
@@ -10067,6 +10361,8 @@ export const SyncAcquireResponsePreparedStackExtendGcpGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     },
   );
 
@@ -10346,6 +10642,8 @@ export const SyncAcquireResponsePreparedStackProfileAwGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     },
   );
 
@@ -10477,6 +10775,8 @@ export const SyncAcquireResponsePreparedStackProfileAzureGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncAcquireResponsePreparedStackProfileAzureGrantFromJSON(
@@ -10720,6 +11020,8 @@ export const SyncAcquireResponsePreparedStackProfileGcpGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncAcquireResponsePreparedStackProfileGcpGrantFromJSON(
@@ -11110,6 +11412,34 @@ export function syncAcquireResponseStackStateConfigFromJSON(
 }
 
 /** @internal */
+export const SyncAcquireResponseControllerPlatformEnum$inboundSchema: z.ZodEnum<
+  typeof SyncAcquireResponseControllerPlatformEnum
+> = z.enum(SyncAcquireResponseControllerPlatformEnum);
+
+/** @internal */
+export const SyncAcquireResponseControllerPlatformUnion$inboundSchema:
+  z.ZodType<SyncAcquireResponseControllerPlatformUnion, unknown> = z.union([
+    SyncAcquireResponseControllerPlatformEnum$inboundSchema,
+    z.any(),
+  ]);
+
+export function syncAcquireResponseControllerPlatformUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseControllerPlatformUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseControllerPlatformUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseControllerPlatformUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const SyncAcquireResponseStackStateDependency$inboundSchema: z.ZodType<
   SyncAcquireResponseStackStateDependency,
   unknown
@@ -11293,6 +11623,9 @@ export const SyncAcquireResponseStackStateResources$inboundSchema: z.ZodType<
 > = z.object({
   _internal: z.nullable(z.any()).optional(),
   config: z.lazy(() => SyncAcquireResponseStackStateConfig$inboundSchema),
+  controllerPlatform: z.nullable(
+    z.union([SyncAcquireResponseControllerPlatformEnum$inboundSchema, z.any()]),
+  ).optional(),
   dependencies: z.array(
     z.lazy(() => SyncAcquireResponseStackStateDependency$inboundSchema),
   ).optional(),
@@ -11483,6 +11816,8 @@ export const SyncAcquireResponseTargetReleaseOverrideAwGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncAcquireResponseTargetReleaseOverrideAwGrantFromJSON(
@@ -11611,6 +11946,8 @@ export const SyncAcquireResponseTargetReleaseOverrideAzureGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncAcquireResponseTargetReleaseOverrideAzureGrantFromJSON(
@@ -11854,6 +12191,8 @@ export const SyncAcquireResponseTargetReleaseOverrideGcpGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncAcquireResponseTargetReleaseOverrideGcpGrantFromJSON(
@@ -12106,6 +12445,8 @@ export const SyncAcquireResponseTargetReleaseExtendAwGrant$inboundSchema:
     actions: z.nullable(z.array(z.string())).optional(),
     dataActions: z.nullable(z.array(z.string())).optional(),
     permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
   });
 
 export function syncAcquireResponseTargetReleaseExtendAwGrantFromJSON(
@@ -12235,6 +12576,8 @@ export const SyncAcquireResponseTargetReleaseExtendAzureGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncAcquireResponseTargetReleaseExtendAzureGrantFromJSON(
@@ -12476,6 +12819,8 @@ export const SyncAcquireResponseTargetReleaseExtendGcpGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     },
   );
 
@@ -12755,6 +13100,8 @@ export const SyncAcquireResponseTargetReleaseProfileAwGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     },
   );
 
@@ -12886,6 +13233,8 @@ export const SyncAcquireResponseTargetReleaseProfileAzureGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncAcquireResponseTargetReleaseProfileAzureGrantFromJSON(
@@ -13128,6 +13477,8 @@ export const SyncAcquireResponseTargetReleaseProfileGcpGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncAcquireResponseTargetReleaseProfileGcpGrantFromJSON(
@@ -13508,6 +13859,28 @@ export function syncAcquireResponseCurrentFromJSON(
     jsonString,
     (x) => SyncAcquireResponseCurrent$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'SyncAcquireResponseCurrent' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseBasePlatformEnum$inboundSchema: z.ZodEnum<
+  typeof SyncAcquireResponseBasePlatformEnum
+> = z.enum(SyncAcquireResponseBasePlatformEnum);
+
+/** @internal */
+export const SyncAcquireResponseBasePlatformUnion$inboundSchema: z.ZodType<
+  SyncAcquireResponseBasePlatformUnion,
+  unknown
+> = z.union([SyncAcquireResponseBasePlatformEnum$inboundSchema, z.any()]);
+
+export function syncAcquireResponseBasePlatformUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseBasePlatformUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseBasePlatformUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseBasePlatformUnion' from JSON`,
   );
 }
 
@@ -18263,6 +18636,9 @@ export const SyncAcquireResponseConfig$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   allowFrozenChanges: z.boolean().optional(),
+  basePlatform: z.nullable(
+    z.union([SyncAcquireResponseBasePlatformEnum$inboundSchema, z.any()]),
+  ).optional(),
   computeBackend: z.nullable(
     z.union([
       z.lazy(() => SyncAcquireResponseComputeBackendHorizon$inboundSchema),

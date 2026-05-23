@@ -809,7 +809,7 @@ mod tests {
     use crate::MockPlatformServiceProvider;
     use alien_core::Platform;
     use alien_gcp_clients::artifactregistry::MockArtifactRegistryApi;
-    use alien_gcp_clients::iam::{MockIamApi, Role, ServiceAccount};
+    use alien_gcp_clients::iam::{MockIamApi, ServiceAccount};
     use std::sync::Arc;
 
     fn basic_artifact_registry() -> ArtifactRegistry {
@@ -836,17 +836,6 @@ mod tests {
         }
     }
 
-    /// Adds common IAM mock expectations needed for resource-scoped permissions
-    /// (custom role binding flow triggered by management permission mutations).
-    fn add_resource_permission_mocks(mock_iam: &mut MockIamApi) {
-        mock_iam
-            .expect_get_role()
-            .returning(|_| Ok(Role::default()));
-        mock_iam
-            .expect_patch_role()
-            .returning(|_, _, _| Ok(Role::default()));
-    }
-
     fn setup_mock_client_for_creation_and_deletion() -> Arc<MockIamApi> {
         let mut mock_iam = MockIamApi::new();
 
@@ -859,8 +848,6 @@ mod tests {
         mock_iam
             .expect_delete_service_account()
             .returning(|_| Ok(()));
-
-        add_resource_permission_mocks(&mut mock_iam);
 
         Arc::new(mock_iam)
     }
@@ -881,8 +868,6 @@ mod tests {
                 let account_id = service_account_name.split('/').last().unwrap_or("unknown");
                 Ok(create_successful_service_account_response(account_id))
             });
-
-        add_resource_permission_mocks(&mut mock_iam);
 
         Arc::new(mock_iam)
     }

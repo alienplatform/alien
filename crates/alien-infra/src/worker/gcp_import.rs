@@ -36,6 +36,8 @@ impl ResourceImporter for GcpWorkerImporter {
             service_name: Some(data.service_name),
             url: data.url,
             operation_name: None,
+            compute_operation_name: None,
+            compute_operation_region: None,
             push_subscriptions: data.pubsub_subscription_names,
             storage_notification_topics: Vec::new(),
             gcs_notification_ids: Vec::new(),

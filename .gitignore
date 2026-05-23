@@ -18,6 +18,7 @@ target/
 
 .env
 .env.test
+.alien-kubeconfigs/
 alien-manager.test.toml
 alien-manager-test.db
 

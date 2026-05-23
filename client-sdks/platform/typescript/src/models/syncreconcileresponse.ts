@@ -88,9 +88,17 @@ export type SyncReconcileResponseCurrentReleaseOverrideAwGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -160,9 +168,17 @@ export type SyncReconcileResponseCurrentReleaseOverrideAzureGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -260,9 +276,17 @@ export type SyncReconcileResponseCurrentReleaseOverrideGcpGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -409,9 +433,17 @@ export type SyncReconcileResponseCurrentReleaseExtendAwGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -479,9 +511,17 @@ export type SyncReconcileResponseCurrentReleaseExtendAzureGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -579,9 +619,17 @@ export type SyncReconcileResponseCurrentReleaseExtendGcpGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -733,9 +781,17 @@ export type SyncReconcileResponseCurrentReleaseProfileAwGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -805,9 +861,17 @@ export type SyncReconcileResponseCurrentReleaseProfileAzureGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -905,9 +969,17 @@ export type SyncReconcileResponseCurrentReleaseProfileGcpGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -1391,9 +1463,17 @@ export type SyncReconcileResponsePreparedStackOverrideAwGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -1463,9 +1543,17 @@ export type SyncReconcileResponsePreparedStackOverrideAzureGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -1563,9 +1651,17 @@ export type SyncReconcileResponsePreparedStackOverrideGcpGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -1709,9 +1805,17 @@ export type SyncReconcileResponsePreparedStackExtendAwGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -1779,9 +1883,17 @@ export type SyncReconcileResponsePreparedStackExtendAzureGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -1879,9 +1991,17 @@ export type SyncReconcileResponsePreparedStackExtendGcpGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -2033,9 +2153,17 @@ export type SyncReconcileResponsePreparedStackProfileAwGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -2103,9 +2231,17 @@ export type SyncReconcileResponsePreparedStackProfileAzureGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -2203,9 +2339,17 @@ export type SyncReconcileResponsePreparedStackProfileGcpGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -2475,6 +2619,28 @@ export type SyncReconcileResponseStackStateConfig = {
 };
 
 /**
+ * Represents the target cloud platform.
+ */
+export const SyncReconcileResponseControllerPlatformEnum = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type SyncReconcileResponseControllerPlatformEnum = ClosedEnum<
+  typeof SyncReconcileResponseControllerPlatformEnum
+>;
+
+export type SyncReconcileResponseControllerPlatformUnion =
+  | SyncReconcileResponseControllerPlatformEnum
+  | any;
+
+/**
  * New ResourceRef that works with any resource type.
  *
  * @remarks
@@ -2666,6 +2832,11 @@ export type SyncReconcileResponseStackStateResources = {
    * Resource that can hold any resource type in the Alien system. All resources share common 'type' and 'id' fields with additional type-specific properties.
    */
   config: SyncReconcileResponseStackStateConfig;
+  controllerPlatform?:
+    | SyncReconcileResponseControllerPlatformEnum
+    | any
+    | null
+    | undefined;
   /**
    * Complete list of dependencies for this resource, including infrastructure dependencies.
    *
@@ -2837,9 +3008,17 @@ export type SyncReconcileResponseTargetReleaseOverrideAwGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -2909,9 +3088,17 @@ export type SyncReconcileResponseTargetReleaseOverrideAzureGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -3009,9 +3196,17 @@ export type SyncReconcileResponseTargetReleaseOverrideGcpGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -3155,9 +3350,17 @@ export type SyncReconcileResponseTargetReleaseExtendAwGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -3225,9 +3428,17 @@ export type SyncReconcileResponseTargetReleaseExtendAzureGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -3325,9 +3536,17 @@ export type SyncReconcileResponseTargetReleaseExtendGcpGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -3479,9 +3698,17 @@ export type SyncReconcileResponseTargetReleaseProfileAwGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -3549,9 +3776,17 @@ export type SyncReconcileResponseTargetReleaseProfileAzureGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -3649,9 +3884,17 @@ export type SyncReconcileResponseTargetReleaseProfileGcpGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -3929,6 +4172,28 @@ export type SyncReconcileResponseCurrent = {
   status: SyncReconcileResponseStatus;
   targetRelease?: SyncReconcileResponseTargetRelease | any | null | undefined;
 };
+
+/**
+ * Represents the target cloud platform.
+ */
+export const SyncReconcileResponseBasePlatformEnum = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type SyncReconcileResponseBasePlatformEnum = ClosedEnum<
+  typeof SyncReconcileResponseBasePlatformEnum
+>;
+
+export type SyncReconcileResponseBasePlatformUnion =
+  | SyncReconcileResponseBasePlatformEnum
+  | any;
 
 /**
  * Configuration for a single container worker cluster.
@@ -6570,6 +6835,7 @@ export type TargetConfig = {
    * This requires running with elevated cloud credentials.
    */
   allowFrozenChanges?: boolean | undefined;
+  basePlatform?: SyncReconcileResponseBasePlatformEnum | any | null | undefined;
   computeBackend?:
     | SyncReconcileResponseComputeBackendHorizon
     | any
@@ -6764,9 +7030,17 @@ export type OverrideReleaseInfoAwGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -6834,9 +7108,17 @@ export type OverrideReleaseInfoAzureGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -6926,9 +7208,17 @@ export type OverrideReleaseInfoGcpGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -7065,9 +7355,17 @@ export type ExtendReleaseInfoAwGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -7135,9 +7433,17 @@ export type ExtendReleaseInfoAzureGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -7225,9 +7531,17 @@ export type ExtendReleaseInfoGcpGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -7372,9 +7686,17 @@ export type ProfileReleaseInfoAwGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -7442,9 +7764,17 @@ export type ProfileReleaseInfoAzureGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -7534,9 +7864,17 @@ export type ProfileReleaseInfoGcpGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * GCP predefined IAM roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -7894,6 +8232,8 @@ export const SyncReconcileResponseCurrentReleaseOverrideAwGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncReconcileResponseCurrentReleaseOverrideAwGrantFromJSON(
@@ -8020,6 +8360,8 @@ export const SyncReconcileResponseCurrentReleaseOverrideAzureGrant$inboundSchema
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncReconcileResponseCurrentReleaseOverrideAzureGrantFromJSON(
@@ -8265,6 +8607,8 @@ export const SyncReconcileResponseCurrentReleaseOverrideGcpGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncReconcileResponseCurrentReleaseOverrideGcpGrantFromJSON(
@@ -8526,6 +8870,8 @@ export const SyncReconcileResponseCurrentReleaseExtendAwGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncReconcileResponseCurrentReleaseExtendAwGrantFromJSON(
@@ -8653,6 +8999,8 @@ export const SyncReconcileResponseCurrentReleaseExtendAzureGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncReconcileResponseCurrentReleaseExtendAzureGrantFromJSON(
@@ -8898,6 +9246,8 @@ export const SyncReconcileResponseCurrentReleaseExtendGcpGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncReconcileResponseCurrentReleaseExtendGcpGrantFromJSON(
@@ -9187,6 +9537,8 @@ export const SyncReconcileResponseCurrentReleaseProfileAwGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncReconcileResponseCurrentReleaseProfileAwGrantFromJSON(
@@ -9313,6 +9665,8 @@ export const SyncReconcileResponseCurrentReleaseProfileAzureGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncReconcileResponseCurrentReleaseProfileAzureGrantFromJSON(
@@ -9557,6 +9911,8 @@ export const SyncReconcileResponseCurrentReleaseProfileGcpGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncReconcileResponseCurrentReleaseProfileGcpGrantFromJSON(
@@ -10221,6 +10577,8 @@ export const SyncReconcileResponsePreparedStackOverrideAwGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncReconcileResponsePreparedStackOverrideAwGrantFromJSON(
@@ -10347,6 +10705,8 @@ export const SyncReconcileResponsePreparedStackOverrideAzureGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncReconcileResponsePreparedStackOverrideAzureGrantFromJSON(
@@ -10592,6 +10952,8 @@ export const SyncReconcileResponsePreparedStackOverrideGcpGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncReconcileResponsePreparedStackOverrideGcpGrantFromJSON(
@@ -10846,6 +11208,8 @@ export const SyncReconcileResponsePreparedStackExtendAwGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncReconcileResponsePreparedStackExtendAwGrantFromJSON(
@@ -10974,6 +11338,8 @@ export const SyncReconcileResponsePreparedStackExtendAzureGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncReconcileResponsePreparedStackExtendAzureGrantFromJSON(
@@ -11218,6 +11584,8 @@ export const SyncReconcileResponsePreparedStackExtendGcpGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncReconcileResponsePreparedStackExtendGcpGrantFromJSON(
@@ -11497,6 +11865,8 @@ export const SyncReconcileResponsePreparedStackProfileAwGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncReconcileResponsePreparedStackProfileAwGrantFromJSON(
@@ -11624,6 +11994,8 @@ export const SyncReconcileResponsePreparedStackProfileAzureGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncReconcileResponsePreparedStackProfileAzureGrantFromJSON(
@@ -11870,6 +12242,8 @@ export const SyncReconcileResponsePreparedStackProfileGcpGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncReconcileResponsePreparedStackProfileGcpGrantFromJSON(
@@ -12273,6 +12647,35 @@ export function syncReconcileResponseStackStateConfigFromJSON(
 }
 
 /** @internal */
+export const SyncReconcileResponseControllerPlatformEnum$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponseControllerPlatformEnum> = z.enum(
+    SyncReconcileResponseControllerPlatformEnum,
+  );
+
+/** @internal */
+export const SyncReconcileResponseControllerPlatformUnion$inboundSchema:
+  z.ZodType<SyncReconcileResponseControllerPlatformUnion, unknown> = z.union([
+    SyncReconcileResponseControllerPlatformEnum$inboundSchema,
+    z.any(),
+  ]);
+
+export function syncReconcileResponseControllerPlatformUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponseControllerPlatformUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseControllerPlatformUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponseControllerPlatformUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const SyncReconcileResponseStackStateDependency$inboundSchema: z.ZodType<
   SyncReconcileResponseStackStateDependency,
   unknown
@@ -12466,6 +12869,12 @@ export const SyncReconcileResponseStackStateResources$inboundSchema: z.ZodType<
 > = z.object({
   _internal: z.nullable(z.any()).optional(),
   config: z.lazy(() => SyncReconcileResponseStackStateConfig$inboundSchema),
+  controllerPlatform: z.nullable(
+    z.union([
+      SyncReconcileResponseControllerPlatformEnum$inboundSchema,
+      z.any(),
+    ]),
+  ).optional(),
   dependencies: z.array(
     z.lazy(() => SyncReconcileResponseStackStateDependency$inboundSchema),
   ).optional(),
@@ -12664,6 +13073,8 @@ export const SyncReconcileResponseTargetReleaseOverrideAwGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncReconcileResponseTargetReleaseOverrideAwGrantFromJSON(
@@ -12790,6 +13201,8 @@ export const SyncReconcileResponseTargetReleaseOverrideAzureGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncReconcileResponseTargetReleaseOverrideAzureGrantFromJSON(
@@ -13034,6 +13447,8 @@ export const SyncReconcileResponseTargetReleaseOverrideGcpGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncReconcileResponseTargetReleaseOverrideGcpGrantFromJSON(
@@ -13288,6 +13703,8 @@ export const SyncReconcileResponseTargetReleaseExtendAwGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncReconcileResponseTargetReleaseExtendAwGrantFromJSON(
@@ -13416,6 +13833,8 @@ export const SyncReconcileResponseTargetReleaseExtendAzureGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncReconcileResponseTargetReleaseExtendAzureGrantFromJSON(
@@ -13659,6 +14078,8 @@ export const SyncReconcileResponseTargetReleaseExtendGcpGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncReconcileResponseTargetReleaseExtendGcpGrantFromJSON(
@@ -13938,6 +14359,8 @@ export const SyncReconcileResponseTargetReleaseProfileAwGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncReconcileResponseTargetReleaseProfileAwGrantFromJSON(
@@ -14065,6 +14488,8 @@ export const SyncReconcileResponseTargetReleaseProfileAzureGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncReconcileResponseTargetReleaseProfileAzureGrantFromJSON(
@@ -14310,6 +14735,8 @@ export const SyncReconcileResponseTargetReleaseProfileGcpGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncReconcileResponseTargetReleaseProfileGcpGrantFromJSON(
@@ -14708,6 +15135,28 @@ export function syncReconcileResponseCurrentFromJSON(
     jsonString,
     (x) => SyncReconcileResponseCurrent$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'SyncReconcileResponseCurrent' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseBasePlatformEnum$inboundSchema: z.ZodEnum<
+  typeof SyncReconcileResponseBasePlatformEnum
+> = z.enum(SyncReconcileResponseBasePlatformEnum);
+
+/** @internal */
+export const SyncReconcileResponseBasePlatformUnion$inboundSchema: z.ZodType<
+  SyncReconcileResponseBasePlatformUnion,
+  unknown
+> = z.union([SyncReconcileResponseBasePlatformEnum$inboundSchema, z.any()]);
+
+export function syncReconcileResponseBasePlatformUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncReconcileResponseBasePlatformUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseBasePlatformUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncReconcileResponseBasePlatformUnion' from JSON`,
   );
 }
 
@@ -19621,6 +20070,9 @@ export function syncReconcileResponseStackSettingsFromJSON(
 export const TargetConfig$inboundSchema: z.ZodType<TargetConfig, unknown> = z
   .object({
     allowFrozenChanges: z.boolean().optional(),
+    basePlatform: z.nullable(
+      z.union([SyncReconcileResponseBasePlatformEnum$inboundSchema, z.any()]),
+    ).optional(),
     computeBackend: z.nullable(
       z.union([
         z.lazy(() => SyncReconcileResponseComputeBackendHorizon$inboundSchema),
@@ -19820,6 +20272,8 @@ export const OverrideReleaseInfoAwGrant$inboundSchema: z.ZodType<
   actions: z.nullable(z.array(z.string())).optional(),
   dataActions: z.nullable(z.array(z.string())).optional(),
   permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
 });
 
 export function overrideReleaseInfoAwGrantFromJSON(
@@ -19916,6 +20370,8 @@ export const OverrideReleaseInfoAzureGrant$inboundSchema: z.ZodType<
   actions: z.nullable(z.array(z.string())).optional(),
   dataActions: z.nullable(z.array(z.string())).optional(),
   permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
 });
 
 export function overrideReleaseInfoAzureGrantFromJSON(
@@ -20106,6 +20562,8 @@ export const OverrideReleaseInfoGcpGrant$inboundSchema: z.ZodType<
   actions: z.nullable(z.array(z.string())).optional(),
   dataActions: z.nullable(z.array(z.string())).optional(),
   permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
 });
 
 export function overrideReleaseInfoGcpGrantFromJSON(
@@ -20292,6 +20750,8 @@ export const ExtendReleaseInfoAwGrant$inboundSchema: z.ZodType<
   actions: z.nullable(z.array(z.string())).optional(),
   dataActions: z.nullable(z.array(z.string())).optional(),
   permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
 });
 
 export function extendReleaseInfoAwGrantFromJSON(
@@ -20388,6 +20848,8 @@ export const ExtendReleaseInfoAzureGrant$inboundSchema: z.ZodType<
   actions: z.nullable(z.array(z.string())).optional(),
   dataActions: z.nullable(z.array(z.string())).optional(),
   permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
 });
 
 export function extendReleaseInfoAzureGrantFromJSON(
@@ -20571,6 +21033,8 @@ export const ExtendReleaseInfoGcpGrant$inboundSchema: z.ZodType<
   actions: z.nullable(z.array(z.string())).optional(),
   dataActions: z.nullable(z.array(z.string())).optional(),
   permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
 });
 
 export function extendReleaseInfoGcpGrantFromJSON(
@@ -20776,6 +21240,8 @@ export const ProfileReleaseInfoAwGrant$inboundSchema: z.ZodType<
   actions: z.nullable(z.array(z.string())).optional(),
   dataActions: z.nullable(z.array(z.string())).optional(),
   permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
 });
 
 export function profileReleaseInfoAwGrantFromJSON(
@@ -20872,6 +21338,8 @@ export const ProfileReleaseInfoAzureGrant$inboundSchema: z.ZodType<
   actions: z.nullable(z.array(z.string())).optional(),
   dataActions: z.nullable(z.array(z.string())).optional(),
   permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
 });
 
 export function profileReleaseInfoAzureGrantFromJSON(
@@ -21056,6 +21524,8 @@ export const ProfileReleaseInfoGcpGrant$inboundSchema: z.ZodType<
   actions: z.nullable(z.array(z.string())).optional(),
   dataActions: z.nullable(z.array(z.string())).optional(),
   permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
 });
 
 export function profileReleaseInfoGcpGrantFromJSON(

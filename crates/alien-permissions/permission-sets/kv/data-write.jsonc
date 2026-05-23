@@ -28,13 +28,7 @@
     "gcp": [
       {
         "grant": {
-          "permissions": [
-            "datastore.entities.get",
-            "datastore.entities.list",
-            "datastore.entities.create",
-            "datastore.entities.update",
-            "datastore.entities.delete"
-          ]
+          "predefinedRoles": ["roles/datastore.user"]
         },
         // Firestore uses the (default) database shared across stacks.
         // Isolation is enforced at the collection level by the application (collection names

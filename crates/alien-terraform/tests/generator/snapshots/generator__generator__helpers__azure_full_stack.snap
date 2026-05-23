@@ -1,5 +1,6 @@
 ---
 source: crates/alien-terraform/tests/generator/helpers.rs
+assertion_line: 54
 expression: buf
 ---
 === versions.tf ===
@@ -270,6 +271,141 @@ resource "azurerm_resource_group" "default_resource_group" {
     resource        = "default-resource-group"
     "resource-type" = "resource-group"
   }
+}
+
+resource "azurerm_role_definition" "setup_management_storage_heartbeat" {
+  name               = "Storage Heartbeat (${local.resource_prefix}) [mgmt]"
+  role_definition_id = uuidv5("oid", "deployment:azure:mgmt-res-role-def:${local.resource_prefix}:storage/heartbeat")
+  scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
+  description        = "Allows readonly monitoring and health checks for storage resources"
+
+  permissions {
+    actions = [
+      "Microsoft.Storage/storageAccounts/blobServices/containers/read",
+      "Microsoft.Storage/storageAccounts/read"
+    ]
+    data_actions     = []
+    not_actions      = []
+    not_data_actions = []
+  }
+
+  assignable_scopes = [
+    "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
+  ]
+}
+
+resource "azurerm_role_definition" "setup_management_queue_heartbeat" {
+  name               = "Queue Heartbeat (${local.resource_prefix}) [mgmt]"
+  role_definition_id = uuidv5("oid", "deployment:azure:mgmt-res-role-def:${local.resource_prefix}:queue/heartbeat")
+  scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
+  description        = "Allows readonly monitoring and health checks for queue resources"
+
+  permissions {
+    actions = [
+      "Microsoft.ServiceBus/namespaces/authorizationRules/read",
+      "Microsoft.ServiceBus/namespaces/queues/read",
+      "Microsoft.ServiceBus/namespaces/read"
+    ]
+    data_actions     = []
+    not_actions      = []
+    not_data_actions = []
+  }
+
+  assignable_scopes = [
+    "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
+  ]
+}
+
+resource "azurerm_role_definition" "setup_management_kv_heartbeat" {
+  name               = "Kv Heartbeat (${local.resource_prefix}) [mgmt]"
+  role_definition_id = uuidv5("oid", "deployment:azure:mgmt-res-role-def:${local.resource_prefix}:kv/heartbeat")
+  scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
+  description        = "Allows readonly monitoring and health checks for kv resources"
+
+  permissions {
+    actions = [
+      "Microsoft.Storage/storageAccounts/read",
+      "Microsoft.Storage/storageAccounts/tableServices/read",
+      "Microsoft.Storage/storageAccounts/tableServices/tables/read"
+    ]
+    data_actions     = []
+    not_actions      = []
+    not_data_actions = []
+  }
+
+  assignable_scopes = [
+    "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
+  ]
+}
+
+resource "azurerm_role_definition" "setup_management_vault_data_write" {
+  name               = "Vault Data Write (${local.resource_prefix}) [mgmt]"
+  role_definition_id = uuidv5("oid", "deployment:azure:mgmt-res-role-def:${local.resource_prefix}:vault/data-write")
+  scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
+  description        = "Allows creating, updating, and deleting individual secrets within vault"
+
+  permissions {
+    actions = []
+    data_actions = [
+      "Microsoft.KeyVault/vaults/secrets/delete",
+      "Microsoft.KeyVault/vaults/secrets/readMetadata/action",
+      "Microsoft.KeyVault/vaults/secrets/setSecret/action"
+    ]
+    not_actions      = []
+    not_data_actions = []
+  }
+
+  assignable_scopes = [
+    "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
+  ]
+}
+
+resource "azurerm_role_definition" "setup_management_worker_management" {
+  name               = "Worker Management (${local.resource_prefix}) [mgmt]"
+  role_definition_id = uuidv5("oid", "deployment:azure:mgmt-res-role-def:${local.resource_prefix}:worker/management")
+  scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
+  description        = "Allows managing function configuration, versions, aliases, and monitoring"
+
+  permissions {
+    actions = [
+      "Microsoft.App/containerApps/authConfigs/read",
+      "Microsoft.App/containerApps/authConfigs/write",
+      "Microsoft.App/containerApps/listSecrets/action",
+      "Microsoft.App/containerApps/read",
+      "Microsoft.App/containerApps/revisions/activate/action",
+      "Microsoft.App/containerApps/revisions/deactivate/action",
+      "Microsoft.App/containerApps/revisions/read",
+      "Microsoft.App/containerApps/revisions/replicas/read",
+      "Microsoft.App/containerApps/revisions/restart/action",
+      "Microsoft.App/containerApps/sourceControls/read",
+      "Microsoft.App/containerApps/write",
+      "Microsoft.App/managedEnvironments/daprComponents/delete",
+      "Microsoft.App/managedEnvironments/daprComponents/read",
+      "Microsoft.App/managedEnvironments/daprComponents/write",
+      "Microsoft.App/managedEnvironments/join/action",
+      "Microsoft.App/managedEnvironments/read",
+      "Microsoft.Authorization/roleAssignments/delete",
+      "Microsoft.Authorization/roleAssignments/read",
+      "Microsoft.Authorization/roleAssignments/write",
+      "Microsoft.Authorization/roleDefinitions/read",
+      "Microsoft.ManagedIdentity/userAssignedIdentities/assign/action",
+      "Microsoft.ServiceBus/namespaces/queues/delete",
+      "Microsoft.ServiceBus/namespaces/queues/read",
+      "Microsoft.ServiceBus/namespaces/queues/write",
+      "Microsoft.ServiceBus/namespaces/read"
+    ]
+    data_actions = [
+      "Microsoft.KeyVault/vaults/certificates/import/action",
+      "Microsoft.KeyVault/vaults/certificates/read",
+      "Microsoft.ServiceBus/namespaces/messages/send/action"
+    ]
+    not_actions      = []
+    not_data_actions = []
+  }
+
+  assignable_scopes = [
+    "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
+  ]
 }
 
 === default_storage_account.tf ===
@@ -713,35 +849,10 @@ resource "azurerm_key_vault" "secrets" {
   ]
 }
 
-resource "azurerm_role_definition" "management_management_vault_data_write" {
-  name               = "Vault Data Write (${local.resource_prefix}) [mgmt]"
-  role_definition_id = uuidv5("oid", "deployment:azure:mgmt-res-role-def:${local.resource_prefix}:vault/data-write")
-  scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
-  description        = "Allows creating, updating, and deleting individual secrets within vault"
-
-  permissions {
-    actions = []
-    data_actions = [
-      "Microsoft.KeyVault/vaults/secrets/delete",
-      "Microsoft.KeyVault/vaults/secrets/readMetadata/action",
-      "Microsoft.KeyVault/vaults/secrets/setSecret/action"
-    ]
-    not_actions      = []
-    not_data_actions = []
-  }
-
-  assignable_scopes = [
-    "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
-  ]
-  depends_on = [
-    azurerm_resource_group.default_resource_group
-  ]
-}
-
-resource "azurerm_role_assignment" "secrets_management_management_vault_data_write_assignment" {
+resource "azurerm_role_assignment" "secrets_setup_management_vault_data_write_assignment" {
   name               = uuidv5("oid", "deployment:azure:mgmt-res-role-assign:${local.resource_prefix}:secrets:vault/data-write")
   scope              = azurerm_key_vault.secrets.id
-  role_definition_id = azurerm_role_definition.management_management_vault_data_write.role_definition_resource_id
+  role_definition_id = azurerm_role_definition.setup_management_vault_data_write.role_definition_resource_id
   principal_id       = azurerm_user_assigned_identity.management.principal_id
   depends_on = [
     azurerm_resource_group.default_resource_group
@@ -833,6 +944,11 @@ resource "terraform_data" "deployment_import" {
   }
   depends_on = [
     azurerm_resource_group.default_resource_group,
+    azurerm_role_definition.setup_management_storage_heartbeat,
+    azurerm_role_definition.setup_management_queue_heartbeat,
+    azurerm_role_definition.setup_management_kv_heartbeat,
+    azurerm_role_definition.setup_management_vault_data_write,
+    azurerm_role_definition.setup_management_worker_management,
     azurerm_storage_account.default_storage_account,
     azurerm_servicebus_namespace.default_service_bus_namespace,
     azurerm_log_analytics_workspace.default_container_apps_environment_logs,
@@ -861,8 +977,7 @@ resource "terraform_data" "deployment_import" {
     azurerm_servicebus_queue.jobs,
     azurerm_storage_table.metadata,
     azurerm_key_vault.secrets,
-    azurerm_role_definition.management_management_vault_data_write,
-    azurerm_role_assignment.secrets_management_management_vault_data_write_assignment,
+    azurerm_role_assignment.secrets_setup_management_vault_data_write_assignment,
     azurerm_container_registry.registry,
     azurerm_user_assigned_identity.registry_pull,
     azurerm_role_assignment.registry_pull_role,

@@ -16,8 +16,8 @@ use alien_gcp_clients::cloudscheduler::{HttpTarget, SchedulerJob, SchedulerOidcT
 use alien_gcp_clients::compute::{
     Address, AddressType, Backend, BackendService, BackendServiceProtocol, BalancingMode,
     ForwardingRule, ForwardingRuleProtocol, LoadBalancingScheme, NetworkEndpointGroup,
-    NetworkEndpointGroupCloudRun, NetworkEndpointType, SslCertificate, SslCertificateSelfManaged,
-    TargetHttpsProxy, UrlMap,
+    NetworkEndpointGroupCloudRun, NetworkEndpointType, Operation as ComputeOperation,
+    SslCertificate, SslCertificateSelfManaged, TargetHttpsProxy, UrlMap,
 };
 use alien_gcp_clients::gcs::GcsNotification;
 use alien_gcp_clients::iam::{Binding, IamPolicy};
@@ -174,6 +174,10 @@ pub struct GcpWorkerController {
     pub(crate) url: Option<String>,
     /// The operation name for long-running operations (for create, update, delete)
     pub(crate) operation_name: Option<String>,
+    /// The Compute Engine operation name for load-balancer infrastructure.
+    pub(crate) compute_operation_name: Option<String>,
+    /// Region for regional Compute Engine operations. `None` means global.
+    pub(crate) compute_operation_region: Option<String>,
     /// Push subscription names for queue triggers (one per queue trigger)
     pub(crate) push_subscriptions: Vec<String>,
     /// Pub/Sub topic names created for storage trigger notifications
@@ -222,6 +226,96 @@ pub struct GcpWorkerController {
     pub(crate) commands_topic_name: Option<String>,
     /// Pub/Sub subscription name for commands delivery
     pub(crate) commands_subscription_name: Option<String>,
+}
+
+impl GcpWorkerController {
+    fn record_compute_operation(
+        &mut self,
+        operation: ComputeOperation,
+        region: Option<String>,
+        resource_id: &str,
+        operation_label: &str,
+    ) -> Result<()> {
+        if operation.has_error() {
+            let error_msg = operation
+                .error
+                .and_then(|e| e.errors.first().and_then(|err| err.message.clone()))
+                .unwrap_or_else(|| "Unknown error".to_string());
+            return Err(AlienError::new(ErrorData::CloudPlatformError {
+                message: format!("{operation_label} failed: {error_msg}"),
+                resource_id: Some(resource_id.to_string()),
+            }));
+        }
+
+        if operation.is_done() {
+            self.compute_operation_name = None;
+            self.compute_operation_region = None;
+            return Ok(());
+        }
+
+        let operation_name = operation.name.ok_or_else(|| {
+            AlienError::new(ErrorData::CloudPlatformError {
+                message: format!("{operation_label} returned without operation name"),
+                resource_id: Some(resource_id.to_string()),
+            })
+        })?;
+
+        self.compute_operation_name = Some(operation_name);
+        self.compute_operation_region = region;
+        Ok(())
+    }
+
+    async fn compute_operation_done(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+        operation_label: &str,
+    ) -> Result<bool> {
+        let Some(operation_name) = self.compute_operation_name.as_ref() else {
+            return Ok(true);
+        };
+
+        let gcp_config = ctx.get_gcp_config()?;
+        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+
+        let operation = if let Some(region) = &self.compute_operation_region {
+            compute_client
+                .get_region_operation(region.clone(), operation_name.clone())
+                .await
+        } else {
+            compute_client
+                .get_global_operation(operation_name.clone())
+                .await
+        }
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to check {operation_label} status"),
+            resource_id: Some(resource_id.to_string()),
+        })?;
+
+        if !operation.is_done() {
+            debug!(
+                operation_name=%operation_name,
+                operation=%operation_label,
+                "Compute operation still in progress"
+            );
+            return Ok(false);
+        }
+
+        if operation.has_error() {
+            let error_msg = operation
+                .error
+                .and_then(|e| e.errors.first().and_then(|err| err.message.clone()))
+                .unwrap_or_else(|| "Unknown error".to_string());
+            return Err(AlienError::new(ErrorData::CloudPlatformError {
+                message: format!("{operation_label} failed: {error_msg}"),
+                resource_id: Some(resource_id.to_string()),
+            }));
+        }
+
+        self.compute_operation_name = None;
+        self.compute_operation_region = None;
+        Ok(true)
+    }
 }
 
 #[controller]
@@ -593,7 +687,7 @@ impl GcpWorkerController {
             )
             .build();
 
-        compute_client
+        let operation = compute_client
             .insert_ssl_certificate(ssl_certificate)
             .await
             .context(ErrorData::CloudPlatformError {
@@ -602,6 +696,12 @@ impl GcpWorkerController {
             })?;
 
         self.ssl_certificate_name = Some(ssl_cert_name);
+        self.record_compute_operation(
+            operation,
+            None,
+            &worker_config.id,
+            "SSL certificate import",
+        )?;
 
         // Store issued_at timestamp for renewal detection
         self.certificate_issued_at = resource.issued_at.clone();
@@ -611,6 +711,32 @@ impl GcpWorkerController {
             cert_name=%self.ssl_certificate_name.as_ref().unwrap(),
             "SSL certificate imported to GCP"
         );
+
+        Ok(HandlerAction::Continue {
+            state: WaitingForSslCertificate,
+            suggested_delay: Some(Duration::from_secs(5)),
+        })
+    }
+
+    #[handler(
+        state = WaitingForSslCertificate,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn waiting_for_ssl_certificate(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        if !self
+            .compute_operation_done(ctx, &worker_config.id, "SSL certificate import")
+            .await?
+        {
+            return Ok(HandlerAction::Stay {
+                max_times: 60,
+                suggested_delay: Some(Duration::from_secs(5)),
+            });
+        }
 
         Ok(HandlerAction::Continue {
             state: CreatingServerlessNeg,
@@ -628,8 +754,13 @@ impl GcpWorkerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         if self.serverless_neg_name.is_some() {
+            let state = if self.compute_operation_name.is_some() {
+                WaitingForServerlessNeg
+            } else {
+                CreatingBackendService
+            };
             return Ok(HandlerAction::Continue {
-                state: CreatingBackendService,
+                state,
                 suggested_delay: Some(Duration::from_secs(2)),
             });
         }
@@ -661,7 +792,7 @@ impl GcpWorkerController {
             .cloud_run(cloud_run_config)
             .build();
 
-        compute_client
+        let operation = compute_client
             .insert_region_network_endpoint_group(gcp_config.region.clone(), neg)
             .await
             .context(ErrorData::CloudPlatformError {
@@ -670,6 +801,12 @@ impl GcpWorkerController {
             })?;
 
         self.serverless_neg_name = Some(neg_name);
+        self.record_compute_operation(
+            operation,
+            Some(gcp_config.region.clone()),
+            &worker_config.id,
+            "serverless NEG creation",
+        )?;
 
         info!(
             worker=%worker_config.id,
@@ -678,8 +815,34 @@ impl GcpWorkerController {
         );
 
         Ok(HandlerAction::Continue {
+            state: WaitingForServerlessNeg,
+            suggested_delay: Some(Duration::from_secs(5)),
+        })
+    }
+
+    #[handler(
+        state = WaitingForServerlessNeg,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn waiting_for_serverless_neg(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        if !self
+            .compute_operation_done(ctx, &worker_config.id, "serverless NEG creation")
+            .await?
+        {
+            return Ok(HandlerAction::Stay {
+                max_times: 60,
+                suggested_delay: Some(Duration::from_secs(5)),
+            });
+        }
+
+        Ok(HandlerAction::Continue {
             state: CreatingBackendService,
-            suggested_delay: Some(Duration::from_secs(2)),
+            suggested_delay: None,
         })
     }
 
@@ -693,8 +856,13 @@ impl GcpWorkerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         if self.backend_service_name.is_some() {
+            let state = if self.compute_operation_name.is_some() {
+                WaitingForBackendService
+            } else {
+                CreatingUrlMap
+            };
             return Ok(HandlerAction::Continue {
-                state: CreatingUrlMap,
+                state,
                 suggested_delay: Some(Duration::from_secs(2)),
             });
         }
@@ -730,7 +898,7 @@ impl GcpWorkerController {
                 .build()])
             .build();
 
-        compute_client
+        let operation = compute_client
             .insert_backend_service(backend_service)
             .await
             .context(ErrorData::CloudPlatformError {
@@ -739,6 +907,12 @@ impl GcpWorkerController {
             })?;
 
         self.backend_service_name = Some(backend_service_name);
+        self.record_compute_operation(
+            operation,
+            None,
+            &worker_config.id,
+            "backend service creation",
+        )?;
 
         info!(
             worker=%worker_config.id,
@@ -747,8 +921,34 @@ impl GcpWorkerController {
         );
 
         Ok(HandlerAction::Continue {
+            state: WaitingForBackendService,
+            suggested_delay: Some(Duration::from_secs(5)),
+        })
+    }
+
+    #[handler(
+        state = WaitingForBackendService,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn waiting_for_backend_service(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        if !self
+            .compute_operation_done(ctx, &worker_config.id, "backend service creation")
+            .await?
+        {
+            return Ok(HandlerAction::Stay {
+                max_times: 60,
+                suggested_delay: Some(Duration::from_secs(5)),
+            });
+        }
+
+        Ok(HandlerAction::Continue {
             state: CreatingUrlMap,
-            suggested_delay: Some(Duration::from_secs(2)),
+            suggested_delay: None,
         })
     }
 
@@ -762,8 +962,13 @@ impl GcpWorkerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         if self.url_map_name.is_some() {
+            let state = if self.compute_operation_name.is_some() {
+                WaitingForUrlMap
+            } else {
+                CreatingTargetHttpsProxy
+            };
             return Ok(HandlerAction::Continue {
-                state: CreatingTargetHttpsProxy,
+                state,
                 suggested_delay: Some(Duration::from_secs(2)),
             });
         }
@@ -794,15 +999,15 @@ impl GcpWorkerController {
             .default_service(backend_service_url)
             .build();
 
-        compute_client
-            .insert_url_map(url_map)
-            .await
-            .context(ErrorData::CloudPlatformError {
+        let operation = compute_client.insert_url_map(url_map).await.context(
+            ErrorData::CloudPlatformError {
                 message: "Failed to create URL map".to_string(),
                 resource_id: Some(worker_config.id.clone()),
-            })?;
+            },
+        )?;
 
         self.url_map_name = Some(url_map_name);
+        self.record_compute_operation(operation, None, &worker_config.id, "URL map creation")?;
 
         info!(
             worker=%worker_config.id,
@@ -811,8 +1016,34 @@ impl GcpWorkerController {
         );
 
         Ok(HandlerAction::Continue {
+            state: WaitingForUrlMap,
+            suggested_delay: Some(Duration::from_secs(5)),
+        })
+    }
+
+    #[handler(
+        state = WaitingForUrlMap,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn waiting_for_url_map(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        if !self
+            .compute_operation_done(ctx, &worker_config.id, "URL map creation")
+            .await?
+        {
+            return Ok(HandlerAction::Stay {
+                max_times: 60,
+                suggested_delay: Some(Duration::from_secs(5)),
+            });
+        }
+
+        Ok(HandlerAction::Continue {
             state: CreatingTargetHttpsProxy,
-            suggested_delay: Some(Duration::from_secs(2)),
+            suggested_delay: None,
         })
     }
 
@@ -826,8 +1057,13 @@ impl GcpWorkerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         if self.target_https_proxy_name.is_some() {
+            let state = if self.compute_operation_name.is_some() {
+                WaitingForTargetHttpsProxy
+            } else {
+                CreatingGlobalAddress
+            };
             return Ok(HandlerAction::Continue {
-                state: CreatingGlobalAddress,
+                state,
                 suggested_delay: Some(Duration::from_secs(2)),
             });
         }
@@ -871,7 +1107,7 @@ impl GcpWorkerController {
             .ssl_certificates(vec![ssl_cert_url])
             .build();
 
-        compute_client
+        let operation = compute_client
             .insert_target_https_proxy(https_proxy)
             .await
             .context(ErrorData::CloudPlatformError {
@@ -880,6 +1116,12 @@ impl GcpWorkerController {
             })?;
 
         self.target_https_proxy_name = Some(proxy_name);
+        self.record_compute_operation(
+            operation,
+            None,
+            &worker_config.id,
+            "target HTTPS proxy creation",
+        )?;
 
         info!(
             worker=%worker_config.id,
@@ -888,8 +1130,34 @@ impl GcpWorkerController {
         );
 
         Ok(HandlerAction::Continue {
+            state: WaitingForTargetHttpsProxy,
+            suggested_delay: Some(Duration::from_secs(5)),
+        })
+    }
+
+    #[handler(
+        state = WaitingForTargetHttpsProxy,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn waiting_for_target_https_proxy(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        if !self
+            .compute_operation_done(ctx, &worker_config.id, "target HTTPS proxy creation")
+            .await?
+        {
+            return Ok(HandlerAction::Stay {
+                max_times: 60,
+                suggested_delay: Some(Duration::from_secs(5)),
+            });
+        }
+
+        Ok(HandlerAction::Continue {
             state: CreatingGlobalAddress,
-            suggested_delay: Some(Duration::from_secs(2)),
+            suggested_delay: None,
         })
     }
 
@@ -903,8 +1171,13 @@ impl GcpWorkerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         if self.global_address_name.is_some() {
+            let state = if self.compute_operation_name.is_some() {
+                WaitingForGlobalAddress
+            } else {
+                CreatingForwardingRule
+            };
             return Ok(HandlerAction::Continue {
-                state: CreatingForwardingRule,
+                state,
                 suggested_delay: Some(Duration::from_secs(2)),
             });
         }
@@ -923,7 +1196,7 @@ impl GcpWorkerController {
             .address_type(AddressType::External)
             .build();
 
-        compute_client
+        let operation = compute_client
             .insert_global_address(address)
             .await
             .context(ErrorData::CloudPlatformError {
@@ -932,6 +1205,12 @@ impl GcpWorkerController {
             })?;
 
         self.global_address_name = Some(address_name);
+        self.record_compute_operation(
+            operation,
+            None,
+            &worker_config.id,
+            "global address creation",
+        )?;
 
         info!(
             worker=%worker_config.id,
@@ -940,8 +1219,34 @@ impl GcpWorkerController {
         );
 
         Ok(HandlerAction::Continue {
+            state: WaitingForGlobalAddress,
+            suggested_delay: Some(Duration::from_secs(5)),
+        })
+    }
+
+    #[handler(
+        state = WaitingForGlobalAddress,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn waiting_for_global_address(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        if !self
+            .compute_operation_done(ctx, &worker_config.id, "global address creation")
+            .await?
+        {
+            return Ok(HandlerAction::Stay {
+                max_times: 60,
+                suggested_delay: Some(Duration::from_secs(5)),
+            });
+        }
+
+        Ok(HandlerAction::Continue {
             state: CreatingForwardingRule,
-            suggested_delay: Some(Duration::from_secs(2)),
+            suggested_delay: None,
         })
     }
 
@@ -955,8 +1260,13 @@ impl GcpWorkerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         if self.forwarding_rule_name.is_some() {
+            let state = if self.compute_operation_name.is_some() {
+                WaitingForForwardingRule
+            } else {
+                WaitingForDns
+            };
             return Ok(HandlerAction::Continue {
-                state: WaitingForDns,
+                state,
                 suggested_delay: Some(Duration::from_secs(2)),
             });
         }
@@ -1002,7 +1312,7 @@ impl GcpWorkerController {
             .load_balancing_scheme(LoadBalancingScheme::External)
             .build();
 
-        compute_client
+        let operation = compute_client
             .insert_global_forwarding_rule(forwarding_rule)
             .await
             .context(ErrorData::CloudPlatformError {
@@ -1011,6 +1321,12 @@ impl GcpWorkerController {
             })?;
 
         self.forwarding_rule_name = Some(forwarding_rule_name);
+        self.record_compute_operation(
+            operation,
+            None,
+            &worker_config.id,
+            "forwarding rule creation",
+        )?;
 
         info!(
             worker=%worker_config.id,
@@ -1019,8 +1335,34 @@ impl GcpWorkerController {
         );
 
         Ok(HandlerAction::Continue {
+            state: WaitingForForwardingRule,
+            suggested_delay: Some(Duration::from_secs(5)),
+        })
+    }
+
+    #[handler(
+        state = WaitingForForwardingRule,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn waiting_for_forwarding_rule(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        if !self
+            .compute_operation_done(ctx, &worker_config.id, "forwarding rule creation")
+            .await?
+        {
+            return Ok(HandlerAction::Stay {
+                max_times: 60,
+                suggested_delay: Some(Duration::from_secs(5)),
+            });
+        }
+
+        Ok(HandlerAction::Continue {
             state: WaitingForDns,
-            suggested_delay: Some(Duration::from_secs(2)),
+            suggested_delay: None,
         })
     }
 
@@ -3637,9 +3979,8 @@ impl GcpWorkerController {
                     })
                 })?;
 
-            // Generate IAM bindings for resource-scoped permissions
-            let bindings_result = generator
-                .generate_bindings(&permission_set, BindingTarget::Resource, permission_context)
+            let grant_plan = generator
+                .generate_grant_plan(&permission_set, BindingTarget::Resource, permission_context)
                 .context(ErrorData::CloudPlatformError {
                     message: format!(
                         "Failed to generate bindings for permission set '{}'",
@@ -3647,10 +3988,13 @@ impl GcpWorkerController {
                     ),
                     resource_id: Some(profile_name.to_string()),
                 })?;
+            let selected_bindings = grant_plan.bindings_for_target(
+                alien_permissions::generators::GcpBindingTargetScope::CurrentResource,
+            );
 
             // Convert and add bindings
             let member = format!("serviceAccount:{}", service_account_email);
-            for binding in bindings_result.bindings {
+            for binding in selected_bindings {
                 all_bindings.push(Binding {
                     role: binding.role,
                     members: vec![member.clone()],
@@ -4321,6 +4665,8 @@ impl GcpWorkerController {
             service_name: Some(function_name.to_string()),
             url: Some(format!("https://{}-abcd1234-uc.a.run.app", function_name)),
             operation_name: None,
+            compute_operation_name: None,
+            compute_operation_region: None,
             push_subscriptions: Vec::new(),
             storage_notification_topics: Vec::new(),
             gcs_notification_ids: Vec::new(),
@@ -4362,8 +4708,8 @@ mod tests {
     };
     use alien_error::AlienError;
     use alien_gcp_clients::cloudrun::{Condition, ConditionState, MockCloudRunApi, Service};
-    use alien_gcp_clients::gcp::compute::{Address, MockComputeApi, Operation};
-    use alien_gcp_clients::iam::{IamPolicy, MockIamApi, Role};
+    use alien_gcp_clients::gcp::compute::{Address, MockComputeApi, Operation, OperationStatus};
+    use alien_gcp_clients::iam::{IamPolicy, MockIamApi};
     use alien_gcp_clients::longrunning::Operation as LongRunningOperation;
     use alien_gcp_clients::longrunning::{OperationResult, Status};
     use alien_gcp_clients::pubsub::MockPubSubApi;
@@ -4479,19 +4825,27 @@ mod tests {
     }
 
     fn create_ssl_compute_mock_for_creation_and_deletion() -> Arc<MockComputeApi> {
+        fn completed_compute_operation() -> Operation {
+            Operation {
+                name: Some("test-compute-operation".to_string()),
+                status: Some(OperationStatus::Done),
+                ..Default::default()
+            }
+        }
+
         let mut mock = MockComputeApi::new();
         mock.expect_insert_ssl_certificate()
-            .returning(|_| Ok(Operation::default()));
+            .returning(|_| Ok(completed_compute_operation()));
         mock.expect_insert_region_network_endpoint_group()
-            .returning(|_, _| Ok(Operation::default()));
+            .returning(|_, _| Ok(completed_compute_operation()));
         mock.expect_insert_backend_service()
-            .returning(|_| Ok(Operation::default()));
+            .returning(|_| Ok(completed_compute_operation()));
         mock.expect_insert_url_map()
-            .returning(|_| Ok(Operation::default()));
+            .returning(|_| Ok(completed_compute_operation()));
         mock.expect_insert_target_https_proxy()
-            .returning(|_| Ok(Operation::default()));
+            .returning(|_| Ok(completed_compute_operation()));
         mock.expect_insert_global_address()
-            .returning(|_| Ok(Operation::default()));
+            .returning(|_| Ok(completed_compute_operation()));
         mock.expect_get_global_address().returning(|_| {
             Ok(Address {
                 address: Some("203.0.113.1".to_string()),
@@ -4499,7 +4853,7 @@ mod tests {
             })
         });
         mock.expect_insert_global_forwarding_rule()
-            .returning(|_| Ok(Operation::default()));
+            .returning(|_| Ok(completed_compute_operation()));
         mock.expect_delete_global_forwarding_rule()
             .returning(|_| Ok(Operation::default()));
         mock.expect_delete_target_https_proxy()
@@ -4721,14 +5075,7 @@ mod tests {
     }
 
     fn create_gcp_iam_mock_for_resource_permissions() -> Arc<MockIamApi> {
-        let mut mock_iam = MockIamApi::new();
-        mock_iam
-            .expect_get_role()
-            .returning(|_| Ok(Role::default()));
-        mock_iam
-            .expect_patch_role()
-            .returning(|_, _, _| Ok(Role::default()));
-        Arc::new(mock_iam)
+        Arc::new(MockIamApi::new())
     }
 
     fn setup_mock_service_provider(
@@ -5483,6 +5830,8 @@ mod tests {
             service_name: None, // This is the key - no service name set
             url: None,
             operation_name: None,
+            compute_operation_name: None,
+            compute_operation_region: None,
             push_subscriptions: Vec::new(),
             fqdn: None,
             certificate_id: None,

@@ -518,14 +518,10 @@ impl GcpServiceAccountController {
         if project_bindings.is_empty() {
             return Ok(());
         }
-        let selected_custom_roles = grant_plan.custom_roles_for_bindings(&project_bindings);
-        ResourcePermissionsHelper::ensure_gcp_custom_roles(
-            ctx,
-            &permission_set.id,
-            selected_custom_roles,
-        )
-        .await?;
 
+        // ServiceAccount reconciliation may attach roles to the service account,
+        // but GCP custom role definitions are setup-owned and must already
+        // exist. Imported runtime credentials should not need iam.roles.update.
         for binding in project_bindings {
             new_bindings
                 .push(ResourcePermissionsHelper::gcp_policy_binding_from_iam_binding(binding));

@@ -29,5 +29,6 @@ pub struct AwsNetworkImportData {
     /// Availability zone names used by created or BYO subnets.
     pub availability_zones: Vec<String>,
     /// True when the VPC is owned outside this stack.
+    #[serde(deserialize_with = "crate::import::data::deserialize_bool_from_bool_or_string")]
     pub is_byo_vpc: bool,
 }

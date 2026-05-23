@@ -2,9 +2,12 @@ terraform {
   required_providers {
     aws     = { source = "hashicorp/aws", version = "~> 5.0" }
     google  = { source = "hashicorp/google", version = "~> 5.0" }
-    azurerm = { source = "hashicorp/azurerm", version = "~> 3.0" }
+    azapi   = { source = "Azure/azapi", version = "~> 2.4" }
+    azurerm = { source = "hashicorp/azurerm", version = ">= 4.46.0, < 5.0.0" }
     azuread = { source = "hashicorp/azuread", version = "~> 3.0" }
+    helm    = { source = "hashicorp/helm", version = "~> 2.0" }
     random  = { source = "hashicorp/random", version = "~> 3.0" }
+    time    = { source = "hashicorp/time", version = "~> 0.13" }
   }
 }
 
@@ -73,4 +76,12 @@ provider "azurerm" {
   client_id       = var.azure_target_client_id
   client_secret   = var.azure_target_client_secret
   features {}
+}
+
+provider "azapi" {
+  alias           = "target"
+  subscription_id = var.azure_target_subscription_id
+  tenant_id       = var.azure_target_tenant_id
+  client_id       = var.azure_target_client_id
+  client_secret   = var.azure_target_client_secret
 }

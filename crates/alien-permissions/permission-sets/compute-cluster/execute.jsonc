@@ -129,11 +129,7 @@
       // Cross-project artifact registry image pull from managing project
       {
         "grant": {
-          "permissions": [
-            "artifactregistry.repositories.downloadArtifacts",
-            "artifactregistry.repositories.get",
-            "artifactregistry.repositories.list"
-          ]
+          "predefinedRoles": ["roles/artifactregistry.reader"]
         },
         "binding": {
           "stack": {

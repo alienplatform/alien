@@ -553,7 +553,11 @@ fn configmap_tpl() -> String {
 {{- if $service.publicUrl -}}
 {{- $_ := set $publicUrls $id $service.publicUrl -}}
 {{- else if $service.host -}}
+{{- if and $service.tls.enabled $service.tls.secretName -}}
 {{- $_ := set $publicUrls $id (printf "https://%s" $service.host) -}}
+{{- else -}}
+{{- $_ := set $publicUrls $id (printf "http://%s" $service.host) -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 apiVersion: v1

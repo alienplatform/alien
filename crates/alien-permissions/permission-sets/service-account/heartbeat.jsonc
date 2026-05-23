@@ -20,7 +20,7 @@
     "gcp": [
       {
         "grant": {
-          "permissions": ["iam.serviceAccounts.get", "iam.roles.get"]
+          "predefinedRoles": ["roles/iam.serviceAccountViewer"]
         },
         "binding": {
           "stack": {
@@ -28,6 +28,19 @@
           },
           "resource": {
             "scope": "projects/${projectName}/serviceAccounts/${stackPrefix}-${resourceName}@${projectName}.iam.gserviceaccount.com"
+          }
+        }
+      },
+      {
+        "grant": {
+          "predefinedRoles": ["roles/iam.roleViewer"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
           }
         }
       }

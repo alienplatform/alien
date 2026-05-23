@@ -1152,10 +1152,15 @@ fn apply_kubernetes_service_values(
                 helm_target.namespace,
                 host_suffix.trim_start_matches('.')
             );
+            let scheme = if helm_target.runtime.tls_secret_name.is_some() {
+                "https"
+            } else {
+                "http"
+            };
             service.insert("host".to_string(), Value::String(host.clone()));
             service.insert(
                 "publicUrl".to_string(),
-                Value::String(format!("https://{host}")),
+                Value::String(format!("{scheme}://{host}")),
             );
         }
     }

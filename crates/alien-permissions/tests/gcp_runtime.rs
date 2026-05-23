@@ -41,12 +41,9 @@ fn gcp_custom_role_metadata_uses_stack_name_and_permission_description() {
 
     let storage_role = roles
         .iter()
-        .find(|role| role.role_id == "role_my_stack_storage_data_write_part1")
-        .expect("storage permissions role exists");
-    assert_eq!(
-        storage_role.title,
-        "byoc-database: Storage data write (part 1)"
-    );
+        .find(|role| role.role_id == "role_my_stack_storage_data_write")
+        .expect("storage helper role exists");
+    assert_eq!(storage_role.title, "byoc-database: Storage data write");
     assert_eq!(
         storage_role.description,
         "Allows reading and writing data to storage buckets and containers. Stack: byoc-database. Deployment prefix: my-stack. Permission set: storage/data-write."
@@ -266,15 +263,28 @@ fn gcp_storage_resource_grant_plan_isolates_project_sign_blob_helper(
     let resource_bindings = grant_plan.bindings_for_target(GcpBindingTargetScope::CurrentResource);
     let project_bindings = grant_plan.bindings_for_target(GcpBindingTargetScope::Project);
 
-    assert_eq!(resource_bindings.len(), 1);
     assert_eq!(project_bindings.len(), 1);
+    if permission_set_id == "storage/data-write" {
+        assert_eq!(resource_bindings.len(), 2);
+        assert!(resource_bindings
+            .iter()
+            .any(|binding| binding.role == "roles/storage.objectAdmin"));
+        assert!(resource_bindings
+            .iter()
+            .any(|binding| binding.role == "roles/storage.bucketViewer"));
+        assert!(grant_plan
+            .custom_roles_for_bindings(&resource_bindings)
+            .is_empty());
+    } else {
+        assert_eq!(resource_bindings.len(), 1);
 
-    let resource_roles = grant_plan.custom_roles_for_bindings(&resource_bindings);
-    assert_eq!(resource_roles.len(), 1);
-    assert!(resource_roles[0]
-        .included_permissions
-        .iter()
-        .any(|permission| permission == "storage.objects.get"));
+        let resource_roles = grant_plan.custom_roles_for_bindings(&resource_bindings);
+        assert_eq!(resource_roles.len(), 1);
+        assert!(resource_roles[0]
+            .included_permissions
+            .iter()
+            .any(|permission| permission == "storage.objects.get"));
+    }
 
     let project_roles = grant_plan.custom_roles_for_bindings(&project_bindings);
     assert_eq!(project_roles.len(), 1);
@@ -343,9 +353,8 @@ fn gcp_resource_target_project_bindings_do_not_include_sensitive_data_permission
 #[test]
 fn gcp_single_custom_role_helper_rejects_multi_entry_sets() {
     let generator = GcpRuntimePermissionsGenerator::new();
-    let permission_set =
-        get_permission_set("artifact-registry/pull").expect("permission set exists");
-    let context = create_test_context().with_resource_name("app-images");
+    let permission_set = get_permission_set("storage/data-read").expect("permission set exists");
+    let context = create_test_context().with_resource_name("app-bucket");
 
     let error = generator
         .generate_custom_role(permission_set, &context)

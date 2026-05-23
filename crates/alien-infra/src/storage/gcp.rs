@@ -843,7 +843,7 @@ mod tests {
         Bucket, IamConfiguration, Lifecycle, LifecycleAction, LifecycleCondition, LifecycleRule,
         ListObjectsResponse, MockGcsApi, Object, UniformBucketLevelAccess, Versioning,
     };
-    use alien_gcp_clients::iam::{Binding, IamPolicy, MockIamApi, Role};
+    use alien_gcp_clients::iam::{Binding, IamPolicy, MockIamApi};
     use rstest::{fixture, rstest};
 
     use crate::core::{
@@ -1022,14 +1022,7 @@ mod tests {
     }
 
     fn create_gcp_iam_mock_for_resource_permissions() -> Arc<MockIamApi> {
-        let mut mock_iam = MockIamApi::new();
-        mock_iam
-            .expect_get_role()
-            .returning(|_| Ok(Role::default()));
-        mock_iam
-            .expect_patch_role()
-            .returning(|_, _, _| Ok(Role::default()));
-        Arc::new(mock_iam)
+        Arc::new(MockIamApi::new())
     }
 
     fn setup_mock_service_provider(mock_gcs: Arc<MockGcsApi>) -> Arc<MockPlatformServiceProvider> {

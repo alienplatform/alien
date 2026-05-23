@@ -354,7 +354,7 @@ mod tests {
         MockPlatformServiceProvider, PlatformServiceProvider,
     };
     use alien_core::{Platform, Queue, ResourceStatus};
-    use alien_gcp_clients::iam::{MockIamApi, Role};
+    use alien_gcp_clients::iam::MockIamApi;
     use alien_gcp_clients::pubsub::{ListTopicsResponse, MockPubSubApi, Subscription, Topic};
     use std::sync::Arc;
 
@@ -371,14 +371,7 @@ mod tests {
     }
 
     fn create_gcp_iam_mock_for_resource_permissions() -> Arc<MockIamApi> {
-        let mut mock_iam = MockIamApi::new();
-        mock_iam
-            .expect_get_role()
-            .returning(|_| Ok(Role::default()));
-        mock_iam
-            .expect_patch_role()
-            .returning(|_, _, _| Ok(Role::default()));
-        Arc::new(mock_iam)
+        Arc::new(MockIamApi::new())
     }
 
     fn setup_mock_provider(mock_pubsub: Arc<MockPubSubApi>) -> Arc<MockPlatformServiceProvider> {

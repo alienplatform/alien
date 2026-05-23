@@ -161,6 +161,23 @@ mod tests {
 
     #[test]
     fn aws_import_data_accepts_cloudformation_string_booleans() {
+        let network: AwsNetworkImportData = serde_json::from_value(json!({
+            "vpcId": "vpc-123",
+            "cidrBlock": null,
+            "internetGatewayId": null,
+            "natGatewayId": null,
+            "eipAllocationId": null,
+            "publicSubnetIds": ["subnet-public"],
+            "privateSubnetIds": ["subnet-private"],
+            "publicRouteTableId": null,
+            "privateRouteTableId": null,
+            "securityGroupId": "sg-123",
+            "availabilityZones": [],
+            "isByoVpc": "true",
+        }))
+        .expect("network import data should parse");
+        assert!(network.is_byo_vpc);
+
         let remote_stack_management: AwsRemoteStackManagementImportData =
             serde_json::from_value(json!({
                 "roleName": "alien-manager",

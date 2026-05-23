@@ -12,8 +12,10 @@ let value: ExtendReleaseInfoAzureGrant = {};
 
 ## Fields
 
-| Field                          | Type                           | Required                       | Description                    |
-| ------------------------------ | ------------------------------ | ------------------------------ | ------------------------------ |
-| `actions`                      | *string*[]                     | :heavy_minus_sign:             | AWS IAM actions (only for AWS) |
-| `dataActions`                  | *string*[]                     | :heavy_minus_sign:             | Azure actions (only for Azure) |
-| `permissions`                  | *string*[]                     | :heavy_minus_sign:             | GCP permissions (only for GCP) |
+| Field                                                          | Type                                                           | Required                                                       | Description                                                    |
+| -------------------------------------------------------------- | -------------------------------------------------------------- | -------------------------------------------------------------- | -------------------------------------------------------------- |
+| `actions`                                                      | *string*[]                                                     | :heavy_minus_sign:                                             | AWS IAM actions (only for AWS)                                 |
+| `dataActions`                                                  | *string*[]                                                     | :heavy_minus_sign:                                             | Azure actions (only for Azure)                                 |
+| `permissions`                                                  | *string*[]                                                     | :heavy_minus_sign:                                             | GCP permissions that require an exact residual custom role.    |
+| `predefinedRoles`                                              | *string*[]                                                     | :heavy_minus_sign:                                             | GCP predefined IAM roles to bind directly.                     |
+| `residualPermissions`                                          | *string*[]                                                     | :heavy_minus_sign:                                             | GCP residual custom permissions to pair with predefined roles. |

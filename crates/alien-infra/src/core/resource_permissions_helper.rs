@@ -108,7 +108,10 @@ impl ResourcePermissionsHelper {
         Ok(())
     }
 
-    /// Idempotently create or update GCP custom roles from a permission set.
+    /// Setup-only: idempotently create or update GCP custom roles from a permission set.
+    ///
+    /// Live resource reconciliation must bind principals to roles created by
+    /// setup and must not call this helper to repair missing role definitions.
     pub async fn ensure_single_gcp_custom_role(
         ctx: &ResourceControllerContext<'_>,
         permission_set: &PermissionSet,
@@ -129,7 +132,10 @@ impl ResourcePermissionsHelper {
         Self::ensure_gcp_custom_roles(ctx, &permission_set.id, custom_roles).await
     }
 
-    /// Idempotently create or update the selected GCP custom roles.
+    /// Setup-only: idempotently create or update the selected GCP custom roles.
+    ///
+    /// Terraform/CloudFormation/CLI setup owns role definitions. Runtime
+    /// resource controllers should fail if a required role is missing.
     pub async fn ensure_gcp_custom_roles(
         ctx: &ResourceControllerContext<'_>,
         permission_set_id: &str,
@@ -384,6 +390,10 @@ impl ResourcePermissionsHelper {
     }
 
     /// Collect GCP resource-scoped IAM bindings with generator metadata intact.
+    ///
+    /// This is a live resource reconciliation path. Custom role definitions are
+    /// setup-owned; this helper only returns bindings to roles that setup has
+    /// already created.
     pub async fn collect_gcp_resource_scoped_iam_bindings(
         ctx: &ResourceControllerContext<'_>,
         resource_id: &str,
@@ -546,8 +556,6 @@ impl ResourcePermissionsHelper {
                 })?;
             let selected_bindings =
                 grant_plan.bindings_for_target(GcpBindingTargetScope::CurrentResource);
-            let selected_custom_roles = grant_plan.custom_roles_for_bindings(&selected_bindings);
-            Self::ensure_gcp_custom_roles(ctx, &permission_set.id, selected_custom_roles).await?;
 
             // Convert and add bindings
             let member = format!("serviceAccount:{}", service_account_email);
@@ -720,8 +728,6 @@ impl ResourcePermissionsHelper {
                 })?;
             let selected_bindings =
                 grant_plan.bindings_for_target(GcpBindingTargetScope::CurrentResource);
-            let selected_custom_roles = grant_plan.custom_roles_for_bindings(&selected_bindings);
-            Self::ensure_gcp_custom_roles(ctx, &permission_set.id, selected_custom_roles).await?;
 
             let bindings_count = selected_bindings.len();
             for mut binding in selected_bindings {
@@ -813,7 +819,7 @@ impl ResourcePermissionsHelper {
                     "Processing AWS resource-scoped permissions"
                 );
 
-                if let Err(e) = Self::process_aws_profile_permissions(
+                Self::process_aws_profile_permissions(
                     ctx,
                     resource_id,
                     profile_name,
@@ -821,15 +827,7 @@ impl ResourcePermissionsHelper {
                     &generator,
                     &permission_context,
                 )
-                .await
-                {
-                    warn!(
-                        resource_id = %resource_id,
-                        profile = %profile_name,
-                        error = %e,
-                        "Failed to process AWS permissions for profile, continuing with other profiles"
-                    );
-                }
+                .await?;
             }
         }
 
@@ -1125,6 +1123,10 @@ impl ResourcePermissionsHelper {
     /// Public method for controllers that manage their own binding collection
     /// (e.g., worker/gcp.rs) to add management SA bindings for pre-computed
     /// permission set references.
+    ///
+    /// This is a live resource reconciliation path. Custom role definitions are
+    /// setup-owned; this helper only returns bindings to roles that setup has
+    /// already created.
     pub async fn collect_gcp_management_bindings_for(
         ctx: &ResourceControllerContext<'_>,
         resource_id: &str,
@@ -1185,8 +1187,6 @@ impl ResourcePermissionsHelper {
                     resource_id: Some(resource_id.to_string()),
                 })?;
             let selected_bindings = grant_plan.bindings_for_target(expected_target);
-            let selected_custom_roles = grant_plan.custom_roles_for_bindings(&selected_bindings);
-            Self::ensure_gcp_custom_roles(ctx, &permission_set.id, selected_custom_roles).await?;
 
             let bindings_count = selected_bindings.len();
             for binding in selected_bindings {

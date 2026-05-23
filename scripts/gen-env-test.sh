@@ -82,6 +82,9 @@ aws_ecr_repository=$(echo "$aws_lambda_image" | cut -d: -f1)
 # E2E artifact registry (separate from bindings-test resources)
 e2e_aws_ar_push_role_arn=$(jq_val e2e_aws_ar_push_role_arn)
 e2e_aws_ar_pull_role_arn=$(jq_val e2e_aws_ar_pull_role_arn)
+e2e_eks_cluster_name=$(jq_val e2e_eks_cluster_name)
+e2e_eks_kube_context=$(jq_val e2e_eks_kube_context)
+e2e_eks_public_host_suffix=$(jq_val e2e_eks_public_host_suffix)
 
 gcp_management_sa_key=$(jq_val_json management_gcp_service_account_key)
 gcp_management_project_id=$(jq_val management_gcp_project_id)
@@ -105,6 +108,10 @@ gcp_gar_repository=$(echo "$gcp_cloudrun_image" | cut -d: -f1)
 e2e_gcp_gar_repository=$(jq_val e2e_gcp_gar_repository)
 e2e_gcp_ar_pull_sa_email=$(jq_val e2e_gcp_ar_pull_sa_email)
 e2e_gcp_ar_push_sa_email=$(jq_val e2e_gcp_ar_push_sa_email)
+e2e_gke_cluster_name=$(jq_val e2e_gke_cluster_name)
+e2e_gke_cluster_location=$(jq_val e2e_gke_cluster_location)
+e2e_gke_kube_context=$(jq_val e2e_gke_kube_context)
+e2e_gke_public_host_suffix=$(jq_val e2e_gke_public_host_suffix)
 
 azure_management_subscription_id=$(jq_val management_azure_subscription_id)
 azure_management_tenant_id=$(jq_val management_azure_tenant_id)
@@ -142,10 +149,37 @@ azure_shared_container_env_join_role_id=$(jq_val azure_shared_container_env_join
 e2e_azure_vnet_resource_id=$(jq_val e2e_azure_vnet_resource_id)
 e2e_azure_public_subnet_name=$(jq_val e2e_azure_public_subnet_name)
 e2e_azure_private_subnet_name=$(jq_val e2e_azure_private_subnet_name)
+e2e_aks_cluster_name=$(jq_val e2e_aks_cluster_name)
+e2e_aks_cluster_resource_group=$(jq_val e2e_aks_cluster_resource_group)
+e2e_aks_kube_context=$(jq_val e2e_aks_kube_context)
+e2e_aks_public_host_suffix=$(jq_val e2e_aks_public_host_suffix)
 
 aws_target_aliases=$(jq_val_target_aliases aws_target_options)
 gcp_target_aliases=$(jq_val_target_aliases gcp_target_options)
 azure_target_aliases=$(jq_val_target_aliases azure_target_options)
+e2e_k8s_ingress_class=$(jq_val e2e_k8s_ingress_class)
+
+kubeconfig_dir="$(pwd)/.alien-kubeconfigs"
+mkdir -p "$kubeconfig_dir"
+e2e_eks_kubeconfig_path="$kubeconfig_dir/eks.yaml"
+e2e_gke_kubeconfig_path="$kubeconfig_dir/gke.yaml"
+e2e_gke_target_1_kubeconfig_path="$kubeconfig_dir/gke-target-1.yaml"
+e2e_gke_target_2_kubeconfig_path="$kubeconfig_dir/gke-target-2.yaml"
+e2e_gke_target_3_kubeconfig_path="$kubeconfig_dir/gke-target-3.yaml"
+e2e_aks_kubeconfig_path="$kubeconfig_dir/aks.yaml"
+jq_val e2e_eks_kubeconfig > "$e2e_eks_kubeconfig_path"
+jq_val e2e_gke_kubeconfig > "$e2e_gke_kubeconfig_path"
+jq_val e2e_gke_target_1_kubeconfig > "$e2e_gke_target_1_kubeconfig_path"
+jq_val e2e_gke_target_2_kubeconfig > "$e2e_gke_target_2_kubeconfig_path"
+jq_val e2e_gke_target_3_kubeconfig > "$e2e_gke_target_3_kubeconfig_path"
+jq_val e2e_aks_kubeconfig > "$e2e_aks_kubeconfig_path"
+chmod 600 \
+  "$e2e_eks_kubeconfig_path" \
+  "$e2e_gke_kubeconfig_path" \
+  "$e2e_gke_target_1_kubeconfig_path" \
+  "$e2e_gke_target_2_kubeconfig_path" \
+  "$e2e_gke_target_3_kubeconfig_path" \
+  "$e2e_aks_kubeconfig_path"
 
 cat > .env.test <<EOF
 # AWS - Management
@@ -181,6 +215,13 @@ ALIEN_TEST_AWS_ECR_REPOSITORY='${aws_ecr_repository}'
 E2E_AWS_AR_PUSH_ROLE_ARN='${e2e_aws_ar_push_role_arn}'
 E2E_AWS_AR_PULL_ROLE_ARN='${e2e_aws_ar_pull_role_arn}'
 
+# Kubernetes E2E kubeconfigs generated from infra/test outputs
+ALIEN_TEST_EKS_KUBECONFIG='${e2e_eks_kubeconfig_path}'
+ALIEN_TEST_EKS_CLUSTER_NAME='${e2e_eks_cluster_name}'
+ALIEN_TEST_EKS_KUBE_CONTEXT='${e2e_eks_kube_context}'
+ALIEN_TEST_EKS_INGRESS_CLASS='${e2e_k8s_ingress_class}'
+ALIEN_TEST_EKS_PUBLIC_HOST_SUFFIX='${e2e_eks_public_host_suffix}'
+
 # GCP - Management
 GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY='${gcp_management_sa_key}'
 GOOGLE_MANAGEMENT_PROJECT_ID='${gcp_management_project_id}'
@@ -209,6 +250,14 @@ ALIEN_TEST_GCP_GAR_REPOSITORY='${gcp_gar_repository}'
 E2E_GCP_GAR_REPOSITORY='${e2e_gcp_gar_repository}'
 E2E_GCP_AR_PULL_SA_EMAIL='${e2e_gcp_ar_pull_sa_email}'
 E2E_GCP_AR_PUSH_SA_EMAIL='${e2e_gcp_ar_push_sa_email}'
+
+# Kubernetes E2E kubeconfigs generated from infra/test outputs
+ALIEN_TEST_GKE_KUBECONFIG='${e2e_gke_kubeconfig_path}'
+ALIEN_TEST_GKE_CLUSTER_NAME='${e2e_gke_cluster_name}'
+ALIEN_TEST_GKE_CLUSTER_LOCATION='${e2e_gke_cluster_location}'
+ALIEN_TEST_GKE_KUBE_CONTEXT='${e2e_gke_kube_context}'
+ALIEN_TEST_GKE_INGRESS_CLASS='${e2e_k8s_ingress_class}'
+ALIEN_TEST_GKE_PUBLIC_HOST_SUFFIX='${e2e_gke_public_host_suffix}'
 
 # Azure - Management
 AZURE_MANAGEMENT_SUBSCRIPTION_ID='${azure_management_subscription_id}'
@@ -261,6 +310,14 @@ ALIEN_E2E_AZURE_VNET_RESOURCE_ID='${e2e_azure_vnet_resource_id}'
 ALIEN_E2E_AZURE_PUBLIC_SUBNET_NAME='${e2e_azure_public_subnet_name}'
 ALIEN_E2E_AZURE_PRIVATE_SUBNET_NAME='${e2e_azure_private_subnet_name}'
 
+# Kubernetes E2E kubeconfigs generated from infra/test outputs
+ALIEN_TEST_AKS_KUBECONFIG='${e2e_aks_kubeconfig_path}'
+ALIEN_TEST_AKS_CLUSTER_NAME='${e2e_aks_cluster_name}'
+ALIEN_TEST_AKS_CLUSTER_RESOURCE_GROUP='${e2e_aks_cluster_resource_group}'
+ALIEN_TEST_AKS_KUBE_CONTEXT='${e2e_aks_kube_context}'
+ALIEN_TEST_AKS_INGRESS_CLASS='${e2e_k8s_ingress_class}'
+ALIEN_TEST_AKS_PUBLIC_HOST_SUFFIX='${e2e_aks_public_host_suffix}'
+
 # Ngrok (for push-mode E2E tests — cloud functions submit responses via tunnel)
 NGROK_AUTHTOKEN='${NGROK_AUTHTOKEN:-}'
 
@@ -287,6 +344,10 @@ EOF
   while IFS='=' read -r key value; do
     printf "%s=%s\n" "$key" "$(quote_env "$value")"
   done < <(jq_val_target_options_env gcp_target_options GCP)
+
+  echo "ALIEN_TARGET_GCP_GCP_TARGET_1_ALIEN_TEST_GKE_KUBECONFIG=$(quote_env "$e2e_gke_target_1_kubeconfig_path")"
+  echo "ALIEN_TARGET_GCP_GCP_TARGET_2_ALIEN_TEST_GKE_KUBECONFIG=$(quote_env "$e2e_gke_target_2_kubeconfig_path")"
+  echo "ALIEN_TARGET_GCP_GCP_TARGET_3_ALIEN_TEST_GKE_KUBECONFIG=$(quote_env "$e2e_gke_target_3_kubeconfig_path")"
 
   while IFS='=' read -r key value; do
     printf "%s=%s\n" "$key" "$(quote_env "$value")"

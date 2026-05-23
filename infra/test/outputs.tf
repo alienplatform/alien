@@ -1,3 +1,9 @@
+# Kubernetes E2E shared settings
+output "e2e_k8s_ingress_class" {
+  value     = var.e2e_k8s_ingress_class
+  sensitive = true
+}
+
 # AWS - Management
 output "management_aws_region" {
   value     = var.aws_management_region
@@ -129,12 +135,32 @@ output "aws_target_options" {
       E2E_AWS_AR_PULL_ROLE_ARN                 = module.aws.e2e_ar_pull_role_arn
       ALIEN_TEST_K8S_NAMESPACE_PREFIX          = var.e2e_k8s_namespace_prefix
       ALIEN_TEST_K8S_INGRESS_CLASS             = var.e2e_k8s_ingress_class
-      ALIEN_TEST_K8S_PUBLIC_HOST_SUFFIX        = var.e2e_k8s_public_host_suffix
+      ALIEN_TEST_K8S_PUBLIC_HOST_SUFFIX        = var.e2e_k8s_public_host_suffix != "" ? var.e2e_k8s_public_host_suffix : module.aws.e2e_k8s_public_host_suffix
       ALIEN_TEST_K8S_TLS_SECRET_NAME           = var.e2e_k8s_tls_secret_name
-      ALIEN_TEST_EKS_CLUSTER_NAME              = var.e2e_eks_cluster_name
-      ALIEN_TEST_EKS_KUBE_CONTEXT              = var.e2e_eks_kube_context
+      ALIEN_TEST_EKS_CLUSTER_NAME              = module.aws.e2e_eks_cluster_name
+      ALIEN_TEST_EKS_KUBE_CONTEXT              = var.e2e_eks_kube_context != "" ? var.e2e_eks_kube_context : module.aws.e2e_eks_kube_context
     }
   }
+  sensitive = true
+}
+
+output "e2e_eks_kubeconfig" {
+  value     = module.aws.e2e_eks_kubeconfig
+  sensitive = true
+}
+
+output "e2e_eks_cluster_name" {
+  value     = module.aws.e2e_eks_cluster_name
+  sensitive = true
+}
+
+output "e2e_eks_kube_context" {
+  value     = var.e2e_eks_kube_context != "" ? var.e2e_eks_kube_context : module.aws.e2e_eks_kube_context
+  sensitive = true
+}
+
+output "e2e_eks_public_host_suffix" {
+  value     = var.e2e_k8s_public_host_suffix != "" ? var.e2e_k8s_public_host_suffix : module.aws.e2e_k8s_public_host_suffix
   sensitive = true
 }
 
@@ -223,57 +249,102 @@ output "e2e_gcp_ar_push_sa_email" {
 }
 
 output "gcp_target_options" {
-  value = merge(
-    {
-      gcp-target-1 = {
-        GOOGLE_TARGET_SERVICE_ACCOUNT_KEY = module.gcp_target_1.target_service_account_key
-        GOOGLE_TARGET_PROJECT_ID          = module.gcp_target_1.target_project_id
-        GOOGLE_TARGET_REGION              = module.gcp_target_1.target_region
-        ALIEN_E2E_GCP_NETWORK_NAME        = module.gcp_target_1.e2e_network_name
-        ALIEN_E2E_GCP_SUBNET_NAME         = module.gcp_target_1.e2e_subnet_name
-        ALIEN_E2E_GCP_REGION              = module.gcp_target_1.e2e_network_region
-        ALIEN_TEST_K8S_NAMESPACE_PREFIX   = var.e2e_k8s_namespace_prefix
-        ALIEN_TEST_K8S_INGRESS_CLASS      = var.e2e_k8s_ingress_class
-        ALIEN_TEST_K8S_PUBLIC_HOST_SUFFIX = var.e2e_k8s_public_host_suffix
-        ALIEN_TEST_K8S_TLS_SECRET_NAME    = var.e2e_k8s_tls_secret_name
-        ALIEN_TEST_GKE_CLUSTER_NAME       = var.e2e_gke_cluster_name
-        ALIEN_TEST_GKE_CLUSTER_LOCATION   = var.e2e_gke_cluster_location
-        ALIEN_TEST_GKE_KUBE_CONTEXT       = var.e2e_gke_kube_context
-      }
-      gcp-target-2 = {
-        GOOGLE_TARGET_SERVICE_ACCOUNT_KEY = module.gcp.target_service_account_key
-        GOOGLE_TARGET_PROJECT_ID          = var.google_target_project_id
-        GOOGLE_TARGET_REGION              = var.google_target_region
-        ALIEN_E2E_GCP_NETWORK_NAME        = module.gcp.e2e_network_name
-        ALIEN_E2E_GCP_SUBNET_NAME         = module.gcp.e2e_subnet_name
-        ALIEN_E2E_GCP_REGION              = module.gcp.e2e_network_region
-        ALIEN_TEST_K8S_NAMESPACE_PREFIX   = var.e2e_k8s_namespace_prefix
-        ALIEN_TEST_K8S_INGRESS_CLASS      = var.e2e_k8s_ingress_class
-        ALIEN_TEST_K8S_PUBLIC_HOST_SUFFIX = var.e2e_k8s_public_host_suffix
-        ALIEN_TEST_K8S_TLS_SECRET_NAME    = var.e2e_k8s_tls_secret_name
-        ALIEN_TEST_GKE_CLUSTER_NAME       = var.e2e_gke_cluster_name
-        ALIEN_TEST_GKE_CLUSTER_LOCATION   = var.e2e_gke_cluster_location
-        ALIEN_TEST_GKE_KUBE_CONTEXT       = var.e2e_gke_kube_context
-      }
-    },
-    var.google_target_3_enabled ? {
-      gcp-target-3 = {
-        GOOGLE_TARGET_SERVICE_ACCOUNT_KEY = module.gcp_target_3[0].target_service_account_key
-        GOOGLE_TARGET_PROJECT_ID          = module.gcp_target_3[0].target_project_id
-        GOOGLE_TARGET_REGION              = module.gcp_target_3[0].target_region
-        ALIEN_E2E_GCP_NETWORK_NAME        = module.gcp_target_3[0].e2e_network_name
-        ALIEN_E2E_GCP_SUBNET_NAME         = module.gcp_target_3[0].e2e_subnet_name
-        ALIEN_E2E_GCP_REGION              = module.gcp_target_3[0].e2e_network_region
-        ALIEN_TEST_K8S_NAMESPACE_PREFIX   = var.e2e_k8s_namespace_prefix
-        ALIEN_TEST_K8S_INGRESS_CLASS      = var.e2e_k8s_ingress_class
-        ALIEN_TEST_K8S_PUBLIC_HOST_SUFFIX = var.e2e_k8s_public_host_suffix
-        ALIEN_TEST_K8S_TLS_SECRET_NAME    = var.e2e_k8s_tls_secret_name
-        ALIEN_TEST_GKE_CLUSTER_NAME       = var.e2e_gke_cluster_name
-        ALIEN_TEST_GKE_CLUSTER_LOCATION   = var.e2e_gke_cluster_location
-        ALIEN_TEST_GKE_KUBE_CONTEXT       = var.e2e_gke_kube_context
-      }
-    } : {}
-  )
+  value = {
+    gcp-target-1 = {
+      GOOGLE_TARGET_SERVICE_ACCOUNT_KEY = module.gcp_target_1.target_service_account_key
+      GOOGLE_TARGET_PROJECT_ID          = module.gcp_target_1.target_project_id
+      GOOGLE_TARGET_REGION              = module.gcp_target_1.target_region
+      ALIEN_E2E_GCP_NETWORK_NAME        = module.gcp_target_1.e2e_network_name
+      ALIEN_E2E_GCP_SUBNET_NAME         = module.gcp_target_1.e2e_subnet_name
+      ALIEN_E2E_GCP_REGION              = module.gcp_target_1.e2e_network_region
+      ALIEN_TEST_K8S_NAMESPACE_PREFIX   = var.e2e_k8s_namespace_prefix
+      ALIEN_TEST_K8S_INGRESS_CLASS      = var.e2e_k8s_ingress_class
+      ALIEN_TEST_K8S_PUBLIC_HOST_SUFFIX = var.e2e_k8s_public_host_suffix != "" ? var.e2e_k8s_public_host_suffix : module.gcp_target_1.e2e_k8s_public_host_suffix
+      ALIEN_TEST_K8S_TLS_SECRET_NAME    = var.e2e_k8s_tls_secret_name
+      ALIEN_TEST_GKE_INGRESS_CLASS      = var.e2e_k8s_ingress_class
+      ALIEN_TEST_GKE_PUBLIC_HOST_SUFFIX = var.e2e_k8s_public_host_suffix != "" ? var.e2e_k8s_public_host_suffix : module.gcp_target_1.e2e_k8s_public_host_suffix
+      ALIEN_TEST_GKE_TLS_SECRET_NAME    = var.e2e_k8s_tls_secret_name
+      ALIEN_TEST_GKE_CLUSTER_NAME       = module.gcp_target_1.e2e_gke_cluster_name
+      ALIEN_TEST_GKE_CLUSTER_LOCATION   = var.e2e_gke_cluster_location != "" ? var.e2e_gke_cluster_location : module.gcp_target_1.e2e_gke_cluster_location
+      ALIEN_TEST_GKE_KUBE_CONTEXT       = var.e2e_gke_kube_context != "" ? var.e2e_gke_kube_context : module.gcp_target_1.e2e_gke_kube_context
+    }
+    gcp-target-2 = {
+      GOOGLE_TARGET_SERVICE_ACCOUNT_KEY = module.gcp.target_service_account_key
+      GOOGLE_TARGET_PROJECT_ID          = var.google_target_project_id
+      GOOGLE_TARGET_REGION              = var.google_target_region
+      ALIEN_E2E_GCP_NETWORK_NAME        = module.gcp.e2e_network_name
+      ALIEN_E2E_GCP_SUBNET_NAME         = module.gcp.e2e_subnet_name
+      ALIEN_E2E_GCP_REGION              = module.gcp.e2e_network_region
+      ALIEN_TEST_K8S_NAMESPACE_PREFIX   = var.e2e_k8s_namespace_prefix
+      ALIEN_TEST_K8S_INGRESS_CLASS      = var.e2e_k8s_ingress_class
+      ALIEN_TEST_K8S_PUBLIC_HOST_SUFFIX = var.e2e_k8s_public_host_suffix != "" ? var.e2e_k8s_public_host_suffix : module.gcp.e2e_k8s_public_host_suffix
+      ALIEN_TEST_K8S_TLS_SECRET_NAME    = var.e2e_k8s_tls_secret_name
+      ALIEN_TEST_GKE_INGRESS_CLASS      = var.e2e_k8s_ingress_class
+      ALIEN_TEST_GKE_PUBLIC_HOST_SUFFIX = var.e2e_k8s_public_host_suffix != "" ? var.e2e_k8s_public_host_suffix : module.gcp.e2e_k8s_public_host_suffix
+      ALIEN_TEST_GKE_TLS_SECRET_NAME    = var.e2e_k8s_tls_secret_name
+      ALIEN_TEST_GKE_CLUSTER_NAME       = module.gcp.e2e_gke_cluster_name
+      ALIEN_TEST_GKE_CLUSTER_LOCATION   = var.e2e_gke_cluster_location != "" ? var.e2e_gke_cluster_location : module.gcp.e2e_gke_cluster_location
+      ALIEN_TEST_GKE_KUBE_CONTEXT       = var.e2e_gke_kube_context != "" ? var.e2e_gke_kube_context : module.gcp.e2e_gke_kube_context
+    }
+    gcp-target-3 = {
+      GOOGLE_TARGET_SERVICE_ACCOUNT_KEY = module.gcp_target_3.target_service_account_key
+      GOOGLE_TARGET_PROJECT_ID          = module.gcp_target_3.target_project_id
+      GOOGLE_TARGET_REGION              = module.gcp_target_3.target_region
+      ALIEN_E2E_GCP_NETWORK_NAME        = module.gcp_target_3.e2e_network_name
+      ALIEN_E2E_GCP_SUBNET_NAME         = module.gcp_target_3.e2e_subnet_name
+      ALIEN_E2E_GCP_REGION              = module.gcp_target_3.e2e_network_region
+      ALIEN_TEST_K8S_NAMESPACE_PREFIX   = var.e2e_k8s_namespace_prefix
+      ALIEN_TEST_K8S_INGRESS_CLASS      = var.e2e_k8s_ingress_class
+      ALIEN_TEST_K8S_PUBLIC_HOST_SUFFIX = var.e2e_k8s_public_host_suffix != "" ? var.e2e_k8s_public_host_suffix : module.gcp_target_3.e2e_k8s_public_host_suffix
+      ALIEN_TEST_K8S_TLS_SECRET_NAME    = var.e2e_k8s_tls_secret_name
+      ALIEN_TEST_GKE_INGRESS_CLASS      = var.e2e_k8s_ingress_class
+      ALIEN_TEST_GKE_PUBLIC_HOST_SUFFIX = var.e2e_k8s_public_host_suffix != "" ? var.e2e_k8s_public_host_suffix : module.gcp_target_3.e2e_k8s_public_host_suffix
+      ALIEN_TEST_GKE_TLS_SECRET_NAME    = var.e2e_k8s_tls_secret_name
+      ALIEN_TEST_GKE_CLUSTER_NAME       = module.gcp_target_3.e2e_gke_cluster_name
+      ALIEN_TEST_GKE_CLUSTER_LOCATION   = var.e2e_gke_cluster_location != "" ? var.e2e_gke_cluster_location : module.gcp_target_3.e2e_gke_cluster_location
+      ALIEN_TEST_GKE_KUBE_CONTEXT       = var.e2e_gke_kube_context != "" ? var.e2e_gke_kube_context : module.gcp_target_3.e2e_gke_kube_context
+    }
+  }
+  sensitive = true
+}
+
+output "e2e_gke_kubeconfig" {
+  value     = module.gcp_target_3.e2e_gke_kubeconfig
+  sensitive = true
+}
+
+output "e2e_gke_target_1_kubeconfig" {
+  value     = module.gcp_target_1.e2e_gke_kubeconfig
+  sensitive = true
+}
+
+output "e2e_gke_target_2_kubeconfig" {
+  value     = module.gcp.e2e_gke_kubeconfig
+  sensitive = true
+}
+
+output "e2e_gke_target_3_kubeconfig" {
+  value     = module.gcp_target_3.e2e_gke_kubeconfig
+  sensitive = true
+}
+
+output "e2e_gke_cluster_name" {
+  value     = module.gcp_target_3.e2e_gke_cluster_name
+  sensitive = true
+}
+
+output "e2e_gke_cluster_location" {
+  value     = module.gcp_target_3.e2e_gke_cluster_location
+  sensitive = true
+}
+
+output "e2e_gke_kube_context" {
+  value     = var.e2e_gke_kube_context != "" ? var.e2e_gke_kube_context : module.gcp_target_3.e2e_gke_kube_context
+  sensitive = true
+}
+
+output "e2e_gke_public_host_suffix" {
+  value     = var.e2e_k8s_public_host_suffix != "" ? var.e2e_k8s_public_host_suffix : module.gcp_target_3.e2e_k8s_public_host_suffix
   sensitive = true
 }
 
@@ -462,12 +533,37 @@ output "azure_target_options" {
       ALIEN_E2E_AZURE_PRIVATE_SUBNET_NAME       = module.azure.e2e_private_subnet_name
       ALIEN_TEST_K8S_NAMESPACE_PREFIX           = var.e2e_k8s_namespace_prefix
       ALIEN_TEST_K8S_INGRESS_CLASS              = var.e2e_k8s_ingress_class
-      ALIEN_TEST_K8S_PUBLIC_HOST_SUFFIX         = var.e2e_k8s_public_host_suffix
+      ALIEN_TEST_K8S_PUBLIC_HOST_SUFFIX         = var.e2e_k8s_public_host_suffix != "" ? var.e2e_k8s_public_host_suffix : module.azure.e2e_k8s_public_host_suffix
       ALIEN_TEST_K8S_TLS_SECRET_NAME            = var.e2e_k8s_tls_secret_name
-      ALIEN_TEST_AKS_CLUSTER_NAME               = var.e2e_aks_cluster_name
-      ALIEN_TEST_AKS_CLUSTER_RESOURCE_GROUP     = var.e2e_aks_cluster_resource_group
-      ALIEN_TEST_AKS_KUBE_CONTEXT               = var.e2e_aks_kube_context
+      ALIEN_TEST_AKS_CLUSTER_NAME               = module.azure.e2e_aks_cluster_name
+      ALIEN_TEST_AKS_CLUSTER_RESOURCE_GROUP     = var.e2e_aks_cluster_resource_group != "" ? var.e2e_aks_cluster_resource_group : module.azure.e2e_aks_cluster_resource_group
+      ALIEN_TEST_AKS_KUBE_CONTEXT               = var.e2e_aks_kube_context != "" ? var.e2e_aks_kube_context : module.azure.e2e_aks_kube_context
     }
   }
+  sensitive = true
+}
+
+output "e2e_aks_kubeconfig" {
+  value     = module.azure.e2e_aks_kubeconfig
+  sensitive = true
+}
+
+output "e2e_aks_cluster_name" {
+  value     = module.azure.e2e_aks_cluster_name
+  sensitive = true
+}
+
+output "e2e_aks_cluster_resource_group" {
+  value     = var.e2e_aks_cluster_resource_group != "" ? var.e2e_aks_cluster_resource_group : module.azure.e2e_aks_cluster_resource_group
+  sensitive = true
+}
+
+output "e2e_aks_kube_context" {
+  value     = var.e2e_aks_kube_context != "" ? var.e2e_aks_kube_context : module.azure.e2e_aks_kube_context
+  sensitive = true
+}
+
+output "e2e_aks_public_host_suffix" {
+  value     = var.e2e_k8s_public_host_suffix != "" ? var.e2e_k8s_public_host_suffix : module.azure.e2e_k8s_public_host_suffix
   sensitive = true
 }
