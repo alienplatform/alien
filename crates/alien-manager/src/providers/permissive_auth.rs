@@ -31,6 +31,7 @@ impl AuthValidator for PermissiveAuthValidator {
             workspace_id: "default".to_string(),
             scope: Scope::Workspace,
             role: Role::WorkspaceAdmin,
+            scopes: Vec::new(),
             bearer_token: bearer,
         }))
     }

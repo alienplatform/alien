@@ -729,15 +729,31 @@ fn require_push_auth(state: &AppState, subject: &Subject, repo_name: &str) -> Re
         .registry_routing_table
         .project_id_for_repo(repo_name)
         .unwrap_or("default");
-    if state.authz.can_push_image(subject, project_id, repo_name) {
-        Ok(())
-    } else {
-        Err(oci_error(
+    if !state.authz.can_push_image(subject, project_id, repo_name) {
+        return Err(oci_error(
             StatusCode::FORBIDDEN,
             "DENIED",
             "Caller cannot push images to this project.",
-        ))
+        ));
     }
+
+    // Require at least one JWT scope to cover this project. Suffix-match on
+    // `/{project_id}` (not the full tuple) because system-manager-minted JWTs
+    // carry the manager's workspace_id in `subject.workspace_id` but the
+    // caller's workspace in the scope; project IDs are globally unique so the
+    // suffix is sufficient. OSS validators leave scopes empty → fall through.
+    if !subject.scopes.is_empty() {
+        let suffix = format!("/{}", project_id);
+        if !subject.scopes.iter().any(|s| s.ends_with(&suffix)) {
+            return Err(oci_error(
+                StatusCode::FORBIDDEN,
+                "DENIED",
+                "Caller's token scope does not cover this project.",
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 /// Validate that a deployment token can access the requested repo.

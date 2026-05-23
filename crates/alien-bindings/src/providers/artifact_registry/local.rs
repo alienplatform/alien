@@ -147,11 +147,13 @@ impl ArtifactRegistry for LocalArtifactRegistry {
     }
 
     fn upstream_repository_prefix(&self) -> String {
-        // The embedded local registry accepts two-segment repo paths (e.g.,
-        // "namespace/repo"). We use "artifacts/default" as the canonical prefix
-        // — this matches what the CLI hardcodes in dev mode and what the proxy
-        // routing table uses to route pushes to this local registry.
-        "artifacts/default".to_string()
+        // The binding name is the routing prefix; the next path segment is the
+        // project namespace (`artifacts/{project_id}` in platform mode,
+        // `artifacts/default` in dev mode). Returning the bare binding name
+        // here — instead of the legacy `"artifacts/default"` — lets the proxy
+        // routing table correctly identify both modes' pushes as local and
+        // extract the right project_id for downstream authz/scope checks.
+        self.binding_name.clone()
     }
 
     async fn create_repository(&self, repo_name: &str) -> Result<RepositoryResponse> {

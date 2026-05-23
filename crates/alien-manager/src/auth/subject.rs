@@ -25,6 +25,11 @@ pub struct Subject {
     pub workspace_id: String,
     pub scope: Scope,
     pub role: Role,
+    /// Per-project scopes from the credential. Format: `"${workspace_id}/${project_id}"`.
+    /// Empty means no narrowing — OSS validators (`TokenDbValidator`,
+    /// `PermissiveAuthValidator`) leave this empty and `require_push_auth`
+    /// falls back to the role/scope check, preserving OSS standalone behavior.
+    pub scopes: Vec<String>,
     /// The raw bearer token the caller presented.
     ///
     /// Lifecycle: request-scoped only. Constructed by the AuthValidator from
@@ -47,6 +52,7 @@ impl fmt::Debug for Subject {
             .field("workspace_id", &self.workspace_id)
             .field("scope", &self.scope)
             .field("role", &self.role)
+            .field("scopes", &self.scopes)
             .field("bearer_token", &"[redacted]")
             .finish()
     }
@@ -114,6 +120,7 @@ impl Subject {
             workspace_id: "default".to_string(),
             scope: Scope::Workspace,
             role: Role::WorkspaceAdmin,
+            scopes: Vec::new(),
             bearer_token: String::new(),
         }
     }
@@ -168,6 +175,7 @@ mod tests {
             workspace_id: "default".to_string(),
             scope,
             role,
+            scopes: Vec::new(),
             bearer_token: "bearer".to_string(),
         }
     }
@@ -210,6 +218,7 @@ mod tests {
             workspace_id: "default".to_string(),
             scope: Scope::Workspace,
             role: Role::WorkspaceAdmin,
+            scopes: Vec::new(),
             bearer_token: String::new(),
         };
         assert!(!s.is_system(), "non-system service account must not match");
