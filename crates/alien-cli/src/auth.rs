@@ -174,6 +174,10 @@ mod oauth_flow {
     const SERVICE: &str = "alien-cli";
     const ACCESS_USER: &str = "access_token";
     const REFRESH_USER: &str = "refresh_token";
+    /// Manager-scoped Platform JWT minted on `alien login`. Different audience
+    /// from the user OAuth access_token, so the manager can verify it locally
+    /// against its configured public key without a /v1/whoami forward.
+    const MANAGER_TOKEN_USER: &str = "manager_token";
     const DEFAULT_BASE: &str = "https://api.alien.dev";
     const CLI_CLIENT_ID: &str = "alien-cli";
 
@@ -280,6 +284,7 @@ mod oauth_flow {
     pub fn logout() {
         let _ = Entry::new(SERVICE, ACCESS_USER).and_then(|e| e.delete_password());
         let _ = Entry::new(SERVICE, REFRESH_USER).and_then(|e| e.delete_password());
+        let _ = Entry::new(SERVICE, MANAGER_TOKEN_USER).and_then(|e| e.delete_password());
         let _ = std::fs::remove_file(cfg_path());
         with_cache(|cache| cache.clear());
     }
@@ -470,6 +475,154 @@ mod oauth_flow {
         });
 
         Ok(())
+    }
+
+    /// Exchanges a user OAuth JWT for a project-scoped registry-push JWT via
+    /// `POST {base}/v1/managers/{manager_id}/token`. The result is the only
+    /// credential the manager accepts on `/v2/...` pushes (single scope tuple,
+    /// `managerId`-bound, audience `alien:manager:registry-push`).
+    pub async fn mint_registry_push_token(
+        client: &Client,
+        base: &str,
+        user_jwt: &str,
+        workspace: &str,
+        manager_id: &str,
+        project_id: &str,
+    ) -> Result<String> {
+        #[derive(serde::Deserialize)]
+        struct ExchangeResponse {
+            #[serde(rename = "accessToken")]
+            access_token: String,
+        }
+
+        #[derive(serde::Serialize)]
+        struct ExchangeBody<'a> {
+            purpose: &'a str,
+            project: &'a str,
+        }
+
+        let response = client
+            .post(format!("{}/v1/managers/{}/token", base, manager_id))
+            .query(&[("workspace", workspace)])
+            .header("Authorization", format!("Bearer {}", user_jwt))
+            .json(&ExchangeBody {
+                purpose: "registry-push",
+                project: project_id,
+            })
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::AuthenticationFailed {
+                reason: "Failed to call manager-token exchange endpoint".to_string(),
+            })?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(AlienError::new(ErrorData::AuthenticationFailed {
+                reason: format!(
+                    "manager-token exchange returned status {}: {}",
+                    status, body
+                ),
+            }));
+        }
+
+        let body: ExchangeResponse = response.json().await.into_alien_error().context(
+            ErrorData::AuthenticationFailed {
+                reason: "Failed to parse manager-token exchange response".to_string(),
+            },
+        )?;
+
+        Ok(body.access_token)
+    }
+
+    pub fn store_manager_token(token: &str) -> Result<()> {
+        Entry::new(SERVICE, MANAGER_TOKEN_USER)
+            .into_alien_error()
+            .context(ErrorData::AuthenticationFailed {
+                reason: "Failed to create manager token keyring entry".to_string(),
+            })?
+            .set_password(token)
+            .into_alien_error()
+            .context(ErrorData::AuthenticationFailed {
+                reason: "Failed to store manager token".to_string(),
+            })?;
+        Ok(())
+    }
+
+    pub fn load_manager_token() -> Option<String> {
+        Entry::new(SERVICE, MANAGER_TOKEN_USER)
+            .ok()?
+            .get_password()
+            .ok()
+    }
+
+    /// Checks `managerId` equality and that at least one `scopes` entry ends
+    /// with `/{project_id}`. Project IDs are globally-unique `prj_*` ULIDs, so
+    /// the suffix check is equivalent to an exact match on the project segment
+    /// without needing `workspace_id` (the CLI doesn't have it locally).
+    /// Returns false on any decode failure — caller re-mints, avoiding a
+    /// guaranteed 401 on the wire.
+    fn token_matches_target(jwt: &str, manager_id: &str, project_id: &str) -> bool {
+        let Some(payload_b64) = jwt.split('.').nth(1) else {
+            return false;
+        };
+        let Ok(payload_bytes) = URL_SAFE_NO_PAD.decode(payload_b64) else {
+            return false;
+        };
+        let Ok(claims) = serde_json::from_slice::<serde_json::Value>(&payload_bytes) else {
+            return false;
+        };
+        let mid_ok = claims
+            .get("managerId")
+            .and_then(|v| v.as_str())
+            .is_some_and(|m| m == manager_id);
+        let suffix = format!("/{}", project_id);
+        let scope_ok = claims
+            .get("scopes")
+            .and_then(|v| v.as_array())
+            .is_some_and(|arr| {
+                arr.iter()
+                    .filter_map(|s| s.as_str())
+                    .any(|s| s.ends_with(&suffix))
+            });
+        mid_ok && scope_ok
+    }
+
+    /// Returns a valid registry-push JWT for the (manager, project) target.
+    /// Reuses the keyring-cached JWT when it matches; common re-mint case is
+    /// the user switching projects between `alien release` invocations.
+    pub async fn get_or_mint_registry_push_token(
+        http: &AuthHttp,
+        workspace: &str,
+        manager_id: &str,
+        project_id: &str,
+    ) -> Result<String> {
+        if let Some(existing) = load_manager_token() {
+            if !token_expired(&existing, 30)
+                && token_matches_target(&existing, manager_id, project_id)
+            {
+                return Ok(existing);
+            }
+        }
+
+        let user_jwt = http.bearer_token.as_deref().ok_or_else(|| {
+            AlienError::new(ErrorData::AuthenticationFailed {
+                reason: "No user OAuth JWT available to exchange for manager token".to_string(),
+            })
+        })?;
+
+        let minted = mint_registry_push_token(
+            &http.client,
+            &http.base_url,
+            user_jwt,
+            workspace,
+            manager_id,
+            project_id,
+        )
+        .await?;
+        store_manager_token(&minted)?;
+        Ok(minted)
     }
 
     async fn refresh_token(base: &str, refresh: &str) -> Result<TokenResponse> {
@@ -872,4 +1025,7 @@ mod oauth_flow {
 
 // Re-export platform-only functions
 #[cfg(feature = "platform")]
-pub use oauth_flow::{force_login, get_auth_http, logout, store_tokens, try_bearer_client};
+pub use oauth_flow::{
+    force_login, get_auth_http, get_or_mint_registry_push_token, logout, store_tokens,
+    try_bearer_client,
+};
