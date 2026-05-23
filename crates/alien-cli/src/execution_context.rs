@@ -426,10 +426,31 @@ impl ExecutionMode {
 
                 info!("Manager: {}", resolved.manager_url);
 
+                // The manager rejects the user OAuth JWT directly; exchange it
+                // for a manager-scoped Platform JWT (audience registry-push,
+                // managerId-bound) before talking to any manager endpoint.
+                //
+                // Today this single token covers BOTH `/v1/artifact-registry/*`
+                // repo-setup AND the `/v2/...` OCI push — both legs of the
+                // release flow share an audience because they're prereqs of
+                // the same user-facing operation. When other platform-mode
+                // commands (e.g. `alien commands invoke`) come online they
+                // must mint their OWN audience instead of reusing this one,
+                // so the audience name keeps reflecting the actual scope.
+                let manager_jwt = crate::auth::get_or_mint_registry_push_token(
+                    &http,
+                    &workspace,
+                    &resolved.manager_id,
+                    &resolved.project_id,
+                )
+                .await?;
+                let manager_http_client =
+                    crate::auth::client_with_header(&format!("Bearer {}", manager_jwt))?;
+
                 // Now call the manager directly to create/get the artifact registry repo.
                 // The repo logical name is the project ID.
                 let repo_name = create_or_get_artifact_repo(
-                    &http.client,
+                    &manager_http_client,
                     &resolved.manager_url,
                     &resolved.project_id,
                     platform,
@@ -438,19 +459,16 @@ impl ExecutionMode {
 
                 info!("Repository: {}", repo_name);
 
-                // Create manager SDK client reusing the authenticated reqwest client
-                let authenticated_client = http.client.clone();
-                let auth_token = http.bearer_token.clone();
                 let manager_client = ServerSdkClient::new_with_client(
                     &resolved.manager_url,
-                    authenticated_client.clone(),
+                    manager_http_client.clone(),
                 );
 
                 Ok(ManagerContext {
                     manager_url: resolved.manager_url,
                     client: manager_client,
-                    http_client: authenticated_client,
-                    auth_token,
+                    http_client: manager_http_client,
+                    auth_token: Some(manager_jwt),
                     repository_name: Some(repo_name),
                     repository_uri: None,
                 })
@@ -554,6 +572,7 @@ async fn check_server_health(port: u16) -> bool {
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ResolveResponse {
+    manager_id: String,
     manager_url: String,
     project_id: String,
 }
