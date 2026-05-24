@@ -1021,6 +1021,100 @@ mod oauth_flow {
             }
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        //! Tests for cache-reuse logic. `token_matches_target` decides whether
+        //! a cached manager-scoped JWT can be reused for a given (manager,
+        //! project) target without re-minting. Failure modes:
+        //!
+        //!   * A token minted for a *different* manager being reused (would
+        //!     cause a managerId-binding rejection at the manager's verifier
+        //!     and an avoidable round-trip — but more importantly, would
+        //!     surface as a confusing 401 rather than triggering a fresh mint).
+        //!   * A token minted for a *different* project being reused (would
+        //!     fail at the scope check on the OCI push path).
+        //!   * A malformed JWT being treated as "matches" (would skip the
+        //!     re-mint and definitely 401 at the manager).
+        //!
+        //! All failure cases must return `false` so the caller re-mints.
+        use super::*;
+
+        const MANAGER_ID: &str = "mgr_xaji0y6dpbhsahxthv3a3zmf8mdd";
+        const OTHER_MANAGER_ID: &str = "mgr_other";
+        const PROJECT_ID: &str = "prj_nisyo047zb0ourgk7wguij040q1x";
+        const OTHER_PROJECT_ID: &str = "prj_other";
+
+        /// Build a fake JWT (header.payload.sig) where the payload is the
+        /// given JSON object base64-url-encoded without padding. The header
+        /// and signature segments are placeholders — `token_matches_target`
+        /// only ever decodes the payload, so this is enough to exercise the
+        /// matching logic.
+        fn fake_jwt(payload: &str) -> String {
+            format!(
+                "header.{}.sig",
+                URL_SAFE_NO_PAD.encode(payload.as_bytes())
+            )
+        }
+
+        #[test]
+        fn matches_when_manager_id_and_project_scope_align() {
+            let jwt = fake_jwt(&format!(
+                r#"{{"managerId":"{MANAGER_ID}","scopes":["ws_abc/{PROJECT_ID}"]}}"#
+            ));
+            assert!(token_matches_target(&jwt, MANAGER_ID, PROJECT_ID));
+        }
+
+        #[test]
+        fn rejects_when_manager_id_mismatches() {
+            let jwt = fake_jwt(&format!(
+                r#"{{"managerId":"{OTHER_MANAGER_ID}","scopes":["ws_abc/{PROJECT_ID}"]}}"#
+            ));
+            assert!(!token_matches_target(&jwt, MANAGER_ID, PROJECT_ID));
+        }
+
+        #[test]
+        fn rejects_when_project_scope_mismatches() {
+            let jwt = fake_jwt(&format!(
+                r#"{{"managerId":"{MANAGER_ID}","scopes":["ws_abc/{OTHER_PROJECT_ID}"]}}"#
+            ));
+            assert!(!token_matches_target(&jwt, MANAGER_ID, PROJECT_ID));
+        }
+
+        #[test]
+        fn rejects_when_scopes_claim_is_missing() {
+            // Defense in depth: even if managerId matches, a token with no
+            // scope can't push to the target project, so don't reuse it.
+            let jwt = fake_jwt(&format!(r#"{{"managerId":"{MANAGER_ID}"}}"#));
+            assert!(!token_matches_target(&jwt, MANAGER_ID, PROJECT_ID));
+        }
+
+        #[test]
+        fn rejects_when_manager_id_claim_is_missing() {
+            let jwt = fake_jwt(&format!(
+                r#"{{"scopes":["ws_abc/{PROJECT_ID}"]}}"#
+            ));
+            assert!(!token_matches_target(&jwt, MANAGER_ID, PROJECT_ID));
+        }
+
+        #[test]
+        fn rejects_malformed_jwt() {
+            // Must NOT panic on garbage — re-minting is the safe response.
+            assert!(!token_matches_target("not.a.jwt", MANAGER_ID, PROJECT_ID));
+            assert!(!token_matches_target("only-one-segment", MANAGER_ID, PROJECT_ID));
+            assert!(!token_matches_target("", MANAGER_ID, PROJECT_ID));
+        }
+
+        #[test]
+        fn rejects_jwt_with_non_array_scopes() {
+            // A buggy producer that serialized `scopes` as a string instead
+            // of an array must not be treated as a valid cached token.
+            let jwt = fake_jwt(&format!(
+                r#"{{"managerId":"{MANAGER_ID}","scopes":"ws_abc/{PROJECT_ID}"}}"#
+            ));
+            assert!(!token_matches_target(&jwt, MANAGER_ID, PROJECT_ID));
+        }
+    }
 }
 
 // Re-export platform-only functions
