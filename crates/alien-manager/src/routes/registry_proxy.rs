@@ -737,7 +737,7 @@ fn require_push_auth(state: &AppState, subject: &Subject, repo_name: &str) -> Re
         ));
     }
 
-    if !scopes_cover_project(&subject.scopes, project_id) {
+    if !subject.permits_project(project_id) {
         return Err(oci_error(
             StatusCode::FORBIDDEN,
             "DENIED",
@@ -746,28 +746,6 @@ fn require_push_auth(state: &AppState, subject: &Subject, repo_name: &str) -> Re
     }
 
     Ok(())
-}
-
-/// Per-project scope check for the OCI push path.
-///
-/// Returns `true` when the caller's token scopes cover `project_id`. An empty
-/// `scopes` slice means "no scope claim was attached to this credential" — OSS
-/// validators leave it empty, so the check falls through and the role-based
-/// gate above is the only authorization required. When scopes ARE present,
-/// at least one must end with `/<project_id>`.
-///
-/// Suffix-match on `/{project_id}` (not the full `workspace_id/project_id`
-/// tuple) because system-manager-minted JWTs carry the manager's workspace_id
-/// in `subject.workspace_id` but the caller's workspace_id in the scope.
-/// Project IDs are globally-unique ULIDs so the suffix is unambiguous, and
-/// the leading slash prevents a `project_id` that's a substring suffix of
-/// another (e.g. `prj_abc` accidentally matching `prj_abcd`).
-fn scopes_cover_project(scopes: &[String], project_id: &str) -> bool {
-    if scopes.is_empty() {
-        return true;
-    }
-    let suffix = format!("/{}", project_id);
-    scopes.iter().any(|s| s.ends_with(&suffix))
 }
 
 /// Validate that a deployment token can access the requested repo.
@@ -1189,53 +1167,8 @@ mod tests {
     }
 
     // -- scopes_cover_project ---------------------------------------------
-    //
-    // Coverage of the OCI push path's per-project scope check. The full
-    // path (`require_push_auth`) needs `&AppState` which has ~17 fields,
-    // so the security-critical predicate is extracted into a pure helper
-    // and tested directly. Failure modes:
-    //   * suffix-substring confusion (e.g. `prj_abc` matching `prj_abcd`)
-    //   * empty-scopes semantics flipped (would block OSS standalone)
-    //   * cross-project scope accepted
-
-    #[test]
-    fn scopes_cover_project_empty_scopes_pass_through_for_oss_validators() {
-        // OSS validators (`TokenDbValidator`, `PermissiveAuthValidator`)
-        // leave `Subject::scopes` empty. The push handler must not reject
-        // those subjects on the scope axis — the role check above is the
-        // only gate for OSS standalone deployments.
-        assert!(scopes_cover_project(&[], "prj_anything"));
-    }
-
-    #[test]
-    fn scopes_cover_project_matching_scope_passes() {
-        let scopes = vec!["ws_main/prj_abc".to_string()];
-        assert!(scopes_cover_project(&scopes, "prj_abc"));
-    }
-
-    #[test]
-    fn scopes_cover_project_different_project_is_rejected() {
-        let scopes = vec!["ws_main/prj_other".to_string()];
-        assert!(!scopes_cover_project(&scopes, "prj_abc"));
-    }
-
-    #[test]
-    fn scopes_cover_project_matches_when_any_of_multiple_scopes_covers() {
-        let scopes = vec![
-            "ws_main/prj_other".to_string(),
-            "ws_main/prj_abc".to_string(),
-            "ws_main/prj_third".to_string(),
-        ];
-        assert!(scopes_cover_project(&scopes, "prj_abc"));
-    }
-
-    #[test]
-    fn scopes_cover_project_requires_leading_slash_not_just_substring_suffix() {
-        // Without the leading slash in the suffix this would incorrectly
-        // pass — `"prj_abcd"` ends with `"prj_abc"` as a substring. The
-        // `/`-prefix is what makes the suffix a project-segment match
-        // and not a string-suffix match.
-        let scopes = vec!["ws_main/prj_abcd".to_string()];
-        assert!(!scopes_cover_project(&scopes, "prj_abc"));
-    }
+    // Per-project scope check coverage now lives on `Subject::permits_project`
+    // in `crate::auth::subject` — moved there as a method so other route
+    // handlers in downstream embedders can apply the same invariant without
+    // duplicating the predicate.
 }

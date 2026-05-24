@@ -145,6 +145,27 @@ impl Subject {
     pub fn is_workspace_admin(&self) -> bool {
         matches!(self.scope, Scope::Workspace) && self.role == Role::WorkspaceAdmin
     }
+
+    /// True if this subject's per-project scopes permit acting on `project_id`.
+    ///
+    /// Empty [`Self::scopes`] returns `true` — OSS standalone validators
+    /// (`TokenDbValidator`, `PermissiveAuthValidator`) leave the field empty,
+    /// and the role check is the only gate in single-tenant deployments.
+    ///
+    /// When non-empty, at least one entry must end with `/<project_id>`,
+    /// matching the documented per-scope format `"<workspace_id>/<project_id>"`.
+    /// The leading slash in the suffix prevents substring confusion (a scope
+    /// ending in `/prj_abc` does NOT permit a target of `prj_abcd`).
+    ///
+    /// Callers that proxy a request to per-project resources should run this
+    /// check after the role check and short-circuit with a 403 on `false`.
+    pub fn permits_project(&self, project_id: &str) -> bool {
+        if self.scopes.is_empty() {
+            return true;
+        }
+        let suffix = format!("/{}", project_id);
+        self.scopes.iter().any(|s| s.ends_with(&suffix))
+    }
 }
 
 /// Roles the policy gates on. Scoped to the role granted on the token's scope
@@ -232,6 +253,54 @@ mod tests {
             !s.is_system(),
             "Subject::system() with a non-empty bearer is not system anymore"
         );
+    }
+
+    /// Helper: a subject with the given per-project scopes (workspace role,
+    /// workspace scope — the role/scope here doesn't matter for
+    /// `permits_project`, only the `scopes` field does).
+    fn subject_with_scopes(scopes: Vec<String>) -> Subject {
+        let mut s = sample(Role::WorkspaceMember, Scope::Workspace);
+        s.scopes = scopes;
+        s
+    }
+
+    #[test]
+    fn permits_project_empty_scopes_passes_for_oss_validators() {
+        // OSS validators leave `scopes` empty. The push-style check must
+        // fall through to the role check rather than rejecting them.
+        let s = subject_with_scopes(Vec::new());
+        assert!(s.permits_project("prj_anything"));
+    }
+
+    #[test]
+    fn permits_project_matching_scope_passes() {
+        let s = subject_with_scopes(vec!["ws_main/prj_abc".to_string()]);
+        assert!(s.permits_project("prj_abc"));
+    }
+
+    #[test]
+    fn permits_project_non_matching_scope_is_rejected() {
+        let s = subject_with_scopes(vec!["ws_main/prj_other".to_string()]);
+        assert!(!s.permits_project("prj_abc"));
+    }
+
+    #[test]
+    fn permits_project_matches_when_any_of_multiple_scopes_covers() {
+        let s = subject_with_scopes(vec![
+            "ws_main/prj_other".to_string(),
+            "ws_main/prj_abc".to_string(),
+            "ws_main/prj_third".to_string(),
+        ]);
+        assert!(s.permits_project("prj_abc"));
+    }
+
+    #[test]
+    fn permits_project_requires_leading_slash_not_string_suffix() {
+        // The `/` prefix in the suffix is what makes this a project-segment
+        // match and not a string-suffix match. Without it, a scope for
+        // `prj_abcd` would incorrectly accept a target of `prj_abc`.
+        let s = subject_with_scopes(vec!["ws_main/prj_abcd".to_string()]);
+        assert!(!s.permits_project("prj_abc"));
     }
 
     #[test]
