@@ -595,6 +595,12 @@ async fn create_or_get_artifact_repo(
         manager_url, project_id, platform
     );
 
+    // Each response below has the same shape: capture status + body once
+    // (the body has to be read even on non-success — without it, the manager's
+    // structured error (e.g. "Platform JWT not bound to this manager") gets
+    // dropped and the user sees only the HTTP status. Pattern matches
+    // `auth.rs::mint_registry_push_token` for the same reason.
+
     let get_resp = client
         .get(&get_url)
         .send()
@@ -607,20 +613,14 @@ async fn create_or_get_artifact_repo(
             ),
             url: Some(get_url.clone()),
         })?;
+    let get_status = get_resp.status();
+    let get_body = get_resp.text().await.unwrap_or_default();
 
-    if get_resp.status().is_success() {
-        let body: serde_json::Value =
-            get_resp
-                .json()
-                .await
-                .into_alien_error()
-                .context(ErrorData::ApiRequestFailed {
-                    message: "Failed to parse artifact repository response".to_string(),
-                    url: Some(get_url.clone()),
-                })?;
-
-        if let Some(name) = body.get("name").and_then(|v| v.as_str()) {
-            return Ok(name.to_string());
+    if get_status.is_success() {
+        if let Ok(body) = serde_json::from_str::<serde_json::Value>(&get_body) {
+            if let Some(name) = body.get("name").and_then(|v| v.as_str()) {
+                return Ok(name.to_string());
+            }
         }
     }
 
@@ -643,22 +643,14 @@ async fn create_or_get_artifact_repo(
             ),
             url: Some(create_url.clone()),
         })?;
-
     let create_status = create_resp.status();
+    let create_body = create_resp.text().await.unwrap_or_default();
 
     if create_status.is_success() {
-        let body: serde_json::Value =
-            create_resp
-                .json()
-                .await
-                .into_alien_error()
-                .context(ErrorData::ApiRequestFailed {
-                    message: "Failed to parse artifact repository response".to_string(),
-                    url: Some(create_url.clone()),
-                })?;
-
-        if let Some(name) = body.get("name").and_then(|v| v.as_str()) {
-            return Ok(name.to_string());
+        if let Ok(body) = serde_json::from_str::<serde_json::Value>(&create_body) {
+            if let Some(name) = body.get("name").and_then(|v| v.as_str()) {
+                return Ok(name.to_string());
+            }
         }
     }
 
@@ -676,28 +668,27 @@ async fn create_or_get_artifact_repo(
             ),
             url: Some(get_url.clone()),
         })?;
+    let get_resp2_status = get_resp2.status();
+    let get_resp2_body = get_resp2.text().await.unwrap_or_default();
 
-    if get_resp2.status().is_success() {
-        let body: serde_json::Value =
-            get_resp2
-                .json()
-                .await
-                .into_alien_error()
-                .context(ErrorData::ApiRequestFailed {
-                    message: "Failed to parse artifact repository response".to_string(),
-                    url: Some(get_url.clone()),
-                })?;
-
-        if let Some(name) = body.get("name").and_then(|v| v.as_str()) {
-            return Ok(name.to_string());
+    if get_resp2_status.is_success() {
+        if let Ok(body) = serde_json::from_str::<serde_json::Value>(&get_resp2_body) {
+            if let Some(name) = body.get("name").and_then(|v| v.as_str()) {
+                return Ok(name.to_string());
+            }
         }
     }
 
-    // Both create and get failed — report the create error
+    // Both create and get failed — report the create error WITH the manager's
+    // response body so the user sees the actual reason (auth failure, bad
+    // payload, scope mismatch, etc.) instead of just an HTTP status.
     Err(AlienError::new(ErrorData::ApiRequestFailed {
         message: format!(
-            "Failed to create artifact repository '{}' for platform '{}' on manager (HTTP {})",
-            project_id, platform, create_status
+            "Failed to create artifact repository '{}' for platform '{}' on manager (HTTP {}): {}",
+            project_id,
+            platform,
+            create_status,
+            create_body.trim()
         ),
         url: Some(create_url),
     }))

@@ -64,8 +64,44 @@ pub enum CommandsAction {
 
 /// Execute commands task — works in all execution modes.
 pub async fn commands_task(args: CommandsArgs, ctx: ExecutionMode) -> Result<()> {
-    let manager = ctx.server_sdk_client()?;
-    let manager_url = ctx.manager_url();
+    // `server_sdk_client()` errors in Platform mode because the manager
+    // URL + auth aren't known until the project is resolved. For Platform
+    // mode we resolve the manager (which mints the per-project JWT and
+    // builds an authenticated client) before doing anything else. For
+    // Standalone/Dev the existing code path is unchanged — those modes
+    // already carry the manager URL + API key statically on ExecutionMode.
+    let (manager, manager_url, auth_token) = {
+        #[cfg(feature = "platform")]
+        if matches!(&ctx, ExecutionMode::Platform { .. }) {
+            // Platform mode: resolve the project (from --project override or
+            // local config), then ask the platform API for the manager that
+            // hosts it. `resolve_manager` returns a ManagerContext whose
+            // `client` is already authenticated with the minted manager JWT
+            // and whose `auth_token` carries that same JWT for the separate
+            // CommandsClient HTTP call below.
+            let (_, project_link) = ctx.resolve_project(None, true).await?;
+            let mgr_ctx = ctx
+                .resolve_manager(&project_link.project_id, "aws")
+                .await?;
+            (
+                mgr_ctx.client,
+                mgr_ctx.manager_url,
+                mgr_ctx.auth_token.unwrap_or_default(),
+            )
+        } else {
+            (
+                ctx.server_sdk_client()?,
+                ctx.manager_url(),
+                ctx.auth_token().unwrap_or_default().to_string(),
+            )
+        }
+        #[cfg(not(feature = "platform"))]
+        (
+            ctx.server_sdk_client()?,
+            ctx.manager_url(),
+            ctx.auth_token().unwrap_or_default().to_string(),
+        )
+    };
 
     match args.action {
         CommandsAction::Invoke {
@@ -75,7 +111,6 @@ pub async fn commands_task(args: CommandsArgs, ctx: ExecutionMode) -> Result<()>
             timeout,
         } => {
             let is_dev = ctx.is_dev();
-            let auth_token = ctx.auth_token().unwrap_or_default().to_string();
             invoke_command(
                 &manager,
                 &manager_url,
