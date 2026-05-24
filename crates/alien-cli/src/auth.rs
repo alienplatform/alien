@@ -501,8 +501,18 @@ mod oauth_flow {
             project: &'a str,
         }
 
+        // URL-encode the path segment to match the established convention in
+        // the rest of the crate (see `execution_context.rs::resolve_url` and
+        // the gcp / aws clients). Manager IDs are ULIDs today and contain no
+        // URL-special characters, but encoding here keeps the call site
+        // correct-by-construction rather than correct-by-coincidence — a
+        // future change to the ID format won't silently mis-route the request.
         let response = client
-            .post(format!("{}/v1/managers/{}/token", base, manager_id))
+            .post(format!(
+                "{}/v1/managers/{}/token",
+                base,
+                urlencoding::encode(manager_id)
+            ))
             .query(&[("workspace", workspace)])
             .header("Authorization", format!("Bearer {}", user_jwt))
             .json(&ExchangeBody {
@@ -621,7 +631,16 @@ mod oauth_flow {
             project_id,
         )
         .await?;
-        store_manager_token(&minted)?;
+        // Cache write is best-effort. The mint succeeded, so we hold a valid
+        // token in memory and the caller can complete the operation. A failed
+        // keyring write just means we'll re-mint on the next invocation —
+        // strictly slower, never wrong. This matches the cache-failure pattern
+        // documented in `alien/CLAUDE.md` ("When `warn!` Is Appropriate").
+        if let Err(e) = store_manager_token(&minted) {
+            tracing::warn!(
+                "Failed to cache manager token in keyring (will re-mint next run): {e}"
+            );
+        }
         Ok(minted)
     }
 
