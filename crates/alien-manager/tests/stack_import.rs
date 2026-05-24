@@ -378,9 +378,8 @@ fn azure_remote_management_import_request(
         stack_settings: StackSettings::default(),
         management_config: ManagementConfig::Azure(AzureManagementConfig {
             managing_tenant_id: tenant_id.to_string(),
-            oidc_issuer: None,
-            oidc_subject: None,
-            management_principal_id: None,
+            oidc_issuer: "https://issuer.example".to_string(),
+            oidc_subject: "system:serviceaccount:alien:manager".to_string(),
         }),
         resources: vec![ImportedResource {
             id: resource_id.to_string(),

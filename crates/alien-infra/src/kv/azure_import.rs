@@ -36,8 +36,6 @@ impl ResourceImporter for AzureKvImporter {
             primary_file_endpoint: azure_storage_endpoint(&data.storage_account_name, "file"),
             primary_queue_endpoint: azure_storage_endpoint(&data.storage_account_name, "queue"),
             primary_table_endpoint: data.table_endpoint,
-            primary_access_key: String::new(),
-            connection_string: String::new(),
             account_name: data.storage_account_name,
         };
 

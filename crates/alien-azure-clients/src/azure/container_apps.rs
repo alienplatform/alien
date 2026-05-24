@@ -14,6 +14,8 @@ use alien_client_core::{ErrorData, Result};
 use alien_error::{Context, IntoAlienError};
 use async_trait::async_trait;
 use reqwest::{Client, Method};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[cfg(feature = "test-utils")]
 use mockall::automock;
@@ -32,6 +34,40 @@ pub type JobExecutionOperationResult = OperationResult<JobExecution>;
 
 /// Result of a dapr component create or update operation
 pub type DaprComponentOperationResult = OperationResult<DaprComponent>;
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedEnvironmentCertificate {
+    pub location: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub properties: Option<ManagedEnvironmentCertificateProperties>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub tags: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedEnvironmentCertificateProperties {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub certificate_key_vault_properties: Option<ManagedEnvironmentCertificateKeyVaultProperties>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedEnvironmentCertificateKeyVaultProperties {
+    pub identity: String,
+    pub key_vault_url: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedEnvironmentCertificateResponse {
+    pub id: Option<String>,
+}
 
 // -------------------------------------------------------------------------
 // Container Apps API trait
@@ -97,6 +133,14 @@ pub trait ContainerAppsApi: Send + Sync + std::fmt::Debug {
         resource_group_name: &str,
         environment_name: &str,
     ) -> Result<OperationResult<()>>;
+
+    async fn create_or_update_managed_environment_certificate(
+        &self,
+        resource_group_name: &str,
+        environment_name: &str,
+        certificate_name: &str,
+        certificate: &ManagedEnvironmentCertificate,
+    ) -> Result<ManagedEnvironmentCertificateResponse>;
 
     // -------------------------------------------------------------------------
     // Jobs API
@@ -673,6 +717,83 @@ impl ContainerAppsApi for AzureContainerAppsClient {
                 environment_name,
             )
             .await
+    }
+
+    async fn create_or_update_managed_environment_certificate(
+        &self,
+        resource_group_name: &str,
+        environment_name: &str,
+        certificate_name: &str,
+        certificate: &ManagedEnvironmentCertificate,
+    ) -> Result<ManagedEnvironmentCertificateResponse> {
+        let bearer_token = self
+            .token_cache
+            .get_bearer_token_with_scope("https://management.azure.com/.default")
+            .await?;
+
+        let url = self.base.build_url(
+            &format!(
+                "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.App/managedEnvironments/{}/certificates/{}",
+                &self.token_cache.config().subscription_id,
+                resource_group_name,
+                environment_name,
+                certificate_name,
+            ),
+            Some(vec![("api-version", "2025-01-01".into())]),
+        );
+
+        let body = serde_json::to_string(certificate)
+            .into_alien_error()
+            .context(ErrorData::SerializationError {
+                message: format!(
+                    "Failed to serialize managed environment certificate: {}",
+                    certificate_name
+                ),
+            })?;
+
+        let builder = AzureRequestBuilder::new(Method::PUT, url.clone())
+            .content_type_json()
+            .content_length(&body)
+            .body(body);
+
+        let req = builder.build()?;
+        let signed = self.base.sign_request(req, &bearer_token).await?;
+        let resp = self
+            .base
+            .execute_request(
+                signed,
+                "CreateOrUpdateManagedEnvironmentCertificate",
+                certificate_name,
+            )
+            .await?;
+
+        let body = resp
+            .text()
+            .await
+            .into_alien_error()
+            .context(ErrorData::HttpResponseError {
+                message: format!(
+                    "Azure CreateOrUpdateManagedEnvironmentCertificate: failed to read response body for {}",
+                    certificate_name
+                ),
+                url: url.clone(),
+                http_status: 200,
+                http_response_text: None,
+                http_request_text: None,
+            })?;
+
+        serde_json::from_str(&body)
+            .into_alien_error()
+            .context(ErrorData::HttpResponseError {
+                message: format!(
+                    "Azure CreateOrUpdateManagedEnvironmentCertificate: JSON parse error for {}",
+                    certificate_name
+                ),
+                url,
+                http_status: 200,
+                http_response_text: Some(body),
+                http_request_text: None,
+            })
     }
 
     // -------------------------------------------------------------------------

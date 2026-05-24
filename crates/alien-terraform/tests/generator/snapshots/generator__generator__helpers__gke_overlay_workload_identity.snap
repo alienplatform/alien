@@ -139,18 +139,23 @@ locals {
   ]
   alien_kubernetes_namespace = var.kubernetes_namespace
   helm_service_accounts = {
-    execution_sa = {
+    execution = {
       annotations = {
         "iam.gke.io/gcp-service-account" = google_service_account.execution_sa.email
       }
       labels = {}
     }
   }
+  helm_manager_service_account = {
+    annotations = {}
+    labels      = {}
+  }
   helm_values = {
-    serviceAccounts      = local.helm_service_accounts
-    stackSettings        = local.deployment_settings
-    basePlatform         = local.deployment_base_platform
-    serviceAccountPrefix = local.resource_prefix
+    serviceAccounts       = local.helm_service_accounts
+    managerServiceAccount = local.helm_manager_service_account
+    stackSettings         = local.deployment_settings
+    basePlatform          = local.deployment_base_platform
+    serviceAccountPrefix  = local.resource_prefix
   }
 }
 
@@ -228,7 +233,7 @@ resource "google_service_account_iam_binding" "execution_sa_workload_identity" {
   service_account_id = google_service_account.execution_sa.name
   role               = "roles/iam.workloadIdentityUser"
   members = [
-    "serviceAccount:${data.google_container_cluster.target.workload_identity_config[0].workload_pool}[${var.kubernetes_namespace}/execution_sa]"
+    "serviceAccount:${data.google_container_cluster.target.workload_identity_config[0].workload_pool}[${var.kubernetes_namespace}/${local.resource_prefix}-execution-sa]"
   ]
 }
 

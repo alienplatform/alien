@@ -28,10 +28,6 @@ pub struct AzureStorageAccountController {
     pub(crate) account_name: Option<String>,
     /// The Azure resource ID of the storage account.
     pub(crate) resource_id: Option<String>,
-    /// The primary access key for the storage account.
-    pub(crate) primary_access_key: Option<String>,
-    /// The connection string for the storage account.
-    pub(crate) connection_string: Option<String>,
     /// The primary blob endpoint.
     pub(crate) primary_blob_endpoint: Option<String>,
     /// The primary file endpoint.
@@ -122,18 +118,6 @@ impl AzureStorageAccountController {
                         StorageAccountPropertiesProvisioningState::Succeeded => {
                             info!(account_name=%account_name, "Storage account creation completed, retrieving details");
 
-                            // Get storage account keys and details now that creation is complete
-                            let keys = client
-                                .list_storage_account_keys(&resource_group_name, account_name)
-                                .await
-                                .context(ErrorData::CloudPlatformError {
-                                    message: format!(
-                                        "Failed to list storage account keys for '{}'.",
-                                        account_name
-                                    ),
-                                    resource_id: Some(config.id.clone()),
-                                })?;
-
                             // Extract details from the response
                             self.resource_id = account_info.id.or_else(|| {
                                 Some(azure_storage_account_resource_id(
@@ -159,22 +143,6 @@ impl AzureStorageAccountController {
                                 .as_ref()
                                 .and_then(|e| e.table.clone())
                                 .or_else(|| Some(azure_storage_endpoint(account_name, "table")));
-
-                            // Extract primary key
-                            self.primary_access_key =
-                                keys.keys.first().and_then(|key| key.value.clone());
-
-                            // Generate connection string
-                            self.connection_string = Some(match &self.primary_access_key {
-                                Some(key) => format!(
-                                    "DefaultEndpointsProtocol=https;AccountName={};AccountKey={};EndpointSuffix=core.windows.net",
-                                    account_name, key
-                                ),
-                                None => format!(
-                                    "DefaultEndpointsProtocol=https;AccountName={};EndpointSuffix=core.windows.net",
-                                    account_name
-                                ),
-                            });
 
                             info!(account_name=%account_name, "Successfully retrieved storage account details");
 
@@ -441,7 +409,6 @@ impl AzureStorageAccountController {
         if let (
             Some(account_name),
             Some(resource_id),
-            Some(connection_string),
             Some(primary_blob_endpoint),
             Some(primary_file_endpoint),
             Some(primary_queue_endpoint),
@@ -449,7 +416,6 @@ impl AzureStorageAccountController {
         ) = (
             &self.account_name,
             &self.resource_id,
-            &self.connection_string,
             &self.primary_blob_endpoint,
             &self.primary_file_endpoint,
             &self.primary_queue_endpoint,
@@ -462,8 +428,6 @@ impl AzureStorageAccountController {
                 primary_file_endpoint: primary_file_endpoint.clone(),
                 primary_queue_endpoint: primary_queue_endpoint.clone(),
                 primary_table_endpoint: primary_table_endpoint.clone(),
-                primary_access_key: self.primary_access_key.clone().unwrap_or_default(),
-                connection_string: connection_string.clone(),
             }))
         } else {
             None
@@ -536,8 +500,6 @@ impl AzureStorageAccountController {
     fn clear_state(&mut self) {
         self.account_name = None;
         self.resource_id = None;
-        self.primary_access_key = None;
-        self.connection_string = None;
         self.primary_blob_endpoint = None;
         self.primary_file_endpoint = None;
         self.primary_queue_endpoint = None;
@@ -591,13 +553,10 @@ impl AzureStorageAccountController {
     /// Creates a controller in a ready state with mock values for testing purposes.
     #[cfg(feature = "test-utils")]
     pub fn mock_ready(account_name: &str) -> Self {
-        let mock_key = "YWJjZGVmZ2hpams="; // Mock base64 key
         Self {
                 state: AzureStorageAccountState::Ready,
                 account_name: Some(account_name.to_string()),
                 resource_id: Some(format!("/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/mock-rg/providers/Microsoft.Storage/storageAccounts/{}", account_name)),
-                primary_access_key: Some(mock_key.to_string()),
-                connection_string: Some(format!("DefaultEndpointsProtocol=https;AccountName={};AccountKey={};EndpointSuffix=core.windows.net", account_name, mock_key)),
                 primary_blob_endpoint: Some(format!("https://{}.blob.core.windows.net/", account_name)),
                 primary_file_endpoint: Some(format!("https://{}.file.core.windows.net/", account_name)),
                 primary_queue_endpoint: Some(format!("https://{}.queue.core.windows.net/", account_name)),

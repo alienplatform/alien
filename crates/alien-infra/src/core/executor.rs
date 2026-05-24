@@ -113,6 +113,7 @@ pub struct StackExecutor {
     id_to_node_index: HashMap<String, NodeIndex>,
     node_index_to_id: HashMap<NodeIndex, String>,
     lifecycle_filter: Option<HashSet<ResourceLifecycle>>,
+    step_running_resources: bool,
     /// Resource IDs that were excluded by the lifecycle filter but ARE in the
     /// desired stack. These must not be removed from state — other in-scope
     /// resources may depend on them.
@@ -197,6 +198,10 @@ pub struct StackExecutorConfig<'a> {
     /// Lifecycle filter - only resources with matching lifecycle are processed
     lifecycle_filter: Option<Vec<ResourceLifecycle>>,
 
+    /// Whether resources that are already Running should execute their Ready handler.
+    #[builder(default = true)]
+    step_running_resources: bool,
+
     /// Custom resource registry (defaults to built-in registry)
     #[builder(default = Arc::new(ResourceRegistry::with_built_ins()))]
     resource_registry: Arc<ResourceRegistry>,
@@ -271,6 +276,7 @@ impl StackExecutor {
         let service_provider = config.service_provider;
         let deployment_config = config.deployment_config.clone();
         let lifecycle_filter = config.lifecycle_filter;
+        let step_running_resources = config.step_running_resources;
         let platform = client_config.platform();
         let base_platform = deployment_config.base_platform;
 
@@ -399,6 +405,7 @@ impl StackExecutor {
             id_to_node_index: id_to_node,
             node_index_to_id: node_to_id,
             lifecycle_filter: filter_set,
+            step_running_resources,
             filtered_out_ids,
             desired_stack: stack.clone(),
             client_config,
@@ -1254,7 +1261,7 @@ impl StackExecutor {
                 // Running resources should always be stepped to run their Ready handler.
                 // This is important for local platform where ephemeral state (ports, URLs)
                 // needs to be refreshed after restart, even if config hasn't changed.
-                true
+                self.step_running_resources
             } else {
                 // Check dependencies only if the resource is defined in the target graph
                 if let Some(node_index) = self.id_to_node_index.get(resource_id) {

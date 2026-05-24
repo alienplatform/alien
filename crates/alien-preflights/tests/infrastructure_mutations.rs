@@ -103,9 +103,8 @@ async fn azure_remote_management_dependencies_do_not_cycle() {
         .stack_settings(StackSettings::default())
         .management_config(ManagementConfig::Azure(AzureManagementConfig {
             managing_tenant_id: "management-tenant".to_string(),
-            oidc_issuer: None,
-            oidc_subject: None,
-            management_principal_id: Some("principal-id".to_string()),
+            oidc_issuer: "https://issuer.example".to_string(),
+            oidc_subject: "system:serviceaccount:alien:manager".to_string(),
         }))
         .environment_variables(empty_env_snapshot())
         .allow_frozen_changes(false)

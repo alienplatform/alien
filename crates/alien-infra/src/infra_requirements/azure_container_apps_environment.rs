@@ -31,6 +31,8 @@ pub struct AzureContainerAppsEnvironmentController {
     pub(crate) default_domain: Option<String>,
     /// The static IP address of the environment (if applicable).
     pub(crate) static_ip: Option<String>,
+    /// Azure Container Apps custom domain verification ID.
+    pub(crate) custom_domain_verification_id: Option<String>,
     /// Long-running operation information for monitoring Azure operations.
     pub(crate) long_running_operation: Option<LongRunningOperation>,
 }
@@ -660,6 +662,7 @@ impl AzureContainerAppsEnvironmentController {
                 resource_group_name: resource_group_name.clone(),
                 default_domain: self.default_domain.clone().unwrap_or_default(),
                 static_ip: self.static_ip.clone(),
+                custom_domain_verification_id: self.custom_domain_verification_id.clone(),
             }))
         } else {
             None
@@ -692,6 +695,11 @@ impl AzureContainerAppsEnvironmentController {
             .properties
             .as_ref()
             .and_then(|p| p.static_ip.clone());
+        self.custom_domain_verification_id = managed_env
+            .properties
+            .as_ref()
+            .and_then(|p| p.custom_domain_configuration.as_ref())
+            .and_then(|c| c.custom_domain_verification_id.clone());
     }
 
     fn clear_state(&mut self) {
@@ -700,6 +708,7 @@ impl AzureContainerAppsEnvironmentController {
         self.resource_group_name = None;
         self.default_domain = None;
         self.static_ip = None;
+        self.custom_domain_verification_id = None;
         self.long_running_operation = None;
     }
 
@@ -849,6 +858,7 @@ impl AzureContainerAppsEnvironmentController {
             resource_group_name: Some("mock-rg".to_string()),
             default_domain: Some(format!("{}.eastus.azurecontainerapps.io", environment_name)),
             static_ip: Some("20.1.2.3".to_string()),
+            custom_domain_verification_id: Some("mock-verification-id".to_string()),
             long_running_operation: None,
             _internal_stay_count: None,
         }

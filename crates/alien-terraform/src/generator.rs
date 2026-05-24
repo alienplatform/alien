@@ -281,7 +281,6 @@ pub fn generate_terraform_module(
             render_body(gcp_iam_propagation_body(&gcp_iam_propagation_dependencies))?,
         );
     }
-
     files.insert(
         "import.tf".to_string(),
         render_body(import_body(
@@ -635,15 +634,15 @@ fn versions_body(
             "google",
             provider_decl_attr("hashicorp/google", ">= 5.0"),
         ));
-        if include_time_provider {
-            provider_attrs.push(attr("time", provider_decl_attr("hashicorp/time", ">= 0.9")));
-        }
     }
     if matches!(target.platform(), alien_core::Platform::Azure) {
         provider_attrs.push(attr(
             "azurerm",
             provider_decl_attr("hashicorp/azurerm", ">= 3.100"),
         ));
+    }
+    if include_time_provider {
+        provider_attrs.push(attr("time", provider_decl_attr("hashicorp/time", ">= 0.9")));
     }
     provider_attrs.push(attr(
         "random",
@@ -878,25 +877,19 @@ fn variables_body(
         blocks.push(nested(variable_block(
             "azure_managing_tenant_id",
             "Azure tenant ID the manager uses for cross-tenant access.",
-            Some(Expression::String(String::new())),
-            false,
-        )));
-        blocks.push(nested(variable_block(
-            "azure_management_principal_id",
-            "Optional service-principal object ID for local development fallback role assignment.",
-            Some(Expression::String(String::new())),
+            None,
             false,
         )));
         blocks.push(nested(variable_block(
             "azure_oidc_issuer",
-            "OIDC issuer URL for Azure Federated Identity Credential. Empty disables FIC creation.",
-            Some(Expression::String(String::new())),
+            "OIDC issuer URL for Azure Federated Identity Credential.",
+            None,
             false,
         )));
         blocks.push(nested(variable_block(
             "azure_oidc_subject",
-            "OIDC subject claim for Azure Federated Identity Credential. Empty disables FIC creation.",
-            Some(Expression::String(String::new())),
+            "OIDC subject claim for Azure Federated Identity Credential.",
+            None,
             false,
         )));
     }
@@ -1232,20 +1225,8 @@ fn management_config_expression(target: TerraformTarget) -> Expression {
                 "managingTenantId",
                 expr::raw("var.azure_managing_tenant_id"),
             );
-            object.insert(
-                "managementPrincipalId",
-                expr::raw(
-                    "var.azure_management_principal_id == \"\" ? null : var.azure_management_principal_id",
-                ),
-            );
-            object.insert(
-                "oidcIssuer",
-                expr::raw("var.azure_oidc_issuer == \"\" ? null : var.azure_oidc_issuer"),
-            );
-            object.insert(
-                "oidcSubject",
-                expr::raw("var.azure_oidc_subject == \"\" ? null : var.azure_oidc_subject"),
-            );
+            object.insert("oidcIssuer", expr::raw("var.azure_oidc_issuer"));
+            object.insert("oidcSubject", expr::raw("var.azure_oidc_subject"));
         }
         _ => {}
     }

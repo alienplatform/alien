@@ -73,25 +73,16 @@ variable "azure_resource_group_name" {
 variable "azure_managing_tenant_id" {
   type        = string
   description = "Azure tenant ID the manager uses for cross-tenant access."
-  default     = ""
-}
-
-variable "azure_management_principal_id" {
-  type        = string
-  description = "Optional service-principal object ID for local development fallback role assignment."
-  default     = ""
 }
 
 variable "azure_oidc_issuer" {
   type        = string
-  description = "OIDC issuer URL for Azure Federated Identity Credential. Empty disables FIC creation."
-  default     = ""
+  description = "OIDC issuer URL for Azure Federated Identity Credential."
 }
 
 variable "azure_oidc_subject" {
   type        = string
-  description = "OIDC subject claim for Azure Federated Identity Credential. Empty disables FIC creation."
-  default     = ""
+  description = "OIDC subject claim for Azure Federated Identity Credential."
 }
 
 === providers.tf ===
@@ -113,11 +104,10 @@ locals {
   deployment_target   = "azure"
   deployment_region   = var.azure_location
   deployment_management_config = {
-    platform              = "azure"
-    managingTenantId      = var.azure_managing_tenant_id
-    managementPrincipalId = var.azure_management_principal_id == "" ? null : var.azure_management_principal_id
-    oidcIssuer            = var.azure_oidc_issuer == "" ? null : var.azure_oidc_issuer
-    oidcSubject           = var.azure_oidc_subject == "" ? null : var.azure_oidc_subject
+    platform         = "azure"
+    managingTenantId = var.azure_managing_tenant_id
+    oidcIssuer       = var.azure_oidc_issuer
+    oidcSubject      = var.azure_oidc_subject
   }
   deployment_settings = jsondecode(var.stack_settings_json)
   deployment_resources = [
@@ -180,7 +170,7 @@ resource "azurerm_role_definition" "management_management_role" {
   name               = "${local.resource_prefix}-management-role"
   role_definition_id = uuidv5("oid", "deployment:azure:mgmt-role-def:${local.resource_prefix}")
   scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
-  description        = "Management role for deployment '${local.resource_prefix}'"
+  description        = "Management role for Terraform resource 'management'"
 
   permissions {
     actions = [
@@ -188,7 +178,6 @@ resource "azurerm_role_definition" "management_management_role" {
       "Microsoft.App/containerApps/authConfigs/read",
       "Microsoft.App/containerApps/authConfigs/write",
       "Microsoft.App/containerApps/delete",
-      "Microsoft.App/containerApps/listSecrets/action",
       "Microsoft.App/containerApps/read",
       "Microsoft.App/containerApps/revisions/activate/action",
       "Microsoft.App/containerApps/revisions/deactivate/action",
@@ -242,8 +231,8 @@ resource "azurerm_role_definition" "management_management_role" {
   ]
 }
 
-resource "azurerm_role_assignment" "management_management_uami_assignment" {
-  name               = uuidv5("oid", "deployment:azure:mgmt-role-assign:${local.resource_prefix}:uami")
+resource "azurerm_role_assignment" "management_management_uami_assignment_0" {
+  name               = uuidv5("oid", "deployment:azure:mgmt-role-assign:${local.resource_prefix}:uami:0")
   scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
   role_definition_id = azurerm_role_definition.management_management_role.role_definition_resource_id
   principal_id       = azurerm_user_assigned_identity.management.principal_id
@@ -252,19 +241,38 @@ resource "azurerm_role_assignment" "management_management_uami_assignment" {
   ]
 }
 
-resource "azurerm_role_assignment" "management_management_sp_assignment" {
-  count              = var.azure_management_principal_id == "" ? 0 : 1
-  name               = uuidv5("oid", "deployment:azure:mgmt-role-assign:${local.resource_prefix}:sp")
+resource "azurerm_role_assignment" "management_management_uami_assignment_1" {
+  name               = uuidv5("oid", "deployment:azure:mgmt-role-assign:${local.resource_prefix}:uami:1")
   scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
   role_definition_id = azurerm_role_definition.management_management_role.role_definition_resource_id
-  principal_id       = var.azure_management_principal_id
+  principal_id       = azurerm_user_assigned_identity.management.principal_id
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_role_assignment" "management_management_uami_assignment_2" {
+  name               = uuidv5("oid", "deployment:azure:mgmt-role-assign:${local.resource_prefix}:uami:2")
+  scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
+  role_definition_id = azurerm_role_definition.management_management_role.role_definition_resource_id
+  principal_id       = azurerm_user_assigned_identity.management.principal_id
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_role_assignment" "management_existing_vnet_reader_uami" {
+  count              = try(local.deployment_settings.network.type, "") == "byo-vnet-azure" ? 1 : 0
+  name               = uuidv5("oid", "alien:azure:existing-vnet-reader:${local.resource_prefix}:uami:${azurerm_user_assigned_identity.management.principal_id}:${try(local.deployment_settings.network.vnet_resource_id, "")}")
+  scope              = try(local.deployment_settings.network.vnet_resource_id, "")
+  role_definition_id = "/subscriptions/${var.azure_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/acdd72a7-3385-48ef-bd42-f606fba81ae7"
+  principal_id       = azurerm_user_assigned_identity.management.principal_id
   depends_on = [
     azurerm_resource_group.default_resource_group
   ]
 }
 
 resource "azurerm_federated_identity_credential" "management_fic" {
-  count               = var.azure_oidc_issuer == "" || var.azure_oidc_subject == "" ? 0 : 1
   name                = "${local.resource_prefix}-federated-credential"
   resource_group_name = var.azure_resource_group_name
   parent_id           = azurerm_user_assigned_identity.management.id
@@ -273,16 +281,6 @@ resource "azurerm_federated_identity_credential" "management_fic" {
   ]
   issuer  = var.azure_oidc_issuer
   subject = var.azure_oidc_subject
-  depends_on = [
-    azurerm_resource_group.default_resource_group
-  ]
-}
-
-resource "azurerm_role_assignment" "management_acr_push_assignment" {
-  name               = uuidv5("oid", "deployment:azure:mgmt-acr-assign:${local.resource_prefix}")
-  scope              = "/subscriptions/${var.azure_subscription_id}"
-  role_definition_id = "/subscriptions/${var.azure_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/8311e382-0749-4cb8-b61a-304f252e45ec"
-  principal_id       = azurerm_user_assigned_identity.management.principal_id
   depends_on = [
     azurerm_resource_group.default_resource_group
   ]
@@ -307,10 +305,11 @@ resource "terraform_data" "deployment_import" {
     azurerm_resource_group.default_resource_group,
     azurerm_user_assigned_identity.management,
     azurerm_role_definition.management_management_role,
-    azurerm_role_assignment.management_management_uami_assignment,
-    azurerm_role_assignment.management_management_sp_assignment,
-    azurerm_federated_identity_credential.management_fic,
-    azurerm_role_assignment.management_acr_push_assignment
+    azurerm_role_assignment.management_management_uami_assignment_0,
+    azurerm_role_assignment.management_management_uami_assignment_1,
+    azurerm_role_assignment.management_management_uami_assignment_2,
+    azurerm_role_assignment.management_existing_vnet_reader_uami,
+    azurerm_federated_identity_credential.management_fic
   ]
 }
 

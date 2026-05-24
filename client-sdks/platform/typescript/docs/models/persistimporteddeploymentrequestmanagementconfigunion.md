@@ -31,6 +31,8 @@ const value: models.PersistImportedDeploymentRequestManagementConfigGcp = {
 ```typescript
 const value: models.PersistImportedDeploymentRequestManagementConfigAzure = {
   managingTenantId: "<id>",
+  oidcIssuer: "<value>",
+  oidcSubject: "<value>",
   platform: "azure",
 };
 ```

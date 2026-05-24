@@ -377,7 +377,6 @@ impl AzureKvController {
     /// Creates a controller in a ready state with mock values for testing purposes.
     #[cfg(feature = "test-utils")]
     pub fn mock_ready(table_name: &str, account_name: &str) -> Self {
-        let mock_key = "YWJjZGVmZ2hpams="; // Mock base64 key
         let storage_outputs = AzureStorageAccountOutputs {
             account_name: account_name.to_string(),
             resource_id: format!("/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/mock-rg/providers/Microsoft.Storage/storageAccounts/{}", account_name),
@@ -385,8 +384,6 @@ impl AzureKvController {
             primary_file_endpoint: format!("https://{}.file.core.windows.net/", account_name),
             primary_queue_endpoint: format!("https://{}.queue.core.windows.net/", account_name),
             primary_table_endpoint: format!("https://{}.table.core.windows.net/", account_name),
-            primary_access_key: mock_key.to_string(),
-            connection_string: format!("DefaultEndpointsProtocol=https;AccountName={};AccountKey={};EndpointSuffix=core.windows.net", account_name, mock_key),
         };
 
         Self {

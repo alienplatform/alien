@@ -12,7 +12,7 @@
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${stackPrefix}-*"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
           },
           "resource": {
             "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceName}"

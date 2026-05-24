@@ -395,22 +395,6 @@ output "target_azure_client_secret" {
   sensitive = true
 }
 
-# Azure - Management Service Principal
-output "management_azure_sp_client_id" {
-  value     = module.azure.management_sp_client_id
-  sensitive = true
-}
-
-output "management_azure_sp_client_secret" {
-  value     = module.azure.management_sp_client_secret
-  sensitive = true
-}
-
-output "management_azure_sp_object_id" {
-  value     = module.azure.management_sp_object_id
-  sensitive = true
-}
-
 # Azure resources
 output "azure_resource_group" {
   value     = module.azure.resource_group

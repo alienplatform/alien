@@ -73,8 +73,7 @@
             "Microsoft.App/managedEnvironments/read",
             "Microsoft.App/managedEnvironments/write",
             "Microsoft.App/jobs/read",
-            "Microsoft.App/jobs/executions/read",
-            "Microsoft.App/jobs/listSecrets/action"
+            "Microsoft.App/jobs/executions/read"
           ],
           "dataActions": []
         },

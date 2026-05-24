@@ -35,7 +35,8 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context};
 use alien_permissions::{
-    generators::AzureRuntimePermissionsGenerator, BindingTarget, PermissionContext,
+    generators::{AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator},
+    BindingTarget, PermissionContext,
 };
 use hcl::expr::Expression;
 use std::collections::HashSet;
@@ -251,132 +252,73 @@ pub fn emit_role_definition_and_assignments(
     principal_id_expr: Expression,
     permission_set: &PermissionSet,
     context: &PermissionContext,
+    seen_predefined_assignments: &mut HashSet<(String, String)>,
 ) -> Result<()> {
     if permission_set.platforms.azure.is_none() {
         return Ok(());
     }
 
     let generator = AzureRuntimePermissionsGenerator::new();
-    let role_definition = generator
-        .generate_role_definition(permission_set, BindingTarget::Stack, context)
+    let grant_plan = generator
+        .generate_grant_plan(permission_set, BindingTarget::Stack, context)
         .context(ErrorData::GenericError {
             message: format!(
-                "failed to generate Azure role definition for permission set '{}'",
+                "failed to generate Azure grant plan for permission set '{}'",
                 permission_set.id
             ),
         })?;
 
-    let role_label = format!("{sa_label}_{}", sanitize_role_label(&permission_set.id));
-    let role_name = format!("${{local.resource_prefix}}-{service_account_id}-{role_index}");
+    for (custom_index, custom_role) in grant_plan.custom_roles.iter().enumerate() {
+        let role_label = stack_custom_role_label(sa_label, &permission_set.id, custom_index);
+        let role_name =
+            format!("${{local.resource_prefix}}-{service_account_id}-{role_index}-{custom_index}");
 
-    fragment.resource_blocks.push(resource_block(
-        "azurerm_role_definition",
-        &role_label,
-        [
-            attr("name", expr::raw(&format!("\"{role_name}\""))),
-            attr(
-                "role_definition_id",
-                expr::raw(&format!(
-                    "uuidv5(\"oid\", \"deployment:azure:role-def:{role_name}\")"
-                )),
-            ),
-            attr(
-                "scope",
-                expr::raw(
-                    "\"/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}\"",
-                ),
-            ),
-            attr(
-                "description",
-                Expression::String(role_definition.description.clone()),
-            ),
-            nested(block(
-                "permissions",
-                [
-                    attr(
-                        "actions",
-                        Expression::Array(
-                            role_definition
-                                .actions
-                                .iter()
-                                .map(|a| Expression::String(a.clone()))
-                                .collect(),
-                        ),
-                    ),
-                    attr(
-                        "data_actions",
-                        Expression::Array(
-                            role_definition
-                                .data_actions
-                                .iter()
-                                .map(|a| Expression::String(a.clone()))
-                                .collect(),
-                        ),
-                    ),
-                    attr(
-                        "not_actions",
-                        Expression::Array(
-                            role_definition
-                                .not_actions
-                                .iter()
-                                .map(|a| Expression::String(a.clone()))
-                                .collect(),
-                        ),
-                    ),
-                    attr(
-                        "not_data_actions",
-                        Expression::Array(
-                            role_definition
-                                .not_data_actions
-                                .iter()
-                                .map(|a| Expression::String(a.clone()))
-                                .collect(),
-                        ),
-                    ),
-                ],
+        fragment.resource_blocks.push(role_definition_block(
+            &role_label,
+            expr::raw(&format!("\"{role_name}\"")),
+            expr::raw(&format!(
+                "uuidv5(\"oid\", \"deployment:azure:role-def:{role_name}\")"
             )),
-            attr(
-                "assignable_scopes",
-                Expression::Array(
-                    role_definition
-                        .assignable_scopes
-                        .iter()
-                        .map(|s| expr::template(s.clone()))
-                        .collect(),
-                ),
-            ),
-        ],
-    ));
+            custom_role.role_definition.clone(),
+        ));
+    }
 
-    let assignment_label = format!("{role_label}_assignment");
-    fragment.resource_blocks.push(resource_block(
-        "azurerm_role_assignment",
-        &assignment_label,
-        [
-            attr(
-                "name",
-                expr::raw(&format!(
-                    "uuidv5(\"oid\", \"deployment:azure:role-assign:${{azurerm_role_definition.{role_label}.role_definition_resource_id}}:${{{}}}\")",
-                    render_expression_for_uuidv5(&principal_id_expr)
-                )),
-            ),
-            attr(
-                "scope",
-                expr::raw(
-                    "\"/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}\"",
+    for (binding_index, binding) in grant_plan.bindings.iter().enumerate() {
+        if let AzureRoleDefinitionRef::Predefined { role_definition_id } = &binding.role_definition
+        {
+            if !seen_predefined_assignments
+                .insert((binding.scope.clone(), role_definition_id.clone()))
+            {
+                continue;
+            }
+        }
+
+        let assignment_label = format!(
+            "{sa_label}_{}_assignment_{binding_index}",
+            sanitize_role_label(&permission_set.id)
+        );
+        let role_definition_id =
+            role_definition_id_expression(&binding.role_definition, &permission_set.id, sa_label);
+
+        fragment.resource_blocks.push(resource_block(
+            "azurerm_role_assignment",
+            &assignment_label,
+            [
+                attr(
+                    "name",
+                    expr::raw(&format!(
+                        "uuidv5(\"oid\", \"deployment:azure:role-assign:{}:{}:{binding_index}:${{{}}}\")",
+                        service_account_id,
+                        permission_set.id,
+                        render_expression_for_uuidv5(&principal_id_expr)
+                    )),
                 ),
-            ),
-            attr(
-                "role_definition_id",
-                expr::traversal([
-                    "azurerm_role_definition",
-                    role_label.as_str(),
-                    "role_definition_resource_id",
-                ]),
-            ),
-            attr("principal_id", principal_id_expr),
-        ],
-    ));
+                attr("scope", expr::template(binding.scope.clone())),
+                attr("role_definition_id", role_definition_id),
+                attr("principal_id", principal_id_expr.clone()),
+            ],
+        ));
+    }
 
     Ok(())
 }
@@ -412,7 +354,7 @@ pub fn emit_setup_resource_role_definitions(
                     continue;
                 }
 
-                emit_setup_execution_role_definition(fragment, profile_name, &permission_set)?;
+                emit_setup_execution_role_definitions(fragment, profile_name, &permission_set)?;
             }
         }
 
@@ -436,7 +378,7 @@ pub fn emit_setup_resource_role_definitions(
                 continue;
             }
 
-            emit_setup_management_role_definition(fragment, &permission_set)?;
+            emit_setup_management_role_definitions(fragment, &permission_set)?;
         }
     }
 
@@ -470,72 +412,90 @@ fn resource_scoped_permission_refs<'a>(
     refs
 }
 
-fn emit_setup_execution_role_definition(
+fn emit_setup_execution_role_definitions(
     fragment: &mut TfFragment,
     profile_name: &str,
     permission_set: &PermissionSet,
 ) -> Result<()> {
-    let role_label = setup_execution_role_label(profile_name, &permission_set.id);
-    let mut role_definition = setup_resource_role_definition(permission_set)?;
-    role_definition.name = format!("{} [{}]", role_definition.name, profile_name);
+    for (index, mut role_definition) in setup_resource_role_definitions(permission_set)?
+        .into_iter()
+        .enumerate()
+    {
+        let role_label = setup_execution_role_label(profile_name, &permission_set.id, index);
+        role_definition.name = format!(
+            "${{local.resource_prefix}}-{} [{}]",
+            role_definition.name, profile_name
+        );
 
-    fragment.resource_blocks.push(setup_role_definition_block(
-        &role_label,
-        expr::template(role_definition.name.clone()),
-        expr::raw(&format!(
-            "uuidv5(\"oid\", \"deployment:azure:res-role-def:${{local.resource_prefix}}:{profile_name}:{}\")",
-            permission_set.id
-        )),
-        role_definition,
-    ));
+        fragment.resource_blocks.push(role_definition_block(
+            &role_label,
+            expr::template(role_definition.name.clone()),
+            expr::raw(&format!(
+                "uuidv5(\"oid\", \"deployment:azure:res-role-def:${{local.resource_prefix}}:{profile_name}:{}:{index}\")",
+                permission_set.id
+            )),
+            role_definition,
+        ));
+    }
 
     Ok(())
 }
 
-fn emit_setup_management_role_definition(
+fn emit_setup_management_role_definitions(
     fragment: &mut TfFragment,
     permission_set: &PermissionSet,
 ) -> Result<()> {
-    let role_label = setup_management_role_label(&permission_set.id);
-    let mut role_definition = setup_resource_role_definition(permission_set)?;
-    role_definition.name = format!("{} [mgmt]", role_definition.name);
+    for (index, mut role_definition) in setup_resource_role_definitions(permission_set)?
+        .into_iter()
+        .enumerate()
+    {
+        let role_label = setup_management_role_label(&permission_set.id, index);
+        role_definition.name =
+            format!("${{local.resource_prefix}}-{} [mgmt]", role_definition.name);
 
-    fragment.resource_blocks.push(setup_role_definition_block(
-        &role_label,
-        expr::template(role_definition.name.clone()),
-        expr::raw(&format!(
-            "uuidv5(\"oid\", \"deployment:azure:mgmt-res-role-def:${{local.resource_prefix}}:{}\")",
-            permission_set.id
-        )),
-        role_definition,
-    ));
+        fragment.resource_blocks.push(role_definition_block(
+            &role_label,
+            expr::template(role_definition.name.clone()),
+            expr::raw(&format!(
+                "uuidv5(\"oid\", \"deployment:azure:mgmt-res-role-def:${{local.resource_prefix}}:{}:{index}\")",
+                permission_set.id
+            )),
+            role_definition,
+        ));
+    }
 
     Ok(())
 }
 
-fn setup_resource_role_definition(
+fn setup_resource_role_definitions(
     permission_set: &PermissionSet,
-) -> Result<alien_permissions::generators::AzureRoleDefinition> {
+) -> Result<Vec<alien_permissions::generators::AzureRoleDefinition>> {
     let generator = AzureRuntimePermissionsGenerator::new();
     let context = permission_context("setup-resource-permissions")
         .with_resource_name("${local.resource_prefix}-setup-role-scope".to_string());
 
-    let mut role_definition = generator
-        .generate_role_definition(permission_set, BindingTarget::Resource, &context)
+    let grant_plan = generator
+        .generate_grant_plan(permission_set, BindingTarget::Resource, &context)
         .context(ErrorData::GenericError {
             message: format!(
-                "failed to generate setup-owned Azure role definition for permission set '{}'",
+                "failed to generate setup-owned Azure grant plan for permission set '{}'",
                 permission_set.id
             ),
         })?;
-    role_definition.assignable_scopes = vec![
-        "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
-            .to_string(),
-    ];
-    Ok(role_definition)
+    Ok(grant_plan
+        .custom_roles
+        .into_iter()
+        .map(|mut custom_role| {
+            custom_role.role_definition.assignable_scopes = vec![
+                "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
+                    .to_string(),
+            ];
+            custom_role.role_definition
+        })
+        .collect())
 }
 
-fn setup_role_definition_block(
+fn role_definition_block(
     label: &str,
     name: Expression,
     role_definition_id: Expression,
@@ -580,19 +540,53 @@ fn setup_role_definition_block(
     )
 }
 
-fn setup_execution_role_label(profile_name: &str, permission_set_id: &str) -> String {
+fn setup_execution_role_label(profile_name: &str, permission_set_id: &str, index: usize) -> String {
     format!(
-        "setup_{}_{}",
+        "setup_{}_{}_{}",
         sanitize_role_label(profile_name),
+        sanitize_role_label(permission_set_id),
+        index
+    )
+}
+
+pub fn setup_management_role_label(permission_set_id: &str, index: usize) -> String {
+    format!(
+        "setup_management_{}_{}",
+        sanitize_role_label(permission_set_id),
+        index
+    )
+}
+
+fn stack_custom_role_label(sa_label: &str, permission_set_id: &str, index: usize) -> String {
+    format!(
+        "{sa_label}_{}_custom_{index}",
         sanitize_role_label(permission_set_id)
     )
 }
 
-pub fn setup_management_role_label(permission_set_id: &str) -> String {
-    format!(
-        "setup_management_{}",
-        sanitize_role_label(permission_set_id)
-    )
+fn role_definition_id_expression(
+    role_definition_ref: &AzureRoleDefinitionRef,
+    permission_set_id: &str,
+    sa_label: &str,
+) -> Expression {
+    match role_definition_ref {
+        AzureRoleDefinitionRef::Predefined { role_definition_id } => {
+            expr::template(role_definition_id.clone())
+        }
+        AzureRoleDefinitionRef::Custom { key } => {
+            let index = key
+                .rsplit(':')
+                .next()
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(0);
+            let role_label = stack_custom_role_label(sa_label, permission_set_id, index);
+            expr::traversal([
+                "azurerm_role_definition",
+                role_label.as_str(),
+                "role_definition_resource_id",
+            ])
+        }
+    }
 }
 
 fn string_array(items: Vec<String>) -> Expression {

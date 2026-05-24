@@ -1,18 +1,16 @@
 //! Azure RemoteStackManagement — management User-Assigned Managed Identity
-//! plus optional Federated Identity Credential.
+//! plus Federated Identity Credential.
 //!
 //! Mirrors `AzureRemoteStackManagementController`:
 //!
 //! 1. `azurerm_user_assigned_identity` for the management identity
 //!    living in the customer's subscription / resource group.
-//! 2. One combined custom management role built from global
-//!    `/provision` permission sets.
-//! 3. Role assignment to the management identity, plus optional service
-//!    principal fallback for local development.
-//! 4. Optional `azurerm_federated_identity_credential` when the caller
-//!    supplies `azure_oidc_issuer` and `azure_oidc_subject`.
-//! 5. AcrPush subscription-scope assignment when management permissions
-//!    need registry access.
+//! 2. Predefined Azure role assignments plus, when needed, one combined
+//!    residual custom management role built from global `/provision`
+//!    permission sets.
+//! 3. Role assignments to the management identity.
+//! 4. `azurerm_federated_identity_credential` trusting the manager OIDC
+//!    issuer and subject.
 
 use crate::{
     block::{attr, block, data_block, nested, resource_block},
@@ -25,8 +23,15 @@ use alien_core::{
     RemoteStackManagement, Result,
 };
 use alien_error::Context;
-use alien_permissions::{generators::AzureRuntimePermissionsGenerator, BindingTarget};
+use alien_permissions::{
+    generators::{
+        dedupe_azure_role_bindings, AzureGrantPlan, AzureRoleDefinition, AzureRoleDefinitionRef,
+        AzureRuntimePermissionsGenerator,
+    },
+    BindingTarget,
+};
 use hcl::expr::Expression;
+use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AzureRemoteStackManagementEmitter;
@@ -60,26 +65,22 @@ impl TfEmitter for AzureRemoteStackManagementEmitter {
             ],
         ));
 
-        let global_refs = ctx
+        let (global_refs, resource_scoped_refs) = ctx
             .stack
             .management()
             .profile()
-            .map(global_permission_refs)
+            .map(management_permission_refs)
             .unwrap_or_default();
-        emit_management_role(&mut fragment, label, &global_refs)?;
-        emit_management_identity_assignment(&mut fragment, label);
-        emit_service_principal_fallback_assignment(&mut fragment, label);
+        let grant_plan =
+            generate_management_grant_plan(label, &global_refs, &resource_scoped_refs)?;
+        emit_management_role(&mut fragment, label, &grant_plan);
+        emit_management_assignments(&mut fragment, label, &grant_plan);
+        emit_existing_network_reader_assignments(&mut fragment, label);
 
         fragment.resource_blocks.push(resource_block(
             "azurerm_federated_identity_credential",
             &format!("{label}_fic"),
             [
-                attr(
-                    "count",
-                    expr::raw(
-                        "var.azure_oidc_issuer == \"\" || var.azure_oidc_subject == \"\" ? 0 : 1",
-                    ),
-                ),
                 attr(
                     "name",
                     expr::template("${local.resource_prefix}-federated-credential".to_string()),
@@ -102,10 +103,6 @@ impl TfEmitter for AzureRemoteStackManagementEmitter {
                 attr("subject", expr::raw("var.azure_oidc_subject")),
             ],
         ));
-        if needs_acr_push_assignment(&global_refs) {
-            emit_acr_push_assignment(&mut fragment, label);
-        }
-
         Ok(fragment)
     }
 
@@ -140,6 +137,38 @@ impl TfEmitter for AzureRemoteStackManagementEmitter {
     }
 }
 
+fn emit_existing_network_reader_assignments(fragment: &mut TfFragment, label: &str) {
+    let is_existing_azure_vnet =
+        "try(local.deployment_settings.network.type, \"\") == \"byo-vnet-azure\"";
+    let existing_vnet_resource_id = "try(local.deployment_settings.network.vnet_resource_id, \"\")";
+    let reader_role_definition_id =
+        "\"/subscriptions/${var.azure_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/acdd72a7-3385-48ef-bd42-f606fba81ae7\"";
+
+    fragment.resource_blocks.push(resource_block(
+        "azurerm_role_assignment",
+        &format!("{label}_existing_vnet_reader_uami"),
+        [
+            attr("count", expr::raw(format!("{is_existing_azure_vnet} ? 1 : 0"))),
+            attr(
+                "name",
+                expr::raw(format!(
+                    "uuidv5(\"oid\", \"alien:azure:existing-vnet-reader:${{local.resource_prefix}}:uami:${{azurerm_user_assigned_identity.{label}.principal_id}}:${{{existing_vnet_resource_id}}}\")"
+                )),
+            ),
+            attr("scope", expr::raw(existing_vnet_resource_id)),
+            attr("role_definition_id", expr::raw(reader_role_definition_id)),
+            attr(
+                "principal_id",
+                expr::traversal(["azurerm_user_assigned_identity", label, "principal_id"]),
+            ),
+        ],
+    ));
+
+    // The management service principal is shared across deployments. Azure role
+    // assignments are unique by (principal, role, scope), so a package cannot
+    // safely own that shared VNet grant per deployment.
+}
+
 fn global_permission_refs(profile: &PermissionProfile) -> Vec<&PermissionSetReference> {
     profile
         .0
@@ -148,165 +177,188 @@ fn global_permission_refs(profile: &PermissionProfile) -> Vec<&PermissionSetRefe
         .unwrap_or_default()
 }
 
-fn emit_management_role(
-    fragment: &mut TfFragment,
-    label: &str,
-    global_refs: &[&PermissionSetReference],
-) -> Result<()> {
-    let (actions, data_actions) = combined_provision_permissions(label, global_refs)?;
+fn management_permission_refs(
+    profile: &PermissionProfile,
+) -> (Vec<&PermissionSetReference>, Vec<&PermissionSetReference>) {
+    let global_refs = global_permission_refs(profile);
+    let resource_scoped_refs = profile
+        .0
+        .iter()
+        .filter(|(scope, _)| scope.as_str() != "*")
+        .flat_map(|(_, refs)| refs.iter())
+        .collect();
+    (global_refs, resource_scoped_refs)
+}
+
+fn emit_management_role(fragment: &mut TfFragment, label: &str, grant_plan: &AzureGrantPlan) {
+    let Some(role_definition) = combined_management_role_definition(label, grant_plan) else {
+        return;
+    };
+
     fragment.resource_blocks.push(resource_block(
         "azurerm_role_definition",
         &format!("{label}_management_role"),
         [
-            attr("name", expr::template("${local.resource_prefix}-management-role".to_string())),
+            attr("name", expr::template(role_definition.name.clone())),
             attr(
                 "role_definition_id",
-                expr::raw("uuidv5(\"oid\", \"deployment:azure:mgmt-role-def:${local.resource_prefix}\")"),
-            ),
-            attr(
-                "scope",
                 expr::raw(
-                    "\"/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}\"",
+                    "uuidv5(\"oid\", \"deployment:azure:mgmt-role-def:${local.resource_prefix}\")",
                 ),
             ),
+            attr("scope", management_role_definition_scope(&role_definition)),
             attr(
                 "description",
-                expr::template("Management role for deployment '${local.resource_prefix}'".to_string()),
+                Expression::String(role_definition.description),
             ),
             nested(block(
                 "permissions",
                 [
-                    attr("actions", string_array(actions)),
-                    attr("data_actions", string_array(data_actions)),
+                    attr("actions", string_array(role_definition.actions)),
+                    attr("data_actions", string_array(role_definition.data_actions)),
                     attr("not_actions", Expression::Array(Vec::new())),
                     attr("not_data_actions", Expression::Array(Vec::new())),
                 ],
             )),
             attr(
                 "assignable_scopes",
-                Expression::Array(vec![expr::raw(
-                    "\"/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}\"",
-                )]),
-            ),
-        ],
-    ));
-    Ok(())
-}
-
-fn emit_management_identity_assignment(fragment: &mut TfFragment, label: &str) {
-    fragment.resource_blocks.push(resource_block(
-        "azurerm_role_assignment",
-        &format!("{label}_management_uami_assignment"),
-        [
-            attr(
-                "name",
-                expr::raw("uuidv5(\"oid\", \"deployment:azure:mgmt-role-assign:${local.resource_prefix}:uami\")"),
-            ),
-            attr(
-                "scope",
-                expr::raw(
-                    "\"/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}\"",
+                Expression::Array(
+                    role_definition
+                        .assignable_scopes
+                        .into_iter()
+                        .map(expr::template)
+                        .collect(),
                 ),
             ),
-            attr(
-                "role_definition_id",
-                expr::traversal([
-                    "azurerm_role_definition",
-                    &format!("{label}_management_role"),
-                    "role_definition_resource_id",
-                ]),
-            ),
-            attr(
-                "principal_id",
-                expr::traversal(["azurerm_user_assigned_identity", label, "principal_id"]),
-            ),
         ],
     ));
 }
 
-fn emit_service_principal_fallback_assignment(fragment: &mut TfFragment, label: &str) {
-    fragment.resource_blocks.push(resource_block(
-        "azurerm_role_assignment",
-        &format!("{label}_management_sp_assignment"),
-        [
-            attr(
-                "count",
-                expr::raw("var.azure_management_principal_id == \"\" ? 0 : 1"),
-            ),
-            attr(
-                "name",
-                expr::raw("uuidv5(\"oid\", \"deployment:azure:mgmt-role-assign:${local.resource_prefix}:sp\")"),
-            ),
-            attr(
-                "scope",
-                expr::raw(
-                    "\"/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}\"",
+fn emit_management_assignments(
+    fragment: &mut TfFragment,
+    label: &str,
+    grant_plan: &AzureGrantPlan,
+) {
+    for (binding_index, binding) in grant_plan.bindings.iter().enumerate() {
+        let role_definition_id = management_role_definition_id(label, &binding.role_definition);
+        let assignment_name = format!(
+            "deployment:azure:mgmt-role-assign:${{local.resource_prefix}}:uami:{binding_index}"
+        );
+        fragment.resource_blocks.push(resource_block(
+            "azurerm_role_assignment",
+            &format!("{label}_management_uami_assignment_{binding_index}"),
+            [
+                attr(
+                    "name",
+                    expr::raw(&format!("uuidv5(\"oid\", \"{assignment_name}\")")),
                 ),
-            ),
-            attr(
-                "role_definition_id",
-                expr::traversal([
-                    "azurerm_role_definition",
-                    &format!("{label}_management_role"),
-                    "role_definition_resource_id",
-                ]),
-            ),
-            attr("principal_id", expr::raw("var.azure_management_principal_id")),
-        ],
-    ));
+                attr("scope", expr::template(binding.scope.clone())),
+                attr("role_definition_id", role_definition_id.clone()),
+                attr(
+                    "principal_id",
+                    expr::traversal(["azurerm_user_assigned_identity", label, "principal_id"]),
+                ),
+            ],
+        ));
+    }
 }
 
-fn emit_acr_push_assignment(fragment: &mut TfFragment, label: &str) {
-    fragment.resource_blocks.push(resource_block(
-        "azurerm_role_assignment",
-        &format!("{label}_acr_push_assignment"),
-        [
-            attr(
-                "name",
-                expr::raw("uuidv5(\"oid\", \"deployment:azure:mgmt-acr-assign:${local.resource_prefix}\")"),
-            ),
-            attr("scope", expr::raw("\"/subscriptions/${var.azure_subscription_id}\"")),
-            attr(
-                "role_definition_id",
-                expr::raw("\"/subscriptions/${var.azure_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/8311e382-0749-4cb8-b61a-304f252e45ec\""),
-            ),
-            attr(
-                "principal_id",
-                expr::traversal(["azurerm_user_assigned_identity", label, "principal_id"]),
-            ),
-        ],
-    ));
-}
-
-fn combined_provision_permissions(
+fn generate_management_grant_plan(
     label: &str,
     global_refs: &[&PermissionSetReference],
-) -> Result<(Vec<String>, Vec<String>)> {
-    let mut actions = Vec::new();
-    let mut data_actions = Vec::new();
+    resource_scoped_refs: &[&PermissionSetReference],
+) -> Result<AzureGrantPlan> {
+    let mut custom_roles = Vec::new();
+    let mut bindings = Vec::new();
     let context = permission_context(label);
     let generator = AzureRuntimePermissionsGenerator::new();
+
     for permission_set in global_refs
         .iter()
         .filter_map(resolve_provision_permission_set)
     {
-        let role_definition = generator
-            .generate_role_definition(&permission_set, BindingTarget::Stack, &context)
+        if permission_set.platforms.azure.is_none() {
+            continue;
+        }
+
+        let grant_plan = generator
+            .generate_grant_plan(&permission_set, BindingTarget::Stack, &context)
             .context(ErrorData::GenericError {
                 message: format!(
-                    "failed to generate Azure management role permissions for '{}'",
+                    "failed to generate Azure management grant plan for '{}'",
                     permission_set.id
                 ),
             })?;
-        actions.extend(role_definition.actions);
-        data_actions.extend(role_definition.data_actions);
+        custom_roles.extend(grant_plan.custom_roles);
+        bindings.extend(grant_plan.bindings);
+    }
+
+    let mut seen_stack_management_refs = BTreeSet::new();
+    for permission_set in resource_scoped_refs
+        .iter()
+        .filter_map(resolve_stack_management_permission_set)
+    {
+        if !seen_stack_management_refs.insert(permission_set.id.clone()) {
+            continue;
+        }
+        if permission_set.platforms.azure.is_none() {
+            continue;
+        }
+
+        let grant_plan = generator
+            .generate_grant_plan(&permission_set, BindingTarget::Stack, &context)
+            .context(ErrorData::GenericError {
+                message: format!(
+                    "failed to generate Azure management grant plan for '{}'",
+                    permission_set.id
+                ),
+            })?;
+        custom_roles.extend(grant_plan.custom_roles);
+        bindings.extend(grant_plan.bindings);
+    }
+
+    Ok(AzureGrantPlan {
+        custom_roles,
+        bindings: dedupe_azure_role_bindings(bindings),
+    })
+}
+
+fn combined_management_role_definition(
+    label: &str,
+    grant_plan: &AzureGrantPlan,
+) -> Option<AzureRoleDefinition> {
+    if grant_plan.custom_roles.is_empty() {
+        return None;
+    }
+
+    let mut actions = Vec::new();
+    let mut data_actions = Vec::new();
+    let mut assignable_scopes = Vec::new();
+
+    for custom_role in &grant_plan.custom_roles {
+        actions.extend(custom_role.role_definition.actions.clone());
+        data_actions.extend(custom_role.role_definition.data_actions.clone());
+        assignable_scopes.extend(custom_role.role_definition.assignable_scopes.clone());
     }
 
     actions.sort();
     actions.dedup();
     data_actions.sort();
     data_actions.dedup();
-    Ok((actions, data_actions))
+    assignable_scopes.sort();
+    assignable_scopes.dedup();
+
+    Some(AzureRoleDefinition {
+        name: "${local.resource_prefix}-management-role".to_string(),
+        id: None,
+        is_custom: true,
+        description: format!("Management role for Terraform resource '{label}'"),
+        actions,
+        not_actions: vec![],
+        data_actions,
+        not_data_actions: vec![],
+        assignable_scopes,
+    })
 }
 
 fn resolve_provision_permission_set(reference: &&PermissionSetReference) -> Option<PermissionSet> {
@@ -316,13 +368,42 @@ fn resolve_provision_permission_set(reference: &&PermissionSetReference) -> Opti
     reference.resolve(|name| alien_permissions::get_permission_set(name).cloned())
 }
 
-fn needs_acr_push_assignment(global_refs: &[&PermissionSetReference]) -> bool {
-    global_refs.iter().any(|reference| {
-        let id = reference.id();
-        id.starts_with("artifact-registry/")
-            || id.starts_with("worker/")
-            || id.starts_with("compute-cluster/")
-    })
+fn resolve_stack_management_permission_set(
+    reference: &&PermissionSetReference,
+) -> Option<PermissionSet> {
+    match reference.id() {
+        "worker/dispatch-command" => {
+            reference.resolve(|name| alien_permissions::get_permission_set(name).cloned())
+        }
+        _ => None,
+    }
+}
+
+fn management_role_definition_id(label: &str, role_ref: &AzureRoleDefinitionRef) -> Expression {
+    match role_ref {
+        AzureRoleDefinitionRef::Predefined { role_definition_id } => {
+            expr::template(role_definition_id.clone())
+        }
+        AzureRoleDefinitionRef::Custom { .. } => expr::traversal([
+            "azurerm_role_definition",
+            &format!("{label}_management_role"),
+            "role_definition_resource_id",
+        ]),
+    }
+}
+
+fn management_role_definition_scope(role_definition: &AzureRoleDefinition) -> Expression {
+    if role_definition
+        .assignable_scopes
+        .iter()
+        .any(|scope| scope == "/subscriptions/${var.azure_subscription_id}")
+    {
+        expr::raw("\"/subscriptions/${var.azure_subscription_id}\"")
+    } else {
+        expr::raw(
+            "\"/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}\"",
+        )
+    }
 }
 
 fn string_array(items: Vec<String>) -> Expression {

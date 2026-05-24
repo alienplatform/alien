@@ -566,7 +566,6 @@
             "Microsoft.App/containerApps/authConfigs/delete",
             "Microsoft.App/containerApps/sourceControls/write",
             "Microsoft.App/containerApps/sourceControls/delete",
-            "Microsoft.App/containerApps/listSecrets/action",
             "Microsoft.App/containerApps/read",
             "Microsoft.App/containerApps/revisions/read",
             "Microsoft.App/containerApps/revisions/replicas/read",

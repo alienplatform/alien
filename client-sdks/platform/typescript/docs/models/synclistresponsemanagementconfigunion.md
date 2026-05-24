@@ -31,6 +31,8 @@ const value: models.SyncListResponseManagementConfigGcp = {
 ```typescript
 const value: models.SyncListResponseManagementConfigAzure = {
   managingTenantId: "<id>",
+  oidcIssuer: "<value>",
+  oidcSubject: "<value>",
   platform: "azure",
 };
 ```

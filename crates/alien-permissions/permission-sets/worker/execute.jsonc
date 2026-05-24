@@ -104,11 +104,7 @@
     "azure": [
       {
         "grant": {
-          "actions": [
-            "Microsoft.ContainerRegistry/registries/read",
-            "Microsoft.ContainerRegistry/registries/metadata/read",
-            "Microsoft.App/containerApps/read"
-          ]
+          "predefinedRoles": ["AcrPull", "Reader"]
         },
         "binding": {
           "stack": {

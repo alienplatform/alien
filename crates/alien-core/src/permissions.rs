@@ -35,7 +35,7 @@ pub struct PermissionGrant {
     /// GCP permissions that require an exact residual custom role.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub permissions: Option<Vec<String>>,
-    /// GCP predefined IAM roles to bind directly.
+    /// Provider predefined roles to bind directly.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub predefined_roles: Option<Vec<String>>,
     /// GCP residual custom permissions to pair with predefined roles.

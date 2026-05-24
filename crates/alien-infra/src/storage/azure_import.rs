@@ -94,8 +94,6 @@ impl ResourceImporter for AzureStorageAccountImporter {
             state: AzureStorageAccountState::Ready,
             account_name: Some(data.storage_account_name),
             resource_id: None,
-            primary_access_key: None,
-            connection_string: None,
             primary_blob_endpoint: Some(data.blob_endpoint),
             primary_file_endpoint: None,
             primary_queue_endpoint: None,
@@ -126,6 +124,7 @@ impl ResourceImporter for AzureContainerAppsEnvironmentImporter {
             resource_group_name: Some(data.resource_group),
             default_domain: Some(data.default_domain),
             static_ip: None,
+            custom_domain_verification_id: data.custom_domain_verification_id,
             long_running_operation: None,
             _internal_stay_count: None,
         };

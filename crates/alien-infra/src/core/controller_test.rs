@@ -965,6 +965,9 @@ impl SingleControllerExecutorBuilder {
                     ("azure-storage-account", Platform::Azure) => {
                         Box::new(crate::infra_requirements::AzureStorageAccountController::mock_ready(new_resource_id))
                     },
+                    ("vault", Platform::Azure) => {
+                        Box::new(crate::vault::AzureVaultController::mock_ready(new_resource_id))
+                    },
                     // For unrecognized resource types, create a basic mock
                     _ => {
                         // Create a generic "ready" controller for unrecognized types

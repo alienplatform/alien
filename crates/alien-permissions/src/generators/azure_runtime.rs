@@ -3,8 +3,9 @@ use crate::{
     variables::VariableInterpolator,
     BindingTarget, PermissionContext,
 };
-use alien_core::PermissionSet;
+use alien_core::{PermissionGrant, PermissionSet};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 
 /// Azure role definition
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -51,6 +52,75 @@ pub struct AzureRoleAssignment {
     pub properties: AzureRoleAssignmentProperties,
 }
 
+/// Azure generated grant plan.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AzureGrantPlan {
+    /// Residual custom roles that need role definitions.
+    pub custom_roles: Vec<AzureCustomRole>,
+    /// Role bindings for both predefined and residual custom roles.
+    pub bindings: Vec<AzureRoleBinding>,
+}
+
+/// Residual Azure custom role.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AzureCustomRole {
+    /// Stable key used by Terraform/runtime to link role definition and binding.
+    pub key: String,
+    /// Custom role definition.
+    pub role_definition: AzureRoleDefinition,
+}
+
+/// Azure role binding.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AzureRoleBinding {
+    /// Permission set that authored the binding.
+    pub permission_set_id: String,
+    /// Azure role name.
+    pub role_name: String,
+    /// Full Azure role definition ID, or a custom role key.
+    pub role_definition: AzureRoleDefinitionRef,
+    /// Scope where the role is assigned.
+    pub scope: String,
+}
+
+/// Azure role definition reference.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum AzureRoleDefinitionRef {
+    /// Built-in Azure role definition ID.
+    Predefined { role_definition_id: String },
+    /// Residual custom role keyed by the grant plan.
+    Custom { key: String },
+}
+
+/// Deduplicate Azure bindings by the tuple Azure actually enforces:
+/// role definition and assignment scope. The caller owns the principal, so a
+/// principal-specific compiler can safely drop duplicate bindings before it
+/// creates Terraform resources or runtime role assignments.
+pub fn dedupe_azure_role_bindings(bindings: Vec<AzureRoleBinding>) -> Vec<AzureRoleBinding> {
+    let mut seen = BTreeSet::new();
+    let mut deduped = Vec::new();
+
+    for binding in bindings {
+        let role_key = match &binding.role_definition {
+            AzureRoleDefinitionRef::Predefined { role_definition_id } => {
+                format!("predefined:{role_definition_id}")
+            }
+            AzureRoleDefinitionRef::Custom { key } => format!("custom:{key}"),
+        };
+        let dedupe_key = (binding.scope.clone(), role_key);
+
+        if seen.insert(dedupe_key) {
+            deduped.push(binding);
+        }
+    }
+
+    deduped
+}
+
 /// Azure runtime permissions generator for role definitions and role assignments
 pub struct AzureRuntimePermissionsGenerator;
 
@@ -88,12 +158,13 @@ impl AzureRuntimePermissionsGenerator {
             base_role_name
         };
 
-        // Aggregate actions and data actions from all platform permissions
+        // Aggregate residual actions and data actions from all platform permissions.
         let mut all_actions = Vec::new();
         let mut all_data_actions = Vec::new();
         let mut assignable_scopes = Vec::new();
 
-        for platform_permission in azure_platform_permissions {
+        for (index, platform_permission) in azure_platform_permissions.iter().enumerate() {
+            self.validate_azure_grant(&platform_permission.grant, permission_set, index)?;
             // Extract actions and data actions
             if let Some(actions) = &platform_permission.grant.actions {
                 all_actions.extend(actions.clone());
@@ -132,6 +203,16 @@ impl AzureRuntimePermissionsGenerator {
             assignable_scopes.push(interpolated_scope);
         }
 
+        if all_actions.is_empty() && all_data_actions.is_empty() {
+            return Err(alien_error::AlienError::new(ErrorData::GeneratorError {
+                platform: "azure".to_string(),
+                message: format!(
+                    "permission set '{}' has no residual Azure actions for a custom role",
+                    permission_set.id
+                ),
+            }));
+        }
+
         // Remove duplicates and sort
         all_actions.sort();
         all_actions.dedup();
@@ -150,6 +231,100 @@ impl AzureRuntimePermissionsGenerator {
             data_actions: all_data_actions,
             not_data_actions: vec![],
             assignable_scopes,
+        })
+    }
+
+    /// Generate Azure predefined bindings and residual custom roles from a permission set.
+    pub fn generate_grant_plan(
+        &self,
+        permission_set: &PermissionSet,
+        binding_target: BindingTarget,
+        context: &PermissionContext,
+    ) -> Result<AzureGrantPlan> {
+        let azure_platform_permissions =
+            permission_set.platforms.azure.as_ref().ok_or_else(|| {
+                alien_error::AlienError::new(ErrorData::PlatformNotSupported {
+                    platform: "azure".to_string(),
+                    permission_set_id: permission_set.id.clone(),
+                })
+            })?;
+
+        let mut custom_roles = Vec::new();
+        let mut bindings = Vec::new();
+
+        for (index, platform_permission) in azure_platform_permissions.iter().enumerate() {
+            self.validate_azure_grant(&platform_permission.grant, permission_set, index)?;
+
+            let binding_spec = match binding_target {
+                BindingTarget::Stack => {
+                    platform_permission.binding.stack.as_ref().ok_or_else(|| {
+                        alien_error::AlienError::new(ErrorData::BindingTargetNotSupported {
+                            platform: "azure".to_string(),
+                            binding_target: "stack".to_string(),
+                            permission_set_id: permission_set.id.clone(),
+                        })
+                    })?
+                }
+                BindingTarget::Resource => platform_permission
+                    .binding
+                    .resource
+                    .as_ref()
+                    .ok_or_else(|| {
+                        alien_error::AlienError::new(ErrorData::BindingTargetNotSupported {
+                            platform: "azure".to_string(),
+                            binding_target: "resource".to_string(),
+                            permission_set_id: permission_set.id.clone(),
+                        })
+                    })?,
+            };
+
+            let scope = VariableInterpolator::interpolate_variables(&binding_spec.scope, context)?;
+            self.validate_azure_scope(&scope, permission_set, index)?;
+
+            if let Some(predefined_roles) = &platform_permission.grant.predefined_roles {
+                for role_name in predefined_roles {
+                    let role_definition_id =
+                        self.predefined_role_definition_id(role_name, context)?;
+                    bindings.push(AzureRoleBinding {
+                        permission_set_id: permission_set.id.clone(),
+                        role_name: role_name.clone(),
+                        role_definition: AzureRoleDefinitionRef::Predefined { role_definition_id },
+                        scope: scope.clone(),
+                    });
+                }
+            }
+
+            if has_residual_azure_permissions(&platform_permission.grant) {
+                let key = format!("{}:{}", permission_set.id, index);
+                let mut role_definition =
+                    self.generate_entry_role_definition(permission_set, index, &scope)?;
+                role_definition.assignable_scopes = vec![scope.clone()];
+                custom_roles.push(AzureCustomRole {
+                    key: key.clone(),
+                    role_definition,
+                });
+                bindings.push(AzureRoleBinding {
+                    permission_set_id: permission_set.id.clone(),
+                    role_name: format!("{} Custom", self.generate_role_name(&permission_set.id)),
+                    role_definition: AzureRoleDefinitionRef::Custom { key },
+                    scope,
+                });
+            }
+        }
+
+        if custom_roles.is_empty() && bindings.is_empty() {
+            return Err(alien_error::AlienError::new(ErrorData::GeneratorError {
+                platform: "azure".to_string(),
+                message: format!(
+                    "permission set '{}' produced no Azure bindings",
+                    permission_set.id
+                ),
+            }));
+        }
+
+        Ok(AzureGrantPlan {
+            custom_roles,
+            bindings: dedupe_azure_role_bindings(bindings),
         })
     }
 
@@ -224,6 +399,67 @@ impl AzureRuntimePermissionsGenerator {
         })
     }
 
+    fn generate_entry_role_definition(
+        &self,
+        permission_set: &PermissionSet,
+        entry_index: usize,
+        scope: &str,
+    ) -> Result<AzureRoleDefinition> {
+        let azure_platform_permissions =
+            permission_set.platforms.azure.as_ref().ok_or_else(|| {
+                alien_error::AlienError::new(ErrorData::PlatformNotSupported {
+                    platform: "azure".to_string(),
+                    permission_set_id: permission_set.id.clone(),
+                })
+            })?;
+        let platform_permission = azure_platform_permissions.get(entry_index).ok_or_else(|| {
+            alien_error::AlienError::new(ErrorData::GeneratorError {
+                platform: "azure".to_string(),
+                message: format!(
+                    "permission set '{}' missing Azure entry {}",
+                    permission_set.id, entry_index
+                ),
+            })
+        })?;
+
+        let mut actions = platform_permission
+            .grant
+            .actions
+            .clone()
+            .unwrap_or_default();
+        let mut data_actions = platform_permission
+            .grant
+            .data_actions
+            .clone()
+            .unwrap_or_default();
+        actions.sort();
+        actions.dedup();
+        data_actions.sort();
+        data_actions.dedup();
+
+        if actions.is_empty() && data_actions.is_empty() {
+            return Err(alien_error::AlienError::new(ErrorData::GeneratorError {
+                platform: "azure".to_string(),
+                message: format!(
+                    "permission set '{}' Azure entry {} has no residual actions",
+                    permission_set.id, entry_index
+                ),
+            }));
+        }
+
+        Ok(AzureRoleDefinition {
+            name: self.generate_scoped_role_name(permission_set, entry_index),
+            id: None,
+            is_custom: true,
+            description: permission_set.description.clone(),
+            actions,
+            not_actions: vec![],
+            data_actions,
+            not_data_actions: vec![],
+            assignable_scopes: vec![scope.to_string()],
+        })
+    }
+
     /// Generate a human-readable role name
     fn generate_role_name(&self, permission_set_id: &str) -> String {
         permission_set_id
@@ -245,10 +481,138 @@ impl AzureRuntimePermissionsGenerator {
             .collect::<Vec<String>>()
             .join(" ")
     }
+
+    fn generate_scoped_role_name(
+        &self,
+        permission_set: &PermissionSet,
+        entry_index: usize,
+    ) -> String {
+        format!(
+            "{} Custom {}",
+            self.generate_role_name(&permission_set.id),
+            entry_index + 1
+        )
+    }
+
+    fn predefined_role_definition_id(
+        &self,
+        role_name: &str,
+        context: &PermissionContext,
+    ) -> Result<String> {
+        let role_id = azure_predefined_role_id(role_name).ok_or_else(|| {
+            alien_error::AlienError::new(ErrorData::GeneratorError {
+                platform: "azure".to_string(),
+                message: format!("unknown Azure predefined role '{}'", role_name),
+            })
+        })?;
+        let subscription_id = context.subscription_id.as_deref().ok_or_else(|| {
+            alien_error::AlienError::new(ErrorData::VariableNotFound {
+                variable: "subscriptionId".to_string(),
+            })
+        })?;
+        Ok(format!(
+            "/subscriptions/{}/providers/Microsoft.Authorization/roleDefinitions/{}",
+            subscription_id, role_id
+        ))
+    }
+
+    fn validate_azure_grant(
+        &self,
+        grant: &PermissionGrant,
+        permission_set: &PermissionSet,
+        entry_index: usize,
+    ) -> Result<()> {
+        let has_predefined = grant
+            .predefined_roles
+            .as_ref()
+            .is_some_and(|roles| !roles.is_empty());
+        if let Some(predefined_roles) = &grant.predefined_roles {
+            if predefined_roles.is_empty() {
+                return Err(alien_error::AlienError::new(ErrorData::GeneratorError {
+                    platform: "azure".to_string(),
+                    message: format!(
+                        "permission set '{}' Azure entry {} has empty predefinedRoles",
+                        permission_set.id, entry_index
+                    ),
+                }));
+            }
+            for role in predefined_roles {
+                if azure_predefined_role_id(role).is_none() {
+                    return Err(alien_error::AlienError::new(ErrorData::GeneratorError {
+                        platform: "azure".to_string(),
+                        message: format!(
+                            "permission set '{}' Azure entry {} references unknown predefined role '{}'",
+                            permission_set.id, entry_index, role
+                        ),
+                    }));
+                }
+            }
+        }
+
+        if !has_predefined && !has_residual_azure_permissions(grant) {
+            return Err(alien_error::AlienError::new(ErrorData::GeneratorError {
+                platform: "azure".to_string(),
+                message: format!(
+                    "permission set '{}' Azure entry {} has no predefined role or residual actions",
+                    permission_set.id, entry_index
+                ),
+            }));
+        }
+
+        Ok(())
+    }
+
+    fn validate_azure_scope(
+        &self,
+        scope: &str,
+        permission_set: &PermissionSet,
+        entry_index: usize,
+    ) -> Result<()> {
+        if scope.contains('*') {
+            return Err(alien_error::AlienError::new(ErrorData::GeneratorError {
+                platform: "azure".to_string(),
+                message: format!(
+                    "permission set '{}' Azure entry {} uses wildcard scope '{}'",
+                    permission_set.id, entry_index, scope
+                ),
+            }));
+        }
+        Ok(())
+    }
 }
 
 impl Default for AzureRuntimePermissionsGenerator {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+fn has_residual_azure_permissions(grant: &PermissionGrant) -> bool {
+    grant
+        .actions
+        .as_ref()
+        .is_some_and(|actions| !actions.is_empty())
+        || grant
+            .data_actions
+            .as_ref()
+            .is_some_and(|actions| !actions.is_empty())
+}
+
+pub fn azure_predefined_role_id(role_name: &str) -> Option<&'static str> {
+    match role_name {
+        "AcrPull" => Some("7f951dda-4ed3-4680-a7ca-43fe172d538d"),
+        "AcrPush" => Some("8311e382-0749-4cb8-b61a-304f252e45ec"),
+        "Azure Service Bus Data Receiver" => Some("4f6d3b9b-027b-4f4c-9142-0e5a2a2247e0"),
+        "Azure Service Bus Data Sender" => Some("69a216fc-b8fb-44d8-bc22-1f3c2cd27a39"),
+        "Key Vault Contributor" => Some("f25e0fa2-a7c8-4377-a976-54943a77a395"),
+        "Key Vault Secrets User" => Some("4633458b-17de-408a-b874-0445c86b69e6"),
+        "Managed Identity Contributor" => Some("e40ec5ca-96e0-45a2-b4ff-59039f2c2b59"),
+        "Network Contributor" => Some("4d97b98b-1d4f-4787-a291-c67834d212e7"),
+        "Reader" => Some("acdd72a7-3385-48ef-bd42-f606fba81ae7"),
+        "Storage Blob Data Contributor" => Some("ba92f5b4-2d11-453d-a403-e96b0029c9fe"),
+        "Storage Blob Data Reader" => Some("2a2b9908-6ea1-4ae2-8e65-a410df84e7d1"),
+        "Storage Table Data Contributor" => Some("0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3"),
+        "Storage Table Data Reader" => Some("76199698-9eea-4c19-bc75-cec21354c6b6"),
+        _ => None,
     }
 }

@@ -17,4 +17,7 @@ pub struct AzureContainerAppsEnvironmentImportData {
     pub resource_id: String,
     /// Default domain (`<env>.<region>.azurecontainerapps.io`).
     pub default_domain: String,
+    /// Domain verification ID required for Azure Container Apps custom domain
+    /// DNS ownership records.
+    pub custom_domain_verification_id: Option<String>,
 }

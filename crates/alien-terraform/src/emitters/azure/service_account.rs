@@ -30,6 +30,7 @@ use crate::{
 };
 use alien_core::{import::EmitContext, Result, ServiceAccount};
 use hcl::expr::Expression;
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AzureServiceAccountEmitter;
@@ -57,6 +58,7 @@ impl TfEmitter for AzureServiceAccountEmitter {
         let principal_id_expr =
             expr::traversal(["azurerm_user_assigned_identity", label, "principal_id"]);
         let context = permission_context(label);
+        let mut seen_predefined_assignments = HashSet::new();
 
         for (role_index, permission_set) in service_account.stack_permission_sets.iter().enumerate()
         {
@@ -68,6 +70,7 @@ impl TfEmitter for AzureServiceAccountEmitter {
                 principal_id_expr.clone(),
                 permission_set,
                 &context,
+                &mut seen_predefined_assignments,
             )?;
         }
 

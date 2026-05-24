@@ -165,25 +165,89 @@ pub fn create_azure_storage_data_read_permission_set() -> PermissionSet {
         platforms: PlatformPermissions {
             aws: None,
             gcp: None,
-            azure: Some(vec![
-                AzurePlatformPermission {
-                    grant: PermissionGrant {
-                        actions: Some(vec!["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read".to_string()]),
-                        permissions: None,
-                        predefined_roles: None,
+            azure: Some(vec![AzurePlatformPermission {
+                grant: PermissionGrant {
+                    actions: None,
+                    permissions: None,
+                    predefined_roles: Some(vec!["Storage Blob Data Reader".to_string()]),
                     residual_permissions: None,
-                    data_actions: Some(vec!["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read".to_string()]),
-                    },
-                    binding: BindingConfiguration {
-                        stack: Some(AzureBindingSpec {
-                            scope: "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}".to_string(),
-                        }),
-                        resource: Some(AzureBindingSpec {
-                            scope: "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${storageAccountName}".to_string(),
-                        }),
-                    },
-                }
-            ]),
+                    data_actions: None,
+                },
+                binding: BindingConfiguration {
+                    stack: Some(AzureBindingSpec {
+                        scope: "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+                            .to_string(),
+                    }),
+                    resource: Some(AzureBindingSpec {
+                        scope: "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${storageAccountName}".to_string(),
+                    }),
+                },
+            }]),
+        },
+    }
+}
+
+/// Test helper to create Azure custom-only permission set
+#[allow(dead_code)]
+pub fn create_azure_custom_permission_set() -> PermissionSet {
+    PermissionSet {
+        id: "storage/metadata-read".to_string(),
+        description: "Allows reading storage account metadata".to_string(),
+        platforms: PlatformPermissions {
+            aws: None,
+            gcp: None,
+            azure: Some(vec![AzurePlatformPermission {
+                grant: PermissionGrant {
+                    actions: Some(vec!["Microsoft.Storage/storageAccounts/read".to_string()]),
+                    permissions: None,
+                    predefined_roles: None,
+                    residual_permissions: None,
+                    data_actions: None,
+                },
+                binding: BindingConfiguration {
+                    stack: Some(AzureBindingSpec {
+                        scope: "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+                            .to_string(),
+                    }),
+                    resource: Some(AzureBindingSpec {
+                        scope: "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${storageAccountName}".to_string(),
+                    }),
+                },
+            }]),
+        },
+    }
+}
+
+/// Test helper to create Azure hybrid predefined + residual custom permission set
+#[allow(dead_code)]
+pub fn create_azure_hybrid_permission_set() -> PermissionSet {
+    PermissionSet {
+        id: "artifact-registry/provision".to_string(),
+        description: "Allows provisioning artifact registries".to_string(),
+        platforms: PlatformPermissions {
+            aws: None,
+            gcp: None,
+            azure: Some(vec![AzurePlatformPermission {
+                grant: PermissionGrant {
+                    actions: Some(vec![
+                        "Microsoft.ContainerRegistry/registries/write".to_string(),
+                        "Microsoft.ContainerRegistry/registries/delete".to_string(),
+                    ]),
+                    permissions: None,
+                    predefined_roles: Some(vec!["AcrPush".to_string()]),
+                    residual_permissions: None,
+                    data_actions: None,
+                },
+                binding: BindingConfiguration {
+                    stack: Some(AzureBindingSpec {
+                        scope: "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+                            .to_string(),
+                    }),
+                    resource: Some(AzureBindingSpec {
+                        scope: "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ContainerRegistry/registries/${resourceName}".to_string(),
+                    }),
+                },
+            }]),
         },
     }
 }

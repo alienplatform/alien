@@ -1,6 +1,5 @@
 ---
 source: crates/alien-terraform/tests/generator/helpers.rs
-assertion_line: 54
 expression: buf
 ---
 === versions.tf ===
@@ -74,25 +73,16 @@ variable "azure_resource_group_name" {
 variable "azure_managing_tenant_id" {
   type        = string
   description = "Azure tenant ID the manager uses for cross-tenant access."
-  default     = ""
-}
-
-variable "azure_management_principal_id" {
-  type        = string
-  description = "Optional service-principal object ID for local development fallback role assignment."
-  default     = ""
 }
 
 variable "azure_oidc_issuer" {
   type        = string
-  description = "OIDC issuer URL for Azure Federated Identity Credential. Empty disables FIC creation."
-  default     = ""
+  description = "OIDC issuer URL for Azure Federated Identity Credential."
 }
 
 variable "azure_oidc_subject" {
   type        = string
-  description = "OIDC subject claim for Azure Federated Identity Credential. Empty disables FIC creation."
-  default     = ""
+  description = "OIDC subject claim for Azure Federated Identity Credential."
 }
 
 === providers.tf ===
@@ -114,11 +104,10 @@ locals {
   deployment_target   = "azure"
   deployment_region   = var.azure_location
   deployment_management_config = {
-    platform              = "azure"
-    managingTenantId      = var.azure_managing_tenant_id
-    managementPrincipalId = var.azure_management_principal_id == "" ? null : var.azure_management_principal_id
-    oidcIssuer            = var.azure_oidc_issuer == "" ? null : var.azure_oidc_issuer
-    oidcSubject           = var.azure_oidc_subject == "" ? null : var.azure_oidc_subject
+    platform         = "azure"
+    managingTenantId = var.azure_managing_tenant_id
+    oidcIssuer       = var.azure_oidc_issuer
+    oidcSubject      = var.azure_oidc_subject
   }
   deployment_settings = jsondecode(var.stack_settings_json)
   deployment_resources = [
@@ -273,74 +262,9 @@ resource "azurerm_resource_group" "default_resource_group" {
   }
 }
 
-resource "azurerm_role_definition" "setup_management_storage_heartbeat" {
-  name               = "Storage Heartbeat (${local.resource_prefix}) [mgmt]"
-  role_definition_id = uuidv5("oid", "deployment:azure:mgmt-res-role-def:${local.resource_prefix}:storage/heartbeat")
-  scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
-  description        = "Allows readonly monitoring and health checks for storage resources"
-
-  permissions {
-    actions = [
-      "Microsoft.Storage/storageAccounts/blobServices/containers/read",
-      "Microsoft.Storage/storageAccounts/read"
-    ]
-    data_actions     = []
-    not_actions      = []
-    not_data_actions = []
-  }
-
-  assignable_scopes = [
-    "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
-  ]
-}
-
-resource "azurerm_role_definition" "setup_management_queue_heartbeat" {
-  name               = "Queue Heartbeat (${local.resource_prefix}) [mgmt]"
-  role_definition_id = uuidv5("oid", "deployment:azure:mgmt-res-role-def:${local.resource_prefix}:queue/heartbeat")
-  scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
-  description        = "Allows readonly monitoring and health checks for queue resources"
-
-  permissions {
-    actions = [
-      "Microsoft.ServiceBus/namespaces/authorizationRules/read",
-      "Microsoft.ServiceBus/namespaces/queues/read",
-      "Microsoft.ServiceBus/namespaces/read"
-    ]
-    data_actions     = []
-    not_actions      = []
-    not_data_actions = []
-  }
-
-  assignable_scopes = [
-    "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
-  ]
-}
-
-resource "azurerm_role_definition" "setup_management_kv_heartbeat" {
-  name               = "Kv Heartbeat (${local.resource_prefix}) [mgmt]"
-  role_definition_id = uuidv5("oid", "deployment:azure:mgmt-res-role-def:${local.resource_prefix}:kv/heartbeat")
-  scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
-  description        = "Allows readonly monitoring and health checks for kv resources"
-
-  permissions {
-    actions = [
-      "Microsoft.Storage/storageAccounts/read",
-      "Microsoft.Storage/storageAccounts/tableServices/read",
-      "Microsoft.Storage/storageAccounts/tableServices/tables/read"
-    ]
-    data_actions     = []
-    not_actions      = []
-    not_data_actions = []
-  }
-
-  assignable_scopes = [
-    "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
-  ]
-}
-
-resource "azurerm_role_definition" "setup_management_vault_data_write" {
-  name               = "Vault Data Write (${local.resource_prefix}) [mgmt]"
-  role_definition_id = uuidv5("oid", "deployment:azure:mgmt-res-role-def:${local.resource_prefix}:vault/data-write")
+resource "azurerm_role_definition" "setup_management_vault_data_write_0" {
+  name               = "${local.resource_prefix}-Vault Data Write Custom 1 [mgmt]"
+  role_definition_id = uuidv5("oid", "deployment:azure:mgmt-res-role-def:${local.resource_prefix}:vault/data-write:0")
   scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
   description        = "Allows creating, updating, and deleting individual secrets within vault"
 
@@ -360,9 +284,9 @@ resource "azurerm_role_definition" "setup_management_vault_data_write" {
   ]
 }
 
-resource "azurerm_role_definition" "setup_management_worker_management" {
-  name               = "Worker Management (${local.resource_prefix}) [mgmt]"
-  role_definition_id = uuidv5("oid", "deployment:azure:mgmt-res-role-def:${local.resource_prefix}:worker/management")
+resource "azurerm_role_definition" "setup_management_worker_management_0" {
+  name               = "${local.resource_prefix}-Worker Management Custom 1 [mgmt]"
+  role_definition_id = uuidv5("oid", "deployment:azure:mgmt-res-role-def:${local.resource_prefix}:worker/management:0")
   scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
   description        = "Allows managing function configuration, versions, aliases, and monitoring"
 
@@ -370,7 +294,6 @@ resource "azurerm_role_definition" "setup_management_worker_management" {
     actions = [
       "Microsoft.App/containerApps/authConfigs/read",
       "Microsoft.App/containerApps/authConfigs/write",
-      "Microsoft.App/containerApps/listSecrets/action",
       "Microsoft.App/containerApps/read",
       "Microsoft.App/containerApps/revisions/activate/action",
       "Microsoft.App/containerApps/revisions/deactivate/action",
@@ -633,74 +556,20 @@ resource "azurerm_user_assigned_identity" "execution_sa" {
   ]
 }
 
-resource "azurerm_role_definition" "execution_sa_storage_data_read" {
-  name               = "${local.resource_prefix}-execution-sa-0"
-  role_definition_id = uuidv5("oid", "deployment:azure:role-def:${local.resource_prefix}-execution-sa-0")
+resource "azurerm_role_assignment" "execution_sa_storage_data_read_assignment_0" {
+  name               = uuidv5("oid", "deployment:azure:role-assign:execution-sa:storage/data-read:0:${azurerm_user_assigned_identity.execution_sa.principal_id}")
   scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
-  description        = "Allows reading data from storage buckets and containers"
-
-  permissions {
-    actions = [
-      "Microsoft.Storage/storageAccounts/blobServices/containers/read",
-      "Microsoft.Storage/storageAccounts/blobServices/generateUserDelegationKey/action",
-      "Microsoft.Storage/storageAccounts/blobServices/read",
-      "Microsoft.Storage/storageAccounts/listKeys/action"
-    ]
-    data_actions = [
-      "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
-    ]
-    not_actions      = []
-    not_data_actions = []
-  }
-
-  assignable_scopes = [
-    "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
-  ]
-  depends_on = [
-    azurerm_resource_group.default_resource_group
-  ]
-}
-
-resource "azurerm_role_assignment" "execution_sa_storage_data_read_assignment" {
-  name               = uuidv5("oid", "deployment:azure:role-assign:${azurerm_role_definition.execution_sa_storage_data_read.role_definition_resource_id}:${azurerm_user_assigned_identity.execution_sa.principal_id}")
-  scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
-  role_definition_id = azurerm_role_definition.execution_sa_storage_data_read.role_definition_resource_id
+  role_definition_id = "/subscriptions/${var.azure_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/2a2b9908-6ea1-4ae2-8e65-a410df84e7d1"
   principal_id       = azurerm_user_assigned_identity.execution_sa.principal_id
   depends_on = [
     azurerm_resource_group.default_resource_group
   ]
 }
 
-resource "azurerm_role_definition" "execution_sa_queue_data_write" {
-  name               = "${local.resource_prefix}-execution-sa-1"
-  role_definition_id = uuidv5("oid", "deployment:azure:role-def:${local.resource_prefix}-execution-sa-1")
+resource "azurerm_role_assignment" "execution_sa_queue_data_write_assignment_0" {
+  name               = uuidv5("oid", "deployment:azure:role-assign:execution-sa:queue/data-write:0:${azurerm_user_assigned_identity.execution_sa.principal_id}")
   scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
-  description        = "Allows sending messages to queues and acknowledging received messages"
-
-  permissions {
-    actions = [
-      "Microsoft.ServiceBus/namespaces/queues/read",
-      "Microsoft.ServiceBus/namespaces/read"
-    ]
-    data_actions = [
-      "Microsoft.ServiceBus/namespaces/messages/send/action"
-    ]
-    not_actions      = []
-    not_data_actions = []
-  }
-
-  assignable_scopes = [
-    "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
-  ]
-  depends_on = [
-    azurerm_resource_group.default_resource_group
-  ]
-}
-
-resource "azurerm_role_assignment" "execution_sa_queue_data_write_assignment" {
-  name               = uuidv5("oid", "deployment:azure:role-assign:${azurerm_role_definition.execution_sa_queue_data_write.role_definition_resource_id}:${azurerm_user_assigned_identity.execution_sa.principal_id}")
-  scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
-  role_definition_id = azurerm_role_definition.execution_sa_queue_data_write.role_definition_resource_id
+  role_definition_id = "/subscriptions/${var.azure_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/69a216fc-b8fb-44d8-bc22-1f3c2cd27a39"
   principal_id       = azurerm_user_assigned_identity.execution_sa.principal_id
   depends_on = [
     azurerm_resource_group.default_resource_group
@@ -725,50 +594,18 @@ resource "azurerm_user_assigned_identity" "management" {
   ]
 }
 
-resource "azurerm_role_definition" "management_management_role" {
-  name               = "${local.resource_prefix}-management-role"
-  role_definition_id = uuidv5("oid", "deployment:azure:mgmt-role-def:${local.resource_prefix}")
-  scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
-  description        = "Management role for deployment '${local.resource_prefix}'"
-
-  permissions {
-    actions          = []
-    data_actions     = []
-    not_actions      = []
-    not_data_actions = []
-  }
-
-  assignable_scopes = [
-    "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
-  ]
-  depends_on = [
-    azurerm_resource_group.default_resource_group
-  ]
-}
-
-resource "azurerm_role_assignment" "management_management_uami_assignment" {
-  name               = uuidv5("oid", "deployment:azure:mgmt-role-assign:${local.resource_prefix}:uami")
-  scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
-  role_definition_id = azurerm_role_definition.management_management_role.role_definition_resource_id
+resource "azurerm_role_assignment" "management_existing_vnet_reader_uami" {
+  count              = try(local.deployment_settings.network.type, "") == "byo-vnet-azure" ? 1 : 0
+  name               = uuidv5("oid", "alien:azure:existing-vnet-reader:${local.resource_prefix}:uami:${azurerm_user_assigned_identity.management.principal_id}:${try(local.deployment_settings.network.vnet_resource_id, "")}")
+  scope              = try(local.deployment_settings.network.vnet_resource_id, "")
+  role_definition_id = "/subscriptions/${var.azure_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/acdd72a7-3385-48ef-bd42-f606fba81ae7"
   principal_id       = azurerm_user_assigned_identity.management.principal_id
   depends_on = [
     azurerm_resource_group.default_resource_group
   ]
 }
 
-resource "azurerm_role_assignment" "management_management_sp_assignment" {
-  count              = var.azure_management_principal_id == "" ? 0 : 1
-  name               = uuidv5("oid", "deployment:azure:mgmt-role-assign:${local.resource_prefix}:sp")
-  scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
-  role_definition_id = azurerm_role_definition.management_management_role.role_definition_resource_id
-  principal_id       = var.azure_management_principal_id
-  depends_on = [
-    azurerm_resource_group.default_resource_group
-  ]
-}
-
 resource "azurerm_federated_identity_credential" "management_fic" {
-  count               = var.azure_oidc_issuer == "" || var.azure_oidc_subject == "" ? 0 : 1
   name                = "${local.resource_prefix}-federated-credential"
   resource_group_name = var.azure_resource_group_name
   parent_id           = azurerm_user_assigned_identity.management.id
@@ -777,16 +614,6 @@ resource "azurerm_federated_identity_credential" "management_fic" {
   ]
   issuer  = var.azure_oidc_issuer
   subject = var.azure_oidc_subject
-  depends_on = [
-    azurerm_resource_group.default_resource_group
-  ]
-}
-
-resource "azurerm_role_assignment" "management_acr_push_assignment" {
-  name               = uuidv5("oid", "deployment:azure:mgmt-acr-assign:${local.resource_prefix}")
-  scope              = "/subscriptions/${var.azure_subscription_id}"
-  role_definition_id = "/subscriptions/${var.azure_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/8311e382-0749-4cb8-b61a-304f252e45ec"
-  principal_id       = azurerm_user_assigned_identity.management.principal_id
   depends_on = [
     azurerm_resource_group.default_resource_group
   ]
@@ -849,10 +676,10 @@ resource "azurerm_key_vault" "secrets" {
   ]
 }
 
-resource "azurerm_role_assignment" "secrets_setup_management_vault_data_write_assignment" {
-  name               = uuidv5("oid", "deployment:azure:mgmt-res-role-assign:${local.resource_prefix}:secrets:vault/data-write")
+resource "azurerm_role_assignment" "secrets_vault_data_write_management_assignment_0" {
+  name               = uuidv5("oid", "deployment:azure:mgmt-res-role-assign:${local.resource_prefix}:secrets:vault/data-write:0")
   scope              = azurerm_key_vault.secrets.id
-  role_definition_id = azurerm_role_definition.setup_management_vault_data_write.role_definition_resource_id
+  role_definition_id = azurerm_role_definition.setup_management_vault_data_write_0.role_definition_resource_id
   principal_id       = azurerm_user_assigned_identity.management.principal_id
   depends_on = [
     azurerm_resource_group.default_resource_group
@@ -944,11 +771,8 @@ resource "terraform_data" "deployment_import" {
   }
   depends_on = [
     azurerm_resource_group.default_resource_group,
-    azurerm_role_definition.setup_management_storage_heartbeat,
-    azurerm_role_definition.setup_management_queue_heartbeat,
-    azurerm_role_definition.setup_management_kv_heartbeat,
-    azurerm_role_definition.setup_management_vault_data_write,
-    azurerm_role_definition.setup_management_worker_management,
+    azurerm_role_definition.setup_management_vault_data_write_0,
+    azurerm_role_definition.setup_management_worker_management_0,
     azurerm_storage_account.default_storage_account,
     azurerm_servicebus_namespace.default_service_bus_namespace,
     azurerm_log_analytics_workspace.default_container_apps_environment_logs,
@@ -963,21 +787,16 @@ resource "terraform_data" "deployment_import" {
     azurerm_network_security_group.default_network_workload,
     azurerm_subnet_network_security_group_association.default_network_private,
     azurerm_user_assigned_identity.execution_sa,
-    azurerm_role_definition.execution_sa_storage_data_read,
-    azurerm_role_assignment.execution_sa_storage_data_read_assignment,
-    azurerm_role_definition.execution_sa_queue_data_write,
-    azurerm_role_assignment.execution_sa_queue_data_write_assignment,
+    azurerm_role_assignment.execution_sa_storage_data_read_assignment_0,
+    azurerm_role_assignment.execution_sa_queue_data_write_assignment_0,
     azurerm_user_assigned_identity.management,
-    azurerm_role_definition.management_management_role,
-    azurerm_role_assignment.management_management_uami_assignment,
-    azurerm_role_assignment.management_management_sp_assignment,
+    azurerm_role_assignment.management_existing_vnet_reader_uami,
     azurerm_federated_identity_credential.management_fic,
-    azurerm_role_assignment.management_acr_push_assignment,
     azurerm_storage_container.assets,
     azurerm_servicebus_queue.jobs,
     azurerm_storage_table.metadata,
     azurerm_key_vault.secrets,
-    azurerm_role_assignment.secrets_setup_management_vault_data_write_assignment,
+    azurerm_role_assignment.secrets_vault_data_write_management_assignment_0,
     azurerm_container_registry.registry,
     azurerm_user_assigned_identity.registry_pull,
     azurerm_role_assignment.registry_pull_role,

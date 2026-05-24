@@ -31,6 +31,8 @@ const value: models.CloudFormationCallbackRequestManagementConfigGcp = {
 ```typescript
 const value: models.CloudFormationCallbackRequestManagementConfigAzure = {
   managingTenantId: "<id>",
+  oidcIssuer: "<value>",
+  oidcSubject: "<value>",
   platform: "azure",
 };
 ```

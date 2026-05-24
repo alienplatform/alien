@@ -458,7 +458,6 @@
           "actions": [
             "Microsoft.App/containerApps/read",
             "Microsoft.App/containerApps/write",
-            "Microsoft.App/containerApps/listSecrets/action",
             "Microsoft.App/containerApps/revisions/read",
             "Microsoft.App/containerApps/revisions/replicas/read",
             "Microsoft.App/containerApps/authConfigs/read",

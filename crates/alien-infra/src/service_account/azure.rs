@@ -17,7 +17,10 @@ use alien_core::{ResourceOutputs, ResourceStatus, ServiceAccount, ServiceAccount
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::{controller, flow_entry, handler, terminal_state};
 use alien_permissions::{
-    generators::{AzureRoleDefinition, AzureRuntimePermissionsGenerator},
+    generators::{
+        dedupe_azure_role_bindings, AzureGrantPlan, AzureRoleDefinitionRef,
+        AzureRuntimePermissionsGenerator,
+    },
     BindingTarget, PermissionContext,
 };
 use std::collections::HashMap;
@@ -38,7 +41,7 @@ const AZURE_MANAGED_IDENTITY_WAIT_SECS: u64 = 10;
 const AZURE_MANAGED_IDENTITY_WAIT_SECS: u64 = 0;
 
 #[cfg(not(test))]
-const AZURE_ROLE_ASSIGNMENT_RBAC_WAIT_SECS: u64 = 60;
+const AZURE_ROLE_ASSIGNMENT_RBAC_WAIT_SECS: u64 = 300;
 #[cfg(test)]
 const AZURE_ROLE_ASSIGNMENT_RBAC_WAIT_SECS: u64 = 0;
 
@@ -67,6 +70,34 @@ fn wait_delay(deadline_epoch_secs: u64) -> Option<Duration> {
         Some(Duration::from_secs(
             remaining.min(AZURE_RBAC_WAIT_POLL_SECS),
         ))
+    }
+}
+
+fn role_definition_scope_for_assignable_scopes(
+    assignable_scopes: &[String],
+    subscription_id: &str,
+    resource_group_name: &str,
+) -> Scope {
+    let subscription_scope = format!("/subscriptions/{subscription_id}");
+    if assignable_scopes
+        .iter()
+        .any(|scope| scope == &subscription_scope)
+    {
+        Scope::Subscription
+    } else {
+        Scope::ResourceGroup {
+            resource_group_name: resource_group_name.to_string(),
+        }
+    }
+}
+
+fn role_definition_scope_from_id(role_definition_id: &str, resource_group_name: &str) -> Scope {
+    if role_definition_id.contains("/resourceGroups/") {
+        Scope::ResourceGroup {
+            resource_group_name: resource_group_name.to_string(),
+        }
+    } else {
+        Scope::Subscription
     }
 }
 
@@ -245,8 +276,7 @@ impl AzureServiceAccountController {
             "Creating Azure role definitions for stack-level permission sets"
         );
 
-        // Generate role definitions for all stack-level permission sets
-        let role_definitions = self.generate_stack_role_definitions(config, ctx)?;
+        let grant_plan = self.generate_stack_grant_plan(config, ctx)?;
 
         let resource_group_name =
             crate::infra_requirements::azure_utils::get_resource_group_name(ctx.state)?;
@@ -255,24 +285,26 @@ impl AzureServiceAccountController {
             .service_provider
             .get_azure_authorization_client(azure_cfg)?;
 
-        let scope = Scope::ResourceGroup {
-            resource_group_name: resource_group_name.clone(),
-        };
-
         // Parallelize role definition creation — each uses a unique
         // deterministic UUID, so there are no conflicts between them.
         let config_id = config.id.clone();
-        let futures = role_definitions
+        let futures = grant_plan
+            .custom_roles
             .iter()
             .enumerate()
-            .map(|(index, role_def)| {
+            .map(|(index, custom_role)| {
                 let client = client.clone();
-                let scope = scope.clone();
                 let config_id = config_id.clone();
                 let role_name = format!(
                     "{}-{}",
                     get_azure_custom_role_name(ctx.resource_prefix, &config.id),
                     index
+                );
+                let role_def = custom_role.role_definition.clone();
+                let scope = role_definition_scope_for_assignable_scopes(
+                    &role_def.assignable_scopes,
+                    &azure_cfg.subscription_id,
+                    &resource_group_name,
                 );
 
                 async move {
@@ -374,41 +406,59 @@ impl AzureServiceAccountController {
             "Creating role assignments for managed identity"
         );
 
-        let resource_group_name =
-            crate::infra_requirements::azure_utils::get_resource_group_name(ctx.state)?;
         let azure_cfg = ctx.get_azure_config()?;
         let client = ctx
             .service_provider
             .get_azure_authorization_client(azure_cfg)?;
 
-        let scope = Scope::ResourceGroup {
-            resource_group_name: resource_group_name.clone(),
-        };
+        let grant_plan = self.generate_stack_grant_plan(config, ctx)?;
 
-        // Parallelize all role assignments — custom roles and builtin ACR roles.
-        // Each uses a unique deterministic UUID, so there are no conflicts.
+        // Parallelize all role assignments. Each uses a unique deterministic UUID,
+        // so there are no conflicts.
         let config_id = config.id.clone();
         let principal_id = principal_id.clone();
 
-        // Custom role assignment futures
-        let custom_futures = self
-            .custom_role_definition_ids
+        let custom_role_ids_by_key: HashMap<_, _> = grant_plan
+            .custom_roles
             .iter()
-            .map(|role_definition_id| {
+            .map(|custom_role| custom_role.key.clone())
+            .zip(self.custom_role_definition_ids.iter().cloned())
+            .collect();
+
+        let futures = grant_plan
+            .bindings
+            .iter()
+            .enumerate()
+            .map(|(binding_index, binding)| {
                 let client = client.clone();
-                let scope = scope.clone();
                 let config_id = config_id.clone();
                 let principal_id = principal_id.clone();
-                let resource_group_name = resource_group_name.clone();
-                let role_definition_id = role_definition_id.clone();
-                let azure_cfg = azure_cfg.clone();
+                let binding = binding.clone();
+                let custom_role_ids_by_key = custom_role_ids_by_key.clone();
 
                 async move {
+                    let role_definition_id = match &binding.role_definition {
+                        AzureRoleDefinitionRef::Predefined { role_definition_id } => {
+                            role_definition_id.clone()
+                        }
+                        AzureRoleDefinitionRef::Custom { key } => {
+                            custom_role_ids_by_key.get(key).cloned().ok_or_else(|| {
+                                AlienError::new(ErrorData::InfrastructureError {
+                                    message: format!(
+                                        "Custom Azure role definition '{}' was not created",
+                                        key
+                                    ),
+                                    operation: Some("create_role_assignment".to_string()),
+                                    resource_id: Some(config_id.clone()),
+                                })
+                            })?
+                        }
+                    };
                     let assignment_id = Uuid::new_v5(
                         &Uuid::NAMESPACE_OID,
                         format!(
-                            "alien:azure:stack-role-assign:{}:{}",
-                            role_definition_id, principal_id
+                            "alien:azure:stack-role-assign:{}:{}:{}",
+                            binding.permission_set_id, binding_index, principal_id
                         )
                         .as_bytes(),
                     )
@@ -424,24 +474,23 @@ impl AzureServiceAccountController {
                             created_on: None,
                             delegated_managed_identity_resource_id: None,
                             description: Some(format!(
-                                "Role assignment for Alien ServiceAccount {}",
-                                config_id
+                                "{} role for Alien ServiceAccount {}",
+                                binding.role_name, config_id
                             )),
                             principal_id: principal_id.clone(),
                             principal_type: RoleAssignmentPropertiesPrincipalType::ServicePrincipal,
                             role_definition_id: role_definition_id.clone(),
-                            scope: Some(format!(
-                                "/subscriptions/{}/resourceGroups/{}",
-                                azure_cfg.subscription_id, resource_group_name
-                            )),
+                            scope: Some(binding.scope.clone()),
                             updated_by: None,
                             updated_on: None,
                         }),
                         type_: None,
                     };
 
-                    let full_assignment_id =
-                        client.build_role_assignment_id(&scope, assignment_id.clone());
+                    let full_assignment_id = format!(
+                        "{}/providers/Microsoft.Authorization/roleAssignments/{}",
+                        binding.scope, assignment_id
+                    );
 
                     client
                         .create_or_update_role_assignment_by_id(
@@ -467,93 +516,7 @@ impl AzureServiceAccountController {
                 }
             });
 
-        // Builtin ACR role assignment futures.
-        // Azure does not allow `Microsoft.ContainerRegistry/registries/pull` and
-        // `registries/push` in custom role definitions, so we use the built-in
-        // AcrPull / AcrPush roles instead.
-        // Scoped to the subscription because the ACR may be in a different
-        // resource group (e.g. the manager's infrastructure RG).
-        let builtin_roles = Self::collect_acr_builtin_roles(&config.stack_permission_sets);
-        let builtin_futures = builtin_roles.into_iter().map(|(role_name, role_id)| {
-            let client = client.clone();
-            let config_id = config_id.clone();
-            let principal_id = principal_id.clone();
-            let azure_cfg = azure_cfg.clone();
-
-            async move {
-                let full_role_definition_id = format!(
-                    "/subscriptions/{}/providers/Microsoft.Authorization/roleDefinitions/{}",
-                    azure_cfg.subscription_id, role_id
-                );
-
-                let assignment_id = Uuid::new_v5(
-                    &Uuid::NAMESPACE_OID,
-                    format!(
-                        "alien:azure:builtin-role-assign:{}:{}",
-                        role_id, principal_id
-                    )
-                    .as_bytes(),
-                )
-                .to_string();
-
-                let role_assignment = RoleAssignment {
-                    id: None,
-                    name: None,
-                    properties: Some(RoleAssignmentProperties {
-                        condition: None,
-                        condition_version: None,
-                        created_by: None,
-                        created_on: None,
-                        delegated_managed_identity_resource_id: None,
-                        description: Some(format!(
-                            "{} role for Alien ServiceAccount {}",
-                            role_name, config_id
-                        )),
-                        principal_id: principal_id.clone(),
-                        principal_type: RoleAssignmentPropertiesPrincipalType::ServicePrincipal,
-                        role_definition_id: full_role_definition_id,
-                        scope: Some(format!("/subscriptions/{}", azure_cfg.subscription_id)),
-                        updated_by: None,
-                        updated_on: None,
-                    }),
-                    type_: None,
-                };
-
-                let subscription_scope = Scope::Subscription;
-                let full_assignment_id =
-                    client.build_role_assignment_id(&subscription_scope, assignment_id.clone());
-
-                client
-                    .create_or_update_role_assignment_by_id(
-                        full_assignment_id.clone(),
-                        &role_assignment,
-                    )
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to assign built-in {} role to managed identity '{}'",
-                            role_name, principal_id
-                        ),
-                        resource_id: Some(config_id.clone()),
-                    })?;
-
-                info!(
-                    assignment_id = %full_assignment_id,
-                    builtin_role = %role_name,
-                    "Built-in role assignment created successfully"
-                );
-
-                Ok::<_, AlienError<ErrorData>>(full_assignment_id)
-            }
-        });
-
-        // Run both groups concurrently, then merge results.
-        let (custom_ids, builtin_ids) = tokio::try_join!(
-            futures::future::try_join_all(custom_futures),
-            futures::future::try_join_all(builtin_futures),
-        )?;
-        self.role_assignment_ids = custom_ids;
-        self.role_assignment_ids.extend(builtin_ids);
+        self.role_assignment_ids = futures::future::try_join_all(futures).await?;
 
         self.stack_permissions_applied = true;
 
@@ -665,10 +628,6 @@ impl AzureServiceAccountController {
             "Updating Azure managed identity permissions"
         );
 
-        // For updates, we regenerate role definitions with new permissions
-        // This is a simple approach - in production we might want to be more granular
-        let new_role_definitions = self.generate_stack_role_definitions(config, ctx)?;
-
         let resource_group_name =
             crate::infra_requirements::azure_utils::get_resource_group_name(ctx.state)?;
         let azure_cfg = ctx.get_azure_config()?;
@@ -676,78 +635,76 @@ impl AzureServiceAccountController {
             .service_provider
             .get_azure_authorization_client(azure_cfg)?;
 
-        let scope = Scope::ResourceGroup {
-            resource_group_name: resource_group_name.clone(),
-        };
+        for assignment_id in &self.role_assignment_ids {
+            match client
+                .delete_role_assignment_by_id(assignment_id.clone())
+                .await
+            {
+                Ok(_) => {
+                    info!(assignment_id = %assignment_id, "Role assignment deleted for update");
+                }
+                Err(e)
+                    if matches!(
+                        &e.error,
+                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                    ) =>
+                {
+                    info!(assignment_id = %assignment_id, "Role assignment already absent for update");
+                }
+                Err(e) => {
+                    return Err(e.context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to delete role assignment '{}' for update",
+                            assignment_id
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    }))
+                }
+            }
+        }
+        self.role_assignment_ids.clear();
 
-        // Update existing role definitions (Azure allows updates via create_or_update)
-        for (index, (role_def, role_definition_id)) in new_role_definitions
-            .iter()
-            .zip(&self.custom_role_definition_ids)
-            .enumerate()
-        {
-            let role_name = format!(
-                "{}-{}",
-                get_azure_custom_role_name(ctx.resource_prefix, &config.id),
-                index
-            );
-
-            let role_definition_props = RoleDefinitionProperties {
-                role_name: Some(role_name.clone()),
-                description: Some(role_def.description.clone()),
-                type_: Some("CustomRole".to_string()),
-                permissions: vec![Permission {
-                    actions: role_def.actions.clone(),
-                    not_actions: Vec::new(),
-                    data_actions: role_def.data_actions.clone(),
-                    not_data_actions: Vec::new(),
-                }],
-                assignable_scopes: role_def.assignable_scopes.clone(),
-                ..Default::default()
-            };
-
-            let role_definition = RoleDefinition {
-                properties: Some(role_definition_props),
-                ..Default::default()
-            };
-
-            // Extract the role definition UUID from the full ID
+        for role_definition_id in &self.custom_role_definition_ids {
             let role_def_uuid = role_definition_id
                 .split('/')
                 .last()
                 .unwrap_or(role_definition_id);
+            let scope = role_definition_scope_from_id(role_definition_id, &resource_group_name);
 
-            client
-                .create_or_update_role_definition(
-                    &scope,
-                    role_def_uuid.to_string(),
-                    &role_definition,
-                )
+            match client
+                .delete_role_definition(&scope, role_def_uuid.to_string())
                 .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to update custom role definition '{}'", role_name),
-                    resource_id: Some(config.id.clone()),
-                })?;
-
-            info!(
-                role_name = %role_name,
-                role_definition_id = %role_definition_id,
-                "Role definition updated successfully"
-            );
+            {
+                Ok(_) => {
+                    info!(role_definition_id = %role_definition_id, "Role definition deleted for update");
+                }
+                Err(e)
+                    if matches!(
+                        &e.error,
+                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                    ) =>
+                {
+                    info!(role_definition_id = %role_definition_id, "Role definition already absent for update");
+                }
+                Err(e) => {
+                    return Err(e.context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to delete role definition '{}' for update",
+                            role_definition_id
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    }))
+                }
+            }
         }
+        self.custom_role_definition_ids.clear();
+        self.stack_permissions_applied = false;
+        self.role_assignment_wait_until_epoch_secs = None;
 
-        if self.role_assignment_ids.is_empty() {
-            Ok(HandlerAction::Continue {
-                state: Ready,
-                suggested_delay: None,
-            })
-        } else {
-            self.role_assignment_wait_until_epoch_secs = None;
-            Ok(HandlerAction::Continue {
-                state: UpdateWaitingForRbacPropagation,
-                suggested_delay: None,
-            })
-        }
+        Ok(HandlerAction::Continue {
+            state: CreatingRoleDefinitions,
+            suggested_delay: None,
+        })
     }
 
     #[handler(
@@ -863,10 +820,6 @@ impl AzureServiceAccountController {
             .service_provider
             .get_azure_authorization_client(azure_cfg)?;
 
-        let scope = Scope::ResourceGroup {
-            resource_group_name: resource_group_name.clone(),
-        };
-
         // Delete all role definitions
         for role_definition_id in &self.custom_role_definition_ids {
             // Extract the role definition UUID from the full ID
@@ -874,6 +827,7 @@ impl AzureServiceAccountController {
                 .split('/')
                 .last()
                 .unwrap_or(role_definition_id);
+            let scope = role_definition_scope_from_id(role_definition_id, &resource_group_name);
 
             match client
                 .delete_role_definition(&scope, role_def_uuid.to_string())
@@ -1029,13 +983,16 @@ impl AzureServiceAccountController {
 // Separate impl block for helper methods
 impl AzureServiceAccountController {
     /// Generate role definitions for all stack-level permission sets
-    fn generate_stack_role_definitions(
+    fn generate_stack_grant_plan(
         &self,
         service_account: &ServiceAccount,
         ctx: &ResourceControllerContext<'_>,
-    ) -> Result<Vec<AzureRoleDefinition>> {
+    ) -> Result<AzureGrantPlan> {
         if service_account.stack_permission_sets.is_empty() {
-            return Ok(Vec::new());
+            return Ok(AzureGrantPlan {
+                custom_roles: Vec::new(),
+                bindings: Vec::new(),
+            });
         }
 
         let generator = AzureRuntimePermissionsGenerator::new();
@@ -1063,69 +1020,29 @@ impl AzureServiceAccountController {
             .with_managing_subscription_id(azure_config.subscription_id.clone())
             .with_managing_resource_group(resource_group);
 
-        let mut all_role_definitions = Vec::new();
+        let mut all_custom_roles = Vec::new();
+        let mut all_bindings = Vec::new();
 
         for permission_set in &service_account.stack_permission_sets {
-            let role_definition = generator
-                .generate_role_definition(permission_set, BindingTarget::Stack, &permission_context)
+            let grant_plan = generator
+                .generate_grant_plan(permission_set, BindingTarget::Stack, &permission_context)
                 .context(ErrorData::InfrastructureError {
                     message: format!(
-                        "Failed to generate role definition for permission set '{}'",
+                        "Failed to generate grant plan for permission set '{}'",
                         permission_set.id
                     ),
-                    operation: Some("generate_stack_role_definitions".to_string()),
+                    operation: Some("generate_stack_grant_plan".to_string()),
                     resource_id: Some(service_account.id.clone()),
                 })?;
 
-            all_role_definitions.push(role_definition);
+            all_custom_roles.extend(grant_plan.custom_roles);
+            all_bindings.extend(grant_plan.bindings);
         }
 
-        Ok(all_role_definitions)
-    }
-
-    /// Azure built-in role IDs for ACR access.
-    /// These cannot be used in custom role definitions — Azure rejects
-    /// `registries/pull` and `registries/push` in both `actions` and `dataActions`.
-    const ACR_PULL_ROLE_ID: &'static str = "7f951dda-4ed3-4680-a7ca-43fe172d538d";
-    const ACR_PUSH_ROLE_ID: &'static str = "8311e382-0749-4cb8-b61a-304f252e45ec";
-
-    /// Permission set IDs that require ACR pull access.
-    const ACR_PULL_PERMISSION_SETS: &'static [&'static str] = &[
-        "artifact-registry/pull",
-        "artifact-registry/management",
-        "worker/execute",
-        "compute-cluster/execute",
-    ];
-
-    /// Permission set IDs that require ACR push access (push implies pull).
-    const ACR_PUSH_PERMISSION_SETS: &'static [&'static str] =
-        &["artifact-registry/push", "artifact-registry/provision"];
-
-    /// Determine which Azure built-in ACR roles are needed based on permission sets.
-    /// Returns a deduplicated list of (role_name, role_id) pairs.
-    fn collect_acr_builtin_roles(
-        permission_sets: &[alien_core::PermissionSet],
-    ) -> Vec<(&'static str, &'static str)> {
-        let mut needs_pull = false;
-        let mut needs_push = false;
-
-        for ps in permission_sets {
-            if Self::ACR_PUSH_PERMISSION_SETS.contains(&ps.id.as_str()) {
-                needs_push = true;
-            }
-            if Self::ACR_PULL_PERMISSION_SETS.contains(&ps.id.as_str()) {
-                needs_pull = true;
-            }
-        }
-
-        let mut roles = Vec::new();
-        // AcrPush includes pull, so only assign AcrPull if we don't need push
-        if needs_push {
-            roles.push(("AcrPush", Self::ACR_PUSH_ROLE_ID));
-        } else if needs_pull {
-            roles.push(("AcrPull", Self::ACR_PULL_ROLE_ID));
-        }
-        roles
+        Ok(AzureGrantPlan {
+            custom_roles: all_custom_roles,
+            bindings: dedupe_azure_role_bindings(all_bindings),
+        })
     }
 
     /// Creates a controller in a ready state with mock values for testing purposes.

@@ -162,35 +162,7 @@
     "azure": [
       {
         "grant": {
-          "actions": [
-            // Virtual Network operations
-            "Microsoft.Network/virtualNetworks/write",
-            "Microsoft.Network/virtualNetworks/delete",
-            "Microsoft.Network/virtualNetworks/read",
-            // Subnet operations
-            "Microsoft.Network/virtualNetworks/subnets/write",
-            "Microsoft.Network/virtualNetworks/subnets/delete",
-            "Microsoft.Network/virtualNetworks/subnets/read",
-            "Microsoft.Network/virtualNetworks/subnets/join/action",
-            // NAT Gateway operations
-            "Microsoft.Network/natGateways/write",
-            "Microsoft.Network/natGateways/delete",
-            "Microsoft.Network/natGateways/read",
-            "Microsoft.Network/natGateways/join/action",
-            // Public IP operations (for NAT Gateway)
-            "Microsoft.Network/publicIPAddresses/write",
-            "Microsoft.Network/publicIPAddresses/delete",
-            "Microsoft.Network/publicIPAddresses/read",
-            "Microsoft.Network/publicIPAddresses/join/action",
-            // Network Security Group operations
-            "Microsoft.Network/networkSecurityGroups/write",
-            "Microsoft.Network/networkSecurityGroups/delete",
-            "Microsoft.Network/networkSecurityGroups/read",
-            "Microsoft.Network/networkSecurityGroups/join/action",
-            "Microsoft.Network/networkSecurityGroups/securityRules/write",
-            "Microsoft.Network/networkSecurityGroups/securityRules/delete",
-            "Microsoft.Network/networkSecurityGroups/securityRules/read"
-          ]
+          "predefinedRoles": ["Network Contributor"]
         },
         "binding": {
           "stack": {

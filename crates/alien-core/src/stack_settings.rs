@@ -30,15 +30,10 @@ pub struct GcpManagementConfig {
 pub struct AzureManagementConfig {
     /// The managing Azure Tenant ID for cross-tenant access
     pub managing_tenant_id: String,
-    /// OIDC issuer URL for federated identity credential creation
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub oidc_issuer: Option<String>,
-    /// OIDC subject claim for federated identity credential creation
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub oidc_subject: Option<String>,
-    /// Management service principal object ID for local development fallback
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub management_principal_id: Option<String>,
+    /// OIDC issuer URL trusted by the target-side managed identity.
+    pub oidc_issuer: String,
+    /// OIDC subject claim trusted by the target-side managed identity.
+    pub oidc_subject: String,
 }
 
 /// Management configuration for different cloud platforms.

@@ -1,5 +1,8 @@
+use alien_azure_clients::container_apps::{
+    ManagedEnvironmentCertificate, ManagedEnvironmentCertificateKeyVaultProperties,
+    ManagedEnvironmentCertificateProperties,
+};
 use alien_azure_clients::long_running_operation::{LongRunningOperation, OperationResult};
-use alien_azure_clients::models::certificates::CertificateImportParameters;
 use alien_azure_clients::models::container_apps::{
     Configuration, ConfigurationActiveRevisionsMode, Container, ContainerApp,
     ContainerAppProperties, ContainerAppPropertiesProvisioningState, ContainerResources,
@@ -10,8 +13,9 @@ use alien_azure_clients::models::container_apps::{
 use alien_azure_clients::AzureClientConfig;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    CertificateStatus, DnsRecordStatus, Ingress, ResourceOutputs, ResourceRef, ResourceStatus,
-    Worker, WorkerOutputs, ENV_AZURE_CLIENT_ID,
+    CertificateStatus, DnsRecordStatus, Ingress, RemoteStackManagement,
+    RemoteStackManagementOutputs, ResourceOutputs, ResourceRef, ResourceStatus, Worker,
+    WorkerOutputs, ENV_AZURE_CLIENT_ID,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use base64::Engine;
@@ -25,7 +29,7 @@ use crate::error::{ErrorData, Result};
 use crate::infra_requirements::azure_utils;
 use crate::infra_requirements::azure_utils::{
     get_container_apps_environment_name, get_container_apps_environment_outputs,
-    get_resource_group_name,
+    get_resource_group_name, is_azure_authorization_propagation_error,
 };
 use crate::worker::readiness_probe::{run_readiness_probe, READINESS_PROBE_MAX_ATTEMPTS};
 use alien_macros::controller;
@@ -46,7 +50,7 @@ const AZURE_READY_RBAC_WAIT_SECS: u64 = 120;
 const AZURE_READY_RBAC_WAIT_SECS: u64 = 0;
 
 #[cfg(not(test))]
-const AZURE_COMMANDS_INFRASTRUCTURE_AUTH_WAIT_SECS: u64 = 300;
+const AZURE_COMMANDS_INFRASTRUCTURE_AUTH_WAIT_SECS: u64 = 900;
 #[cfg(test)]
 const AZURE_COMMANDS_INFRASTRUCTURE_AUTH_WAIT_SECS: u64 = 0;
 
@@ -108,6 +112,20 @@ fn retry_after_delay(retry_after_epoch_secs: u64) -> Option<Duration> {
     }
 }
 
+fn dns_name_from_url(url: &str) -> String {
+    let without_scheme = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .unwrap_or(url);
+
+    without_scheme
+        .split('/')
+        .next()
+        .unwrap_or(without_scheme)
+        .trim_end_matches('.')
+        .to_string()
+}
+
 fn management_profile_dispatches_commands(
     ctx: &ResourceControllerContext<'_>,
     worker_id: &str,
@@ -117,77 +135,6 @@ fn management_profile_dispatches_commands(
         .profile()
         .and_then(|profile| profile.0.get(worker_id))
         .is_some_and(|refs| refs.iter().any(|r| r.id() == "worker/dispatch-command"))
-}
-
-fn is_azure_authorization_propagation_error(error: &AlienError<ErrorData>) -> bool {
-    const AUTHORIZATION_MESSAGE_MARKERS: &[&str] = &[
-        "AuthorizationFailed",
-        "Unauthorized",
-        "does not have authorization",
-        "refresh your credentials",
-        "HTTP 401",
-        "HTTP 403",
-    ];
-
-    fn context_http_status(context: Option<&serde_json::Value>) -> Option<u16> {
-        context
-            .and_then(|value| value.get("http_status"))
-            .and_then(|value| value.as_u64())
-            .and_then(|status| u16::try_from(status).ok())
-    }
-
-    fn context_contains_auth_marker(context: Option<&serde_json::Value>) -> bool {
-        context.is_some_and(|value| {
-            let context_text = value.to_string();
-            AUTHORIZATION_MESSAGE_MARKERS
-                .iter()
-                .any(|marker| context_text.contains(marker))
-        })
-    }
-
-    fn matches_layer(
-        code: &str,
-        message: &str,
-        http_status_code: Option<u16>,
-        context: Option<&serde_json::Value>,
-    ) -> bool {
-        let http_status_code = http_status_code.or_else(|| context_http_status(context));
-        let authorization_status = matches!(http_status_code, Some(401 | 403));
-        let authorization_code = matches!(
-            code,
-            "REMOTE_ACCESS_DENIED" | "AUTHENTICATION_ERROR" | "HTTP_RESPONSE_ERROR"
-        );
-        let authorization_message = AUTHORIZATION_MESSAGE_MARKERS
-            .iter()
-            .any(|marker| message.contains(marker))
-            || context_contains_auth_marker(context);
-
-        (authorization_status || authorization_code) && authorization_message
-    }
-
-    if matches_layer(
-        &error.code,
-        &error.message,
-        error.http_status_code,
-        error.context.as_ref(),
-    ) {
-        return true;
-    }
-
-    let mut source = error.source.as_deref();
-    while let Some(layer) = source {
-        if matches_layer(
-            &layer.code,
-            &layer.message,
-            layer.http_status_code,
-            layer.context.as_ref(),
-        ) {
-            return true;
-        }
-        source = layer.source.as_deref();
-    }
-
-    false
 }
 
 fn is_azure_container_apps_environment_waking_error(error: &AlienError<ErrorData>) -> bool {
@@ -214,25 +161,10 @@ fn is_azure_container_apps_environment_waking_error(error: &AlienError<ErrorData
     false
 }
 
-/// Get the Key Vault name for importing certificates.
-/// For now, we use a simple naming convention. In the future, this could be extracted from infrastructure requirements.
-fn get_keyvault_name_for_function(ctx: &ResourceControllerContext<'_>) -> Result<String> {
-    // Use the resource prefix to generate a deterministic Key Vault name
-    // Azure Key Vault names must be 3-24 characters and only contain alphanumeric characters and hyphens
-    let vault_name = format!("{}-kv", ctx.resource_prefix)
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '-')
-        .collect::<String>()
-        .to_lowercase();
-
-    // Truncate if needed (Key Vault names max 24 chars)
-    let vault_name = if vault_name.len() > 24 {
-        vault_name[..24].to_string()
-    } else {
-        vault_name
-    };
-
-    Ok(vault_name)
+fn get_container_apps_certificate_name(prefix: &str, worker_id: &str) -> String {
+    format!("{}-{}", prefix, worker_id)
+        .replace('_', "-")
+        .to_lowercase()
 }
 
 /// Domain information for a worker.
@@ -240,6 +172,7 @@ struct DomainInfo {
     fqdn: String,
     certificate_id: Option<String>,
     keyvault_cert_id: Option<String>,
+    container_apps_certificate_id: Option<String>,
     uses_custom_domain: bool,
 }
 
@@ -358,6 +291,8 @@ pub struct AzureWorkerController {
     pub(crate) certificate_id: Option<String>,
     /// The Azure Key Vault certificate ID
     pub(crate) keyvault_cert_id: Option<String>,
+    /// The Azure Container Apps managed environment certificate resource ID.
+    pub(crate) container_apps_certificate_id: Option<String>,
     /// Whether this worker uses a custom domain
     pub(crate) uses_custom_domain: bool,
     /// Timestamp when certificate was issued (for renewal detection)
@@ -828,6 +763,8 @@ impl AzureWorkerController {
                                         self.fqdn = Some(domain_info.fqdn);
                                         self.certificate_id = domain_info.certificate_id;
                                         self.keyvault_cert_id = domain_info.keyvault_cert_id;
+                                        self.container_apps_certificate_id =
+                                            domain_info.container_apps_certificate_id;
                                         self.uses_custom_domain = domain_info.uses_custom_domain;
 
                                         // Proceed to certificate flow
@@ -987,48 +924,57 @@ impl AzureWorkerController {
         let pkcs12_data = pem_to_pkcs12(private_key, certificate_chain)?;
         let pkcs12_base64 = base64::engine::general_purpose::STANDARD.encode(&pkcs12_data);
 
-        // Get Key Vault URL from infrastructure requirements
-        let keyvault_name = get_keyvault_name_for_function(ctx)?;
-        let keyvault_url = format!("https://{}.vault.azure.net", keyvault_name);
-
-        // Import certificate to Key Vault
-        let keyvault_client = ctx
-            .service_provider
-            .get_azure_key_vault_certificates_client(azure_cfg)?;
-        let cert_name = format!("{}-{}", ctx.resource_prefix, worker_config.id)
-            .replace('_', "-") // Key Vault names can't have underscores
-            .to_lowercase(); // Convert to lowercase for Key Vault naming requirements
-
-        let import_request = CertificateImportParameters {
-            value: pkcs12_base64,
-            pwd: Some(String::new()), // Empty password
-            policy: None,
-            attributes: None,
+        let certificate_name =
+            get_container_apps_certificate_name(ctx.resource_prefix, &worker_config.id);
+        let resource_group_name = get_resource_group_name(ctx.state)?;
+        let environment_name = get_container_apps_environment_name(ctx.state)?;
+        let location = azure_cfg.region.as_deref().unwrap_or("East US").to_string();
+        let certificate = ManagedEnvironmentCertificate {
+            location,
+            properties: Some(ManagedEnvironmentCertificateProperties {
+                value: Some(pkcs12_base64),
+                password: Some(String::new()),
+                certificate_key_vault_properties: None,
+            }),
             tags: HashMap::new(),
-            preserve_cert_order: None,
         };
 
-        let response = keyvault_client
-            .import_certificate(keyvault_url, cert_name, import_request)
+        let container_apps_client = ctx
+            .service_provider
+            .get_azure_container_apps_client(azure_cfg)?;
+        let response = container_apps_client
+            .create_or_update_managed_environment_certificate(
+                &resource_group_name,
+                &environment_name,
+                &certificate_name,
+                &certificate,
+            )
             .await
             .context(ErrorData::CloudPlatformError {
-                message: "Failed to import certificate to Key Vault".to_string(),
+                message: "Failed to import certificate to Azure Container Apps Environment"
+                    .to_string(),
                 resource_id: Some(worker_config.id.clone()),
             })?;
 
-        self.keyvault_cert_id = response.id;
+        self.container_apps_certificate_id = Some(response.id.ok_or_else(|| {
+            AlienError::new(ErrorData::CloudPlatformError {
+                message: "Azure Container Apps Environment certificate response missing ID"
+                    .to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })
+        })?);
 
         // Store issued_at timestamp for renewal detection
         self.certificate_issued_at = resource.issued_at.clone();
 
         info!(
             worker=%worker_config.id,
-            cert_id=?self.keyvault_cert_id,
-            "Certificate imported to Key Vault"
+            cert_id=?self.container_apps_certificate_id,
+            "Certificate imported to Azure Container Apps Environment"
         );
 
         Ok(HandlerAction::Continue {
-            state: ConfiguringCustomDomain,
+            state: WaitingForDns,
             suggested_delay: None,
         })
     }
@@ -1058,40 +1004,90 @@ impl AzureWorkerController {
             })
         })?;
 
-        let keyvault_cert_id = self.keyvault_cert_id.as_ref().ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceControllerConfigError {
-                resource_id: worker_config.id.clone(),
-                message: "Key Vault certificate ID not set".to_string(),
-            })
-        })?;
-
         let resource_group_name = get_resource_group_name(ctx.state)?;
         let client = ctx
             .service_provider
             .get_azure_container_apps_client(azure_cfg)?;
 
-        // Get the current container app
-        let mut app = client
-            .get_container_app(&resource_group_name, container_app_name)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to get container app for custom domain configuration".to_string(),
-                resource_id: Some(worker_config.id.clone()),
+        let environment_name = get_container_apps_environment_name(ctx.state)?;
+        if self.container_apps_certificate_id.is_none() {
+            let keyvault_cert_id = self.keyvault_cert_id.as_ref().ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceControllerConfigError {
+                    resource_id: worker_config.id.clone(),
+                    message: "Container Apps certificate ID not set".to_string(),
+                })
+            })?;
+            let rsm_ref = ResourceRef::new(
+                RemoteStackManagement::RESOURCE_TYPE,
+                "remote-stack-management",
+            );
+            let rsm_outputs = ctx
+                .state
+                .get_resource_outputs::<RemoteStackManagementOutputs>(rsm_ref.id())
+                .context(ErrorData::DependencyNotReady {
+                    resource_id: worker_config.id.clone(),
+                    dependency_id: rsm_ref.id().to_string(),
+                })?;
+            let certificate_name =
+                get_container_apps_certificate_name(ctx.resource_prefix, &worker_config.id);
+            let certificate = ManagedEnvironmentCertificate {
+                location: azure_cfg.region.as_deref().unwrap_or("East US").to_string(),
+                properties: Some(ManagedEnvironmentCertificateProperties {
+                    value: None,
+                    password: None,
+                    certificate_key_vault_properties: Some(
+                        ManagedEnvironmentCertificateKeyVaultProperties {
+                            identity: rsm_outputs.management_resource_id.clone(),
+                            key_vault_url: keyvault_cert_id.clone(),
+                        },
+                    ),
+                }),
+                tags: HashMap::new(),
+            };
+            let response = client
+                .create_or_update_managed_environment_certificate(
+                    &resource_group_name,
+                    &environment_name,
+                    &certificate_name,
+                    &certificate,
+                )
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message:
+                        "Failed to import Key Vault certificate to Azure Container Apps Environment"
+                            .to_string(),
+                    resource_id: Some(worker_config.id.clone()),
+                })?;
+            self.container_apps_certificate_id = Some(response.id.ok_or_else(|| {
+                AlienError::new(ErrorData::CloudPlatformError {
+                    message: "Azure Container Apps Environment certificate response missing ID"
+                        .to_string(),
+                    resource_id: Some(worker_config.id.clone()),
+                })
+            })?);
+        }
+        let container_apps_certificate_id =
+            self.container_apps_certificate_id.as_ref().ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceControllerConfigError {
+                    resource_id: worker_config.id.clone(),
+                    message: "Container Apps certificate ID not set".to_string(),
+                })
             })?;
 
-        // Update the ingress configuration with custom domain
-        if let Some(props) = &mut app.properties {
-            if let Some(config) = &mut props.configuration {
-                if let Some(ingress) = &mut config.ingress {
-                    // Add custom domain configuration
-                    ingress.custom_domains = vec![CustomDomain {
-                        name: fqdn.clone(),
-                        binding_type: Some(CustomDomainBindingType::SniEnabled),
-                        certificate_id: Some(keyvault_cert_id.clone()),
-                    }];
-                }
-            }
-        }
+        let mut app = self
+            .build_container_app(
+                worker_config,
+                &environment_name,
+                container_app_name,
+                azure_cfg,
+                ctx,
+            )
+            .await?;
+        Self::set_custom_domain(
+            &mut app,
+            fqdn.clone(),
+            container_apps_certificate_id.clone(),
+        );
 
         // Update the container app with custom domain
         let _operation = client
@@ -1109,8 +1105,8 @@ impl AzureWorkerController {
         );
 
         Ok(HandlerAction::Continue {
-            state: WaitingForDns,
-            suggested_delay: Some(Duration::from_secs(2)),
+            state: ConfiguringDaprComponents,
+            suggested_delay: None,
         })
     }
 
@@ -1139,6 +1135,12 @@ impl AzureWorkerController {
                     fqdn=%self.fqdn.as_ref().unwrap_or(&"unknown".to_string()),
                     "DNS record created successfully"
                 );
+                if self.container_apps_certificate_id.is_some() {
+                    return Ok(HandlerAction::Continue {
+                        state: ConfiguringCustomDomain,
+                        suggested_delay: None,
+                    });
+                }
                 Ok(HandlerAction::Continue {
                     state: ConfiguringDaprComponents,
                     suggested_delay: None,
@@ -1653,10 +1655,8 @@ impl AzureWorkerController {
         self.commands_queue_name = Some(queue_name);
         self.commands_dapr_component = Some(component_name);
 
-        // Grant Azure Service Bus Data Sender to the deploying identity.
-        // Azure separates management plane (Contributor) from data plane — the identity
-        // that creates the queue cannot send messages without an explicit data-plane role.
-        // This is Azure-specific; AWS/GCP don't have this separation.
+        // Verify that command transport permissions are part of the setup-applied
+        // management profile. Live worker provisioning should not create RBAC grants.
         self.assign_commands_sender_role(
             ctx,
             azure_config,
@@ -2010,36 +2010,48 @@ impl AzureWorkerController {
 
         let pkcs12_data = pem_to_pkcs12(private_key, certificate_chain)?;
         let pkcs12_base64 = base64::engine::general_purpose::STANDARD.encode(&pkcs12_data);
-        let keyvault_name = get_keyvault_name_for_function(ctx)?;
-        let keyvault_url = format!("https://{}.vault.azure.net", keyvault_name);
-        let cert_name = format!("{}-{}", ctx.resource_prefix, func_cfg.id)
-            .replace('_', "-")
-            .to_lowercase();
-        let import_request = CertificateImportParameters {
-            value: pkcs12_base64,
-            pwd: Some(String::new()),
-            policy: None,
-            attributes: None,
+        let azure_cfg = ctx.get_azure_config()?;
+        let resource_group_name = get_resource_group_name(ctx.state)?;
+        let environment_name = get_container_apps_environment_name(ctx.state)?;
+        let certificate_name =
+            get_container_apps_certificate_name(ctx.resource_prefix, &func_cfg.id);
+        let certificate = ManagedEnvironmentCertificate {
+            location: azure_cfg.region.as_deref().unwrap_or("East US").to_string(),
+            properties: Some(ManagedEnvironmentCertificateProperties {
+                value: Some(pkcs12_base64),
+                password: Some(String::new()),
+                certificate_key_vault_properties: None,
+            }),
             tags: HashMap::new(),
-            preserve_cert_order: None,
         };
 
-        let azure_cfg = ctx.get_azure_config()?;
-        let keyvault_client = ctx
+        let container_apps_client = ctx
             .service_provider
-            .get_azure_key_vault_certificates_client(azure_cfg)?;
-        let response = keyvault_client
-            .import_certificate(keyvault_url, cert_name, import_request)
+            .get_azure_container_apps_client(azure_cfg)?;
+        let response = container_apps_client
+            .create_or_update_managed_environment_certificate(
+                &resource_group_name,
+                &environment_name,
+                &certificate_name,
+                &certificate,
+            )
             .await
             .context(ErrorData::CloudPlatformError {
-                message: "Failed to re-import certificate to Key Vault".to_string(),
+                message: "Failed to re-import certificate to Azure Container Apps Environment"
+                    .to_string(),
                 resource_id: Some(func_cfg.id.clone()),
             })?;
 
-        self.keyvault_cert_id = response.id;
+        self.container_apps_certificate_id = Some(response.id.ok_or_else(|| {
+            AlienError::new(ErrorData::CloudPlatformError {
+                message: "Azure Container Apps Environment certificate response missing ID"
+                    .to_string(),
+                resource_id: Some(func_cfg.id.clone()),
+            })
+        })?);
         self.certificate_issued_at = resource.issued_at.clone();
 
-        if self.fqdn.is_some() && self.keyvault_cert_id.is_some() {
+        if self.fqdn.is_some() && self.container_apps_certificate_id.is_some() {
             let container_app_name = self.container_app_name.as_ref().ok_or_else(|| {
                 AlienError::new(ErrorData::ResourceControllerConfigError {
                     resource_id: func_cfg.id.clone(),
@@ -2047,32 +2059,20 @@ impl AzureWorkerController {
                 })
             })?;
             let fqdn = self.fqdn.clone().unwrap();
-            let keyvault_cert_id = self.keyvault_cert_id.clone().unwrap();
-            let resource_group_name = get_resource_group_name(ctx.state)?;
-            let client = ctx
-                .service_provider
-                .get_azure_container_apps_client(azure_cfg)?;
-            let mut app = client
-                .get_container_app(&resource_group_name, container_app_name)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: "Failed to get container app for certificate renewal".to_string(),
-                    resource_id: Some(func_cfg.id.clone()),
-                })?;
+            let container_apps_certificate_id = self.container_apps_certificate_id.clone().unwrap();
+            let environment_name = get_container_apps_environment_name(ctx.state)?;
+            let mut app = self
+                .build_container_app(
+                    func_cfg,
+                    &environment_name,
+                    container_app_name,
+                    azure_cfg,
+                    ctx,
+                )
+                .await?;
+            Self::set_custom_domain(&mut app, fqdn, container_apps_certificate_id);
 
-            if let Some(props) = &mut app.properties {
-                if let Some(config) = &mut props.configuration {
-                    if let Some(ingress) = &mut config.ingress {
-                        ingress.custom_domains = vec![CustomDomain {
-                            name: fqdn,
-                            binding_type: Some(CustomDomainBindingType::SniEnabled),
-                            certificate_id: Some(keyvault_cert_id),
-                        }];
-                    }
-                }
-            }
-
-            client
+            container_apps_client
                 .create_or_update_container_app(&resource_group_name, container_app_name, &app)
                 .await
                 .context(ErrorData::CloudPlatformError {
@@ -2132,17 +2132,7 @@ impl AzureWorkerController {
             .await?;
         let mut desired_app = desired_app;
         if let (Some(fqdn), Some(keyvault_cert_id)) = (&self.fqdn, &self.keyvault_cert_id) {
-            if let Some(props) = &mut desired_app.properties {
-                if let Some(config) = &mut props.configuration {
-                    if let Some(ingress) = &mut config.ingress {
-                        ingress.custom_domains = vec![CustomDomain {
-                            name: fqdn.clone(),
-                            binding_type: Some(CustomDomainBindingType::SniEnabled),
-                            certificate_id: Some(keyvault_cert_id.clone()),
-                        }];
-                    }
-                }
-            }
+            Self::set_custom_domain(&mut desired_app, fqdn.clone(), keyvault_cert_id.clone());
         }
 
         // Issue UPDATE
@@ -2994,21 +2984,13 @@ impl AzureWorkerController {
     // Implementation of get_outputs trait method
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         self.resource_id.as_ref().map(|id| {
-            // If we have a custom domain, use the FQDN
-            // Otherwise, use the Container App URL
-            let load_balancer_endpoint = if let Some(fqdn) = &self.fqdn {
-                Some(alien_core::LoadBalancerEndpoint {
-                    dns_name: fqdn.clone(),
-                    hosted_zone_id: None, // Azure doesn't use hosted zones like AWS
-                })
-            } else {
+            let load_balancer_endpoint =
                 self.url
                     .as_ref()
                     .map(|url| alien_core::LoadBalancerEndpoint {
-                        dns_name: url.clone(),
+                        dns_name: dns_name_from_url(url),
                         hosted_zone_id: None,
-                    })
-            };
+                    });
 
             ResourceOutputs::new(WorkerOutputs {
                 worker_name: self
@@ -3262,7 +3244,7 @@ impl AzureWorkerController {
         self.commands_queue_name = Some(queue_name);
         self.commands_dapr_component = Some(component_name);
 
-        // Assign roles BEFORE Container App starts, giving RBAC time to propagate.
+        // Command transport RBAC is setup-applied before live worker provisioning.
         self.assign_commands_sender_role(
             ctx,
             azure_config,
@@ -3276,24 +3258,19 @@ impl AzureWorkerController {
         Ok(DaprComponentOperation::Completed)
     }
 
-    /// Assign the built-in Azure Service Bus Data Sender role to the deploying identity
-    /// on the commands Service Bus namespace.
+    /// Ensure command transport permissions are represented in the management profile.
     ///
-    /// Azure separates management plane (Contributor) from data plane — the identity
-    /// that creates the queue cannot send messages without an explicit data-plane role.
+    /// Azure command transport uses Service Bus data-plane roles. Those grants are
+    /// setup-owned because both Terraform setup and runtime setup know the stack
+    /// management and execution identities before live workers are created.
     async fn assign_commands_sender_role(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
-        azure_config: &alien_azure_clients::AzureClientConfig,
-        resource_group_name: &str,
-        namespace_name: &str,
+        _azure_config: &alien_azure_clients::AzureClientConfig,
+        _resource_group_name: &str,
+        _namespace_name: &str,
         func_cfg: &alien_core::Worker,
     ) -> Result<()> {
-        use alien_azure_clients::authorization::Scope;
-        use alien_azure_clients::models::authorization_role_assignments::{
-            RoleAssignment, RoleAssignmentProperties, RoleAssignmentPropertiesPrincipalType,
-        };
-
         if !management_profile_dispatches_commands(ctx, &func_cfg.id) {
             info!(
                 worker = %func_cfg.id,
@@ -3302,161 +3279,10 @@ impl AzureWorkerController {
             return Ok(());
         }
 
-        let caller_principal_id = ctx
-            .service_provider
-            .get_azure_caller_principal_id(azure_config)
-            .await?;
-
-        let authorization_client = ctx
-            .service_provider
-            .get_azure_authorization_client(azure_config)?;
-
-        let namespace_scope = Scope::Resource {
-            resource_group_name: resource_group_name.to_string(),
-            resource_provider: "Microsoft.ServiceBus".to_string(),
-            parent_resource_path: None,
-            resource_type: "namespaces".to_string(),
-            resource_name: namespace_name.to_string(),
-        };
-
-        // Azure Service Bus Data Sender built-in role
-        let sb_data_sender_role_id = "69a216fc-b8fb-44d8-bc22-1f3c2cd27a39";
-        let full_role_def_id = format!(
-            "/subscriptions/{}/providers/Microsoft.Authorization/roleDefinitions/{}",
-            azure_config.subscription_id, sb_data_sender_role_id
-        );
-
-        let assignment_uuid = uuid::Uuid::new_v5(
-            &uuid::Uuid::NAMESPACE_OID,
-            format!(
-                "alien:azure:cmd-sender:{}:{}",
-                ctx.resource_prefix, namespace_name
-            )
-            .as_bytes(),
-        )
-        .to_string();
-
-        let full_assignment_id =
-            authorization_client.build_role_assignment_id(&namespace_scope, assignment_uuid);
-
-        let role_assignment = RoleAssignment {
-            id: None,
-            name: None,
-            type_: None,
-            properties: Some(RoleAssignmentProperties {
-                principal_id: caller_principal_id.clone(),
-                role_definition_id: full_role_def_id,
-                scope: Some(namespace_scope.to_scope_string(azure_config)),
-                principal_type: RoleAssignmentPropertiesPrincipalType::ServicePrincipal,
-                description: Some(format!(
-                    "Service Bus Data Sender for deploying identity (commands dispatch) in stack {}",
-                    ctx.resource_prefix
-                )),
-                condition: None,
-                condition_version: None,
-                created_by: None,
-                created_on: None,
-                delegated_managed_identity_resource_id: None,
-                updated_by: None,
-                updated_on: None,
-            }),
-        };
-
-        authorization_client
-            .create_or_update_role_assignment_by_id(full_assignment_id.clone(), &role_assignment)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to assign Service Bus Data Sender to deploying identity"
-                    .to_string(),
-                resource_id: Some(func_cfg.id.clone()),
-            })?;
-
         info!(
-            principal_id = %caller_principal_id,
-            assignment_id = %full_assignment_id,
-            "Assigned Service Bus Data Sender to deploying identity for commands dispatch"
+            worker = %func_cfg.id,
+            "Using setup-applied Azure Service Bus command permissions"
         );
-
-        self.commands_sender_role_assignment_id = Some(full_assignment_id);
-
-        // Also assign Service Bus Data Receiver to the execution UAMI so the Dapr
-        // input binding can read commands from the queue. The execution UAMI gets
-        // queue/data-read on user-defined queues, but not on the internally-created
-        // commands queue.
-        let service_account_id = format!("{}-sa", func_cfg.get_permissions());
-        let service_account_ref = alien_core::ResourceRef::new(
-            alien_core::ServiceAccount::RESOURCE_TYPE,
-            service_account_id.to_string(),
-        );
-        if let Ok(sa_state) = ctx
-            .require_dependency::<crate::service_account::AzureServiceAccountController>(
-                &service_account_ref,
-            )
-        {
-            if let Some(ref sa_principal_id) = sa_state.identity_principal_id {
-                let sb_data_receiver_role_id = "4f6d3b9b-027b-4f4c-9142-0e5a2a2247e0";
-                let full_receiver_role_def_id = format!(
-                    "/subscriptions/{}/providers/Microsoft.Authorization/roleDefinitions/{}",
-                    azure_config.subscription_id, sb_data_receiver_role_id
-                );
-
-                let receiver_assignment_uuid = uuid::Uuid::new_v5(
-                    &uuid::Uuid::NAMESPACE_OID,
-                    format!(
-                        "alien:azure:cmd-receiver:{}:{}",
-                        ctx.resource_prefix, namespace_name
-                    )
-                    .as_bytes(),
-                )
-                .to_string();
-
-                let full_receiver_assignment_id = authorization_client
-                    .build_role_assignment_id(&namespace_scope, receiver_assignment_uuid);
-
-                let receiver_role_assignment = RoleAssignment {
-                    id: None,
-                    name: None,
-                    type_: None,
-                    properties: Some(RoleAssignmentProperties {
-                        principal_id: sa_principal_id.clone(),
-                        role_definition_id: full_receiver_role_def_id,
-                        scope: Some(namespace_scope.to_scope_string(azure_config)),
-                        principal_type: RoleAssignmentPropertiesPrincipalType::ServicePrincipal,
-                        description: Some(format!(
-                            "Service Bus Data Receiver for execution UAMI (commands receive via Dapr) in stack {}",
-                            ctx.resource_prefix
-                        )),
-                        condition: None,
-                        condition_version: None,
-                        created_by: None,
-                        created_on: None,
-                        delegated_managed_identity_resource_id: None,
-                        updated_by: None,
-                        updated_on: None,
-                    }),
-                };
-
-                authorization_client
-                    .create_or_update_role_assignment_by_id(
-                        full_receiver_assignment_id.clone(),
-                        &receiver_role_assignment,
-                    )
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: "Failed to assign Service Bus Data Receiver to execution UAMI"
-                            .to_string(),
-                        resource_id: Some(func_cfg.id.clone()),
-                    })?;
-
-                info!(
-                    principal_id = %sa_principal_id,
-                    assignment_id = %full_receiver_assignment_id,
-                    "Assigned Service Bus Data Receiver to execution UAMI for commands receive"
-                );
-
-                self.commands_receiver_role_assignment_id = Some(full_receiver_assignment_id);
-            }
-        }
 
         Ok(())
     }
@@ -3493,6 +3319,7 @@ impl AzureWorkerController {
                 fqdn: custom.domain.clone(),
                 certificate_id: None,
                 keyvault_cert_id: Some(keyvault_cert_id),
+                container_apps_certificate_id: None,
                 uses_custom_domain: true,
             });
         }
@@ -3520,6 +3347,7 @@ impl AzureWorkerController {
             fqdn: resource.fqdn.clone(),
             certificate_id: Some(resource.certificate_id.clone()),
             keyvault_cert_id: None,
+            container_apps_certificate_id: None,
             uses_custom_domain: false,
         })
     }
@@ -3542,6 +3370,7 @@ impl AzureWorkerController {
                 self.fqdn = Some(domain_info.fqdn.clone());
                 self.certificate_id = domain_info.certificate_id;
                 self.keyvault_cert_id = domain_info.keyvault_cert_id;
+                self.container_apps_certificate_id = domain_info.container_apps_certificate_id;
                 self.uses_custom_domain = domain_info.uses_custom_domain;
                 if self.url.is_none() {
                     self.url = ctx
@@ -3590,6 +3419,20 @@ impl AzureWorkerController {
 
         self.pending_operation_url = None;
         self.pending_operation_retry_after = None;
+    }
+
+    fn set_custom_domain(app: &mut ContainerApp, fqdn: String, certificate_id: String) {
+        if let Some(props) = &mut app.properties {
+            if let Some(config) = &mut props.configuration {
+                if let Some(ingress) = &mut config.ingress {
+                    ingress.custom_domains = vec![CustomDomain {
+                        name: fqdn,
+                        binding_type: Some(CustomDomainBindingType::SniEnabled),
+                        certificate_id: Some(certificate_id),
+                    }];
+                }
+            }
+        }
     }
 
     fn extract_url_from_container_app(&self, app: &ContainerApp) -> Option<String> {
@@ -4388,6 +4231,7 @@ impl AzureWorkerController {
             fqdn: None,
             certificate_id: None,
             keyvault_cert_id: None,
+            container_apps_certificate_id: None,
             uses_custom_domain: false,
             certificate_issued_at: None,
             commands_namespace_name: None,
@@ -4432,17 +4276,50 @@ mod tests {
     use httpmock::MockServer;
     use rstest::rstest;
 
-    use super::{
-        current_unix_timestamp_secs, is_azure_authorization_propagation_error,
-        AZURE_RBAC_WAIT_POLL_SECS,
-    };
+    use super::{current_unix_timestamp_secs, dns_name_from_url, AZURE_RBAC_WAIT_POLL_SECS};
     use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
     use crate::error::ErrorData;
+    use crate::infra_requirements::azure_utils::is_azure_authorization_propagation_error;
     use crate::worker::{
         fixtures::*, readiness_probe::test_utils::create_readiness_probe_mock,
         AzureWorkerController,
     };
     use crate::AzureWorkerState;
+
+    #[test]
+    fn strips_scheme_and_path_from_dns_endpoint_url() {
+        assert_eq!(
+            dns_name_from_url("https://app.example.azurecontainerapps.io/health"),
+            "app.example.azurecontainerapps.io"
+        );
+        assert_eq!(
+            dns_name_from_url("app.example.azurecontainerapps.io."),
+            "app.example.azurecontainerapps.io"
+        );
+    }
+
+    #[test]
+    fn platform_domain_outputs_target_container_app_host_not_public_fqdn() {
+        let mut controller = AzureWorkerController::mock_ready("test-worker");
+        controller.fqdn = Some("test-worker.public.example.com".to_string());
+        controller.certificate_id = Some("cert_123".to_string());
+        controller.url = Some("https://test-worker.azurecontainerapps.io".to_string());
+
+        let outputs = controller.build_outputs().unwrap();
+        let worker_outputs = outputs.downcast_ref::<WorkerOutputs>().unwrap();
+
+        assert_eq!(
+            worker_outputs.url.as_deref(),
+            Some("https://test-worker.azurecontainerapps.io")
+        );
+        assert_eq!(
+            worker_outputs
+                .load_balancer_endpoint
+                .as_ref()
+                .map(|endpoint| endpoint.dns_name.as_str()),
+            Some("test-worker.azurecontainerapps.io")
+        );
+    }
 
     #[test]
     fn detects_azure_authorization_propagation_error_from_http_context() {
@@ -5587,6 +5464,7 @@ mod tests {
             fqdn: None,
             certificate_id: None,
             keyvault_cert_id: None,
+            container_apps_certificate_id: None,
             uses_custom_domain: false,
             certificate_issued_at: None,
             commands_namespace_name: None,

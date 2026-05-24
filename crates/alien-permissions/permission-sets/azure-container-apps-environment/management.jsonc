@@ -17,7 +17,7 @@
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/managedEnvironments/${stackPrefix}-*"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
           },
           "resource": {
             "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/managedEnvironments/${resourceName}"

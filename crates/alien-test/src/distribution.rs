@@ -359,14 +359,34 @@ fn missing_distribution_flow_config(
         DistributionFlow::TerraformAksHelmPull => {
             if !config.has_platform(Platform::Azure) {
                 Some("Azure management and target credentials are required")
+            } else if !has_azure_management_oidc(config) {
+                Some("AZURE_MANAGEMENT_OIDC_ISSUER, AZURE_MANAGEMENT_OIDC_SUBJECT, and AZURE_FEDERATED_TOKEN_FILE are required")
             } else if config.kubernetes.aks.is_none() {
                 Some("ALIEN_TEST_AKS_CLUSTER_NAME, ALIEN_TEST_AKS_CLUSTER_RESOURCE_GROUP, and KUBECONFIG are required")
             } else {
                 None
             }
         }
+        DistributionFlow::TerraformAzurePush => {
+            if !has_azure_management_oidc(config) {
+                Some("AZURE_MANAGEMENT_OIDC_ISSUER, AZURE_MANAGEMENT_OIDC_SUBJECT, and AZURE_FEDERATED_TOKEN_FILE are required")
+            } else {
+                None
+            }
+        }
         _ => None,
     }
+}
+
+fn has_azure_management_oidc(config: &TestConfig) -> bool {
+    config
+        .azure_mgmt
+        .as_ref()
+        .is_some_and(|mgmt| mgmt.oidc_issuer.is_some() && mgmt.oidc_subject.is_some())
+        && std::env::var("AZURE_FEDERATED_TOKEN_FILE")
+            .ok()
+            .filter(|value| !value.is_empty())
+            .is_some()
 }
 
 fn manager_platforms_for_flow(flow: DistributionFlow, config: &TestConfig) -> Vec<Platform> {
@@ -477,9 +497,8 @@ fn render_management_config(
         })),
         Platform::Azure => Some(ManagementConfig::Azure(AzureManagementConfig {
             managing_tenant_id: String::new(),
-            oidc_issuer: None,
-            oidc_subject: None,
-            management_principal_id: None,
+            oidc_issuer: String::new(),
+            oidc_subject: String::new(),
         })),
         Platform::Kubernetes | Platform::Local | Platform::Test => None,
     }
@@ -1736,13 +1755,10 @@ async fn wait_for_azure_management_permissions(
         "azure_service_bus_namespace",
     )?;
 
-    let Some(token_file) = std::env::var("AZURE_FEDERATED_TOKEN_FILE")
+    let token_file = std::env::var("AZURE_FEDERATED_TOKEN_FILE")
         .ok()
         .filter(|value| !value.is_empty())
-    else {
-        warn!("Skipping Azure management permission probe because AZURE_FEDERATED_TOKEN_FILE is not set");
-        return Ok(());
-    };
+        .context("AZURE_FEDERATED_TOKEN_FILE is required for Azure management permission probe")?;
 
     let azure_config = AzureClientConfig {
         subscription_id: management.subscription_id.clone(),
@@ -2085,14 +2101,6 @@ fn insert_azure_tfvars(
                 Value::String(subject.clone()),
             );
         }
-        if mgmt.oidc_issuer.is_none() {
-            if let Some(principal_id) = &mgmt.management_sp_object_id {
-                vars.insert(
-                    "azure_management_principal_id".to_string(),
-                    Value::String(principal_id.clone()),
-                );
-            }
-        }
     }
     if target == alien_terraform::TerraformTarget::Aks {
         vars.insert(
@@ -2282,7 +2290,6 @@ mod tests {
         region: &str,
         oidc_issuer: Option<&str>,
         oidc_subject: Option<&str>,
-        management_sp_object_id: Option<&str>,
     ) -> AzureConfig {
         AzureConfig {
             subscription_id: subscription_id.to_string(),
@@ -2292,9 +2299,6 @@ mod tests {
             region: region.to_string(),
             oidc_issuer: oidc_issuer.map(ToString::to_string),
             oidc_subject: oidc_subject.map(ToString::to_string),
-            management_sp_client_id: None,
-            management_sp_client_secret: None,
-            management_sp_object_id: management_sp_object_id.map(ToString::to_string),
         }
     }
 
@@ -2396,14 +2400,13 @@ mod tests {
 
     #[test]
     fn azure_tfvars_include_oidc_federated_identity_inputs() {
-        let azure_target = azure_config("target-sub", "target-tenant", "eastus", None, None, None);
+        let azure_target = azure_config("target-sub", "target-tenant", "eastus", None, None);
         let azure_mgmt = azure_config(
             "mgmt-sub",
             "mgmt-tenant",
             "eastus2",
             Some("https://issuer.example.com"),
             Some("system:serviceaccount:alien:manager"),
-            Some("fallback-principal"),
         );
         let mut vars = serde_json::Map::new();
 
@@ -2434,30 +2437,18 @@ mod tests {
     }
 
     #[test]
-    fn azure_tfvars_include_local_fallback_principal_without_oidc() {
-        let azure_target = azure_config("target-sub", "target-tenant", "eastus", None, None, None);
-        let azure_mgmt = azure_config(
-            "mgmt-sub",
-            "mgmt-tenant",
-            "eastus2",
-            None,
-            None,
-            Some("fallback-principal"),
-        );
+    fn azure_tfvars_omit_oidc_inputs_when_management_config_is_missing() {
+        let azure_target = azure_config("target-sub", "target-tenant", "eastus", None, None);
         let mut vars = serde_json::Map::new();
 
         insert_azure_tfvars(
             &mut vars,
             &azure_target,
-            Some(&azure_mgmt),
+            None,
             alien_terraform::TerraformTarget::Azure,
         );
 
-        assert_eq!(
-            vars.get("azure_management_principal_id")
-                .and_then(Value::as_str),
-            Some("fallback-principal")
-        );
+        assert!(vars.get("azure_management_principal_id").is_none());
         assert!(vars.get("azure_oidc_issuer").is_none());
         assert!(vars.get("azure_oidc_subject").is_none());
     }

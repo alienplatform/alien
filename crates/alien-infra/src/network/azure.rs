@@ -33,7 +33,18 @@ use alien_azure_clients::long_running_operation::OperationResult;
 use alien_core::{Network, NetworkSettings, ResourceStatus};
 use alien_error::{AlienError, Context};
 use alien_macros::{controller, flow_entry, handler, terminal_state};
-use tracing::{debug, info};
+use serde::{Deserialize, Serialize};
+use tracing::{debug, info, warn};
+
+const AZURE_BYO_VNET_RBAC_WAIT_MAX_ATTEMPTS: u32 = 60;
+const AZURE_BYO_VNET_RBAC_WAIT_SECS: u64 = 10;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AzureByoVnetVerificationError {
+    pub code: String,
+    pub message: String,
+}
 
 // =============================================================================================
 // Controller
@@ -60,6 +71,7 @@ pub struct AzureNetworkController {
     pub(crate) location: Option<String>,
     pub cidr_block: Option<String>,
     pub(crate) is_byo_vnet: bool,
+    pub(crate) last_byo_vnet_verification_error: Option<AzureByoVnetVerificationError>,
 }
 
 impl AzureNetworkController {
@@ -171,6 +183,7 @@ impl AzureNetworkController {
             location: Some("eastus".to_string()),
             cidr_block: Some("10.0.0.0/16".to_string()),
             is_byo_vnet: false,
+            last_byo_vnet_verification_error: None,
             _internal_stay_count: None,
         }
     }
@@ -267,14 +280,48 @@ impl AzureNetworkController {
                     .service_provider
                     .get_azure_network_client(azure_config)?;
 
-                let vnet = network_client
+                let vnet = match network_client
                     .get_virtual_network(&resource_group, &vnet_name)
                     .await
                     .context(ErrorData::InfrastructureError {
                         message: format!("BYO-VNet '{}' not found", vnet_name),
                         operation: Some("verify_byo_vnet".to_string()),
                         resource_id: Some(config.id.clone()),
-                    })?;
+                    }) {
+                    Ok(vnet) => {
+                        self.last_byo_vnet_verification_error = None;
+                        vnet
+                    }
+                    Err(err) if azure_utils::is_azure_authorization_propagation_error(&err) => {
+                        self.last_byo_vnet_verification_error =
+                            Some(AzureByoVnetVerificationError {
+                                code: err.code.clone(),
+                                message: err.to_string(),
+                            });
+
+                        warn!(
+                            network_id = %config.id,
+                            vnet_name = %vnet_name,
+                            vnet_resource_id = %vnet_resource_id,
+                            error = %err,
+                            "Waiting for Azure Reader role assignment to propagate before verifying BYO-VNet"
+                        );
+
+                        if self._internal_stay_count.unwrap_or_default() + 1
+                            >= AZURE_BYO_VNET_RBAC_WAIT_MAX_ATTEMPTS
+                        {
+                            return Err(err);
+                        }
+
+                        return Ok(HandlerAction::Stay {
+                            max_times: AZURE_BYO_VNET_RBAC_WAIT_MAX_ATTEMPTS,
+                            suggested_delay: Some(std::time::Duration::from_secs(
+                                AZURE_BYO_VNET_RBAC_WAIT_SECS,
+                            )),
+                        });
+                    }
+                    Err(err) => return Err(err),
+                };
 
                 self.location = vnet.location;
                 if let Some(props) = &vnet.properties {

@@ -10,6 +10,8 @@ let value: Targets = {
   managerUrl: "https://excitable-drug.name/",
   managementConfig: {
     managingTenantId: "<id>",
+    oidcIssuer: "<value>",
+    oidcSubject: "<value>",
     platform: "azure",
   },
 };

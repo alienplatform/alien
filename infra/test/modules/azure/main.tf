@@ -337,29 +337,6 @@ data "azurerm_client_config" "management" {
   provider = azurerm.management
 }
 
-# ── Management: Service Principal ─────────────────────────────────────────
-# Multi-tenant SP used as a local-dev fallback for cross-tenant client_credentials.
-# In production/CI, OIDC token exchange replaces this SP entirely.
-
-resource "azuread_application" "manager" {
-  provider         = azuread.management
-  display_name     = "alien-test-manager"
-  sign_in_audience = "AzureADMultipleOrgs"
-  owners           = [data.azurerm_client_config.management.object_id]
-}
-
-resource "azuread_service_principal" "manager" {
-  provider  = azuread.management
-  client_id = azuread_application.manager.client_id
-  owners    = [data.azurerm_client_config.management.object_id]
-}
-
-resource "azuread_application_password" "manager" {
-  provider       = azuread.management
-  application_id = azuread_application.manager.id
-  display_name   = "alien-test"
-}
-
 # Drop historical managed cloud-pull identities from state without requiring
 # directory delete privileges. The current e2e flows do not use these resources.
 removed {
@@ -416,21 +393,6 @@ resource "azuread_application_federated_identity_credential" "github_environment
   issuer         = "https://token.actions.githubusercontent.com"
   subject        = "repo:alienplatform/alien:environment:e2e-tests"
   audiences      = ["api://AzureADTokenExchange"]
-}
-
-# Scoped to the test resource group instead of subscription-wide Contributor
-resource "azurerm_role_assignment" "mgmt_sp_contributor" {
-  provider             = azurerm.management
-  scope                = azurerm_resource_group.test.id
-  role_definition_name = "Contributor"
-  principal_id         = azuread_service_principal.manager.object_id
-}
-
-resource "azurerm_role_assignment" "mgmt_sp_user_access_admin" {
-  provider             = azurerm.management
-  scope                = azurerm_resource_group.test.id
-  role_definition_name = "User Access Administrator"
-  principal_id         = azuread_service_principal.manager.object_id
 }
 
 # ── ACR Pull/Push SPs (matching production) ──────────────────────────────────

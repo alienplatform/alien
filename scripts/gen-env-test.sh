@@ -119,10 +119,6 @@ azure_management_client_id=$(jq_val management_azure_client_id)
 azure_management_client_secret=$(jq_val management_azure_client_secret)
 azure_management_region=$(jq_val management_azure_region)
 
-azure_management_sp_client_id=$(jq_val management_azure_sp_client_id)
-azure_management_sp_client_secret=$(jq_val management_azure_sp_client_secret)
-azure_management_sp_object_id=$(jq_val management_azure_sp_object_id)
-
 azure_target_subscription_id=$(jq_val target_azure_subscription_id)
 azure_target_tenant_id=$(jq_val target_azure_tenant_id)
 azure_target_client_id=$(jq_val target_azure_client_id)
@@ -266,12 +262,7 @@ AZURE_MANAGEMENT_CLIENT_ID='${azure_management_client_id}'
 AZURE_MANAGEMENT_CLIENT_SECRET='${azure_management_client_secret}'
 AZURE_MANAGEMENT_REGION='${azure_management_region}'
 
-# Azure - Management Service Principal (local dev fallback)
-AZURE_MANAGEMENT_SP_CLIENT_ID='${azure_management_sp_client_id}'
-AZURE_MANAGEMENT_SP_CLIENT_SECRET='${azure_management_sp_client_secret}'
-AZURE_MANAGEMENT_SP_OBJECT_ID='${azure_management_sp_object_id}'
-
-# Azure OIDC (set dynamically in CI, empty for local dev = SP fallback)
+# Azure OIDC (set dynamically by the runtime environment)
 AZURE_MANAGEMENT_OIDC_ISSUER='${AZURE_MANAGEMENT_OIDC_ISSUER:-}'
 AZURE_MANAGEMENT_OIDC_SUBJECT='${AZURE_MANAGEMENT_OIDC_SUBJECT:-}'
 

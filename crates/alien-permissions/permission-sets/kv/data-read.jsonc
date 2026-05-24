@@ -41,8 +41,7 @@
     "azure": [
       {
         "grant": {
-          "actions": ["Microsoft.Storage/storageAccounts/tableServices/read"],
-          "dataActions": ["Microsoft.Storage/storageAccounts/tableServices/tables/entities/read"]
+          "predefinedRoles": ["Storage Table Data Reader"]
         },
         "binding": {
           "stack": {

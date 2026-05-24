@@ -57,13 +57,7 @@
     "azure": [
       {
         "grant": {
-          "actions": [
-            "Microsoft.Storage/storageAccounts/blobServices/read",
-            "Microsoft.Storage/storageAccounts/blobServices/containers/read",
-            "Microsoft.Storage/storageAccounts/blobServices/generateUserDelegationKey/action",
-            "Microsoft.Storage/storageAccounts/listKeys/action"
-          ],
-          "dataActions": ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+          "predefinedRoles": ["Storage Blob Data Reader"]
         },
         "binding": {
           "stack": {

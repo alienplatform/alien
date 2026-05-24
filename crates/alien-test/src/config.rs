@@ -91,12 +91,6 @@ pub struct AzureConfig {
     pub oidc_issuer: Option<String>,
     /// OIDC subject for production and CI token exchange.
     pub oidc_subject: Option<String>,
-    /// Management SP client ID (local development fallback only).
-    pub management_sp_client_id: Option<String>,
-    /// Management SP client secret (local development fallback only).
-    pub management_sp_client_secret: Option<String>,
-    /// Management SP object/principal ID (local development fallback only).
-    pub management_sp_object_id: Option<String>,
 }
 
 /// Azure-specific test resources provisioned by Terraform.
@@ -378,15 +372,6 @@ impl TestConfig {
             oidc_subject: env::var("AZURE_MANAGEMENT_OIDC_SUBJECT")
                 .ok()
                 .filter(|s| !s.is_empty()),
-            management_sp_client_id: env::var("AZURE_MANAGEMENT_SP_CLIENT_ID")
-                .ok()
-                .filter(|s| !s.is_empty()),
-            management_sp_client_secret: env::var("AZURE_MANAGEMENT_SP_CLIENT_SECRET")
-                .ok()
-                .filter(|s| !s.is_empty()),
-            management_sp_object_id: env::var("AZURE_MANAGEMENT_SP_OBJECT_ID")
-                .ok()
-                .filter(|s| !s.is_empty()),
         })
     }
 
@@ -407,9 +392,6 @@ impl TestConfig {
             region,
             oidc_issuer: None,
             oidc_subject: None,
-            management_sp_client_id: None,
-            management_sp_client_secret: None,
-            management_sp_object_id: None,
         })
     }
 
@@ -634,9 +616,6 @@ impl TestConfig {
             mask(&az.tenant_id);
             mask(&az.client_id);
             mask(&az.client_secret);
-            mask_opt(&az.management_sp_client_id);
-            mask_opt(&az.management_sp_client_secret);
-            mask_opt(&az.management_sp_object_id);
         }
         let azr = &self.azure_resources;
         mask_opt(&azr.resource_group);

@@ -866,7 +866,7 @@ export type SyncListResponseOverrideAwGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -944,7 +944,7 @@ export type SyncListResponseOverrideAzureGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -1048,7 +1048,7 @@ export type SyncListResponseOverrideGcpGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -1195,7 +1195,7 @@ export type SyncListResponseExtendAwGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -1273,7 +1273,7 @@ export type SyncListResponseExtendAzureGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -1373,7 +1373,7 @@ export type SyncListResponseExtendGcpGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -1528,7 +1528,7 @@ export type SyncListResponseProfileAwGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -1606,7 +1606,7 @@ export type SyncListResponseProfileAzureGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -1706,7 +1706,7 @@ export type SyncListResponseProfileGcpGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -2049,21 +2049,17 @@ export type SyncListResponseManagementConfigPlatformAzure = ClosedEnum<
  */
 export type SyncListResponseManagementConfigAzure = {
   /**
-   * Management service principal object ID for local development fallback
-   */
-  managementPrincipalId?: string | null | undefined;
-  /**
    * The managing Azure Tenant ID for cross-tenant access
    */
   managingTenantId: string;
   /**
-   * OIDC issuer URL for federated identity credential creation
+   * OIDC issuer URL trusted by the target-side managed identity.
    */
-  oidcIssuer?: string | null | undefined;
+  oidcIssuer: string;
   /**
-   * OIDC subject claim for federated identity credential creation
+   * OIDC subject claim trusted by the target-side managed identity.
    */
-  oidcSubject?: string | null | undefined;
+  oidcSubject: string;
   platform: SyncListResponseManagementConfigPlatformAzure;
 };
 
@@ -2112,9 +2108,9 @@ export type SyncListResponseManagementConfigAws = {
  * This is NOT user-specified - it's derived from the Manager's ServiceAccount.
  */
 export type SyncListResponseManagementConfigUnion =
+  | SyncListResponseManagementConfigAzure
   | SyncListResponseManagementConfigAws
   | SyncListResponseManagementConfigGcp
-  | SyncListResponseManagementConfigAzure
   | SyncListResponseManagementConfigKubernetes
   | any;
 
@@ -2231,9 +2227,9 @@ export type SyncListResponseDeployment = {
    * This is NOT user-specified - it's derived from the Manager's ServiceAccount.
    */
   managementConfig?:
+    | SyncListResponseManagementConfigAzure
     | SyncListResponseManagementConfigAws
     | SyncListResponseManagementConfigGcp
-    | SyncListResponseManagementConfigAzure
     | SyncListResponseManagementConfigKubernetes
     | any
     | null
@@ -4897,10 +4893,9 @@ export const SyncListResponseManagementConfigAzure$inboundSchema: z.ZodType<
   SyncListResponseManagementConfigAzure,
   unknown
 > = z.object({
-  managementPrincipalId: z.nullable(z.string()).optional(),
   managingTenantId: z.string(),
-  oidcIssuer: z.nullable(z.string()).optional(),
-  oidcSubject: z.nullable(z.string()).optional(),
+  oidcIssuer: z.string(),
+  oidcSubject: z.string(),
   platform: SyncListResponseManagementConfigPlatformAzure$inboundSchema,
 });
 
@@ -4972,9 +4967,9 @@ export const SyncListResponseManagementConfigUnion$inboundSchema: z.ZodType<
   SyncListResponseManagementConfigUnion,
   unknown
 > = z.union([
+  z.lazy(() => SyncListResponseManagementConfigAzure$inboundSchema),
   z.lazy(() => SyncListResponseManagementConfigAws$inboundSchema),
   z.lazy(() => SyncListResponseManagementConfigGcp$inboundSchema),
-  z.lazy(() => SyncListResponseManagementConfigAzure$inboundSchema),
   z.lazy(() => SyncListResponseManagementConfigKubernetes$inboundSchema),
   z.any(),
 ]);
@@ -5041,9 +5036,9 @@ export const SyncListResponseDeployment$inboundSchema: z.ZodType<
   ),
   managementConfig: z.nullable(
     z.union([
+      z.lazy(() => SyncListResponseManagementConfigAzure$inboundSchema),
       z.lazy(() => SyncListResponseManagementConfigAws$inboundSchema),
       z.lazy(() => SyncListResponseManagementConfigGcp$inboundSchema),
-      z.lazy(() => SyncListResponseManagementConfigAzure$inboundSchema),
       z.lazy(() => SyncListResponseManagementConfigKubernetes$inboundSchema),
       z.any(),
     ]),

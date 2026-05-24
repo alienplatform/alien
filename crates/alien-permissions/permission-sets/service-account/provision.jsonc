@@ -55,9 +55,8 @@
     "azure": [
       {
         "grant": {
+          "predefinedRoles": ["Managed Identity Contributor"],
           "actions": [
-            "Microsoft.ManagedIdentity/userAssignedIdentities/read",
-            "Microsoft.ManagedIdentity/userAssignedIdentities/write",
             "Microsoft.Authorization/roleDefinitions/read",
             "Microsoft.Authorization/roleDefinitions/write",
             "Microsoft.Authorization/roleAssignments/read",

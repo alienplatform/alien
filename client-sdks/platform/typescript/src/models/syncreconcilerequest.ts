@@ -86,7 +86,7 @@ export type SyncReconcileRequestCurrentReleaseOverrideAwGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -166,7 +166,7 @@ export type SyncReconcileRequestCurrentReleaseOverrideAzureGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -274,7 +274,7 @@ export type SyncReconcileRequestCurrentReleaseOverrideGcpGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -428,7 +428,7 @@ export type SyncReconcileRequestCurrentReleaseExtendAwGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -506,7 +506,7 @@ export type SyncReconcileRequestCurrentReleaseExtendAzureGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -614,7 +614,7 @@ export type SyncReconcileRequestCurrentReleaseExtendGcpGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -776,7 +776,7 @@ export type SyncReconcileRequestCurrentReleaseProfileAwGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -854,7 +854,7 @@ export type SyncReconcileRequestCurrentReleaseProfileAzureGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -962,7 +962,7 @@ export type SyncReconcileRequestCurrentReleaseProfileGcpGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -1456,7 +1456,7 @@ export type SyncReconcileRequestPreparedStackOverrideAwGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -1534,7 +1534,7 @@ export type SyncReconcileRequestPreparedStackOverrideAzureGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -1642,7 +1642,7 @@ export type SyncReconcileRequestPreparedStackOverrideGcpGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -1796,7 +1796,7 @@ export type SyncReconcileRequestPreparedStackExtendAwGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -1874,7 +1874,7 @@ export type SyncReconcileRequestPreparedStackExtendAzureGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -1982,7 +1982,7 @@ export type SyncReconcileRequestPreparedStackExtendGcpGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -2144,7 +2144,7 @@ export type SyncReconcileRequestPreparedStackProfileAwGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -2222,7 +2222,7 @@ export type SyncReconcileRequestPreparedStackProfileAzureGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -2330,7 +2330,7 @@ export type SyncReconcileRequestPreparedStackProfileGcpGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -3001,7 +3001,7 @@ export type SyncReconcileRequestTargetReleaseOverrideAwGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -3079,7 +3079,7 @@ export type SyncReconcileRequestTargetReleaseOverrideAzureGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -3187,7 +3187,7 @@ export type SyncReconcileRequestTargetReleaseOverrideGcpGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -3341,7 +3341,7 @@ export type SyncReconcileRequestTargetReleaseExtendAwGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -3419,7 +3419,7 @@ export type SyncReconcileRequestTargetReleaseExtendAzureGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -3527,7 +3527,7 @@ export type SyncReconcileRequestTargetReleaseExtendGcpGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -3689,7 +3689,7 @@ export type SyncReconcileRequestTargetReleaseProfileAwGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -3767,7 +3767,7 @@ export type SyncReconcileRequestTargetReleaseProfileAzureGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -3875,7 +3875,7 @@ export type SyncReconcileRequestTargetReleaseProfileGcpGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**

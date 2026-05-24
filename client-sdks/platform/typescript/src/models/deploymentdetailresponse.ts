@@ -905,7 +905,7 @@ export type DeploymentDetailResponseOverrideAwGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -983,7 +983,7 @@ export type DeploymentDetailResponseOverrideAzureGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -1091,7 +1091,7 @@ export type DeploymentDetailResponseOverrideGcpGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -1240,7 +1240,7 @@ export type DeploymentDetailResponseExtendAwGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -1318,7 +1318,7 @@ export type DeploymentDetailResponseExtendAzureGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -1426,7 +1426,7 @@ export type DeploymentDetailResponseExtendGcpGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -1583,7 +1583,7 @@ export type DeploymentDetailResponseProfileAwGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -1661,7 +1661,7 @@ export type DeploymentDetailResponseProfileAzureGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -1769,7 +1769,7 @@ export type DeploymentDetailResponseProfileGcpGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**

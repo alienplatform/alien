@@ -32,6 +32,20 @@ pub struct AzureVaultController {
     pub(crate) vault_client: Option<Arc<dyn KeyVaultManagementApi>>,
 }
 
+impl AzureVaultController {
+    /// Creates a ready Azure Key Vault controller for tests.
+    pub fn mock_ready(vault_id: &str) -> Self {
+        Self {
+            state: AzureVaultState::Ready,
+            vault_name: Some(format!("test-{vault_id}")),
+            resource_group_name: Some("test-rg".to_string()),
+            vault_uri: Some(format!("https://test-{vault_id}.vault.azure.net")),
+            vault_client: None,
+            _internal_stay_count: None,
+        }
+    }
+}
+
 #[controller]
 impl AzureVaultController {
     // ─────────────── CREATE FLOW ──────────────────────────────

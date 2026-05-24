@@ -352,21 +352,17 @@ export type CloudFormationCallbackRequestManagementConfigKubernetes = {
  */
 export type CloudFormationCallbackRequestManagementConfigAzure = {
   /**
-   * Management service principal object ID for local development fallback
-   */
-  managementPrincipalId?: string | null | undefined;
-  /**
    * The managing Azure Tenant ID for cross-tenant access
    */
   managingTenantId: string;
   /**
-   * OIDC issuer URL for federated identity credential creation
+   * OIDC issuer URL trusted by the target-side managed identity.
    */
-  oidcIssuer?: string | null | undefined;
+  oidcIssuer: string;
   /**
-   * OIDC subject claim for federated identity credential creation
+   * OIDC subject claim trusted by the target-side managed identity.
    */
-  oidcSubject?: string | null | undefined;
+  oidcSubject: string;
   platform: "azure";
 };
 
@@ -1140,10 +1136,9 @@ export function cloudFormationCallbackRequestManagementConfigKubernetesToJSON(
 
 /** @internal */
 export type CloudFormationCallbackRequestManagementConfigAzure$Outbound = {
-  managementPrincipalId?: string | null | undefined;
   managingTenantId: string;
-  oidcIssuer?: string | null | undefined;
-  oidcSubject?: string | null | undefined;
+  oidcIssuer: string;
+  oidcSubject: string;
   platform: "azure";
 };
 
@@ -1153,10 +1148,9 @@ export const CloudFormationCallbackRequestManagementConfigAzure$outboundSchema:
     CloudFormationCallbackRequestManagementConfigAzure$Outbound,
     CloudFormationCallbackRequestManagementConfigAzure
   > = z.object({
-    managementPrincipalId: z.nullable(z.string()).optional(),
     managingTenantId: z.string(),
-    oidcIssuer: z.nullable(z.string()).optional(),
-    oidcSubject: z.nullable(z.string()).optional(),
+    oidcIssuer: z.string(),
+    oidcSubject: z.string(),
     platform: z.literal("azure"),
   });
 

@@ -95,15 +95,7 @@
     "azure": [
       {
         "grant": {
-          "actions": [
-            "Microsoft.App/containerApps/read",
-            "Microsoft.App/containerApps/revisions/read",
-            "Microsoft.App/containerApps/revisions/replicas/read",
-            "Microsoft.App/containerApps/authConfigs/read",
-            "Microsoft.App/containerApps/sourceControls/read",
-            "Microsoft.App/managedEnvironments/daprComponents/read",
-            "Microsoft.App/managedEnvironments/read"
-          ]
+          "predefinedRoles": ["Reader"]
         },
         "binding": {
           "stack": {

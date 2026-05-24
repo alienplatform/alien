@@ -73,25 +73,16 @@ variable "azure_resource_group_name" {
 variable "azure_managing_tenant_id" {
   type        = string
   description = "Azure tenant ID the manager uses for cross-tenant access."
-  default     = ""
-}
-
-variable "azure_management_principal_id" {
-  type        = string
-  description = "Optional service-principal object ID for local development fallback role assignment."
-  default     = ""
 }
 
 variable "azure_oidc_issuer" {
   type        = string
-  description = "OIDC issuer URL for Azure Federated Identity Credential. Empty disables FIC creation."
-  default     = ""
+  description = "OIDC issuer URL for Azure Federated Identity Credential."
 }
 
 variable "azure_oidc_subject" {
   type        = string
-  description = "OIDC subject claim for Azure Federated Identity Credential. Empty disables FIC creation."
-  default     = ""
+  description = "OIDC subject claim for Azure Federated Identity Credential."
 }
 
 === providers.tf ===
@@ -113,11 +104,10 @@ locals {
   deployment_target   = "azure"
   deployment_region   = var.azure_location
   deployment_management_config = {
-    platform              = "azure"
-    managingTenantId      = var.azure_managing_tenant_id
-    managementPrincipalId = var.azure_management_principal_id == "" ? null : var.azure_management_principal_id
-    oidcIssuer            = var.azure_oidc_issuer == "" ? null : var.azure_oidc_issuer
-    oidcSubject           = var.azure_oidc_subject == "" ? null : var.azure_oidc_subject
+    platform         = "azure"
+    managingTenantId = var.azure_managing_tenant_id
+    oidcIssuer       = var.azure_oidc_issuer
+    oidcSubject      = var.azure_oidc_subject
   }
   deployment_settings = jsondecode(var.stack_settings_json)
   deployment_resources = [

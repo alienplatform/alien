@@ -43,15 +43,7 @@
     "azure": [
       {
         "grant": {
-          "actions": [
-            "Microsoft.Storage/storageAccounts/tableServices/read",
-            "Microsoft.Storage/storageAccounts/tableServices/tables/read"
-          ],
-          "dataActions": [
-            "Microsoft.Storage/storageAccounts/tableServices/tables/entities/read",
-            "Microsoft.Storage/storageAccounts/tableServices/tables/entities/write",
-            "Microsoft.Storage/storageAccounts/tableServices/tables/entities/delete"
-          ]
+          "predefinedRoles": ["Storage Table Data Contributor"]
         },
         "binding": {
           "stack": {

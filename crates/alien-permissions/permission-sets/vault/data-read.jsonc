@@ -49,10 +49,7 @@
     "azure": [
       {
         "grant": {
-          "dataActions": [
-            "Microsoft.KeyVault/vaults/secrets/getSecret/action",
-            "Microsoft.KeyVault/vaults/secrets/readMetadata/action"
-          ]
+          "predefinedRoles": ["Key Vault Secrets User"]
         },
         "binding": {
           "stack": {

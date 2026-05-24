@@ -42,11 +42,7 @@
     "azure": [
       {
         "grant": {
-          "actions": [
-            "Microsoft.App/jobs/read",
-            "Microsoft.App/jobs/executions/read",
-            "Microsoft.App/managedEnvironments/read"
-          ]
+          "predefinedRoles": ["Reader"]
         },
         "binding": {
           "stack": {

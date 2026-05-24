@@ -40,7 +40,7 @@ fn azure_service_account_with_permission_set_emits_role_definitions() {
 }
 
 #[test]
-fn azure_service_account_storage_data_write_emits_blob_write_actions() {
+fn azure_service_account_storage_data_write_uses_predefined_blob_contributor() {
     let sa = ServiceAccount::new("execution-sa".to_string())
         .stack_permission_set(
             alien_permissions::get_permission_set("storage/data-write")
@@ -60,20 +60,14 @@ fn azure_service_account_storage_data_write_emits_blob_write_actions() {
         .join("\n");
 
     assert!(
-        rendered
-            .contains("\"Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write\""),
-        "storage/data-write should emit Azure Blob write data action"
-    );
-    assert!(
-        rendered
-            .contains("\"Microsoft.Storage/storageAccounts/blobServices/containers/blobs/delete\""),
-        "storage/data-write should emit Azure Blob delete data action"
-    );
-    assert!(
         rendered.contains(
-            "\"Microsoft.Storage/storageAccounts/blobServices/containers/blobs/add/action\""
+            "/providers/Microsoft.Authorization/roleDefinitions/ba92f5b4-2d11-453d-a403-e96b0029c9fe"
         ),
-        "storage/data-write should emit Azure Blob add data action"
+        "storage/data-write should assign Storage Blob Data Contributor"
+    );
+    assert!(
+        !rendered.contains("Microsoft.Storage/storageAccounts/listKeys/action"),
+        "storage/data-write should not emit storage account key access"
     );
 
     assert_terraform_valid(&module, "azure_service_account_storage_data_write");
@@ -96,6 +90,20 @@ fn azure_remote_stack_management_emits_uami_with_federated_credential() {
         )
         .build();
     let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    let rendered = module
+        .iter()
+        .map(|(_, contents)| contents)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(
+        !rendered.contains("time_sleep\" \"azure_rbac_propagation\""),
+        "Azure setup/live handoff waits in the imported frozen controller, not Terraform"
+    );
+    assert!(
+        !rendered.contains("hashicorp/time"),
+        "Azure setup artifacts should not need the time provider"
+    );
     snapshot_module("azure_remote_stack_management", &module);
     assert_terraform_valid(&module, "azure_remote_stack_management");
 }

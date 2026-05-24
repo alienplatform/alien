@@ -8,6 +8,8 @@
 //!
 //! * `status == Running` for resources that are fully imported at their
 //!   controller terminal state.
+//! * `status == Provisioning` for imported setup resources that still need a
+//!   controller-owned propagation wait before live resources can start.
 //! * `internal_state.type` — the type tag injected by `serialize_controller`
 //!   must round-trip through `deserialize_controller` (the manager calls
 //!   this on every reconcile tick).
@@ -23,8 +25,9 @@ use alien_core::import::{
     data::{
         AwsKvImportData, AwsRemoteStackManagementImportData, AwsServiceAccountImportData,
         AwsStorageImportData, AzureContainerAppsEnvironmentImportData,
-        AzureRemoteStackManagementImportData, AzureResourceGroupImportData, AzureStorageImportData,
-        GcpBuildImportData, GcpKvImportData, GcpServiceActivationImportData, GcpStorageImportData,
+        AzureRemoteStackManagementImportData, AzureResourceGroupImportData,
+        AzureServiceAccountImportData, AzureStorageImportData, GcpBuildImportData, GcpKvImportData,
+        GcpServiceActivationImportData, GcpStorageImportData,
     },
     ImportContext,
 };
@@ -68,9 +71,8 @@ fn gcp_management_config() -> ManagementConfig {
 fn azure_management_config() -> ManagementConfig {
     ManagementConfig::Azure(AzureManagementConfig {
         managing_tenant_id: "00000000-0000-0000-0000-000000000000".to_string(),
-        oidc_issuer: None,
-        oidc_subject: None,
-        management_principal_id: None,
+        oidc_issuer: "https://issuer.example".to_string(),
+        oidc_subject: "system:serviceaccount:alien:manager".to_string(),
     })
 }
 
@@ -117,6 +119,23 @@ fn assert_running_with_internal_state(state: &alien_core::StackResourceState) {
         state.status,
         ResourceStatus::Running,
         "imported resource must start at Running so the loop's heartbeat path runs immediately"
+    );
+    let internal = internal_state(state)
+        .as_object()
+        .expect("internal_state must serialize as object");
+    assert!(
+        internal.contains_key("type"),
+        "serialize_controller must inject a `type` discriminator (controller deserialization depends on it). \
+         got keys: {:?}",
+        internal.keys().collect::<Vec<_>>()
+    );
+}
+
+fn assert_provisioning_with_internal_state(state: &alien_core::StackResourceState) {
+    assert_eq!(
+        state.status,
+        ResourceStatus::Provisioning,
+        "imported setup resource must finish controller-owned propagation before live provisioning"
     );
     let internal = internal_state(state)
         .as_object()
@@ -398,6 +417,7 @@ fn azure_container_apps_environment_round_trip_includes_dependency_outputs() {
         environment_name: "alien-env".to_string(),
         resource_id: "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-alien/providers/Microsoft.App/managedEnvironments/alien-env".to_string(),
         default_domain: "alien-env.example.azurecontainerapps.io".to_string(),
+        custom_domain_verification_id: Some("verification-id".to_string()),
     };
     let state = run_through_registry(
         &AzureContainerAppsEnvironment::RESOURCE_TYPE,
@@ -418,6 +438,33 @@ fn azure_container_apps_environment_round_trip_includes_dependency_outputs() {
     assert_eq!(outputs.resource_id, data.resource_id);
     assert_eq!(outputs.resource_group_name, data.resource_group);
     assert_eq!(outputs.default_domain, data.default_domain);
+    assert_eq!(
+        outputs.custom_domain_verification_id,
+        data.custom_domain_verification_id
+    );
+}
+
+#[test]
+fn azure_service_account_import_waits_for_stack_permission_propagation() {
+    let entry = entry(ServiceAccount::new("execution".to_string()).build());
+    let data = AzureServiceAccountImportData {
+        subscription_id: "00000000-0000-0000-0000-000000000000".to_string(),
+        resource_group: "rg-alien".to_string(),
+        identity_id: "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-alien/providers/Microsoft.ManagedIdentity/userAssignedIdentities/execution".to_string(),
+        client_id: "11111111-1111-1111-1111-111111111111".to_string(),
+        principal_id: "22222222-2222-2222-2222-222222222222".to_string(),
+        stack_permissions_applied: true,
+    };
+    let state = run_through_registry(
+        &ServiceAccount::RESOURCE_TYPE,
+        Platform::Azure,
+        serde_json::to_value(&data).unwrap(),
+        &entry,
+        "eastus",
+        &azure_management_config(),
+    );
+    assert_provisioning_with_internal_state(&state);
+    assert_eq!(internal_state(&state)["state"], "waitingForRbacPropagation");
 }
 
 #[test]
@@ -440,7 +487,8 @@ fn azure_remote_stack_management_round_trip_includes_access_outputs() {
         "eastus",
         &azure_management_config(),
     );
-    assert_running_with_internal_state(&state);
+    assert_provisioning_with_internal_state(&state);
+    assert_eq!(internal_state(&state)["state"], "waitingForRbacPropagation");
 
     let outputs = state
         .outputs

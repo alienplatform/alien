@@ -14,12 +14,19 @@
 use crate::{
     block::{attr, data_block, resource_block},
     emitter::{TfEmitter, TfFragment},
-    emitters::azure::helpers::{downcast, required_label, setup_management_role_label, tags},
+    emitters::azure::helpers::{
+        downcast, permission_context, required_label, setup_management_role_label, tags,
+    },
     expr,
 };
 use alien_core::{
     import::EmitContext, PermissionProfile, PermissionSet, PermissionSetReference,
     RemoteStackManagement, Result, Vault,
+};
+use alien_error::Context;
+use alien_permissions::{
+    generators::{AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator},
+    BindingTarget,
 };
 use hcl::expr::Expression;
 
@@ -141,15 +148,51 @@ fn emit_management_permissions(
             continue;
         }
 
-        let role_label = setup_management_role_label(&permission_set.id);
-        emit_management_role_assignment(
-            fragment,
-            ctx.resource_id,
-            vault_label,
-            &role_label,
-            principal_id_expr.clone(),
-            &permission_set,
-        );
+        let generator = AzureRuntimePermissionsGenerator::new();
+        let permission_context = permission_context(vault_label)
+            .with_resource_name(format!("${{local.resource_prefix}}-{}", ctx.resource_id));
+        let grant_plan = generator
+            .generate_grant_plan(
+                &permission_set,
+                BindingTarget::Resource,
+                &permission_context,
+            )
+            .context(alien_core::ErrorData::GenericError {
+                message: format!(
+                    "failed to generate Azure vault management grants for '{}'",
+                    permission_set.id
+                ),
+            })?;
+
+        for (binding_index, binding) in grant_plan.bindings.iter().enumerate() {
+            let role_definition_id = match &binding.role_definition {
+                AzureRoleDefinitionRef::Predefined { role_definition_id } => {
+                    expr::template(role_definition_id.clone())
+                }
+                AzureRoleDefinitionRef::Custom { key } => {
+                    let index = key
+                        .rsplit(':')
+                        .next()
+                        .and_then(|value| value.parse::<usize>().ok())
+                        .unwrap_or(0);
+                    let role_label = setup_management_role_label(&permission_set.id, index);
+                    expr::traversal([
+                        "azurerm_role_definition",
+                        role_label.as_str(),
+                        "role_definition_resource_id",
+                    ])
+                }
+            };
+            emit_management_role_assignment(
+                fragment,
+                ctx.resource_id,
+                vault_label,
+                binding_index,
+                role_definition_id,
+                principal_id_expr.clone(),
+                &permission_set,
+            );
+        }
     }
 
     Ok(())
@@ -159,18 +202,22 @@ fn emit_management_role_assignment(
     fragment: &mut TfFragment,
     vault_id: &str,
     vault_label: &str,
-    role_label: &str,
+    binding_index: usize,
+    role_definition_id: Expression,
     principal_id_expr: Expression,
     permission_set: &PermissionSet,
 ) {
     fragment.resource_blocks.push(resource_block(
         "azurerm_role_assignment",
-        &format!("{vault_label}_{role_label}_assignment"),
+        &format!(
+            "{vault_label}_{}_management_assignment_{binding_index}",
+            sanitize_role_label(&permission_set.id)
+        ),
         [
             attr(
                 "name",
                 expr::raw(&format!(
-                    "uuidv5(\"oid\", \"deployment:azure:mgmt-res-role-assign:${{local.resource_prefix}}:{}:{}\")",
+                    "uuidv5(\"oid\", \"deployment:azure:mgmt-res-role-assign:${{local.resource_prefix}}:{}:{}:{binding_index}\")",
                     vault_id, permission_set.id
                 )),
             ),
@@ -180,15 +227,24 @@ fn emit_management_role_assignment(
             ),
             attr(
                 "role_definition_id",
-                expr::traversal([
-                    "azurerm_role_definition",
-                    role_label,
-                    "role_definition_resource_id",
-                ]),
+                role_definition_id,
             ),
             attr("principal_id", principal_id_expr),
         ],
     ));
+}
+
+fn sanitize_role_label(input: &str) -> String {
+    input
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 fn remote_stack_management_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {

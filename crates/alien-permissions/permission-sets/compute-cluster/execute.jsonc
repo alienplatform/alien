@@ -196,10 +196,7 @@
       // Cross-subscription ACR image pull from managing subscription
       {
         "grant": {
-          "actions": [
-            "Microsoft.ContainerRegistry/registries/read",
-            "Microsoft.ContainerRegistry/registries/metadata/read"
-          ]
+          "predefinedRoles": ["AcrPull"]
         },
         "binding": {
           "stack": {

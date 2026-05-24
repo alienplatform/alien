@@ -7,6 +7,7 @@ import * as z from "zod";
 import { AlienErrorSchema } from "./alien-error-schema.js";
 import { BaseResourceOutputsSchema } from "./base-resource-outputs-schema.js";
 import { BaseResourceSchema } from "./base-resource-schema.js";
+import { PlatformSchema } from "./platform-schema.js";
 import { ResourceLifecycleSchema } from "./resource-lifecycle-schema.js";
 import { ResourceRefSchema } from "./resource-ref-schema.js";
 import { ResourceStatusSchema } from "./resource-status-schema.js";
@@ -18,6 +19,9 @@ export const StackResourceStateSchema = z.object({
     "_internal": z.optional(z.any().describe("The platform-specific resource controller that manages this resource's lifecycle.\nThis is None when the resource status is Pending.\nStored as JSON to make the struct serializable and movable to alien-core.")),
 get "config"(){
                 return BaseResourceSchema.describe("Resource that can hold any resource type in the Alien system. All resources share common 'type' and 'id' fields with additional type-specific properties.")
+              },
+get "controllerPlatform"(){
+                return z.union([PlatformSchema, z.null()]).optional()
               },
 get "dependencies"(){
                 return z.array(ResourceRefSchema.describe("New ResourceRef that works with any resource type.\nThis can eventually replace the enum-based ResourceRef for full extensibility.")).describe("Complete list of dependencies for this resource, including infrastructure dependencies.\nThis preserves the full dependency information from the stack definition.").optional()

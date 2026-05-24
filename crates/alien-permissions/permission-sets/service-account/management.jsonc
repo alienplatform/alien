@@ -54,11 +54,7 @@
     "azure": [
       {
         "grant": {
-          "actions": [
-            "Microsoft.ManagedIdentity/userAssignedIdentities/read",
-            "Microsoft.Authorization/roleDefinitions/read",
-            "Microsoft.Authorization/roleAssignments/read"
-          ]
+          "predefinedRoles": ["Reader"]
         },
         "binding": {
           "stack": {

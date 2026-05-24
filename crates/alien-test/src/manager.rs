@@ -394,13 +394,8 @@ impl TestManager {
                 Some(alien_core::ManagementConfig::Azure(
                     alien_core::AzureManagementConfig {
                         managing_tenant_id: mgmt.tenant_id.clone(),
-                        oidc_issuer: mgmt.oidc_issuer.clone(),
-                        oidc_subject: mgmt.oidc_subject.clone(),
-                        management_principal_id: if mgmt.oidc_issuer.is_none() {
-                            mgmt.management_sp_object_id.clone()
-                        } else {
-                            None
-                        },
+                        oidc_issuer: mgmt.oidc_issuer.clone()?,
+                        oidc_subject: mgmt.oidc_subject.clone()?,
                     },
                 ))
             }
@@ -580,27 +575,11 @@ impl TestManager {
                         Some(m) => m,
                         None => continue,
                     };
-                    let (client_id, object_id, resource_id) = if mgmt.oidc_issuer.is_some() {
-                        ("oidc".to_string(), "oidc".to_string(), "oidc".to_string())
-                    } else {
-                        let client_id = match mgmt.management_sp_client_id.as_ref() {
-                            Some(id) => id.clone(),
-                            None => continue,
-                        };
-                        let object_id = match mgmt.management_sp_object_id.as_ref() {
-                            Some(id) => id.clone(),
-                            None => continue,
-                        };
-                        let resource_id = format!(
-                            "/subscriptions/{}/resourceGroups/alien-test/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{}",
-                            mgmt.subscription_id, client_id
-                        );
-                        (client_id, object_id, resource_id)
-                    };
+                    if mgmt.oidc_issuer.is_none() || mgmt.oidc_subject.is_none() {
+                        continue;
+                    }
                     section.azure = Some(ServiceAccountBinding::azure_managed_identity(
-                        BindingValue::value(client_id),
-                        BindingValue::value(resource_id),
-                        BindingValue::value(object_id),
+                        "oidc", "oidc", "oidc",
                     ));
                 }
                 _ => {}
@@ -672,12 +651,6 @@ impl TestManager {
                             "AZURE_MANAGEMENT_OIDC_SUBJECT",
                             mgmt.oidc_subject.as_deref().unwrap_or(""),
                         );
-                        // Management SP secret for local-development fallback impersonation
-                        if let Some(ref sp_secret) = mgmt.management_sp_client_secret {
-                            std::env::set_var("ALIEN_AZURE_MANAGEMENT_CLIENT_SECRET", sp_secret);
-                        } else {
-                            std::env::remove_var("ALIEN_AZURE_MANAGEMENT_CLIENT_SECRET");
-                        }
                     }
                 }
                 _ => {}

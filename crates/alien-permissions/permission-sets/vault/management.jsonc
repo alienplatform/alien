@@ -49,7 +49,7 @@
     "azure": [
       {
         "grant": {
-          "actions": ["Microsoft.KeyVault/vaults/read"]
+          "predefinedRoles": ["Reader"]
         },
         "binding": {
           "stack": {

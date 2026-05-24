@@ -33,11 +33,7 @@
     "azure": [
       {
         "grant": {
-          "actions": [
-            "Microsoft.ServiceBus/namespaces/read",
-            "Microsoft.ServiceBus/namespaces/queues/read"
-          ],
-          "dataActions": ["Microsoft.ServiceBus/namespaces/messages/send/action"]
+          "predefinedRoles": ["Azure Service Bus Data Sender"]
         },
         "binding": {
           "stack": {

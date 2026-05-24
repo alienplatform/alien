@@ -13,7 +13,8 @@
 //!    [`alien_infra::ImporterRegistry`] to produce a typed
 //!    [`StackResourceState`] form.
 //! 4. Merges setup-owned state into the imported deployment's stack state. New
-//!    imports start at `provisioning` so the manager can complete Live work.
+//!    imports with pending setup resources start at `initial-setup`; otherwise
+//!    they start at `provisioning` so the manager can complete Live work.
 //!
 //! Naming. The caller supplies `deploymentName` for the deployment row and
 //! `resourcePrefix` for physical resource names. Setup drivers may use the
@@ -35,8 +36,9 @@ use axum::{
 use alien_core::{
     import::{ImportContext, StackImportRequest, StackImportResponse},
     is_valid_resource_prefix, AwsEnvironmentInfo, AzureEnvironmentInfo, DeploymentConfig,
-    EnvironmentInfo, EnvironmentVariablesSnapshot, ExternalBindings, GcpEnvironmentInfo, Platform,
-    RuntimeMetadata, Stack, StackResourceState, StackState, RESOURCE_PREFIX_ERROR_MESSAGE,
+    DeploymentStatus, EnvironmentInfo, EnvironmentVariablesSnapshot, ExternalBindings,
+    GcpEnvironmentInfo, Platform, ResourceLifecycle, ResourceStatus, RuntimeMetadata, Stack,
+    StackResourceState, StackState, RESOURCE_PREFIX_ERROR_MESSAGE,
 };
 use alien_error::AlienError;
 
@@ -298,7 +300,7 @@ pub async fn stack_import(
         stack_state: stack_state.clone(),
         environment_info,
         runtime_metadata,
-        status: "provisioning".to_string(),
+        status: initial_import_status(&prepared_stack, &stack_state),
         current_release_id: None,
         desired_release_id: Some(release.id.clone()),
         import_source: req.source_kind,
@@ -383,6 +385,45 @@ fn reconciliation_already_scheduled(deployment: &DeploymentRecord) -> bool {
         deployment.status.as_str(),
         "provisioning" | "update-pending" | "updating"
     )
+}
+
+fn initial_import_status(prepared_stack: &Stack, stack_state: &StackState) -> String {
+    let has_pending_setup = prepared_stack
+        .resources()
+        .filter(|(_, entry)| entry.lifecycle == ResourceLifecycle::Frozen)
+        .any(|(resource_id, _)| {
+            stack_state
+                .resources
+                .get(resource_id)
+                .is_none_or(|resource| resource.status != ResourceStatus::Running)
+        });
+
+    if has_pending_setup {
+        deployment_status_string(DeploymentStatus::InitialSetup)
+    } else {
+        deployment_status_string(DeploymentStatus::Provisioning)
+    }
+}
+
+fn deployment_status_string(status: DeploymentStatus) -> String {
+    match status {
+        DeploymentStatus::Pending => "pending",
+        DeploymentStatus::InitialSetup => "initial-setup",
+        DeploymentStatus::InitialSetupFailed => "initial-setup-failed",
+        DeploymentStatus::Provisioning => "provisioning",
+        DeploymentStatus::ProvisioningFailed => "provisioning-failed",
+        DeploymentStatus::Running => "running",
+        DeploymentStatus::RefreshFailed => "refresh-failed",
+        DeploymentStatus::UpdatePending => "update-pending",
+        DeploymentStatus::Updating => "updating",
+        DeploymentStatus::UpdateFailed => "update-failed",
+        DeploymentStatus::DeletePending => "delete-pending",
+        DeploymentStatus::Deleting => "deleting",
+        DeploymentStatus::DeleteFailed => "delete-failed",
+        DeploymentStatus::Deleted => "deleted",
+        DeploymentStatus::Error => "error",
+    }
+    .to_string()
 }
 
 fn import_changes_deployment(

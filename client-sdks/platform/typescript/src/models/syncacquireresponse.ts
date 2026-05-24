@@ -93,7 +93,7 @@ export type SyncAcquireResponseCurrentReleaseOverrideAwGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -171,7 +171,7 @@ export type SyncAcquireResponseCurrentReleaseOverrideAzureGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -279,7 +279,7 @@ export type SyncAcquireResponseCurrentReleaseOverrideGcpGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -433,7 +433,7 @@ export type SyncAcquireResponseCurrentReleaseExtendAwGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -511,7 +511,7 @@ export type SyncAcquireResponseCurrentReleaseExtendAzureGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -619,7 +619,7 @@ export type SyncAcquireResponseCurrentReleaseExtendGcpGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -781,7 +781,7 @@ export type SyncAcquireResponseCurrentReleaseProfileAwGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -859,7 +859,7 @@ export type SyncAcquireResponseCurrentReleaseProfileAzureGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -967,7 +967,7 @@ export type SyncAcquireResponseCurrentReleaseProfileGcpGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -1461,7 +1461,7 @@ export type SyncAcquireResponsePreparedStackOverrideAwGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -1539,7 +1539,7 @@ export type SyncAcquireResponsePreparedStackOverrideAzureGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -1647,7 +1647,7 @@ export type SyncAcquireResponsePreparedStackOverrideGcpGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -1801,7 +1801,7 @@ export type SyncAcquireResponsePreparedStackExtendAwGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -1879,7 +1879,7 @@ export type SyncAcquireResponsePreparedStackExtendAzureGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -1987,7 +1987,7 @@ export type SyncAcquireResponsePreparedStackExtendGcpGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -2146,7 +2146,7 @@ export type SyncAcquireResponsePreparedStackProfileAwGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -2224,7 +2224,7 @@ export type SyncAcquireResponsePreparedStackProfileAzureGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -2332,7 +2332,7 @@ export type SyncAcquireResponsePreparedStackProfileGcpGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -2999,7 +2999,7 @@ export type SyncAcquireResponseTargetReleaseOverrideAwGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -3077,7 +3077,7 @@ export type SyncAcquireResponseTargetReleaseOverrideAzureGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -3185,7 +3185,7 @@ export type SyncAcquireResponseTargetReleaseOverrideGcpGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -3339,7 +3339,7 @@ export type SyncAcquireResponseTargetReleaseExtendAwGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -3417,7 +3417,7 @@ export type SyncAcquireResponseTargetReleaseExtendAzureGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -3525,7 +3525,7 @@ export type SyncAcquireResponseTargetReleaseExtendGcpGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -3684,7 +3684,7 @@ export type SyncAcquireResponseTargetReleaseProfileAwGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -3762,7 +3762,7 @@ export type SyncAcquireResponseTargetReleaseProfileAzureGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -3870,7 +3870,7 @@ export type SyncAcquireResponseTargetReleaseProfileGcpGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -6360,21 +6360,17 @@ export type SyncAcquireResponseConfigPlatformAzure = ClosedEnum<
  */
 export type SyncAcquireResponseManagementConfigAzure = {
   /**
-   * Management service principal object ID for local development fallback
-   */
-  managementPrincipalId?: string | null | undefined;
-  /**
    * The managing Azure Tenant ID for cross-tenant access
    */
   managingTenantId: string;
   /**
-   * OIDC issuer URL for federated identity credential creation
+   * OIDC issuer URL trusted by the target-side managed identity.
    */
-  oidcIssuer?: string | null | undefined;
+  oidcIssuer: string;
   /**
-   * OIDC subject claim for federated identity credential creation
+   * OIDC subject claim trusted by the target-side managed identity.
    */
-  oidcSubject?: string | null | undefined;
+  oidcSubject: string;
   platform: SyncAcquireResponseConfigPlatformAzure;
 };
 
@@ -6415,9 +6411,9 @@ export type SyncAcquireResponseManagementConfigAws = {
 };
 
 export type SyncAcquireResponseManagementConfigUnion =
+  | SyncAcquireResponseManagementConfigAzure
   | SyncAcquireResponseManagementConfigAws
   | SyncAcquireResponseManagementConfigGcp
-  | SyncAcquireResponseManagementConfigAzure
   | SyncAcquireResponseManagementConfigKubernetes
   | any;
 
@@ -6848,9 +6844,9 @@ export type SyncAcquireResponseConfig = {
       | SyncAcquireResponseExternalBindingsLocalVault;
   } | undefined;
   managementConfig?:
+    | SyncAcquireResponseManagementConfigAzure
     | SyncAcquireResponseManagementConfigAws
     | SyncAcquireResponseManagementConfigGcp
-    | SyncAcquireResponseManagementConfigAzure
     | SyncAcquireResponseManagementConfigKubernetes
     | any
     | null
@@ -18034,10 +18030,9 @@ export const SyncAcquireResponseManagementConfigAzure$inboundSchema: z.ZodType<
   SyncAcquireResponseManagementConfigAzure,
   unknown
 > = z.object({
-  managementPrincipalId: z.nullable(z.string()).optional(),
   managingTenantId: z.string(),
-  oidcIssuer: z.nullable(z.string()).optional(),
-  oidcSubject: z.nullable(z.string()).optional(),
+  oidcIssuer: z.string(),
+  oidcSubject: z.string(),
   platform: SyncAcquireResponseConfigPlatformAzure$inboundSchema,
 });
 
@@ -18112,9 +18107,9 @@ export const SyncAcquireResponseManagementConfigUnion$inboundSchema: z.ZodType<
   SyncAcquireResponseManagementConfigUnion,
   unknown
 > = z.union([
+  z.lazy(() => SyncAcquireResponseManagementConfigAzure$inboundSchema),
   z.lazy(() => SyncAcquireResponseManagementConfigAws$inboundSchema),
   z.lazy(() => SyncAcquireResponseManagementConfigGcp$inboundSchema),
-  z.lazy(() => SyncAcquireResponseManagementConfigAzure$inboundSchema),
   z.lazy(() => SyncAcquireResponseManagementConfigKubernetes$inboundSchema),
   z.any(),
 ]);
@@ -18715,9 +18710,9 @@ export const SyncAcquireResponseConfig$inboundSchema: z.ZodType<
   ).optional(),
   managementConfig: z.nullable(
     z.union([
+      z.lazy(() => SyncAcquireResponseManagementConfigAzure$inboundSchema),
       z.lazy(() => SyncAcquireResponseManagementConfigAws$inboundSchema),
       z.lazy(() => SyncAcquireResponseManagementConfigGcp$inboundSchema),
-      z.lazy(() => SyncAcquireResponseManagementConfigAzure$inboundSchema),
       z.lazy(() => SyncAcquireResponseManagementConfigKubernetes$inboundSchema),
       z.any(),
     ]),

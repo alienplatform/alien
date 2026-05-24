@@ -31,6 +31,8 @@ const value: operations.GetManagerManagementConfigGcp = {
 ```typescript
 const value: operations.GetManagerManagementConfigAzure = {
   managingTenantId: "<id>",
+  oidcIssuer: "<value>",
+  oidcSubject: "<value>",
   platform: "azure",
 };
 ```

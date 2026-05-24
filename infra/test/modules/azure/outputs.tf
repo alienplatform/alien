@@ -83,21 +83,6 @@ output "acr_name" {
   sensitive = true
 }
 
-output "management_sp_client_id" {
-  value     = azuread_service_principal.manager.client_id
-  sensitive = true
-}
-
-output "management_sp_client_secret" {
-  value     = azuread_application_password.manager.value
-  sensitive = true
-}
-
-output "management_sp_object_id" {
-  value     = azuread_service_principal.manager.object_id
-  sensitive = true
-}
-
 # E2E artifact registry — uses the same ACR but with a separate image
 # path prefix. ACR supports multiple image repos within one registry.
 output "e2e_acr_repository" {

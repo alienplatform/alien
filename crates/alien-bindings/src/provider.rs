@@ -1051,9 +1051,6 @@ impl BindingsProviderApi for BindingsProvider {
             #[cfg(feature = "azure")]
             KvBinding::TableStorage(config) => {
                 use crate::providers::kv::azure_table_storage::AzureTableStorageKv;
-                use alien_azure_clients::storage_accounts::{
-                    AzureStorageAccountsClient, StorageAccountsApi,
-                };
                 use alien_azure_clients::tables::AzureTableStorageClient;
                 use alien_azure_clients::AzureTokenCache;
 
@@ -1091,39 +1088,9 @@ impl BindingsProviderApi for BindingsProvider {
                             .to_string(),
                     })?;
 
-                // Fetch storage account key once during initialization
-                let storage_accounts_client = AzureStorageAccountsClient::new(
-                    crate::http_client::create_http_client(),
-                    AzureTokenCache::new(azure_config.clone()),
-                );
-
-                let keys_result = storage_accounts_client
-                    .list_storage_account_keys(&resource_group_name, &account_name)
-                    .await
-                    .context(ErrorData::BindingConfigInvalid {
-                        binding_name: binding_name.to_string(),
-                        reason: "Failed to fetch storage account keys".to_string(),
-                    })?;
-
-                let storage_account_key = keys_result
-                    .keys
-                    .into_iter()
-                    .find(|key| key.key_name.as_deref() == Some("key1"))
-                    .and_then(|key| key.value)
-                    .ok_or_else(|| {
-                        AlienError::new(ErrorData::BindingConfigInvalid {
-                            binding_name: binding_name.to_string(),
-                            reason: format!(
-                                "No access key found for storage account '{}'",
-                                account_name
-                            ),
-                        })
-                    })?;
-
                 let client = AzureTableStorageClient::new(
                     crate::http_client::create_http_client(),
                     AzureTokenCache::new(azure_config.clone()),
-                    storage_account_key,
                 );
 
                 let kv_impl =

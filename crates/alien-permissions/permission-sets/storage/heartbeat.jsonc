@@ -53,10 +53,7 @@
     "azure": [
       {
         "grant": {
-          "actions": [
-            "Microsoft.Storage/storageAccounts/read",
-            "Microsoft.Storage/storageAccounts/blobServices/containers/read"
-          ]
+          "predefinedRoles": ["Reader"]
         },
         "binding": {
           "stack": {

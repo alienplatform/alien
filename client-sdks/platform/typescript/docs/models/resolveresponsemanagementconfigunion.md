@@ -31,6 +31,8 @@ const value: models.ResolveResponseManagementConfigGcp = {
 ```typescript
 const value: models.ResolveResponseManagementConfigAzure = {
   managingTenantId: "<id>",
+  oidcIssuer: "<value>",
+  oidcSubject: "<value>",
   platform: "azure",
 };
 ```

@@ -1,9 +1,13 @@
 //! Tests for lifecycle filtering (Frozen vs Live resources).
 
 use super::helpers::*;
+use crate::core::state_utils::StackResourceStateExt;
+use crate::core::StackExecutor;
 use crate::error::Result;
+use crate::storage::TestStorageController;
 use alien_core::{
-    Resource, ResourceLifecycle, ResourceRef, ResourceStatus, Stack, Storage, Worker,
+    Resource, ResourceLifecycle, ResourceOutputs, ResourceRef, ResourceStatus, Stack, Storage,
+    StorageOutputs, Worker,
 };
 
 /// Tests that filtering to Frozen only processes Frozen resources.
@@ -27,6 +31,65 @@ async fn test_frozen_filter_only_processes_frozen() -> Result<()> {
         Some(ResourceStatus::Running)
     );
     assert_not_in_state(&final_state, &["func1"]);
+
+    Ok(())
+}
+
+/// Tests that callers can skip Ready handlers for already-running resources.
+#[tokio::test]
+async fn test_filtered_executor_can_skip_running_ready_handlers() -> Result<()> {
+    let store1 = test_storage("store1");
+
+    let stack = Stack::new("skip-running-ready-test".to_owned())
+        .add(store1.clone(), ResourceLifecycle::Frozen)
+        .build();
+
+    let executor = StackExecutor::builder(&stack, alien_core::ClientConfig::Test)
+        .deployment_config(
+            &alien_core::DeploymentConfig::builder()
+                .stack_settings(alien_core::StackSettings::default())
+                .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                    variables: vec![],
+                    hash: String::new(),
+                    created_at: String::new(),
+                })
+                .external_bindings(alien_core::ExternalBindings::default())
+                .allow_frozen_changes(false)
+                .build(),
+        )
+        .lifecycle_filter(vec![ResourceLifecycle::Frozen])
+        .step_running_resources(false)
+        .build()?;
+
+    let mut resource_state = alien_core::StackResourceState::new_pending(
+        Storage::RESOURCE_TYPE.to_string(),
+        Resource::new(store1),
+        Some(ResourceLifecycle::Frozen),
+        vec![],
+    );
+    resource_state.status = ResourceStatus::Running;
+    resource_state.outputs = Some(ResourceOutputs::new(StorageOutputs {
+        bucket_name: "imported-store1".to_string(),
+    }));
+    let mut controller = TestStorageController::default();
+    controller.bucket_name = Some("imported-store1".to_string());
+    resource_state.set_internal_controller(Some(Box::new(controller)))?;
+
+    let mut state = new_test_state();
+    state
+        .resources
+        .insert("store1".to_string(), resource_state.clone());
+
+    let step_result = executor.step(state).await?;
+
+    assert_eq!(
+        get_status(&step_result.next_state, "store1"),
+        Some(ResourceStatus::Running)
+    );
+    assert_eq!(
+        step_result.suggested_delay_ms, None,
+        "Running resources should not run Ready handlers when disabled"
+    );
 
     Ok(())
 }

@@ -34,11 +34,7 @@
     "azure": [
       {
         "grant": {
-          "actions": [
-            "Microsoft.ServiceBus/namespaces/read",
-            "Microsoft.ServiceBus/namespaces/queues/read"
-          ],
-          "dataActions": ["Microsoft.ServiceBus/namespaces/messages/receive/action"]
+          "predefinedRoles": ["Azure Service Bus Data Receiver"]
         },
         "binding": {
           "stack": {

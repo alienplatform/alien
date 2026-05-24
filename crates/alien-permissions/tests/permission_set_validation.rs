@@ -4,6 +4,7 @@
 //! actions and permissions that actually exist in the official AWS IAM dataset,
 //! GCP permissions dataset, and Azure provider operations dataset.
 
+use alien_permissions::generators::azure_predefined_role_id;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -390,10 +391,17 @@ fn validate_gcp_permissions(
 
     // Iterate through all platform permissions in the array
     for platform_permission in gcp_platform_permissions {
+        let has_predefined_roles = platform_permission
+            .grant
+            .predefined_roles
+            .as_ref()
+            .is_some_and(|roles| !roles.is_empty());
+
         match platform_permission.grant.permissions.as_deref() {
-            Some([]) | None => {
+            Some([]) | None if !has_predefined_roles => {
                 all_invalid_permissions.push("missing permissions".to_string());
             }
+            Some([]) | None => {}
             Some(permissions) => {
                 for permission in permissions {
                     if !permissions_dataset.contains(permission)
@@ -440,6 +448,14 @@ fn validate_azure_actions(
     // Iterate through all platform permissions in the array
     for platform_permission in azure_platform_permissions {
         let mut invalid_actions = Vec::new();
+
+        if let Some(predefined_roles) = &platform_permission.grant.predefined_roles {
+            for role_name in predefined_roles {
+                if azure_predefined_role_id(role_name).is_none() {
+                    invalid_actions.push(format!("unknown predefined role: {}", role_name));
+                }
+            }
+        }
 
         // Validate regular actions
         if let Some(actions) = &platform_permission.grant.actions {
@@ -810,8 +826,17 @@ fn test_permission_sets_structure() -> Result<()> {
                             .data_actions
                             .as_ref()
                             .map_or(false, |v| !v.is_empty());
+                        let has_predefined_roles = platform_permission
+                            .grant
+                            .predefined_roles
+                            .as_ref()
+                            .map_or(false, |v| !v.is_empty());
 
-                        if !has_actions && !has_permissions && !has_data_actions {
+                        if !has_actions
+                            && !has_permissions
+                            && !has_data_actions
+                            && !has_predefined_roles
+                        {
                             errors.push(format!(
                                 "{}: AWS[{}] has no grant permissions",
                                 file_path.display(),
@@ -847,7 +872,16 @@ fn test_permission_sets_structure() -> Result<()> {
                             .data_actions
                             .as_ref()
                             .map_or(false, |v| !v.is_empty());
-                        if !has_actions && !has_permissions && !has_data_actions {
+                        let has_predefined_roles = platform_permission
+                            .grant
+                            .predefined_roles
+                            .as_ref()
+                            .map_or(false, |v| !v.is_empty());
+                        if !has_actions
+                            && !has_permissions
+                            && !has_data_actions
+                            && !has_predefined_roles
+                        {
                             errors.push(format!(
                                 "{}: GCP[{}] has no grant permissions",
                                 file_path.display(),
@@ -883,8 +917,17 @@ fn test_permission_sets_structure() -> Result<()> {
                             .data_actions
                             .as_ref()
                             .map_or(false, |v| !v.is_empty());
+                        let has_predefined_roles = platform_permission
+                            .grant
+                            .predefined_roles
+                            .as_ref()
+                            .map_or(false, |v| !v.is_empty());
 
-                        if !has_actions && !has_permissions && !has_data_actions {
+                        if !has_actions
+                            && !has_permissions
+                            && !has_data_actions
+                            && !has_predefined_roles
+                        {
                             errors.push(format!(
                                 "{}: Azure[{}] has no grant permissions",
                                 file_path.display(),

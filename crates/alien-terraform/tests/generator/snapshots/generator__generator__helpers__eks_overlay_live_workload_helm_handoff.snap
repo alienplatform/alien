@@ -133,20 +133,25 @@ locals {
     }
   ]
   alien_kubernetes_namespace = var.kubernetes_namespace
-  eks_oidc_issuer_host_path  = trimprefix(data.aws_eks_cluster.target.identity[0].oidc[0].issuer, "https://")
   helm_service_accounts = {
-    execution_sa = {
+    execution = {
       annotations = {
         "eks.amazonaws.com/role-arn" = aws_iam_role.execution_sa.arn
       }
       labels = {}
     }
   }
+  helm_manager_service_account = {
+    annotations = {}
+    labels      = {}
+  }
+  eks_oidc_issuer_host_path = trimprefix(data.aws_eks_cluster.target.identity[0].oidc[0].issuer, "https://")
   helm_values = {
-    serviceAccounts      = local.helm_service_accounts
-    stackSettings        = local.deployment_settings
-    basePlatform         = local.deployment_base_platform
-    serviceAccountPrefix = local.resource_prefix
+    serviceAccounts       = local.helm_service_accounts
+    managerServiceAccount = local.helm_manager_service_account
+    stackSettings         = local.deployment_settings
+    basePlatform          = local.deployment_base_platform
+    serviceAccountPrefix  = local.resource_prefix
   }
 }
 
@@ -220,7 +225,7 @@ data "aws_iam_policy_document" "execution_sa_assume_role" {
       test     = "StringEquals"
       variable = "${local.eks_oidc_issuer_host_path}:sub"
       values = [
-        "system:serviceaccount:${var.kubernetes_namespace}:execution_sa"
+        "system:serviceaccount:${var.kubernetes_namespace}:${local.resource_prefix}-execution-sa"
       ]
     }
 

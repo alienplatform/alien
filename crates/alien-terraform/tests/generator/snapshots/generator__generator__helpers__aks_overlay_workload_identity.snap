@@ -73,25 +73,16 @@ variable "azure_resource_group_name" {
 variable "azure_managing_tenant_id" {
   type        = string
   description = "Azure tenant ID the manager uses for cross-tenant access."
-  default     = ""
-}
-
-variable "azure_management_principal_id" {
-  type        = string
-  description = "Optional service-principal object ID for local development fallback role assignment."
-  default     = ""
 }
 
 variable "azure_oidc_issuer" {
   type        = string
-  description = "OIDC issuer URL for Azure Federated Identity Credential. Empty disables FIC creation."
-  default     = ""
+  description = "OIDC issuer URL for Azure Federated Identity Credential."
 }
 
 variable "azure_oidc_subject" {
   type        = string
-  description = "OIDC subject claim for Azure Federated Identity Credential. Empty disables FIC creation."
-  default     = ""
+  description = "OIDC subject claim for Azure Federated Identity Credential."
 }
 
 variable "kubernetes_namespace" {
@@ -130,11 +121,10 @@ locals {
   deployment_target        = "aks"
   deployment_region        = var.azure_location
   deployment_management_config = {
-    platform              = "azure"
-    managingTenantId      = var.azure_managing_tenant_id
-    managementPrincipalId = var.azure_management_principal_id == "" ? null : var.azure_management_principal_id
-    oidcIssuer            = var.azure_oidc_issuer == "" ? null : var.azure_oidc_issuer
-    oidcSubject           = var.azure_oidc_subject == "" ? null : var.azure_oidc_subject
+    platform         = "azure"
+    managingTenantId = var.azure_managing_tenant_id
+    oidcIssuer       = var.azure_oidc_issuer
+    oidcSubject      = var.azure_oidc_subject
   }
   deployment_settings = jsondecode(var.stack_settings_json)
   deployment_resources = [
@@ -162,7 +152,7 @@ locals {
   ]
   alien_kubernetes_namespace = var.kubernetes_namespace
   helm_service_accounts = {
-    execution_sa = {
+    execution = {
       annotations = {
         "azure.workload.identity/client-id" = azurerm_user_assigned_identity.execution_sa.client_id
       }
@@ -171,11 +161,16 @@ locals {
       }
     }
   }
+  helm_manager_service_account = {
+    annotations = {}
+    labels      = {}
+  }
   helm_values = {
-    serviceAccounts      = local.helm_service_accounts
-    stackSettings        = local.deployment_settings
-    basePlatform         = local.deployment_base_platform
-    serviceAccountPrefix = local.resource_prefix
+    serviceAccounts       = local.helm_service_accounts
+    managerServiceAccount = local.helm_manager_service_account
+    stackSettings         = local.deployment_settings
+    basePlatform          = local.deployment_base_platform
+    serviceAccountPrefix  = local.resource_prefix
   }
 }
 
@@ -212,38 +207,10 @@ resource "azurerm_user_assigned_identity" "execution_sa" {
   ]
 }
 
-resource "azurerm_role_definition" "execution_sa_storage_data_read" {
-  name               = "${local.resource_prefix}-execution-sa-0"
-  role_definition_id = uuidv5("oid", "deployment:azure:role-def:${local.resource_prefix}-execution-sa-0")
+resource "azurerm_role_assignment" "execution_sa_storage_data_read_assignment_0" {
+  name               = uuidv5("oid", "deployment:azure:role-assign:execution-sa:storage/data-read:0:${azurerm_user_assigned_identity.execution_sa.principal_id}")
   scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
-  description        = "Allows reading data from storage buckets and containers"
-
-  permissions {
-    actions = [
-      "Microsoft.Storage/storageAccounts/blobServices/containers/read",
-      "Microsoft.Storage/storageAccounts/blobServices/generateUserDelegationKey/action",
-      "Microsoft.Storage/storageAccounts/blobServices/read",
-      "Microsoft.Storage/storageAccounts/listKeys/action"
-    ]
-    data_actions = [
-      "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
-    ]
-    not_actions      = []
-    not_data_actions = []
-  }
-
-  assignable_scopes = [
-    "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
-  ]
-  depends_on = [
-    azurerm_resource_group.default_resource_group
-  ]
-}
-
-resource "azurerm_role_assignment" "execution_sa_storage_data_read_assignment" {
-  name               = uuidv5("oid", "deployment:azure:role-assign:${azurerm_role_definition.execution_sa_storage_data_read.role_definition_resource_id}:${azurerm_user_assigned_identity.execution_sa.principal_id}")
-  scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
-  role_definition_id = azurerm_role_definition.execution_sa_storage_data_read.role_definition_resource_id
+  role_definition_id = "/subscriptions/${var.azure_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/2a2b9908-6ea1-4ae2-8e65-a410df84e7d1"
   principal_id       = azurerm_user_assigned_identity.execution_sa.principal_id
   depends_on = [
     azurerm_resource_group.default_resource_group
@@ -258,7 +225,7 @@ resource "azurerm_federated_identity_credential" "execution_sa_federated" {
     "api://AzureADTokenExchange"
   ]
   issuer  = data.azurerm_kubernetes_cluster.target.oidc_issuer_url
-  subject = "system:serviceaccount:${var.kubernetes_namespace}:execution_sa"
+  subject = "system:serviceaccount:${var.kubernetes_namespace}:${local.resource_prefix}-execution-sa"
   depends_on = [
     azurerm_resource_group.default_resource_group
   ]
@@ -282,8 +249,7 @@ resource "terraform_data" "deployment_import" {
   depends_on = [
     azurerm_resource_group.default_resource_group,
     azurerm_user_assigned_identity.execution_sa,
-    azurerm_role_definition.execution_sa_storage_data_read,
-    azurerm_role_assignment.execution_sa_storage_data_read_assignment,
+    azurerm_role_assignment.execution_sa_storage_data_read_assignment_0,
     azurerm_federated_identity_credential.execution_sa_federated
   ]
 }

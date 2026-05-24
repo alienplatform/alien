@@ -44,11 +44,7 @@
     "azure": [
       {
         "grant": {
-          "actions": [
-            "Microsoft.ServiceBus/namespaces/read",
-            "Microsoft.ServiceBus/namespaces/queues/read",
-            "Microsoft.ServiceBus/namespaces/authorizationRules/read"
-          ]
+          "predefinedRoles": ["Reader"]
         },
         "binding": {
           "stack": {

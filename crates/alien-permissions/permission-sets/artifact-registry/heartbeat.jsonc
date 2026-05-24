@@ -53,11 +53,7 @@
     "azure": [
       {
         "grant": {
-          "actions": [
-            "Microsoft.ContainerRegistry/registries/read",
-            "Microsoft.ContainerRegistry/registries/metadata/read",
-            "Microsoft.ContainerRegistry/registries/quarantine/read"
-          ]
+          "predefinedRoles": ["Reader"]
         },
         "binding": {
           "stack": {

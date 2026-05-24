@@ -38,6 +38,7 @@ impl ResourceImporter for AzureWorkerImporter {
             fqdn: data.fqdn,
             certificate_id: None,
             keyvault_cert_id: None,
+            container_apps_certificate_id: None,
             uses_custom_domain: false,
             certificate_issued_at: None,
             commands_namespace_name: None,

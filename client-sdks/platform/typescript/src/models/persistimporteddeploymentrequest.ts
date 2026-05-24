@@ -578,7 +578,7 @@ export type PersistImportedDeploymentRequestOverrideAwGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -656,7 +656,7 @@ export type PersistImportedDeploymentRequestOverrideAzureGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -764,7 +764,7 @@ export type PersistImportedDeploymentRequestOverrideGcpGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -918,7 +918,7 @@ export type PersistImportedDeploymentRequestExtendAwGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -996,7 +996,7 @@ export type PersistImportedDeploymentRequestExtendAzureGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -1104,7 +1104,7 @@ export type PersistImportedDeploymentRequestExtendGcpGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -1263,7 +1263,7 @@ export type PersistImportedDeploymentRequestProfileAwGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -1341,7 +1341,7 @@ export type PersistImportedDeploymentRequestProfileAzureGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -1449,7 +1449,7 @@ export type PersistImportedDeploymentRequestProfileGcpGrant = {
    */
   permissions?: Array<string> | null | undefined;
   /**
-   * GCP predefined IAM roles to bind directly.
+   * Provider predefined roles to bind directly.
    */
   predefinedRoles?: Array<string> | null | undefined;
   /**
@@ -1731,21 +1731,17 @@ export type PersistImportedDeploymentRequestManagementConfigKubernetes = {
  */
 export type PersistImportedDeploymentRequestManagementConfigAzure = {
   /**
-   * Management service principal object ID for local development fallback
-   */
-  managementPrincipalId?: string | null | undefined;
-  /**
    * The managing Azure Tenant ID for cross-tenant access
    */
   managingTenantId: string;
   /**
-   * OIDC issuer URL for federated identity credential creation
+   * OIDC issuer URL trusted by the target-side managed identity.
    */
-  oidcIssuer?: string | null | undefined;
+  oidcIssuer: string;
   /**
-   * OIDC subject claim for federated identity credential creation
+   * OIDC subject claim trusted by the target-side managed identity.
    */
-  oidcSubject?: string | null | undefined;
+  oidcSubject: string;
   platform: "azure";
 };
 
@@ -5313,10 +5309,9 @@ export function persistImportedDeploymentRequestManagementConfigKubernetesToJSON
 
 /** @internal */
 export type PersistImportedDeploymentRequestManagementConfigAzure$Outbound = {
-  managementPrincipalId?: string | null | undefined;
   managingTenantId: string;
-  oidcIssuer?: string | null | undefined;
-  oidcSubject?: string | null | undefined;
+  oidcIssuer: string;
+  oidcSubject: string;
   platform: "azure";
 };
 
@@ -5326,10 +5321,9 @@ export const PersistImportedDeploymentRequestManagementConfigAzure$outboundSchem
     PersistImportedDeploymentRequestManagementConfigAzure$Outbound,
     PersistImportedDeploymentRequestManagementConfigAzure
   > = z.object({
-    managementPrincipalId: z.nullable(z.string()).optional(),
     managingTenantId: z.string(),
-    oidcIssuer: z.nullable(z.string()).optional(),
-    oidcSubject: z.nullable(z.string()).optional(),
+    oidcIssuer: z.string(),
+    oidcSubject: z.string(),
     platform: z.literal("azure"),
   });
 

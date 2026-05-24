@@ -814,6 +814,8 @@ async function run() {
         stackSettings: {},
         managementConfig: {
           managingTenantId: "<id>",
+          oidcIssuer: "<value>",
+          oidcSubject: "<value>",
           platform: "azure",
         },
         resources: [
@@ -872,6 +874,8 @@ async function run() {
         stackSettings: {},
         managementConfig: {
           managingTenantId: "<id>",
+          oidcIssuer: "<value>",
+          oidcSubject: "<value>",
           platform: "azure",
         },
         resources: [

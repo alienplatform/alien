@@ -756,9 +756,9 @@ mod tests {
     #[test]
     fn only_bootstrap_statuses_need_provision_capability() {
         assert!(needs_provision_capability(DeploymentStatus::Pending));
-        assert!(needs_provision_capability(DeploymentStatus::InitialSetup));
 
         for status in [
+            DeploymentStatus::InitialSetup,
             DeploymentStatus::Provisioning,
             DeploymentStatus::UpdatePending,
             DeploymentStatus::Updating,
@@ -834,10 +834,7 @@ mod tests {
 }
 
 fn needs_provision_capability(status: DeploymentStatus) -> bool {
-    matches!(
-        status,
-        DeploymentStatus::Pending | DeploymentStatus::InitialSetup
-    )
+    matches!(status, DeploymentStatus::Pending)
 }
 
 /// Parse a status string (kebab-case, as stored in the DB) to `DeploymentStatus`.

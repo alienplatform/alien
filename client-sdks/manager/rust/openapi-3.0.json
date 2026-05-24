@@ -1464,27 +1464,22 @@
         "type": "object",
         "description": "Azure management configuration extracted from stack settings",
         "required": [
-          "managingTenantId"
+          "managingTenantId",
+          "oidcIssuer",
+          "oidcSubject"
         ],
         "properties": {
-          "managementPrincipalId": {
-            "type": "string",
-            "description": "Management service principal object ID for local development fallback",
-            "nullable": true
-          },
           "managingTenantId": {
             "type": "string",
             "description": "The managing Azure Tenant ID for cross-tenant access"
           },
           "oidcIssuer": {
             "type": "string",
-            "description": "OIDC issuer URL for federated identity credential creation",
-            "nullable": true
+            "description": "OIDC issuer URL trusted by the target-side managed identity."
           },
           "oidcSubject": {
             "type": "string",
-            "description": "OIDC subject claim for federated identity credential creation",
-            "nullable": true
+            "description": "OIDC subject claim trusted by the target-side managed identity."
           }
         }
       },

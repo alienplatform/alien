@@ -744,11 +744,14 @@ pub fn create_azure_http_error_with_context(
         (StatusCode::TOO_MANY_REQUESTS, _) => ErrorData::RateLimitExceeded {
             message: format!("Rate limit exceeded for {res_type} '{res_name}': {body}"),
         },
-        (StatusCode::SERVICE_UNAVAILABLE | StatusCode::INTERNAL_SERVER_ERROR, _) => {
-            ErrorData::RemoteServiceUnavailable {
-                message: format!("Service unavailable for {res_type} '{res_name}': {body}"),
-            }
-        }
+        (
+            StatusCode::BAD_GATEWAY
+            | StatusCode::SERVICE_UNAVAILABLE
+            | StatusCode::INTERNAL_SERVER_ERROR,
+            _,
+        ) => ErrorData::RemoteServiceUnavailable {
+            message: format!("Service unavailable for {res_type} '{res_name}': {body}"),
+        },
         (StatusCode::REQUEST_TIMEOUT | StatusCode::GATEWAY_TIMEOUT, _) => ErrorData::Timeout {
             message: format!("Timeout for {res_type} '{res_name}': {body}"),
         },
@@ -809,4 +812,26 @@ pub fn validate_azure_metadata_value(key: &str, value: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bad_gateway_is_retryable_service_unavailable() {
+        let err = create_azure_http_error_with_context(
+            StatusCode::BAD_GATEWAY,
+            "CreateOrUpdateQueue",
+            "Resource",
+            "commands",
+            "Bad Gateway",
+            "https://management.azure.com/test",
+            None,
+        );
+
+        assert_eq!(err.code, "REMOTE_SERVICE_UNAVAILABLE");
+        assert!(err.retryable);
+        assert!(err.message.contains("Bad Gateway"));
+    }
 }
