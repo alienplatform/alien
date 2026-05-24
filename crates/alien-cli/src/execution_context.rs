@@ -617,10 +617,26 @@ async fn create_or_get_artifact_repo(
     let get_body = get_resp.text().await.unwrap_or_default();
 
     if get_status.is_success() {
-        if let Ok(body) = serde_json::from_str::<serde_json::Value>(&get_body) {
-            if let Some(name) = body.get("name").and_then(|v| v.as_str()) {
-                return Ok(name.to_string());
-            }
+        // Fail loud on parse error (matches the canonical pattern at
+        // `execution_context.rs:378-381` and `auth.rs:541`). A reverse-proxy
+        // or WAF responding with an HTML 200 would otherwise silently fall
+        // through to CREATE, and the user would see a confusing
+        // "Failed to create artifact repository" instead of the real
+        // problem. Valid-JSON-without-`name` still falls through — that's
+        // the manager's "no such repo" shape and the CREATE below is the
+        // correct next step.
+        let body: serde_json::Value =
+            serde_json::from_str(&get_body)
+                .into_alien_error()
+                .context(ErrorData::ApiRequestFailed {
+                    message: format!(
+                        "GET artifact registry returned HTTP {} but the response body wasn't parseable JSON",
+                        get_status
+                    ),
+                    url: Some(get_url.clone()),
+                })?;
+        if let Some(name) = body.get("name").and_then(|v| v.as_str()) {
+            return Ok(name.to_string());
         }
     }
 
@@ -647,10 +663,21 @@ async fn create_or_get_artifact_repo(
     let create_body = create_resp.text().await.unwrap_or_default();
 
     if create_status.is_success() {
-        if let Ok(body) = serde_json::from_str::<serde_json::Value>(&create_body) {
-            if let Some(name) = body.get("name").and_then(|v| v.as_str()) {
-                return Ok(name.to_string());
-            }
+        // Same fail-loud rationale as the GET above — a CREATE that returned
+        // 2xx with an unparseable body is the kind of upstream weirdness an
+        // operator needs to see, not have silently masked by the retry-GET.
+        let body: serde_json::Value =
+            serde_json::from_str(&create_body)
+                .into_alien_error()
+                .context(ErrorData::ApiRequestFailed {
+                    message: format!(
+                        "POST artifact registry returned HTTP {} but the response body wasn't parseable JSON",
+                        create_status
+                    ),
+                    url: Some(create_url.clone()),
+                })?;
+        if let Some(name) = body.get("name").and_then(|v| v.as_str()) {
+            return Ok(name.to_string());
         }
     }
 
@@ -672,10 +699,22 @@ async fn create_or_get_artifact_repo(
     let get_resp2_body = get_resp2.text().await.unwrap_or_default();
 
     if get_resp2_status.is_success() {
-        if let Ok(body) = serde_json::from_str::<serde_json::Value>(&get_resp2_body) {
-            if let Some(name) = body.get("name").and_then(|v| v.as_str()) {
-                return Ok(name.to_string());
-            }
+        // Final GET in the retry chain — if this returns 2xx with an
+        // unparseable body, the final "Failed to create artifact repository"
+        // error below would otherwise swallow the diagnostic that the
+        // retry-GET response itself was malformed. Surface it.
+        let body: serde_json::Value =
+            serde_json::from_str(&get_resp2_body)
+                .into_alien_error()
+                .context(ErrorData::ApiRequestFailed {
+                    message: format!(
+                        "GET artifact registry (retry after CREATE) returned HTTP {} but the response body wasn't parseable JSON",
+                        get_resp2_status
+                    ),
+                    url: Some(get_url.clone()),
+                })?;
+        if let Some(name) = body.get("name").and_then(|v| v.as_str()) {
+            return Ok(name.to_string());
         }
     }
 
