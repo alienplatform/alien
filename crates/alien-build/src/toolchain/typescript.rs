@@ -17,7 +17,7 @@ use tracing::{error, info};
 /// This wrapper:
 /// 1. Imports the user's module
 /// 2. Detects if the default export has a `fetch` method (Hono, Elysia, etc.)
-/// 3. If so, starts Bun.serve() on a random port and registers with the runtime
+/// 3. If so, starts Bun.serve() and registers with the runtime
 /// 4. Enters the event loop via ctx.run()
 const BOOTSTRAP_TEMPLATE: &str = r#"/**
  * Alien Bootstrap - Auto-generated wrapper for TypeScript applications.
@@ -47,6 +47,7 @@ async function __alienBootstrap() {
 
     const server = Bun.serve({
       fetch: fetchHandler,
+      hostname: isPassthrough ? "0.0.0.0" : "127.0.0.1",
       port: listenPort,
       idleTimeout: 255, // Max value (seconds) — prevent Bun from closing idle connections during slow operations
     })
@@ -56,7 +57,6 @@ async function __alienBootstrap() {
     // No HTTP framework — start a minimal server so the runtime knows we're alive.
     // Commands and event handlers are delivered via gRPC, but the runtime still
     // needs an HTTP port to probe readiness and route health checks.
-    // Bound to 127.0.0.1 so it's only reachable from the local machine.
     const server = Bun.serve({
       fetch: () => new Response("ok"),
       hostname: isPassthrough ? "0.0.0.0" : "127.0.0.1",
@@ -225,7 +225,7 @@ impl TypeScriptToolchain {
     /// Generate the bootstrap wrapper file that handles automatic HTTP server registration.
     ///
     /// The wrapper imports the user's module, detects `export default` with a `fetch` method,
-    /// starts Bun.serve() on a random port, registers with the runtime, and enters the event loop.
+    /// starts Bun.serve(), registers with the runtime, and enters the event loop.
     async fn generate_bootstrap_wrapper(
         &self,
         _src_dir: &Path,
