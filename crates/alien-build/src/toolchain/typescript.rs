@@ -33,6 +33,12 @@ async function __alienBootstrap() {
   // Detect default export with fetch method (Hono, Elysia, Express adapter, etc.)
   const defaultExport = userModule?.default ?? userModule
   const hasFetchHandler = defaultExport && typeof defaultExport === "object" && "fetch" in defaultExport
+  const isPassthrough = process.env.ALIEN_TRANSPORT === "passthrough"
+  const listenPort = isPassthrough ? Number(process.env.PORT ?? "3000") : 0
+
+  if (!Number.isInteger(listenPort) || listenPort < 0 || listenPort > 65535) {
+    throw new Error(`Invalid PORT value for Alien HTTP server: ${process.env.PORT}`)
+  }
 
   if (hasFetchHandler) {
     const fetchHandler = typeof defaultExport.fetch === "function"
@@ -41,7 +47,7 @@ async function __alienBootstrap() {
 
     const server = Bun.serve({
       fetch: fetchHandler,
-      port: 0, // Random available port
+      port: listenPort,
       idleTimeout: 255, // Max value (seconds) — prevent Bun from closing idle connections during slow operations
     })
 
@@ -53,8 +59,8 @@ async function __alienBootstrap() {
     // Bound to 127.0.0.1 so it's only reachable from the local machine.
     const server = Bun.serve({
       fetch: () => new Response("ok"),
-      hostname: "127.0.0.1",
-      port: 0,
+      hostname: isPassthrough ? "0.0.0.0" : "127.0.0.1",
+      port: listenPort,
       idleTimeout: 255,
     })
 
