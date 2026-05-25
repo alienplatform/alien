@@ -102,7 +102,7 @@ impl CfEmitter for AwsNetworkEmitter {
                         ),
                         (
                             "securityGroupId",
-                            CfExpression::ref_(network_id(prefix, "SecurityGroup")),
+                            CfExpression::get_att(network_id(prefix, "SecurityGroup"), "GroupId"),
                         ),
                         ("availabilityZones", availability_zone_names()),
                         ("isByoVpc", CfExpression::from(false)),

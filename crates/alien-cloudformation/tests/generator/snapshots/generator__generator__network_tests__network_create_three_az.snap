@@ -1,5 +1,6 @@
 ---
 source: crates/alien-cloudformation/tests/generator/network_tests.rs
+assertion_line: 38
 expression: yaml
 ---
 AWSTemplateFormatVersion: 2010-09-09
@@ -80,7 +81,7 @@ Parameters:
     Description: Manager IAM role ARN allowed to assume generated management roles.
   ManagingAccountId:
     Type: String
-    Description: AWS account ID for the Alien management account that hosts deployment container images.
+    Description: AWS account ID for the management account that hosts deployment container images.
     Default: ''
   NetworkMode:
     Type: String
@@ -690,7 +691,9 @@ Outputs:
             privateRouteTableId:
               Ref: DefaultNetworkPrivateRouteTable
             securityGroupId:
-              Ref: DefaultNetworkSecurityGroup
+              Fn::GetAtt:
+              - DefaultNetworkSecurityGroup
+              - GroupId
             availabilityZones:
             - Fn::Select:
               - 0

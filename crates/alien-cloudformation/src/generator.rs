@@ -505,7 +505,7 @@ fn add_standard_parameters(template: &mut CfTemplate, settings: &StackSettings) 
     template.parameters.insert(
         PARAM_MANAGING_ACCOUNT_ID.to_string(),
         string_parameter(
-            "AWS account ID for the Alien management account that hosts deployment container images.",
+            "AWS account ID for the management account that hosts deployment container images.",
             Some(String::new()),
             None,
             false,

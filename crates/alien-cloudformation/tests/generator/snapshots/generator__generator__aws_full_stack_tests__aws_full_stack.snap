@@ -1,5 +1,6 @@
 ---
 source: crates/alien-cloudformation/tests/generator/aws_full_stack_tests.rs
+assertion_line: 118
 expression: yaml
 ---
 AWSTemplateFormatVersion: 2010-09-09
@@ -80,7 +81,7 @@ Parameters:
     Description: Manager IAM role ARN allowed to assume generated management roles.
   ManagingAccountId:
     Type: String
-    Description: AWS account ID for the Alien management account that hosts deployment container images.
+    Description: AWS account ID for the management account that hosts deployment container images.
     Default: ''
   NetworkMode:
     Type: String
@@ -646,7 +647,7 @@ Resources:
   ManagementRoleManagementPolicy1:
     Type: AWS::IAM::ManagedPolicy
     Properties:
-      Description: Alien remote stack management permissions
+      Description: Remote stack management permissions
       PolicyDocument:
         Version: 2012-10-17
         Statement:
@@ -829,7 +830,7 @@ Resources:
   ManagementRoleManagementPolicy2:
     Type: AWS::IAM::ManagedPolicy
     Properties:
-      Description: Alien remote stack management permissions
+      Description: Remote stack management permissions
       PolicyDocument:
         Version: 2012-10-17
         Statement:
@@ -1323,7 +1324,9 @@ Resources:
             privateRouteTableId:
               Ref: DefaultNetworkPrivateRouteTable
             securityGroupId:
-              Ref: DefaultNetworkSecurityGroup
+              Fn::GetAtt:
+              - DefaultNetworkSecurityGroup
+              - GroupId
             availabilityZones:
             - Fn::Select:
               - 0
@@ -1592,7 +1595,9 @@ Outputs:
             privateRouteTableId:
               Ref: DefaultNetworkPrivateRouteTable
             securityGroupId:
-              Ref: DefaultNetworkSecurityGroup
+              Fn::GetAtt:
+              - DefaultNetworkSecurityGroup
+              - GroupId
             availabilityZones:
             - Fn::Select:
               - 0

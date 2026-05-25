@@ -239,8 +239,8 @@ pub fn private_subnet_ids_expr(ctx: &EmitContext<'_>) -> CfExpression {
     }
 }
 
-/// Security-group IDs expression: created security group ref or existing
-/// security group parameter.
+/// Security-group IDs expression: created security group ID or existing
+/// security group ID parameter.
 pub fn security_group_ids_expr(ctx: &EmitContext<'_>) -> CfExpression {
     let Some((network_id, network)) = default_network(ctx) else {
         return CfExpression::ref_(PARAM_SECURITY_GROUP_IDS);
@@ -248,7 +248,10 @@ pub fn security_group_ids_expr(ctx: &EmitContext<'_>) -> CfExpression {
     match &network.settings {
         NetworkSettings::Create { .. } => CfExpression::if_(
             CONDITION_NETWORK_MODE_CREATE,
-            CfExpression::list([CfExpression::ref_(format!("{network_id}SecurityGroup"))]),
+            CfExpression::list([CfExpression::get_att(
+                format!("{network_id}SecurityGroup"),
+                "GroupId",
+            )]),
             CfExpression::if_(
                 CONDITION_NETWORK_MODE_USE_EXISTING,
                 CfExpression::ref_(PARAM_SECURITY_GROUP_IDS),

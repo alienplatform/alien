@@ -56,7 +56,7 @@ Parameters:
     Description: Manager IAM role ARN allowed to assume generated management roles.
   ManagingAccountId:
     Type: String
-    Description: AWS account ID for the Alien management account that hosts deployment container images.
+    Description: AWS account ID for the management account that hosts deployment container images.
     Default: ''
   NetworkMode:
     Type: String

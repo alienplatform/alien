@@ -1,0 +1,64 @@
+{
+  "id": "network/heartbeat",
+  "description": "Allows reading network metadata needed to monitor and consume imported network infrastructure",
+  "platforms": {
+    "aws": [
+      {
+        // AWS requires Resource: "*" for these read-only discovery APIs.
+        "grant": {
+          "actions": [
+            "ec2:DescribeVpcs",
+            "ec2:DescribeSubnets",
+            "ec2:DescribeSecurityGroups",
+            "ec2:DescribeRouteTables",
+            "ec2:DescribeInternetGateways",
+            "ec2:DescribeNatGateways",
+            "ec2:DescribeAddresses",
+            "ec2:DescribeAvailabilityZones"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": [
+            "compute.networks.get",
+            "compute.subnetworks.get",
+            "compute.firewalls.get",
+            "compute.routers.get"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.Network/virtualNetworks/read",
+            "Microsoft.Network/virtualNetworks/subnets/read",
+            "Microsoft.Network/networkSecurityGroups/read",
+            "Microsoft.Network/publicIPAddresses/read",
+            "Microsoft.Network/loadBalancers/read"
+          ],
+          "dataActions": []
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          }
+        }
+      }
+    ]
+  }
+}
