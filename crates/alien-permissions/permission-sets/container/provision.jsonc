@@ -166,25 +166,41 @@
         }
       },
       // Security group for LB (created by container controller, not cluster).
-      // Create is allowed only when the request carries Alien boundary tags.
+      // AWS authorizes CreateSecurityGroup against the target VPC. The created
+      // security group is tag-bound by the paired CreateTags-on-create grant.
       {
         "grant": {
           "actions": ["ec2:CreateSecurityGroup"]
         },
         "binding": {
           "stack": {
-            "resources": ["*"],
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/*"]
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["ec2:CreateTags"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"],
             "condition": {
               "StringEquals": {
+                "ec2:CreateAction": "CreateSecurityGroup",
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${managedByTag}": "deployment"
               }
             }
           },
           "resource": {
-            "resources": ["*"],
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"],
             "condition": {
               "StringEquals": {
+                "ec2:CreateAction": "CreateSecurityGroup",
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${resourceTag}": "${resourceName}",
                 "aws:RequestTag/${managedByTag}": "deployment"

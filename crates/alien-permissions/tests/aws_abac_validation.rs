@@ -64,6 +64,10 @@ fn runtime_aws_system_generated_resources_are_abac_guarded() {
                         continue;
                     }
 
+                    if documented_create_security_group_vpc_authorization(action, binding) {
+                        continue;
+                    }
+
                     let has_request_tag = has_condition_key(binding, "aws:RequestTag/${stackTag}");
                     let has_resource_tag =
                         has_condition_key(binding, "aws:ResourceTag/${stackTag}");
@@ -203,6 +207,7 @@ fn aws_resource_arns_are_stack_or_resource_scoped_unless_documented_external() {
                         || binding.condition.is_some()
                         || documented_external_resource_scope(resource)
                         || documented_run_instances_companion_resource(actions, resource)
+                        || documented_create_security_group_vpc_resource(actions, resource)
                     {
                         continue;
                     }
@@ -240,6 +245,24 @@ fn documented_run_instances_companion_resource(actions: &[String], resource: &st
         || resource == "arn:aws:ec2:${awsRegion}:${awsAccountId}:subnet/*"
         || resource == "arn:aws:ec2:${awsRegion}:${awsAccountId}:network-interface/*"
         || resource == "arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"
+}
+
+fn documented_create_security_group_vpc_resource(actions: &[String], resource: &str) -> bool {
+    actions
+        .iter()
+        .all(|action| action == "ec2:CreateSecurityGroup")
+        && resource == "arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/*"
+}
+
+fn documented_create_security_group_vpc_authorization(
+    action: &str,
+    binding: &AwsBindingSpec,
+) -> bool {
+    action == "ec2:CreateSecurityGroup"
+        && binding
+            .resources
+            .iter()
+            .any(|resource| resource == "arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/*")
 }
 
 #[test]
