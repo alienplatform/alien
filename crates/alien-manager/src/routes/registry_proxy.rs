@@ -27,7 +27,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 use serde::Serialize;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 use alien_bindings::traits::{
     ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions,
@@ -769,9 +769,13 @@ async fn validate_pull_access(
         cached_repos
     } else {
         // Cache miss — query DB.
+        // The caller has already been authenticated and scoped to this
+        // deployment. Use the manager's system subject for the metadata lookup
+        // so registry pull auth does not depend on the caller's bearer format.
+        let system = crate::auth::Subject::system();
         let deployment = state
             .deployment_store
-            .get_deployment(subject, deployment_id)
+            .get_deployment(&system, deployment_id)
             .await
             .map_err(|e| {
                 warn!(error = %e, "Failed to get deployment for registry proxy");
@@ -802,7 +806,6 @@ async fn validate_pull_access(
             })?
             .to_string();
 
-        let system = crate::auth::Subject::system();
         let release = state
             .release_store
             .get_release(&system, &release_id)
