@@ -1,11 +1,11 @@
-# SyncAcquireResponseGcpConfig
+# SyncAcquireResponseDomainsGcp
 
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseGcpConfig } from "@alienplatform/platform-api/models";
+import { SyncAcquireResponseDomainsGcp } from "@alienplatform/platform-api/models";
 
-let value: SyncAcquireResponseGcpConfig = {
+let value: SyncAcquireResponseDomainsGcp = {
   certificateName: "<value>",
 };
 ```

@@ -7,8 +7,8 @@
 
 ```typescript
 const value: models.SyncReconcileResponseHorizonHostImage = {
-  architecture: "<value>",
   channel: "<value>",
+  version: "<value>",
 };
 ```
 

@@ -4218,34 +4218,84 @@ export type SyncReconcileResponseClusters = {
 };
 
 /**
- * Horizon host image channel or provider-specific pointer.
+ * AWS Horizon host image catalog.
+ */
+export type SyncReconcileResponseHorizonHostImageAws = {
+  /**
+   * AMI IDs by architecture, then AWS region.
+   */
+  amis: { [k: string]: { [k: string]: string } };
+};
+
+export type SyncReconcileResponseHorizonHostImageAwsUnion =
+  | SyncReconcileResponseHorizonHostImageAws
+  | any;
+
+/**
+ * Azure Horizon host image entry.
+ */
+export type SyncReconcileResponseAzureImages = {
+  /**
+   * Azure Compute Gallery image definition ID.
+   */
+  imageDefinitionId: string;
+};
+
+/**
+ * Azure Horizon host image catalog.
+ */
+export type HorizonHostImageAzureTarget = {
+  /**
+   * Images by architecture.
+   */
+  images: { [k: string]: SyncReconcileResponseAzureImages };
+};
+
+export type HorizonHostImageTargetAzureUnion =
+  | HorizonHostImageAzureTarget
+  | any;
+
+/**
+ * GCP Horizon host image entry.
+ */
+export type SyncReconcileResponseGcpImages = {
+  /**
+   * Source image self link or image-family URL.
+   */
+  sourceImage: string;
+};
+
+/**
+ * GCP Horizon host image catalog.
+ */
+export type HorizonHostImageGcpTarget = {
+  /**
+   * Images by architecture.
+   */
+  images: { [k: string]: SyncReconcileResponseGcpImages };
+};
+
+export type HorizonHostImageTargetGcpUnion = HorizonHostImageGcpTarget | any;
+
+/**
+ * Horizon host image catalog.
  *
  * @remarks
  *
- * Setup references these stable pointers. The concrete image version resolved
- * during rollout is management state, not ComputeCluster resource config.
+ * Platform resolves concrete provider images from this catalog during rollout.
  */
 export type SyncReconcileResponseHorizonHostImage = {
-  /**
-   * Machine architecture, such as amd64 or arm64.
-   */
-  architecture: string;
-  /**
-   * AWS SSM parameter path for the channel pointer.
-   */
-  awsSsmParameter?: string | null | undefined;
-  /**
-   * Azure Compute Gallery image definition ID for the channel pointer.
-   */
-  azureGalleryImageDefinitionId?: string | null | undefined;
+  aws?: SyncReconcileResponseHorizonHostImageAws | any | null | undefined;
+  azure?: HorizonHostImageAzureTarget | any | null | undefined;
   /**
    * Logical image channel, such as prod, staging, or canary.
    */
   channel: string;
+  gcp?: HorizonHostImageGcpTarget | any | null | undefined;
   /**
-   * GCP image family for the channel pointer.
+   * Published image catalog version.
    */
-  gcpImageFamily?: string | null | undefined;
+  version: string;
 };
 
 export type SyncReconcileResponseHorizonHostImageUnion =
@@ -6531,31 +6581,33 @@ export type SyncReconcileResponseDeploymentModel = ClosedEnum<
   typeof SyncReconcileResponseDeploymentModel
 >;
 
-export type SyncReconcileResponseAws = {
+export type SyncReconcileResponseDomainsAws = {
   certificateArn: string;
 };
 
-export type SyncReconcileResponseAwsUnion = SyncReconcileResponseAws | any;
+export type SyncReconcileResponseDomainsAwsUnion =
+  | SyncReconcileResponseDomainsAws
+  | any;
 
-export type AzureTargetConfig = {
+export type DomainsAzureTarget = {
   keyVaultCertificateId: string;
 };
 
-export type TargetAzureUnion = AzureTargetConfig | any;
+export type DomainsTargetAzureUnion = DomainsAzureTarget | any;
 
-export type GcpTargetConfig = {
+export type DomainsGcpTarget = {
   certificateName: string;
 };
 
-export type TargetGcpUnion = GcpTargetConfig | any;
+export type DomainsTargetGcpUnion = DomainsGcpTarget | any;
 
 /**
  * Platform-specific certificate references for custom domains.
  */
 export type SyncReconcileResponseCertificate = {
-  aws?: SyncReconcileResponseAws | any | null | undefined;
-  azure?: AzureTargetConfig | any | null | undefined;
-  gcp?: GcpTargetConfig | any | null | undefined;
+  aws?: SyncReconcileResponseDomainsAws | any | null | undefined;
+  azure?: DomainsAzureTarget | any | null | undefined;
+  gcp?: DomainsGcpTarget | any | null | undefined;
 };
 
 /**
@@ -15176,15 +15228,181 @@ export function syncReconcileResponseClustersFromJSON(
 }
 
 /** @internal */
+export const SyncReconcileResponseHorizonHostImageAws$inboundSchema: z.ZodType<
+  SyncReconcileResponseHorizonHostImageAws,
+  unknown
+> = z.object({
+  amis: z.record(z.string(), z.record(z.string(), z.string())),
+});
+
+export function syncReconcileResponseHorizonHostImageAwsFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponseHorizonHostImageAws,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseHorizonHostImageAws$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponseHorizonHostImageAws' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseHorizonHostImageAwsUnion$inboundSchema:
+  z.ZodType<SyncReconcileResponseHorizonHostImageAwsUnion, unknown> = z.union([
+    z.lazy(() => SyncReconcileResponseHorizonHostImageAws$inboundSchema),
+    z.any(),
+  ]);
+
+export function syncReconcileResponseHorizonHostImageAwsUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponseHorizonHostImageAwsUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseHorizonHostImageAwsUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponseHorizonHostImageAwsUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseAzureImages$inboundSchema: z.ZodType<
+  SyncReconcileResponseAzureImages,
+  unknown
+> = z.object({
+  imageDefinitionId: z.string(),
+});
+
+export function syncReconcileResponseAzureImagesFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncReconcileResponseAzureImages, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncReconcileResponseAzureImages$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncReconcileResponseAzureImages' from JSON`,
+  );
+}
+
+/** @internal */
+export const HorizonHostImageAzureTarget$inboundSchema: z.ZodType<
+  HorizonHostImageAzureTarget,
+  unknown
+> = z.object({
+  images: z.record(
+    z.string(),
+    z.lazy(() => SyncReconcileResponseAzureImages$inboundSchema),
+  ),
+});
+
+export function horizonHostImageAzureTargetFromJSON(
+  jsonString: string,
+): SafeParseResult<HorizonHostImageAzureTarget, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => HorizonHostImageAzureTarget$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'HorizonHostImageAzureTarget' from JSON`,
+  );
+}
+
+/** @internal */
+export const HorizonHostImageTargetAzureUnion$inboundSchema: z.ZodType<
+  HorizonHostImageTargetAzureUnion,
+  unknown
+> = z.union([z.lazy(() => HorizonHostImageAzureTarget$inboundSchema), z.any()]);
+
+export function horizonHostImageTargetAzureUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<HorizonHostImageTargetAzureUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => HorizonHostImageTargetAzureUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'HorizonHostImageTargetAzureUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseGcpImages$inboundSchema: z.ZodType<
+  SyncReconcileResponseGcpImages,
+  unknown
+> = z.object({
+  sourceImage: z.string(),
+});
+
+export function syncReconcileResponseGcpImagesFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncReconcileResponseGcpImages, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncReconcileResponseGcpImages$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncReconcileResponseGcpImages' from JSON`,
+  );
+}
+
+/** @internal */
+export const HorizonHostImageGcpTarget$inboundSchema: z.ZodType<
+  HorizonHostImageGcpTarget,
+  unknown
+> = z.object({
+  images: z.record(
+    z.string(),
+    z.lazy(() => SyncReconcileResponseGcpImages$inboundSchema),
+  ),
+});
+
+export function horizonHostImageGcpTargetFromJSON(
+  jsonString: string,
+): SafeParseResult<HorizonHostImageGcpTarget, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => HorizonHostImageGcpTarget$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'HorizonHostImageGcpTarget' from JSON`,
+  );
+}
+
+/** @internal */
+export const HorizonHostImageTargetGcpUnion$inboundSchema: z.ZodType<
+  HorizonHostImageTargetGcpUnion,
+  unknown
+> = z.union([z.lazy(() => HorizonHostImageGcpTarget$inboundSchema), z.any()]);
+
+export function horizonHostImageTargetGcpUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<HorizonHostImageTargetGcpUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => HorizonHostImageTargetGcpUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'HorizonHostImageTargetGcpUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const SyncReconcileResponseHorizonHostImage$inboundSchema: z.ZodType<
   SyncReconcileResponseHorizonHostImage,
   unknown
 > = z.object({
-  architecture: z.string(),
-  awsSsmParameter: z.nullable(z.string()).optional(),
-  azureGalleryImageDefinitionId: z.nullable(z.string()).optional(),
+  aws: z.nullable(
+    z.union([
+      z.lazy(() => SyncReconcileResponseHorizonHostImageAws$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  azure: z.nullable(
+    z.union([z.lazy(() => HorizonHostImageAzureTarget$inboundSchema), z.any()]),
+  ).optional(),
   channel: z.string(),
-  gcpImageFamily: z.nullable(z.string()).optional(),
+  gcp: z.nullable(
+    z.union([z.lazy(() => HorizonHostImageGcpTarget$inboundSchema), z.any()]),
+  ).optional(),
+  version: z.string(),
 });
 
 export function syncReconcileResponseHorizonHostImageFromJSON(
@@ -19612,102 +19830,108 @@ export const SyncReconcileResponseDeploymentModel$inboundSchema: z.ZodEnum<
 > = z.enum(SyncReconcileResponseDeploymentModel);
 
 /** @internal */
-export const SyncReconcileResponseAws$inboundSchema: z.ZodType<
-  SyncReconcileResponseAws,
+export const SyncReconcileResponseDomainsAws$inboundSchema: z.ZodType<
+  SyncReconcileResponseDomainsAws,
   unknown
 > = z.object({
   certificateArn: z.string(),
 });
 
-export function syncReconcileResponseAwsFromJSON(
+export function syncReconcileResponseDomainsAwsFromJSON(
   jsonString: string,
-): SafeParseResult<SyncReconcileResponseAws, SDKValidationError> {
+): SafeParseResult<SyncReconcileResponseDomainsAws, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => SyncReconcileResponseAws$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncReconcileResponseAws' from JSON`,
+    (x) => SyncReconcileResponseDomainsAws$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncReconcileResponseDomainsAws' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncReconcileResponseAwsUnion$inboundSchema: z.ZodType<
-  SyncReconcileResponseAwsUnion,
+export const SyncReconcileResponseDomainsAwsUnion$inboundSchema: z.ZodType<
+  SyncReconcileResponseDomainsAwsUnion,
   unknown
-> = z.union([z.lazy(() => SyncReconcileResponseAws$inboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => SyncReconcileResponseDomainsAws$inboundSchema),
+  z.any(),
+]);
 
-export function syncReconcileResponseAwsUnionFromJSON(
+export function syncReconcileResponseDomainsAwsUnionFromJSON(
   jsonString: string,
-): SafeParseResult<SyncReconcileResponseAwsUnion, SDKValidationError> {
+): SafeParseResult<SyncReconcileResponseDomainsAwsUnion, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => SyncReconcileResponseAwsUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncReconcileResponseAwsUnion' from JSON`,
+    (x) =>
+      SyncReconcileResponseDomainsAwsUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncReconcileResponseDomainsAwsUnion' from JSON`,
   );
 }
 
 /** @internal */
-export const AzureTargetConfig$inboundSchema: z.ZodType<
-  AzureTargetConfig,
+export const DomainsAzureTarget$inboundSchema: z.ZodType<
+  DomainsAzureTarget,
   unknown
 > = z.object({
   keyVaultCertificateId: z.string(),
 });
 
-export function azureTargetConfigFromJSON(
+export function domainsAzureTargetFromJSON(
   jsonString: string,
-): SafeParseResult<AzureTargetConfig, SDKValidationError> {
+): SafeParseResult<DomainsAzureTarget, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => AzureTargetConfig$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'AzureTargetConfig' from JSON`,
+    (x) => DomainsAzureTarget$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DomainsAzureTarget' from JSON`,
   );
 }
 
 /** @internal */
-export const TargetAzureUnion$inboundSchema: z.ZodType<
-  TargetAzureUnion,
+export const DomainsTargetAzureUnion$inboundSchema: z.ZodType<
+  DomainsTargetAzureUnion,
   unknown
-> = z.union([z.lazy(() => AzureTargetConfig$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => DomainsAzureTarget$inboundSchema), z.any()]);
 
-export function targetAzureUnionFromJSON(
+export function domainsTargetAzureUnionFromJSON(
   jsonString: string,
-): SafeParseResult<TargetAzureUnion, SDKValidationError> {
+): SafeParseResult<DomainsTargetAzureUnion, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => TargetAzureUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'TargetAzureUnion' from JSON`,
+    (x) => DomainsTargetAzureUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DomainsTargetAzureUnion' from JSON`,
   );
 }
 
 /** @internal */
-export const GcpTargetConfig$inboundSchema: z.ZodType<
-  GcpTargetConfig,
+export const DomainsGcpTarget$inboundSchema: z.ZodType<
+  DomainsGcpTarget,
   unknown
 > = z.object({
   certificateName: z.string(),
 });
 
-export function gcpTargetConfigFromJSON(
+export function domainsGcpTargetFromJSON(
   jsonString: string,
-): SafeParseResult<GcpTargetConfig, SDKValidationError> {
+): SafeParseResult<DomainsGcpTarget, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => GcpTargetConfig$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GcpTargetConfig' from JSON`,
+    (x) => DomainsGcpTarget$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DomainsGcpTarget' from JSON`,
   );
 }
 
 /** @internal */
-export const TargetGcpUnion$inboundSchema: z.ZodType<TargetGcpUnion, unknown> =
-  z.union([z.lazy(() => GcpTargetConfig$inboundSchema), z.any()]);
+export const DomainsTargetGcpUnion$inboundSchema: z.ZodType<
+  DomainsTargetGcpUnion,
+  unknown
+> = z.union([z.lazy(() => DomainsGcpTarget$inboundSchema), z.any()]);
 
-export function targetGcpUnionFromJSON(
+export function domainsTargetGcpUnionFromJSON(
   jsonString: string,
-): SafeParseResult<TargetGcpUnion, SDKValidationError> {
+): SafeParseResult<DomainsTargetGcpUnion, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => TargetGcpUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'TargetGcpUnion' from JSON`,
+    (x) => DomainsTargetGcpUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DomainsTargetGcpUnion' from JSON`,
   );
 }
 
@@ -19717,13 +19941,16 @@ export const SyncReconcileResponseCertificate$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   aws: z.nullable(
-    z.union([z.lazy(() => SyncReconcileResponseAws$inboundSchema), z.any()]),
+    z.union([
+      z.lazy(() => SyncReconcileResponseDomainsAws$inboundSchema),
+      z.any(),
+    ]),
   ).optional(),
   azure: z.nullable(
-    z.union([z.lazy(() => AzureTargetConfig$inboundSchema), z.any()]),
+    z.union([z.lazy(() => DomainsAzureTarget$inboundSchema), z.any()]),
   ).optional(),
   gcp: z.nullable(
-    z.union([z.lazy(() => GcpTargetConfig$inboundSchema), z.any()]),
+    z.union([z.lazy(() => DomainsGcpTarget$inboundSchema), z.any()]),
   ).optional(),
 });
 

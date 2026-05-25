@@ -1,11 +1,11 @@
-# GcpTargetConfig
+# DomainsGcpTarget
 
 ## Example Usage
 
 ```typescript
-import { GcpTargetConfig } from "@alienplatform/platform-api/models";
+import { DomainsGcpTarget } from "@alienplatform/platform-api/models";
 
-let value: GcpTargetConfig = {
+let value: DomainsGcpTarget = {
   certificateName: "<value>",
 };
 ```

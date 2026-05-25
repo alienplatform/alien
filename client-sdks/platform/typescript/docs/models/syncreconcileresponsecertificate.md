@@ -12,8 +12,8 @@ let value: SyncReconcileResponseCertificate = {};
 
 ## Fields
 
-| Field                                  | Type                                   | Required                               | Description                            |
-| -------------------------------------- | -------------------------------------- | -------------------------------------- | -------------------------------------- |
-| `aws`                                  | *models.SyncReconcileResponseAwsUnion* | :heavy_minus_sign:                     | N/A                                    |
-| `azure`                                | *models.TargetAzureUnion*              | :heavy_minus_sign:                     | N/A                                    |
-| `gcp`                                  | *models.TargetGcpUnion*                | :heavy_minus_sign:                     | N/A                                    |
+| Field                                         | Type                                          | Required                                      | Description                                   |
+| --------------------------------------------- | --------------------------------------------- | --------------------------------------------- | --------------------------------------------- |
+| `aws`                                         | *models.SyncReconcileResponseDomainsAwsUnion* | :heavy_minus_sign:                            | N/A                                           |
+| `azure`                                       | *models.DomainsTargetAzureUnion*              | :heavy_minus_sign:                            | N/A                                           |
+| `gcp`                                         | *models.DomainsTargetGcpUnion*                | :heavy_minus_sign:                            | N/A                                           |

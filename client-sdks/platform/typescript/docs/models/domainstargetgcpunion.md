@@ -1,12 +1,12 @@
-# SyncAcquireResponseGcpUnion
+# DomainsTargetGcpUnion
 
 
 ## Supported Types
 
-### `models.SyncAcquireResponseGcpConfig`
+### `models.DomainsGcpTarget`
 
 ```typescript
-const value: models.SyncAcquireResponseGcpConfig = {
+const value: models.DomainsGcpTarget = {
   certificateName: "<value>",
 };
 ```

@@ -845,15 +845,12 @@ fn add_custom_resource(
         "AWS::CloudFormation::CustomResource".to_string(),
     );
     resource.depends_on = depends_on;
-    // The Custom Resource forwards `DeploymentName` to the Platform's
-    // `/v1/deployments/import` endpoint, which defaults to the CFN stack name
-    // (`!Ref AWS::StackName`) when the property is absent. We always emit it
-    // so the manager-side import row mirrors the CFN stack list verbatim;
-    // customers who want a different identity can rewire the property
+    // Emit an explicit name so imported deployments mirror the CFN stack list
+    // verbatim; callers who want a different identity can rewire the property
     // post-rendering.
     resource.properties = indexmap! {
         "ServiceToken".to_string() => service_token,
-        "DeploymentGroupToken".to_string() => CfExpression::ref_(PARAM_TOKEN),
+        "Token".to_string() => CfExpression::ref_(PARAM_TOKEN),
         "DeploymentName".to_string() => CfExpression::ref_("AWS::StackName"),
         "ResourcePrefix".to_string() => CfExpression::ref_("AWS::StackName"),
         "SourceKind".to_string() => CfExpression::from("cloudformation"),

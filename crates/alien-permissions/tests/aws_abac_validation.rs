@@ -183,6 +183,12 @@ fn aws_resource_arns_are_stack_or_resource_scoped_unless_documented_external() {
                 continue;
             }
 
+            let actions = permission
+                .grant
+                .actions
+                .as_deref()
+                .unwrap_or_else(|| panic!("{permission_set_id} AWS permission has no actions"));
+
             for binding in [
                 permission.binding.stack.as_ref(),
                 permission.binding.resource.as_ref(),
@@ -196,6 +202,7 @@ fn aws_resource_arns_are_stack_or_resource_scoped_unless_documented_external() {
                         || resource.contains("${resourceName}")
                         || binding.condition.is_some()
                         || documented_external_resource_scope(resource)
+                        || documented_run_instances_companion_resource(actions, resource)
                     {
                         continue;
                     }
@@ -219,6 +226,20 @@ fn documented_external_resource_scope(resource: &str) -> bool {
     // Runtime compute pulls images from the manager-owned artifact registry. Target-account
     // isolation is enforced by the repository resource policy that grants this role access.
     resource == "arn:aws:ecr:*:${managingAccountId}:repository/*"
+}
+
+fn documented_run_instances_companion_resource(actions: &[String], resource: &str) -> bool {
+    if actions.iter().any(|action| action != "ec2:RunInstances") {
+        return false;
+    }
+
+    // EC2 Auto Scaling validates launch template use with an ec2:RunInstances
+    // dry run. IAM evaluates that action against the public AMI, selected subnet,
+    // and create-side EC2 resources as well as the tagged launch template.
+    resource == "arn:aws:ec2:${awsRegion}::image/*"
+        || resource == "arn:aws:ec2:${awsRegion}:${awsAccountId}:subnet/*"
+        || resource == "arn:aws:ec2:${awsRegion}:${awsAccountId}:network-interface/*"
+        || resource == "arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"
 }
 
 #[test]

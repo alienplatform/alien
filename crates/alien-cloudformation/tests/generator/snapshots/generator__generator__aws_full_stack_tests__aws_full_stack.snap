@@ -634,267 +634,6 @@ Resources:
             StringEquals:
               aws:PrincipalArn:
                 Ref: ManagingRoleArn
-      Policies:
-      - PolicyName: alien-management-policy
-        PolicyDocument:
-          Version: 2012-10-17
-          Statement:
-          - Action:
-            - lambda:CreateFunction
-            Condition:
-              StringEquals:
-                aws:RequestTag/deployment:
-                  Fn::Sub: ${AWS::StackName}
-                aws:RequestTag/managed-by: deployment
-            Effect: Allow
-            Resource:
-            - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*
-            Sid: WorkerProvision1
-          - Action:
-            - lambda:AddPermission
-            - lambda:CreateAlias
-            - lambda:CreateEventSourceMapping
-            - lambda:CreateFunctionUrlConfig
-            - lambda:DeleteAlias
-            - lambda:DeleteEventSourceMapping
-            - lambda:DeleteFunction
-            - lambda:DeleteFunctionConcurrency
-            - lambda:DeleteFunctionEventInvokeConfig
-            - lambda:DeleteFunctionUrlConfig
-            - lambda:GetCodeSigningConfig
-            - lambda:GetEventSourceMapping
-            - lambda:GetFunction
-            - lambda:GetFunctionConfiguration
-            - lambda:GetFunctionEventInvokeConfig
-            - lambda:GetFunctionUrlConfig
-            - lambda:GetPolicy
-            - lambda:ListAliases
-            - lambda:ListEventSourceMappings
-            - lambda:ListTags
-            - lambda:ListVersionsByFunction
-            - lambda:PublishVersion
-            - lambda:PutFunctionConcurrency
-            - lambda:PutFunctionEventInvokeConfig
-            - lambda:RemovePermission
-            - lambda:TagResource
-            - lambda:UntagResource
-            - lambda:UpdateAlias
-            - lambda:UpdateCodeSigningConfig
-            - lambda:UpdateEventSourceMapping
-            - lambda:UpdateFunctionCode
-            - lambda:UpdateFunctionConfiguration
-            Condition:
-              StringEquals:
-                aws:ResourceTag/deployment:
-                  Fn::Sub: ${AWS::StackName}
-                aws:ResourceTag/managed-by: deployment
-            Effect: Allow
-            Resource:
-            - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*
-            Sid: WorkerProvision2
-          - Action:
-            - ec2:DescribeNetworkInterfaces
-            - ec2:DescribeSecurityGroups
-            - ec2:DescribeSubnets
-            - ec2:DescribeVpcs
-            Effect: Allow
-            Resource:
-            - '*'
-            Sid: WorkerProvision3
-          - Action:
-            - iam:PassRole
-            Effect: Allow
-            Resource:
-            - Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*-sa
-            Sid: WorkerProvision4
-          - Action:
-            - iam:GetRolePolicy
-            - iam:ListRolePolicies
-            - iam:PutRolePolicy
-            Condition:
-              StringEquals:
-                aws:ResourceTag/deployment:
-                  Fn::Sub: ${AWS::StackName}
-                aws:ResourceTag/managed-by: deployment
-            Effect: Allow
-            Resource:
-            - Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*
-            Sid: WorkerProvision5
-          - Action:
-            - ecr:GetAuthorizationToken
-            Effect: Allow
-            Resource:
-            - '*'
-            Sid: WorkerProvision6
-          - Action:
-            - ecr:BatchGetImage
-            - ecr:GetDownloadUrlForLayer
-            - ecr:GetRepositoryPolicy
-            - ecr:SetRepositoryPolicy
-            Effect: Allow
-            Resource:
-            - Fn::Sub:
-              - arn:${AWS::Partition}:ecr:*:${ManagingAccountId}:repository/*
-              - ManagingAccountId:
-                  Fn::Select:
-                  - 4
-                  - Fn::Split:
-                    - ':'
-                    - Ref: ManagingRoleArn
-            Sid: WorkerProvision7
-          - Action:
-            - acm:AddTagsToCertificate
-            - acm:ImportCertificate
-            Condition:
-              StringEquals:
-                aws:RequestTag/deployment:
-                  Fn::Sub: ${AWS::StackName}
-                aws:RequestTag/managed-by: deployment
-            Effect: Allow
-            Resource:
-            - Fn::Sub: arn:${AWS::Partition}:acm:${AWS::Region}:${AWS::AccountId}:certificate/*
-            Sid: WorkerProvision8
-          - Action:
-            - acm:AddTagsToCertificate
-            - acm:DeleteCertificate
-            - acm:DescribeCertificate
-            - acm:ImportCertificate
-            Condition:
-              StringEquals:
-                aws:ResourceTag/deployment:
-                  Fn::Sub: ${AWS::StackName}
-                aws:ResourceTag/managed-by: deployment
-            Effect: Allow
-            Resource:
-            - Fn::Sub: arn:${AWS::Partition}:acm:${AWS::Region}:${AWS::AccountId}:certificate/*
-            Sid: WorkerProvision9
-          - Action:
-            - apigateway:POST
-            - apigateway:PUT
-            Condition:
-              StringEquals:
-                aws:RequestTag/deployment:
-                  Fn::Sub: ${AWS::StackName}
-                aws:RequestTag/managed-by: deployment
-            Effect: Allow
-            Resource:
-            - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis
-            - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames
-            - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/tags/*
-            Sid: WorkerProvision10
-          - Action:
-            - apigateway:POST
-            Condition:
-              StringEquals:
-                aws:ResourceTag/deployment:
-                  Fn::Sub: ${AWS::StackName}
-                aws:ResourceTag/managed-by: deployment
-            Effect: Allow
-            Resource:
-            - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*
-            - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*
-            - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*/apimappings
-            Sid: WorkerProvision11
-          - Action:
-            - apigateway:PUT
-            - apigateway:TagResource
-            Condition:
-              StringEquals:
-                aws:RequestTag/deployment:
-                  Fn::Sub: ${AWS::StackName}
-                aws:RequestTag/managed-by: deployment
-            Effect: Allow
-            Resource:
-            - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*
-            - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*/stages
-            - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*/stages/*
-            - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*
-            - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/tags/*
-            Sid: WorkerProvision12
-          - Action:
-            - apigateway:DELETE
-            - apigateway:GET
-            - apigateway:PATCH
-            - apigateway:PUT
-            Condition:
-              StringEquals:
-                aws:ResourceTag/deployment:
-                  Fn::Sub: ${AWS::StackName}
-                aws:ResourceTag/managed-by: deployment
-            Effect: Allow
-            Resource:
-            - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*
-            - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*
-            - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*/apimappings
-            - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*/apimappings/*
-            Sid: WorkerProvision13
-          - Action:
-            - events:PutRule
-            - events:TagResource
-            Condition:
-              StringEquals:
-                aws:RequestTag/deployment:
-                  Fn::Sub: ${AWS::StackName}
-                aws:RequestTag/managed-by: deployment
-            Effect: Allow
-            Resource:
-            - Fn::Sub: arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${AWS::StackName}-*
-            Sid: WorkerProvision14
-          - Action:
-            - events:DeleteRule
-            - events:DescribeRule
-            - events:PutTargets
-            - events:RemoveTargets
-            Condition:
-              StringEquals:
-                aws:ResourceTag/deployment:
-                  Fn::Sub: ${AWS::StackName}
-                aws:ResourceTag/managed-by: deployment
-            Effect: Allow
-            Resource:
-            - Fn::Sub: arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${AWS::StackName}-*
-            Sid: WorkerProvision15
-          - Action:
-            - s3:GetBucketAcl
-            - s3:GetBucketLocation
-            - s3:GetBucketPolicy
-            - s3:GetBucketPublicAccessBlock
-            - s3:GetBucketVersioning
-            - s3:GetEncryptionConfiguration
-            - s3:GetLifecycleConfiguration
-            Effect: Allow
-            Resource:
-            - Fn::Sub: arn:${AWS::Partition}:s3:::${AWS::StackName}-*
-            Sid: StorageHeartbeat
-          - Action:
-            - sqs:GetQueueAttributes
-            - sqs:ListQueueTags
-            Effect: Allow
-            Resource:
-            - Fn::Sub: arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${AWS::StackName}-*
-            Sid: QueueHeartbeat
-          - Action:
-            - dynamodb:DescribeContinuousBackups
-            - dynamodb:DescribeTable
-            - dynamodb:DescribeTimeToLive
-            - dynamodb:ListTables
-            - dynamodb:ListTagsOfResource
-            Effect: Allow
-            Resource:
-            - Fn::Sub: arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${AWS::StackName}-*
-            Sid: KvHeartbeat
-          - Action:
-            - ssm:DeleteParameter
-            - ssm:PutParameter
-            Effect: Allow
-            Resource:
-            - Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}-*
-            Sid: VaultDataWrite
-          - Sid: ReadOwnManagementRole
-            Effect: Allow
-            Action: iam:GetRole
-            Resource:
-              Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-management
       Tags:
       - Key: managed-by
         Value: deployment
@@ -905,6 +644,284 @@ Resources:
         Value: management
       - Key: resource-type
         Value: remote-stack-management
+  ManagementRoleManagementPolicy1:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Alien remote stack management permissions
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Action:
+          - lambda:CreateFunction
+          Condition:
+            StringEquals:
+              aws:RequestTag/deployment:
+                Fn::Sub: ${AWS::StackName}
+              aws:RequestTag/managed-by: deployment
+          Effect: Allow
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*
+          Sid: WorkerProvision1
+        - Action:
+          - lambda:AddPermission
+          - lambda:CreateAlias
+          - lambda:CreateEventSourceMapping
+          - lambda:CreateFunctionUrlConfig
+          - lambda:DeleteAlias
+          - lambda:DeleteEventSourceMapping
+          - lambda:DeleteFunction
+          - lambda:DeleteFunctionConcurrency
+          - lambda:DeleteFunctionEventInvokeConfig
+          - lambda:DeleteFunctionUrlConfig
+          - lambda:GetCodeSigningConfig
+          - lambda:GetEventSourceMapping
+          - lambda:GetFunction
+          - lambda:GetFunctionConfiguration
+          - lambda:GetFunctionEventInvokeConfig
+          - lambda:GetFunctionUrlConfig
+          - lambda:GetPolicy
+          - lambda:ListAliases
+          - lambda:ListEventSourceMappings
+          - lambda:ListTags
+          - lambda:ListVersionsByFunction
+          - lambda:PublishVersion
+          - lambda:PutFunctionConcurrency
+          - lambda:PutFunctionEventInvokeConfig
+          - lambda:RemovePermission
+          - lambda:TagResource
+          - lambda:UntagResource
+          - lambda:UpdateAlias
+          - lambda:UpdateCodeSigningConfig
+          - lambda:UpdateEventSourceMapping
+          - lambda:UpdateFunctionCode
+          - lambda:UpdateFunctionConfiguration
+          Condition:
+            StringEquals:
+              aws:ResourceTag/deployment:
+                Fn::Sub: ${AWS::StackName}
+              aws:ResourceTag/managed-by: deployment
+          Effect: Allow
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*
+          Sid: WorkerProvision2
+        - Action:
+          - ec2:DescribeNetworkInterfaces
+          - ec2:DescribeSecurityGroups
+          - ec2:DescribeSubnets
+          - ec2:DescribeVpcs
+          Effect: Allow
+          Resource:
+          - '*'
+          Sid: WorkerProvision3
+        - Action:
+          - iam:PassRole
+          Effect: Allow
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*-sa
+          Sid: WorkerProvision4
+        - Action:
+          - iam:GetRolePolicy
+          - iam:ListRolePolicies
+          - iam:PutRolePolicy
+          Condition:
+            StringEquals:
+              aws:ResourceTag/deployment:
+                Fn::Sub: ${AWS::StackName}
+              aws:ResourceTag/managed-by: deployment
+          Effect: Allow
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*
+          Sid: WorkerProvision5
+        - Action:
+          - ecr:GetAuthorizationToken
+          Effect: Allow
+          Resource:
+          - '*'
+          Sid: WorkerProvision6
+        - Action:
+          - ecr:BatchGetImage
+          - ecr:GetDownloadUrlForLayer
+          - ecr:GetRepositoryPolicy
+          - ecr:SetRepositoryPolicy
+          Effect: Allow
+          Resource:
+          - Fn::Sub:
+            - arn:${AWS::Partition}:ecr:*:${ManagingAccountId}:repository/*
+            - ManagingAccountId:
+                Fn::Select:
+                - 4
+                - Fn::Split:
+                  - ':'
+                  - Ref: ManagingRoleArn
+          Sid: WorkerProvision7
+        - Action:
+          - acm:AddTagsToCertificate
+          - acm:ImportCertificate
+          Condition:
+            StringEquals:
+              aws:RequestTag/deployment:
+                Fn::Sub: ${AWS::StackName}
+              aws:RequestTag/managed-by: deployment
+          Effect: Allow
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:acm:${AWS::Region}:${AWS::AccountId}:certificate/*
+          Sid: WorkerProvision8
+        - Action:
+          - acm:AddTagsToCertificate
+          - acm:DeleteCertificate
+          - acm:DescribeCertificate
+          - acm:ImportCertificate
+          Condition:
+            StringEquals:
+              aws:ResourceTag/deployment:
+                Fn::Sub: ${AWS::StackName}
+              aws:ResourceTag/managed-by: deployment
+          Effect: Allow
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:acm:${AWS::Region}:${AWS::AccountId}:certificate/*
+          Sid: WorkerProvision9
+        - Action:
+          - apigateway:POST
+          - apigateway:PUT
+          Condition:
+            StringEquals:
+              aws:RequestTag/deployment:
+                Fn::Sub: ${AWS::StackName}
+              aws:RequestTag/managed-by: deployment
+          Effect: Allow
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis
+          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames
+          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/tags/*
+          Sid: WorkerProvision10
+        - Action:
+          - apigateway:POST
+          Condition:
+            StringEquals:
+              aws:ResourceTag/deployment:
+                Fn::Sub: ${AWS::StackName}
+              aws:ResourceTag/managed-by: deployment
+          Effect: Allow
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*
+          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*
+          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*/apimappings
+          Sid: WorkerProvision11
+        - Action:
+          - apigateway:PUT
+          - apigateway:TagResource
+          Condition:
+            StringEquals:
+              aws:RequestTag/deployment:
+                Fn::Sub: ${AWS::StackName}
+              aws:RequestTag/managed-by: deployment
+          Effect: Allow
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*
+          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*/stages
+          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*/stages/*
+          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*
+          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/tags/*
+          Sid: WorkerProvision12
+      Roles:
+      - Ref: ManagementRole
+    DependsOn:
+    - ManagementRole
+  ManagementRoleManagementPolicy2:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Alien remote stack management permissions
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Action:
+          - apigateway:DELETE
+          - apigateway:GET
+          - apigateway:PATCH
+          - apigateway:PUT
+          Condition:
+            StringEquals:
+              aws:ResourceTag/deployment:
+                Fn::Sub: ${AWS::StackName}
+              aws:ResourceTag/managed-by: deployment
+          Effect: Allow
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*
+          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*
+          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*/apimappings
+          - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*/apimappings/*
+          Sid: WorkerProvision13
+        - Action:
+          - events:PutRule
+          - events:TagResource
+          Condition:
+            StringEquals:
+              aws:RequestTag/deployment:
+                Fn::Sub: ${AWS::StackName}
+              aws:RequestTag/managed-by: deployment
+          Effect: Allow
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${AWS::StackName}-*
+          Sid: WorkerProvision14
+        - Action:
+          - events:DeleteRule
+          - events:DescribeRule
+          - events:PutTargets
+          - events:RemoveTargets
+          Condition:
+            StringEquals:
+              aws:ResourceTag/deployment:
+                Fn::Sub: ${AWS::StackName}
+              aws:ResourceTag/managed-by: deployment
+          Effect: Allow
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${AWS::StackName}-*
+          Sid: WorkerProvision15
+        - Action:
+          - s3:GetBucketAcl
+          - s3:GetBucketLocation
+          - s3:GetBucketPolicy
+          - s3:GetBucketPublicAccessBlock
+          - s3:GetBucketVersioning
+          - s3:GetEncryptionConfiguration
+          - s3:GetLifecycleConfiguration
+          Effect: Allow
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:s3:::${AWS::StackName}-*
+          Sid: StorageHeartbeat
+        - Action:
+          - sqs:GetQueueAttributes
+          - sqs:ListQueueTags
+          Effect: Allow
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${AWS::StackName}-*
+          Sid: QueueHeartbeat
+        - Action:
+          - dynamodb:DescribeContinuousBackups
+          - dynamodb:DescribeTable
+          - dynamodb:DescribeTimeToLive
+          - dynamodb:ListTables
+          - dynamodb:ListTagsOfResource
+          Effect: Allow
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${AWS::StackName}-*
+          Sid: KvHeartbeat
+        - Action:
+          - ssm:DeleteParameter
+          - ssm:PutParameter
+          Effect: Allow
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}-*
+          Sid: VaultDataWrite
+        - Sid: ReadOwnManagementRole
+          Effect: Allow
+          Action: iam:GetRole
+          Resource:
+            Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-management
+      Roles:
+      - Ref: ManagementRole
+    DependsOn:
+    - ManagementRole
   Assets:
     Type: AWS::S3::Bucket
     Properties:
@@ -1202,7 +1219,7 @@ Resources:
     Type: AWS::CloudFormation::CustomResource
     Properties:
       ServiceToken: arn:aws:lambda:us-east-1:123456789012:function:alien-import
-      DeploymentGroupToken:
+      Token:
         Ref: Token
       DeploymentName:
         Ref: AWS::StackName
@@ -1441,6 +1458,8 @@ Resources:
     DependsOn:
     - ExecutionSaRole
     - ManagementRole
+    - ManagementRoleManagementPolicy1
+    - ManagementRoleManagementPolicy2
     - Assets
     - AssetsBucketPolicy
     - Jobs

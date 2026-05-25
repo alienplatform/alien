@@ -1,11 +1,11 @@
-# SyncReconcileResponseAws
+# SyncAcquireResponseDomainsAws
 
 ## Example Usage
 
 ```typescript
-import { SyncReconcileResponseAws } from "@alienplatform/platform-api/models";
+import { SyncAcquireResponseDomainsAws } from "@alienplatform/platform-api/models";
 
-let value: SyncReconcileResponseAws = {
+let value: SyncAcquireResponseDomainsAws = {
   certificateArn: "<value>",
 };
 ```

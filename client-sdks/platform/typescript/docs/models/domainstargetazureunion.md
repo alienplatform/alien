@@ -1,12 +1,12 @@
-# TargetAzureUnion
+# DomainsTargetAzureUnion
 
 
 ## Supported Types
 
-### `models.AzureTargetConfig`
+### `models.DomainsAzureTarget`
 
 ```typescript
-const value: models.AzureTargetConfig = {
+const value: models.DomainsAzureTarget = {
   keyVaultCertificateId: "<id>",
 };
 ```

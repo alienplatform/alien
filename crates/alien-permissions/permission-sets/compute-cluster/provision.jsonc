@@ -165,17 +165,19 @@
           }
         }
       },
-      // iam:PassRole — scoped to the ComputeCluster's IAM role created in CF
+      // iam:PassRole — scoped to stack-prefixed IAM roles created by setup.
+      // CloudFormation role names are based on logical IDs and generated
+      // suffixes, so they do not reliably end in a fixed role suffix.
       {
         "grant": {
           "actions": ["iam:PassRole"]
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-role"]
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"]
           },
           "resource": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-role"]
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"]
           }
         }
       }

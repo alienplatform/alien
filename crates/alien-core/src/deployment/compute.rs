@@ -1,7 +1,8 @@
 //! Compute backend configuration for container orchestration.
 
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+use serde::{Deserialize, Serialize};
 
 /// Configuration for a single container worker cluster.
 ///
@@ -19,27 +20,84 @@ pub struct HorizonClusterConfig {
     pub management_token: String,
 }
 
-/// Horizon host image channel or provider-specific pointer.
+/// Horizon host image architecture.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum HorizonHostArchitecture {
+    /// Linux arm64 / aarch64 host image.
+    #[serde(rename = "arm64")]
+    Arm64,
+    /// Linux amd64 / x86_64 host image.
+    #[serde(rename = "amd64")]
+    Amd64,
+}
+
+/// AWS Horizon host image catalog.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct HorizonAwsHostImages {
+    /// AMI IDs by architecture, then AWS region.
+    pub amis: HashMap<HorizonHostArchitecture, HashMap<String, String>>,
+}
+
+/// GCP Horizon host image entry.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct HorizonGcpHostImage {
+    /// Source image self link or image-family URL.
+    pub source_image: String,
+}
+
+/// GCP Horizon host image catalog.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct HorizonGcpHostImages {
+    /// Images by architecture.
+    pub images: HashMap<HorizonHostArchitecture, HorizonGcpHostImage>,
+}
+
+/// Azure Horizon host image entry.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct HorizonAzureHostImage {
+    /// Azure Compute Gallery image definition ID.
+    pub image_definition_id: String,
+}
+
+/// Azure Horizon host image catalog.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct HorizonAzureHostImages {
+    /// Images by architecture.
+    pub images: HashMap<HorizonHostArchitecture, HorizonAzureHostImage>,
+}
+
+/// Horizon host image catalog.
 ///
-/// Setup references these stable pointers. The concrete image version resolved
-/// during rollout is management state, not ComputeCluster resource config.
+/// Platform resolves concrete provider images from this catalog during rollout.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct HorizonHostImage {
     /// Logical image channel, such as prod, staging, or canary.
     pub channel: String,
-    /// Machine architecture, such as amd64 or arm64.
-    pub architecture: String,
-    /// AWS SSM parameter path for the channel pointer.
+    /// Published image catalog version.
+    pub version: String,
+    /// AWS image catalog.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub aws_ssm_parameter: Option<String>,
-    /// GCP image family for the channel pointer.
+    pub aws: Option<HorizonAwsHostImages>,
+    /// GCP image catalog.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub gcp_image_family: Option<String>,
-    /// Azure Compute Gallery image definition ID for the channel pointer.
+    pub gcp: Option<HorizonGcpHostImages>,
+    /// Azure image catalog.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub azure_gallery_image_definition_id: Option<String>,
+    pub azure: Option<HorizonAzureHostImages>,
 }
 
 /// Horizon control-plane configuration for container orchestration.
@@ -54,7 +112,7 @@ pub struct HorizonConfig {
     /// Horizon control-plane API base URL.
     pub url: String,
 
-    /// Stable Horizon host image channel or provider pointer.
+    /// Horizon host image catalog.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub horizon_host_image: Option<HorizonHostImage>,
 

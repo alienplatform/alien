@@ -1,12 +1,12 @@
-# SyncAcquireResponseAwsUnion
+# SyncAcquireResponseDomainsAwsUnion
 
 
 ## Supported Types
 
-### `models.SyncAcquireResponseAws`
+### `models.SyncAcquireResponseDomainsAws`
 
 ```typescript
-const value: models.SyncAcquireResponseAws = {
+const value: models.SyncAcquireResponseDomainsAws = {
   certificateArn: "<value>",
 };
 ```

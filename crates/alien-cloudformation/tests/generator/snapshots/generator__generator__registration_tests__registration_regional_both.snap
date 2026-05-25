@@ -1,6 +1,5 @@
 ---
 source: crates/alien-cloudformation/tests/generator/registration_tests.rs
-assertion_line: 71
 expression: yaml
 ---
 AWSTemplateFormatVersion: 2010-09-09
@@ -127,7 +126,7 @@ Resources:
         - RegionalCustomResourceServiceTokens
         - Ref: AWS::Region
         - ServiceToken
-      DeploymentGroupToken:
+      Token:
         Ref: Token
       DeploymentName:
         Ref: AWS::StackName

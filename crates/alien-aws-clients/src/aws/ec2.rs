@@ -574,19 +574,25 @@ impl Ec2Client {
         form_data: &mut HashMap<String, String>,
         tag_specs: &[TagSpecification],
     ) {
+        Self::add_tag_specifications_with_prefix(form_data, "TagSpecification", tag_specs);
+    }
+
+    /// Add tag specification parameters under a specific EC2 query prefix.
+    fn add_tag_specifications_with_prefix(
+        form_data: &mut HashMap<String, String>,
+        prefix: &str,
+        tag_specs: &[TagSpecification],
+    ) {
         for (i, spec) in tag_specs.iter().enumerate() {
             let idx = i + 1;
             form_data.insert(
-                format!("TagSpecification.{}.ResourceType", idx),
+                format!("{prefix}.{idx}.ResourceType"),
                 spec.resource_type.clone(),
             );
             for (j, tag) in spec.tags.iter().enumerate() {
+                form_data.insert(format!("{prefix}.{idx}.Tag.{}.Key", j + 1), tag.key.clone());
                 form_data.insert(
-                    format!("TagSpecification.{}.Tag.{}.Key", idx, j + 1),
-                    tag.key.clone(),
-                );
-                form_data.insert(
-                    format!("TagSpecification.{}.Tag.{}.Value", idx, j + 1),
+                    format!("{prefix}.{idx}.Tag.{}.Value", j + 1),
                     tag.value.clone(),
                 );
             }
@@ -1758,6 +1764,20 @@ impl Ec2Api for Ec2Client {
                     http_put_response_hop_limit.to_string(),
                 );
             }
+            if let Some(instance_metadata_tags) = &metadata_options.instance_metadata_tags {
+                form_data.insert(
+                    "LaunchTemplateData.MetadataOptions.InstanceMetadataTags".to_string(),
+                    instance_metadata_tags.clone(),
+                );
+            }
+        }
+
+        if let Some(tag_specs) = &data.tag_specifications {
+            Self::add_tag_specifications_with_prefix(
+                &mut form_data,
+                "LaunchTemplateData.TagSpecification",
+                tag_specs,
+            );
         }
 
         if let Some(tag_specs) = &request.tag_specifications {
@@ -1816,6 +1836,40 @@ impl Ec2Api for Ec2Client {
             form_data.insert(
                 "LaunchTemplateData.InstanceType".to_string(),
                 instance_type.clone(),
+            );
+        }
+        if let Some(metadata_options) = &data.metadata_options {
+            if let Some(http_tokens) = &metadata_options.http_tokens {
+                form_data.insert(
+                    "LaunchTemplateData.MetadataOptions.HttpTokens".to_string(),
+                    http_tokens.clone(),
+                );
+            }
+            if let Some(http_endpoint) = &metadata_options.http_endpoint {
+                form_data.insert(
+                    "LaunchTemplateData.MetadataOptions.HttpEndpoint".to_string(),
+                    http_endpoint.clone(),
+                );
+            }
+            if let Some(http_put_response_hop_limit) = metadata_options.http_put_response_hop_limit
+            {
+                form_data.insert(
+                    "LaunchTemplateData.MetadataOptions.HttpPutResponseHopLimit".to_string(),
+                    http_put_response_hop_limit.to_string(),
+                );
+            }
+            if let Some(instance_metadata_tags) = &metadata_options.instance_metadata_tags {
+                form_data.insert(
+                    "LaunchTemplateData.MetadataOptions.InstanceMetadataTags".to_string(),
+                    instance_metadata_tags.clone(),
+                );
+            }
+        }
+        if let Some(tag_specs) = &data.tag_specifications {
+            Self::add_tag_specifications_with_prefix(
+                &mut form_data,
+                "LaunchTemplateData.TagSpecification",
+                tag_specs,
             );
         }
 
@@ -3288,6 +3342,9 @@ pub struct RequestLaunchTemplateData {
     /// Metadata options.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata_options: Option<LaunchTemplateInstanceMetadataOptions>,
+    /// Tags to apply to resources created from the launch template.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag_specifications: Option<Vec<TagSpecification>>,
 }
 
 /// IAM instance profile specification for launch template.
@@ -3347,6 +3404,8 @@ pub struct LaunchTemplateInstanceMetadataOptions {
     pub http_endpoint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub http_put_response_hop_limit: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instance_metadata_tags: Option<String>,
 }
 
 /// Response from creating a launch template.

@@ -7,8 +7,8 @@
 
 ```typescript
 const value: models.SyncAcquireResponseHorizonHostImage = {
-  architecture: "<value>",
   channel: "<value>",
+  version: "<value>",
 };
 ```
 

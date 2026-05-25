@@ -1,11 +1,11 @@
-# AzureTargetConfig
+# DomainsAzureTarget
 
 ## Example Usage
 
 ```typescript
-import { AzureTargetConfig } from "@alienplatform/platform-api/models";
+import { DomainsAzureTarget } from "@alienplatform/platform-api/models";
 
-let value: AzureTargetConfig = {
+let value: DomainsAzureTarget = {
   keyVaultCertificateId: "<id>",
 };
 ```

@@ -1,11 +1,11 @@
-# SyncAcquireResponseAzureConfig
+# SyncAcquireResponseDomainsAzure
 
 ## Example Usage
 
 ```typescript
-import { SyncAcquireResponseAzureConfig } from "@alienplatform/platform-api/models";
+import { SyncAcquireResponseDomainsAzure } from "@alienplatform/platform-api/models";
 
-let value: SyncAcquireResponseAzureConfig = {
+let value: SyncAcquireResponseDomainsAzure = {
   keyVaultCertificateId: "<id>",
 };
 ```

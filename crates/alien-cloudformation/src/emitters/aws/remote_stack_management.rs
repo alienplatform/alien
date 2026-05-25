@@ -39,16 +39,13 @@ impl CfEmitter for AwsRemoteStackManagementEmitter {
             "AssumeRolePolicyDocument".to_string(),
             remote_management_trust_policy(),
         );
-        role.properties.insert(
-            "Policies".to_string(),
-            CfExpression::list([CfExpression::object([
-                ("PolicyName", CfExpression::from("alien-management-policy")),
-                ("PolicyDocument", remote_management_policy_document(ctx)?),
-            ])]),
-        );
         role.properties.insert("Tags".to_string(), tags(ctx));
 
-        Ok(vec![role])
+        let policy_documents = remote_management_policy_documents(ctx)?;
+        let mut resources = vec![role];
+        resources.extend(management_policy_resources(&role_id, policy_documents));
+
+        Ok(resources)
     }
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<CfExpression> {
@@ -99,7 +96,7 @@ fn remote_management_trust_policy() -> CfExpression {
     ])
 }
 
-fn remote_management_policy_document(ctx: &EmitContext<'_>) -> Result<CfExpression> {
+fn remote_management_policy_documents(ctx: &EmitContext<'_>) -> Result<Vec<CfExpression>> {
     let mut statements = Vec::new();
     let generator = AwsCloudFormationPermissionsGenerator::new();
     let context = permission_context();
@@ -150,10 +147,85 @@ fn remote_management_policy_document(ctx: &EmitContext<'_>) -> Result<CfExpressi
         ),
     ]));
 
-    Ok(CfExpression::object([
+    chunk_policy_statements(statements)
+}
+
+fn policy_document(statements: Vec<CfExpression>) -> CfExpression {
+    CfExpression::object([
         ("Version", CfExpression::from("2012-10-17")),
         ("Statement", CfExpression::list(statements)),
-    ]))
+    ])
+}
+
+fn management_policy_resources(
+    role_id: &str,
+    policy_documents: Vec<CfExpression>,
+) -> Vec<CfResource> {
+    policy_documents
+        .into_iter()
+        .enumerate()
+        .map(|(index, policy_document)| {
+            let mut policy = CfResource::new(
+                format!("{role_id}ManagementPolicy{}", index + 1),
+                "AWS::IAM::ManagedPolicy".to_string(),
+            );
+            policy.properties.insert(
+                "Description".to_string(),
+                CfExpression::from("Alien remote stack management permissions"),
+            );
+            policy
+                .properties
+                .insert("PolicyDocument".to_string(), policy_document);
+            policy.properties.insert(
+                "Roles".to_string(),
+                CfExpression::list([CfExpression::ref_(role_id)]),
+            );
+            policy.depends_on.push(role_id.to_string());
+            policy
+        })
+        .collect()
+}
+
+fn chunk_policy_statements(statements: Vec<CfExpression>) -> Result<Vec<CfExpression>> {
+    const MAX_MANAGED_POLICY_BYTES: usize = 5_500;
+
+    let mut chunks = Vec::new();
+    let mut current = Vec::new();
+
+    for statement in statements {
+        let mut candidate = current.clone();
+        candidate.push(statement.clone());
+        if policy_document_size(&candidate)? <= MAX_MANAGED_POLICY_BYTES {
+            current = candidate;
+            continue;
+        }
+
+        if current.is_empty() {
+            return Err(AlienError::new(ErrorData::GenericError {
+                message: "AWS management IAM statement is too large for a managed policy"
+                    .to_string(),
+            }));
+        }
+
+        chunks.push(policy_document(current));
+        current = vec![statement];
+    }
+
+    if !current.is_empty() {
+        chunks.push(policy_document(current));
+    }
+
+    Ok(chunks)
+}
+
+fn policy_document_size(statements: &[CfExpression]) -> Result<usize> {
+    serde_json::to_string(&policy_document(statements.to_vec()))
+        .into_alien_error()
+        .context(ErrorData::TemplateSerializationFailed {
+            format: "CloudFormation IAM policy".to_string(),
+            reason: "Failed to serialize IAM policy for size validation".to_string(),
+        })
+        .map(|policy| policy.len())
 }
 
 fn global_permission_refs(profile: &PermissionProfile) -> Vec<&PermissionSetReference> {

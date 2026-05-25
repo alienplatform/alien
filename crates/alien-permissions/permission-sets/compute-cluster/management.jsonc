@@ -58,6 +58,125 @@
           }
         }
       },
+      // Auto Scaling validates a dry-run ec2:RunInstances call before accepting
+      // launch templates. That authorization check covers every EC2 resource
+      // referenced by the template and ASG placement, not only the template.
+      {
+        "grant": {
+          "actions": ["ec2:RunInstances"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:launch-template/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "deployment"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:launch-template/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "deployment"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["ec2:RunInstances"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:instance/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "deployment"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:instance/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "deployment"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["ec2:RunInstances"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:ec2:${awsRegion}::image/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:subnet/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:network-interface/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:ec2:${awsRegion}::image/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:subnet/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:network-interface/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"
+            ]
+          }
+        }
+      },
+      // Launch-template tag specifications trigger an ec2:CreateTags
+      // authorization check as part of RunInstances.
+      {
+        "grant": {
+          "actions": ["ec2:CreateTags"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:instance/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:network-interface/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "ec2:CreateAction": "RunInstances",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "deployment"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:instance/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:network-interface/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "ec2:CreateAction": "RunInstances",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "deployment"
+              }
+            }
+          }
+        }
+      },
       // ASG creation must include boundary tags in the create request.
       {
         "grant": {
@@ -188,6 +307,7 @@
           "actions": [
             "secretsmanager:DescribeSecret",
             "secretsmanager:CreateSecret",
+            "secretsmanager:TagResource",
             "secretsmanager:UpdateSecret",
             "secretsmanager:DeleteSecret"
           ]
@@ -201,18 +321,19 @@
           }
         }
       },
-      // iam:PassRole remains name-scoped. IAM roles do not consistently support
-      // the same resource-tag checks for PassRole that EC2/ELB resources do.
+      // iam:PassRole remains stack-prefix scoped. CloudFormation role names are
+      // based on logical IDs and generated suffixes, so they do not reliably end
+      // in a fixed role suffix.
       {
         "grant": {
           "actions": ["iam:PassRole"]
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-role"]
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"]
           },
           "resource": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-role"]
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"]
           }
         }
       },
