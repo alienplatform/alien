@@ -791,7 +791,7 @@ jobs:
       - name: Run E2E push test
         env:
           NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
-          ALIEN_TEST_OVERRIDE_BASE_IMAGE: ${{ needs.compute-matrix.outputs.build_images == 'true' && needs.build-base-image.outputs.base_image || '' }}
+          ALIEN_OVERRIDE_BASE_IMAGE: ${{ needs.compute-matrix.outputs.build_images == 'true' && needs.build-base-image.outputs.base_image || '' }}
           ALIEN_E2E_NETWORK_MODE: ${{ needs.compute-matrix.outputs.network_mode }}
         run: |
           set -a && source .env.test && set +a
@@ -875,7 +875,7 @@ jobs:
       - name: Run E2E CloudFormation distribution test
         env:
           NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
-          ALIEN_TEST_OVERRIDE_BASE_IMAGE: ${{ needs.compute-matrix.outputs.build_images == 'true' && needs.build-base-image.outputs.base_image || '' }}
+          ALIEN_OVERRIDE_BASE_IMAGE: ${{ needs.compute-matrix.outputs.build_images == 'true' && needs.build-base-image.outputs.base_image || '' }}
           ALIEN_E2E_NETWORK_MODE: ${{ needs.compute-matrix.outputs.network_mode }}
         run: |
           set -a && source .env.test && set +a
@@ -1003,7 +1003,7 @@ jobs:
       - name: Run E2E Terraform distribution test
         env:
           NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
-          ALIEN_TEST_OVERRIDE_BASE_IMAGE: ${{ needs.compute-matrix.outputs.build_images == 'true' && needs.build-base-image.outputs.base_image || '' }}
+          ALIEN_OVERRIDE_BASE_IMAGE: ${{ needs.compute-matrix.outputs.build_images == 'true' && needs.build-base-image.outputs.base_image || '' }}
           ALIEN_TEST_OVERRIDE_AGENT_IMAGE: ${{ needs.compute-matrix.outputs.build_images == 'true' && needs.build-agent-image.outputs.agent_image || '' }}
           ALIEN_E2E_NETWORK_MODE: ${{ needs.compute-matrix.outputs.network_mode }}
         run: |

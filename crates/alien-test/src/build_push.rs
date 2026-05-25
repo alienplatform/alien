@@ -182,7 +182,8 @@ fn create_build_settings(platform: Platform, config: &TestConfig) -> anyhow::Res
         None
     };
 
-    let override_base_image = std::env::var("ALIEN_TEST_OVERRIDE_BASE_IMAGE")
+    let override_base_image = std::env::var("ALIEN_OVERRIDE_BASE_IMAGE")
+        .or_else(|_| std::env::var("ALIEN_TEST_OVERRIDE_BASE_IMAGE"))
         .ok()
         .filter(|s| !s.is_empty());
 
