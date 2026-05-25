@@ -505,7 +505,7 @@ fn add_standard_parameters(template: &mut CfTemplate, settings: &StackSettings) 
     template.parameters.insert(
         PARAM_MANAGING_ACCOUNT_ID.to_string(),
         string_parameter(
-            "Account ID hosting the manager. Referenced by stack-side IAM policies that scope cross-account image pulls. Empty disables those grants.",
+            "AWS account ID for the Alien management account that hosts deployment container images.",
             Some(String::new()),
             None,
             false,
@@ -518,7 +518,7 @@ fn add_standard_parameters(template: &mut CfTemplate, settings: &StackSettings) 
     template.parameters.insert(
         PARAM_DOMAIN_NAME.to_string(),
         string_parameter(
-            "Optional domain name for public endpoints. Empty disables custom domains.",
+            "Optional custom domain for public endpoints. Leave unset to use an auto-generated domain with a managed TLS certificate.",
             Some(domain_defaults.domain_name.unwrap_or_default()),
             None,
             false,
@@ -527,7 +527,7 @@ fn add_standard_parameters(template: &mut CfTemplate, settings: &StackSettings) 
     template.parameters.insert(
         PARAM_HOSTED_ZONE_ID.to_string(),
         string_parameter(
-            "Optional Route 53 hosted zone ID for the domain.",
+            "Route 53 hosted zone ID for the custom domain. Not needed for the auto-generated domain.",
             Some(String::new()),
             None,
             false,
@@ -536,7 +536,7 @@ fn add_standard_parameters(template: &mut CfTemplate, settings: &StackSettings) 
     template.parameters.insert(
         PARAM_CERTIFICATE_ARN.to_string(),
         string_parameter(
-            "Optional ACM certificate ARN for the domain.",
+            "ACM certificate ARN for the custom domain. Not needed for the auto-generated domain.",
             Some(domain_defaults.certificate_arn.unwrap_or_default()),
             None,
             false,
@@ -584,7 +584,7 @@ fn add_network_parameters(template: &mut CfTemplate, network: Option<&NetworkSet
     template.parameters.insert(
         PARAM_NETWORK_MODE.to_string(),
         string_parameter(
-            "Choose whether this setup creates a new network, uses an existing network, or uses the default network.",
+            "Choose create-new for a managed VPC, use-existing for your VPC, or use-default for the account default VPC.",
             Some(network_mode_default(network).to_string()),
             Some(vec![
                 CfExpression::from("create-new"),
@@ -603,7 +603,7 @@ fn add_network_parameters(template: &mut CfTemplate, network: Option<&NetworkSet
             template.parameters.insert(
                 PARAM_VPC_CIDR.to_string(),
                 string_parameter(
-                    "CIDR for created VPCs. Empty uses the generated default.",
+                    "Only used with create-new. CIDR for the new VPC; leave unset for the generated default.",
                     Some(defaults.cidr.unwrap_or_default()),
                     None,
                     false,
@@ -612,7 +612,7 @@ fn add_network_parameters(template: &mut CfTemplate, network: Option<&NetworkSet
             template.parameters.insert(
                 PARAM_AVAILABILITY_ZONES.to_string(),
                 number_parameter(
-                    "Number of availability zones to use when creating a VPC.",
+                    "Only used with create-new. Number of availability zones for the new VPC.",
                     defaults.availability_zones,
                     Some(vec![
                         CfExpression::from(1u8),
@@ -624,7 +624,7 @@ fn add_network_parameters(template: &mut CfTemplate, network: Option<&NetworkSet
             template.parameters.insert(
                 PARAM_VPC_ID.to_string(),
                 string_parameter(
-                    "Existing VPC ID. Required when Network is use-existing.",
+                    "Only used with use-existing. Existing VPC ID.",
                     Some(defaults.vpc_id.unwrap_or_default()),
                     None,
                     false,
@@ -632,15 +632,24 @@ fn add_network_parameters(template: &mut CfTemplate, network: Option<&NetworkSet
             );
             template.parameters.insert(
                 PARAM_PUBLIC_SUBNET_IDS.to_string(),
-                comma_list_parameter("Existing public subnet IDs.", defaults.public_subnet_ids),
+                comma_list_parameter(
+                    "Only used with use-existing. Existing public subnet IDs.",
+                    defaults.public_subnet_ids,
+                ),
             );
             template.parameters.insert(
                 PARAM_PRIVATE_SUBNET_IDS.to_string(),
-                comma_list_parameter("Existing private subnet IDs.", defaults.private_subnet_ids),
+                comma_list_parameter(
+                    "Only used with use-existing. Existing private subnet IDs.",
+                    defaults.private_subnet_ids,
+                ),
             );
             template.parameters.insert(
                 PARAM_SECURITY_GROUP_IDS.to_string(),
-                comma_list_parameter("Existing security group IDs.", defaults.security_group_ids),
+                comma_list_parameter(
+                    "Only used with use-existing. Existing security group IDs.",
+                    defaults.security_group_ids,
+                ),
             );
         }
         None | Some(NetworkSettings::ByoVpcGcp { .. } | NetworkSettings::ByoVnetAzure { .. }) => {}
@@ -738,7 +747,7 @@ fn add_console_interface_metadata(template: &mut CfTemplate, settings: &StackSet
         }));
     }
     parameter_groups.push(json!({
-        "Label": { "default": "Domains" },
+        "Label": { "default": "Custom domain" },
         "Parameters": [PARAM_DOMAIN_NAME, PARAM_HOSTED_ZONE_ID, PARAM_CERTIFICATE_ARN]
     }));
     parameter_groups.push(json!({

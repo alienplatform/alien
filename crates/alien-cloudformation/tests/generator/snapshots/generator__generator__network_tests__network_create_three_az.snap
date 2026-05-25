@@ -1,6 +1,5 @@
 ---
 source: crates/alien-cloudformation/tests/generator/network_tests.rs
-assertion_line: 38
 expression: yaml
 ---
 AWSTemplateFormatVersion: 2010-09-09
@@ -27,7 +26,7 @@ Metadata:
       - PrivateSubnetIds
       - SecurityGroupIds
     - Label:
-        default: Domains
+        default: Custom domain
       Parameters:
       - DomainName
       - HostedZoneId
@@ -81,11 +80,11 @@ Parameters:
     Description: Manager IAM role ARN allowed to assume generated management roles.
   ManagingAccountId:
     Type: String
-    Description: Account ID hosting the manager. Referenced by stack-side IAM policies that scope cross-account image pulls. Empty disables those grants.
+    Description: AWS account ID for the Alien management account that hosts deployment container images.
     Default: ''
   NetworkMode:
     Type: String
-    Description: Choose whether this setup creates a new network, uses an existing network, or uses the default network.
+    Description: Choose create-new for a managed VPC, use-existing for your VPC, or use-default for the account default VPC.
     Default: create-new
     AllowedValues:
     - create-new
@@ -93,11 +92,11 @@ Parameters:
     - use-default
   VpcCidr:
     Type: String
-    Description: CIDR for created VPCs. Empty uses the generated default.
+    Description: Only used with create-new. CIDR for the new VPC; leave unset for the generated default.
     Default: 10.42.0.0/16
   AvailabilityZones:
     Type: Number
-    Description: Number of availability zones to use when creating a VPC.
+    Description: Only used with create-new. Number of availability zones for the new VPC.
     Default: 3
     AllowedValues:
     - 1
@@ -105,31 +104,31 @@ Parameters:
     - 3
   VpcId:
     Type: String
-    Description: Existing VPC ID. Required when Network is use-existing.
+    Description: Only used with use-existing. Existing VPC ID.
     Default: ''
   PublicSubnetIds:
     Type: CommaDelimitedList
-    Description: Existing public subnet IDs.
+    Description: Only used with use-existing. Existing public subnet IDs.
     Default: ''
   PrivateSubnetIds:
     Type: CommaDelimitedList
-    Description: Existing private subnet IDs.
+    Description: Only used with use-existing. Existing private subnet IDs.
     Default: ''
   SecurityGroupIds:
     Type: CommaDelimitedList
-    Description: Existing security group IDs.
+    Description: Only used with use-existing. Existing security group IDs.
     Default: ''
   DomainName:
     Type: String
-    Description: Optional domain name for public endpoints. Empty disables custom domains.
+    Description: Optional custom domain for public endpoints. Leave unset to use an auto-generated domain with a managed TLS certificate.
     Default: ''
   HostedZoneId:
     Type: String
-    Description: Optional Route 53 hosted zone ID for the domain.
+    Description: Route 53 hosted zone ID for the custom domain. Not needed for the auto-generated domain.
     Default: ''
   CertificateArn:
     Type: String
-    Description: Optional ACM certificate ARN for the domain.
+    Description: ACM certificate ARN for the custom domain. Not needed for the auto-generated domain.
     Default: ''
   UpdatesMode:
     Type: String

@@ -16,7 +16,7 @@ Metadata:
       - ManagingRoleArn
       - ManagingAccountId
     - Label:
-        default: Domains
+        default: Custom domain
       Parameters:
       - DomainName
       - HostedZoneId
@@ -56,11 +56,11 @@ Parameters:
     Description: Manager IAM role ARN allowed to assume generated management roles.
   ManagingAccountId:
     Type: String
-    Description: Account ID hosting the manager. Referenced by stack-side IAM policies that scope cross-account image pulls. Empty disables those grants.
+    Description: AWS account ID for the Alien management account that hosts deployment container images.
     Default: ''
   NetworkMode:
     Type: String
-    Description: Choose whether this setup creates a new network, uses an existing network, or uses the default network.
+    Description: Choose create-new for a managed VPC, use-existing for your VPC, or use-default for the account default VPC.
     Default: create-new
     AllowedValues:
     - create-new
@@ -68,15 +68,15 @@ Parameters:
     - use-default
   DomainName:
     Type: String
-    Description: Optional domain name for public endpoints. Empty disables custom domains.
+    Description: Optional custom domain for public endpoints. Leave unset to use an auto-generated domain with a managed TLS certificate.
     Default: ''
   HostedZoneId:
     Type: String
-    Description: Optional Route 53 hosted zone ID for the domain.
+    Description: Route 53 hosted zone ID for the custom domain. Not needed for the auto-generated domain.
     Default: ''
   CertificateArn:
     Type: String
-    Description: Optional ACM certificate ARN for the domain.
+    Description: ACM certificate ARN for the custom domain. Not needed for the auto-generated domain.
     Default: ''
   UpdatesMode:
     Type: String
