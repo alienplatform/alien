@@ -65,7 +65,8 @@ pub mod ssm;
 pub mod sts;
 
 const AWS_IMDS_ENDPOINT: &str = "http://169.254.169.254";
-const AWS_IMDS_TIMEOUT: Duration = Duration::from_millis(500);
+const AWS_IMDS_DISCOVERY_TIMEOUT: Duration = Duration::from_millis(500);
+const AWS_IMDS_CREDENTIALS_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
@@ -381,7 +382,6 @@ async fn load_imds_credentials(
         .trim_end_matches('/');
 
     let client = reqwest::Client::builder()
-        .timeout(AWS_IMDS_TIMEOUT)
         .build()
         .into_alien_error()
         .context(ErrorData::InvalidClientConfig {
@@ -392,6 +392,7 @@ async fn load_imds_credentials(
     let token_url = format!("{endpoint}/latest/api/token");
     let token = client
         .put(&token_url)
+        .timeout(AWS_IMDS_DISCOVERY_TIMEOUT)
         .header("X-aws-ec2-metadata-token-ttl-seconds", "21600")
         .send()
         .await
@@ -417,6 +418,7 @@ async fn load_imds_credentials(
     let role_url = format!("{endpoint}/latest/meta-data/iam/security-credentials/");
     let role_name = client
         .get(&role_url)
+        .timeout(AWS_IMDS_DISCOVERY_TIMEOUT)
         .header("X-aws-ec2-metadata-token", &token)
         .send()
         .await
@@ -453,6 +455,7 @@ async fn load_imds_credentials(
     let credentials_url = format!("{role_url}{role_name}");
     let credentials: AwsImdsCredentials = client
         .get(&credentials_url)
+        .timeout(AWS_IMDS_CREDENTIALS_TIMEOUT)
         .header("X-aws-ec2-metadata-token", &token)
         .send()
         .await
