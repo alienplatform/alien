@@ -2,7 +2,7 @@ use alien_client_core::{ErrorData, Result};
 use alien_error::{AlienError, Context, IntoAlienError};
 use aws_credential_types::Credentials;
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Duration};
 
 // Re-export types from alien-core
 pub use alien_core::{
@@ -64,13 +64,16 @@ pub mod sqs;
 pub mod ssm;
 pub mod sts;
 
+const AWS_IMDS_ENDPOINT: &str = "http://169.254.169.254";
+const AWS_IMDS_TIMEOUT: Duration = Duration::from_millis(500);
+
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 impl AwsClientConfigExt for AwsClientConfig {
     /// Create a new `AwsClientConfig` from environment variables.
     async fn from_env(environment_variables: &HashMap<String, String>) -> Result<Self> {
         let region = resolve_region(environment_variables)?;
-        let credentials = resolve_credentials(environment_variables)?;
+        let credentials = resolve_credentials(environment_variables).await?;
         let service_overrides =
             parse_service_overrides(environment_variables.get("AWS_SERVICE_OVERRIDES_ENDPOINTS"))?;
         let account_id = infer_account_id(
@@ -303,7 +306,9 @@ fn resolve_region(environment_variables: &HashMap<String, String>) -> Result<Str
     }))
 }
 
-fn resolve_credentials(environment_variables: &HashMap<String, String>) -> Result<AwsCredentials> {
+async fn resolve_credentials(
+    environment_variables: &HashMap<String, String>,
+) -> Result<AwsCredentials> {
     if let (Some(role_arn), Some(token_file)) = (
         environment_variables.get("AWS_ROLE_ARN"),
         environment_variables.get("AWS_WEB_IDENTITY_TOKEN_FILE"),
@@ -331,8 +336,150 @@ fn resolve_credentials(environment_variables: &HashMap<String, String>) -> Resul
         });
     }
 
+    if profile_is_explicit(environment_variables) {
+        let profile = profile_name(environment_variables);
+        return load_profile_credentials(&profile);
+    }
+
+    if !metadata_disabled(environment_variables) {
+        if let Ok(credentials) = load_imds_credentials(environment_variables).await {
+            return Ok(credentials);
+        }
+    }
+
     let profile = profile_name(environment_variables);
     load_profile_credentials(&profile)
+}
+
+fn profile_is_explicit(environment_variables: &HashMap<String, String>) -> bool {
+    environment_variables.contains_key("AWS_PROFILE")
+        || environment_variables.contains_key("AWS_DEFAULT_PROFILE")
+}
+
+fn metadata_disabled(environment_variables: &HashMap<String, String>) -> bool {
+    environment_variables
+        .get("AWS_EC2_METADATA_DISABLED")
+        .map(|value| value.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct AwsImdsCredentials {
+    access_key_id: String,
+    secret_access_key: String,
+    token: String,
+}
+
+async fn load_imds_credentials(
+    environment_variables: &HashMap<String, String>,
+) -> Result<AwsCredentials> {
+    let endpoint = environment_variables
+        .get("AWS_EC2_METADATA_SERVICE_ENDPOINT")
+        .map(String::as_str)
+        .unwrap_or(AWS_IMDS_ENDPOINT)
+        .trim_end_matches('/');
+
+    let client = reqwest::Client::builder()
+        .timeout(AWS_IMDS_TIMEOUT)
+        .build()
+        .into_alien_error()
+        .context(ErrorData::InvalidClientConfig {
+            message: "Failed to create AWS IMDS HTTP client".to_string(),
+            errors: None,
+        })?;
+
+    let token_url = format!("{endpoint}/latest/api/token");
+    let token = client
+        .put(&token_url)
+        .header("X-aws-ec2-metadata-token-ttl-seconds", "21600")
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::InvalidClientConfig {
+            message: "Failed to request AWS IMDSv2 token".to_string(),
+            errors: None,
+        })?
+        .error_for_status()
+        .into_alien_error()
+        .context(ErrorData::InvalidClientConfig {
+            message: "AWS IMDSv2 token request failed".to_string(),
+            errors: None,
+        })?
+        .text()
+        .await
+        .into_alien_error()
+        .context(ErrorData::InvalidClientConfig {
+            message: "Failed to read AWS IMDSv2 token".to_string(),
+            errors: None,
+        })?;
+
+    let role_url = format!("{endpoint}/latest/meta-data/iam/security-credentials/");
+    let role_name = client
+        .get(&role_url)
+        .header("X-aws-ec2-metadata-token", &token)
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::InvalidClientConfig {
+            message: "Failed to request AWS IMDS role name".to_string(),
+            errors: None,
+        })?
+        .error_for_status()
+        .into_alien_error()
+        .context(ErrorData::InvalidClientConfig {
+            message: "AWS IMDS role name request failed".to_string(),
+            errors: None,
+        })?
+        .text()
+        .await
+        .into_alien_error()
+        .context(ErrorData::InvalidClientConfig {
+            message: "Failed to read AWS IMDS role name".to_string(),
+            errors: None,
+        })?;
+
+    let role_name = role_name
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::InvalidClientConfig {
+                message: "AWS IMDS did not return an IAM role name".to_string(),
+                errors: None,
+            })
+        })?;
+
+    let credentials_url = format!("{role_url}{role_name}");
+    let credentials: AwsImdsCredentials = client
+        .get(&credentials_url)
+        .header("X-aws-ec2-metadata-token", &token)
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::InvalidClientConfig {
+            message: "Failed to request AWS IMDS credentials".to_string(),
+            errors: None,
+        })?
+        .error_for_status()
+        .into_alien_error()
+        .context(ErrorData::InvalidClientConfig {
+            message: "AWS IMDS credentials request failed".to_string(),
+            errors: None,
+        })?
+        .json()
+        .await
+        .into_alien_error()
+        .context(ErrorData::InvalidClientConfig {
+            message: "Failed to parse AWS IMDS credentials".to_string(),
+            errors: None,
+        })?;
+
+    Ok(AwsCredentials::AccessKeys {
+        access_key_id: credentials.access_key_id,
+        secret_access_key: credentials.secret_access_key,
+        session_token: Some(credentials.token),
+    })
 }
 
 fn parse_service_overrides(endpoints_json: Option<&String>) -> Result<Option<ServiceOverrides>> {
@@ -582,15 +729,15 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_resolve_credentials_prefers_explicit_keys() {
+    #[tokio::test]
+    async fn test_resolve_credentials_prefers_explicit_keys() {
         let mut env = HashMap::new();
         env.insert("AWS_ACCESS_KEY_ID".to_string(), "AKIA123".to_string());
         env.insert("AWS_SECRET_ACCESS_KEY".to_string(), "secret".to_string());
         env.insert("AWS_SESSION_TOKEN".to_string(), "token".to_string());
         env.insert("AWS_PROFILE".to_string(), "should-not-be-used".to_string());
 
-        let credentials = resolve_credentials(&env).unwrap();
+        let credentials = resolve_credentials(&env).await.unwrap();
         assert_eq!(
             credentials,
             AwsCredentials::AccessKeys {
