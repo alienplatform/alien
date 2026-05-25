@@ -251,7 +251,7 @@ fn documented_create_security_group_vpc_resource(actions: &[String], resource: &
     actions
         .iter()
         .all(|action| action == "ec2:CreateSecurityGroup")
-        && resource == "arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/*"
+        && documented_create_security_group_authorization_resource(resource)
 }
 
 fn documented_create_security_group_vpc_authorization(
@@ -262,7 +262,15 @@ fn documented_create_security_group_vpc_authorization(
         && binding
             .resources
             .iter()
-            .any(|resource| resource == "arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/*")
+            .any(|resource| documented_create_security_group_authorization_resource(resource))
+}
+
+fn documented_create_security_group_authorization_resource(resource: &str) -> bool {
+    matches!(
+        resource,
+        "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"
+            | "arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/*"
+    )
 }
 
 #[test]

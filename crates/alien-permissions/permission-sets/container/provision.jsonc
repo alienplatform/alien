@@ -174,10 +174,16 @@
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/*"]
+            "resources": [
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/*"
+            ]
           },
           "resource": {
-            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/*"]
+            "resources": [
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/*"
+            ]
           }
         }
       },
