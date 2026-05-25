@@ -13,7 +13,9 @@ use crate::{
     },
     template::{CfExpression, CfResource},
 };
-use alien_core::{import::EmitContext, Build, ErrorData, Result, ServiceAccount, Worker};
+use alien_core::{
+    import::EmitContext, Build, ComputeCluster, ErrorData, Result, ServiceAccount, Worker,
+};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{
     generators::AwsCloudFormationPermissionsGenerator, BindingTarget, PermissionContext,
@@ -91,8 +93,9 @@ fn service_account_trust_policy(
 ) -> CfExpression {
     let profile_name = service_account.id.strip_suffix("-sa");
     let mut services = BTreeSet::new();
+    let mut compute_role_arns = Vec::new();
 
-    for (_id, entry) in ctx.stack.resources() {
+    for (id, entry) in ctx.stack.resources() {
         if let Some(function) = entry.config.downcast_ref::<Worker>() {
             if Some(function.permissions.as_str()) == profile_name {
                 services.insert("lambda.amazonaws.com");
@@ -103,15 +106,55 @@ fn service_account_trust_policy(
                 services.insert("codebuild.amazonaws.com");
             }
         }
+        if entry.config.downcast_ref::<ComputeCluster>().is_some() {
+            if let Some(logical_id) = ctx.name_for(id) {
+                compute_role_arns.push(CfExpression::get_att(
+                    format!("{logical_id}InstanceRole"),
+                    "Arn",
+                ));
+            }
+        }
     }
 
-    if services.is_empty() {
+    if services.is_empty() && compute_role_arns.is_empty() {
         services.insert("lambda.amazonaws.com");
         services.insert("codebuild.amazonaws.com");
         services.insert("ec2.amazonaws.com");
     }
 
-    service_trust_policy(services)
+    if compute_role_arns.is_empty() {
+        return service_trust_policy(services);
+    }
+
+    let mut statements = Vec::new();
+    if !services.is_empty() {
+        let service_principal = if services.len() == 1 {
+            CfExpression::from(*services.iter().next().expect("one service"))
+        } else {
+            CfExpression::list(services.into_iter().map(CfExpression::from))
+        };
+        statements.push(CfExpression::object([
+            ("Effect", CfExpression::from("Allow")),
+            (
+                "Principal",
+                CfExpression::object([("Service", service_principal)]),
+            ),
+            ("Action", CfExpression::from("sts:AssumeRole")),
+        ]));
+    }
+    statements.push(CfExpression::object([
+        ("Effect", CfExpression::from("Allow")),
+        (
+            "Principal",
+            CfExpression::object([("AWS", CfExpression::list(compute_role_arns))]),
+        ),
+        ("Action", CfExpression::from("sts:AssumeRole")),
+    ]));
+
+    CfExpression::object([
+        ("Version", CfExpression::from("2012-10-17")),
+        ("Statement", CfExpression::list(statements)),
+    ])
 }
 
 fn service_account_policy_document(

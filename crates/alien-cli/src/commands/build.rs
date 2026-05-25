@@ -73,6 +73,10 @@ pub struct BuildArgs {
     #[arg(long)]
     pub cache_url: Option<String>,
 
+    /// Override the runtime base image used for source-built cloud containers.
+    #[arg(long, env = "ALIEN_OVERRIDE_BASE_IMAGE", hide = true)]
+    pub override_base_image: Option<String>,
+
     /// Emit structured JSON output
     #[arg(long)]
     pub json: bool,
@@ -203,7 +207,7 @@ pub async fn build_task(args: &BuildArgs) -> Result<Vec<BuildOutput>> {
             platform: target_platform,
             targets: targets.clone(),
             cache_url: args.cache_url.clone(),
-            override_base_image: None,
+            override_base_image: args.override_base_image.clone(),
             debug_mode: false,
         };
 

@@ -76,6 +76,10 @@ pub struct ReleaseArgs {
     #[arg(long)]
     pub prebuilt: bool,
 
+    /// Override the runtime base image used for source-built cloud containers.
+    #[arg(long, env = "ALIEN_OVERRIDE_BASE_IMAGE", hide = true)]
+    pub override_base_image: Option<String>,
+
     // Manual registry override options (for manager deployment)
     /// Image repository URL (manual override - skips platform manager)
     #[arg(long)]
@@ -231,7 +235,14 @@ async fn load_release_config(
     // Content-hash dedup in the build layer makes this fast when nothing changed.
     if !args.prebuilt {
         for platform_str in &target_platforms {
-            auto_build_for_platform(platform_str, &stack, &output_dir, show_human_output).await?;
+            auto_build_for_platform(
+                platform_str,
+                &stack,
+                &output_dir,
+                show_human_output,
+                args.override_base_image.clone(),
+            )
+            .await?;
         }
     }
 
@@ -622,6 +633,7 @@ async fn auto_build_for_platform(
     stack: &Stack,
     output_dir: &PathBuf,
     _show_human_output: bool,
+    override_base_image: Option<String>,
 ) -> Result<()> {
     let platform = Platform::from_str(platform_str).map_err(|e| {
         AlienError::new(ErrorData::ValidationError {
@@ -651,7 +663,7 @@ async fn auto_build_for_platform(
         platform: platform_build_settings,
         targets,
         cache_url: None,
-        override_base_image: None,
+        override_base_image,
         debug_mode: false,
     };
 
