@@ -12,11 +12,11 @@
 //! behind `#[cfg(feature = "platform")]`.
 
 use crate::error::{ErrorData, Result};
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError, IntoAlienErrorDirect};
 use alien_manager_api::Client as ServerSdkClient;
 use alien_platform_api::Client as SdkClient;
 use tokio::time::Duration;
-use tracing::info;
+use tracing::{info, warn};
 
 #[cfg(feature = "platform")]
 use crate::auth::{get_auth_http, load_workspace, save_workspace, AuthOpts};
@@ -576,18 +576,13 @@ async fn create_or_get_artifact_repo(
         manager_url, project_id, platform
     );
 
-    let get_resp = client
-        .get(&get_url)
-        .send()
-        .await
-        .into_alien_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: format!(
-                "Failed to reach artifact registry on manager at {}",
-                manager_url
-            ),
-            url: Some(get_url.clone()),
-        })?;
+    let get_resp = send_artifact_registry_request_with_retry(
+        || client.get(&get_url),
+        manager_url,
+        &get_url,
+        "Failed to reach artifact registry on manager",
+    )
+    .await?;
 
     if get_resp.status().is_success() {
         let body: serde_json::Value =
@@ -611,19 +606,17 @@ async fn create_or_get_artifact_repo(
         manager_url, platform
     );
 
-    let create_resp = client
-        .post(&create_url)
-        .json(&serde_json::json!({ "name": project_id }))
-        .send()
-        .await
-        .into_alien_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: format!(
-                "Failed to create artifact repository on manager at {}",
-                manager_url
-            ),
-            url: Some(create_url.clone()),
-        })?;
+    let create_resp = send_artifact_registry_request_with_retry(
+        || {
+            client
+                .post(&create_url)
+                .json(&serde_json::json!({ "name": project_id }))
+        },
+        manager_url,
+        &create_url,
+        "Failed to create artifact repository on manager",
+    )
+    .await?;
 
     let create_status = create_resp.status();
 
@@ -645,18 +638,13 @@ async fn create_or_get_artifact_repo(
 
     // Create returned non-success (409 = already exists, or other error).
     // Try GET again — the repo may have been created concurrently.
-    let get_resp2 = client
-        .get(&get_url)
-        .send()
-        .await
-        .into_alien_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: format!(
-                "Failed to get artifact repository from manager at {}",
-                manager_url
-            ),
-            url: Some(get_url.clone()),
-        })?;
+    let get_resp2 = send_artifact_registry_request_with_retry(
+        || client.get(&get_url),
+        manager_url,
+        &get_url,
+        "Failed to get artifact repository from manager",
+    )
+    .await?;
 
     if get_resp2.status().is_success() {
         let body: serde_json::Value =
@@ -682,4 +670,47 @@ async fn create_or_get_artifact_repo(
         ),
         url: Some(create_url),
     }))
+}
+
+#[cfg(feature = "platform")]
+async fn send_artifact_registry_request_with_retry<F>(
+    build_request: F,
+    manager_url: &str,
+    url: &str,
+    message: &str,
+) -> crate::error::Result<reqwest::Response>
+where
+    F: Fn() -> reqwest::RequestBuilder,
+{
+    for attempt in 1..=3 {
+        match build_request().send().await {
+            Ok(response) => return Ok(response),
+            Err(error) if attempt < 3 && is_retryable_artifact_registry_error(&error) => {
+                let delay = Duration::from_secs(attempt * 2);
+                warn!(
+                    attempt,
+                    delay_secs = delay.as_secs(),
+                    url,
+                    error = %error,
+                    "Retrying artifact registry manager request"
+                );
+                tokio::time::sleep(delay).await;
+            }
+            Err(error) => {
+                return Err(error
+                    .into_alien_error()
+                    .context(ErrorData::ApiRequestFailed {
+                        message: format!("{} at {}", message, manager_url),
+                        url: Some(url.to_string()),
+                    }));
+            }
+        }
+    }
+
+    unreachable!("artifact registry retry loop always returns")
+}
+
+#[cfg(feature = "platform")]
+fn is_retryable_artifact_registry_error(error: &reqwest::Error) -> bool {
+    error.is_timeout() || error.is_connect()
 }
