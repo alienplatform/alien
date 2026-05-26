@@ -6,6 +6,7 @@ terraform {
       configuration_aliases = [google.management, google.target]
     }
     random = { source = "hashicorp/random", version = "~> 3.0" }
+    time   = { source = "hashicorp/time", version = "~> 0.13" }
   }
 }
 
@@ -45,7 +46,7 @@ resource "google_compute_network" "e2e" {
 
   depends_on = [
     google_project_service.target_apis,
-    google_project_iam_member.target_roles,
+    time_sleep.target_role_propagation,
   ]
 }
 
@@ -157,6 +158,16 @@ resource "google_project_iam_member" "target_roles" {
   project  = var.target_project_id
   role     = each.value
   member   = "serviceAccount:${google_service_account.target.email}"
+}
+
+resource "time_sleep" "target_role_propagation" {
+  create_duration = "90s"
+
+  triggers = {
+    target_roles = sha1(jsonencode(sort(local.target_roles)))
+  }
+
+  depends_on = [google_project_iam_member.target_roles]
 }
 
 resource "google_project_iam_member" "target_management_access" {
