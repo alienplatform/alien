@@ -223,6 +223,32 @@ resource "aws_iam_role_policy_attachment" "e2e_eks_node" {
   policy_arn = each.value
 }
 
+resource "aws_iam_role" "e2e_eks_managed_node" {
+  provider = aws.target
+  name     = "alien-e2e-eks-mng-node-${random_id.suffix.hex}"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "ec2.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "e2e_eks_managed_node" {
+  provider = aws.target
+  for_each = toset([
+    "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy",
+    "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPullOnly",
+    "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy",
+  ])
+
+  role       = aws_iam_role.e2e_eks_managed_node.name
+  policy_arn = each.value
+}
+
 resource "aws_eks_cluster" "e2e" {
   provider                      = aws.target
   name                          = local.e2e_eks_cluster_name
@@ -280,7 +306,7 @@ resource "aws_eks_node_group" "e2e" {
   provider        = aws.target
   cluster_name    = aws_eks_cluster.e2e.name
   node_group_name = "alien-e2e-${random_id.suffix.hex}"
-  node_role_arn   = aws_iam_role.e2e_eks_node.arn
+  node_role_arn   = aws_iam_role.e2e_eks_managed_node.arn
   subnet_ids      = aws_subnet.e2e_private[*].id
 
   ami_type       = "AL2023_x86_64_STANDARD"
@@ -299,7 +325,7 @@ resource "aws_eks_node_group" "e2e" {
   }
 
   depends_on = [
-    aws_iam_role_policy_attachment.e2e_eks_node,
+    aws_iam_role_policy_attachment.e2e_eks_managed_node,
   ]
 }
 
