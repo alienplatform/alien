@@ -983,6 +983,7 @@ mod tests {
                 resource_group_name: "shared-rg".to_string(),
                 default_domain: "test-env.azurecontainerapps.io".to_string(),
                 static_ip: Some("10.0.0.1".to_string()),
+                custom_domain_verification_id: None,
             };
 
             let env_state = StackResourceState::new_pending(
@@ -1108,6 +1109,7 @@ mod tests {
                 resource_group_name: "shared-rg".to_string(),
                 default_domain: "test.io".to_string(),
                 static_ip: None,
+                custom_domain_verification_id: None,
             };
 
             let env_state = StackResourceState::new_pending(

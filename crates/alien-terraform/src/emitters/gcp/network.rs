@@ -76,6 +76,7 @@ impl TfEmitter for GcpNetworkEmitter {
                 ("vpcSelfLink", Expression::Null),
                 ("vpcName", Expression::Null),
                 ("subnetSelfLinks", Expression::Array(vec![])),
+                ("cidrBlock", Expression::Null),
                 ("routerSelfLink", Expression::Null),
                 ("natName", Expression::Null),
                 ("isByoVpc", Expression::Bool(true)),
@@ -100,6 +101,15 @@ impl TfEmitter for GcpNetworkEmitter {
                             &subnet_label,
                             "self_link",
                         ])]),
+                    ),
+                    (
+                        "cidrBlock",
+                        expr::traversal([
+                            "data",
+                            "google_compute_subnetwork",
+                            &subnet_label,
+                            "ip_cidr_range",
+                        ]),
                     ),
                     ("routerSelfLink", Expression::Null),
                     ("natName", Expression::Null),
@@ -129,6 +139,12 @@ impl TfEmitter for GcpNetworkEmitter {
                         "subnetSelfLinks",
                         expr::raw(format!(
                             "var.network_mode == \"create-new\" ? [google_compute_subnetwork.{subnet_label}[0].self_link] : var.network_mode == \"use-existing\" ? [data.google_compute_subnetwork.{existing_subnet_label}[0].self_link] : []"
+                        )),
+                    ),
+                    (
+                        "cidrBlock",
+                        expr::raw(format!(
+                            "var.network_mode == \"create-new\" ? google_compute_subnetwork.{subnet_label}[0].ip_cidr_range : var.network_mode == \"use-existing\" ? data.google_compute_subnetwork.{existing_subnet_label}[0].ip_cidr_range : null"
                         )),
                     ),
                     (

@@ -326,6 +326,8 @@
             "compute.healthChecks.create",
             "compute.healthChecks.delete",
             "compute.healthChecks.get",
+            "compute.healthChecks.update",
+            "compute.healthChecks.useReadOnly",
             "compute.networkEndpointGroups.create",
             "compute.networkEndpointGroups.delete",
             "compute.networkEndpointGroups.get",
@@ -346,6 +348,7 @@
             "compute.globalAddresses.create",
             "compute.globalAddresses.delete",
             "compute.globalAddresses.get",
+            "compute.globalAddresses.use",
             "compute.globalForwardingRules.create",
             "compute.globalForwardingRules.delete",
             "compute.globalForwardingRules.get"

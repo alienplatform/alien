@@ -297,6 +297,7 @@ fn emit_selected_custom_roles(fragment: &mut TfFragment, custom_roles: &[GcpCust
             "google_project_iam_custom_role",
             &role_label,
             [
+                attr("count", expr::raw("var.gcp_manage_custom_roles ? 1 : 0")),
                 attr("project", expr::raw("var.gcp_project")),
                 attr("role_id", role_id),
                 attr("title", Expression::String(custom_role.title.clone())),
@@ -360,11 +361,10 @@ pub(crate) fn role_expression_for_binding(
 
     let custom_role = custom_role_for_binding(role, custom_roles)?;
     let role_label = custom_role_label(custom_role);
-    Ok(expr::traversal([
-        "google_project_iam_custom_role",
-        &role_label,
-        "name",
-    ]))
+    let suffix = custom_role_suffix(custom_role);
+    Ok(expr::raw(format!(
+        "var.gcp_manage_custom_roles ? google_project_iam_custom_role.{role_label}[0].name : format(\"projects/%s/roles/role_%s_{suffix}\", var.gcp_project, local.gcp_custom_role_prefix)"
+    )))
 }
 
 fn custom_role_for_binding<'a>(
@@ -384,7 +384,7 @@ fn custom_role_for_binding<'a>(
 fn custom_role_id_template(custom_role: &GcpCustomRole) -> Expression {
     let suffix = custom_role_suffix(custom_role);
     expr::raw(format!(
-        "format(\"role_%s_{suffix}\", substr(replace(lower(local.resource_prefix), \"-\", \"_\"), 0, 18))"
+        "format(\"role_%s_{suffix}\", local.gcp_custom_role_prefix)"
     ))
 }
 

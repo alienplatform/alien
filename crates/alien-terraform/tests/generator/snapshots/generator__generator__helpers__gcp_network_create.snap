@@ -71,6 +71,18 @@ variable "managing_service_account_email" {
   default     = ""
 }
 
+variable "gcp_manage_custom_roles" {
+  type        = bool
+  description = "Whether this module creates the GCP project custom roles it binds. Set to false when those roles are managed outside this stack."
+  default     = true
+}
+
+variable "gcp_custom_role_prefix" {
+  type        = string
+  description = "Prefix used for GCP project custom role IDs when gcp_manage_custom_roles is false. Empty uses resource_prefix."
+  default     = ""
+}
+
 variable "network_mode" {
   type        = string
   description = "Choose whether this setup creates a new network, uses an existing network, or uses the default network. Values: create-new, use-existing, use-default."
@@ -120,10 +132,11 @@ resource "random_id" "resource_prefix" {
 
 === locals.tf ===
 locals {
-  resource_prefix     = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
-  deployment_platform = "gcp"
-  deployment_target   = "gcp"
-  deployment_region   = var.gcp_region
+  resource_prefix        = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
+  gcp_custom_role_prefix = substr(replace(lower(var.gcp_custom_role_prefix == "" ? local.resource_prefix : var.gcp_custom_role_prefix), "-", "_"), 0, 18)
+  deployment_platform    = "gcp"
+  deployment_target      = "gcp"
+  deployment_region      = var.gcp_region
   deployment_management_config = {
     platform            = "gcp"
     projectId           = var.gcp_project
@@ -139,6 +152,7 @@ locals {
         vpcSelfLink     = var.network_mode == "create-new" ? google_compute_network.default_network[0].self_link : var.network_mode == "use-existing" ? data.google_compute_network.default_network[0].self_link : null
         vpcName         = var.network_mode == "create-new" ? google_compute_network.default_network[0].name : var.network_mode == "use-existing" ? data.google_compute_network.default_network[0].name : null
         subnetSelfLinks = var.network_mode == "create-new" ? [google_compute_subnetwork.default_network_workload[0].self_link] : var.network_mode == "use-existing" ? [data.google_compute_subnetwork.default_network_existing_subnet[0].self_link] : []
+        cidrBlock       = var.network_mode == "create-new" ? google_compute_subnetwork.default_network_workload[0].ip_cidr_range : var.network_mode == "use-existing" ? data.google_compute_subnetwork.default_network_existing_subnet[0].ip_cidr_range : null
         routerSelfLink  = var.network_mode == "create-new" ? google_compute_router.default_network_router[0].self_link : null
         natName         = var.network_mode == "create-new" ? google_compute_router_nat.default_network_nat[0].name : null
         isByoVpc        = var.network_mode != "create-new"

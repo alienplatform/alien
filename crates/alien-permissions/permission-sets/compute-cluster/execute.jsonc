@@ -177,6 +177,7 @@
       {
         "grant": {
           "permissions": [
+            "compute.instances.use",
             "compute.networkEndpointGroups.attachNetworkEndpoints",
             "compute.networkEndpointGroups.detachNetworkEndpoints",
             "compute.networkEndpointGroups.get"

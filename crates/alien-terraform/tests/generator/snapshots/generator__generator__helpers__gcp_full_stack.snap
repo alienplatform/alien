@@ -75,6 +75,18 @@ variable "managing_service_account_email" {
   default     = ""
 }
 
+variable "gcp_manage_custom_roles" {
+  type        = bool
+  description = "Whether this module creates the GCP project custom roles it binds. Set to false when those roles are managed outside this stack."
+  default     = true
+}
+
+variable "gcp_custom_role_prefix" {
+  type        = string
+  description = "Prefix used for GCP project custom role IDs when gcp_manage_custom_roles is false. Empty uses resource_prefix."
+  default     = ""
+}
+
 variable "network_mode" {
   type        = string
   description = "Choose whether this setup creates a new network, uses an existing network, or uses the default network. Values: create-new, use-existing, use-default."
@@ -124,10 +136,11 @@ resource "random_id" "resource_prefix" {
 
 === locals.tf ===
 locals {
-  resource_prefix     = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
-  deployment_platform = "gcp"
-  deployment_target   = "gcp"
-  deployment_region   = var.gcp_region
+  resource_prefix        = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
+  gcp_custom_role_prefix = substr(replace(lower(var.gcp_custom_role_prefix == "" ? local.resource_prefix : var.gcp_custom_role_prefix), "-", "_"), 0, 18)
+  deployment_platform    = "gcp"
+  deployment_target      = "gcp"
+  deployment_region      = var.gcp_region
   deployment_management_config = {
     platform            = "gcp"
     projectId           = var.gcp_project
@@ -143,6 +156,7 @@ locals {
         vpcSelfLink     = var.network_mode == "create-new" ? google_compute_network.default_network[0].self_link : var.network_mode == "use-existing" ? data.google_compute_network.default_network[0].self_link : null
         vpcName         = var.network_mode == "create-new" ? google_compute_network.default_network[0].name : var.network_mode == "use-existing" ? data.google_compute_network.default_network[0].name : null
         subnetSelfLinks = var.network_mode == "create-new" ? [google_compute_subnetwork.default_network_workload[0].self_link] : var.network_mode == "use-existing" ? [data.google_compute_subnetwork.default_network_existing_subnet[0].self_link] : []
+        cidrBlock       = var.network_mode == "create-new" ? google_compute_subnetwork.default_network_workload[0].ip_cidr_range : var.network_mode == "use-existing" ? data.google_compute_subnetwork.default_network_existing_subnet[0].ip_cidr_range : null
         routerSelfLink  = var.network_mode == "create-new" ? google_compute_router.default_network_router[0].self_link : null
         natName         = var.network_mode == "create-new" ? google_compute_router_nat.default_network_nat[0].name : null
         isByoVpc        = var.network_mode != "create-new"
@@ -303,8 +317,9 @@ resource "google_service_account" "execution_sa" {
 }
 
 resource "google_project_iam_custom_role" "gcp_role_storage_data_read_part1" {
+  count       = var.gcp_manage_custom_roles ? 1 : 0
   project     = var.gcp_project
-  role_id     = format("role_%s_storage_data_read_part1", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18))
+  role_id     = format("role_%s_storage_data_read_part1", local.gcp_custom_role_prefix)
   title       = "full-gcp: Storage data read (part 1)"
   description = "Allows reading data from storage buckets and containers. Stack: full-gcp. Deployment prefix: ${local.resource_prefix}. Permission set: storage/data-read."
   stage       = "GA"
@@ -320,8 +335,9 @@ resource "google_project_iam_custom_role" "gcp_role_storage_data_read_part1" {
 }
 
 resource "google_project_iam_custom_role" "gcp_role_storage_data_read_part2" {
+  count       = var.gcp_manage_custom_roles ? 1 : 0
   project     = var.gcp_project
-  role_id     = format("role_%s_storage_data_read_part2", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18))
+  role_id     = format("role_%s_storage_data_read_part2", local.gcp_custom_role_prefix)
   title       = "full-gcp: Storage data read (part 2)"
   description = "Allows reading data from storage buckets and containers. Stack: full-gcp. Deployment prefix: ${local.resource_prefix}. Permission set: storage/data-read."
   stage       = "GA"
@@ -332,13 +348,13 @@ resource "google_project_iam_custom_role" "gcp_role_storage_data_read_part2" {
 
 resource "google_project_iam_member" "gcp_role_storage_data_read_part1_execution_sa_binding_0" {
   project = var.gcp_project
-  role    = google_project_iam_custom_role.gcp_role_storage_data_read_part1.name
+  role    = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_storage_data_read_part1[0].name : format("projects/%s/roles/role_%s_storage_data_read_part1", var.gcp_project, local.gcp_custom_role_prefix)
   member  = "serviceAccount:${google_service_account.execution_sa.email}"
 }
 
 resource "google_project_iam_member" "gcp_role_storage_data_read_part2_execution_sa_binding_1" {
   project = var.gcp_project
-  role    = google_project_iam_custom_role.gcp_role_storage_data_read_part2.name
+  role    = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_storage_data_read_part2[0].name : format("projects/%s/roles/role_%s_storage_data_read_part2", var.gcp_project, local.gcp_custom_role_prefix)
   member  = "serviceAccount:${google_service_account.execution_sa.email}"
 }
 
@@ -373,8 +389,9 @@ resource "google_service_account" "management" {
 }
 
 resource "google_project_iam_custom_role" "gcp_role_worker_management_part1" {
+  count       = var.gcp_manage_custom_roles ? 1 : 0
   project     = var.gcp_project
-  role_id     = format("role_%s_worker_management_part1", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18))
+  role_id     = format("role_%s_worker_management_part1", local.gcp_custom_role_prefix)
   title       = "full-gcp: Worker management (part 1)"
   description = "Allows managing function configuration, versions, aliases, and monitoring. Stack: full-gcp. Deployment prefix: ${local.resource_prefix}. Permission set: worker/management."
   stage       = "GA"
@@ -426,8 +443,9 @@ resource "google_project_iam_custom_role" "gcp_role_worker_management_part1" {
 }
 
 resource "google_project_iam_custom_role" "gcp_role_worker_management_part2" {
+  count       = var.gcp_manage_custom_roles ? 1 : 0
   project     = var.gcp_project
-  role_id     = format("role_%s_worker_management_part2", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18))
+  role_id     = format("role_%s_worker_management_part2", local.gcp_custom_role_prefix)
   title       = "full-gcp: Worker management (part 2)"
   description = "Allows managing function configuration, versions, aliases, and monitoring. Stack: full-gcp. Deployment prefix: ${local.resource_prefix}. Permission set: worker/management."
   stage       = "GA"
@@ -463,19 +481,20 @@ resource "google_project_iam_custom_role" "gcp_role_worker_management_part2" {
 
 resource "google_project_iam_member" "gcp_role_worker_management_part1_management_binding_0" {
   project = var.gcp_project
-  role    = google_project_iam_custom_role.gcp_role_worker_management_part1.name
+  role    = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_worker_management_part1[0].name : format("projects/%s/roles/role_%s_worker_management_part1", var.gcp_project, local.gcp_custom_role_prefix)
   member  = "serviceAccount:${google_service_account.management.email}"
 }
 
 resource "google_project_iam_member" "gcp_role_worker_management_part2_management_binding_1" {
   project = var.gcp_project
-  role    = google_project_iam_custom_role.gcp_role_worker_management_part2.name
+  role    = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_worker_management_part2[0].name : format("projects/%s/roles/role_%s_worker_management_part2", var.gcp_project, local.gcp_custom_role_prefix)
   member  = "serviceAccount:${google_service_account.management.email}"
 }
 
 resource "google_project_iam_custom_role" "gcp_role_storage_heartbeat" {
+  count       = var.gcp_manage_custom_roles ? 1 : 0
   project     = var.gcp_project
-  role_id     = format("role_%s_storage_heartbeat", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18))
+  role_id     = format("role_%s_storage_heartbeat", local.gcp_custom_role_prefix)
   title       = "full-gcp: Storage heartbeat"
   description = "Allows readonly monitoring and health checks for storage resources. Stack: full-gcp. Deployment prefix: ${local.resource_prefix}. Permission set: storage/heartbeat."
   stage       = "GA"
@@ -494,7 +513,7 @@ resource "google_project_iam_custom_role" "gcp_role_storage_heartbeat" {
 
 resource "google_project_iam_member" "gcp_role_storage_heartbeat_management_binding_0" {
   project = var.gcp_project
-  role    = google_project_iam_custom_role.gcp_role_storage_heartbeat.name
+  role    = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_storage_heartbeat[0].name : format("projects/%s/roles/role_%s_storage_heartbeat", var.gcp_project, local.gcp_custom_role_prefix)
   member  = "serviceAccount:${google_service_account.management.email}"
 }
 
@@ -541,7 +560,7 @@ resource "google_storage_bucket" "assets" {
 
 resource "google_storage_bucket_iam_member" "gcp_role_storage_heartbeat_assets_management_storage_0" {
   bucket = google_storage_bucket.assets.name
-  role   = google_project_iam_custom_role.gcp_role_storage_heartbeat.name
+  role   = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_storage_heartbeat[0].name : format("projects/%s/roles/role_%s_storage_heartbeat", var.gcp_project, local.gcp_custom_role_prefix)
   member = "serviceAccount:${google_service_account.management.email}"
 }
 
@@ -605,8 +624,9 @@ resource "google_firestore_database" "metadata" {
 
 === secrets.tf ===
 resource "google_project_iam_custom_role" "gcp_role_vault_data_write_part1" {
+  count       = var.gcp_manage_custom_roles ? 1 : 0
   project     = var.gcp_project
-  role_id     = format("role_%s_vault_data_write_part1", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18))
+  role_id     = format("role_%s_vault_data_write_part1", local.gcp_custom_role_prefix)
   title       = "full-gcp: Vault data write (part 1)"
   description = "Allows creating, updating, and deleting individual secrets within vault. Stack: full-gcp. Deployment prefix: ${local.resource_prefix}. Permission set: vault/data-write."
   stage       = "GA"
@@ -616,8 +636,9 @@ resource "google_project_iam_custom_role" "gcp_role_vault_data_write_part1" {
 }
 
 resource "google_project_iam_custom_role" "gcp_role_vault_data_write_part2" {
+  count       = var.gcp_manage_custom_roles ? 1 : 0
   project     = var.gcp_project
-  role_id     = format("role_%s_vault_data_write_part2", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18))
+  role_id     = format("role_%s_vault_data_write_part2", local.gcp_custom_role_prefix)
   title       = "full-gcp: Vault data write (part 2)"
   description = "Allows creating, updating, and deleting individual secrets within vault. Stack: full-gcp. Deployment prefix: ${local.resource_prefix}. Permission set: vault/data-write."
   stage       = "GA"
@@ -629,7 +650,7 @@ resource "google_project_iam_custom_role" "gcp_role_vault_data_write_part2" {
 
 resource "google_project_iam_member" "gcp_role_vault_data_write_part1_management_secrets_binding_0" {
   project = var.gcp_project
-  role    = google_project_iam_custom_role.gcp_role_vault_data_write_part1.name
+  role    = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_vault_data_write_part1[0].name : format("projects/%s/roles/role_%s_vault_data_write_part1", var.gcp_project, local.gcp_custom_role_prefix)
   member  = "serviceAccount:${google_service_account.management.email}"
 }
 
@@ -647,7 +668,7 @@ resource "google_project_iam_member" "secretmanager_secretversionadder_managemen
 
 resource "google_project_iam_member" "gcp_role_vault_data_write_part2_management_secrets_binding_2" {
   project = var.gcp_project
-  role    = google_project_iam_custom_role.gcp_role_vault_data_write_part2.name
+  role    = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_vault_data_write_part2[0].name : format("projects/%s/roles/role_%s_vault_data_write_part2", var.gcp_project, local.gcp_custom_role_prefix)
   member  = "serviceAccount:${google_service_account.management.email}"
 
   condition {

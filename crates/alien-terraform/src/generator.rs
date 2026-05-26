@@ -817,6 +817,17 @@ fn variables_body(
             Some(Expression::String(String::new())),
             false,
         )));
+        blocks.push(nested(bool_variable_block(
+            "gcp_manage_custom_roles",
+            "Whether this module creates the GCP project custom roles it binds. Set to false when those roles are managed outside this stack.",
+            Some(true),
+        )));
+        blocks.push(nested(variable_block(
+            "gcp_custom_role_prefix",
+            "Prefix used for GCP project custom role IDs when gcp_manage_custom_roles is false. Empty uses resource_prefix.",
+            Some(Expression::String(String::new())),
+            false,
+        )));
         if has_dynamic_gcp_network_settings(stack_settings.network.as_ref()) {
             blocks.push(nested(variable_block(
                 "network_mode",
@@ -1030,6 +1041,21 @@ fn number_variable_block(name: &str, description: &str, default: Option<i64>) ->
     }
 }
 
+fn bool_variable_block(name: &str, description: &str, default: Option<bool>) -> Block {
+    let mut body: Vec<Structure> = vec![
+        attr("type", expr::raw("bool")),
+        attr("description", Expression::String(description.to_string())),
+    ];
+    if let Some(default) = default {
+        body.push(attr("default", Expression::Bool(default)));
+    }
+    Block {
+        identifier: Identifier::sanitized("variable"),
+        labels: vec![BlockLabel::String(name.to_string())],
+        body: Body::from(body),
+    }
+}
+
 fn variable_block(
     name: &str,
     description: &str,
@@ -1132,6 +1158,14 @@ fn locals_body(
             "var.resource_prefix == \"\" ? format(\"a%s\", random_id.resource_prefix.hex) : var.resource_prefix",
         ),
     ));
+    if matches!(target.platform(), alien_core::Platform::Gcp) {
+        body.push(attr(
+            "gcp_custom_role_prefix",
+            expr::raw(
+                "substr(replace(lower(var.gcp_custom_role_prefix == \"\" ? local.resource_prefix : var.gcp_custom_role_prefix), \"-\", \"_\"), 0, 18)",
+            ),
+        ));
+    }
     body.push(attr(
         "deployment_platform",
         Expression::String(

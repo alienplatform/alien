@@ -68,8 +68,9 @@ fn gcp_remote_stack_management_function_provision_role() {
     assert!(rendered.contains("\"storage.buckets.update\""));
     assert!(rendered.contains("google_project_iam_custom_role\" \"gcp_role_worker_provision\""));
     assert!(rendered.contains(
-        "role_id     = format(\"role_%s_worker_provision\", substr(replace(lower(local.resource_prefix), \"-\", \"_\"), 0, 18))"
+        "role_id     = format(\"role_%s_worker_provision\", local.gcp_custom_role_prefix)"
     ));
+    assert!(rendered.contains("gcp_manage_custom_roles"));
     assert!(!rendered.contains("roles/run.admin"));
     assert_terraform_valid(&module, "gcp_remote_stack_management_function_provision");
 }

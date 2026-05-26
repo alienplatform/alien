@@ -385,19 +385,63 @@
       }
     ],
     "gcp": [
-      // MIG scaling + instance inspection
+      // Imported ComputeClusters hand off fleet ownership to the manager after
+      // setup. The manager creates and rolls the runtime host infrastructure
+      // inside the setup-owned project/network boundary.
       {
         "grant": {
           "permissions": [
+            "compute.firewalls.create",
+            "compute.firewalls.delete",
+            "compute.firewalls.get",
+            "compute.healthChecks.create",
+            "compute.healthChecks.delete",
+            "compute.healthChecks.get",
+            "compute.healthChecks.use",
+            "compute.instanceGroups.create",
+            "compute.instanceGroups.delete",
+            "compute.instanceGroups.get",
+            "compute.instanceGroupManagers.create",
+            "compute.instanceGroupManagers.delete",
             "compute.instanceGroupManagers.update",
             "compute.instanceGroupManagers.get",
             "compute.instanceGroupManagers.list",
             "compute.instanceTemplates.create",
             "compute.instanceTemplates.delete",
             "compute.instanceTemplates.get",
+            "compute.instanceTemplates.useReadOnly",
+            "compute.instances.create",
             "compute.instances.list",
             "compute.instances.get",
-            "compute.instances.getSerialPortOutput"
+            "compute.instances.getSerialPortOutput",
+            "compute.instances.setMetadata",
+            "compute.instances.setTags",
+            "compute.networks.updatePolicy",
+            "compute.subnetworks.use"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
+      },
+      // OTLP auth headers are stored as stack-prefixed Secret Manager
+      // secrets for compute host boot. Management owns the fleet lifecycle,
+      // so it must also own these secret versions and the per-secret IAM
+      // grant to the compute node service account.
+      {
+        "grant": {
+          "permissions": [
+            "secretmanager.secrets.get",
+            "secretmanager.secrets.create",
+            "secretmanager.secrets.delete",
+            "secretmanager.versions.add",
+            "secretmanager.secrets.getIamPolicy",
+            "secretmanager.secrets.setIamPolicy"
           ]
         },
         "binding": {

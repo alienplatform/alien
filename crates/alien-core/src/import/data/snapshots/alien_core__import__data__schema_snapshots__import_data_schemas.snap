@@ -519,6 +519,13 @@ expression: schemas
     "additionalProperties": false,
     "description": "Azure ContainerAppsEnvironment ImportData — parent environment for Container Apps in this stack. Realized once per stack.",
     "properties": {
+      "customDomainVerificationId": {
+        "description": "Domain verification ID required for Azure Container Apps custom domain DNS ownership records.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
       "defaultDomain": {
         "description": "Default domain (`<env>.<region>.azurecontainerapps.io`).",
         "type": "string"
@@ -1224,6 +1231,13 @@ expression: schemas
     "additionalProperties": false,
     "description": "GCP Network ImportData — VPC + subnetwork + Cloud NAT topology.",
     "properties": {
+      "cidrBlock": {
+        "description": "Primary subnetwork CIDR block used for internal firewall rules.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
       "isByoVpc": {
         "description": "True when the VPC is owned outside this stack.",
         "type": "boolean"
