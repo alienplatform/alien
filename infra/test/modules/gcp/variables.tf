@@ -14,6 +14,10 @@ variable "target_region" {
   type = string
 }
 
+variable "target_provider_email" {
+  type = string
+}
+
 variable "e2e_k8s_ingress_class" {
   type = string
 }

@@ -160,14 +160,26 @@ resource "google_project_iam_member" "target_roles" {
   member   = "serviceAccount:${google_service_account.target.email}"
 }
 
+resource "google_project_iam_member" "target_provider_container_admin" {
+  provider = google.target
+  for_each = var.target_provider_email != "" && var.target_provider_email != google_service_account.target.email ? toset([var.target_provider_email]) : toset([])
+  project  = var.target_project_id
+  role     = "roles/container.admin"
+  member   = "serviceAccount:${each.value}"
+}
+
 resource "time_sleep" "target_role_propagation" {
   create_duration = "90s"
 
   triggers = {
-    target_roles = sha1(jsonencode(sort(local.target_roles)))
+    target_provider_email = var.target_provider_email
+    target_roles          = sha1(jsonencode(sort(local.target_roles)))
   }
 
-  depends_on = [google_project_iam_member.target_roles]
+  depends_on = [
+    google_project_iam_member.target_roles,
+    google_project_iam_member.target_provider_container_admin,
+  ]
 }
 
 resource "google_project_iam_member" "target_management_access" {
