@@ -302,6 +302,16 @@ resource "aws_eip" "e2e_ingress" {
   }
 }
 
+resource "aws_eks_addon" "e2e_vpc_cni" {
+  provider     = aws.target
+  cluster_name = aws_eks_cluster.e2e.name
+  addon_name   = "vpc-cni"
+
+  depends_on = [
+    aws_eks_cluster.e2e,
+  ]
+}
+
 resource "aws_eks_node_group" "e2e" {
   provider        = aws.target
   cluster_name    = aws_eks_cluster.e2e.name
@@ -325,7 +335,28 @@ resource "aws_eks_node_group" "e2e" {
   }
 
   depends_on = [
+    aws_eks_addon.e2e_vpc_cni,
     aws_iam_role_policy_attachment.e2e_eks_managed_node,
+  ]
+}
+
+resource "aws_eks_addon" "e2e_kube_proxy" {
+  provider     = aws.target
+  cluster_name = aws_eks_cluster.e2e.name
+  addon_name   = "kube-proxy"
+
+  depends_on = [
+    aws_eks_node_group.e2e,
+  ]
+}
+
+resource "aws_eks_addon" "e2e_coredns" {
+  provider     = aws.target
+  cluster_name = aws_eks_cluster.e2e.name
+  addon_name   = "coredns"
+
+  depends_on = [
+    aws_eks_node_group.e2e,
   ]
 }
 
