@@ -106,6 +106,7 @@ async fn prepare_stack_for_render(
 
     let stack_state = StackState::new(platform);
     let config = DeploymentConfig {
+        deployment_name: Some(stack.id().to_string()),
         stack_settings: stack_settings.clone(),
         management_config: None,
         environment_variables: EnvironmentVariablesSnapshot {
@@ -255,6 +256,7 @@ fn render_terraform(
         stack,
         terraform_target(target),
         alien_terraform::TerraformOptions {
+            display_name: None,
             registry: &registry,
             stack_settings: stack_settings.clone(),
             registration: None,

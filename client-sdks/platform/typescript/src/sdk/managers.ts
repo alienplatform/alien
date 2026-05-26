@@ -8,11 +8,11 @@ import { managersGenerateManagerToken } from "../funcs/managersGenerateManagerTo
 import { managersGet } from "../funcs/managersGet.js";
 import { managersGetDeployment } from "../funcs/managersGetDeployment.js";
 import { managersGetManagementConfig } from "../funcs/managersGetManagementConfig.js";
-import { managersGoogleCloudConnect } from "../funcs/managersGoogleCloudConnect.js";
 import { managersList } from "../funcs/managersList.js";
 import { managersListEvents } from "../funcs/managersListEvents.js";
 import { managersProvision } from "../funcs/managersProvision.js";
 import { managersReportHeartbeat } from "../funcs/managersReportHeartbeat.js";
+import { managersResolveGcpOAuthProvider } from "../funcs/managersResolveGcpOAuthProvider.js";
 import { managersUpdate } from "../funcs/managersUpdate.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
 import * as models from "../models/index.js";
@@ -147,6 +147,20 @@ export class Managers extends ClientSDK {
   }
 
   /**
+   * Resolve decrypted project-level Google Cloud OAuth provider settings for a manager-side deployment bootstrap.
+   */
+  async resolveGcpOAuthProvider(
+    request: operations.ResolveManagerGcpOAuthProviderRequest,
+    options?: RequestOptions,
+  ): Promise<models.ResolveManagerGcpOAuthProviderResponse> {
+    return unwrapAsync(managersResolveGcpOAuthProvider(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
    * Report Manager health status and metrics.
    */
   async reportHeartbeat(
@@ -168,20 +182,6 @@ export class Managers extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.ManagerDeployment> {
     return unwrapAsync(managersGetDeployment(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  /**
-   * Connect a Google Cloud manager via OAuth.
-   */
-  async googleCloudConnect(
-    request: operations.ConnectManagerToGoogleCloudRequest,
-    options?: RequestOptions,
-  ): Promise<void> {
-    return unwrapAsync(managersGoogleCloudConnect(
       this,
       request,
       options,

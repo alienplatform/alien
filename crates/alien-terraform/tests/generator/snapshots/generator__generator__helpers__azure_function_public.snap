@@ -32,12 +32,12 @@ variable "resource_prefix" {
 
 variable "name" {
   type        = string
-  description = "Human-readable deployment name shown in the deployment portal."
+  description = "Human-readable application name shown in setup and cloud IAM review metadata."
 }
 
 variable "token" {
   type        = string
-  description = "Deployment token from the deployment page. This is the same token used by the deploy CLI --token flag."
+  description = "Install token from the application setup page. This is the same token used by the deploy CLI --token flag."
   sensitive   = true
 }
 
@@ -100,6 +100,7 @@ resource "random_id" "resource_prefix" {
 === locals.tf ===
 locals {
   resource_prefix     = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
+  deployment_name     = var.name
   deployment_platform = "azure"
   deployment_target   = "azure"
   deployment_region   = var.azure_location
@@ -124,11 +125,12 @@ locals {
       id   = "default-container-apps-environment"
       type = "azure_container_apps_environment"
       importData = {
-        subscriptionId  = var.azure_subscription_id
-        resourceGroup   = var.azure_resource_group_name
-        environmentName = azurerm_container_app_environment.default_container_apps_environment.name
-        resourceId      = azurerm_container_app_environment.default_container_apps_environment.id
-        defaultDomain   = azurerm_container_app_environment.default_container_apps_environment.default_domain
+        subscriptionId             = var.azure_subscription_id
+        resourceGroup              = var.azure_resource_group_name
+        environmentName            = azurerm_container_app_environment.default_container_apps_environment.name
+        resourceId                 = azurerm_container_app_environment.default_container_apps_environment.id
+        defaultDomain              = azurerm_container_app_environment.default_container_apps_environment.default_domain
+        customDomainVerificationId = azurerm_container_app_environment.default_container_apps_environment.custom_domain_verification_id
       }
     }
   ]

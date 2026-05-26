@@ -82,8 +82,8 @@ pub struct CapacityGroup {
 /// ## Architecture
 ///
 /// - **Setup** creates cloud resources: ASGs/MIGs/VMSSs, IAM roles, security groups
-/// - **Alien** manages allowed fleet operations: machine count and Horizon host image rollout
-/// - **horizond** runs on each machine from the selected Horizon host image channel
+/// - **Alien** manages allowed fleet operations: machine count and Horizon machine image rollout
+/// - **horizond** runs on each machine from the selected Horizon machine image channel
 ///
 /// ## Example
 ///

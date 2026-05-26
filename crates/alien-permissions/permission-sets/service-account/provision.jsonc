@@ -12,8 +12,7 @@
             "iam:GetRolePolicy",
             "iam:ListRolePolicies",
             "iam:ListAttachedRolePolicies",
-            "iam:TagRole",
-            "iam:UntagRole"
+            "iam:TagRole"
           ]
         },
         "binding": {

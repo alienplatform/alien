@@ -11,14 +11,15 @@ let value: Deployment = {
   status: "update-pending",
   projectId: "prj_mcytp6z3j91f7tn5ryqsfwtr",
   platform: "aws",
+  deploymentProtocolVersion: 447915,
   deploymentGroupId: "dg_r27ict8c7vcgsumpj90ackf7b",
   stackSettings: {},
   currentReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
   desiredReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
   pinnedReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
   retryRequested: true,
-  createdAt: new Date("2025-01-10T10:28:35.468Z"),
-  updatedAt: new Date("2024-07-02T17:29:04.075Z"),
+  createdAt: new Date("2024-07-02T17:29:04.075Z"),
+  updatedAt: new Date("2026-07-09T12:57:49.283Z"),
   managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
   workspaceId: "ws_It13CUaGEhLLAB87simX0",
 };
@@ -34,6 +35,7 @@ let value: Deployment = {
 | `status`                                                                                           | [models.DeploymentStatus](../models/deploymentstatus.md)                                           | :heavy_check_mark:                                                                                 | Deployment status in the deployment lifecycle                                                      |                                                                                                    |
 | `projectId`                                                                                        | *string*                                                                                           | :heavy_check_mark:                                                                                 | Unique identifier for the project.                                                                 | prj_mcytp6z3j91f7tn5ryqsfwtr                                                                       |
 | `platform`                                                                                         | [models.DeploymentPlatform](../models/deploymentplatform.md)                                       | :heavy_check_mark:                                                                                 | Target platform for the deployment                                                                 |                                                                                                    |
+| `deploymentProtocolVersion`                                                                        | *number*                                                                                           | :heavy_check_mark:                                                                                 | DeploymentState protocol version owned by the runtime/manager                                      |                                                                                                    |
 | `deploymentGroupId`                                                                                | *string*                                                                                           | :heavy_check_mark:                                                                                 | ID of deployment group this deployment belongs to                                                  | dg_r27ict8c7vcgsumpj90ackf7b                                                                       |
 | `environmentInfo`                                                                                  | *models.DeploymentEnvironmentInfoUnion*                                                            | :heavy_minus_sign:                                                                                 | Cloud environment information                                                                      |                                                                                                    |
 | `stackSettings`                                                                                    | [models.DeploymentStackSettings](../models/deploymentstacksettings.md)                             | :heavy_check_mark:                                                                                 | User-provided configuration (network, deployment model, approvals)                                 |                                                                                                    |

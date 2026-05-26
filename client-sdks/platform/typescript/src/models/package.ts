@@ -46,6 +46,10 @@ export type PackageStatus = ClosedEnum<typeof PackageStatus>;
  * Configuration for Terraform package generation.
  */
 export type ConfigTerraform = {
+  /**
+   * Human-friendly application name shown in generated install artifacts.
+   */
+  displayName?: string | null | undefined;
   type: "terraform";
 };
 
@@ -83,6 +87,10 @@ export type ConfigHelm = {
  * Configuration for CloudFormation packages
  */
 export type ConfigCloudformation = {
+  /**
+   * Human-friendly application name shown in generated install artifacts.
+   */
+  displayName?: string | null | undefined;
   type: "cloudformation";
 };
 
@@ -376,9 +384,9 @@ export type Package = {
    */
   setupFingerprints: { [k: string]: SetupFingerprintInfo };
   /**
-   * Package generator contract/hash version used to decide rebuild compatibility
+   * Hash of Platform-known package build request inputs: package type, source release, setup fingerprints, package config, and setup contract version
    */
-  packageGeneratorContractVersion: string;
+  packageBuildInputHash: string;
   /**
    * Type-specific configuration
    */
@@ -405,7 +413,7 @@ export type Package = {
    */
   error?: any | null | undefined;
   /**
-   * Source binary SHA256 (for cli/terraform packages)
+   * Builder-recorded source binary SHA256 (for cli/terraform packages)
    */
   sourceBinarySha256?: string | null | undefined;
   /**
@@ -432,6 +440,7 @@ export const ConfigTerraform$inboundSchema: z.ZodType<
   ConfigTerraform,
   unknown
 > = z.object({
+  displayName: z.nullable(z.string()).optional(),
   type: z.literal("terraform"),
 });
 
@@ -488,6 +497,7 @@ export const ConfigCloudformation$inboundSchema: z.ZodType<
   ConfigCloudformation,
   unknown
 > = z.object({
+  displayName: z.nullable(z.string()).optional(),
   type: z.literal("cloudformation"),
 });
 
@@ -794,7 +804,7 @@ export const Package$inboundSchema: z.ZodType<Package, unknown> = z.object({
   version: z.string(),
   sourceReleaseId: z.string(),
   setupFingerprints: z.record(z.string(), SetupFingerprintInfo$inboundSchema),
-  packageGeneratorContractVersion: z.string(),
+  packageBuildInputHash: z.string(),
   config: z.union([
     z.lazy(() => ConfigCli$inboundSchema),
     z.lazy(() => ConfigCloudformation$inboundSchema),

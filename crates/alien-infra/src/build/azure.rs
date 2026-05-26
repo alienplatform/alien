@@ -345,11 +345,15 @@ impl AzureBuildController {
         let azure_config = ctx.get_azure_config()?;
 
         // Build permission context for this specific build resource
-        let permission_context = PermissionContext::new()
+        let mut permission_context = PermissionContext::new()
             .with_subscription_id(azure_config.subscription_id.clone())
             .with_resource_group(self.resource_group_name.as_ref().unwrap().clone())
             .with_stack_prefix(ctx.resource_prefix.to_string())
             .with_resource_name(build_id.to_string());
+        if let Some(deployment_name) = ctx.deployment_name_for_metadata() {
+            permission_context =
+                permission_context.with_deployment_name(deployment_name.to_string());
+        }
 
         // Build Azure resource scope for the Container Apps environment (build execution environment)
         // Use the environment's own resource group, which may differ from the stack's RG

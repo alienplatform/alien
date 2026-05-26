@@ -399,6 +399,10 @@ export type ImportSource = {
    */
   region: string;
   setupTarget: string;
+  /**
+   * Setup import payload format version embedded in the package
+   */
+  setupImportFormatVersion: number;
   setupFingerprint: string;
   setupFingerprintVersion: number;
   /**
@@ -1094,6 +1098,7 @@ export type ImportSource$Outbound = {
   platform: string;
   region: string;
   setupTarget: string;
+  setupImportFormatVersion: number;
   setupFingerprint: string;
   setupFingerprintVersion: number;
   stackSettings: ImportSourceStackSettings$Outbound;
@@ -1117,6 +1122,7 @@ export const ImportSource$outboundSchema: z.ZodType<
   platform: ImportSourcePlatformEnum$outboundSchema,
   region: z.string(),
   setupTarget: z.string(),
+  setupImportFormatVersion: z.int(),
   setupFingerprint: z.string(),
   setupFingerprintVersion: z.int(),
   stackSettings: z.lazy(() => ImportSourceStackSettings$outboundSchema),

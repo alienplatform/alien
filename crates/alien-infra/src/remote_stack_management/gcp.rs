@@ -62,15 +62,23 @@ impl GcpRemoteStackManagementController {
             "Creating GCP management service account"
         );
 
+        let display_name = match ctx.deployment_name_for_metadata() {
+            Some(deployment_name) => format!("{deployment_name}: Management service account"),
+            None => "Management service account".to_string(),
+        };
+        let description = match ctx.deployment_name_for_metadata() {
+            Some(deployment_name) => format!(
+                "Management cloud identity for {deployment_name}. Resource prefix: {}.",
+                ctx.resource_prefix
+            ),
+            None => format!(
+                "Management cloud identity. Resource prefix: {}.",
+                ctx.resource_prefix
+            ),
+        };
         let service_account = GcpServiceAccount::builder()
-            .display_name(format!(
-                "Alien Management Service Account: {}",
-                ctx.resource_prefix
-            ))
-            .description(format!(
-                "Management service account for Alien stack {}",
-                ctx.resource_prefix
-            ))
+            .display_name(display_name)
+            .description(description)
             .build();
 
         let request = CreateServiceAccountRequest::builder()
@@ -171,10 +179,13 @@ impl GcpRemoteStackManagementController {
 
         let mut permission_context = PermissionContext::new()
             .with_stack_prefix(ctx.resource_prefix.to_string())
-            .with_stack_name(ctx.desired_stack.id().to_string())
             .with_project_name(gcp_config.project_id.clone())
             .with_region(gcp_config.region.clone())
             .with_service_account_name(service_account_id.to_string());
+        if let Some(deployment_name) = ctx.deployment_name_for_metadata() {
+            permission_context =
+                permission_context.with_deployment_name(deployment_name.to_string());
+        }
         if let Some(ref project_number) = gcp_config.project_number {
             permission_context = permission_context.with_project_number(project_number.clone());
         }
@@ -324,30 +335,41 @@ impl GcpRemoteStackManagementController {
                 resource_id: Some(config.id.clone()),
             })?;
 
-        // Add impersonation bindings
+        // Reconcile impersonation bindings for the configured management service account.
         let mut all_bindings = current_policy.bindings;
-
-        // Grant roles/iam.serviceAccountTokenCreator
-        all_bindings.push(
+        let member = format!("serviceAccount:{management_service_account_email}");
+        let desired_bindings = vec![
             Binding::builder()
                 .role("roles/iam.serviceAccountTokenCreator".to_string())
-                .members(vec![format!(
-                    "serviceAccount:{}",
-                    management_service_account_email
-                )])
+                .members(vec![member.clone()])
                 .build(),
-        );
-
-        // Grant roles/iam.serviceAccountUser
-        all_bindings.push(
             Binding::builder()
                 .role("roles/iam.serviceAccountUser".to_string())
-                .members(vec![format!(
-                    "serviceAccount:{}",
-                    management_service_account_email
-                )])
+                .members(vec![member.clone()])
                 .build(),
+        ];
+        let owned_exact_roles =
+            ResourcePermissionsHelper::gcp_predefined_role_names(&desired_bindings);
+        let changed = ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
+            &mut all_bindings,
+            desired_bindings,
+            &member,
+            &[],
+            &owned_exact_roles,
         );
+
+        if !changed {
+            info!(
+                target_service_account = %service_account_email,
+                management_service_account = %management_service_account_email,
+                "Impersonation permissions already reconciled"
+            );
+            self.impersonation_granted = true;
+            return Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: None,
+            });
+        }
 
         let new_policy = IamPolicy::builder()
             .version(3)
@@ -685,7 +707,7 @@ mod tests {
     fn test_permission_context() -> PermissionContext {
         PermissionContext::new()
             .with_stack_prefix("test-stack".to_string())
-            .with_stack_name("test-stack".to_string())
+            .with_deployment_name("Test Deployment".to_string())
             .with_project_name("test-project".to_string())
             .with_region("us-central1".to_string())
             .with_project_number("123456789012".to_string())

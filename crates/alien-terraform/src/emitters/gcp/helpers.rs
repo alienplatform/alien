@@ -215,10 +215,10 @@ pub fn service_account_member_for_var(variable: &str) -> Expression {
 /// as `var.gcp_project` / `var.gcp_region` so the rendered HCL stays
 /// parameterised — the runtime generator interpolates them at apply
 /// time, exactly the same way the controller does.
-pub fn permission_context(label: &str, stack_name: &str) -> PermissionContext {
+pub fn permission_context(label: &str, _stack_name: &str) -> PermissionContext {
     PermissionContext::new()
         .with_stack_prefix("${local.resource_prefix}".to_string())
-        .with_stack_name(stack_name.to_string())
+        .with_deployment_name("${local.deployment_name}".to_string())
         .with_project_name("${var.gcp_project}".to_string())
         .with_project_number("${data.google_project.current.number}".to_string())
         .with_region("${var.gcp_region}".to_string())
@@ -300,7 +300,7 @@ fn emit_selected_custom_roles(fragment: &mut TfFragment, custom_roles: &[GcpCust
                 attr("count", expr::raw("var.gcp_manage_custom_roles ? 1 : 0")),
                 attr("project", expr::raw("var.gcp_project")),
                 attr("role_id", role_id),
-                attr("title", Expression::String(custom_role.title.clone())),
+                attr("title", expr::template(custom_role.title.clone())),
                 attr(
                     "description",
                     expr::template(custom_role.description.clone()),

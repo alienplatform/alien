@@ -5,6 +5,8 @@
   "platforms": {
     "aws": [
       {
+        "label": "send-sqs-messages",
+        "description": "Send, acknowledge, and inspect messages in application-owned SQS queues.",
         "grant": {
           "actions": [
             "sqs:SendMessage",
@@ -26,6 +28,8 @@
     ],
     "gcp": [
       {
+        "label": "publish-pubsub-messages",
+        "description": "Publish messages to application-owned Pub/Sub topics.",
         "grant": {
           "predefinedRoles": ["roles/pubsub.publisher"]
         },
@@ -37,6 +41,8 @@
         }
       },
       {
+        "label": "acknowledge-pubsub-messages",
+        "description": "Acknowledge and inspect messages on application-owned Pub/Sub subscriptions.",
         "grant": {
           "predefinedRoles": ["roles/pubsub.subscriber", "roles/pubsub.viewer"]
         },
@@ -50,6 +56,8 @@
     ],
     "azure": [
       {
+        "label": "send-service-bus-messages",
+        "description": "Send messages to application-owned Azure Service Bus queues.",
         "grant": {
           "predefinedRoles": ["Azure Service Bus Data Sender"]
         },

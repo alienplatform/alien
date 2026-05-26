@@ -103,10 +103,6 @@ fn generate_auto_management_profile(
     let mut resource_permission_set_ids: IndexMap<String, BTreeSet<String>> = IndexMap::new();
     let platform = stack_state.platform;
 
-    if platform == Platform::Aws {
-        permission_set_ids.insert("aws/tag-tamper-protection".to_string());
-    }
-
     // Iterate through all resources in the stack to determine required management permissions
     for (resource_id, resource_entry) in stack.resources() {
         let resource_type_value = resource_entry.config.resource_type();
@@ -296,6 +292,7 @@ mod tests {
                 assert!(permission_names.contains(&"worker/provision".to_string()));
                 assert!(!permission_names.contains(&"worker/management".to_string()));
                 assert!(!permission_names.contains(&"storage/management".to_string()));
+                assert!(!permission_names.contains(&"aws/tag-tamper-protection".to_string()));
             }
             _ => panic!("Expected Extend management permissions"),
         }

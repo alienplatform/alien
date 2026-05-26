@@ -152,7 +152,7 @@ fn emit_existing_network_reader_assignments(fragment: &mut TfFragment, label: &s
             attr(
                 "name",
                 expr::raw(format!(
-                    "uuidv5(\"oid\", \"alien:azure:existing-vnet-reader:${{local.resource_prefix}}:uami:${{azurerm_user_assigned_identity.{label}.principal_id}}:${{{existing_vnet_resource_id}}}\")"
+                    "uuidv5(\"oid\", \"deployment:azure:existing-vnet-reader:${{local.resource_prefix}}:uami:${{azurerm_user_assigned_identity.{label}.principal_id}}:${{{existing_vnet_resource_id}}}\")"
                 )),
             ),
             attr("scope", expr::raw(existing_vnet_resource_id)),

@@ -565,7 +565,7 @@ use alien_error::{AlienError, Context, IntoAlienError};
 #[cfg(feature = "gcp")]
 use alien_gcp_clients::GcpClientConfig;
 use async_trait::async_trait;
-use serde::de::DeserializeOwned;
+use serde::de::{DeserializeOwned, Error as DeError};
 use std::sync::Arc;
 use std::time::Duration;
 use std::{any::Any, fmt::Debug};
@@ -713,18 +713,115 @@ impl Clone for Box<dyn ResourceController> {
     }
 }
 
+pub const MIN_SUPPORTED_CONTROLLER_STATE_VERSION: u32 = 1;
+pub const CURRENT_CONTROLLER_STATE_VERSION: u32 = 1;
+
 /// Serializes a controller to a JSON Value, injecting its type tag.
 pub fn serialize_controller(
     controller: &dyn ResourceController,
 ) -> serde_json::Result<serde_json::Value> {
-    let mut v = controller.to_json_value()?;
-    v.as_object_mut()
-        .ok_or_else(|| serde::ser::Error::custom("controller must serialize as object"))?
-        .insert(
-            "type".into(),
-            serde_json::Value::String(controller.controller_type().into()),
-        );
-    Ok(v)
+    let mut value = controller.to_json_value()?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| serde::ser::Error::custom("controller must serialize as object"))?;
+    object.insert(
+        "type".into(),
+        serde_json::Value::String(controller.controller_type().into()),
+    );
+    object.insert(
+        "_controllerStateVersion".into(),
+        serde_json::Value::Number(CURRENT_CONTROLLER_STATE_VERSION.into()),
+    );
+    Ok(value)
+}
+
+pub fn validate_controller_state_value(
+    value: &serde_json::Value,
+    resource_id: Option<&str>,
+) -> crate::Result<()> {
+    let controller_type = value.get("type").and_then(|v| v.as_str()).ok_or_else(|| {
+        alien_error::AlienError::new(crate::ErrorData::IncompatibleControllerState {
+            controller_type: "<missing>".to_string(),
+            found_version: 0,
+            min_supported_version: MIN_SUPPORTED_CONTROLLER_STATE_VERSION,
+            current_version: CURRENT_CONTROLLER_STATE_VERSION,
+            repair:
+                "Controller state is missing its type tag; repair or recreate the deployment state."
+                    .to_string(),
+            resource_id: resource_id.map(str::to_string),
+        })
+    })?;
+    let found_version = value
+        .get("_controllerStateVersion")
+        .and_then(|v| v.as_u64())
+        .and_then(|value| u32::try_from(value).ok())
+        .filter(|version| *version > 0)
+        .ok_or_else(|| {
+            alien_error::AlienError::new(crate::ErrorData::IncompatibleControllerState {
+                controller_type: controller_type.to_string(),
+                found_version: 0,
+                min_supported_version: MIN_SUPPORTED_CONTROLLER_STATE_VERSION,
+                current_version: CURRENT_CONTROLLER_STATE_VERSION,
+                repair:
+                    "Controller state is missing or has an invalid _controllerStateVersion; repair or recreate the deployment state."
+                        .to_string(),
+                resource_id: resource_id.map(str::to_string),
+            })
+        })?;
+
+    if !(MIN_SUPPORTED_CONTROLLER_STATE_VERSION..=CURRENT_CONTROLLER_STATE_VERSION)
+        .contains(&found_version)
+    {
+        return Err(alien_error::AlienError::new(
+            crate::ErrorData::IncompatibleControllerState {
+                controller_type: controller_type.to_string(),
+                found_version,
+                min_supported_version: MIN_SUPPORTED_CONTROLLER_STATE_VERSION,
+                current_version: CURRENT_CONTROLLER_STATE_VERSION,
+                repair:
+                    "Upgrade the deployment actor or repair the controller state before retrying."
+                        .to_string(),
+                resource_id: resource_id.map(str::to_string),
+            },
+        ));
+    }
+
+    Ok(())
+}
+
+fn normalize_controller_state_for_deserialize(
+    mut value: serde_json::Value,
+) -> std::result::Result<(String, serde_json::Value), serde_json::Error> {
+    let type_tag = value
+        .get("type")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| serde_json::Error::custom("missing 'type' field in controller state"))?
+        .to_string();
+    let found_version = value
+        .get("_controllerStateVersion")
+        .and_then(|v| v.as_u64())
+        .and_then(|value| u32::try_from(value).ok())
+        .filter(|version| *version > 0)
+        .ok_or_else(|| {
+            serde_json::Error::custom(format!(
+                "controller state for {type_tag} is missing or has an invalid _controllerStateVersion"
+            ))
+        })?;
+
+    if !(MIN_SUPPORTED_CONTROLLER_STATE_VERSION..=CURRENT_CONTROLLER_STATE_VERSION)
+        .contains(&found_version)
+    {
+        return Err(serde_json::Error::custom(format!(
+            "unsupported controller state version {found_version} for {type_tag}; supported range is {MIN_SUPPORTED_CONTROLLER_STATE_VERSION}..={CURRENT_CONTROLLER_STATE_VERSION}"
+        )));
+    }
+
+    if let Some(obj) = value.as_object_mut() {
+        obj.remove("type");
+        obj.remove("_controllerStateVersion");
+    }
+
+    Ok((type_tag, value))
 }
 
 /// Type alias for an extension deserializer function that handles additional controller types.
@@ -757,19 +854,7 @@ pub fn register_controller_deserializer_extension(ext: ControllerDeserializerExt
 pub fn deserialize_controller(
     value: serde_json::Value,
 ) -> std::result::Result<Box<dyn ResourceController>, serde_json::Error> {
-    use serde::de::Error as _;
-    let mut value = value;
-    let type_tag = value
-        .get("type")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| serde_json::Error::custom("missing 'type' field in controller state"))?
-        .to_string();
-
-    // Remove the "type" tag before passing to concrete deserializer
-    if let Some(obj) = value.as_object_mut() {
-        obj.remove("type");
-    }
-
+    let (type_tag, value) = normalize_controller_state_for_deserialize(value)?;
     deserialize_controller_by_tag(&type_tag, value)
 }
 
@@ -982,6 +1067,15 @@ fn deserialize_controller_by_tag(
 
 // Add the new helper method implementation
 impl ResourceControllerContext<'_> {
+    /// Human-facing deployment name for cloud console metadata.
+    pub fn deployment_name_for_metadata(&self) -> Option<&str> {
+        self.deployment_config
+            .deployment_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+    }
+
     /// Requires a dependency resource to be ready and returns its internal state.
     ///
     /// This method looks up a dependency resource in the stack state and attempts to
@@ -1185,5 +1279,33 @@ impl ResourceControllerContext<'_> {
             .resources
             .get(self.desired_config.id())
             .and_then(|resource_state| resource_state.error.as_ref())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn controller_state_validation_rejects_missing_version() {
+        let value = serde_json::json!({
+            "type": "test-controller",
+        });
+
+        let err = validate_controller_state_value(&value, Some("resource-a"))
+            .expect_err("missing controller state version should be incompatible");
+        assert_eq!(err.code, "INCOMPATIBLE_CONTROLLER_STATE");
+    }
+
+    #[test]
+    fn controller_state_validation_rejects_malformed_version() {
+        let value = serde_json::json!({
+            "type": "test-controller",
+            "_controllerStateVersion": "1",
+        });
+
+        let err = validate_controller_state_value(&value, Some("resource-a"))
+            .expect_err("malformed controller state version should be incompatible");
+        assert_eq!(err.code, "INCOMPATIBLE_CONTROLLER_STATE");
     }
 }

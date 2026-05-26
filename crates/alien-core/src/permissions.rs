@@ -113,6 +113,12 @@ pub struct GcpCondition {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AwsPlatformPermission {
+    /// Stable admin-facing label for this permission entry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// Short admin-facing description of why this entry exists.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// IAM effect. Defaults to Allow.
     #[serde(default, skip_serializing_if = "AwsPermissionEffect::is_allow")]
     pub effect: AwsPermissionEffect,
@@ -127,6 +133,12 @@ pub struct AwsPlatformPermission {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GcpPlatformPermission {
+    /// Stable admin-facing label for this permission entry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// Short admin-facing description of why this entry exists.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// What permissions to grant
     pub grant: PermissionGrant,
     /// How to bind the permissions (stack vs resource scope)
@@ -138,6 +150,12 @@ pub struct GcpPlatformPermission {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AzurePlatformPermission {
+    /// Stable admin-facing label for this permission entry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// Short admin-facing description of why this entry exists.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// What permissions to grant
     pub grant: PermissionGrant,
     /// How to bind the permissions (stack vs resource scope)

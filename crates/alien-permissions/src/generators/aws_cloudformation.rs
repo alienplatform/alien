@@ -1,8 +1,9 @@
 use crate::{
     error::{ErrorData, Result},
+    generators::labels::{entry_pascal_label, has_explicit_label},
     BindingTarget, PermissionContext,
 };
-use alien_core::PermissionSet;
+use alien_core::{PermissionGrant, PermissionSet};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
@@ -63,7 +64,7 @@ impl AwsCloudFormationPermissionsGenerator {
         let mut statements = Vec::new();
 
         // Process each AWS platform permission in the permission set
-        for (index, platform_permission) in aws_platform_permissions.iter().enumerate() {
+        for platform_permission in aws_platform_permissions {
             let actions = platform_permission.grant.actions.as_ref().ok_or_else(|| {
                 alien_error::AlienError::new(ErrorData::GeneratorError {
                     platform: "aws".to_string(),
@@ -98,15 +99,12 @@ impl AwsCloudFormationPermissionsGenerator {
                 self.interpolate_cloudformation_resources(&binding_spec.resources, context)?;
             let conditions = self.extract_cloudformation_conditions(binding_spec, context)?;
 
-            let statement_id = if aws_platform_permissions.len() > 1 {
-                format!(
-                    "{}{}",
-                    self.generate_statement_id(&permission_set.id),
-                    index + 1
-                )
-            } else {
-                self.generate_statement_id(&permission_set.id)
-            };
+            let statement_id = self.statement_id(
+                permission_set,
+                &platform_permission.grant,
+                platform_permission.label.as_deref(),
+                aws_platform_permissions.len() > 1,
+            );
 
             // Convert actions to JsonValue (plain strings for now, could be intrinsic functions later)
             // Sort actions to ensure deterministic output
@@ -329,6 +327,25 @@ impl AwsCloudFormationPermissionsGenerator {
                     .collect::<String>()
             })
             .collect::<String>()
+    }
+
+    fn statement_id(
+        &self,
+        permission_set: &PermissionSet,
+        grant: &PermissionGrant,
+        explicit_label: Option<&str>,
+        include_entry_label: bool,
+    ) -> String {
+        if has_explicit_label(explicit_label) {
+            return entry_pascal_label(explicit_label, grant);
+        }
+
+        let base = self.generate_statement_id(&permission_set.id);
+        if include_entry_label {
+            format!("{base}{}", entry_pascal_label(explicit_label, grant))
+        } else {
+            base
+        }
     }
 }
 

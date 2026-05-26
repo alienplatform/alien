@@ -6,6 +6,22 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorData {
+    /// Controller state version is outside this binary's supported range.
+    #[error(
+        code = "INCOMPATIBLE_CONTROLLER_STATE",
+        message = "Controller state version {found_version} for '{controller_type}' is not supported; this binary supports {min_supported_version} through {current_version}. {repair}",
+        retryable = "false",
+        internal = "false"
+    )]
+    IncompatibleControllerState {
+        controller_type: String,
+        found_version: u32,
+        min_supported_version: u32,
+        current_version: u32,
+        repair: String,
+        resource_id: Option<String>,
+    },
+
     /// Resource configuration validation failed.
     #[error(
         code = "RESOURCE_CONFIG_INVALID",

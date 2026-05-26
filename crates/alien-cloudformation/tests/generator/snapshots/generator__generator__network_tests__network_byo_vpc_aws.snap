@@ -63,7 +63,7 @@ Metadata:
       TelemetryMode:
         default: Telemetry
       Token:
-        default: Deployment token
+        default: Install token
       UpdatesMode:
         default: Updates
       VpcCidr:
@@ -73,14 +73,14 @@ Metadata:
 Parameters:
   Token:
     Type: String
-    Description: Deployment token from the deployment page.
+    Description: Install token from the application setup page.
     NoEcho: true
   ManagingRoleArn:
     Type: String
     Description: Manager IAM role ARN allowed to assume generated management roles.
   ManagingAccountId:
     Type: String
-    Description: AWS account ID for the management account that hosts deployment container images.
+    Description: AWS account ID for the management account that hosts application container images.
     Default: ''
   NetworkMode:
     Type: String
@@ -198,6 +198,9 @@ Outputs:
   DeploymentSetupFingerprint:
     Value: test
     Description: Setup compatibility fingerprint.
+  DeploymentSetupImportFormatVersion:
+    Value: 1
+    Description: Setup import payload format version.
   DeploymentSetupFingerprintVersion:
     Value: 1
     Description: Setup fingerprint algorithm version.

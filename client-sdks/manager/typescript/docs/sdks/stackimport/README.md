@@ -42,6 +42,7 @@ async function run() {
     resources: [],
     setupFingerprint: "<value>",
     setupFingerprintVersion: 325467,
+    setupImportFormatVersion: 325467,
     setupTarget: "<value>",
     stackSettings: {},
   });
@@ -81,6 +82,7 @@ async function run() {
     resources: [],
     setupFingerprint: "<value>",
     setupFingerprintVersion: 325467,
+    setupImportFormatVersion: 325467,
     setupTarget: "<value>",
     stackSettings: {},
   });

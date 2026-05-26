@@ -93,81 +93,96 @@ fn runtime_aws_system_generated_resources_are_abac_guarded() {
 }
 
 #[test]
-fn aws_tag_tamper_protection_denies_alien_tag_mutation() {
-    let permission_set = get_permission_set("aws/tag-tamper-protection")
-        .expect("aws/tag-tamper-protection permission set must exist");
-    let aws_permissions = permission_set
-        .platforms
-        .aws
-        .as_ref()
-        .expect("tag tamper protection must have AWS permissions");
-
-    assert!(!aws_permissions.is_empty());
+fn aws_tag_tamper_protection_is_not_a_builtin_boundary_layer() {
     assert!(
-        aws_permissions
-            .iter()
-            .all(|permission| permission.effect == AwsPermissionEffect::Deny),
-        "tag tamper protection must only contain Deny statements"
+        get_permission_set("aws/tag-tamper-protection").is_none(),
+        "AWS isolation should be enforced by scoped permission sets, not a compensating tag-tamper Deny"
     );
+}
 
-    let actions = aws_permissions
-        .iter()
-        .flat_map(|permission| {
-            permission
-                .grant
-                .actions
-                .as_ref()
-                .expect("tag tamper protection must have actions")
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    for expected in [
-        "acm:RemoveTagsFromCertificate",
-        "autoscaling:DeleteTags",
-        "dynamodb:UntagResource",
-        "ec2:DeleteTags",
-        "elasticloadbalancing:RemoveTags",
-        "events:UntagResource",
-        "lambda:UntagResource",
-        "sqs:UntagQueue",
-    ] {
-        assert!(
-            actions.contains(&expected.to_string()),
-            "tag tamper protection is missing {expected}"
-        );
-    }
+#[test]
+fn kv_and_queue_management_do_not_mutate_tags() {
+    let cases: [(&str, &[&str]); 2] = [
+        (
+            "kv/management",
+            &["dynamodb:TagResource", "dynamodb:UntagResource"],
+        ),
+        ("queue/management", &["sqs:TagQueue", "sqs:UntagQueue"]),
+    ];
 
-    for permission in aws_permissions {
-        for binding in [
-            permission.binding.stack.as_ref(),
-            permission.binding.resource.as_ref(),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            assert_eq!(binding.resources, vec!["*".to_string()]);
-            assert!(has_condition_key(binding, "aws:TagKeys"));
+    for (permission_set_id, forbidden_actions) in cases {
+        let permission_set = get_permission_set(permission_set_id)
+            .unwrap_or_else(|| panic!("missing permission set {permission_set_id}"));
+        let aws_permissions = permission_set
+            .platforms
+            .aws
+            .as_ref()
+            .unwrap_or_else(|| panic!("{permission_set_id} must have AWS permissions"));
+        let actions = aws_permissions
+            .iter()
+            .flat_map(|permission| permission.grant.actions.as_deref().unwrap_or_default())
+            .collect::<Vec<_>>();
+
+        for forbidden_action in forbidden_actions {
+            assert!(
+                !actions
+                    .iter()
+                    .any(|action| action.as_str() == *forbidden_action),
+                "{permission_set_id} should not include tag mutation action {forbidden_action}"
+            );
         }
     }
 
-    let s3_permission = aws_permissions
+    let queue_management =
+        get_permission_set("queue/management").expect("queue/management permission set must exist");
+    let queue_actions = queue_management
+        .platforms
+        .aws
+        .as_ref()
+        .expect("queue/management must have AWS permissions")
         .iter()
-        .find(|permission| {
-            permission
-                .grant
-                .actions
-                .as_ref()
-                .is_some_and(|actions| actions.contains(&"s3:PutBucketTagging".to_string()))
-        })
-        .expect("tag tamper protection must deny s3:PutBucketTagging");
-    for binding in [
-        s3_permission.binding.stack.as_ref(),
-        s3_permission.binding.resource.as_ref(),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        assert!(has_condition_key(binding, "aws:ResourceTag/${stackTag}"));
+        .flat_map(|permission| permission.grant.actions.as_deref().unwrap_or_default())
+        .collect::<Vec<_>>();
+    assert!(
+        queue_actions
+            .iter()
+            .any(|action| action.as_str() == "sqs:PurgeQueue"),
+        "queue/management should retain PurgeQueue"
+    );
+}
+
+#[test]
+fn provision_sets_do_not_grant_tag_removal() {
+    let cases: [(&str, &[&str]); 6] = [
+        ("artifact-registry/provision", &["ecr:UntagResource"]),
+        ("kv/provision", &["dynamodb:UntagResource"]),
+        ("network/provision", &["ec2:DeleteTags"]),
+        ("queue/provision", &["sqs:UntagQueue"]),
+        ("service-account/provision", &["iam:UntagRole"]),
+        ("worker/provision", &["lambda:UntagResource"]),
+    ];
+
+    for (permission_set_id, forbidden_actions) in cases {
+        let permission_set = get_permission_set(permission_set_id)
+            .unwrap_or_else(|| panic!("missing permission set {permission_set_id}"));
+        let aws_permissions = permission_set
+            .platforms
+            .aws
+            .as_ref()
+            .unwrap_or_else(|| panic!("{permission_set_id} must have AWS permissions"));
+        let actions = aws_permissions
+            .iter()
+            .flat_map(|permission| permission.grant.actions.as_deref().unwrap_or_default())
+            .collect::<Vec<_>>();
+
+        for forbidden_action in forbidden_actions {
+            assert!(
+                !actions
+                    .iter()
+                    .any(|action| action.as_str() == *forbidden_action),
+                "{permission_set_id} should not include tag removal action {forbidden_action}"
+            );
+        }
     }
 }
 
@@ -463,7 +478,6 @@ fn action_requires_tag_condition(action: &str) -> bool {
             | "ec2:DeleteRouteTable"
             | "ec2:DeleteSecurityGroup"
             | "ec2:DeleteSubnet"
-            | "ec2:DeleteTags"
             | "ec2:DeleteVolume"
             | "ec2:DeleteVpc"
             | "ec2:DescribeVpcAttribute"

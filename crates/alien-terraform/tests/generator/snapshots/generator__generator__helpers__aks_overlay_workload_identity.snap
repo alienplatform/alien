@@ -32,12 +32,12 @@ variable "resource_prefix" {
 
 variable "name" {
   type        = string
-  description = "Human-readable deployment name shown in the deployment portal."
+  description = "Human-readable application name shown in setup and cloud IAM review metadata."
 }
 
 variable "token" {
   type        = string
-  description = "Deployment token from the deployment page. This is the same token used by the deploy CLI --token flag."
+  description = "Install token from the application setup page. This is the same token used by the deploy CLI --token flag."
   sensitive   = true
 }
 
@@ -116,6 +116,7 @@ resource "random_id" "resource_prefix" {
 === locals.tf ===
 locals {
   resource_prefix          = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
+  deployment_name          = var.name
   deployment_platform      = "kubernetes"
   deployment_base_platform = "azure"
   deployment_target        = "aks"
@@ -207,8 +208,8 @@ resource "azurerm_user_assigned_identity" "execution_sa" {
   ]
 }
 
-resource "azurerm_role_assignment" "execution_sa_storage_data_read_assignment_0" {
-  name               = uuidv5("oid", "deployment:azure:role-assign:execution-sa:storage/data-read:0:${azurerm_user_assigned_identity.execution_sa.principal_id}")
+resource "azurerm_role_assignment" "execution_sa_storage_blob_data_reader___var_azure_resource_group_name__assignment" {
+  name               = uuidv5("oid", "deployment:azure:role-assign:execution-sa:storage_blob_data_reader___var_azure_resource_group_name_:${azurerm_user_assigned_identity.execution_sa.principal_id}")
   scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
   role_definition_id = "/subscriptions/${var.azure_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/2a2b9908-6ea1-4ae2-8e65-a410df84e7d1"
   principal_id       = azurerm_user_assigned_identity.execution_sa.principal_id
@@ -249,7 +250,7 @@ resource "terraform_data" "deployment_import" {
   depends_on = [
     azurerm_resource_group.default_resource_group,
     azurerm_user_assigned_identity.execution_sa,
-    azurerm_role_assignment.execution_sa_storage_data_read_assignment_0,
+    azurerm_role_assignment.execution_sa_storage_blob_data_reader___var_azure_resource_group_name__assignment,
     azurerm_federated_identity_credential.execution_sa_federated
   ]
 }

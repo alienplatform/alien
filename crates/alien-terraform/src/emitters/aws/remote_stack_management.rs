@@ -79,7 +79,7 @@ impl TfEmitter for AwsRemoteStackManagementEmitter {
             &mut fragment,
             label,
             &format!("{label}_managed_policy"),
-            "alien-management",
+            "deployment-management",
             statements,
         )?;
 
@@ -94,7 +94,7 @@ impl TfEmitter for AwsRemoteStackManagementEmitter {
             [
                 attr(
                     "name",
-                    Expression::String("alien-management-self-read".to_string()),
+                    Expression::String("deployment-management-self-read".to_string()),
                 ),
                 attr("role", expr::traversal(["aws_iam_role", label, "id"])),
                 attr("policy", self_read_policy(label)),

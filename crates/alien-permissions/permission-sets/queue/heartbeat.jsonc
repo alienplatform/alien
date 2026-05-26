@@ -4,6 +4,8 @@
   "platforms": {
     "aws": [
       {
+        "label": "check-sqs-queue-health",
+        "description": "Read SQS queue attributes and tags needed for application health checks.",
         "grant": {
           "actions": ["sqs:GetQueueAttributes", "sqs:ListQueueTags"]
         },
@@ -19,6 +21,8 @@
     ],
     "gcp": [
       {
+        "label": "check-pubsub-topic-health",
+        "description": "Read Pub/Sub topic metadata needed for application health checks.",
         "grant": {
           "predefinedRoles": ["roles/pubsub.viewer"]
         },
@@ -30,6 +34,8 @@
         }
       },
       {
+        "label": "check-pubsub-subscription-health",
+        "description": "Read Pub/Sub subscription metadata needed for application health checks.",
         "grant": {
           "predefinedRoles": ["roles/pubsub.viewer"]
         },
@@ -43,6 +49,8 @@
     ],
     "azure": [
       {
+        "label": "check-service-bus-health",
+        "description": "Read Azure Service Bus namespace metadata needed for application health checks.",
         "grant": {
           "predefinedRoles": ["Reader"]
         },

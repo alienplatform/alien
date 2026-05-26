@@ -1,6 +1,5 @@
 ---
 source: crates/alien-cloudformation/tests/generator/aws_full_stack_tests.rs
-assertion_line: 118
 expression: yaml
 ---
 AWSTemplateFormatVersion: 2010-09-09
@@ -64,7 +63,7 @@ Metadata:
       TelemetryMode:
         default: Telemetry
       Token:
-        default: Deployment token
+        default: Install token
       UpdatesMode:
         default: Updates
       VpcCidr:
@@ -74,14 +73,14 @@ Metadata:
 Parameters:
   Token:
     Type: String
-    Description: Deployment token from the deployment page.
+    Description: Install token from the application setup page.
     NoEcho: true
   ManagingRoleArn:
     Type: String
     Description: Manager IAM role ARN allowed to assume generated management roles.
   ManagingAccountId:
     Type: String
-    Description: AWS account ID for the management account that hosts deployment container images.
+    Description: AWS account ID for the management account that hosts application container images.
     Default: ''
   NetworkMode:
     Type: String
@@ -582,7 +581,7 @@ Resources:
             - lambda.amazonaws.com
           Action: sts:AssumeRole
       Policies:
-      - PolicyName: alien-managed-policy
+      - PolicyName: deployment-permissions
         PolicyDocument:
           Version: 2012-10-17
           Statement:
@@ -595,7 +594,7 @@ Resources:
             Resource:
             - Fn::Sub: arn:${AWS::Partition}:s3:::${AWS::StackName}-*
             - Fn::Sub: arn:${AWS::Partition}:s3:::${AWS::StackName}-*/*
-            Sid: StorageDataRead
+            Sid: ReadS3Objects
           - Action:
             - sqs:ChangeMessageVisibility
             - sqs:DeleteMessage
@@ -605,7 +604,7 @@ Resources:
             Effect: Allow
             Resource:
             - Fn::Sub: arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${AWS::StackName}-*
-            Sid: QueueDataWrite
+            Sid: SendSqsMessages
       Tags:
       - Key: managed-by
         Value: deployment
@@ -647,7 +646,7 @@ Resources:
   ManagementRoleManagementPolicy1:
     Type: AWS::IAM::ManagedPolicy
     Properties:
-      Description: Remote stack management permissions
+      Description: Application management permissions
       PolicyDocument:
         Version: 2012-10-17
         Statement:
@@ -661,7 +660,7 @@ Resources:
           Effect: Allow
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*
-          Sid: WorkerProvision1
+          Sid: CreateLambdaFunctions
         - Action:
           - lambda:AddPermission
           - lambda:CreateAlias
@@ -689,7 +688,6 @@ Resources:
           - lambda:PutFunctionEventInvokeConfig
           - lambda:RemovePermission
           - lambda:TagResource
-          - lambda:UntagResource
           - lambda:UpdateAlias
           - lambda:UpdateCodeSigningConfig
           - lambda:UpdateEventSourceMapping
@@ -703,7 +701,7 @@ Resources:
           Effect: Allow
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*
-          Sid: WorkerProvision2
+          Sid: ManageLambdaFunctions
         - Action:
           - ec2:DescribeNetworkInterfaces
           - ec2:DescribeSecurityGroups
@@ -712,13 +710,13 @@ Resources:
           Effect: Allow
           Resource:
           - '*'
-          Sid: WorkerProvision3
+          Sid: InspectVpcForLambdaNetworking
         - Action:
           - iam:PassRole
           Effect: Allow
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*-sa
-          Sid: WorkerProvision4
+          Sid: PassLambdaExecutionRoles
         - Action:
           - iam:GetRolePolicy
           - iam:ListRolePolicies
@@ -731,13 +729,13 @@ Resources:
           Effect: Allow
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*
-          Sid: WorkerProvision5
+          Sid: AttachLambdaRuntimePolicies
         - Action:
           - ecr:GetAuthorizationToken
           Effect: Allow
           Resource:
           - '*'
-          Sid: WorkerProvision6
+          Sid: GetEcrLoginToken
         - Action:
           - ecr:BatchGetImage
           - ecr:GetDownloadUrlForLayer
@@ -753,7 +751,7 @@ Resources:
                 - Fn::Split:
                   - ':'
                   - Ref: ManagingRoleArn
-          Sid: WorkerProvision7
+          Sid: ConfigureLambdaImagePullAccess
         - Action:
           - acm:AddTagsToCertificate
           - acm:ImportCertificate
@@ -765,7 +763,7 @@ Resources:
           Effect: Allow
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:acm:${AWS::Region}:${AWS::AccountId}:certificate/*
-          Sid: WorkerProvision8
+          Sid: ImportTlsCertificates
         - Action:
           - acm:AddTagsToCertificate
           - acm:DeleteCertificate
@@ -779,7 +777,7 @@ Resources:
           Effect: Allow
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:acm:${AWS::Region}:${AWS::AccountId}:certificate/*
-          Sid: WorkerProvision9
+          Sid: ManageTlsCertificates
         - Action:
           - apigateway:POST
           - apigateway:PUT
@@ -793,7 +791,7 @@ Resources:
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/tags/*
-          Sid: WorkerProvision10
+          Sid: CreateHttpApiEndpoints
         - Action:
           - apigateway:POST
           Condition:
@@ -806,7 +804,7 @@ Resources:
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*/apimappings
-          Sid: WorkerProvision11
+          Sid: CreateHttpApiRoutes
         - Action:
           - apigateway:PUT
           - apigateway:TagResource
@@ -822,7 +820,7 @@ Resources:
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*/stages/*
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/tags/*
-          Sid: WorkerProvision12
+          Sid: TagHttpApiEndpoints
       Roles:
       - Ref: ManagementRole
     DependsOn:
@@ -830,7 +828,7 @@ Resources:
   ManagementRoleManagementPolicy2:
     Type: AWS::IAM::ManagedPolicy
     Properties:
-      Description: Remote stack management permissions
+      Description: Application management permissions
       PolicyDocument:
         Version: 2012-10-17
         Statement:
@@ -850,7 +848,7 @@ Resources:
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*/apimappings
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/domainnames/*/apimappings/*
-          Sid: WorkerProvision13
+          Sid: ManageHttpApiEndpoints
         - Action:
           - events:PutRule
           - events:TagResource
@@ -862,7 +860,7 @@ Resources:
           Effect: Allow
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${AWS::StackName}-*
-          Sid: WorkerProvision14
+          Sid: CreateEventbridgeSchedules
         - Action:
           - events:DeleteRule
           - events:DescribeRule
@@ -876,7 +874,7 @@ Resources:
           Effect: Allow
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${AWS::StackName}-*
-          Sid: WorkerProvision15
+          Sid: ManageEventbridgeSchedules
         - Action:
           - s3:GetBucketAcl
           - s3:GetBucketLocation
@@ -888,14 +886,14 @@ Resources:
           Effect: Allow
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:s3:::${AWS::StackName}-*
-          Sid: StorageHeartbeat
+          Sid: CheckS3BucketHealth
         - Action:
           - sqs:GetQueueAttributes
           - sqs:ListQueueTags
           Effect: Allow
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${AWS::StackName}-*
-          Sid: QueueHeartbeat
+          Sid: CheckSqsQueueHealth
         - Action:
           - dynamodb:DescribeContinuousBackups
           - dynamodb:DescribeTable
@@ -905,14 +903,14 @@ Resources:
           Effect: Allow
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${AWS::StackName}-*
-          Sid: KvHeartbeat
+          Sid: CheckDynamodbTableHealth
         - Action:
           - ssm:DeleteParameter
           - ssm:PutParameter
           Effect: Allow
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}-*
-          Sid: VaultDataWrite
+          Sid: WriteSsmParameters
         - Sid: ReadOwnManagementRole
           Effect: Allow
           Action: iam:GetRole
@@ -1230,6 +1228,7 @@ Resources:
       Region:
         Ref: AWS::Region
       SetupTarget: aws
+      SetupImportFormatVersion: 1
       SetupFingerprint: test
       SetupFingerprintVersion: 1
       ManagementConfig:
@@ -1492,6 +1491,9 @@ Outputs:
   DeploymentSetupFingerprint:
     Value: test
     Description: Setup compatibility fingerprint.
+  DeploymentSetupImportFormatVersion:
+    Value: 1
+    Description: Setup import payload format version.
   DeploymentSetupFingerprintVersion:
     Value: 1
     Description: Setup fingerprint algorithm version.

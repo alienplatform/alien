@@ -24,7 +24,7 @@ fn get_aws_role_name(prefix: &str, name: &str) -> String {
 }
 
 // Define the inline policy name we will manage
-const MANAGED_POLICY_NAME: &str = "alien-managed-policy";
+const MANAGED_POLICY_NAME: &str = "deployment-permissions";
 
 #[controller]
 pub struct AwsServiceAccountController {
@@ -67,10 +67,16 @@ impl AwsServiceAccountController {
         let role_request = CreateRoleRequest::builder()
             .role_name(role_name.clone())
             .assume_role_policy_document(assume_role_policy)
-            .description(format!(
-                "Service account role for Alien resource {}",
-                config.id
-            ))
+            .description(match ctx.deployment_name_for_metadata() {
+                Some(deployment_name) => format!(
+                    "Runtime IAM role for {deployment_name}. Resource prefix: {}. Resource: {}.",
+                    ctx.resource_prefix, config.id
+                ),
+                None => format!(
+                    "Runtime IAM role. Resource prefix: {}. Resource: {}.",
+                    ctx.resource_prefix, config.id
+                ),
+            })
             .tags(
                 standard_resource_tags(ctx.resource_prefix, &config.id)
                     .into_iter()

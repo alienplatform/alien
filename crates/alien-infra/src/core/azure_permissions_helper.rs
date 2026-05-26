@@ -209,7 +209,7 @@ impl AzurePermissionsHelper {
                     let role_assignment_id = Uuid::new_v5(
                         &Uuid::NAMESPACE_OID,
                         format!(
-                            "alien:azure:res-role-assign:{}:{}:{}:{}",
+                            "deployment:azure:res-role-assign:{}:{}:{}:{}",
                             ctx.resource_prefix, resource_id, profile_name, binding_index
                         )
                         .as_bytes(),
@@ -259,16 +259,12 @@ impl AzurePermissionsHelper {
         match &binding.role_definition {
             AzureRoleDefinitionRef::Predefined { role_definition_id } => role_definition_id.clone(),
             AzureRoleDefinitionRef::Custom { key } => {
-                let index = key
-                    .rsplit(':')
-                    .next()
-                    .and_then(|value| value.parse::<usize>().ok())
-                    .unwrap_or(0);
+                let role_segment = azure_role_key_segment(key);
                 let role_definition_id = Uuid::new_v5(
                     &Uuid::NAMESPACE_OID,
                     format!(
                         "deployment:azure:res-role-def:{}:{}:{}:{}",
-                        resource_prefix, profile_name, binding.permission_set_id, index
+                        resource_prefix, profile_name, binding.permission_set_id, role_segment
                     )
                     .as_bytes(),
                 )
@@ -446,16 +442,12 @@ impl AzurePermissionsHelper {
                             role_definition_id.clone()
                         }
                         AzureRoleDefinitionRef::Custom { key } => {
-                            let index = key
-                                .rsplit(':')
-                                .next()
-                                .and_then(|value| value.parse::<usize>().ok())
-                                .unwrap_or(0);
+                            let role_segment = azure_role_key_segment(key);
                             let role_definition_id = Uuid::new_v5(
                                 &Uuid::NAMESPACE_OID,
                                 format!(
                                     "deployment:azure:mgmt-res-role-def:{}:{}:{}",
-                                    ctx.resource_prefix, binding.permission_set_id, index
+                                    ctx.resource_prefix, binding.permission_set_id, role_segment
                                 )
                                 .as_bytes(),
                             )
@@ -471,7 +463,7 @@ impl AzurePermissionsHelper {
                     let role_assignment_id = Uuid::new_v5(
                         &Uuid::NAMESPACE_OID,
                         format!(
-                            "alien:azure:mgmt-res-role-assign:{}:{}:{}",
+                            "deployment:azure:mgmt-res-role-assign:{}:{}:{}",
                             ctx.resource_prefix, resource_id, binding_index
                         )
                         .as_bytes(),
@@ -604,4 +596,23 @@ impl AzurePermissionsHelper {
 
 fn is_worker_command_transport_permission(resource_type: &str, permission_set_id: &str) -> bool {
     resource_type == "worker" && permission_set_id == "worker/dispatch-command"
+}
+
+fn azure_role_key_segment(key: &str) -> String {
+    key.rsplit(':')
+        .next()
+        .map(|segment| {
+            segment
+                .chars()
+                .map(|ch| {
+                    if ch.is_ascii_alphanumeric() {
+                        ch.to_ascii_lowercase()
+                    } else {
+                        '-'
+                    }
+                })
+                .collect::<String>()
+        })
+        .filter(|segment| !segment.is_empty())
+        .unwrap_or_else(|| "custom".to_string())
 }

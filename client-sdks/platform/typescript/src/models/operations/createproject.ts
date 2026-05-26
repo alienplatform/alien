@@ -63,6 +63,10 @@ export type CreateProjectCloudformationRequest = {
    * Whether CloudFormation package generation is enabled
    */
   enabled: boolean;
+  /**
+   * Human-friendly application name shown in generated install artifacts
+   */
+  displayName?: string | null | undefined;
 };
 
 /**
@@ -109,6 +113,10 @@ export type CreateProjectTerraformRequest = {
    * Whether Terraform package generation is enabled
    */
   enabled: boolean;
+  /**
+   * Human-friendly application name shown in generated install artifacts
+   */
+  displayName?: string | null | undefined;
 };
 
 /**
@@ -255,6 +263,10 @@ export type CreateProjectCloudformationResponse = {
    * Whether CloudFormation package generation is enabled
    */
   enabled: boolean;
+  /**
+   * Human-friendly application name shown in generated install artifacts
+   */
+  displayName?: string | null | undefined;
 };
 
 /**
@@ -301,6 +313,10 @@ export type CreateProjectTerraformResponse = {
    * Whether Terraform package generation is enabled
    */
   enabled: boolean;
+  /**
+   * Human-friendly application name shown in generated install artifacts
+   */
+  displayName?: string | null | undefined;
 };
 
 /**
@@ -441,6 +457,7 @@ export function createProjectCliRequestToJSON(
 /** @internal */
 export type CreateProjectCloudformationRequest$Outbound = {
   enabled: boolean;
+  displayName?: string | null | undefined;
 };
 
 /** @internal */
@@ -449,6 +466,7 @@ export const CreateProjectCloudformationRequest$outboundSchema: z.ZodType<
   CreateProjectCloudformationRequest
 > = z.object({
   enabled: z.boolean(),
+  displayName: z.nullable(z.string()).optional(),
 });
 
 export function createProjectCloudformationRequestToJSON(
@@ -516,6 +534,7 @@ export function createProjectHelmRequestToJSON(
 /** @internal */
 export type CreateProjectTerraformRequest$Outbound = {
   enabled: boolean;
+  displayName?: string | null | undefined;
 };
 
 /** @internal */
@@ -524,6 +543,7 @@ export const CreateProjectTerraformRequest$outboundSchema: z.ZodType<
   CreateProjectTerraformRequest
 > = z.object({
   enabled: z.boolean(),
+  displayName: z.nullable(z.string()).optional(),
 });
 
 export function createProjectTerraformRequestToJSON(
@@ -723,6 +743,7 @@ export const CreateProjectCloudformationResponse$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   enabled: z.boolean(),
+  displayName: z.nullable(z.string()).optional(),
 });
 
 export function createProjectCloudformationResponseFromJSON(
@@ -782,6 +803,7 @@ export const CreateProjectTerraformResponse$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   enabled: z.boolean(),
+  displayName: z.nullable(z.string()).optional(),
 });
 
 export function createProjectTerraformResponseFromJSON(

@@ -321,6 +321,7 @@ impl CloudProxyTest {
             .create_deployment(
                 &test_subject(),
                 CreateDeploymentParams {
+                    deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
                     name: "cloud-proxy-deploy".to_string(),
                     deployment_group_id: dg.id.clone(),
                     platform,
@@ -329,6 +330,7 @@ impl CloudProxyTest {
                         deployment_model: DeploymentModel::Pull,
                         ..Default::default()
                     },
+                    stack_state: None,
                     environment_variables: None,
                     deployment_token: Some(deploy_raw.clone()),
                 },

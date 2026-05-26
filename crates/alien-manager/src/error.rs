@@ -139,6 +139,21 @@ pub enum ErrorData {
     )]
     BadRequest { reason: String },
 
+    /// Setup import payload version is outside this manager's supported range.
+    #[error(
+        code = "INCOMPATIBLE_SETUP_IMPORT",
+        message = "Setup import format version {found_version} is not supported; this manager supports {min_supported_version} through {current_version}. {repair}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    IncompatibleSetupImport {
+        found_version: u32,
+        min_supported_version: u32,
+        current_version: u32,
+        repair: String,
+    },
+
     /// Database operation failed
     #[error(
         code = "DATABASE_ERROR",

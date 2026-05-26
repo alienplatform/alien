@@ -110,6 +110,10 @@ export type SyncReconcileResponseCurrentReleaseOverrideAw = {
    */
   binding: SyncReconcileResponseCurrentReleaseOverrideAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: SyncReconcileResponseCurrentReleaseOverrideEffect | undefined;
@@ -117,6 +121,10 @@ export type SyncReconcileResponseCurrentReleaseOverrideAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileResponseCurrentReleaseOverrideAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -190,9 +198,17 @@ export type SyncReconcileResponseCurrentReleaseOverrideAzure = {
    */
   binding: SyncReconcileResponseCurrentReleaseOverrideAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileResponseCurrentReleaseOverrideAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -298,9 +314,17 @@ export type SyncReconcileResponseCurrentReleaseOverrideGcp = {
    */
   binding: SyncReconcileResponseCurrentReleaseOverrideGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileResponseCurrentReleaseOverrideGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -455,6 +479,10 @@ export type SyncReconcileResponseCurrentReleaseExtendAw = {
    */
   binding: SyncReconcileResponseCurrentReleaseExtendAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: SyncReconcileResponseCurrentReleaseExtendEffect | undefined;
@@ -462,6 +490,10 @@ export type SyncReconcileResponseCurrentReleaseExtendAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileResponseCurrentReleaseExtendAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -533,9 +565,17 @@ export type SyncReconcileResponseCurrentReleaseExtendAzure = {
    */
   binding: SyncReconcileResponseCurrentReleaseExtendAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileResponseCurrentReleaseExtendAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -641,9 +681,17 @@ export type SyncReconcileResponseCurrentReleaseExtendGcp = {
    */
   binding: SyncReconcileResponseCurrentReleaseExtendGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileResponseCurrentReleaseExtendGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -803,6 +851,10 @@ export type SyncReconcileResponseCurrentReleaseProfileAw = {
    */
   binding: SyncReconcileResponseCurrentReleaseProfileAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: SyncReconcileResponseCurrentReleaseProfileEffect | undefined;
@@ -810,6 +862,10 @@ export type SyncReconcileResponseCurrentReleaseProfileAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileResponseCurrentReleaseProfileAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -883,9 +939,17 @@ export type SyncReconcileResponseCurrentReleaseProfileAzure = {
    */
   binding: SyncReconcileResponseCurrentReleaseProfileAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileResponseCurrentReleaseProfileAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -991,9 +1055,17 @@ export type SyncReconcileResponseCurrentReleaseProfileGcp = {
    */
   binding: SyncReconcileResponseCurrentReleaseProfileGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileResponseCurrentReleaseProfileGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -1485,6 +1557,10 @@ export type SyncReconcileResponsePreparedStackOverrideAw = {
    */
   binding: SyncReconcileResponsePreparedStackOverrideAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: SyncReconcileResponsePreparedStackOverrideEffect | undefined;
@@ -1492,6 +1568,10 @@ export type SyncReconcileResponsePreparedStackOverrideAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileResponsePreparedStackOverrideAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -1565,9 +1645,17 @@ export type SyncReconcileResponsePreparedStackOverrideAzure = {
    */
   binding: SyncReconcileResponsePreparedStackOverrideAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileResponsePreparedStackOverrideAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -1673,9 +1761,17 @@ export type SyncReconcileResponsePreparedStackOverrideGcp = {
    */
   binding: SyncReconcileResponsePreparedStackOverrideGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileResponsePreparedStackOverrideGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -1827,6 +1923,10 @@ export type SyncReconcileResponsePreparedStackExtendAw = {
    */
   binding: SyncReconcileResponsePreparedStackExtendAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: SyncReconcileResponsePreparedStackExtendEffect | undefined;
@@ -1834,6 +1934,10 @@ export type SyncReconcileResponsePreparedStackExtendAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileResponsePreparedStackExtendAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -1905,9 +2009,17 @@ export type SyncReconcileResponsePreparedStackExtendAzure = {
    */
   binding: SyncReconcileResponsePreparedStackExtendAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileResponsePreparedStackExtendAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -2013,9 +2125,17 @@ export type SyncReconcileResponsePreparedStackExtendGcp = {
    */
   binding: SyncReconcileResponsePreparedStackExtendGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileResponsePreparedStackExtendGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -2175,6 +2295,10 @@ export type SyncReconcileResponsePreparedStackProfileAw = {
    */
   binding: SyncReconcileResponsePreparedStackProfileAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: SyncReconcileResponsePreparedStackProfileEffect | undefined;
@@ -2182,6 +2306,10 @@ export type SyncReconcileResponsePreparedStackProfileAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileResponsePreparedStackProfileAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -2253,9 +2381,17 @@ export type SyncReconcileResponsePreparedStackProfileAzure = {
    */
   binding: SyncReconcileResponsePreparedStackProfileAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileResponsePreparedStackProfileAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -2361,9 +2497,17 @@ export type SyncReconcileResponsePreparedStackProfileGcp = {
    */
   binding: SyncReconcileResponsePreparedStackProfileGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileResponsePreparedStackProfileGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -3030,6 +3174,10 @@ export type SyncReconcileResponseTargetReleaseOverrideAw = {
    */
   binding: SyncReconcileResponseTargetReleaseOverrideAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: SyncReconcileResponseTargetReleaseOverrideEffect | undefined;
@@ -3037,6 +3185,10 @@ export type SyncReconcileResponseTargetReleaseOverrideAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileResponseTargetReleaseOverrideAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -3110,9 +3262,17 @@ export type SyncReconcileResponseTargetReleaseOverrideAzure = {
    */
   binding: SyncReconcileResponseTargetReleaseOverrideAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileResponseTargetReleaseOverrideAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -3218,9 +3378,17 @@ export type SyncReconcileResponseTargetReleaseOverrideGcp = {
    */
   binding: SyncReconcileResponseTargetReleaseOverrideGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileResponseTargetReleaseOverrideGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -3372,6 +3540,10 @@ export type SyncReconcileResponseTargetReleaseExtendAw = {
    */
   binding: SyncReconcileResponseTargetReleaseExtendAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: SyncReconcileResponseTargetReleaseExtendEffect | undefined;
@@ -3379,6 +3551,10 @@ export type SyncReconcileResponseTargetReleaseExtendAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileResponseTargetReleaseExtendAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -3450,9 +3626,17 @@ export type SyncReconcileResponseTargetReleaseExtendAzure = {
    */
   binding: SyncReconcileResponseTargetReleaseExtendAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileResponseTargetReleaseExtendAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -3558,9 +3742,17 @@ export type SyncReconcileResponseTargetReleaseExtendGcp = {
    */
   binding: SyncReconcileResponseTargetReleaseExtendGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileResponseTargetReleaseExtendGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -3720,6 +3912,10 @@ export type SyncReconcileResponseTargetReleaseProfileAw = {
    */
   binding: SyncReconcileResponseTargetReleaseProfileAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: SyncReconcileResponseTargetReleaseProfileEffect | undefined;
@@ -3727,6 +3923,10 @@ export type SyncReconcileResponseTargetReleaseProfileAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileResponseTargetReleaseProfileAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -3798,9 +3998,17 @@ export type SyncReconcileResponseTargetReleaseProfileAzure = {
    */
   binding: SyncReconcileResponseTargetReleaseProfileAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileResponseTargetReleaseProfileAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -3906,9 +4114,17 @@ export type SyncReconcileResponseTargetReleaseProfileGcp = {
    */
   binding: SyncReconcileResponseTargetReleaseProfileGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileResponseTargetReleaseProfileGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -4152,7 +4368,7 @@ export type SyncReconcileResponseCurrent = {
    * Mismatched versions produce a clear error instead of silent corruption.
    * See docs/02-manager/10-deployment-protocol.md.
    */
-  protocolVersion?: number | undefined;
+  protocolVersion: number;
   /**
    * Whether a retry has been requested for a failed deployment
    *
@@ -4218,45 +4434,59 @@ export type SyncReconcileResponseClusters = {
 };
 
 /**
- * AWS Horizon host image catalog.
+ * AWS Horizon machine image catalog.
  */
-export type SyncReconcileResponseHorizonHostImageAws = {
+export type SyncReconcileResponseHorizonMachineImageAws = {
   /**
    * AMI IDs by architecture, then AWS region.
    */
   amis: { [k: string]: { [k: string]: string } };
 };
 
-export type SyncReconcileResponseHorizonHostImageAwsUnion =
-  | SyncReconcileResponseHorizonHostImageAws
+export type SyncReconcileResponseHorizonMachineImageAwsUnion =
+  | SyncReconcileResponseHorizonMachineImageAws
   | any;
 
 /**
- * Azure Horizon host image entry.
+ * Azure Horizon machine image entry.
  */
 export type SyncReconcileResponseAzureImages = {
   /**
-   * Azure Compute Gallery image definition ID.
+   * Azure Compute Gallery image version ID.
    */
-  imageDefinitionId: string;
+  imageVersionId: string;
 };
 
 /**
- * Azure Horizon host image catalog.
+ * Azure Horizon machine image catalog.
  */
-export type HorizonHostImageAzureTarget = {
+export type HorizonMachineImageAzureTarget = {
   /**
    * Images by architecture.
    */
   images: { [k: string]: SyncReconcileResponseAzureImages };
 };
 
-export type HorizonHostImageTargetAzureUnion =
-  | HorizonHostImageAzureTarget
+export type HorizonMachineImageTargetAzureUnion =
+  | HorizonMachineImageAzureTarget
   | any;
 
 /**
- * GCP Horizon host image entry.
+ * Base image metadata for the Horizon machine image.
+ */
+export type SyncReconcileResponseBaseImage = {
+  /**
+   * Base OS image name.
+   */
+  name: string;
+  /**
+   * Base OS image version or channel.
+   */
+  version: string;
+};
+
+/**
+ * GCP Horizon machine image entry.
  */
 export type SyncReconcileResponseGcpImages = {
   /**
@@ -4266,40 +4496,58 @@ export type SyncReconcileResponseGcpImages = {
 };
 
 /**
- * GCP Horizon host image catalog.
+ * GCP Horizon machine image catalog.
  */
-export type HorizonHostImageGcpTarget = {
+export type HorizonMachineImageGcpTarget = {
   /**
    * Images by architecture.
    */
   images: { [k: string]: SyncReconcileResponseGcpImages };
 };
 
-export type HorizonHostImageTargetGcpUnion = HorizonHostImageGcpTarget | any;
+export type HorizonMachineImageTargetGcpUnion =
+  | HorizonMachineImageGcpTarget
+  | any;
 
 /**
- * Horizon host image catalog.
+ * Horizon machine image catalog.
  *
  * @remarks
  *
  * Platform resolves concrete provider images from this catalog during rollout.
  */
-export type SyncReconcileResponseHorizonHostImage = {
-  aws?: SyncReconcileResponseHorizonHostImageAws | any | null | undefined;
-  azure?: HorizonHostImageAzureTarget | any | null | undefined;
+export type SyncReconcileResponseHorizonMachineImage = {
+  aws?: SyncReconcileResponseHorizonMachineImageAws | any | null | undefined;
+  azure?: HorizonMachineImageAzureTarget | any | null | undefined;
+  /**
+   * Base image metadata for the Horizon machine image.
+   */
+  baseImage: SyncReconcileResponseBaseImage;
   /**
    * Logical image channel, such as prod, staging, or canary.
    */
   channel: string;
-  gcp?: HorizonHostImageGcpTarget | any | null | undefined;
   /**
-   * Published image catalog version.
+   * Image manifest creation timestamp.
    */
-  version: string;
+  createdAt: string;
+  gcp?: HorizonMachineImageGcpTarget | any | null | undefined;
+  /**
+   * Git commit SHA used to build the image.
+   */
+  gitSha: string;
+  /**
+   * horizond daemon version baked into the image.
+   */
+  horizondVersion: string;
+  /**
+   * Published immutable machine image version.
+   */
+  machineImageVersion: string;
 };
 
-export type SyncReconcileResponseHorizonHostImageUnion =
-  | SyncReconcileResponseHorizonHostImage
+export type SyncReconcileResponseHorizonMachineImageUnion =
+  | SyncReconcileResponseHorizonMachineImage
   | any;
 
 export const SyncReconcileResponseComputeBackendType = {
@@ -4326,8 +4574,8 @@ export type SyncReconcileResponseComputeBackendHorizon = {
    * Value: Cluster ID and management token for that cluster
    */
   clusters: { [k: string]: SyncReconcileResponseClusters };
-  horizonHostImage?:
-    | SyncReconcileResponseHorizonHostImage
+  horizonMachineImage?:
+    | SyncReconcileResponseHorizonMachineImage
     | any
     | null
     | undefined;
@@ -6890,6 +7138,16 @@ export type TargetConfig = {
     | null
     | undefined;
   /**
+   * Human-readable deployment name for cloud console metadata.
+   *
+   * @remarks
+   *
+   * This is separate from the physical resource prefix in StackState. It is
+   * used only for display text such as IAM role descriptions, service
+   * account descriptions, and custom role titles.
+   */
+  deploymentName?: string | null | undefined;
+  /**
    * Deployment token for pull authentication with the manager's registry.
    *
    * @remarks
@@ -7100,6 +7358,10 @@ export type OverrideReleaseInfoAw = {
    */
   binding: OverrideReleaseInfoAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: OverrideReleaseInfoEffect | undefined;
@@ -7107,6 +7369,10 @@ export type OverrideReleaseInfoAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: OverrideReleaseInfoAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -7178,9 +7444,17 @@ export type OverrideReleaseInfoAzure = {
    */
   binding: OverrideReleaseInfoAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: OverrideReleaseInfoAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -7278,9 +7552,17 @@ export type OverrideReleaseInfoGcp = {
    */
   binding: OverrideReleaseInfoGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: OverrideReleaseInfoGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -7425,6 +7707,10 @@ export type ExtendReleaseInfoAw = {
    */
   binding: ExtendReleaseInfoAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: ExtendReleaseInfoEffect | undefined;
@@ -7432,6 +7718,10 @@ export type ExtendReleaseInfoAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: ExtendReleaseInfoAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -7503,9 +7793,17 @@ export type ExtendReleaseInfoAzure = {
    */
   binding: ExtendReleaseInfoAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: ExtendReleaseInfoAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -7601,9 +7899,17 @@ export type ExtendReleaseInfoGcp = {
    */
   binding: ExtendReleaseInfoGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: ExtendReleaseInfoGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -7756,6 +8062,10 @@ export type ProfileReleaseInfoAw = {
    */
   binding: ProfileReleaseInfoAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: ProfileReleaseInfoEffect | undefined;
@@ -7763,6 +8073,10 @@ export type ProfileReleaseInfoAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: ProfileReleaseInfoAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -7834,9 +8148,17 @@ export type ProfileReleaseInfoAzure = {
    */
   binding: ProfileReleaseInfoAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: ProfileReleaseInfoAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -7934,9 +8256,17 @@ export type ProfileReleaseInfoGcp = {
    */
   binding: ProfileReleaseInfoGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: ProfileReleaseInfoGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -8306,11 +8636,13 @@ export const SyncReconcileResponseCurrentReleaseOverrideAw$inboundSchema:
     binding: z.lazy(() =>
       SyncReconcileResponseCurrentReleaseOverrideAwBinding$inboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     effect: SyncReconcileResponseCurrentReleaseOverrideEffect$inboundSchema
       .optional(),
     grant: z.lazy(() =>
       SyncReconcileResponseCurrentReleaseOverrideAwGrant$inboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileResponseCurrentReleaseOverrideAwFromJSON(
@@ -8435,9 +8767,11 @@ export const SyncReconcileResponseCurrentReleaseOverrideAzure$inboundSchema:
       binding: z.lazy(() =>
         SyncReconcileResponseCurrentReleaseOverrideAzureBinding$inboundSchema
       ),
+      description: z.nullable(z.string()).optional(),
       grant: z.lazy(() =>
         SyncReconcileResponseCurrentReleaseOverrideAzureGrant$inboundSchema
       ),
+      label: z.nullable(z.string()).optional(),
     });
 
 export function syncReconcileResponseCurrentReleaseOverrideAzureFromJSON(
@@ -8682,9 +9016,11 @@ export const SyncReconcileResponseCurrentReleaseOverrideGcp$inboundSchema:
       binding: z.lazy(() =>
         SyncReconcileResponseCurrentReleaseOverrideGcpBinding$inboundSchema
       ),
+      description: z.nullable(z.string()).optional(),
       grant: z.lazy(() =>
         SyncReconcileResponseCurrentReleaseOverrideGcpGrant$inboundSchema
       ),
+      label: z.nullable(z.string()).optional(),
     },
   );
 
@@ -8944,11 +9280,13 @@ export const SyncReconcileResponseCurrentReleaseExtendAw$inboundSchema:
     binding: z.lazy(() =>
       SyncReconcileResponseCurrentReleaseExtendAwBinding$inboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     effect: SyncReconcileResponseCurrentReleaseExtendEffect$inboundSchema
       .optional(),
     grant: z.lazy(() =>
       SyncReconcileResponseCurrentReleaseExtendAwGrant$inboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileResponseCurrentReleaseExtendAwFromJSON(
@@ -9074,9 +9412,11 @@ export const SyncReconcileResponseCurrentReleaseExtendAzure$inboundSchema:
       binding: z.lazy(() =>
         SyncReconcileResponseCurrentReleaseExtendAzureBinding$inboundSchema
       ),
+      description: z.nullable(z.string()).optional(),
       grant: z.lazy(() =>
         SyncReconcileResponseCurrentReleaseExtendAzureGrant$inboundSchema
       ),
+      label: z.nullable(z.string()).optional(),
     },
   );
 
@@ -9320,9 +9660,11 @@ export const SyncReconcileResponseCurrentReleaseExtendGcp$inboundSchema:
     binding: z.lazy(() =>
       SyncReconcileResponseCurrentReleaseExtendGcpBinding$inboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncReconcileResponseCurrentReleaseExtendGcpGrant$inboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileResponseCurrentReleaseExtendGcpFromJSON(
@@ -9611,11 +9953,13 @@ export const SyncReconcileResponseCurrentReleaseProfileAw$inboundSchema:
     binding: z.lazy(() =>
       SyncReconcileResponseCurrentReleaseProfileAwBinding$inboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     effect: SyncReconcileResponseCurrentReleaseProfileEffect$inboundSchema
       .optional(),
     grant: z.lazy(() =>
       SyncReconcileResponseCurrentReleaseProfileAwGrant$inboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileResponseCurrentReleaseProfileAwFromJSON(
@@ -9740,9 +10084,11 @@ export const SyncReconcileResponseCurrentReleaseProfileAzure$inboundSchema:
       binding: z.lazy(() =>
         SyncReconcileResponseCurrentReleaseProfileAzureBinding$inboundSchema
       ),
+      description: z.nullable(z.string()).optional(),
       grant: z.lazy(() =>
         SyncReconcileResponseCurrentReleaseProfileAzureGrant$inboundSchema
       ),
+      label: z.nullable(z.string()).optional(),
     });
 
 export function syncReconcileResponseCurrentReleaseProfileAzureFromJSON(
@@ -9985,9 +10331,11 @@ export const SyncReconcileResponseCurrentReleaseProfileGcp$inboundSchema:
     binding: z.lazy(() =>
       SyncReconcileResponseCurrentReleaseProfileGcpBinding$inboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncReconcileResponseCurrentReleaseProfileGcpGrant$inboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileResponseCurrentReleaseProfileGcpFromJSON(
@@ -10651,11 +10999,13 @@ export const SyncReconcileResponsePreparedStackOverrideAw$inboundSchema:
     binding: z.lazy(() =>
       SyncReconcileResponsePreparedStackOverrideAwBinding$inboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     effect: SyncReconcileResponsePreparedStackOverrideEffect$inboundSchema
       .optional(),
     grant: z.lazy(() =>
       SyncReconcileResponsePreparedStackOverrideAwGrant$inboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileResponsePreparedStackOverrideAwFromJSON(
@@ -10780,9 +11130,11 @@ export const SyncReconcileResponsePreparedStackOverrideAzure$inboundSchema:
       binding: z.lazy(() =>
         SyncReconcileResponsePreparedStackOverrideAzureBinding$inboundSchema
       ),
+      description: z.nullable(z.string()).optional(),
       grant: z.lazy(() =>
         SyncReconcileResponsePreparedStackOverrideAzureGrant$inboundSchema
       ),
+      label: z.nullable(z.string()).optional(),
     });
 
 export function syncReconcileResponsePreparedStackOverrideAzureFromJSON(
@@ -11026,9 +11378,11 @@ export const SyncReconcileResponsePreparedStackOverrideGcp$inboundSchema:
     binding: z.lazy(() =>
       SyncReconcileResponsePreparedStackOverrideGcpBinding$inboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncReconcileResponsePreparedStackOverrideGcpGrant$inboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileResponsePreparedStackOverrideGcpFromJSON(
@@ -11282,11 +11636,13 @@ export const SyncReconcileResponsePreparedStackExtendAw$inboundSchema:
     binding: z.lazy(() =>
       SyncReconcileResponsePreparedStackExtendAwBinding$inboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     effect: SyncReconcileResponsePreparedStackExtendEffect$inboundSchema
       .optional(),
     grant: z.lazy(() =>
       SyncReconcileResponsePreparedStackExtendAwGrant$inboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileResponsePreparedStackExtendAwFromJSON(
@@ -11412,9 +11768,11 @@ export const SyncReconcileResponsePreparedStackExtendAzure$inboundSchema:
     binding: z.lazy(() =>
       SyncReconcileResponsePreparedStackExtendAzureBinding$inboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncReconcileResponsePreparedStackExtendAzureGrant$inboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileResponsePreparedStackExtendAzureFromJSON(
@@ -11658,9 +12016,11 @@ export const SyncReconcileResponsePreparedStackExtendGcp$inboundSchema:
     binding: z.lazy(() =>
       SyncReconcileResponsePreparedStackExtendGcpBinding$inboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncReconcileResponsePreparedStackExtendGcpGrant$inboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileResponsePreparedStackExtendGcpFromJSON(
@@ -11939,11 +12299,13 @@ export const SyncReconcileResponsePreparedStackProfileAw$inboundSchema:
     binding: z.lazy(() =>
       SyncReconcileResponsePreparedStackProfileAwBinding$inboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     effect: SyncReconcileResponsePreparedStackProfileEffect$inboundSchema
       .optional(),
     grant: z.lazy(() =>
       SyncReconcileResponsePreparedStackProfileAwGrant$inboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileResponsePreparedStackProfileAwFromJSON(
@@ -12069,9 +12431,11 @@ export const SyncReconcileResponsePreparedStackProfileAzure$inboundSchema:
       binding: z.lazy(() =>
         SyncReconcileResponsePreparedStackProfileAzureBinding$inboundSchema
       ),
+      description: z.nullable(z.string()).optional(),
       grant: z.lazy(() =>
         SyncReconcileResponsePreparedStackProfileAzureGrant$inboundSchema
       ),
+      label: z.nullable(z.string()).optional(),
     },
   );
 
@@ -12316,9 +12680,11 @@ export const SyncReconcileResponsePreparedStackProfileGcp$inboundSchema:
     binding: z.lazy(() =>
       SyncReconcileResponsePreparedStackProfileGcpBinding$inboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncReconcileResponsePreparedStackProfileGcpGrant$inboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileResponsePreparedStackProfileGcpFromJSON(
@@ -13147,11 +13513,13 @@ export const SyncReconcileResponseTargetReleaseOverrideAw$inboundSchema:
     binding: z.lazy(() =>
       SyncReconcileResponseTargetReleaseOverrideAwBinding$inboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     effect: SyncReconcileResponseTargetReleaseOverrideEffect$inboundSchema
       .optional(),
     grant: z.lazy(() =>
       SyncReconcileResponseTargetReleaseOverrideAwGrant$inboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileResponseTargetReleaseOverrideAwFromJSON(
@@ -13276,9 +13644,11 @@ export const SyncReconcileResponseTargetReleaseOverrideAzure$inboundSchema:
       binding: z.lazy(() =>
         SyncReconcileResponseTargetReleaseOverrideAzureBinding$inboundSchema
       ),
+      description: z.nullable(z.string()).optional(),
       grant: z.lazy(() =>
         SyncReconcileResponseTargetReleaseOverrideAzureGrant$inboundSchema
       ),
+      label: z.nullable(z.string()).optional(),
     });
 
 export function syncReconcileResponseTargetReleaseOverrideAzureFromJSON(
@@ -13521,9 +13891,11 @@ export const SyncReconcileResponseTargetReleaseOverrideGcp$inboundSchema:
     binding: z.lazy(() =>
       SyncReconcileResponseTargetReleaseOverrideGcpBinding$inboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncReconcileResponseTargetReleaseOverrideGcpGrant$inboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileResponseTargetReleaseOverrideGcpFromJSON(
@@ -13777,11 +14149,13 @@ export const SyncReconcileResponseTargetReleaseExtendAw$inboundSchema:
     binding: z.lazy(() =>
       SyncReconcileResponseTargetReleaseExtendAwBinding$inboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     effect: SyncReconcileResponseTargetReleaseExtendEffect$inboundSchema
       .optional(),
     grant: z.lazy(() =>
       SyncReconcileResponseTargetReleaseExtendAwGrant$inboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileResponseTargetReleaseExtendAwFromJSON(
@@ -13907,9 +14281,11 @@ export const SyncReconcileResponseTargetReleaseExtendAzure$inboundSchema:
     binding: z.lazy(() =>
       SyncReconcileResponseTargetReleaseExtendAzureBinding$inboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncReconcileResponseTargetReleaseExtendAzureGrant$inboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileResponseTargetReleaseExtendAzureFromJSON(
@@ -14152,9 +14528,11 @@ export const SyncReconcileResponseTargetReleaseExtendGcp$inboundSchema:
     binding: z.lazy(() =>
       SyncReconcileResponseTargetReleaseExtendGcpBinding$inboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncReconcileResponseTargetReleaseExtendGcpGrant$inboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileResponseTargetReleaseExtendGcpFromJSON(
@@ -14433,11 +14811,13 @@ export const SyncReconcileResponseTargetReleaseProfileAw$inboundSchema:
     binding: z.lazy(() =>
       SyncReconcileResponseTargetReleaseProfileAwBinding$inboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     effect: SyncReconcileResponseTargetReleaseProfileEffect$inboundSchema
       .optional(),
     grant: z.lazy(() =>
       SyncReconcileResponseTargetReleaseProfileAwGrant$inboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileResponseTargetReleaseProfileAwFromJSON(
@@ -14563,9 +14943,11 @@ export const SyncReconcileResponseTargetReleaseProfileAzure$inboundSchema:
       binding: z.lazy(() =>
         SyncReconcileResponseTargetReleaseProfileAzureBinding$inboundSchema
       ),
+      description: z.nullable(z.string()).optional(),
       grant: z.lazy(() =>
         SyncReconcileResponseTargetReleaseProfileAzureGrant$inboundSchema
       ),
+      label: z.nullable(z.string()).optional(),
     },
   );
 
@@ -14809,9 +15191,11 @@ export const SyncReconcileResponseTargetReleaseProfileGcp$inboundSchema:
     binding: z.lazy(() =>
       SyncReconcileResponseTargetReleaseProfileGcpBinding$inboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncReconcileResponseTargetReleaseProfileGcpGrant$inboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileResponseTargetReleaseProfileGcpFromJSON(
@@ -15153,7 +15537,7 @@ export const SyncReconcileResponseCurrent$inboundSchema: z.ZodType<
     ]),
   ).optional(),
   platform: SyncReconcileResponseCurrentPlatform$inboundSchema,
-  protocolVersion: z.int().optional(),
+  protocolVersion: z.int(),
   retryRequested: z.boolean().optional(),
   runtimeMetadata: z.nullable(
     z.union([
@@ -15228,49 +15612,48 @@ export function syncReconcileResponseClustersFromJSON(
 }
 
 /** @internal */
-export const SyncReconcileResponseHorizonHostImageAws$inboundSchema: z.ZodType<
-  SyncReconcileResponseHorizonHostImageAws,
-  unknown
-> = z.object({
-  amis: z.record(z.string(), z.record(z.string(), z.string())),
-});
+export const SyncReconcileResponseHorizonMachineImageAws$inboundSchema:
+  z.ZodType<SyncReconcileResponseHorizonMachineImageAws, unknown> = z.object({
+    amis: z.record(z.string(), z.record(z.string(), z.string())),
+  });
 
-export function syncReconcileResponseHorizonHostImageAwsFromJSON(
+export function syncReconcileResponseHorizonMachineImageAwsFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  SyncReconcileResponseHorizonHostImageAws,
+  SyncReconcileResponseHorizonMachineImageAws,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      SyncReconcileResponseHorizonHostImageAws$inboundSchema.parse(
+      SyncReconcileResponseHorizonMachineImageAws$inboundSchema.parse(
         JSON.parse(x),
       ),
-    `Failed to parse 'SyncReconcileResponseHorizonHostImageAws' from JSON`,
+    `Failed to parse 'SyncReconcileResponseHorizonMachineImageAws' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncReconcileResponseHorizonHostImageAwsUnion$inboundSchema:
-  z.ZodType<SyncReconcileResponseHorizonHostImageAwsUnion, unknown> = z.union([
-    z.lazy(() => SyncReconcileResponseHorizonHostImageAws$inboundSchema),
-    z.any(),
-  ]);
+export const SyncReconcileResponseHorizonMachineImageAwsUnion$inboundSchema:
+  z.ZodType<SyncReconcileResponseHorizonMachineImageAwsUnion, unknown> = z
+    .union([
+      z.lazy(() => SyncReconcileResponseHorizonMachineImageAws$inboundSchema),
+      z.any(),
+    ]);
 
-export function syncReconcileResponseHorizonHostImageAwsUnionFromJSON(
+export function syncReconcileResponseHorizonMachineImageAwsUnionFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  SyncReconcileResponseHorizonHostImageAwsUnion,
+  SyncReconcileResponseHorizonMachineImageAwsUnion,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      SyncReconcileResponseHorizonHostImageAwsUnion$inboundSchema.parse(
+      SyncReconcileResponseHorizonMachineImageAwsUnion$inboundSchema.parse(
         JSON.parse(x),
       ),
-    `Failed to parse 'SyncReconcileResponseHorizonHostImageAwsUnion' from JSON`,
+    `Failed to parse 'SyncReconcileResponseHorizonMachineImageAwsUnion' from JSON`,
   );
 }
 
@@ -15279,7 +15662,7 @@ export const SyncReconcileResponseAzureImages$inboundSchema: z.ZodType<
   SyncReconcileResponseAzureImages,
   unknown
 > = z.object({
-  imageDefinitionId: z.string(),
+  imageVersionId: z.string(),
 });
 
 export function syncReconcileResponseAzureImagesFromJSON(
@@ -15293,8 +15676,8 @@ export function syncReconcileResponseAzureImagesFromJSON(
 }
 
 /** @internal */
-export const HorizonHostImageAzureTarget$inboundSchema: z.ZodType<
-  HorizonHostImageAzureTarget,
+export const HorizonMachineImageAzureTarget$inboundSchema: z.ZodType<
+  HorizonMachineImageAzureTarget,
   unknown
 > = z.object({
   images: z.record(
@@ -15303,29 +15686,52 @@ export const HorizonHostImageAzureTarget$inboundSchema: z.ZodType<
   ),
 });
 
-export function horizonHostImageAzureTargetFromJSON(
+export function horizonMachineImageAzureTargetFromJSON(
   jsonString: string,
-): SafeParseResult<HorizonHostImageAzureTarget, SDKValidationError> {
+): SafeParseResult<HorizonMachineImageAzureTarget, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => HorizonHostImageAzureTarget$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'HorizonHostImageAzureTarget' from JSON`,
+    (x) => HorizonMachineImageAzureTarget$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'HorizonMachineImageAzureTarget' from JSON`,
   );
 }
 
 /** @internal */
-export const HorizonHostImageTargetAzureUnion$inboundSchema: z.ZodType<
-  HorizonHostImageTargetAzureUnion,
+export const HorizonMachineImageTargetAzureUnion$inboundSchema: z.ZodType<
+  HorizonMachineImageTargetAzureUnion,
   unknown
-> = z.union([z.lazy(() => HorizonHostImageAzureTarget$inboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => HorizonMachineImageAzureTarget$inboundSchema),
+  z.any(),
+]);
 
-export function horizonHostImageTargetAzureUnionFromJSON(
+export function horizonMachineImageTargetAzureUnionFromJSON(
   jsonString: string,
-): SafeParseResult<HorizonHostImageTargetAzureUnion, SDKValidationError> {
+): SafeParseResult<HorizonMachineImageTargetAzureUnion, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => HorizonHostImageTargetAzureUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'HorizonHostImageTargetAzureUnion' from JSON`,
+    (x) =>
+      HorizonMachineImageTargetAzureUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'HorizonMachineImageTargetAzureUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseBaseImage$inboundSchema: z.ZodType<
+  SyncReconcileResponseBaseImage,
+  unknown
+> = z.object({
+  name: z.string(),
+  version: z.string(),
+});
+
+export function syncReconcileResponseBaseImageFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncReconcileResponseBaseImage, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncReconcileResponseBaseImage$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncReconcileResponseBaseImage' from JSON`,
   );
 }
 
@@ -15348,8 +15754,8 @@ export function syncReconcileResponseGcpImagesFromJSON(
 }
 
 /** @internal */
-export const HorizonHostImageGcpTarget$inboundSchema: z.ZodType<
-  HorizonHostImageGcpTarget,
+export const HorizonMachineImageGcpTarget$inboundSchema: z.ZodType<
+  HorizonMachineImageGcpTarget,
   unknown
 > = z.object({
   images: z.record(
@@ -15358,84 +15764,102 @@ export const HorizonHostImageGcpTarget$inboundSchema: z.ZodType<
   ),
 });
 
-export function horizonHostImageGcpTargetFromJSON(
+export function horizonMachineImageGcpTargetFromJSON(
   jsonString: string,
-): SafeParseResult<HorizonHostImageGcpTarget, SDKValidationError> {
+): SafeParseResult<HorizonMachineImageGcpTarget, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => HorizonHostImageGcpTarget$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'HorizonHostImageGcpTarget' from JSON`,
+    (x) => HorizonMachineImageGcpTarget$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'HorizonMachineImageGcpTarget' from JSON`,
   );
 }
 
 /** @internal */
-export const HorizonHostImageTargetGcpUnion$inboundSchema: z.ZodType<
-  HorizonHostImageTargetGcpUnion,
+export const HorizonMachineImageTargetGcpUnion$inboundSchema: z.ZodType<
+  HorizonMachineImageTargetGcpUnion,
   unknown
-> = z.union([z.lazy(() => HorizonHostImageGcpTarget$inboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => HorizonMachineImageGcpTarget$inboundSchema),
+  z.any(),
+]);
 
-export function horizonHostImageTargetGcpUnionFromJSON(
+export function horizonMachineImageTargetGcpUnionFromJSON(
   jsonString: string,
-): SafeParseResult<HorizonHostImageTargetGcpUnion, SDKValidationError> {
+): SafeParseResult<HorizonMachineImageTargetGcpUnion, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => HorizonHostImageTargetGcpUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'HorizonHostImageTargetGcpUnion' from JSON`,
+    (x) => HorizonMachineImageTargetGcpUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'HorizonMachineImageTargetGcpUnion' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncReconcileResponseHorizonHostImage$inboundSchema: z.ZodType<
-  SyncReconcileResponseHorizonHostImage,
+export const SyncReconcileResponseHorizonMachineImage$inboundSchema: z.ZodType<
+  SyncReconcileResponseHorizonMachineImage,
   unknown
 > = z.object({
   aws: z.nullable(
     z.union([
-      z.lazy(() => SyncReconcileResponseHorizonHostImageAws$inboundSchema),
+      z.lazy(() => SyncReconcileResponseHorizonMachineImageAws$inboundSchema),
       z.any(),
     ]),
   ).optional(),
   azure: z.nullable(
-    z.union([z.lazy(() => HorizonHostImageAzureTarget$inboundSchema), z.any()]),
+    z.union([
+      z.lazy(() => HorizonMachineImageAzureTarget$inboundSchema),
+      z.any(),
+    ]),
   ).optional(),
+  baseImage: z.lazy(() => SyncReconcileResponseBaseImage$inboundSchema),
   channel: z.string(),
+  createdAt: z.string(),
   gcp: z.nullable(
-    z.union([z.lazy(() => HorizonHostImageGcpTarget$inboundSchema), z.any()]),
+    z.union([
+      z.lazy(() => HorizonMachineImageGcpTarget$inboundSchema),
+      z.any(),
+    ]),
   ).optional(),
-  version: z.string(),
+  gitSha: z.string(),
+  horizondVersion: z.string(),
+  machineImageVersion: z.string(),
 });
 
-export function syncReconcileResponseHorizonHostImageFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncReconcileResponseHorizonHostImage, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      SyncReconcileResponseHorizonHostImage$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncReconcileResponseHorizonHostImage' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncReconcileResponseHorizonHostImageUnion$inboundSchema:
-  z.ZodType<SyncReconcileResponseHorizonHostImageUnion, unknown> = z.union([
-    z.lazy(() => SyncReconcileResponseHorizonHostImage$inboundSchema),
-    z.any(),
-  ]);
-
-export function syncReconcileResponseHorizonHostImageUnionFromJSON(
+export function syncReconcileResponseHorizonMachineImageFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  SyncReconcileResponseHorizonHostImageUnion,
+  SyncReconcileResponseHorizonMachineImage,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      SyncReconcileResponseHorizonHostImageUnion$inboundSchema.parse(
+      SyncReconcileResponseHorizonMachineImage$inboundSchema.parse(
         JSON.parse(x),
       ),
-    `Failed to parse 'SyncReconcileResponseHorizonHostImageUnion' from JSON`,
+    `Failed to parse 'SyncReconcileResponseHorizonMachineImage' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseHorizonMachineImageUnion$inboundSchema:
+  z.ZodType<SyncReconcileResponseHorizonMachineImageUnion, unknown> = z.union([
+    z.lazy(() => SyncReconcileResponseHorizonMachineImage$inboundSchema),
+    z.any(),
+  ]);
+
+export function syncReconcileResponseHorizonMachineImageUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponseHorizonMachineImageUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponseHorizonMachineImageUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponseHorizonMachineImageUnion' from JSON`,
   );
 }
 
@@ -15451,9 +15875,9 @@ export const SyncReconcileResponseComputeBackendHorizon$inboundSchema:
       z.string(),
       z.lazy(() => SyncReconcileResponseClusters$inboundSchema),
     ),
-    horizonHostImage: z.nullable(
+    horizonMachineImage: z.nullable(
       z.union([
-        z.lazy(() => SyncReconcileResponseHorizonHostImage$inboundSchema),
+        z.lazy(() => SyncReconcileResponseHorizonMachineImage$inboundSchema),
         z.any(),
       ]),
     ).optional(),
@@ -20301,6 +20725,7 @@ export const TargetConfig$inboundSchema: z.ZodType<TargetConfig, unknown> = z
         z.any(),
       ]),
     ).optional(),
+    deploymentName: z.nullable(z.string()).optional(),
     deploymentToken: z.nullable(z.string()).optional(),
     domainMetadata: z.nullable(
       z.union([
@@ -20514,8 +20939,10 @@ export const OverrideReleaseInfoAw$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   binding: z.lazy(() => OverrideReleaseInfoAwBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
   effect: OverrideReleaseInfoEffect$inboundSchema.optional(),
   grant: z.lazy(() => OverrideReleaseInfoAwGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function overrideReleaseInfoAwFromJSON(
@@ -20612,7 +21039,9 @@ export const OverrideReleaseInfoAzure$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   binding: z.lazy(() => OverrideReleaseInfoAzureBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
   grant: z.lazy(() => OverrideReleaseInfoAzureGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function overrideReleaseInfoAzureFromJSON(
@@ -20804,7 +21233,9 @@ export const OverrideReleaseInfoGcp$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   binding: z.lazy(() => OverrideReleaseInfoGcpBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
   grant: z.lazy(() => OverrideReleaseInfoGcpGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function overrideReleaseInfoGcpFromJSON(
@@ -20992,8 +21423,10 @@ export const ExtendReleaseInfoAw$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   binding: z.lazy(() => ExtendReleaseInfoAwBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
   effect: ExtendReleaseInfoEffect$inboundSchema.optional(),
   grant: z.lazy(() => ExtendReleaseInfoAwGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function extendReleaseInfoAwFromJSON(
@@ -21090,7 +21523,9 @@ export const ExtendReleaseInfoAzure$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   binding: z.lazy(() => ExtendReleaseInfoAzureBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
   grant: z.lazy(() => ExtendReleaseInfoAzureGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function extendReleaseInfoAzureFromJSON(
@@ -21275,7 +21710,9 @@ export const ExtendReleaseInfoGcp$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   binding: z.lazy(() => ExtendReleaseInfoGcpBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
   grant: z.lazy(() => ExtendReleaseInfoGcpGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function extendReleaseInfoGcpFromJSON(
@@ -21482,8 +21919,10 @@ export const ProfileReleaseInfoAw$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   binding: z.lazy(() => ProfileReleaseInfoAwBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
   effect: ProfileReleaseInfoEffect$inboundSchema.optional(),
   grant: z.lazy(() => ProfileReleaseInfoAwGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function profileReleaseInfoAwFromJSON(
@@ -21580,7 +22019,9 @@ export const ProfileReleaseInfoAzure$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   binding: z.lazy(() => ProfileReleaseInfoAzureBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
   grant: z.lazy(() => ProfileReleaseInfoAzureGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function profileReleaseInfoAzureFromJSON(
@@ -21766,7 +22207,9 @@ export const ProfileReleaseInfoGcp$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   binding: z.lazy(() => ProfileReleaseInfoGcpBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
   grant: z.lazy(() => ProfileReleaseInfoGcpGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function profileReleaseInfoGcpFromJSON(

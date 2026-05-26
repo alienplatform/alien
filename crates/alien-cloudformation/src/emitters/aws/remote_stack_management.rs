@@ -171,7 +171,7 @@ fn management_policy_resources(
             );
             policy.properties.insert(
                 "Description".to_string(),
-                CfExpression::from("Remote stack management permissions"),
+                CfExpression::from("Application management permissions"),
             );
             policy
                 .properties

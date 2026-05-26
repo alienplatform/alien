@@ -351,7 +351,9 @@ fn missing_distribution_flow_config(
             if !config.has_platform(Platform::Gcp) {
                 Some("GCP management and target credentials are required")
             } else if config.kubernetes.gke.is_none() {
-                Some("ALIEN_TEST_GKE_CLUSTER_NAME, ALIEN_TEST_GKE_CLUSTER_LOCATION, and KUBECONFIG are required")
+                Some(
+                    "ALIEN_TEST_GKE_CLUSTER_NAME, ALIEN_TEST_GKE_CLUSTER_LOCATION, and KUBECONFIG are required",
+                )
             } else {
                 None
             }
@@ -360,16 +362,22 @@ fn missing_distribution_flow_config(
             if !config.has_platform(Platform::Azure) {
                 Some("Azure management and target credentials are required")
             } else if !has_azure_management_oidc(config) {
-                Some("AZURE_MANAGEMENT_OIDC_ISSUER, AZURE_MANAGEMENT_OIDC_SUBJECT, and AZURE_FEDERATED_TOKEN_FILE are required")
+                Some(
+                    "AZURE_MANAGEMENT_OIDC_ISSUER, AZURE_MANAGEMENT_OIDC_SUBJECT, and AZURE_FEDERATED_TOKEN_FILE are required",
+                )
             } else if config.kubernetes.aks.is_none() {
-                Some("ALIEN_TEST_AKS_CLUSTER_NAME, ALIEN_TEST_AKS_CLUSTER_RESOURCE_GROUP, and KUBECONFIG are required")
+                Some(
+                    "ALIEN_TEST_AKS_CLUSTER_NAME, ALIEN_TEST_AKS_CLUSTER_RESOURCE_GROUP, and KUBECONFIG are required",
+                )
             } else {
                 None
             }
         }
         DistributionFlow::TerraformAzurePush => {
             if !has_azure_management_oidc(config) {
-                Some("AZURE_MANAGEMENT_OIDC_ISSUER, AZURE_MANAGEMENT_OIDC_SUBJECT, and AZURE_FEDERATED_TOKEN_FILE are required")
+                Some(
+                    "AZURE_MANAGEMENT_OIDC_ISSUER, AZURE_MANAGEMENT_OIDC_SUBJECT, and AZURE_FEDERATED_TOKEN_FILE are required",
+                )
             } else {
                 None
             }
@@ -514,6 +522,7 @@ async fn apply_render_mutations(
 
     let stack_state = StackState::new(platform);
     let config = DeploymentConfig {
+        deployment_name: Some(stack.id().to_string()),
         stack_settings: stack_settings.clone(),
         management_config: render_management_config(platform, stack_settings),
         environment_variables: EnvironmentVariablesSnapshot {
@@ -878,6 +887,7 @@ async fn apply_terraform_and_import(
         &prepared.rendered_stack,
         target,
         alien_terraform::TerraformOptions {
+            display_name: None,
             registry: &registry,
             stack_settings,
             registration: None,
@@ -1350,6 +1360,7 @@ async fn cloudformation_import_request(
     let resources = parse_cfn_resources(&values)?;
 
     Ok(StackImportRequest {
+        setup_import_format_version: 1,
         deployment_group_token: token.to_string(),
         deployment_name: stack_name.to_string(),
         resource_prefix,
@@ -1542,6 +1553,7 @@ fn terraform_import_request_from_outputs(
         terraform_output_u32(output, "deployment_setup_fingerprint_version")?;
 
     Ok(StackImportRequest {
+        setup_import_format_version: 1,
         deployment_group_token: token.to_string(),
         deployment_name: format!("terraform-{}", &uuid::Uuid::new_v4().to_string()[..8]),
         resource_prefix,
@@ -1587,7 +1599,9 @@ async fn wait_for_gcp_management_permissions(
         }
     };
     if management_service_account_email.is_empty() {
-        warn!("Skipping GCP management permission probe because no management service account is configured");
+        warn!(
+            "Skipping GCP management permission probe because no management service account is configured"
+        );
         return Ok(());
     }
     let resources: Vec<ImportedResource> =
@@ -1602,7 +1616,9 @@ async fn wait_for_gcp_management_permissions(
         return Ok(());
     };
     let Some(credentials_json) = management_source.credentials_json.clone() else {
-        warn!("Skipping GCP management permission probe because GCP management credentials are missing");
+        warn!(
+            "Skipping GCP management permission probe because GCP management credentials are missing"
+        );
         return Ok(());
     };
 
@@ -2330,6 +2346,7 @@ mod tests {
             &rendered_stack,
             alien_terraform::TerraformTarget::Gcp,
             alien_terraform::TerraformOptions {
+                display_name: None,
                 registry: &registry,
                 stack_settings,
                 registration: None,
@@ -2365,6 +2382,7 @@ mod tests {
             &rendered_stack,
             alien_terraform::TerraformTarget::Gcp,
             alien_terraform::TerraformOptions {
+                display_name: None,
                 registry: &registry,
                 stack_settings,
                 registration: None,

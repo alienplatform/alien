@@ -3344,8 +3344,11 @@ impl GcpWorkerController {
             .with_project_name(gcp_config.project_id.clone())
             .with_region(gcp_config.region.clone())
             .with_stack_prefix(ctx.resource_prefix.to_string())
-            .with_stack_name(ctx.desired_stack.id().to_string())
             .with_resource_name(topic_name.to_string());
+        if let Some(deployment_name) = ctx.deployment_name_for_metadata() {
+            permission_context =
+                permission_context.with_deployment_name(deployment_name.to_string());
+        }
         if let Some(ref project_number) = gcp_config.project_number {
             permission_context = permission_context.with_project_number(project_number.clone());
         }
@@ -3846,8 +3849,11 @@ impl GcpWorkerController {
             .with_project_name(gcp_config.project_id.clone())
             .with_region(gcp_config.region.clone())
             .with_stack_prefix(ctx.resource_prefix.to_string())
-            .with_stack_name(ctx.desired_stack.id().to_string())
             .with_resource_name(service_name.to_string());
+        if let Some(deployment_name) = ctx.deployment_name_for_metadata() {
+            permission_context =
+                permission_context.with_deployment_name(deployment_name.to_string());
+        }
         if let Some(ref project_number) = gcp_config.project_number {
             permission_context = permission_context.with_project_number(project_number.clone());
         }

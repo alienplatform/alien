@@ -56,12 +56,23 @@ impl GcpServiceAccountController {
             "Creating GCP service account"
         );
 
+        let display_name = match ctx.deployment_name_for_metadata() {
+            Some(deployment_name) => format!("{deployment_name}: Runtime service account"),
+            None => "Runtime service account".to_string(),
+        };
+        let description = match ctx.deployment_name_for_metadata() {
+            Some(deployment_name) => format!(
+                "Runtime cloud identity for {deployment_name}. Resource prefix: {}. Resource: {}.",
+                ctx.resource_prefix, config.id
+            ),
+            None => format!(
+                "Runtime cloud identity. Resource prefix: {}. Resource: {}.",
+                ctx.resource_prefix, config.id
+            ),
+        };
         let service_account = GcpServiceAccount::builder()
-            .display_name(format!("Alien ServiceAccount: {}", config.id))
-            .description(format!(
-                "Service account for Alien ServiceAccount {}",
-                config.id
-            ))
+            .display_name(display_name)
+            .description(description)
             .build();
 
         let request = CreateServiceAccountRequest::builder()
@@ -370,10 +381,13 @@ impl GcpServiceAccountController {
 
         let mut permission_context = PermissionContext::new()
             .with_stack_prefix(ctx.resource_prefix.to_string())
-            .with_stack_name(ctx.desired_stack.id().to_string())
             .with_project_name(gcp_config.project_id.clone())
             .with_region(gcp_config.region.clone())
             .with_service_account_name(service_account_id.to_string());
+        if let Some(deployment_name) = ctx.deployment_name_for_metadata() {
+            permission_context =
+                permission_context.with_deployment_name(deployment_name.to_string());
+        }
         if let Some(ref project_number) = gcp_config.project_number {
             permission_context = permission_context.with_project_number(project_number.clone());
         }
@@ -519,9 +533,14 @@ impl GcpServiceAccountController {
             return Ok(());
         }
 
-        // ServiceAccount reconciliation may attach roles to the service account,
-        // but GCP custom role definitions are setup-owned and must already
-        // exist. Imported runtime credentials should not need iam.roles.update.
+        let selected_custom_roles = grant_plan.custom_roles_for_bindings(&project_bindings);
+        ResourcePermissionsHelper::ensure_gcp_custom_roles(
+            ctx,
+            &permission_set.id,
+            selected_custom_roles,
+        )
+        .await?;
+
         for binding in project_bindings {
             new_bindings
                 .push(ResourcePermissionsHelper::gcp_policy_binding_from_iam_binding(binding));

@@ -1830,8 +1830,8 @@ impl AzureWorkerController {
         info!(name=%func_cfg.id, "Successfully applied resource-scoped permissions");
 
         // The worker is the consumer of every upstream Azure role assignment
-        // applied during this deployment (storage, KV, queue, vault, plus the
-        // worker/execute role just applied above). Azure RBAC propagation can
+        // applied during this application install (storage, KV, queue, vault,
+        // plus the worker/execute role just applied above). Azure RBAC propagation can
         // take 2-5 minutes for resource-scope assignments — caller code that
         // invokes the worker within seconds otherwise hits 403
         // `AuthorizationPermissionMismatch`. Wait here, in the consumer, before

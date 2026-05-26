@@ -115,6 +115,10 @@ export type ProjectListItemResponseCloudformation = {
    * Whether CloudFormation package generation is enabled
    */
   enabled: boolean;
+  /**
+   * Human-friendly application name shown in generated install artifacts
+   */
+  displayName?: string | null | undefined;
 };
 
 /**
@@ -161,6 +165,10 @@ export type ProjectListItemResponseTerraform = {
    * Whether Terraform package generation is enabled
    */
   enabled: boolean;
+  /**
+   * Human-friendly application name shown in generated install artifacts
+   */
+  displayName?: string | null | undefined;
 };
 
 /**
@@ -311,6 +319,7 @@ export const ProjectListItemResponseCloudformation$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   enabled: z.boolean(),
+  displayName: z.nullable(z.string()).optional(),
 });
 
 export function projectListItemResponseCloudformationFromJSON(
@@ -370,6 +379,7 @@ export const ProjectListItemResponseTerraform$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   enabled: z.boolean(),
+  displayName: z.nullable(z.string()).optional(),
 });
 
 export function projectListItemResponseTerraformFromJSON(

@@ -36,12 +36,12 @@ variable "resource_prefix" {
 
 variable "name" {
   type        = string
-  description = "Human-readable deployment name shown in the deployment portal."
+  description = "Human-readable application name shown in setup and cloud IAM review metadata."
 }
 
 variable "token" {
   type        = string
-  description = "Deployment token from the deployment page. This is the same token used by the deploy CLI --token flag."
+  description = "Install token from the application setup page. This is the same token used by the deploy CLI --token flag."
   sensitive   = true
 }
 
@@ -75,6 +75,18 @@ variable "managing_service_account_email" {
   default     = ""
 }
 
+variable "gcp_manage_custom_roles" {
+  type        = bool
+  description = "Whether this module creates the GCP project custom roles it binds. Set to false when those roles are managed outside this stack."
+  default     = true
+}
+
+variable "gcp_custom_role_prefix" {
+  type        = string
+  description = "Prefix used for GCP project custom role IDs when gcp_manage_custom_roles is false. Empty uses resource_prefix."
+  default     = ""
+}
+
 variable "kubernetes_namespace" {
   type        = string
   description = "Kubernetes namespace for runtime resources."
@@ -105,6 +117,8 @@ resource "random_id" "resource_prefix" {
 === locals.tf ===
 locals {
   resource_prefix          = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
+  deployment_name          = var.name
+  gcp_custom_role_prefix   = substr(replace(lower(var.gcp_custom_role_prefix == "" ? local.resource_prefix : var.gcp_custom_role_prefix), "-", "_"), 0, 18)
   deployment_platform      = "kubernetes"
   deployment_base_platform = "gcp"
   deployment_target        = "gke"
@@ -185,15 +199,16 @@ data "google_container_cluster" "target" {
 resource "google_service_account" "execution_sa" {
   project      = var.gcp_project
   account_id   = format("%s-%s", trim(substr(replace(lower(format("a-%s-execution_sa", local.resource_prefix)), "_", "-"), 0, 21), "-"), substr(sha1(replace(lower(format("%s-execution_sa", local.resource_prefix)), "_", "-")), 0, 8))
-  display_name = "Deployment execution-sa service account"
-  description  = "${local.resource_prefix} deployment service account for permission profile 'execution_sa'"
+  display_name = "${local.deployment_name}: Runtime service account (execution-sa)"
+  description  = "Runtime cloud identity for ${local.deployment_name}. Resource prefix: ${local.resource_prefix}. Resource: execution_sa."
 }
 
-resource "google_project_iam_custom_role" "gcp_role_storage_data_read_part1" {
+resource "google_project_iam_custom_role" "gcp_role_read_cloud_storage_objects" {
+  count       = var.gcp_manage_custom_roles ? 1 : 0
   project     = var.gcp_project
-  role_id     = format("role_%s_storage_data_read_part1", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18))
-  title       = "gke-overlay: Storage data read (part 1)"
-  description = "Allows reading data from storage buckets and containers. Stack: gke-overlay. Deployment prefix: ${local.resource_prefix}. Permission set: storage/data-read."
+  role_id     = format("role_%s_read_cloud_storage_objects", local.gcp_custom_role_prefix)
+  title       = "${local.deployment_name}: Read Cloud Storage Objects"
+  description = "Used by ${local.deployment_name}. Read objects and object metadata from application-owned Cloud Storage buckets. Resource prefix: ${local.resource_prefix}."
   stage       = "GA"
   permissions = [
     "storage.buckets.get",
@@ -206,26 +221,27 @@ resource "google_project_iam_custom_role" "gcp_role_storage_data_read_part1" {
   ]
 }
 
-resource "google_project_iam_custom_role" "gcp_role_storage_data_read_part2" {
+resource "google_project_iam_custom_role" "gcp_role_sign_cloud_storage_download_urls" {
+  count       = var.gcp_manage_custom_roles ? 1 : 0
   project     = var.gcp_project
-  role_id     = format("role_%s_storage_data_read_part2", substr(replace(lower(local.resource_prefix), "-", "_"), 0, 18))
-  title       = "gke-overlay: Storage data read (part 2)"
-  description = "Allows reading data from storage buckets and containers. Stack: gke-overlay. Deployment prefix: ${local.resource_prefix}. Permission set: storage/data-read."
+  role_id     = format("role_%s_sign_cloud_storage_download_urls", local.gcp_custom_role_prefix)
+  title       = "${local.deployment_name}: Sign Cloud Storage Download URLs"
+  description = "Used by ${local.deployment_name}. Sign Cloud Storage download URLs on behalf of this application's service account. Resource prefix: ${local.resource_prefix}."
   stage       = "GA"
   permissions = [
     "iam.serviceAccounts.signBlob"
   ]
 }
 
-resource "google_project_iam_member" "gcp_role_storage_data_read_part1_execution_sa_binding_0" {
+resource "google_project_iam_member" "gcp_role_read_cloud_storage_objects_execution_sa_binding_0" {
   project = var.gcp_project
-  role    = google_project_iam_custom_role.gcp_role_storage_data_read_part1.name
+  role    = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_read_cloud_storage_objects[0].name : format("projects/%s/roles/role_%s_read_cloud_storage_objects", var.gcp_project, local.gcp_custom_role_prefix)
   member  = "serviceAccount:${google_service_account.execution_sa.email}"
 }
 
-resource "google_project_iam_member" "gcp_role_storage_data_read_part2_execution_sa_binding_1" {
+resource "google_project_iam_member" "gcp_role_sign_cloud_storage_download_urls_execution_sa_binding_1" {
   project = var.gcp_project
-  role    = google_project_iam_custom_role.gcp_role_storage_data_read_part2.name
+  role    = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_sign_cloud_storage_download_urls[0].name : format("projects/%s/roles/role_%s_sign_cloud_storage_download_urls", var.gcp_project, local.gcp_custom_role_prefix)
   member  = "serviceAccount:${google_service_account.execution_sa.email}"
 }
 
@@ -241,8 +257,8 @@ resource "google_service_account_iam_binding" "execution_sa_workload_identity" {
 resource "time_sleep" "gcp_iam_propagation" {
   create_duration = "120s"
   depends_on = [
-    google_project_iam_member.gcp_role_storage_data_read_part1_execution_sa_binding_0,
-    google_project_iam_member.gcp_role_storage_data_read_part2_execution_sa_binding_1
+    google_project_iam_member.gcp_role_read_cloud_storage_objects_execution_sa_binding_0,
+    google_project_iam_member.gcp_role_sign_cloud_storage_download_urls_execution_sa_binding_1
   ]
 }
 
@@ -264,10 +280,10 @@ resource "terraform_data" "deployment_import" {
   depends_on = [
     google_storage_bucket.data,
     google_service_account.execution_sa,
-    google_project_iam_custom_role.gcp_role_storage_data_read_part1,
-    google_project_iam_custom_role.gcp_role_storage_data_read_part2,
-    google_project_iam_member.gcp_role_storage_data_read_part1_execution_sa_binding_0,
-    google_project_iam_member.gcp_role_storage_data_read_part2_execution_sa_binding_1,
+    google_project_iam_custom_role.gcp_role_read_cloud_storage_objects,
+    google_project_iam_custom_role.gcp_role_sign_cloud_storage_download_urls,
+    google_project_iam_member.gcp_role_read_cloud_storage_objects_execution_sa_binding_0,
+    google_project_iam_member.gcp_role_sign_cloud_storage_download_urls_execution_sa_binding_1,
     google_service_account_iam_binding.execution_sa_workload_identity,
     time_sleep.gcp_iam_propagation
   ]

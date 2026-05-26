@@ -2422,8 +2422,7 @@
             "$ref": "#/components/schemas/ResourceType",
             "description": "Resource type from the active stack."
           }
-        },
-        "additionalProperties": false
+        }
       },
       "InitializeRequest": {
         "type": "object",
@@ -3208,6 +3207,7 @@
         "type": "object",
         "description": "Request body for manager-side stack import.",
         "required": [
+          "setupImportFormatVersion",
           "deploymentGroupToken",
           "deploymentName",
           "resourcePrefix",
@@ -3280,6 +3280,12 @@
             "description": "Setup fingerprint algorithm version embedded in the package.",
             "minimum": 0
           },
+          "setupImportFormatVersion": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Wire-format version for the setup import payload.",
+            "minimum": 0
+          },
           "setupTarget": {
             "type": "string",
             "description": "Setup target this package was generated for."
@@ -3299,8 +3305,7 @@
             "$ref": "#/components/schemas/StackSettings",
             "description": "Resolved stack settings supplied by the setup artifact."
           }
-        },
-        "additionalProperties": false
+        }
       },
       "StackImportResponse": {
         "type": "object",
@@ -3323,8 +3328,7 @@
             "$ref": "#/components/schemas/StackState",
             "description": "Fully populated imported stack state."
           }
-        },
-        "additionalProperties": false
+        }
       },
       "StackResourceState": {
         "type": "object",

@@ -32,12 +32,12 @@ variable "resource_prefix" {
 
 variable "name" {
   type        = string
-  description = "Human-readable deployment name shown in the deployment portal."
+  description = "Human-readable application name shown in setup and cloud IAM review metadata."
 }
 
 variable "token" {
   type        = string
-  description = "Deployment token from the deployment page. This is the same token used by the deploy CLI --token flag."
+  description = "Install token from the application setup page. This is the same token used by the deploy CLI --token flag."
   sensitive   = true
 }
 
@@ -100,6 +100,7 @@ resource "random_id" "resource_prefix" {
 === locals.tf ===
 locals {
   resource_prefix     = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
+  deployment_name     = var.name
   deployment_platform = "azure"
   deployment_target   = "azure"
   deployment_region   = var.azure_location
@@ -263,7 +264,7 @@ resource "azurerm_role_assignment" "management_management_uami_assignment_2" {
 
 resource "azurerm_role_assignment" "management_existing_vnet_reader_uami" {
   count              = try(local.deployment_settings.network.type, "") == "byo-vnet-azure" ? 1 : 0
-  name               = uuidv5("oid", "alien:azure:existing-vnet-reader:${local.resource_prefix}:uami:${azurerm_user_assigned_identity.management.principal_id}:${try(local.deployment_settings.network.vnet_resource_id, "")}")
+  name               = uuidv5("oid", "deployment:azure:existing-vnet-reader:${local.resource_prefix}:uami:${azurerm_user_assigned_identity.management.principal_id}:${try(local.deployment_settings.network.vnet_resource_id, "")}")
   scope              = try(local.deployment_settings.network.vnet_resource_id, "")
   role_definition_id = "/subscriptions/${var.azure_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/acdd72a7-3385-48ef-bd42-f606fba81ae7"
   principal_id       = azurerm_user_assigned_identity.management.principal_id

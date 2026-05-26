@@ -5,6 +5,8 @@
   "platforms": {
     "aws": [
       {
+        "label": "write-ssm-parameters",
+        "description": "Create, update, and delete application-owned SSM Parameter Store values.",
         "grant": {
           "actions": ["ssm:PutParameter", "ssm:DeleteParameter"]
         },
@@ -22,6 +24,8 @@
     ],
     "gcp": [
       {
+        "label": "create-secret-manager-secrets",
+        "description": "Create application-owned Secret Manager secrets.",
         "grant": {
           "permissions": ["secretmanager.secrets.create"]
         },
@@ -35,6 +39,8 @@
         }
       },
       {
+        "label": "write-secret-manager-values",
+        "description": "Add values to application-owned Secret Manager secrets and delete those secrets during cleanup.",
         "grant": {
           "predefinedRoles": ["roles/secretmanager.secretVersionAdder"],
           "residualPermissions": [
@@ -62,6 +68,8 @@
     ],
     "azure": [
       {
+        "label": "write-key-vault-secrets",
+        "description": "Create, update, and delete application-owned Azure Key Vault secrets.",
         "grant": {
           "dataActions": [
             "Microsoft.KeyVault/vaults/secrets/setSecret/action",

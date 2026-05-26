@@ -15,6 +15,13 @@ use super::{is_false, ComputeBackend, DomainMetadata, EnvironmentVariablesSnapsh
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct DeploymentConfig {
+    /// Human-readable deployment name for cloud console metadata.
+    ///
+    /// This is separate from the physical resource prefix in StackState. It is
+    /// used only for display text such as IAM role descriptions, service
+    /// account descriptions, and custom role titles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deployment_name: Option<String>,
     /// User-customizable deployment settings (network, deployment model, approvals).
     /// Provided by customer via CloudFormation, Terraform, CLI, or Helm.
     #[serde(default)]

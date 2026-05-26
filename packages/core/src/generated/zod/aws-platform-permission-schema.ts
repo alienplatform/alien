@@ -15,12 +15,14 @@ export const AwsPlatformPermissionSchema = z.object({
     get "binding"(){
                 return BindingConfigurationAwsBindingSpecSchema.describe("Generic binding configuration for permissions")
               },
+"description": z.string().describe("Short admin-facing description of why this entry exists.").nullish(),
 get "effect"(){
                 return AwsPermissionEffectSchema.describe("IAM effect. Defaults to Allow.").optional()
               },
 get "grant"(){
                 return PermissionGrantSchema.describe("Grant permissions for a specific cloud platform")
-              }
+              },
+"label": z.string().describe("Stable admin-facing label for this permission entry.").nullish()
     }).describe("AWS-specific platform permission configuration")
 
 export type AwsPlatformPermission = z.infer<typeof AwsPlatformPermissionSchema>

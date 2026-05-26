@@ -4,8 +4,31 @@
 
 import * as z from "zod/v4";
 import { safeParse } from "../lib/schemas.js";
+import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
+
+/**
+ * How the user heard about Alien.
+ */
+export const UserProfileAcquisitionSource = {
+  Github: "github",
+  XTwitter: "x-twitter",
+  Linkedin: "linkedin",
+  HackerNews: "hacker-news",
+  Reddit: "reddit",
+  Search: "search",
+  FriendOrColleague: "friend-or-colleague",
+  Founder: "founder",
+  EventOrCommunity: "event-or-community",
+  Other: "other",
+} as const;
+/**
+ * How the user heard about Alien.
+ */
+export type UserProfileAcquisitionSource = ClosedEnum<
+  typeof UserProfileAcquisitionSource
+>;
 
 export type UserProfile = {
   /**
@@ -32,7 +55,36 @@ export type UserProfile = {
    * Whether this user has ever authenticated a request from the Alien CLI. Latched on first CLI request, never cleared.
    */
   cliConnected: boolean;
+  /**
+   * Company name collected during profile setup.
+   */
+  company: string | null;
+  /**
+   * How the user heard about Alien.
+   */
+  acquisitionSource: UserProfileAcquisitionSource | null;
+  /**
+   * Additional acquisition source detail when the source is other.
+   */
+  acquisitionSourceDetail: string | null;
+  /**
+   * What the user is hoping to use Alien for.
+   */
+  useCases: string | null;
+  /**
+   * When the user completed the required profile setup dialog.
+   */
+  profileSetupCompletedAt: Date | null;
+  /**
+   * Version of the required profile setup dialog the user completed.
+   */
+  profileSetupVersion: number | null;
 };
+
+/** @internal */
+export const UserProfileAcquisitionSource$inboundSchema: z.ZodEnum<
+  typeof UserProfileAcquisitionSource
+> = z.enum(UserProfileAcquisitionSource);
 
 /** @internal */
 export const UserProfile$inboundSchema: z.ZodType<UserProfile, unknown> = z
@@ -43,6 +95,14 @@ export const UserProfile$inboundSchema: z.ZodType<UserProfile, unknown> = z
     image: z.nullable(z.string()),
     githubUsername: z.nullable(z.string()),
     cliConnected: z.boolean(),
+    company: z.nullable(z.string()),
+    acquisitionSource: z.nullable(UserProfileAcquisitionSource$inboundSchema),
+    acquisitionSourceDetail: z.nullable(z.string()),
+    useCases: z.nullable(z.string()),
+    profileSetupCompletedAt: z.nullable(
+      z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+    ),
+    profileSetupVersion: z.nullable(z.int()),
   });
 
 export function userProfileFromJSON(

@@ -312,7 +312,7 @@ impl AzureRemoteStackManagementController {
 
         let role_definition_uuid = Uuid::new_v5(
             &Uuid::NAMESPACE_OID,
-            format!("alien:azure:mgmt-role-def:{}", ctx.resource_prefix).as_bytes(),
+            format!("deployment:azure:mgmt-role-def:{}", ctx.resource_prefix).as_bytes(),
         )
         .to_string();
 
@@ -415,8 +415,8 @@ impl AzureRemoteStackManagementController {
             let assignment_id = Uuid::new_v5(
                 &Uuid::NAMESPACE_OID,
                 format!(
-                    "alien:azure:mgmt-role-assign:{}:uami:{}:{}",
-                    ctx.resource_prefix, binding.permission_set_id, binding_index
+                    "deployment:azure:mgmt-role-assign:{}:uami:{}:{}",
+                    ctx.resource_prefix, binding.role_name, binding_index
                 )
                 .as_bytes(),
             )
@@ -593,7 +593,7 @@ impl AzureRemoteStackManagementController {
                             assignment_id
                         ),
                         resource_id: Some(config.id.clone()),
-                    }))
+                    }));
                 }
             }
         }
@@ -625,7 +625,7 @@ impl AzureRemoteStackManagementController {
                             role_def_id
                         ),
                         resource_id: Some(config.id.clone()),
-                    }))
+                    }));
                 }
             }
         }
@@ -720,7 +720,7 @@ impl AzureRemoteStackManagementController {
                     return Err(e.context(ErrorData::CloudPlatformError {
                         message: format!("Failed to delete role assignment '{}'", assignment_id),
                         resource_id: Some(config.id.clone()),
-                    }))
+                    }));
                 }
             }
         }
@@ -773,7 +773,7 @@ impl AzureRemoteStackManagementController {
                     return Err(e.context(ErrorData::CloudPlatformError {
                         message: format!("Failed to delete role definition '{}'", role_def_id),
                         resource_id: Some(config.id.clone()),
-                    }))
+                    }));
                 }
             }
 
@@ -824,7 +824,7 @@ impl AzureRemoteStackManagementController {
                     return Err(e.context(ErrorData::CloudPlatformError {
                         message: format!("Failed to delete federated credential '{}'", fic_name),
                         resource_id: Some(config.id.clone()),
-                    }))
+                    }));
                 }
             }
 
@@ -878,7 +878,7 @@ impl AzureRemoteStackManagementController {
                             identity_name
                         ),
                         resource_id: Some(config.id.clone()),
-                    }))
+                    }));
                 }
             }
 
@@ -935,7 +935,7 @@ fn existing_vnet_reader_assignment_key(
     vnet_resource_id: &str,
 ) -> String {
     format!(
-        "alien:azure:existing-vnet-reader:{resource_prefix}:{principal_kind}:{principal_id}:{vnet_resource_id}"
+        "deployment:azure:existing-vnet-reader:{resource_prefix}:{principal_kind}:{principal_id}:{vnet_resource_id}"
     )
 }
 
@@ -978,7 +978,13 @@ impl AzureRemoteStackManagementController {
         assignable_scopes.dedup();
 
         let role_name = format!("{}-management-role", ctx.resource_prefix);
-        let description = format!("Management role for Alien stack '{}'", ctx.resource_prefix);
+        let description = match ctx.deployment_name_for_metadata() {
+            Some(deployment_name) => format!(
+                "Management role for {deployment_name}. Resource prefix: {}.",
+                ctx.resource_prefix
+            ),
+            None => format!("Management role. Resource prefix: {}.", ctx.resource_prefix),
+        };
 
         Ok(Some(RoleDefinitionProperties {
             role_name: Some(role_name),
@@ -1029,6 +1035,12 @@ impl AzureRemoteStackManagementController {
             .with_stack_prefix(ctx.resource_prefix.to_string())
             .with_managing_subscription_id(azure_config.subscription_id.clone())
             .with_managing_resource_group(resource_group_name.clone());
+        let permission_context = match ctx.deployment_name_for_metadata() {
+            Some(deployment_name) => {
+                permission_context.with_deployment_name(deployment_name.to_string())
+            }
+            None => permission_context,
+        };
 
         let generator = AzureRuntimePermissionsGenerator::new();
         for permission_set_ref in global_refs {

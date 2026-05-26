@@ -112,6 +112,27 @@ pub fn controller_struct(_args: TokenStream, input: TokenStream) -> TokenStream 
 
     // Add the state and stay count fields
     if let Fields::Named(ref mut fields) = item_struct.fields {
+        for field in &fields.named {
+            let Some(ident) = &field.ident else {
+                continue;
+            };
+            let name = ident.to_string();
+            if matches!(
+                name.as_str(),
+                "type"
+                    | "_controller_state_version"
+                    | "_controllerStateVersion"
+                    | "state"
+                    | "_internal_stay_count"
+            ) {
+                return Error::new(
+                    ident.span(),
+                    format!("controller field '{name}' is reserved for controller metadata"),
+                )
+                .to_compile_error()
+                .into();
+            }
+        }
         fields.named.push(parse_quote! {
             pub(crate) state: #state_enum_name
         });

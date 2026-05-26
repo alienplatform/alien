@@ -22,6 +22,7 @@ pub struct DeploymentRecord {
     pub name: String,
     pub deployment_group_id: String,
     pub platform: Platform,
+    pub deployment_protocol_version: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_platform: Option<Platform>,
     pub status: String,
@@ -73,6 +74,10 @@ impl std::fmt::Debug for DeploymentRecord {
             .field("name", &self.name)
             .field("deployment_group_id", &self.deployment_group_id)
             .field("platform", &self.platform)
+            .field(
+                "deployment_protocol_version",
+                &self.deployment_protocol_version,
+            )
             .field("status", &self.status)
             .field("stack_settings", &self.stack_settings)
             .field("stack_state", &self.stack_state)
@@ -113,6 +118,7 @@ pub struct CreateDeploymentParams {
     pub name: String,
     pub deployment_group_id: String,
     pub platform: Platform,
+    pub deployment_protocol_version: u32,
     pub base_platform: Option<Platform>,
     pub stack_settings: StackSettings,
     pub stack_state: Option<StackState>,
@@ -128,6 +134,7 @@ pub struct CreateImportedDeploymentParams {
     pub name: String,
     pub deployment_group_id: String,
     pub platform: Platform,
+    pub deployment_protocol_version: u32,
     pub base_platform: Option<Platform>,
     pub stack_settings: StackSettings,
     pub stack_state: StackState,

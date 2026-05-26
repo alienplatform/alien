@@ -1,10 +1,9 @@
-use std::time::Duration;
+use std::{collections::HashSet, time::Duration};
 use tracing::{info, warn};
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use alien_aws_clients::iam::{CreateRoleRequest, CreateRoleTag};
-use alien_core::permissions::PermissionSet;
+use alien_aws_clients::iam::{CreateRoleRequest, CreateRoleTag, IamApi};
 use alien_core::{
     standard_resource_tags, RemoteStackManagement, RemoteStackManagementOutputs, ResourceOutputs,
     ResourceStatus,
@@ -12,8 +11,8 @@ use alien_core::{
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::{controller, flow_entry, handler, terminal_state};
 use alien_permissions::{
-    generators::AwsRuntimePermissionsGenerator, get_permission_set, BindingTarget,
-    PermissionContext,
+    generators::{AwsIamPolicy, AwsIamStatement, AwsRuntimePermissionsGenerator},
+    get_permission_set, BindingTarget, PermissionContext,
 };
 
 /// Generates the AWS IAM role name for RemoteStackManagement.
@@ -21,8 +20,10 @@ fn get_aws_management_role_name(prefix: &str) -> String {
     format!("{}-management", prefix)
 }
 
-// Define the inline policy name we will manage
-const MANAGED_POLICY_NAME: &str = "alien-management-policy";
+const LEGACY_INLINE_POLICY_NAME: &str = "alien-management-policy";
+const MANAGED_POLICY_BASE_NAME: &str = "deployment-management";
+const MAX_MANAGED_POLICY_BYTES: usize = 5_500;
+const IAM_POLICY_NAME_MAX_LEN: usize = 128;
 
 #[controller]
 pub struct AwsRemoteStackManagementController {
@@ -74,10 +75,16 @@ impl AwsRemoteStackManagementController {
         let role_request = CreateRoleRequest::builder()
             .role_name(role_name.clone())
             .assume_role_policy_document(assume_role_policy)
-            .description(format!(
-                "Cross-account management role for Alien stack {}",
-                ctx.resource_prefix
-            ))
+            .description(match ctx.deployment_name_for_metadata() {
+                Some(deployment_name) => format!(
+                    "Cross-account management IAM role for {deployment_name}. Resource prefix: {}.",
+                    ctx.resource_prefix
+                ),
+                None => format!(
+                    "Cross-account management IAM role. Resource prefix: {}.",
+                    ctx.resource_prefix
+                ),
+            })
             .tags(
                 standard_resource_tags(ctx.resource_prefix, &config.id)
                     .into_iter()
@@ -124,7 +131,6 @@ impl AwsRemoteStackManagementController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
         let aws_config = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
         let role_name = self.role_name.as_ref().unwrap();
@@ -134,21 +140,16 @@ impl AwsRemoteStackManagementController {
             "Applying management permission sets to cross-account IAM role"
         );
 
-        // Generate management policy document from the stack's management permission profile
-        let policy_document = self.generate_management_policy_document(ctx)?;
+        let policy_documents = self.generate_management_policy_documents(ctx)?;
 
-        if !policy_document.is_empty() {
-            client
-                .put_role_policy(role_name, MANAGED_POLICY_NAME, &policy_document)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to apply management permissions to IAM role '{}'",
-                        role_name
-                    ),
-                    resource_id: Some(config.id.clone()),
-                })?;
-
+        if !policy_documents.is_empty() {
+            self.apply_management_policy_documents(
+                ctx,
+                client.as_ref(),
+                role_name,
+                &policy_documents,
+            )
+            .await?;
             info!(
                 role_name = %role_name,
                 "Management permissions applied successfully"
@@ -221,7 +222,6 @@ impl AwsRemoteStackManagementController {
         status = ResourceStatus::Updating,
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
-        let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
         let aws_config = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
         let role_name = self.role_name.as_ref().unwrap();
@@ -231,39 +231,24 @@ impl AwsRemoteStackManagementController {
             "Updating cross-account management IAM role policies"
         );
 
-        // Re-generate and apply management permissions
-        let policy_document = self.generate_management_policy_document(ctx)?;
+        let policy_documents = self.generate_management_policy_documents(ctx)?;
 
-        if !policy_document.is_empty() {
-            client
-                .put_role_policy(role_name, MANAGED_POLICY_NAME, &policy_document)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to update management permissions for IAM role '{}'",
-                        role_name
-                    ),
-                    resource_id: Some(config.id.clone()),
-                })?;
+        if !policy_documents.is_empty() {
+            self.apply_management_policy_documents(
+                ctx,
+                client.as_ref(),
+                role_name,
+                &policy_documents,
+            )
+            .await?;
 
             info!(
                 role_name = %role_name,
                 "Cross-account management IAM role policies updated successfully"
             );
         } else {
-            // Remove policy if no permissions are needed
-            match client
-                .delete_role_policy(role_name, MANAGED_POLICY_NAME)
-                .await
-            {
-                Ok(_) => {
-                    info!(role_name = %role_name, "Removed empty management policy from IAM role");
-                }
-                Err(e) => {
-                    // Policy might not exist, which is fine
-                    warn!(role_name = %role_name, error = %e, "Failed to delete management policy during update (policy might not exist)");
-                }
-            }
+            self.reconcile_owned_management_policies(ctx, client.as_ref(), role_name, &[])
+                .await?;
         }
 
         Ok(HandlerAction::Continue {
@@ -313,10 +298,10 @@ impl AwsRemoteStackManagementController {
                             policy_arn = %policy.policy_arn,
                             "Detaching managed policy from management role"
                         );
-                        match client
+                        let detach_result = client
                             .detach_role_policy(role_name, &policy.policy_arn)
-                            .await
-                        {
+                            .await;
+                        match detach_result {
                             Ok(_) => {}
                             Err(e) => {
                                 if let Some(
@@ -334,6 +319,11 @@ impl AwsRemoteStackManagementController {
                                     }).into());
                                 }
                             }
+                        }
+
+                        if self.is_owned_management_policy_name(&policy.policy_name) {
+                            self.delete_owned_policy(client.as_ref(), &policy.policy_arn)
+                                .await?;
                         }
                     }
                 }
@@ -522,11 +512,11 @@ impl AwsRemoteStackManagementController {
         )
     }
 
-    /// Generate IAM policy document for management permissions from the stack's management profile
-    fn generate_management_policy_document(
+    /// Generate managed IAM policy documents for management permissions from the stack's management profile.
+    fn generate_management_policy_documents(
         &self,
         ctx: &ResourceControllerContext<'_>,
-    ) -> Result<String> {
+    ) -> Result<Vec<String>> {
         // Get the management permission profile from the stack
         // The stack processor should have processed the management permissions
         let management_permissions = ctx.desired_stack.management();
@@ -545,92 +535,6 @@ impl AwsRemoteStackManagementController {
                 resource_id: Some("management".to_string()),
             })
         })?;
-
-        // Include all permission sets from the management profile in the stack-level
-        // management policy. The management profile is curated by
-        // ManagementPermissionProfileMutation to include only what the management role
-        // needs: /provision sets for lifecycle operations, /management sets for ongoing
-        // management, /heartbeat and /telemetry for health checks, and /data-write
-        // sets for manager-level operations like the vault API.
-        //
-        // Using stack-level wildcard bindings ensures the management role has all
-        // necessary permissions from the moment it's created, without depending on
-        // per-resource policy propagation timing.
-        let mut combined_actions = Vec::new();
-        let mut combined_resources = std::collections::HashSet::new();
-
-        for permission_set_ref in global_permission_set_ids {
-            let permission_set =
-                permission_set_ref.resolve(|name| get_permission_set(name).cloned());
-            if let Some(permission_set) = permission_set {
-                if let Some(aws_platform) = &permission_set.platforms.aws {
-                    for platform_permission in aws_platform {
-                        if let Some(actions) = &platform_permission.grant.actions {
-                            combined_actions.extend(actions.clone());
-                        }
-
-                        if let Some(stack_binding) = &platform_permission.binding.stack {
-                            combined_resources.extend(stack_binding.resources.clone());
-                        }
-                    }
-                }
-            }
-        }
-
-        // Always include iam:GetRole for the management role itself. During the Running
-        // phase the manager impersonates this role and runs heartbeat checks on all resources,
-        // including the RSM resource. The RSM Ready handler calls iam:GetRole on the
-        // management role to verify it still exists, so the role needs this self-permission.
-        if !combined_actions.contains(&"iam:GetRole".to_string()) {
-            combined_actions.push("iam:GetRole".to_string());
-        }
-        if let Some(role_name) = &self.role_name {
-            let aws_config_for_arn = ctx.get_aws_config()?;
-            let self_role_arn = format!(
-                "arn:aws:iam::{}:role/{}",
-                aws_config_for_arn.account_id, role_name
-            );
-            combined_resources.insert(self_role_arn);
-        }
-
-        // Remove duplicates from actions
-        combined_actions.sort();
-        combined_actions.dedup();
-
-        // If no actions were found (shouldn't happen now since we always add iam:GetRole),
-        // return an empty string so that callers skip the PutRolePolicy call.
-        if combined_actions.is_empty() {
-            return Ok(String::new());
-        }
-
-        // Create the combined permission set
-        let management_permission_set = PermissionSet {
-            id: "management".to_string(),
-            description: "Auto-generated management permissions for stack".to_string(),
-            platforms: alien_core::permissions::PlatformPermissions {
-                aws: Some(vec![alien_core::permissions::AwsPlatformPermission {
-                    effect: Default::default(),
-                    grant: alien_core::permissions::PermissionGrant {
-                        actions: Some(combined_actions),
-                        permissions: None,
-                        predefined_roles: None,
-                        residual_permissions: None,
-                        data_actions: None,
-                    },
-                    binding: alien_core::permissions::BindingConfiguration {
-                        stack: Some(alien_core::permissions::AwsBindingSpec {
-                            resources: combined_resources.into_iter().collect(),
-                            condition: None,
-                        }),
-                        resource: None,
-                    },
-                }]),
-                gcp: None,
-                azure: None,
-            },
-        };
-
-        let generator = AwsRuntimePermissionsGenerator::new();
 
         let aws_config = ctx.get_aws_config()?;
         let mut permission_context = PermissionContext::new()
@@ -657,28 +561,389 @@ impl AwsRemoteStackManagementController {
             permission_context = permission_context.with_managing_account_id(managing_account_id);
         }
 
-        // Generate stack-level policy for the management permission set
-        let policy = generator
-            .generate_policy(
-                &management_permission_set,
-                BindingTarget::Stack,
-                &permission_context,
-            )
-            .context(ErrorData::InfrastructureError {
-                message: "Failed to generate IAM policy for management permission set".to_string(),
-                operation: Some("generate_management_policy_document".to_string()),
-                resource_id: Some("management".to_string()),
-            })?;
+        // Include all permission sets from the management profile in the stack-level
+        // management policies. Generate each permission set independently so IAM
+        // statement effects and conditions remain intact.
+        let generator = AwsRuntimePermissionsGenerator::new();
+        let mut all_statements = Vec::new();
+        for permission_set_ref in global_permission_set_ids {
+            let permission_set =
+                permission_set_ref.resolve(|name| get_permission_set(name).cloned());
+            let Some(permission_set) = permission_set else {
+                continue;
+            };
+            if permission_set.platforms.aws.is_none() {
+                continue;
+            }
 
-        let policy_document = serde_json::to_string_pretty(&policy)
+            let policy = generator
+                .generate_policy(&permission_set, BindingTarget::Stack, &permission_context)
+                .context(ErrorData::InfrastructureError {
+                    message: format!(
+                        "Failed to generate IAM policy for management permission set '{}'",
+                        permission_set.id
+                    ),
+                    operation: Some("generate_management_policy_document".to_string()),
+                    resource_id: Some("management".to_string()),
+                })?;
+            all_statements.extend(policy.statement);
+        }
+
+        // The management role always needs to read itself during heartbeat.
+        if let Some(role_name) = &self.role_name {
+            all_statements.push(AwsIamStatement {
+                sid: "ReadOwnManagementRole".to_string(),
+                effect: "Allow".to_string(),
+                action: vec!["iam:GetRole".to_string()],
+                resource: vec![format!(
+                    "arn:aws:iam::{}:role/{}",
+                    aws_config.account_id, role_name
+                )],
+                condition: None,
+            });
+        }
+
+        if all_statements.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        self.chunk_management_policy_documents(all_statements)
+    }
+
+    fn chunk_management_policy_documents(
+        &self,
+        statements: Vec<AwsIamStatement>,
+    ) -> Result<Vec<String>> {
+        let mut chunks = Vec::new();
+        let mut current = Vec::new();
+
+        for statement in statements {
+            let mut candidate = current.clone();
+            candidate.push(statement.clone());
+            if self.management_policy_document_size(&candidate)? <= MAX_MANAGED_POLICY_BYTES {
+                current = candidate;
+                continue;
+            }
+
+            if current.is_empty() {
+                return Err(AlienError::new(ErrorData::InfrastructureError {
+                    message: format!(
+                        "AWS IAM statement '{}' is too large for a managed policy",
+                        statement.sid
+                    ),
+                    operation: Some("chunk_management_policy_documents".to_string()),
+                    resource_id: Some("management".to_string()),
+                }));
+            }
+
+            chunks.push(self.serialize_management_policy_document(current)?);
+            current = vec![statement];
+        }
+
+        if !current.is_empty() {
+            chunks.push(self.serialize_management_policy_document(current)?);
+        }
+
+        Ok(chunks)
+    }
+
+    fn management_policy_document_size(&self, statements: &[AwsIamStatement]) -> Result<usize> {
+        self.serialize_management_policy_document(statements.to_vec())
+            .map(|policy| policy.len())
+    }
+
+    fn serialize_management_policy_document(
+        &self,
+        statements: Vec<AwsIamStatement>,
+    ) -> Result<String> {
+        let policy = AwsIamPolicy {
+            version: "2012-10-17".to_string(),
+            statement: statements,
+        };
+
+        serde_json::to_string_pretty(&policy)
             .into_alien_error()
             .context(ErrorData::InfrastructureError {
                 message: "Failed to serialize management IAM policy document".to_string(),
                 operation: Some("generate_management_policy_document".to_string()),
                 resource_id: Some("management".to_string()),
-            })?;
+            })
+    }
 
-        Ok(policy_document)
+    async fn apply_management_policy_documents(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        client: &dyn IamApi,
+        role_name: &str,
+        policy_documents: &[String],
+    ) -> Result<()> {
+        let desired_policy_arns = self
+            .ensure_desired_management_policies(ctx, client, policy_documents)
+            .await?;
+        for policy_arn in &desired_policy_arns {
+            client
+                .attach_role_policy(role_name, policy_arn)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to attach management policy '{}' to IAM role '{}'",
+                        policy_arn, role_name
+                    ),
+                    resource_id: Some("remote-stack-management".to_string()),
+                })?;
+        }
+
+        self.reconcile_owned_management_policies(ctx, client, role_name, &desired_policy_arns)
+            .await?;
+        self.delete_legacy_inline_policy(client, role_name).await?;
+
+        Ok(())
+    }
+
+    async fn ensure_desired_management_policies(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        client: &dyn IamApi,
+        policy_documents: &[String],
+    ) -> Result<Vec<String>> {
+        let aws_config = ctx.get_aws_config()?;
+        let mut policy_arns = Vec::new();
+
+        for (idx, policy_document) in policy_documents.iter().enumerate() {
+            let policy_name = self.management_policy_name(ctx.resource_prefix, idx);
+            let policy_arn = self.management_policy_arn(&aws_config.account_id, &policy_name);
+
+            match client
+                .create_policy(&policy_name, policy_document, None)
+                .await
+            {
+                Ok(response) => {
+                    policy_arns.push(response.create_policy_result.policy.arn);
+                }
+                Err(e) if is_remote_conflict(&e) => {
+                    self.create_default_policy_version(client, &policy_arn, policy_document)
+                        .await?;
+                    policy_arns.push(policy_arn);
+                }
+                Err(e) => {
+                    return Err(e
+                        .context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Failed to create management IAM policy '{}'",
+                                policy_name
+                            ),
+                            resource_id: Some("remote-stack-management".to_string()),
+                        })
+                        .into());
+                }
+            }
+        }
+
+        Ok(policy_arns)
+    }
+
+    async fn create_default_policy_version(
+        &self,
+        client: &dyn IamApi,
+        policy_arn: &str,
+        policy_document: &str,
+    ) -> Result<()> {
+        self.prune_policy_versions_for_new_default(client, policy_arn)
+            .await?;
+        client
+            .create_policy_version(policy_arn, policy_document, true)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to create new default version for '{}'", policy_arn),
+                resource_id: Some("remote-stack-management".to_string()),
+            })?;
+        Ok(())
+    }
+
+    async fn prune_policy_versions_for_new_default(
+        &self,
+        client: &dyn IamApi,
+        policy_arn: &str,
+    ) -> Result<()> {
+        let versions = client.list_policy_versions(policy_arn).await.context(
+            ErrorData::CloudPlatformError {
+                message: format!("Failed to list policy versions for '{}'", policy_arn),
+                resource_id: Some("remote-stack-management".to_string()),
+            },
+        )?;
+        let versions = versions
+            .list_policy_versions_result
+            .versions
+            .map(|versions| versions.member)
+            .unwrap_or_default();
+
+        if versions.len() < 5 {
+            return Ok(());
+        }
+
+        let Some(version_to_delete) = versions
+            .iter()
+            .filter(|version| !version.is_default_version)
+            .min_by_key(|version| version.create_date.as_deref().unwrap_or(""))
+        else {
+            return Ok(());
+        };
+
+        client
+            .delete_policy_version(policy_arn, &version_to_delete.version_id)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to delete old policy version '{}' for '{}'",
+                    version_to_delete.version_id, policy_arn
+                ),
+                resource_id: Some("remote-stack-management".to_string()),
+            })?;
+        Ok(())
+    }
+
+    async fn reconcile_owned_management_policies(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        client: &dyn IamApi,
+        role_name: &str,
+        desired_policy_arns: &[String],
+    ) -> Result<()> {
+        let desired: HashSet<&str> = desired_policy_arns.iter().map(String::as_str).collect();
+        let response = client
+            .list_attached_role_policies(role_name)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to list attached policies for management role '{}'",
+                    role_name
+                ),
+                resource_id: Some("remote-stack-management".to_string()),
+            })?;
+        let attached = response
+            .list_attached_role_policies_result
+            .attached_policies
+            .map(|attached| attached.member)
+            .unwrap_or_default();
+
+        for policy in attached {
+            if !self.is_owned_management_policy_name(&policy.policy_name)
+                || desired.contains(policy.policy_arn.as_str())
+            {
+                continue;
+            }
+
+            client
+                .detach_role_policy(role_name, &policy.policy_arn)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to detach stale management policy '{}' from role '{}'",
+                        policy.policy_arn, role_name
+                    ),
+                    resource_id: Some("remote-stack-management".to_string()),
+                })?;
+            self.delete_owned_policy(client, &policy.policy_arn).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn delete_legacy_inline_policy(
+        &self,
+        client: &dyn IamApi,
+        role_name: &str,
+    ) -> Result<()> {
+        match client
+            .delete_role_policy(role_name, LEGACY_INLINE_POLICY_NAME)
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(e) if is_remote_not_found(&e) => Ok(()),
+            Err(e) => Err(e
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to delete legacy inline management policy from role '{}'",
+                        role_name
+                    ),
+                    resource_id: Some("remote-stack-management".to_string()),
+                })
+                .into()),
+        }
+    }
+
+    async fn delete_owned_policy(&self, client: &dyn IamApi, policy_arn: &str) -> Result<()> {
+        let versions = match client.list_policy_versions(policy_arn).await {
+            Ok(response) => response
+                .list_policy_versions_result
+                .versions
+                .map(|versions| versions.member)
+                .unwrap_or_default(),
+            Err(e) if is_remote_not_found(&e) => return Ok(()),
+            Err(e) => {
+                return Err(e
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to list policy versions for '{}'", policy_arn),
+                        resource_id: Some("remote-stack-management".to_string()),
+                    })
+                    .into());
+            }
+        };
+
+        for version in versions {
+            if version.is_default_version {
+                continue;
+            }
+            match client
+                .delete_policy_version(policy_arn, &version.version_id)
+                .await
+            {
+                Ok(_) => {}
+                Err(e) if is_remote_not_found(&e) => {}
+                Err(e) => {
+                    return Err(e
+                        .context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Failed to delete policy version '{}' for '{}'",
+                                version.version_id, policy_arn
+                            ),
+                            resource_id: Some("remote-stack-management".to_string()),
+                        })
+                        .into());
+                }
+            }
+        }
+
+        match client.delete_policy(policy_arn).await {
+            Ok(_) => Ok(()),
+            Err(e) if is_remote_not_found(&e) => Ok(()),
+            Err(e) => Err(e
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to delete management policy '{}'", policy_arn),
+                    resource_id: Some("remote-stack-management".to_string()),
+                })
+                .into()),
+        }
+    }
+
+    fn management_policy_name(&self, resource_prefix: &str, idx: usize) -> String {
+        let suffix = format!("-{idx}");
+        let base =
+            sanitize_iam_policy_name(&format!("{resource_prefix}-{MANAGED_POLICY_BASE_NAME}"));
+        if base.len() + suffix.len() <= IAM_POLICY_NAME_MAX_LEN {
+            return format!("{base}{suffix}");
+        }
+
+        let max_base_len = IAM_POLICY_NAME_MAX_LEN - suffix.len();
+        format!("{}{}", &base[..max_base_len], suffix)
+    }
+
+    fn management_policy_arn(&self, account_id: &str, policy_name: &str) -> String {
+        format!("arn:aws:iam::{account_id}:policy/{policy_name}")
+    }
+
+    fn is_owned_management_policy_name(&self, policy_name: &str) -> bool {
+        policy_name.contains(MANAGED_POLICY_BASE_NAME)
     }
 
     /// Creates a controller in a ready state with mock values for testing purposes.
@@ -692,4 +957,31 @@ impl AwsRemoteStackManagementController {
             _internal_stay_count: None,
         }
     }
+}
+
+fn sanitize_iam_policy_name(input: &str) -> String {
+    input
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '_' | '+' | '=' | ',' | '.' | '@' | '-') {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect()
+}
+
+fn is_remote_conflict(error: &alien_error::AlienError<alien_client_core::ErrorData>) -> bool {
+    matches!(
+        error.error,
+        Some(alien_client_core::ErrorData::RemoteResourceConflict { .. })
+    )
+}
+
+fn is_remote_not_found(error: &alien_error::AlienError<alien_client_core::ErrorData>) -> bool {
+    matches!(
+        error.error,
+        Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+    )
 }

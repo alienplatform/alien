@@ -18,24 +18,14 @@ let value: CloudFormationCallbackRequest = {
     platform: "test",
     region: "<value>",
     setupTarget: "<value>",
+    setupImportFormatVersion: 651282,
     setupFingerprint: "<value>",
-    setupFingerprintVersion: 651282,
+    setupFingerprintVersion: 14476,
     stackSettings: {},
     managementConfig: {
-      managingRoleArn: "<value>",
-      platform: "aws",
+      platform: "kubernetes",
     },
-    resources: [
-      {
-        id: "<id>",
-        type: "<value>",
-        importData: {
-          "key": "<value>",
-          "key1": "<value>",
-          "key2": "<value>",
-        },
-      },
-    ],
+    resources: [],
   },
 };
 ```

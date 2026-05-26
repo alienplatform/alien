@@ -35,11 +35,12 @@ impl SqliteDeploymentStore {
     }
 
     /// All columns needed for deployment queries (must match parse_deployment order).
-    const DEPLOYMENT_COLUMNS: [Deployments; 26] = [
+    const DEPLOYMENT_COLUMNS: [Deployments; 27] = [
         Deployments::Id,
         Deployments::Name,
         Deployments::DeploymentGroupId,
         Deployments::Platform,
+        Deployments::DeploymentProtocolVersion,
         Deployments::BasePlatform,
         Deployments::Status,
         Deployments::StackSettings,
@@ -68,14 +69,20 @@ impl SqliteDeploymentStore {
         let p = RowParser::new(row);
         let platform_str: String = p.string(3, "platform")?;
         let platform: Platform = platform_str.parse().map_err(|e: String| db_error(&e))?;
+        let deployment_protocol_version =
+            u32::try_from(p.i64(4, "deployment_protocol_version")?)
+                .map_err(|_| db_error("deployment_protocol_version must be a positive u32"))?;
+        if deployment_protocol_version == 0 {
+            return Err(db_error("deployment_protocol_version must be positive"));
+        }
         let base_platform = p
-            .optional_string(4, "base_platform")?
+            .optional_string(5, "base_platform")?
             .map(|value| value.parse().map_err(|e: String| db_error(&e)))
             .transpose()?;
 
         // Parse user environment variables from JSON TEXT column
         let import_source = p
-            .optional_string(12, "import_source")?
+            .optional_string(13, "import_source")?
             .map(|source| serde_json::from_value(serde_json::Value::String(source)))
             .transpose()
             .into_alien_error()
@@ -84,44 +91,45 @@ impl SqliteDeploymentStore {
             })?;
 
         let user_environment_variables: Option<Vec<EnvironmentVariable>> =
-            p.optional_json(16, "environment_variables")?;
+            p.optional_json(17, "environment_variables")?;
 
-        let retry_requested_int: i64 = p.optional_i64(18, "retry_requested")?.unwrap_or(0);
+        let retry_requested_int: i64 = p.optional_i64(19, "retry_requested")?.unwrap_or(0);
 
         Ok(DeploymentRecord {
             id: p.string(0, "id")?,
             name: p.string(1, "name")?,
             deployment_group_id: p.string(2, "deployment_group_id")?,
             platform,
+            deployment_protocol_version,
             base_platform,
-            status: p.string(5, "status")?,
-            stack_settings: p.json(6, "stack_settings")?,
-            stack_state: p.optional_json(7, "stack_state")?,
-            environment_info: p.optional_json(8, "environment_info")?,
-            runtime_metadata: p.optional_json(9, "runtime_metadata")?,
-            current_release_id: p.optional_string(10, "current_release_id")?,
-            desired_release_id: p.optional_string(11, "desired_release_id")?,
+            status: p.string(6, "status")?,
+            stack_settings: p.json(7, "stack_settings")?,
+            stack_state: p.optional_json(8, "stack_state")?,
+            environment_info: p.optional_json(9, "environment_info")?,
+            runtime_metadata: p.optional_json(10, "runtime_metadata")?,
+            current_release_id: p.optional_string(11, "current_release_id")?,
+            desired_release_id: p.optional_string(12, "desired_release_id")?,
             import_source,
-            setup_target: p.optional_string(13, "setup_target")?,
-            setup_fingerprint: p.optional_string(14, "setup_fingerprint")?,
+            setup_target: p.optional_string(14, "setup_target")?,
+            setup_fingerprint: p.optional_string(15, "setup_fingerprint")?,
             setup_fingerprint_version: p
-                .optional_i64(15, "setup_fingerprint_version")?
+                .optional_i64(16, "setup_fingerprint_version")?
                 .map(|value| value as u32),
             user_environment_variables,
-            deployment_token: p.optional_string(17, "deployment_token")?,
+            deployment_token: p.optional_string(18, "deployment_token")?,
             management_config: None,
             deployment_config: None,
             retry_requested: retry_requested_int != 0,
-            locked_by: p.optional_string(19, "locked_by")?,
-            locked_at: p.optional_datetime(20, "locked_at")?,
-            created_at: p.datetime(21, "created_at")?,
-            updated_at: p.optional_datetime(22, "updated_at")?,
-            error: p.optional_json(23, "error")?,
+            locked_by: p.optional_string(20, "locked_by")?,
+            locked_at: p.optional_datetime(21, "locked_at")?,
+            created_at: p.datetime(22, "created_at")?,
+            updated_at: p.optional_datetime(23, "updated_at")?,
+            error: p.optional_json(24, "error")?,
             workspace_id: p
-                .optional_string(24, "workspace_id")?
+                .optional_string(25, "workspace_id")?
                 .unwrap_or_else(|| "default".to_string()),
             project_id: p
-                .optional_string(25, "project_id")?
+                .optional_string(26, "project_id")?
                 .unwrap_or_else(|| "default".to_string()),
         })
     }
@@ -198,6 +206,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                 Deployments::Name,
                 Deployments::DeploymentGroupId,
                 Deployments::Platform,
+                Deployments::DeploymentProtocolVersion,
                 Deployments::Status,
                 Deployments::StackSettings,
                 Deployments::RetryRequested,
@@ -208,6 +217,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                 params.name.clone().into(),
                 params.deployment_group_id.clone().into(),
                 params.platform.as_str().to_string().into(),
+                (params.deployment_protocol_version as i64).into(),
                 "pending".to_string().into(),
                 stack_settings_json.into(),
                 0i64.into(),
@@ -246,6 +256,7 @@ impl DeploymentStore for SqliteDeploymentStore {
             name: params.name,
             deployment_group_id: params.deployment_group_id,
             platform: params.platform,
+            deployment_protocol_version: params.deployment_protocol_version,
             base_platform: None,
             status: "pending".to_string(),
             stack_settings: params.stack_settings,
@@ -323,6 +334,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                 Deployments::Name,
                 Deployments::DeploymentGroupId,
                 Deployments::Platform,
+                Deployments::DeploymentProtocolVersion,
                 Deployments::BasePlatform,
                 Deployments::Status,
                 Deployments::StackSettings,
@@ -339,6 +351,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                 params.name.clone().into(),
                 params.deployment_group_id.clone().into(),
                 params.platform.as_str().to_string().into(),
+                (params.deployment_protocol_version as i64).into(),
                 params
                     .base_platform
                     .map(|platform| platform.as_str().to_string())
@@ -400,6 +413,7 @@ impl DeploymentStore for SqliteDeploymentStore {
             name: params.name,
             deployment_group_id: params.deployment_group_id,
             platform: params.platform,
+            deployment_protocol_version: params.deployment_protocol_version,
             base_platform: params.base_platform,
             status: params.status,
             stack_settings: params.stack_settings,
@@ -954,6 +968,10 @@ impl DeploymentStore for SqliteDeploymentStore {
             query
                 .table(Deployments::Table)
                 .value(Deployments::Status, &status_str as &str)
+                .value(
+                    Deployments::DeploymentProtocolVersion,
+                    state.protocol_version as i64,
+                )
                 .value(Deployments::RetryRequested, 0i64)
                 .value(Deployments::UpdatedAt, now.to_rfc3339());
 

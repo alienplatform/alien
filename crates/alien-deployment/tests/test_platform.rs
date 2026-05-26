@@ -223,6 +223,7 @@ fn create_env_vars_snapshot(hash: &str, include_secret: bool) -> EnvironmentVari
 /// Create a deployment config fixture
 fn create_test_config(env_vars_hash: &str, include_secret: bool) -> DeploymentConfig {
     DeploymentConfig {
+        deployment_name: Some("test deployment".to_string()),
         stack_settings: StackSettings::default(),
         management_config: None,
         environment_variables: create_env_vars_snapshot(env_vars_hash, include_secret),

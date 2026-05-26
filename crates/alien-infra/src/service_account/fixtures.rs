@@ -63,6 +63,8 @@ pub fn storage_read_permission_set() -> PermissionSet {
         description: "Allows reading data from storage buckets and containers".to_string(),
         platforms: PlatformPermissions {
             aws: Some(vec![AwsPlatformPermission {
+                label: None,
+                description: None,
                 effect: Default::default(),
                 grant: PermissionGrant {
                     actions: Some(vec![
@@ -93,6 +95,8 @@ pub fn storage_read_permission_set() -> PermissionSet {
                 },
             }]),
             gcp: Some(vec![GcpPlatformPermission {
+                label: None,
+                description: None,
                 grant: PermissionGrant {
                     actions: None,
                     permissions: Some(vec![
@@ -119,6 +123,8 @@ pub fn storage_read_permission_set() -> PermissionSet {
                 },
             }]),
             azure: Some(vec![AzurePlatformPermission {
+                label: None,
+                description: None,
                 grant: PermissionGrant {
                     actions: None,
                     permissions: None,
@@ -148,6 +154,8 @@ pub fn storage_write_permission_set() -> PermissionSet {
         description: "Allows writing data to storage buckets and containers".to_string(),
         platforms: PlatformPermissions {
             aws: Some(vec![AwsPlatformPermission {
+                label: None,
+                description: None,
                 effect: Default::default(),
                 grant: PermissionGrant {
                     actions: Some(vec![
@@ -176,6 +184,8 @@ pub fn storage_write_permission_set() -> PermissionSet {
                 },
             }]),
             gcp: Some(vec![GcpPlatformPermission {
+                label: None,
+                description: None,
                 grant: PermissionGrant {
                     actions: None,
                     permissions: Some(vec![
@@ -202,6 +212,8 @@ pub fn storage_write_permission_set() -> PermissionSet {
                 },
             }]),
             azure: Some(vec![AzurePlatformPermission {
+                label: None,
+                description: None,
                 grant: PermissionGrant {
                     actions: None,
                     permissions: None,
@@ -232,6 +244,8 @@ pub fn function_execute_permission_set() -> PermissionSet {
         description: "Allows executing functions".to_string(),
         platforms: PlatformPermissions {
             aws: Some(vec![AwsPlatformPermission {
+                label: None,
+                description: None,
                 effect: Default::default(),
                 grant: PermissionGrant {
                     actions: Some(vec![
@@ -258,6 +272,8 @@ pub fn function_execute_permission_set() -> PermissionSet {
                 },
             }]),
             gcp: Some(vec![GcpPlatformPermission {
+                label: None,
+                description: None,
                 grant: PermissionGrant {
                     actions: None,
                     permissions: Some(vec![
@@ -282,6 +298,8 @@ pub fn function_execute_permission_set() -> PermissionSet {
                 },
             }]),
             azure: Some(vec![AzurePlatformPermission {
+                label: None,
+                description: None,
                 grant: PermissionGrant {
                     actions: Some(vec![
                         "Microsoft.Web/sites/functions/action".to_string(),

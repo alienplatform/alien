@@ -3,9 +3,10 @@ use crate::{
     template::{CfExpression, CfMapping, CfOutput, CfParameter, CfResource, CfTemplate},
 };
 use alien_core::{
-    import::EmitContext, ownership_policy_for_resource_type, DomainSettings, ErrorData,
-    HeartbeatsMode, Network, NetworkSettings, Platform, Result, Stack, StackSettings,
-    TelemetryMode, UpdatesMode, Worker, WorkerCode,
+    import::{EmitContext, CURRENT_SETUP_IMPORT_FORMAT_VERSION},
+    ownership_policy_for_resource_type, DomainSettings, ErrorData, HeartbeatsMode, Network,
+    NetworkSettings, Platform, Result, Stack, StackSettings, TelemetryMode, UpdatesMode, Worker,
+    WorkerCode,
 };
 use alien_error::AlienError;
 use indexmap::{indexmap, IndexMap};
@@ -46,13 +47,14 @@ const OUTPUT_RESOURCE_PREFIX: &str = "DeploymentResourcePrefix";
 const OUTPUT_PLATFORM: &str = "DeploymentPlatform";
 const OUTPUT_REGION: &str = "DeploymentRegion";
 const OUTPUT_SETUP_TARGET: &str = "DeploymentSetupTarget";
+const OUTPUT_SETUP_IMPORT_FORMAT_VERSION: &str = "DeploymentSetupImportFormatVersion";
 const OUTPUT_SETUP_FINGERPRINT: &str = "DeploymentSetupFingerprint";
 const OUTPUT_SETUP_FINGERPRINT_VERSION: &str = "DeploymentSetupFingerprintVersion";
 const OUTPUT_MANAGEMENT_CONFIG: &str = "DeploymentManagementConfig";
 const OUTPUT_STACK_SETTINGS: &str = "DeploymentStackSettings";
 const OUTPUT_RESOURCES: &str = "DeploymentResources";
 const OUTPUT_RESOURCES_CHUNK_BYTES: usize = 3_500;
-const STANDARD_OUTPUT_COUNT: usize = 9;
+const STANDARD_OUTPUT_COUNT: usize = 10;
 const CLOUDFORMATION_MAX_OUTPUTS: usize = 200;
 const MAPPING_REGIONAL_CUSTOM_RESOURCE_SERVICE_TOKENS: &str = "RegionalCustomResourceServiceTokens";
 const MAPPING_SERVICE_TOKEN_KEY: &str = "ServiceToken";
@@ -152,7 +154,7 @@ pub fn generate_cloudformation_template(
             options
                 .description
                 .clone()
-                .unwrap_or_else(|| format!("Deployment stack for {}", stack.id())),
+                .unwrap_or_else(|| format!("Application setup stack for {}", stack.id())),
         ),
         transform: vec![LANGUAGE_EXTENSIONS_TRANSFORM.to_string()],
         metadata: IndexMap::new(),
@@ -487,7 +489,7 @@ fn add_standard_parameters(template: &mut CfTemplate, settings: &StackSettings) 
     template.parameters.insert(
         PARAM_TOKEN.to_string(),
         string_parameter(
-            "Deployment token from the deployment page.",
+            "Install token from the application setup page.",
             None,
             None,
             true,
@@ -505,7 +507,7 @@ fn add_standard_parameters(template: &mut CfTemplate, settings: &StackSettings) 
     template.parameters.insert(
         PARAM_MANAGING_ACCOUNT_ID.to_string(),
         string_parameter(
-            "AWS account ID for the management account that hosts deployment container images.",
+            "AWS account ID for the management account that hosts application container images.",
             Some(String::new()),
             None,
             false,
@@ -756,7 +758,7 @@ fn add_console_interface_metadata(template: &mut CfTemplate, settings: &StackSet
     }));
 
     let mut parameter_labels = serde_json::Map::new();
-    insert_parameter_label(&mut parameter_labels, PARAM_TOKEN, "Deployment token");
+    insert_parameter_label(&mut parameter_labels, PARAM_TOKEN, "Install token");
     insert_parameter_label(
         &mut parameter_labels,
         PARAM_MANAGING_ROLE_ARN,
@@ -866,6 +868,7 @@ fn add_custom_resource(
         "Platform".to_string() => CfExpression::from(Platform::Aws.as_str()),
         "Region".to_string() => CfExpression::ref_("AWS::Region"),
         "SetupTarget".to_string() => CfExpression::from(options.setup_target.clone()),
+        "SetupImportFormatVersion".to_string() => CfExpression::from(CURRENT_SETUP_IMPORT_FORMAT_VERSION),
         "SetupFingerprint".to_string() => CfExpression::from(options.setup_fingerprint.clone()),
         "SetupFingerprintVersion".to_string() => CfExpression::from(options.setup_fingerprint_version),
         "ManagementConfig".to_string() => management_config,
@@ -924,6 +927,13 @@ fn add_outputs(
         output(
             "Setup compatibility fingerprint.",
             CfExpression::from(options.setup_fingerprint.clone()),
+        ),
+    );
+    template.outputs.insert(
+        OUTPUT_SETUP_IMPORT_FORMAT_VERSION.to_string(),
+        output(
+            "Setup import payload format version.",
+            CfExpression::from(CURRENT_SETUP_IMPORT_FORMAT_VERSION),
         ),
     );
     template.outputs.insert(

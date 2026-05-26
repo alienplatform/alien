@@ -89,7 +89,6 @@ pub struct DeploymentState {
     /// All actors (manager, push client, agent) check this before stepping.
     /// Mismatched versions produce a clear error instead of silent corruption.
     /// See docs/02-manager/10-deployment-protocol.md.
-    #[serde(default = "default_protocol_version")]
     pub protocol_version: u32,
 }
 
@@ -127,10 +126,12 @@ pub(crate) fn is_false(b: &bool) -> bool {
     !*b
 }
 
-/// Current deployment protocol version.
-/// Bump when making incompatible changes to DeploymentState semantics.
-pub const DEPLOYMENT_PROTOCOL_VERSION: u32 = 1;
+/// Oldest deployment protocol version this binary can read.
+pub const MIN_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION: u32 = 1;
 
-fn default_protocol_version() -> u32 {
-    DEPLOYMENT_PROTOCOL_VERSION
-}
+/// Deployment protocol version this binary writes.
+/// Bump when making incompatible changes to DeploymentState semantics.
+pub const CURRENT_DEPLOYMENT_PROTOCOL_VERSION: u32 = 1;
+
+/// Backwards-compatible alias for older call sites.
+pub const DEPLOYMENT_PROTOCOL_VERSION: u32 = CURRENT_DEPLOYMENT_PROTOCOL_VERSION;

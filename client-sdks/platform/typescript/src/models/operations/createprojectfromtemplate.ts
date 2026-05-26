@@ -51,6 +51,10 @@ export type CreateProjectFromTemplateCloudformationRequest = {
    * Whether CloudFormation package generation is enabled
    */
   enabled: boolean;
+  /**
+   * Human-friendly application name shown in generated install artifacts
+   */
+  displayName?: string | null | undefined;
 };
 
 /**
@@ -97,6 +101,10 @@ export type CreateProjectFromTemplateTerraformRequest = {
    * Whether Terraform package generation is enabled
    */
   enabled: boolean;
+  /**
+   * Human-friendly application name shown in generated install artifacts
+   */
+  displayName?: string | null | undefined;
 };
 
 /**
@@ -253,6 +261,10 @@ export type CreateProjectFromTemplateCloudformationResponse = {
    * Whether CloudFormation package generation is enabled
    */
   enabled: boolean;
+  /**
+   * Human-friendly application name shown in generated install artifacts
+   */
+  displayName?: string | null | undefined;
 };
 
 /**
@@ -299,6 +311,10 @@ export type CreateProjectFromTemplateTerraformResponse = {
    * Whether Terraform package generation is enabled
    */
   enabled: boolean;
+  /**
+   * Human-friendly application name shown in generated install artifacts
+   */
+  displayName?: string | null | undefined;
 };
 
 /**
@@ -456,6 +472,7 @@ export function createProjectFromTemplateCliRequestToJSON(
 /** @internal */
 export type CreateProjectFromTemplateCloudformationRequest$Outbound = {
   enabled: boolean;
+  displayName?: string | null | undefined;
 };
 
 /** @internal */
@@ -465,6 +482,7 @@ export const CreateProjectFromTemplateCloudformationRequest$outboundSchema:
     CreateProjectFromTemplateCloudformationRequest
   > = z.object({
     enabled: z.boolean(),
+    displayName: z.nullable(z.string()).optional(),
   });
 
 export function createProjectFromTemplateCloudformationRequestToJSON(
@@ -537,6 +555,7 @@ export function createProjectFromTemplateHelmRequestToJSON(
 /** @internal */
 export type CreateProjectFromTemplateTerraformRequest$Outbound = {
   enabled: boolean;
+  displayName?: string | null | undefined;
 };
 
 /** @internal */
@@ -546,6 +565,7 @@ export const CreateProjectFromTemplateTerraformRequest$outboundSchema:
     CreateProjectFromTemplateTerraformRequest
   > = z.object({
     enabled: z.boolean(),
+    displayName: z.nullable(z.string()).optional(),
   });
 
 export function createProjectFromTemplateTerraformRequestToJSON(
@@ -766,6 +786,7 @@ export const CreateProjectFromTemplateCloudformationResponse$inboundSchema:
   z.ZodType<CreateProjectFromTemplateCloudformationResponse, unknown> = z
     .object({
       enabled: z.boolean(),
+      displayName: z.nullable(z.string()).optional(),
     });
 
 export function createProjectFromTemplateCloudformationResponseFromJSON(
@@ -833,6 +854,7 @@ export function createProjectFromTemplateHelmResponseFromJSON(
 export const CreateProjectFromTemplateTerraformResponse$inboundSchema:
   z.ZodType<CreateProjectFromTemplateTerraformResponse, unknown> = z.object({
     enabled: z.boolean(),
+    displayName: z.nullable(z.string()).optional(),
   });
 
 export function createProjectFromTemplateTerraformResponseFromJSON(

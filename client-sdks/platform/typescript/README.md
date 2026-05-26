@@ -238,9 +238,9 @@ run();
 * [update](docs/sdks/managers/README.md#update) - Update a manager to a specific release ID or active release.
 * [listEvents](docs/sdks/managers/README.md#listevents) - Retrieve all events of a manager.
 * [generateManagerToken](docs/sdks/managers/README.md#generatemanagertoken) - Generate a short-lived JWT for direct browser → manager communication. Used for fetching command payloads and querying logs without routing sensitive data through the platform API.
+* [resolveGcpOAuthProvider](docs/sdks/managers/README.md#resolvegcpoauthprovider) - Resolve decrypted project-level Google Cloud OAuth provider settings for a manager-side deployment bootstrap.
 * [reportHeartbeat](docs/sdks/managers/README.md#reportheartbeat) - Report Manager health status and metrics.
 * [getDeployment](docs/sdks/managers/README.md#getdeployment) - Get deployment details for a private manager (internal deployment platform, status, resources).
-* [googleCloudConnect](docs/sdks/managers/README.md#googlecloudconnect) - Connect a Google Cloud manager via OAuth.
 
 ### [Packages](docs/sdks/packages/README.md)
 
@@ -256,6 +256,8 @@ run();
 * [get](docs/sdks/projects/README.md#get) - Retrieve a project by ID or name.
 * [delete](docs/sdks/projects/README.md#delete) - Delete a project. The project must have no deployments.
 * [update](docs/sdks/projects/README.md#update) - Update a project.
+* [getGcpOAuthProvider](docs/sdks/projects/README.md#getgcpoauthprovider) - Retrieve redacted project-level Google Cloud OAuth provider settings.
+* [updateGcpOAuthProvider](docs/sdks/projects/README.md#updategcpoauthprovider) - Update project-level Google Cloud OAuth provider settings.
 * [createFromTemplate](docs/sdks/projects/README.md#createfromtemplate) - Create a project by forking alienplatform/alien into your namespace, then configuring GitHub Actions.
 * [getTemplateUrls](docs/sdks/projects/README.md#gettemplateurls) - Get template URLs for deploying setup stacks in this project.
 * [getActiveRelease](docs/sdks/projects/README.md#getactiverelease) - Get the active release for this project. Returns the latest release, or the pinned release if deploymentId is provided and that deployment has a pinned release.
@@ -283,6 +285,7 @@ run();
 
 * [getProfile](docs/sdks/user/README.md#getprofile) - Get the current user's profile and user-scoped onboarding state.
 * [updateProfile](docs/sdks/user/README.md#updateprofile) - Update the current user's profile (display name).
+* [completeProfileSetup](docs/sdks/user/README.md#completeprofilesetup) - Complete the required beta intake and profile setup dialog.
 * [listMemberships](docs/sdks/user/README.md#listmemberships) - List all workspaces the current user has access to.
 * [createWorkspace](docs/sdks/user/README.md#createworkspace) - Create a new workspace. The current user will be automatically added as an admin.
 * [listGitNamespaces](docs/sdks/user/README.md#listgitnamespaces) - List all git namespaces (GitHub installations) the current user has access to.
@@ -378,11 +381,11 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`managersGet`](docs/sdks/managers/README.md#get) - Retrieve a manager by ID.
 - [`managersGetDeployment`](docs/sdks/managers/README.md#getdeployment) - Get deployment details for a private manager (internal deployment platform, status, resources).
 - [`managersGetManagementConfig`](docs/sdks/managers/README.md#getmanagementconfig) - Get the management configuration for a manager.
-- [`managersGoogleCloudConnect`](docs/sdks/managers/README.md#googlecloudconnect) - Connect a Google Cloud manager via OAuth.
 - [`managersList`](docs/sdks/managers/README.md#list) - Retrieve all managers.
 - [`managersListEvents`](docs/sdks/managers/README.md#listevents) - Retrieve all events of a manager.
 - [`managersProvision`](docs/sdks/managers/README.md#provision) - Enqueue provisioning for a manager by ID.
 - [`managersReportHeartbeat`](docs/sdks/managers/README.md#reportheartbeat) - Report Manager health status and metrics.
+- [`managersResolveGcpOAuthProvider`](docs/sdks/managers/README.md#resolvegcpoauthprovider) - Resolve decrypted project-level Google Cloud OAuth provider settings for a manager-side deployment bootstrap.
 - [`managersUpdate`](docs/sdks/managers/README.md#update) - Update a manager to a specific release ID or active release.
 - [`packagesCancel`](docs/sdks/packages/README.md#cancel) - Cancel a pending or building package.
 - [`packagesGet`](docs/sdks/packages/README.md#get) - Get details of a specific package.
@@ -393,9 +396,11 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`projectsDelete`](docs/sdks/projects/README.md#delete) - Delete a project. The project must have no deployments.
 - [`projectsGet`](docs/sdks/projects/README.md#get) - Retrieve a project by ID or name.
 - [`projectsGetActiveRelease`](docs/sdks/projects/README.md#getactiverelease) - Get the active release for this project. Returns the latest release, or the pinned release if deploymentId is provided and that deployment has a pinned release.
+- [`projectsGetGcpOAuthProvider`](docs/sdks/projects/README.md#getgcpoauthprovider) - Retrieve redacted project-level Google Cloud OAuth provider settings.
 - [`projectsGetTemplateUrls`](docs/sdks/projects/README.md#gettemplateurls) - Get template URLs for deploying setup stacks in this project.
 - [`projectsList`](docs/sdks/projects/README.md#list) - Retrieve all projects.
 - [`projectsUpdate`](docs/sdks/projects/README.md#update) - Update a project.
+- [`projectsUpdateGcpOAuthProvider`](docs/sdks/projects/README.md#updategcpoauthprovider) - Update project-level Google Cloud OAuth provider settings.
 - [`releasesCreate`](docs/sdks/releases/README.md#create) - Create a new release.
 - [`releasesGet`](docs/sdks/releases/README.md#get) - Retrieve a release by ID.
 - [`releasesList`](docs/sdks/releases/README.md#list) - Retrieve all releases.
@@ -406,6 +411,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`syncList`](docs/sdks/sync/README.md#list) - List full deployment records for manager operational loops. This endpoint is intentionally separate from the public deployments list, which returns lightweight UI rows.
 - [`syncReconcile`](docs/sdks/sync/README.md#reconcile) - Reconcile deployment state. Push model (with session) verifies lock ownership. Pull model (no session) verifies the deployment is unlocked. Accepts full DeploymentState after step() execution.
 - [`syncRelease`](docs/sdks/sync/README.md#release) - Release a deployment lock. Must be called after processing an acquired deployment, even if processing failed. This is critical to avoid deadlocks.
+- [`userCompleteProfileSetup`](docs/sdks/user/README.md#completeprofilesetup) - Complete the required beta intake and profile setup dialog.
 - [`userCreateWorkspace`](docs/sdks/user/README.md#createworkspace) - Create a new workspace. The current user will be automatically added as an admin.
 - [`userGetProfile`](docs/sdks/user/README.md#getprofile) - Get the current user's profile and user-scoped onboarding state.
 - [`userListGitNamespaceRepositories`](docs/sdks/user/README.md#listgitnamespacerepositories) - List repositories accessible through a git namespace (GitHub installation).

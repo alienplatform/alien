@@ -14,9 +14,8 @@
 use crate::{
     emitter::CfEmitter,
     emitters::aws::helpers::{
-        link_permission_statements, logical_id_for_ref, private_subnet_ids_expr,
-        required_logical_id, resource_config, role_for_profile_or_fallback,
-        security_group_ids_expr, stack_name, tags,
+        logical_id_for_ref, private_subnet_ids_expr, required_logical_id, resource_config,
+        role_for_profile_or_fallback, security_group_ids_expr, stack_name, tags,
     },
     registry::CfRegistry,
     template::{CfExpression, CfResource},
@@ -328,30 +327,6 @@ fn lambda_fallback_policy(ctx: &EmitContext<'_>, function: &Worker) -> Result<Cf
         ),
         ("Resource", CfExpression::from("*")),
     ])];
-
-    for trigger in &function.triggers {
-        if let WorkerTrigger::Queue { queue } = trigger {
-            let queue_id = logical_id_for_ref(ctx, queue)?;
-            statements.push(CfExpression::object([
-                ("Sid", CfExpression::from(format!("ReadQueue{}", queue_id))),
-                ("Effect", CfExpression::from("Allow")),
-                (
-                    "Action",
-                    CfExpression::list([
-                        CfExpression::from("sqs:ReceiveMessage"),
-                        CfExpression::from("sqs:DeleteMessage"),
-                        CfExpression::from("sqs:GetQueueAttributes"),
-                        CfExpression::from("sqs:ChangeMessageVisibility"),
-                    ]),
-                ),
-                ("Resource", CfExpression::get_att(queue_id, "Arn")),
-            ]));
-        }
-    }
-
-    for link in &function.links {
-        statements.extend(link_permission_statements(ctx, link)?);
-    }
 
     Ok(CfExpression::object([
         ("Version", CfExpression::from("2012-10-17")),

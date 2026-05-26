@@ -486,6 +486,9 @@ impl ResourcePermissionsHelper {
             // In single-subscription mode, these are the same as the current values.
             .with_managing_subscription_id(azure_config.subscription_id.clone())
             .with_managing_resource_group(resource_group);
+        if let Some(deployment_name) = ctx.deployment_name_for_metadata() {
+            permission_ctx = permission_ctx.with_deployment_name(deployment_name.to_string());
+        }
 
         // Resolve storage account name from infrastructure outputs if available.
         // Many permission sets (kv/*, storage/*) reference ${storageAccountName}
@@ -514,8 +517,10 @@ impl ResourcePermissionsHelper {
             .with_project_name(gcp_config.project_id.clone())
             .with_region(gcp_config.region.clone())
             .with_stack_prefix(ctx.resource_prefix.to_string())
-            .with_stack_name(ctx.desired_stack.id().to_string())
             .with_resource_name(resource_name.to_string());
+        if let Some(deployment_name) = ctx.deployment_name_for_metadata() {
+            permission_ctx = permission_ctx.with_deployment_name(deployment_name.to_string());
+        }
         if let Some(ref project_number) = gcp_config.project_number {
             permission_ctx = permission_ctx.with_project_number(project_number.clone());
         }

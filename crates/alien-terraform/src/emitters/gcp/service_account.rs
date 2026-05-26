@@ -48,12 +48,15 @@ impl TfEmitter for GcpServiceAccountEmitter {
                 attr("account_id", account_id_template),
                 attr(
                     "display_name",
-                    expr::template(format!("Deployment {} service account", service_account.id)),
+                    expr::template(format!(
+                        "${{local.deployment_name}}: Runtime service account ({})",
+                        service_account.id
+                    )),
                 ),
                 attr(
                     "description",
                     expr::template(format!(
-                        "${{local.resource_prefix}} deployment service account for permission profile '{label}'"
+                        "Runtime cloud identity for ${{local.deployment_name}}. Resource prefix: ${{local.resource_prefix}}. Resource: {label}."
                     )),
                 ),
             ],

@@ -12,8 +12,7 @@
             "sqs:GetQueueAttributes",
             "sqs:SetQueueAttributes",
             "sqs:ListQueues",
-            "sqs:TagQueue",
-            "sqs:UntagQueue"
+            "sqs:TagQueue"
           ]
         },
         "binding": {

@@ -33,6 +33,7 @@ get "resources"(){
               },
 "setupFingerprint": z.string().describe("Setup compatibility fingerprint embedded in the package."),
 "setupFingerprintVersion": z.int().min(0).describe("Setup fingerprint algorithm version embedded in the package."),
+"setupImportFormatVersion": z.int().min(0).describe("Wire-format version for the setup import payload."),
 "setupTarget": z.string().describe("Setup target this package was generated for."),
 get "sourceKind"(){
                 return z.union([ImportSourceKindSchema, z.null()]).optional()

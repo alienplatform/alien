@@ -329,6 +329,7 @@ mod tests {
 
     fn test_config() -> DeploymentConfig {
         DeploymentConfig {
+            deployment_name: Some("test deployment".to_string()),
             stack_settings: StackSettings::default(),
             management_config: None,
             environment_variables: EnvironmentVariablesSnapshot {

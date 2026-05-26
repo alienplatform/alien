@@ -14,6 +14,7 @@ let value: ConfigTerraform = {
 
 ## Fields
 
-| Field              | Type               | Required           | Description        |
-| ------------------ | ------------------ | ------------------ | ------------------ |
-| `type`             | *"terraform"*      | :heavy_check_mark: | N/A                |
+| Field                                                                 | Type                                                                  | Required                                                              | Description                                                           |
+| --------------------------------------------------------------------- | --------------------------------------------------------------------- | --------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `displayName`                                                         | *string*                                                              | :heavy_minus_sign:                                                    | Human-friendly application name shown in generated install artifacts. |
+| `type`                                                                | *"terraform"*                                                         | :heavy_check_mark:                                                    | N/A                                                                   |

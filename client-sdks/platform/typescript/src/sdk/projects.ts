@@ -7,9 +7,11 @@ import { projectsCreateFromTemplate } from "../funcs/projectsCreateFromTemplate.
 import { projectsDelete } from "../funcs/projectsDelete.js";
 import { projectsGet } from "../funcs/projectsGet.js";
 import { projectsGetActiveRelease } from "../funcs/projectsGetActiveRelease.js";
+import { projectsGetGcpOAuthProvider } from "../funcs/projectsGetGcpOAuthProvider.js";
 import { projectsGetTemplateUrls } from "../funcs/projectsGetTemplateUrls.js";
 import { projectsList } from "../funcs/projectsList.js";
 import { projectsUpdate } from "../funcs/projectsUpdate.js";
+import { projectsUpdateGcpOAuthProvider } from "../funcs/projectsUpdateGcpOAuthProvider.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
 import * as models from "../models/index.js";
 import * as operations from "../models/operations/index.js";
@@ -80,6 +82,34 @@ export class Projects extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.Project> {
     return unwrapAsync(projectsUpdate(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Retrieve redacted project-level Google Cloud OAuth provider settings.
+   */
+  async getGcpOAuthProvider(
+    request: operations.GetProjectGcpOAuthProviderRequest,
+    options?: RequestOptions,
+  ): Promise<models.ProjectGcpOAuthProvider> {
+    return unwrapAsync(projectsGetGcpOAuthProvider(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Update project-level Google Cloud OAuth provider settings.
+   */
+  async updateGcpOAuthProvider(
+    request: operations.UpdateProjectGcpOAuthProviderRequest,
+    options?: RequestOptions,
+  ): Promise<models.ProjectGcpOAuthProvider> {
+    return unwrapAsync(projectsUpdateGcpOAuthProvider(
       this,
       request,
       options,

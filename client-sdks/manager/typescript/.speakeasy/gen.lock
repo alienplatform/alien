@@ -1,16 +1,16 @@
 lockVersion: 2.0.0
 id: 8940d7e8-6d5d-4ea9-9632-85457ecd75f0
 management:
-  docChecksum: d9e24a8501c491cf6552d3320243bf88
+  docChecksum: 6bbe236e7cce45836dbba8b374cf5fbd
   docVersion: 1.0.0
   speakeasyVersion: 1.680.11
   generationVersion: 2.788.15
-  releaseVersion: 1.2.19
-  configChecksum: 683f3643e887b07e6e1e360f72589b4f
+  releaseVersion: 1.2.22
+  configChecksum: 7d515fa306678a8f6964bf0804b405af
 persistentEdits:
-  generation_id: 6d172814-7da2-45e9-8c78-39d30d94ea3e
-  pristine_commit_hash: 6a2bb28104f0d2b4fd040998ce141fd8a61d6473
-  pristine_tree_hash: 184b097fae5f9c881035755ad01d93603fe30b0e
+  generation_id: 3632cc2f-a7eb-4004-8c32-cf14753e1bb4
+  pristine_commit_hash: 0941212089fddcdc87b9614ffedb2dd32c64a3e5
+  pristine_tree_hash: 0c51234765a501fd84404b37cfed541043042f8b
 features:
   typescript:
     additionalDependencies: 0.1.0
@@ -482,8 +482,8 @@ trackedFiles:
     pristine_git_object: 386149d04c9bf978bb0ee972a3aa09584afc2db5
   docs/models/stackimportrequest.md:
     id: d793fb9cfbc1
-    last_write_checksum: sha1:b72877d627bedf67d397936dd7225d453c0602e1
-    pristine_git_object: 3a6396bce6cb8d5a3351390a75ab1f3bc54ea633
+    last_write_checksum: sha1:97307dc43c255104240bfdcc5118093d22cbe005
+    pristine_git_object: 1a30f3c03b940c2b9eba087bd100ef201fb3f127
   docs/models/stackimportresponse.md:
     id: b6a34d2b6613
     last_write_checksum: sha1:be4cdbb836f767bbf2af477844a92facd3f8bd12
@@ -558,8 +558,8 @@ trackedFiles:
     pristine_git_object: a91c645999a1a82e60499c6f11b72cccb4506ddb
   docs/sdks/stackimport/README.md:
     id: 17bcf49afc4e
-    last_write_checksum: sha1:3fc2b5b4037f0988fad83266837b3ba28ea6ef36
-    pristine_git_object: 388a90639a4935d3e62138df2bd767a95a2c8834
+    last_write_checksum: sha1:b8156842e58e6c0c1a3b1b04811146975f342e88
+    pristine_git_object: d40b506fad6f72f2244daa63fec91bd07c8b3b60
   docs/sdks/sync/README.md:
     id: a2e09f86bd16
     last_write_checksum: sha1:f024edcbb783752acc6b5972120387f3448f8235
@@ -590,12 +590,12 @@ trackedFiles:
     pristine_git_object: ee6bb1a089f199ee421f67dd2cfd0e26a3b112c9
   jsr.json:
     id: 7f6ab7767282
-    last_write_checksum: sha1:a8947c0240faffc86e6d7e42bd2d7598d8c15d24
-    pristine_git_object: b66442d1d48d704ffdabe315f2512ade0f0f587f
+    last_write_checksum: sha1:06e96d8fd9ed273cb5b1a3974bf512a86171ed58
+    pristine_git_object: dda54c30dd2c285ea5db3f13bef44519c75f7c7c
   package.json:
     id: 7030d0b2f71b
-    last_write_checksum: sha1:3f90a5cba4f3eb2764230944aa1d6078d1fc218c
-    pristine_git_object: 04b8e4ce39ef6f133ed515fe78a0f587facc4108
+    last_write_checksum: sha1:bd98a486b60ae2380392beb0bb56566ed3766eac
+    pristine_git_object: b6e8016366c4e75449458b8c5ea2c1260bc9417f
   src/core.ts:
     id: f431fdbcd144
     last_write_checksum: sha1:a3b94f76908a8f9a4857fea8aac869403adb797c
@@ -746,8 +746,8 @@ trackedFiles:
     pristine_git_object: 962ea486e17eabe13bcf068493a556110c944df8
   src/lib/config.ts:
     id: 320761608fb3
-    last_write_checksum: sha1:c2976c2cbdfe7dc8825b4d915c6c689926e06c6c
-    pristine_git_object: ae077fd9fec832f451789432b9b115d5da25fe5d
+    last_write_checksum: sha1:024298e7345d013891ce0d43b30c8f7ce2f19e5d
+    pristine_git_object: 8763c5987e759ec64d15f88df26659845d393fb5
   src/lib/dlv.ts:
     id: b1988214835a
     last_write_checksum: sha1:1dd3e3fbb4550c4bf31f5ef997faff355d6f3250
@@ -1182,8 +1182,8 @@ trackedFiles:
     pristine_git_object: 45a6cdb1a83c0746f120cd994a3552d6c2598bdf
   src/models/stackimportrequest.ts:
     id: 95dfff36e78f
-    last_write_checksum: sha1:1f3fa8fa86523f52b7205f1dbea0da4f86706c92
-    pristine_git_object: 671c5d83128f8cedadb60e32c88fe6d22a44fbb5
+    last_write_checksum: sha1:cc39ce47ec1761914867668debf6df65ff6e0456
+    pristine_git_object: 7b3a0bfe2f815fd8d26d4304fda9b4f0bd77f607
   src/models/stackimportresponse.ts:
     id: 5622ee7806e5
     last_write_checksum: sha1:05100242aa3e8ed307ac50a03cfc9f7b48e66f5e
@@ -1563,7 +1563,7 @@ examples:
   stack_import:
     speakeasy-default-stack-import:
       requestBody:
-        application/json: {"deploymentGroupToken": "<value>", "deploymentName": "<value>", "managementConfig": {"serviceAccountEmail": "<value>", "platform": "gcp"}, "platform": "gcp", "region": "<value>", "resourcePrefix": "<value>", "resources": [], "setupFingerprint": "<value>", "setupFingerprintVersion": 325467, "setupTarget": "<value>", "stackSettings": {}}
+        application/json: {"deploymentGroupToken": "<value>", "deploymentName": "<value>", "managementConfig": {"serviceAccountEmail": "<value>", "platform": "gcp"}, "platform": "gcp", "region": "<value>", "resourcePrefix": "<value>", "resources": [], "setupFingerprint": "<value>", "setupFingerprintVersion": 325467, "setupImportFormatVersion": 325467, "setupTarget": "<value>", "stackSettings": {}}
       responses:
         "201":
           application/json: {"deploymentId": "<id>", "stackSettings": {}, "stackState": {"platform": "aws", "resourcePrefix": "<value>", "resources": {}}}

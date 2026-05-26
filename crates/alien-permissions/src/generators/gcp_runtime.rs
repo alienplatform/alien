@@ -1,5 +1,8 @@
 use crate::{
     error::{ErrorData, Result},
+    generators::labels::{
+        entry_description, entry_snake_label, entry_title_label, has_explicit_label,
+    },
     variables::VariableInterpolator,
     BindingTarget, PermissionContext,
 };
@@ -196,7 +199,6 @@ impl GcpRuntimePermissionsGenerator {
             .filter(|entry| gcp_residual_permissions(&entry.grant).is_some_and(|p| !p.is_empty()))
             .count();
         let has_multiple_entries = residual_entry_count > 1;
-        let mut residual_index = 0usize;
         for (index, platform_permission) in gcp_platform_permissions.iter().enumerate() {
             validate_gcp_grant(permission_set, index, &platform_permission.grant)?;
 
@@ -206,13 +208,17 @@ impl GcpRuntimePermissionsGenerator {
             if permissions.is_empty() {
                 continue;
             }
-            residual_index += 1;
-
             let role = self.custom_role_for_permissions(
                 permission_set,
                 permissions.clone(),
                 context,
-                role_part(residual_index - 1, has_multiple_entries),
+                role_suffix(
+                    &platform_permission.grant,
+                    platform_permission.label.as_deref(),
+                    has_multiple_entries,
+                ),
+                platform_permission.label.as_deref(),
+                platform_permission.description.as_deref(),
             )?;
             if !roles
                 .iter()
@@ -230,20 +236,26 @@ impl GcpRuntimePermissionsGenerator {
         permission_set: &PermissionSet,
         mut included_permissions: Vec<String>,
         context: &PermissionContext,
-        part: Option<usize>,
+        suffix: Option<String>,
+        explicit_label: Option<&str>,
+        entry_description_override: Option<&str>,
     ) -> Result<GcpCustomRole> {
         included_permissions.sort();
         included_permissions.dedup();
 
         let project = context.project_name.as_deref().unwrap_or("PROJECT_NAME");
-        let role_id = generate_role_id(permission_set, context, part);
+        let role_id = generate_role_id(permission_set, context, suffix.as_deref(), explicit_label);
         let role_name = format!("projects/{project}/roles/{role_id}");
 
         Ok(GcpCustomRole {
             role_id: role_id.clone(),
             name: role_name,
-            title: custom_role_title(permission_set, context, part),
-            description: custom_role_description(permission_set, context),
+            title: custom_role_title(permission_set, context, suffix.as_deref(), explicit_label),
+            description: custom_role_description(
+                permission_set,
+                context,
+                entry_description_override,
+            ),
             included_permissions,
             stage: "GA".to_string(),
         })
@@ -304,7 +316,6 @@ impl GcpRuntimePermissionsGenerator {
             .filter(|entry| gcp_residual_permissions(&entry.grant).is_some_and(|p| !p.is_empty()))
             .count();
         let has_multiple_entries = residual_entry_count > 1;
-        let mut residual_index = 0usize;
         for (index, platform_permission) in gcp_platform_permissions.iter().enumerate() {
             validate_gcp_grant(permission_set, index, &platform_permission.grant)?;
 
@@ -340,12 +351,17 @@ impl GcpRuntimePermissionsGenerator {
                 continue;
             }
 
-            residual_index += 1;
             let custom_role = self.custom_role_for_permissions(
                 permission_set,
                 permissions.clone(),
                 context,
-                role_part(residual_index - 1, has_multiple_entries),
+                role_suffix(
+                    &platform_permission.grant,
+                    platform_permission.label.as_deref(),
+                    has_multiple_entries,
+                ),
+                platform_permission.label.as_deref(),
+                platform_permission.description.as_deref(),
             )?;
             bindings.push(GcpIamBinding {
                 role: custom_role.name.clone(),
@@ -466,12 +482,18 @@ fn validate_gcp_grant(
 fn generate_role_id(
     permission_set: &PermissionSet,
     context: &PermissionContext,
-    part: Option<usize>,
+    suffix: Option<&str>,
+    explicit_label: Option<&str>,
 ) -> String {
     let namespace = custom_role_namespace(context);
+    if has_explicit_label(explicit_label) {
+        let suffix = suffix.unwrap_or("custom");
+        return format!("role_{namespace}_{suffix}");
+    }
+
     let permission_set_slug = sanitize_role_segment(&permission_set.id.replace('/', "_"), 28);
-    match part {
-        Some(part) => format!("role_{namespace}_{permission_set_slug}_part{part}"),
+    match suffix {
+        Some(suffix) => format!("role_{namespace}_{permission_set_slug}_{suffix}"),
         None => format!("role_{namespace}_{permission_set_slug}"),
     }
 }
@@ -497,31 +519,49 @@ fn custom_role_namespace(context: &PermissionContext) -> String {
 fn custom_role_title(
     permission_set: &PermissionSet,
     context: &PermissionContext,
-    part: Option<usize>,
+    suffix: Option<&str>,
+    explicit_label: Option<&str>,
 ) -> String {
-    let stack_name = context
-        .stack_name
-        .as_deref()
-        .or(context.stack_prefix.as_deref())
-        .unwrap_or("Stack");
+    let deployment_name = context.deployment_name.as_deref();
+    if has_explicit_label(explicit_label) {
+        let title = entry_title_label(explicit_label, &PermissionGrant::default());
+        return role_title(deployment_name, &title);
+    }
+
     let label = permission_set_display_label(&permission_set.id);
-    match part {
-        Some(part) => format!("{stack_name}: {label} (part {part})"),
-        None => format!("{stack_name}: {label}"),
+    let title = match suffix {
+        Some(suffix) => format!(
+            "{label} - {}",
+            entry_title_label(Some(suffix), &PermissionGrant::default())
+        ),
+        None => label,
+    };
+    role_title(deployment_name, &title)
+}
+
+fn custom_role_description(
+    permission_set: &PermissionSet,
+    context: &PermissionContext,
+    entry_description_override: Option<&str>,
+) -> String {
+    let stack_prefix = context.stack_prefix.as_deref().unwrap_or("unknown");
+    let description = entry_description(entry_description_override, &permission_set.description);
+    let description = description.trim_end_matches('.');
+    match context.deployment_name.as_deref() {
+        Some(deployment_name) if !deployment_name.trim().is_empty() => {
+            format!("Used by {deployment_name}. {description}. Resource prefix: {stack_prefix}.")
+        }
+        _ => format!("{description}. Resource prefix: {stack_prefix}."),
     }
 }
 
-fn custom_role_description(permission_set: &PermissionSet, context: &PermissionContext) -> String {
-    let stack_name = context
-        .stack_name
-        .as_deref()
-        .or(context.stack_prefix.as_deref())
-        .unwrap_or("unknown");
-    let stack_prefix = context.stack_prefix.as_deref().unwrap_or("unknown");
-    format!(
-        "{}. Stack: {stack_name}. Deployment prefix: {stack_prefix}. Permission set: {}.",
-        permission_set.description, permission_set.id
-    )
+fn role_title(deployment_name: Option<&str>, title: &str) -> String {
+    match deployment_name {
+        Some(deployment_name) if !deployment_name.trim().is_empty() => {
+            format!("{deployment_name}: {title}")
+        }
+        _ => title.to_string(),
+    }
 }
 
 fn permission_set_display_label(permission_set_id: &str) -> String {
@@ -546,9 +586,21 @@ fn permission_set_display_label(permission_set_id: &str) -> String {
     label
 }
 
-fn role_part(index: usize, has_multiple_entries: bool) -> Option<usize> {
-    if has_multiple_entries {
-        Some(index + 1)
+fn role_suffix(
+    grant: &PermissionGrant,
+    explicit_label: Option<&str>,
+    has_multiple_entries: bool,
+) -> Option<String> {
+    if has_explicit_label(explicit_label) || has_multiple_entries {
+        let max_len = if has_explicit_label(explicit_label) {
+            40
+        } else {
+            28
+        };
+        Some(sanitize_role_segment(
+            &entry_snake_label(explicit_label, grant),
+            max_len,
+        ))
     } else {
         None
     }

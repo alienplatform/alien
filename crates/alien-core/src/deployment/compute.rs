@@ -20,84 +20,103 @@ pub struct HorizonClusterConfig {
     pub management_token: String,
 }
 
-/// Horizon host image architecture.
+/// Horizon machine image architecture.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
-pub enum HorizonHostArchitecture {
-    /// Linux arm64 / aarch64 host image.
+pub enum HorizonMachineArchitecture {
+    /// Linux arm64 / aarch64 machine image.
     #[serde(rename = "arm64")]
     Arm64,
-    /// Linux amd64 / x86_64 host image.
+    /// Linux amd64 / x86_64 machine image.
     #[serde(rename = "amd64")]
     Amd64,
 }
 
-/// AWS Horizon host image catalog.
+/// AWS Horizon machine image catalog.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
-pub struct HorizonAwsHostImages {
+pub struct HorizonAwsMachineImages {
     /// AMI IDs by architecture, then AWS region.
-    pub amis: HashMap<HorizonHostArchitecture, HashMap<String, String>>,
+    pub amis: HashMap<HorizonMachineArchitecture, HashMap<String, String>>,
 }
 
-/// GCP Horizon host image entry.
+/// GCP Horizon machine image entry.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
-pub struct HorizonGcpHostImage {
+pub struct HorizonGcpMachineImage {
     /// Source image self link or image-family URL.
     pub source_image: String,
 }
 
-/// GCP Horizon host image catalog.
+/// GCP Horizon machine image catalog.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
-pub struct HorizonGcpHostImages {
+pub struct HorizonGcpMachineImages {
     /// Images by architecture.
-    pub images: HashMap<HorizonHostArchitecture, HorizonGcpHostImage>,
+    pub images: HashMap<HorizonMachineArchitecture, HorizonGcpMachineImage>,
 }
 
-/// Azure Horizon host image entry.
+/// Azure Horizon machine image entry.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
-pub struct HorizonAzureHostImage {
-    /// Azure Compute Gallery image definition ID.
-    pub image_definition_id: String,
+pub struct HorizonAzureMachineImage {
+    /// Azure Compute Gallery image version ID.
+    pub image_version_id: String,
 }
 
-/// Azure Horizon host image catalog.
+/// Base image metadata for the Horizon machine image.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
-pub struct HorizonAzureHostImages {
+pub struct HorizonMachineBaseImage {
+    /// Base OS image name.
+    pub name: String,
+    /// Base OS image version or channel.
+    pub version: String,
+}
+
+/// Azure Horizon machine image catalog.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct HorizonAzureMachineImages {
     /// Images by architecture.
-    pub images: HashMap<HorizonHostArchitecture, HorizonAzureHostImage>,
+    pub images: HashMap<HorizonMachineArchitecture, HorizonAzureMachineImage>,
 }
 
-/// Horizon host image catalog.
+/// Horizon machine image catalog.
 ///
 /// Platform resolves concrete provider images from this catalog during rollout.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
-pub struct HorizonHostImage {
+pub struct HorizonMachineImage {
     /// Logical image channel, such as prod, staging, or canary.
     pub channel: String,
-    /// Published image catalog version.
-    pub version: String,
+    /// Published immutable machine image version.
+    pub machine_image_version: String,
+    /// horizond daemon version baked into the image.
+    pub horizond_version: String,
+    /// Git commit SHA used to build the image.
+    pub git_sha: String,
+    /// Image manifest creation timestamp.
+    pub created_at: String,
+    /// Base OS image metadata.
+    pub base_image: HorizonMachineBaseImage,
     /// AWS image catalog.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub aws: Option<HorizonAwsHostImages>,
+    pub aws: Option<HorizonAwsMachineImages>,
     /// GCP image catalog.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub gcp: Option<HorizonGcpHostImages>,
+    pub gcp: Option<HorizonGcpMachineImages>,
     /// Azure image catalog.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub azure: Option<HorizonAzureHostImages>,
+    pub azure: Option<HorizonAzureMachineImages>,
 }
 
 /// Horizon control-plane configuration for container orchestration.
@@ -112,9 +131,9 @@ pub struct HorizonConfig {
     /// Horizon control-plane API base URL.
     pub url: String,
 
-    /// Horizon host image catalog.
+    /// Horizon machine image catalog.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub horizon_host_image: Option<HorizonHostImage>,
+    pub horizon_machine_image: Option<HorizonMachineImage>,
 
     /// Cluster configurations (one per ComputeCluster resource)
     /// Key: ComputeCluster resource ID from stack

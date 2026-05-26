@@ -1,6 +1,12 @@
 use crate::{ManagementConfig, Platform, ResourceType, StackSettings, StackState};
 use serde::{Deserialize, Serialize};
 
+/// Oldest setup import payload format this binary can read.
+pub const MIN_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION: u32 = 1;
+
+/// Setup import payload format this binary writes.
+pub const CURRENT_SETUP_IMPORT_FORMAT_VERSION: u32 = 1;
+
 /// Package source that produced an import request. Observability label
 /// only — the manager does not branch on this value, and any new deployment
 /// pathway can omit it without affecting import behavior.
@@ -20,8 +26,10 @@ pub enum ImportSourceKind {
 /// Request body for manager-side stack import.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct StackImportRequest {
+    /// Wire-format version for the setup import payload.
+    pub setup_import_format_version: u32,
     /// Deployment-group token authorizing the import.
     pub deployment_group_token: String,
     /// User-chosen deployment name. Must be unique within the deployment
@@ -69,7 +77,7 @@ pub struct StackImportRequest {
 /// One resolved resource import payload.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct ImportedResource {
     /// Resource id from the active stack.
     pub id: String,
@@ -84,7 +92,7 @@ pub struct ImportedResource {
 /// Response body returned after a stack import.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct StackImportResponse {
     /// Deployment created.
     pub deployment_id: String,

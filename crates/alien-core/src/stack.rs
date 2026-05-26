@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct ResourceEntry {
     /// Resource configuration (can be any type of resource)
     pub config: Resource,
@@ -25,7 +25,7 @@ pub struct ResourceEntry {
 /// A bag of resources, unaware of any cloud.
 #[derive(Builder, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 #[builder(start_fn = new)]
 pub struct Stack {
     /// Unique identifier for the stack

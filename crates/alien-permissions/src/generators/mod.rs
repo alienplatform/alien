@@ -2,6 +2,7 @@ pub mod aws_cloudformation;
 pub mod aws_runtime;
 pub mod azure_runtime;
 pub mod gcp_runtime;
+mod labels;
 
 pub use aws_cloudformation::{
     AwsCloudFormationIamPolicy, AwsCloudFormationIamStatement,

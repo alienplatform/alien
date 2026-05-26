@@ -55,7 +55,7 @@ impl TfEmitter for GcpArtifactRegistryEmitter {
                 attr(
                     "description",
                     expr::template(format!(
-                        "Deployment {} container artifact registry",
+                        "Application container artifact registry ({})",
                         registry.id
                     )),
                 ),
@@ -86,7 +86,7 @@ impl TfEmitter for GcpArtifactRegistryEmitter {
                     attr(
                         "display_name",
                         expr::template(format!(
-                            "Deployment {} artifact registry {} identity",
+                            "Application artifact registry identity ({} {})",
                             registry.id, suffix
                         )),
                     ),

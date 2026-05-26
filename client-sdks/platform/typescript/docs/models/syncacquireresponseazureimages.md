@@ -1,6 +1,6 @@
 # SyncAcquireResponseAzureImages
 
-Azure Horizon host image entry.
+Azure Horizon machine image entry.
 
 ## Example Usage
 
@@ -8,12 +8,12 @@ Azure Horizon host image entry.
 import { SyncAcquireResponseAzureImages } from "@alienplatform/platform-api/models";
 
 let value: SyncAcquireResponseAzureImages = {
-  imageDefinitionId: "<id>",
+  imageVersionId: "<id>",
 };
 ```
 
 ## Fields
 
-| Field                                      | Type                                       | Required                                   | Description                                |
-| ------------------------------------------ | ------------------------------------------ | ------------------------------------------ | ------------------------------------------ |
-| `imageDefinitionId`                        | *string*                                   | :heavy_check_mark:                         | Azure Compute Gallery image definition ID. |
+| Field                                   | Type                                    | Required                                | Description                             |
+| --------------------------------------- | --------------------------------------- | --------------------------------------- | --------------------------------------- |
+| `imageVersionId`                        | *string*                                | :heavy_check_mark:                      | Azure Compute Gallery image version ID. |

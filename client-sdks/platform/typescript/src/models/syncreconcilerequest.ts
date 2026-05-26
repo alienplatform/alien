@@ -104,6 +104,10 @@ export type SyncReconcileRequestCurrentReleaseOverrideAw = {
    */
   binding: SyncReconcileRequestCurrentReleaseOverrideAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: SyncReconcileRequestCurrentReleaseOverrideEffect | undefined;
@@ -111,6 +115,10 @@ export type SyncReconcileRequestCurrentReleaseOverrideAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileRequestCurrentReleaseOverrideAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -184,9 +192,17 @@ export type SyncReconcileRequestCurrentReleaseOverrideAzure = {
    */
   binding: SyncReconcileRequestCurrentReleaseOverrideAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileRequestCurrentReleaseOverrideAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -292,9 +308,17 @@ export type SyncReconcileRequestCurrentReleaseOverrideGcp = {
    */
   binding: SyncReconcileRequestCurrentReleaseOverrideGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileRequestCurrentReleaseOverrideGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -446,6 +470,10 @@ export type SyncReconcileRequestCurrentReleaseExtendAw = {
    */
   binding: SyncReconcileRequestCurrentReleaseExtendAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: SyncReconcileRequestCurrentReleaseExtendEffect | undefined;
@@ -453,6 +481,10 @@ export type SyncReconcileRequestCurrentReleaseExtendAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileRequestCurrentReleaseExtendAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -524,9 +556,17 @@ export type SyncReconcileRequestCurrentReleaseExtendAzure = {
    */
   binding: SyncReconcileRequestCurrentReleaseExtendAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileRequestCurrentReleaseExtendAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -632,9 +672,17 @@ export type SyncReconcileRequestCurrentReleaseExtendGcp = {
    */
   binding: SyncReconcileRequestCurrentReleaseExtendGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileRequestCurrentReleaseExtendGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -794,6 +842,10 @@ export type SyncReconcileRequestCurrentReleaseProfileAw = {
    */
   binding: SyncReconcileRequestCurrentReleaseProfileAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: SyncReconcileRequestCurrentReleaseProfileEffect | undefined;
@@ -801,6 +853,10 @@ export type SyncReconcileRequestCurrentReleaseProfileAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileRequestCurrentReleaseProfileAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -872,9 +928,17 @@ export type SyncReconcileRequestCurrentReleaseProfileAzure = {
    */
   binding: SyncReconcileRequestCurrentReleaseProfileAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileRequestCurrentReleaseProfileAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -980,9 +1044,17 @@ export type SyncReconcileRequestCurrentReleaseProfileGcp = {
    */
   binding: SyncReconcileRequestCurrentReleaseProfileGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileRequestCurrentReleaseProfileGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -1474,6 +1546,10 @@ export type SyncReconcileRequestPreparedStackOverrideAw = {
    */
   binding: SyncReconcileRequestPreparedStackOverrideAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: SyncReconcileRequestPreparedStackOverrideEffect | undefined;
@@ -1481,6 +1557,10 @@ export type SyncReconcileRequestPreparedStackOverrideAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileRequestPreparedStackOverrideAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -1552,9 +1632,17 @@ export type SyncReconcileRequestPreparedStackOverrideAzure = {
    */
   binding: SyncReconcileRequestPreparedStackOverrideAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileRequestPreparedStackOverrideAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -1660,9 +1748,17 @@ export type SyncReconcileRequestPreparedStackOverrideGcp = {
    */
   binding: SyncReconcileRequestPreparedStackOverrideGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileRequestPreparedStackOverrideGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -1814,6 +1910,10 @@ export type SyncReconcileRequestPreparedStackExtendAw = {
    */
   binding: SyncReconcileRequestPreparedStackExtendAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: SyncReconcileRequestPreparedStackExtendEffect | undefined;
@@ -1821,6 +1921,10 @@ export type SyncReconcileRequestPreparedStackExtendAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileRequestPreparedStackExtendAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -1892,9 +1996,17 @@ export type SyncReconcileRequestPreparedStackExtendAzure = {
    */
   binding: SyncReconcileRequestPreparedStackExtendAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileRequestPreparedStackExtendAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -2000,9 +2112,17 @@ export type SyncReconcileRequestPreparedStackExtendGcp = {
    */
   binding: SyncReconcileRequestPreparedStackExtendGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileRequestPreparedStackExtendGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -2162,6 +2282,10 @@ export type SyncReconcileRequestPreparedStackProfileAw = {
    */
   binding: SyncReconcileRequestPreparedStackProfileAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: SyncReconcileRequestPreparedStackProfileEffect | undefined;
@@ -2169,6 +2293,10 @@ export type SyncReconcileRequestPreparedStackProfileAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileRequestPreparedStackProfileAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -2240,9 +2368,17 @@ export type SyncReconcileRequestPreparedStackProfileAzure = {
    */
   binding: SyncReconcileRequestPreparedStackProfileAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileRequestPreparedStackProfileAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -2348,9 +2484,17 @@ export type SyncReconcileRequestPreparedStackProfileGcp = {
    */
   binding: SyncReconcileRequestPreparedStackProfileGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileRequestPreparedStackProfileGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -3019,6 +3163,10 @@ export type SyncReconcileRequestTargetReleaseOverrideAw = {
    */
   binding: SyncReconcileRequestTargetReleaseOverrideAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: SyncReconcileRequestTargetReleaseOverrideEffect | undefined;
@@ -3026,6 +3174,10 @@ export type SyncReconcileRequestTargetReleaseOverrideAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileRequestTargetReleaseOverrideAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -3097,9 +3249,17 @@ export type SyncReconcileRequestTargetReleaseOverrideAzure = {
    */
   binding: SyncReconcileRequestTargetReleaseOverrideAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileRequestTargetReleaseOverrideAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -3205,9 +3365,17 @@ export type SyncReconcileRequestTargetReleaseOverrideGcp = {
    */
   binding: SyncReconcileRequestTargetReleaseOverrideGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileRequestTargetReleaseOverrideGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -3359,6 +3527,10 @@ export type SyncReconcileRequestTargetReleaseExtendAw = {
    */
   binding: SyncReconcileRequestTargetReleaseExtendAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: SyncReconcileRequestTargetReleaseExtendEffect | undefined;
@@ -3366,6 +3538,10 @@ export type SyncReconcileRequestTargetReleaseExtendAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileRequestTargetReleaseExtendAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -3437,9 +3613,17 @@ export type SyncReconcileRequestTargetReleaseExtendAzure = {
    */
   binding: SyncReconcileRequestTargetReleaseExtendAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileRequestTargetReleaseExtendAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -3545,9 +3729,17 @@ export type SyncReconcileRequestTargetReleaseExtendGcp = {
    */
   binding: SyncReconcileRequestTargetReleaseExtendGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileRequestTargetReleaseExtendGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -3707,6 +3899,10 @@ export type SyncReconcileRequestTargetReleaseProfileAw = {
    */
   binding: SyncReconcileRequestTargetReleaseProfileAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: SyncReconcileRequestTargetReleaseProfileEffect | undefined;
@@ -3714,6 +3910,10 @@ export type SyncReconcileRequestTargetReleaseProfileAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileRequestTargetReleaseProfileAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -3785,9 +3985,17 @@ export type SyncReconcileRequestTargetReleaseProfileAzure = {
    */
   binding: SyncReconcileRequestTargetReleaseProfileAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileRequestTargetReleaseProfileAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -3893,9 +4101,17 @@ export type SyncReconcileRequestTargetReleaseProfileGcp = {
    */
   binding: SyncReconcileRequestTargetReleaseProfileGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncReconcileRequestTargetReleaseProfileGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -4139,7 +4355,7 @@ export type SyncReconcileRequestState = {
    * Mismatched versions produce a clear error instead of silent corruption.
    * See docs/02-manager/10-deployment-protocol.md.
    */
-  protocolVersion?: number | undefined;
+  protocolVersion: number;
   /**
    * Whether a retry has been requested for a failed deployment
    *
@@ -4409,8 +4625,10 @@ export function syncReconcileRequestCurrentReleaseOverrideAwGrantToJSON(
 /** @internal */
 export type SyncReconcileRequestCurrentReleaseOverrideAw$Outbound = {
   binding: SyncReconcileRequestCurrentReleaseOverrideAwBinding$Outbound;
+  description?: string | null | undefined;
   effect?: string | undefined;
   grant: SyncReconcileRequestCurrentReleaseOverrideAwGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -4422,11 +4640,13 @@ export const SyncReconcileRequestCurrentReleaseOverrideAw$outboundSchema:
     binding: z.lazy(() =>
       SyncReconcileRequestCurrentReleaseOverrideAwBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     effect: SyncReconcileRequestCurrentReleaseOverrideEffect$outboundSchema
       .optional(),
     grant: z.lazy(() =>
       SyncReconcileRequestCurrentReleaseOverrideAwGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileRequestCurrentReleaseOverrideAwToJSON(
@@ -4560,7 +4780,9 @@ export function syncReconcileRequestCurrentReleaseOverrideAzureGrantToJSON(
 /** @internal */
 export type SyncReconcileRequestCurrentReleaseOverrideAzure$Outbound = {
   binding: SyncReconcileRequestCurrentReleaseOverrideAzureBinding$Outbound;
+  description?: string | null | undefined;
   grant: SyncReconcileRequestCurrentReleaseOverrideAzureGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -4572,9 +4794,11 @@ export const SyncReconcileRequestCurrentReleaseOverrideAzure$outboundSchema:
     binding: z.lazy(() =>
       SyncReconcileRequestCurrentReleaseOverrideAzureBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncReconcileRequestCurrentReleaseOverrideAzureGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileRequestCurrentReleaseOverrideAzureToJSON(
@@ -4843,7 +5067,9 @@ export function syncReconcileRequestCurrentReleaseOverrideGcpGrantToJSON(
 /** @internal */
 export type SyncReconcileRequestCurrentReleaseOverrideGcp$Outbound = {
   binding: SyncReconcileRequestCurrentReleaseOverrideGcpBinding$Outbound;
+  description?: string | null | undefined;
   grant: SyncReconcileRequestCurrentReleaseOverrideGcpGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -4855,9 +5081,11 @@ export const SyncReconcileRequestCurrentReleaseOverrideGcp$outboundSchema:
     binding: z.lazy(() =>
       SyncReconcileRequestCurrentReleaseOverrideGcpBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncReconcileRequestCurrentReleaseOverrideGcpGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileRequestCurrentReleaseOverrideGcpToJSON(
@@ -5146,8 +5374,10 @@ export function syncReconcileRequestCurrentReleaseExtendAwGrantToJSON(
 /** @internal */
 export type SyncReconcileRequestCurrentReleaseExtendAw$Outbound = {
   binding: SyncReconcileRequestCurrentReleaseExtendAwBinding$Outbound;
+  description?: string | null | undefined;
   effect?: string | undefined;
   grant: SyncReconcileRequestCurrentReleaseExtendAwGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -5159,11 +5389,13 @@ export const SyncReconcileRequestCurrentReleaseExtendAw$outboundSchema:
     binding: z.lazy(() =>
       SyncReconcileRequestCurrentReleaseExtendAwBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     effect: SyncReconcileRequestCurrentReleaseExtendEffect$outboundSchema
       .optional(),
     grant: z.lazy(() =>
       SyncReconcileRequestCurrentReleaseExtendAwGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileRequestCurrentReleaseExtendAwToJSON(
@@ -5298,7 +5530,9 @@ export function syncReconcileRequestCurrentReleaseExtendAzureGrantToJSON(
 /** @internal */
 export type SyncReconcileRequestCurrentReleaseExtendAzure$Outbound = {
   binding: SyncReconcileRequestCurrentReleaseExtendAzureBinding$Outbound;
+  description?: string | null | undefined;
   grant: SyncReconcileRequestCurrentReleaseExtendAzureGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -5310,9 +5544,11 @@ export const SyncReconcileRequestCurrentReleaseExtendAzure$outboundSchema:
     binding: z.lazy(() =>
       SyncReconcileRequestCurrentReleaseExtendAzureBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncReconcileRequestCurrentReleaseExtendAzureGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileRequestCurrentReleaseExtendAzureToJSON(
@@ -5580,7 +5816,9 @@ export function syncReconcileRequestCurrentReleaseExtendGcpGrantToJSON(
 /** @internal */
 export type SyncReconcileRequestCurrentReleaseExtendGcp$Outbound = {
   binding: SyncReconcileRequestCurrentReleaseExtendGcpBinding$Outbound;
+  description?: string | null | undefined;
   grant: SyncReconcileRequestCurrentReleaseExtendGcpGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -5592,9 +5830,11 @@ export const SyncReconcileRequestCurrentReleaseExtendGcp$outboundSchema:
     binding: z.lazy(() =>
       SyncReconcileRequestCurrentReleaseExtendGcpBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncReconcileRequestCurrentReleaseExtendGcpGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileRequestCurrentReleaseExtendGcpToJSON(
@@ -5910,8 +6150,10 @@ export function syncReconcileRequestCurrentReleaseProfileAwGrantToJSON(
 /** @internal */
 export type SyncReconcileRequestCurrentReleaseProfileAw$Outbound = {
   binding: SyncReconcileRequestCurrentReleaseProfileAwBinding$Outbound;
+  description?: string | null | undefined;
   effect?: string | undefined;
   grant: SyncReconcileRequestCurrentReleaseProfileAwGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -5923,11 +6165,13 @@ export const SyncReconcileRequestCurrentReleaseProfileAw$outboundSchema:
     binding: z.lazy(() =>
       SyncReconcileRequestCurrentReleaseProfileAwBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     effect: SyncReconcileRequestCurrentReleaseProfileEffect$outboundSchema
       .optional(),
     grant: z.lazy(() =>
       SyncReconcileRequestCurrentReleaseProfileAwGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileRequestCurrentReleaseProfileAwToJSON(
@@ -6062,7 +6306,9 @@ export function syncReconcileRequestCurrentReleaseProfileAzureGrantToJSON(
 /** @internal */
 export type SyncReconcileRequestCurrentReleaseProfileAzure$Outbound = {
   binding: SyncReconcileRequestCurrentReleaseProfileAzureBinding$Outbound;
+  description?: string | null | undefined;
   grant: SyncReconcileRequestCurrentReleaseProfileAzureGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -6074,9 +6320,11 @@ export const SyncReconcileRequestCurrentReleaseProfileAzure$outboundSchema:
     binding: z.lazy(() =>
       SyncReconcileRequestCurrentReleaseProfileAzureBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncReconcileRequestCurrentReleaseProfileAzureGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileRequestCurrentReleaseProfileAzureToJSON(
@@ -6345,7 +6593,9 @@ export function syncReconcileRequestCurrentReleaseProfileGcpGrantToJSON(
 /** @internal */
 export type SyncReconcileRequestCurrentReleaseProfileGcp$Outbound = {
   binding: SyncReconcileRequestCurrentReleaseProfileGcpBinding$Outbound;
+  description?: string | null | undefined;
   grant: SyncReconcileRequestCurrentReleaseProfileGcpGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -6357,9 +6607,11 @@ export const SyncReconcileRequestCurrentReleaseProfileGcp$outboundSchema:
     binding: z.lazy(() =>
       SyncReconcileRequestCurrentReleaseProfileGcpBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncReconcileRequestCurrentReleaseProfileGcpGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileRequestCurrentReleaseProfileGcpToJSON(
@@ -7111,8 +7363,10 @@ export function syncReconcileRequestPreparedStackOverrideAwGrantToJSON(
 /** @internal */
 export type SyncReconcileRequestPreparedStackOverrideAw$Outbound = {
   binding: SyncReconcileRequestPreparedStackOverrideAwBinding$Outbound;
+  description?: string | null | undefined;
   effect?: string | undefined;
   grant: SyncReconcileRequestPreparedStackOverrideAwGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -7124,11 +7378,13 @@ export const SyncReconcileRequestPreparedStackOverrideAw$outboundSchema:
     binding: z.lazy(() =>
       SyncReconcileRequestPreparedStackOverrideAwBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     effect: SyncReconcileRequestPreparedStackOverrideEffect$outboundSchema
       .optional(),
     grant: z.lazy(() =>
       SyncReconcileRequestPreparedStackOverrideAwGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileRequestPreparedStackOverrideAwToJSON(
@@ -7263,7 +7519,9 @@ export function syncReconcileRequestPreparedStackOverrideAzureGrantToJSON(
 /** @internal */
 export type SyncReconcileRequestPreparedStackOverrideAzure$Outbound = {
   binding: SyncReconcileRequestPreparedStackOverrideAzureBinding$Outbound;
+  description?: string | null | undefined;
   grant: SyncReconcileRequestPreparedStackOverrideAzureGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -7275,9 +7533,11 @@ export const SyncReconcileRequestPreparedStackOverrideAzure$outboundSchema:
     binding: z.lazy(() =>
       SyncReconcileRequestPreparedStackOverrideAzureBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncReconcileRequestPreparedStackOverrideAzureGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileRequestPreparedStackOverrideAzureToJSON(
@@ -7545,7 +7805,9 @@ export function syncReconcileRequestPreparedStackOverrideGcpGrantToJSON(
 /** @internal */
 export type SyncReconcileRequestPreparedStackOverrideGcp$Outbound = {
   binding: SyncReconcileRequestPreparedStackOverrideGcpBinding$Outbound;
+  description?: string | null | undefined;
   grant: SyncReconcileRequestPreparedStackOverrideGcpGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -7557,9 +7819,11 @@ export const SyncReconcileRequestPreparedStackOverrideGcp$outboundSchema:
     binding: z.lazy(() =>
       SyncReconcileRequestPreparedStackOverrideGcpBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncReconcileRequestPreparedStackOverrideGcpGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileRequestPreparedStackOverrideGcpToJSON(
@@ -7848,8 +8112,10 @@ export function syncReconcileRequestPreparedStackExtendAwGrantToJSON(
 /** @internal */
 export type SyncReconcileRequestPreparedStackExtendAw$Outbound = {
   binding: SyncReconcileRequestPreparedStackExtendAwBinding$Outbound;
+  description?: string | null | undefined;
   effect?: string | undefined;
   grant: SyncReconcileRequestPreparedStackExtendAwGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -7861,11 +8127,13 @@ export const SyncReconcileRequestPreparedStackExtendAw$outboundSchema:
     binding: z.lazy(() =>
       SyncReconcileRequestPreparedStackExtendAwBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     effect: SyncReconcileRequestPreparedStackExtendEffect$outboundSchema
       .optional(),
     grant: z.lazy(() =>
       SyncReconcileRequestPreparedStackExtendAwGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileRequestPreparedStackExtendAwToJSON(
@@ -8000,7 +8268,9 @@ export function syncReconcileRequestPreparedStackExtendAzureGrantToJSON(
 /** @internal */
 export type SyncReconcileRequestPreparedStackExtendAzure$Outbound = {
   binding: SyncReconcileRequestPreparedStackExtendAzureBinding$Outbound;
+  description?: string | null | undefined;
   grant: SyncReconcileRequestPreparedStackExtendAzureGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -8012,9 +8282,11 @@ export const SyncReconcileRequestPreparedStackExtendAzure$outboundSchema:
     binding: z.lazy(() =>
       SyncReconcileRequestPreparedStackExtendAzureBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncReconcileRequestPreparedStackExtendAzureGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileRequestPreparedStackExtendAzureToJSON(
@@ -8281,7 +8553,9 @@ export function syncReconcileRequestPreparedStackExtendGcpGrantToJSON(
 /** @internal */
 export type SyncReconcileRequestPreparedStackExtendGcp$Outbound = {
   binding: SyncReconcileRequestPreparedStackExtendGcpBinding$Outbound;
+  description?: string | null | undefined;
   grant: SyncReconcileRequestPreparedStackExtendGcpGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -8293,9 +8567,11 @@ export const SyncReconcileRequestPreparedStackExtendGcp$outboundSchema:
     binding: z.lazy(() =>
       SyncReconcileRequestPreparedStackExtendGcpBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncReconcileRequestPreparedStackExtendGcpGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileRequestPreparedStackExtendGcpToJSON(
@@ -8611,8 +8887,10 @@ export function syncReconcileRequestPreparedStackProfileAwGrantToJSON(
 /** @internal */
 export type SyncReconcileRequestPreparedStackProfileAw$Outbound = {
   binding: SyncReconcileRequestPreparedStackProfileAwBinding$Outbound;
+  description?: string | null | undefined;
   effect?: string | undefined;
   grant: SyncReconcileRequestPreparedStackProfileAwGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -8624,11 +8902,13 @@ export const SyncReconcileRequestPreparedStackProfileAw$outboundSchema:
     binding: z.lazy(() =>
       SyncReconcileRequestPreparedStackProfileAwBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     effect: SyncReconcileRequestPreparedStackProfileEffect$outboundSchema
       .optional(),
     grant: z.lazy(() =>
       SyncReconcileRequestPreparedStackProfileAwGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileRequestPreparedStackProfileAwToJSON(
@@ -8763,7 +9043,9 @@ export function syncReconcileRequestPreparedStackProfileAzureGrantToJSON(
 /** @internal */
 export type SyncReconcileRequestPreparedStackProfileAzure$Outbound = {
   binding: SyncReconcileRequestPreparedStackProfileAzureBinding$Outbound;
+  description?: string | null | undefined;
   grant: SyncReconcileRequestPreparedStackProfileAzureGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -8775,9 +9057,11 @@ export const SyncReconcileRequestPreparedStackProfileAzure$outboundSchema:
     binding: z.lazy(() =>
       SyncReconcileRequestPreparedStackProfileAzureBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncReconcileRequestPreparedStackProfileAzureGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileRequestPreparedStackProfileAzureToJSON(
@@ -9044,7 +9328,9 @@ export function syncReconcileRequestPreparedStackProfileGcpGrantToJSON(
 /** @internal */
 export type SyncReconcileRequestPreparedStackProfileGcp$Outbound = {
   binding: SyncReconcileRequestPreparedStackProfileGcpBinding$Outbound;
+  description?: string | null | undefined;
   grant: SyncReconcileRequestPreparedStackProfileGcpGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -9056,9 +9342,11 @@ export const SyncReconcileRequestPreparedStackProfileGcp$outboundSchema:
     binding: z.lazy(() =>
       SyncReconcileRequestPreparedStackProfileGcpBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncReconcileRequestPreparedStackProfileGcpGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileRequestPreparedStackProfileGcpToJSON(
@@ -10058,8 +10346,10 @@ export function syncReconcileRequestTargetReleaseOverrideAwGrantToJSON(
 /** @internal */
 export type SyncReconcileRequestTargetReleaseOverrideAw$Outbound = {
   binding: SyncReconcileRequestTargetReleaseOverrideAwBinding$Outbound;
+  description?: string | null | undefined;
   effect?: string | undefined;
   grant: SyncReconcileRequestTargetReleaseOverrideAwGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -10071,11 +10361,13 @@ export const SyncReconcileRequestTargetReleaseOverrideAw$outboundSchema:
     binding: z.lazy(() =>
       SyncReconcileRequestTargetReleaseOverrideAwBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     effect: SyncReconcileRequestTargetReleaseOverrideEffect$outboundSchema
       .optional(),
     grant: z.lazy(() =>
       SyncReconcileRequestTargetReleaseOverrideAwGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileRequestTargetReleaseOverrideAwToJSON(
@@ -10210,7 +10502,9 @@ export function syncReconcileRequestTargetReleaseOverrideAzureGrantToJSON(
 /** @internal */
 export type SyncReconcileRequestTargetReleaseOverrideAzure$Outbound = {
   binding: SyncReconcileRequestTargetReleaseOverrideAzureBinding$Outbound;
+  description?: string | null | undefined;
   grant: SyncReconcileRequestTargetReleaseOverrideAzureGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -10222,9 +10516,11 @@ export const SyncReconcileRequestTargetReleaseOverrideAzure$outboundSchema:
     binding: z.lazy(() =>
       SyncReconcileRequestTargetReleaseOverrideAzureBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncReconcileRequestTargetReleaseOverrideAzureGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileRequestTargetReleaseOverrideAzureToJSON(
@@ -10493,7 +10789,9 @@ export function syncReconcileRequestTargetReleaseOverrideGcpGrantToJSON(
 /** @internal */
 export type SyncReconcileRequestTargetReleaseOverrideGcp$Outbound = {
   binding: SyncReconcileRequestTargetReleaseOverrideGcpBinding$Outbound;
+  description?: string | null | undefined;
   grant: SyncReconcileRequestTargetReleaseOverrideGcpGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -10505,9 +10803,11 @@ export const SyncReconcileRequestTargetReleaseOverrideGcp$outboundSchema:
     binding: z.lazy(() =>
       SyncReconcileRequestTargetReleaseOverrideGcpBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncReconcileRequestTargetReleaseOverrideGcpGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileRequestTargetReleaseOverrideGcpToJSON(
@@ -10796,8 +11096,10 @@ export function syncReconcileRequestTargetReleaseExtendAwGrantToJSON(
 /** @internal */
 export type SyncReconcileRequestTargetReleaseExtendAw$Outbound = {
   binding: SyncReconcileRequestTargetReleaseExtendAwBinding$Outbound;
+  description?: string | null | undefined;
   effect?: string | undefined;
   grant: SyncReconcileRequestTargetReleaseExtendAwGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -10809,11 +11111,13 @@ export const SyncReconcileRequestTargetReleaseExtendAw$outboundSchema:
     binding: z.lazy(() =>
       SyncReconcileRequestTargetReleaseExtendAwBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     effect: SyncReconcileRequestTargetReleaseExtendEffect$outboundSchema
       .optional(),
     grant: z.lazy(() =>
       SyncReconcileRequestTargetReleaseExtendAwGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileRequestTargetReleaseExtendAwToJSON(
@@ -10948,7 +11252,9 @@ export function syncReconcileRequestTargetReleaseExtendAzureGrantToJSON(
 /** @internal */
 export type SyncReconcileRequestTargetReleaseExtendAzure$Outbound = {
   binding: SyncReconcileRequestTargetReleaseExtendAzureBinding$Outbound;
+  description?: string | null | undefined;
   grant: SyncReconcileRequestTargetReleaseExtendAzureGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -10960,9 +11266,11 @@ export const SyncReconcileRequestTargetReleaseExtendAzure$outboundSchema:
     binding: z.lazy(() =>
       SyncReconcileRequestTargetReleaseExtendAzureBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncReconcileRequestTargetReleaseExtendAzureGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileRequestTargetReleaseExtendAzureToJSON(
@@ -11230,7 +11538,9 @@ export function syncReconcileRequestTargetReleaseExtendGcpGrantToJSON(
 /** @internal */
 export type SyncReconcileRequestTargetReleaseExtendGcp$Outbound = {
   binding: SyncReconcileRequestTargetReleaseExtendGcpBinding$Outbound;
+  description?: string | null | undefined;
   grant: SyncReconcileRequestTargetReleaseExtendGcpGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -11242,9 +11552,11 @@ export const SyncReconcileRequestTargetReleaseExtendGcp$outboundSchema:
     binding: z.lazy(() =>
       SyncReconcileRequestTargetReleaseExtendGcpBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncReconcileRequestTargetReleaseExtendGcpGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileRequestTargetReleaseExtendGcpToJSON(
@@ -11560,8 +11872,10 @@ export function syncReconcileRequestTargetReleaseProfileAwGrantToJSON(
 /** @internal */
 export type SyncReconcileRequestTargetReleaseProfileAw$Outbound = {
   binding: SyncReconcileRequestTargetReleaseProfileAwBinding$Outbound;
+  description?: string | null | undefined;
   effect?: string | undefined;
   grant: SyncReconcileRequestTargetReleaseProfileAwGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -11573,11 +11887,13 @@ export const SyncReconcileRequestTargetReleaseProfileAw$outboundSchema:
     binding: z.lazy(() =>
       SyncReconcileRequestTargetReleaseProfileAwBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     effect: SyncReconcileRequestTargetReleaseProfileEffect$outboundSchema
       .optional(),
     grant: z.lazy(() =>
       SyncReconcileRequestTargetReleaseProfileAwGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileRequestTargetReleaseProfileAwToJSON(
@@ -11712,7 +12028,9 @@ export function syncReconcileRequestTargetReleaseProfileAzureGrantToJSON(
 /** @internal */
 export type SyncReconcileRequestTargetReleaseProfileAzure$Outbound = {
   binding: SyncReconcileRequestTargetReleaseProfileAzureBinding$Outbound;
+  description?: string | null | undefined;
   grant: SyncReconcileRequestTargetReleaseProfileAzureGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -11724,9 +12042,11 @@ export const SyncReconcileRequestTargetReleaseProfileAzure$outboundSchema:
     binding: z.lazy(() =>
       SyncReconcileRequestTargetReleaseProfileAzureBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncReconcileRequestTargetReleaseProfileAzureGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileRequestTargetReleaseProfileAzureToJSON(
@@ -11994,7 +12314,9 @@ export function syncReconcileRequestTargetReleaseProfileGcpGrantToJSON(
 /** @internal */
 export type SyncReconcileRequestTargetReleaseProfileGcp$Outbound = {
   binding: SyncReconcileRequestTargetReleaseProfileGcpBinding$Outbound;
+  description?: string | null | undefined;
   grant: SyncReconcileRequestTargetReleaseProfileGcpGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -12006,9 +12328,11 @@ export const SyncReconcileRequestTargetReleaseProfileGcp$outboundSchema:
     binding: z.lazy(() =>
       SyncReconcileRequestTargetReleaseProfileGcpBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncReconcileRequestTargetReleaseProfileGcpGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncReconcileRequestTargetReleaseProfileGcpToJSON(
@@ -12403,7 +12727,7 @@ export type SyncReconcileRequestState$Outbound = {
     | null
     | undefined;
   platform: string;
-  protocolVersion?: number | undefined;
+  protocolVersion: number;
   retryRequested?: boolean | undefined;
   runtimeMetadata?:
     | SyncReconcileRequestRuntimeMetadata$Outbound
@@ -12441,7 +12765,7 @@ export const SyncReconcileRequestState$outboundSchema: z.ZodType<
     ]),
   ).optional(),
   platform: SyncReconcileRequestPlatform$outboundSchema,
-  protocolVersion: z.int().optional(),
+  protocolVersion: z.int(),
   retryRequested: z.boolean().optional(),
   runtimeMetadata: z.nullable(
     z.union([

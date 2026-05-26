@@ -32,12 +32,12 @@ variable "resource_prefix" {
 
 variable "name" {
   type        = string
-  description = "Human-readable deployment name shown in the deployment portal."
+  description = "Human-readable application name shown in setup and cloud IAM review metadata."
 }
 
 variable "token" {
   type        = string
-  description = "Deployment token from the deployment page. This is the same token used by the deploy CLI --token flag."
+  description = "Install token from the application setup page. This is the same token used by the deploy CLI --token flag."
   sensitive   = true
 }
 
@@ -97,6 +97,7 @@ resource "random_id" "resource_prefix" {
 === locals.tf ===
 locals {
   resource_prefix        = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
+  deployment_name        = var.name
   gcp_custom_role_prefix = substr(replace(lower(var.gcp_custom_role_prefix == "" ? local.resource_prefix : var.gcp_custom_role_prefix), "-", "_"), 0, 18)
   deployment_platform    = "gcp"
   deployment_target      = "gcp"
@@ -131,7 +132,7 @@ resource "google_artifact_registry_repository" "registry" {
   location      = var.gcp_region
   repository_id = length(local.registry_repository_id_full) <= 63 ? local.registry_repository_id_full : format("%s-%s", trim(substr(local.registry_repository_id_full, 0, 54), "-"), substr(sha1(local.registry_repository_id_full), 0, 8))
   format        = "DOCKER"
-  description   = "Deployment registry container artifact registry"
+  description   = "Application container artifact registry (registry)"
   labels = {
     "managed-by"    = "deployment"
     deployment      = local.resource_prefix
@@ -143,7 +144,7 @@ resource "google_artifact_registry_repository" "registry" {
 resource "google_service_account" "registry_pull" {
   project      = var.gcp_project
   account_id   = format("%s-%s", trim(substr(replace(lower(format("a-%s-registry-pull", local.resource_prefix)), "_", "-"), 0, 21), "-"), substr(sha1(replace(lower(format("%s-registry-pull", local.resource_prefix)), "_", "-")), 0, 8))
-  display_name = "Deployment registry artifact registry pull identity"
+  display_name = "Application artifact registry identity (registry pull)"
 }
 
 resource "google_artifact_registry_repository_iam_member" "registry_pull_iam" {
@@ -157,7 +158,7 @@ resource "google_artifact_registry_repository_iam_member" "registry_pull_iam" {
 resource "google_service_account" "registry_push" {
   project      = var.gcp_project
   account_id   = format("%s-%s", trim(substr(replace(lower(format("a-%s-registry-push", local.resource_prefix)), "_", "-"), 0, 21), "-"), substr(sha1(replace(lower(format("%s-registry-push", local.resource_prefix)), "_", "-")), 0, 8))
-  display_name = "Deployment registry artifact registry push identity"
+  display_name = "Application artifact registry identity (registry push)"
 }
 
 resource "google_artifact_registry_repository_iam_member" "registry_push_iam" {

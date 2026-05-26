@@ -18,6 +18,9 @@ use turso::{Builder, Connection, Database, EncryptionOpts};
 
 use crate::error::{ErrorData, Result};
 
+pub const MIN_SUPPORTED_AGENT_SCHEMA_VERSION: u32 = 1;
+pub const CURRENT_AGENT_SCHEMA_VERSION: u32 = 1;
+
 // =============================================================================
 // Types
 // =============================================================================
@@ -126,6 +129,7 @@ impl AgentDb {
             })?;
 
         Self::run_migrations(&conn).await?;
+        Self::ensure_schema_version(&conn).await?;
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -157,6 +161,116 @@ impl AgentDb {
                 })?;
         }
         Ok(())
+    }
+
+    async fn ensure_schema_version(conn: &Connection) -> Result<()> {
+        let mut rows = conn
+            .query("SELECT value FROM state WHERE key = 'schema_version'", ())
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to query agent schema_version".to_string(),
+            })?;
+
+        let stored_version = match rows.next().await.into_alien_error().context(
+            ErrorData::DatabaseError {
+                message: "Failed to fetch agent schema_version row".to_string(),
+            },
+        )? {
+            Some(row) => {
+                let value: String =
+                    row.get(0)
+                        .into_alien_error()
+                        .context(ErrorData::DatabaseError {
+                            message: "Failed to read agent schema_version value".to_string(),
+                        })?;
+                Some(value.parse::<u32>().map_err(|_| {
+                        alien_error::AlienError::new(ErrorData::IncompatibleAgentState {
+                            found_version: 0,
+                            min_supported_version: MIN_SUPPORTED_AGENT_SCHEMA_VERSION,
+                            current_version: CURRENT_AGENT_SCHEMA_VERSION,
+                            repair: "Agent state has an invalid schema_version; recreate its local state directory."
+                                .to_string(),
+                        })
+                    })?)
+            }
+            None => None,
+        };
+
+        if stored_version.is_none() {
+            let existing_state_rows = Self::count_existing_state_rows(conn).await?;
+            if existing_state_rows > 0 {
+                return Err(alien_error::AlienError::new(
+                    ErrorData::IncompatibleAgentState {
+                        found_version: 0,
+                        min_supported_version: MIN_SUPPORTED_AGENT_SCHEMA_VERSION,
+                        current_version: CURRENT_AGENT_SCHEMA_VERSION,
+                        repair:
+                            "Agent state is missing schema_version; recreate its local state directory."
+                                .to_string(),
+                    },
+                ));
+            }
+        }
+
+        let version = stored_version.unwrap_or(CURRENT_AGENT_SCHEMA_VERSION);
+        if version < MIN_SUPPORTED_AGENT_SCHEMA_VERSION || version > CURRENT_AGENT_SCHEMA_VERSION {
+            return Err(alien_error::AlienError::new(
+                ErrorData::IncompatibleAgentState {
+                    found_version: version,
+                    min_supported_version: MIN_SUPPORTED_AGENT_SCHEMA_VERSION,
+                    current_version: CURRENT_AGENT_SCHEMA_VERSION,
+                    repair: "Upgrade the agent or recreate its local state directory.".to_string(),
+                },
+            ));
+        }
+
+        if stored_version.is_none() {
+            conn.execute(
+                "INSERT INTO state (key, value, updated_at) VALUES ('schema_version', ?, datetime('now'))
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                (CURRENT_AGENT_SCHEMA_VERSION.to_string(),),
+            )
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to initialize agent schema_version".to_string(),
+            })?;
+        }
+
+        Ok(())
+    }
+
+    async fn count_existing_state_rows(conn: &Connection) -> Result<i64> {
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM state WHERE key != 'schema_version'",
+                (),
+            )
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to count existing agent state rows".to_string(),
+            })?;
+
+        let row = rows
+            .next()
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to fetch existing agent state count".to_string(),
+            })?
+            .ok_or_else(|| {
+                alien_error::AlienError::new(ErrorData::DatabaseError {
+                    message: "Existing agent state count query returned no rows".to_string(),
+                })
+            })?;
+
+        row.get(0)
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to read existing agent state count".to_string(),
+            })
     }
 
     // =========================================================================

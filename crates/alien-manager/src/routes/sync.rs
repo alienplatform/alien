@@ -570,6 +570,7 @@ async fn agent_sync(
                         stack,
                     },
                     config: DeploymentConfig::builder()
+                        .deployment_name(deployment.name.clone())
                         .stack_settings(deployment.stack_settings.clone())
                         .maybe_management_config(management_config)
                         .environment_variables(EnvironmentVariablesSnapshot {
@@ -710,6 +711,8 @@ async fn initialize(
                 .create_deployment(
                     &subject,
                     CreateDeploymentParams {
+                        deployment_protocol_version:
+                            alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
                         name,
                         deployment_group_id: dg_id.clone(),
                         platform,

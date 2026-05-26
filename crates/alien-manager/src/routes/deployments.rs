@@ -342,6 +342,7 @@ async fn create_deployment(
         .create_deployment(
             &subject,
             CreateDeploymentParams {
+                deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
                 name: req.name,
                 deployment_group_id: deployment_group_id.clone(),
                 platform: req.platform,

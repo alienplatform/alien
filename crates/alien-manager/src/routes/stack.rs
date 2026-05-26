@@ -34,7 +34,10 @@ use axum::{
 };
 
 use alien_core::{
-    import::{ImportContext, StackImportRequest, StackImportResponse},
+    import::{
+        ImportContext, StackImportRequest, StackImportResponse,
+        CURRENT_SETUP_IMPORT_FORMAT_VERSION, MIN_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION,
+    },
     is_valid_resource_prefix, AwsEnvironmentInfo, AzureEnvironmentInfo, DeploymentConfig,
     DeploymentStatus, EnvironmentInfo, EnvironmentVariablesSnapshot, ExternalBindings,
     GcpEnvironmentInfo, Platform, ResourceLifecycle, ResourceStatus, RuntimeMetadata, Stack,
@@ -80,8 +83,13 @@ pub fn router() -> Router<AppState> {
 pub async fn stack_import(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(req): Json<StackImportRequest>,
+    Json(raw_req): Json<serde_json::Value>,
 ) -> Response {
+    let req = match parse_stack_import_request(raw_req) {
+        Ok(req) => req,
+        Err(e) => return e.into_response(),
+    };
+
     let subject = match auth::require_auth(&state, &headers).await {
         Ok(s) => s,
         Err(e) => return e.into_response(),
@@ -292,6 +300,7 @@ pub async fn stack_import(
     let (raw_token, key_prefix, key_hash) = ids::generate_token(TokenType::Deployment.prefix());
 
     let params = CreateImportedDeploymentParams {
+        deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
         name: deployment_name,
         deployment_group_id: deployment_group_id.clone(),
         platform: req.platform,
@@ -343,6 +352,41 @@ pub async fn stack_import(
         }),
     )
         .into_response()
+}
+
+fn parse_stack_import_request(raw: serde_json::Value) -> crate::error::Result<StackImportRequest> {
+    let found_version = raw
+        .get("setupImportFormatVersion")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .filter(|version| *version > 0)
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::IncompatibleSetupImport {
+                found_version: 0,
+                min_supported_version: MIN_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION,
+                current_version: CURRENT_SETUP_IMPORT_FORMAT_VERSION,
+                repair: "Use a setup package that emits setupImportFormatVersion, or upgrade the setup package."
+                    .to_string(),
+            })
+        })?;
+
+    if !(MIN_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION..=CURRENT_SETUP_IMPORT_FORMAT_VERSION)
+        .contains(&found_version)
+    {
+        return Err(AlienError::new(ErrorData::IncompatibleSetupImport {
+            found_version,
+            min_supported_version: MIN_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION,
+            current_version: CURRENT_SETUP_IMPORT_FORMAT_VERSION,
+            repair: "Use a setup package compatible with this manager, or upgrade the manager."
+                .to_string(),
+        }));
+    }
+
+    serde_json::from_value(raw).map_err(|err| {
+        AlienError::new(ErrorData::BadRequest {
+            reason: format!("Invalid stack import payload: {err}"),
+        })
+    })
 }
 
 fn setup_contract_lane_matches(existing: &DeploymentRecord, req: &StackImportRequest) -> bool {
@@ -489,6 +533,7 @@ async fn prepare_import_stack(
 
     let stack_state = StackState::new(import_platform);
     let config = DeploymentConfig {
+        deployment_name: Some(req.deployment_name.clone()),
         stack_settings: req.stack_settings.clone(),
         management_config: Some(req.management_config.clone()),
         environment_variables: EnvironmentVariablesSnapshot {

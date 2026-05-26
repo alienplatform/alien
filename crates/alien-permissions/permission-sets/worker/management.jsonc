@@ -4,6 +4,8 @@
   "platforms": {
     "aws": [
       {
+        "label": "update-lambda-functions",
+        "description": "Update Lambda code, configuration, versions, aliases, function URLs, and event source mappings owned by this application.",
         "grant": {
           "actions": [
             "lambda:UpdateFunctionCode",
@@ -58,6 +60,8 @@
         // iam:PassRole remains name-scoped. AWS PassRole is evaluated against
         // the role being passed and does not give us the same reliable
         // resource-tag boundary as EC2/ELB/Lambda resources.
+        "label": "pass-lambda-execution-roles",
+        "description": "Allow Lambda to use application-owned IAM execution roles.",
         "grant": {
           "actions": ["iam:PassRole"]
         },
@@ -71,6 +75,8 @@
         }
       },
       {
+        "label": "get-ecr-login-token",
+        "description": "Get an ECR authorization token so Lambda can pull deployment container images.",
         "grant": {
           "actions": ["ecr:GetAuthorizationToken"]
         },
@@ -84,6 +90,8 @@
         }
       },
       {
+        "label": "read-deployment-container-images",
+        "description": "Read deployment container images from ECR for Lambda updates.",
         "grant": {
           "actions": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]
         },
@@ -97,6 +105,8 @@
         }
       },
       {
+        "label": "import-tls-certificates",
+        "description": "Import TLS certificates for application-owned HTTPS endpoints.",
         "grant": {
           "actions": ["acm:ImportCertificate", "acm:AddTagsToCertificate"]
         },
@@ -123,6 +133,8 @@
         }
       },
       {
+        "label": "manage-tls-certificates",
+        "description": "Inspect and delete TLS certificates owned by this application.",
         "grant": {
           "actions": [
             "acm:ImportCertificate",
@@ -155,6 +167,8 @@
       },
       {
         // API Gateway V2 API/domain creation. The request must carry boundary tags.
+        "label": "create-http-api-endpoints",
+        "description": "Create API Gateway HTTP APIs and custom domain names for application-owned public endpoints.",
         "grant": {
           "actions": ["apigateway:POST", "apigateway:PUT"]
         },
@@ -190,6 +204,8 @@
       },
       {
         // API Gateway V2 child creates run under already-tagged APIs/domains.
+        "label": "create-http-api-routes",
+        "description": "Create routes and mappings under API Gateway HTTP APIs and domain names owned by this application.",
         "grant": {
           "actions": ["apigateway:POST"]
         },
@@ -225,6 +241,8 @@
       },
       {
         // API Gateway V2 tagged creates can perform implicit TagResource calls.
+        "label": "tag-http-api-endpoints",
+        "description": "Apply deployment tags to API Gateway HTTP API resources created for public endpoints.",
         "grant": {
           "actions": ["apigateway:TagResource", "apigateway:PUT"]
         },
@@ -263,6 +281,8 @@
         }
       },
       {
+        "label": "manage-http-api-endpoints",
+        "description": "Read, update, and delete API Gateway HTTP APIs, custom domain names, and mappings owned by this application.",
         "grant": {
           "actions": ["apigateway:GET", "apigateway:DELETE", "apigateway:PATCH", "apigateway:PUT"]
         },
@@ -300,6 +320,8 @@
       },
       {
         // EventBridge schedule rules are created with Alien boundary tags.
+        "label": "create-eventbridge-schedules",
+        "description": "Create EventBridge schedule rules for application-owned scheduled functions.",
         "grant": {
           "actions": ["events:PutRule", "events:TagResource"]
         },
@@ -326,6 +348,8 @@
         }
       },
       {
+        "label": "manage-eventbridge-schedules",
+        "description": "Read, update, and delete EventBridge schedule rules and targets owned by this application.",
         "grant": {
           "actions": [
             "events:DeleteRule",
@@ -359,6 +383,8 @@
     ],
     "gcp": [
       {
+        "label": "manage-cloud-run-services",
+        "description": "Update Cloud Run services, jobs, schedulers, Pub/Sub triggers, and IAM bindings owned by this application.",
         "grant": {
           "permissions": [
             "run.services.get",
@@ -416,6 +442,8 @@
         }
       },
       {
+        "label": "manage-cloud-run-https-endpoints",
+        "description": "Create, update, and delete Google Cloud HTTPS load-balancer resources used by Cloud Run public endpoints.",
         "grant": {
           "permissions": [
             "compute.sslCertificates.create",
@@ -454,6 +482,8 @@
     ],
     "azure": [
       {
+        "label": "manage-container-apps",
+        "description": "Update Azure Container Apps, queues, identities, certificates, and role assignments owned by this application.",
         "grant": {
           "actions": [
             "Microsoft.App/containerApps/read",

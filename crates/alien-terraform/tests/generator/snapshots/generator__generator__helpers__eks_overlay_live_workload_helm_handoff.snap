@@ -36,12 +36,12 @@ variable "resource_prefix" {
 
 variable "name" {
   type        = string
-  description = "Human-readable deployment name shown in the deployment portal."
+  description = "Human-readable application name shown in setup and cloud IAM review metadata."
 }
 
 variable "token" {
   type        = string
-  description = "Deployment token from the deployment page. This is the same token used by the deploy CLI --token flag."
+  description = "Install token from the application setup page. This is the same token used by the deploy CLI --token flag."
   sensitive   = true
 }
 
@@ -104,6 +104,7 @@ resource "random_id" "resource_prefix" {
 === locals.tf ===
 locals {
   resource_prefix          = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
+  deployment_name          = var.name
   deployment_platform      = "kubernetes"
   deployment_base_platform = "aws"
   deployment_target        = "eks"
@@ -253,7 +254,7 @@ resource "aws_iam_role" "execution_sa" {
 resource "aws_iam_role_policy" "execution_sa_set_0" {
   name   = "storage-data-read-0"
   role   = aws_iam_role.execution_sa.id
-  policy = jsonencode({ Statement = [{ Action = ["s3:ListBucket", "s3:GetObject", "s3:GetObjectVersion", "s3:GetObjectAcl"], Effect = "Allow", Resource = ["arn:aws:s3:::${local.resource_prefix}-*", "arn:aws:s3:::${local.resource_prefix}-*/*"], Sid = "StorageDataRead" }], Version = "2012-10-17" })
+  policy = jsonencode({ Statement = [{ Action = ["s3:ListBucket", "s3:GetObject", "s3:GetObjectVersion", "s3:GetObjectAcl"], Effect = "Allow", Resource = ["arn:aws:s3:::${local.resource_prefix}-*", "arn:aws:s3:::${local.resource_prefix}-*/*"], Sid = "ReadS3Objects" }], Version = "2012-10-17" })
 }
 
 resource "aws_iam_openid_connect_provider" "target" {

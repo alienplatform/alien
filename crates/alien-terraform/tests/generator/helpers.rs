@@ -19,6 +19,7 @@ pub fn render(stack: &Stack, target: TerraformTarget, settings: StackSettings) -
         stack,
         target,
         TerraformOptions {
+            display_name: None,
             registry: &registry,
             stack_settings: settings,
             registration: None,

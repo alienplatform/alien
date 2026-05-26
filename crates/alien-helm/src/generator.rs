@@ -10,10 +10,10 @@ use crate::{
     registry::HelmRegistry,
 };
 use alien_core::{
-    import::EmitContext, Container, ErrorData, ExposeProtocol, Ingress, Platform,
-    ResourceLifecycle, Result, Stack, StackSettings, Worker,
+    import::EmitContext, Container, ContainerCode, Daemon, DaemonCode, ErrorData, ExposeProtocol,
+    Ingress, Platform, ResourceLifecycle, Result, Stack, StackSettings, Worker, WorkerCode,
 };
-use alien_error::{Context, IntoAlienError};
+use alien_error::{AlienError, Context, IntoAlienError};
 use indexmap::IndexMap;
 use std::collections::BTreeSet;
 
@@ -64,9 +64,18 @@ pub fn generate_helm_chart(stack: &Stack, options: HelmOptions<'_>) -> Result<He
     files.insert("templates/secret.yaml".to_string(), secret_tpl());
     files.insert("templates/configmap.yaml".to_string(), configmap_tpl());
     files.insert("templates/deployment.yaml".to_string(), deployment_tpl());
+    files.insert("templates/pvc.yaml".to_string(), pvc_tpl());
     files.insert("templates/service.yaml".to_string(), service_tpl());
     files.insert("templates/app-service.yaml".to_string(), app_service_tpl());
     files.insert("templates/app-ingress.yaml".to_string(), app_ingress_tpl());
+    files.insert(
+        "templates/poddisruptionbudget.yaml".to_string(),
+        poddisruptionbudget_tpl(),
+    );
+    files.insert(
+        "templates/networkpolicy.yaml".to_string(),
+        networkpolicy_tpl(),
+    );
 
     // Per-resource extra templates contributed by emitters.
     for (path, contents) in &analysis.extra_templates {
@@ -132,6 +141,7 @@ impl ChartAnalysis {
 
         for (resource_id, entry) in stack.resources() {
             if let Some(function) = entry.config.downcast_ref::<Worker>() {
+                fail_if_worker_source_remains(resource_id, function)?;
                 service_accounts.insert(function.permissions.clone());
                 if function.ingress == Ingress::Public {
                     analysis.services.push(ServiceValue {
@@ -142,6 +152,7 @@ impl ChartAnalysis {
                 }
             }
             if let Some(container) = entry.config.downcast_ref::<Container>() {
+                fail_if_container_source_remains(resource_id, container)?;
                 if let Some(port) = container
                     .ports
                     .iter()
@@ -156,6 +167,9 @@ impl ChartAnalysis {
             }
             if let Some(build) = entry.config.downcast_ref::<alien_core::Build>() {
                 service_accounts.insert(build.permissions.clone());
+            }
+            if let Some(daemon) = entry.config.downcast_ref::<Daemon>() {
+                fail_if_daemon_source_remains(resource_id, daemon)?;
             }
 
             // Frozen resources contribute agent-local infrastructure bindings; live
@@ -194,6 +208,39 @@ impl ChartAnalysis {
     }
 }
 
+fn fail_if_worker_source_remains(resource_id: &str, worker: &Worker) -> Result<()> {
+    if matches!(&worker.code, WorkerCode::Source { .. }) {
+        return Err(AlienError::new(ErrorData::GenericError {
+            message: format!(
+                "Worker '{resource_id}' still has source code before Helm chart generation; build and inject an image first"
+            ),
+        }));
+    }
+    Ok(())
+}
+
+fn fail_if_container_source_remains(resource_id: &str, container: &Container) -> Result<()> {
+    if matches!(&container.code, ContainerCode::Source { .. }) {
+        return Err(AlienError::new(ErrorData::GenericError {
+            message: format!(
+                "Container '{resource_id}' still has source code before Helm chart generation; build and inject an image first"
+            ),
+        }));
+    }
+    Ok(())
+}
+
+fn fail_if_daemon_source_remains(resource_id: &str, daemon: &Daemon) -> Result<()> {
+    if matches!(&daemon.code, DaemonCode::Source { .. }) {
+        return Err(AlienError::new(ErrorData::GenericError {
+            message: format!(
+                "Daemon '{resource_id}' still has source code before Helm chart generation; build and inject an image first"
+            ),
+        }));
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 struct ServiceValue {
     id: String,
@@ -213,6 +260,9 @@ fn values_yaml(analysis: &ChartAnalysis) -> String {
     yaml.push_str(
         r#"management:
   token: ""
+  existingSecret:
+    name: ""
+    tokenKey: sync-token
   name: ""
   url: ""
   deploymentId: "dep_replace_me"
@@ -225,8 +275,16 @@ runtime:
     repository: ghcr.io/alienplatform/alien-agent
     tag: latest
     pullPolicy: IfNotPresent
-  # Optional 64-character hex key. If empty, Helm generates one at install time.
-  encryptionKey: ""
+  imagePullSecrets: []
+  podLabels: {}
+  podAnnotations: {}
+  automountServiceAccountToken: true
+  encryption:
+    # Set this explicitly, or reference an existing Secret below.
+    key: "replace-me-with-a-stable-64-character-encryption-secret"
+    existingSecret:
+      name: ""
+      key: encryption-key
   replicas: 1
   resources:
     requests:
@@ -239,6 +297,63 @@ runtime:
     port: 8080
     service:
       type: ClusterIP
+  probes:
+    liveness:
+      enabled: true
+      path: /health
+      initialDelaySeconds: 10
+      periodSeconds: 10
+      timeoutSeconds: 2
+      failureThreshold: 3
+    readiness:
+      enabled: true
+      path: /health
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      timeoutSeconds: 2
+      failureThreshold: 3
+  security:
+    podSecurityContext:
+      runAsNonRoot: true
+      runAsUser: 10001
+      runAsGroup: 10001
+      fsGroup: 10001
+      seccompProfile:
+        type: RuntimeDefault
+    containerSecurityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop:
+          - ALL
+  tmp:
+    enabled: true
+    sizeLimit: 256Mi
+  data:
+    mountPath: /var/lib/alien
+    persistence:
+      enabled: false
+      existingClaim: ""
+      storageClassName: ""
+      accessModes:
+        - ReadWriteOnce
+      size: 1Gi
+  scheduling:
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    topologySpreadConstraints: []
+    priorityClassName: ""
+    runtimeClassName: ""
+  pdb:
+    enabled: false
+    minAvailable: 1
+  networkPolicy:
+    enabled: false
+    ingress:
+      enabled: true
+    egress:
+      enabled: true
 
 "#,
     );
@@ -315,17 +430,27 @@ fn append_services(yaml: &mut String, analysis: &ChartAnalysis) {
 }
 
 fn values_schema_json() -> String {
-    r#"{
+    r##"{
   "$schema": "https://json-schema.org/draft-07/schema#",
   "type": "object",
   "additionalProperties": false,
   "properties": {
+    "nameOverride": { "type": "string" },
+    "fullnameOverride": { "type": "string" },
     "management": {
       "type": "object",
       "additionalProperties": false,
       "required": ["token", "updates", "telemetry", "healthChecks"],
       "properties": {
         "token": { "type": "string" },
+        "existingSecret": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": { "type": "string" },
+            "tokenKey": { "type": "string", "minLength": 1 }
+          }
+        },
         "name": { "type": "string" },
         "url": { "type": "string" },
         "deploymentId": { "type": ["string", "null"] },
@@ -334,7 +459,145 @@ fn values_schema_json() -> String {
         "healthChecks": { "type": "string", "enum": ["on", "off"] }
       }
     },
-    "runtime": { "type": "object" },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "repository": { "type": "string", "minLength": 1 },
+            "tag": { "type": "string", "minLength": 1 },
+            "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+          }
+        },
+        "imagePullSecrets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name"],
+            "properties": { "name": { "type": "string", "minLength": 1 } }
+          }
+        },
+        "podLabels": { "type": "object", "additionalProperties": { "type": "string" } },
+        "podAnnotations": { "type": "object", "additionalProperties": { "type": "string" } },
+        "automountServiceAccountToken": { "type": "boolean" },
+        "encryption": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "key": { "type": "string" },
+            "existingSecret": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "name": { "type": "string" },
+                "key": { "type": "string", "minLength": 1 }
+              }
+            }
+          }
+        },
+        "replicas": { "type": "integer", "minimum": 1 },
+        "resources": { "type": "object" },
+        "api": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "service": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "type": { "type": "string", "enum": ["ClusterIP", "NodePort", "LoadBalancer"] }
+              }
+            }
+          }
+        },
+        "probes": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "liveness": { "$ref": "#/definitions/httpProbe" },
+            "readiness": { "$ref": "#/definitions/httpProbe" }
+          }
+        },
+        "security": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "podSecurityContext": { "type": "object" },
+            "containerSecurityContext": { "type": "object" }
+          }
+        },
+        "tmp": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "sizeLimit": { "type": "string" }
+          }
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mountPath": { "type": "string", "minLength": 1 },
+            "persistence": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "existingClaim": { "type": "string" },
+                "storageClassName": { "type": "string" },
+                "accessModes": { "type": "array", "items": { "type": "string" } },
+                "size": { "type": "string" }
+              }
+            }
+          }
+        },
+        "scheduling": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "nodeSelector": { "type": "object", "additionalProperties": { "type": "string" } },
+            "tolerations": { "type": "array" },
+            "affinity": { "type": "object" },
+            "topologySpreadConstraints": { "type": "array" },
+            "priorityClassName": { "type": "string" },
+            "runtimeClassName": { "type": "string" }
+          }
+        },
+        "pdb": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "minAvailable": { "type": ["integer", "string"] },
+            "maxUnavailable": { "type": ["integer", "string"] }
+          }
+        },
+        "networkPolicy": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "ingress": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": { "enabled": { "type": "boolean" } }
+            },
+            "egress": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": { "enabled": { "type": "boolean" } }
+            }
+          }
+        }
+      }
+    },
     "managerServiceAccount": {
       "type": "object",
       "properties": {
@@ -365,10 +628,54 @@ fn values_schema_json() -> String {
     "infrastructure": { "type": ["object", "null"] },
     "basePlatform": { "type": ["string", "null"], "enum": ["aws", "gcp", "azure", null] },
     "serviceAccountPrefix": { "type": "string" },
-    "services": { "type": "object" },
+    "services": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "type": { "type": "string", "enum": ["clusterIp", "loadBalancer"] },
+          "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+          "targetPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+          "component": { "type": "string" },
+          "host": { "type": "string" },
+          "publicUrl": { "type": "string" },
+          "tls": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": { "type": "boolean" },
+              "secretName": { "type": "string" }
+            }
+          },
+          "ingress": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "className": { "type": "string" },
+              "annotations": { "type": "object", "additionalProperties": { "type": "string" } }
+            }
+          }
+        }
+      }
+    },
     "publicUrls": { "type": "object", "additionalProperties": { "type": "string" } },
     "persistentStorage": { "type": "object" },
     "ephemeralStorage": { "type": "object" }
+  },
+  "definitions": {
+    "httpProbe": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "path": { "type": "string", "minLength": 1 },
+        "initialDelaySeconds": { "type": "integer", "minimum": 0 },
+        "periodSeconds": { "type": "integer", "minimum": 1 },
+        "timeoutSeconds": { "type": "integer", "minimum": 1 },
+        "failureThreshold": { "type": "integer", "minimum": 1 }
+      }
+    }
   },
   "oneOf": [
     {
@@ -399,7 +706,7 @@ fn values_schema_json() -> String {
     }
   ]
 }
-"#
+"##
     .to_string()
 }
 
@@ -439,6 +746,22 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- $prefix := default (include "alien.fullname" .root) .root.Values.serviceAccountPrefix -}}
 {{- $raw := printf "%s-%s" $prefix .name | lower -}}
 {{- regexReplaceAll "[^a-z0-9-]" $raw "-" | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{- define "alien.managementSecretName" -}}
+{{- default (include "alien.fullname" .) .Values.management.existingSecret.name -}}
+{{- end -}}
+
+{{- define "alien.managementSecretTokenKey" -}}
+{{- default "sync-token" .Values.management.existingSecret.tokenKey -}}
+{{- end -}}
+
+{{- define "alien.encryptionSecretName" -}}
+{{- default (include "alien.fullname" .) .Values.runtime.encryption.existingSecret.name -}}
+{{- end -}}
+
+{{- define "alien.encryptionSecretKey" -}}
+{{- default "encryption-key" .Values.runtime.encryption.existingSecret.key -}}
 {{- end -}}
 "#
     .to_string()
@@ -522,7 +845,10 @@ roleRef:
 }
 
 fn secret_tpl() -> String {
-    r#"apiVersion: v1
+    r#"{{- $createManagementSecret := not .Values.management.existingSecret.name -}}
+{{- $createEncryptionSecret := not .Values.runtime.encryption.existingSecret.name -}}
+{{- if or $createManagementSecret $createEncryptionSecret .Values.infrastructure }}
+apiVersion: v1
 kind: Secret
 metadata:
   name: {{ include "alien.fullname" . }}
@@ -530,18 +856,16 @@ metadata:
     {{- include "alien.labels" . | nindent 4 }}
 type: Opaque
 stringData:
+  {{- if $createManagementSecret }}
   sync-token: {{ .Values.management.token | quote }}
-  {{- $existingSecret := lookup "v1" "Secret" .Release.Namespace (include "alien.fullname" .) }}
-  {{- if .Values.runtime.encryptionKey }}
-  encryption-key: {{ .Values.runtime.encryptionKey | quote }}
-  {{- else if and $existingSecret (index $existingSecret.data "encryption-key") }}
-  encryption-key: {{ index $existingSecret.data "encryption-key" | b64dec | quote }}
-  {{- else }}
-  encryption-key: {{ randAlphaNum 64 | sha256sum | quote }}
+  {{- end }}
+  {{- if $createEncryptionSecret }}
+  encryption-key: {{ required "runtime.encryption.key or runtime.encryption.existingSecret.name is required" .Values.runtime.encryption.key | quote }}
   {{- end }}
   {{- if .Values.infrastructure }}
   external-bindings.json: {{ toJson .Values.infrastructure | quote }}
   {{- end }}
+{{- end }}
 "#
     .to_string()
 }
@@ -593,12 +917,50 @@ spec:
     metadata:
       labels:
         {{- include "alien.labels" . | nindent 8 }}
+        {{- with .Values.runtime.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.runtime.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
     spec:
       serviceAccountName: {{ include "alien.managerServiceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.runtime.automountServiceAccountToken }}
+      securityContext:
+        {{- toYaml .Values.runtime.security.podSecurityContext | nindent 8 }}
+      {{- with .Values.runtime.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.runtime.scheduling.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.runtime.scheduling.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.runtime.scheduling.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.runtime.scheduling.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.runtime.scheduling.priorityClassName }}
+      priorityClassName: {{ .Values.runtime.scheduling.priorityClassName | quote }}
+      {{- end }}
+      {{- if .Values.runtime.scheduling.runtimeClassName }}
+      runtimeClassName: {{ .Values.runtime.scheduling.runtimeClassName | quote }}
+      {{- end }}
       containers:
         - name: agent
           image: "{{ .Values.runtime.image.repository }}:{{ .Values.runtime.image.tag }}"
           imagePullPolicy: {{ .Values.runtime.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.runtime.security.containerSecurityContext | nindent 12 }}
           env:
             - name: PLATFORM
               value: kubernetes
@@ -635,23 +997,88 @@ spec:
           ports:
             - name: otlp
               containerPort: {{ .Values.runtime.api.port }}
+          {{- if .Values.runtime.probes.liveness.enabled }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.runtime.probes.liveness.path | quote }}
+              port: otlp
+            initialDelaySeconds: {{ .Values.runtime.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.runtime.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.runtime.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.runtime.probes.liveness.failureThreshold }}
+          {{- end }}
+          {{- if .Values.runtime.probes.readiness.enabled }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.runtime.probes.readiness.path | quote }}
+              port: otlp
+            initialDelaySeconds: {{ .Values.runtime.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.runtime.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.runtime.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.runtime.probes.readiness.failureThreshold }}
+          {{- end }}
           volumeMounts:
             - name: config
               mountPath: /etc/alien/config
               readOnly: true
-            - name: secrets
-              mountPath: /etc/alien/secrets
+            - name: management-token
+              mountPath: /etc/alien/secrets/sync-token
+              subPath: sync-token
               readOnly: true
+            - name: encryption-key
+              mountPath: /etc/alien/secrets/encryption-key
+              subPath: {{ include "alien.encryptionSecretKey" . }}
+              readOnly: true
+            {{- if .Values.infrastructure }}
+            - name: external-bindings
+              mountPath: /etc/alien/secrets/external-bindings.json
+              subPath: external-bindings.json
+              readOnly: true
+            {{- end }}
+            {{- if .Values.runtime.tmp.enabled }}
+            - name: tmp
+              mountPath: /tmp
+            {{- end }}
+            - name: runtime-data
+              mountPath: {{ .Values.runtime.data.mountPath | quote }}
           resources:
             {{- toYaml .Values.runtime.resources | nindent 12 }}
       volumes:
         - name: config
           configMap:
             name: {{ include "alien.fullname" . }}
-        - name: secrets
+        - name: management-token
+          secret:
+            secretName: {{ include "alien.managementSecretName" . }}
+            items:
+              - key: {{ include "alien.managementSecretTokenKey" . }}
+                path: sync-token
+            defaultMode: 384
+        - name: encryption-key
+          secret:
+            secretName: {{ include "alien.encryptionSecretName" . }}
+            defaultMode: 384
+        {{- if .Values.infrastructure }}
+        - name: external-bindings
           secret:
             secretName: {{ include "alien.fullname" . }}
+            items:
+              - key: external-bindings.json
+                path: external-bindings.json
             defaultMode: 384
+        {{- end }}
+        {{- if .Values.runtime.tmp.enabled }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: {{ .Values.runtime.tmp.sizeLimit | quote }}
+        {{- end }}
+        - name: runtime-data
+          {{- if .Values.runtime.data.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ default (printf "%s-runtime-data" (include "alien.fullname" .)) .Values.runtime.data.persistence.existingClaim }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
 "#
     .to_string()
 }
@@ -672,7 +1099,85 @@ spec:
   ports:
     - name: http
       port: {{ .Values.runtime.api.port }}
-      targetPort: http
+      targetPort: otlp
+{{- end }}
+"#
+    .to_string()
+}
+
+fn pvc_tpl() -> String {
+    r#"{{- if and .Values.runtime.data.persistence.enabled (not .Values.runtime.data.persistence.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ printf "%s-runtime-data" (include "alien.fullname" .) }}
+  labels:
+    {{- include "alien.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.runtime.data.persistence.accessModes | nindent 4 }}
+  {{- if .Values.runtime.data.persistence.storageClassName }}
+  storageClassName: {{ .Values.runtime.data.persistence.storageClassName | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.runtime.data.persistence.size | quote }}
+{{- end }}
+"#
+    .to_string()
+}
+
+fn poddisruptionbudget_tpl() -> String {
+    r#"{{- if .Values.runtime.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "alien.fullname" . }}
+  labels:
+    {{- include "alien.labels" . | nindent 4 }}
+spec:
+  {{- if hasKey .Values.runtime.pdb "maxUnavailable" }}
+  maxUnavailable: {{ .Values.runtime.pdb.maxUnavailable }}
+  {{- else }}
+  minAvailable: {{ .Values.runtime.pdb.minAvailable }}
+  {{- end }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "alien.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
+"#
+    .to_string()
+}
+
+fn networkpolicy_tpl() -> String {
+    r#"{{- if .Values.runtime.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "alien.fullname" . }}
+  labels:
+    {{- include "alien.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "alien.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes:
+    {{- if .Values.runtime.networkPolicy.ingress.enabled }}
+    - Ingress
+    {{- end }}
+    {{- if .Values.runtime.networkPolicy.egress.enabled }}
+    - Egress
+    {{- end }}
+  {{- if .Values.runtime.networkPolicy.ingress.enabled }}
+  ingress:
+    - {}
+  {{- end }}
+  {{- if .Values.runtime.networkPolicy.egress.enabled }}
+  egress:
+    - {}
+  {{- end }}
 {{- end }}
 "#
     .to_string()

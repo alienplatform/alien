@@ -143,6 +143,7 @@ fn gcp_container_cluster_without_platform_extension_errors_cleanly() {
         &stack,
         TerraformTarget::Gcp,
         TerraformOptions {
+            display_name: None,
             registry: &registry,
             stack_settings: StackSettings::default(),
             registration: None,

@@ -522,12 +522,16 @@ impl AzureStorageAccountController {
         // Build permission context for this specific storage account resource
         let resource_group =
             crate::infra_requirements::azure_utils::get_resource_group_name(ctx.state)?;
-        let permission_context = PermissionContext::new()
+        let mut permission_context = PermissionContext::new()
             .with_subscription_id(azure_config.subscription_id.clone())
             .with_resource_group(resource_group)
             .with_storage_account_name(account_name.to_string())
             .with_stack_prefix(ctx.resource_prefix.to_string())
             .with_resource_name(account_name.to_string());
+        if let Some(deployment_name) = ctx.deployment_name_for_metadata() {
+            permission_context =
+                permission_context.with_deployment_name(deployment_name.to_string());
+        }
 
         // Build Azure resource scope for the storage account
         let resource_scope = Scope::Resource {

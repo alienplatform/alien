@@ -35,6 +35,28 @@ fn get_azure_custom_role_name(prefix: &str, name: &str) -> String {
     format!("{}-{}-role", prefix, name)
 }
 
+fn azure_custom_role_segment(key: &str) -> String {
+    let mut out = String::new();
+    let mut last_was_dash = true;
+    for ch in key.rsplit(':').next().unwrap_or(key).chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+            last_was_dash = false;
+        } else if !last_was_dash {
+            out.push('-');
+            last_was_dash = true;
+        }
+    }
+    if out.ends_with('-') {
+        out.pop();
+    }
+    if out.is_empty() {
+        "custom".to_string()
+    } else {
+        out
+    }
+}
+
 #[cfg(not(test))]
 const AZURE_MANAGED_IDENTITY_WAIT_SECS: u64 = 10;
 #[cfg(test)]
@@ -288,87 +310,80 @@ impl AzureServiceAccountController {
         // Parallelize role definition creation — each uses a unique
         // deterministic UUID, so there are no conflicts between them.
         let config_id = config.id.clone();
-        let futures = grant_plan
-            .custom_roles
-            .iter()
-            .enumerate()
-            .map(|(index, custom_role)| {
-                let client = client.clone();
-                let config_id = config_id.clone();
-                let role_name = format!(
-                    "{}-{}",
-                    get_azure_custom_role_name(ctx.resource_prefix, &config.id),
-                    index
-                );
-                let role_def = custom_role.role_definition.clone();
-                let scope = role_definition_scope_for_assignable_scopes(
-                    &role_def.assignable_scopes,
-                    &azure_cfg.subscription_id,
-                    &resource_group_name,
-                );
+        let futures = grant_plan.custom_roles.iter().map(|custom_role| {
+            let client = client.clone();
+            let config_id = config_id.clone();
+            let role_name = format!(
+                "{}-{}",
+                get_azure_custom_role_name(ctx.resource_prefix, &config.id),
+                azure_custom_role_segment(&custom_role.key)
+            );
+            let role_def = custom_role.role_definition.clone();
+            let scope = role_definition_scope_for_assignable_scopes(
+                &role_def.assignable_scopes,
+                &azure_cfg.subscription_id,
+                &resource_group_name,
+            );
 
-                async move {
-                    // Deterministic UUID so re-running the same deployment updates
-                    // the existing role definition instead of creating a duplicate.
-                    let role_definition_id = Uuid::new_v5(
-                        &Uuid::NAMESPACE_OID,
-                        format!("alien:azure:stack-role-def:{}", role_name).as_bytes(),
+            async move {
+                // Deterministic UUID so re-running the same deployment updates
+                // the existing role definition instead of creating a duplicate.
+                let role_definition_id = Uuid::new_v5(
+                    &Uuid::NAMESPACE_OID,
+                    format!("deployment:azure:stack-role-def:{}", role_name).as_bytes(),
+                )
+                .to_string();
+
+                let role_definition_props = RoleDefinitionProperties {
+                    role_name: Some(role_name.clone()),
+                    description: Some(role_def.description.clone()),
+                    type_: Some("CustomRole".to_string()),
+                    permissions: vec![Permission {
+                        actions: role_def.actions.clone(),
+                        not_actions: Vec::new(),
+                        data_actions: role_def.data_actions.clone(),
+                        not_data_actions: Vec::new(),
+                    }],
+                    assignable_scopes: role_def.assignable_scopes.clone(),
+                    ..Default::default()
+                };
+
+                let role_definition = RoleDefinition {
+                    properties: Some(role_definition_props),
+                    ..Default::default()
+                };
+
+                let created_role = client
+                    .create_or_update_role_definition(
+                        &scope,
+                        role_definition_id.clone(),
+                        &role_definition,
                     )
-                    .to_string();
-
-                    let role_definition_props = RoleDefinitionProperties {
-                        role_name: Some(role_name.clone()),
-                        description: Some(role_def.description.clone()),
-                        type_: Some("CustomRole".to_string()),
-                        permissions: vec![Permission {
-                            actions: role_def.actions.clone(),
-                            not_actions: Vec::new(),
-                            data_actions: role_def.data_actions.clone(),
-                            not_data_actions: Vec::new(),
-                        }],
-                        assignable_scopes: role_def.assignable_scopes.clone(),
-                        ..Default::default()
-                    };
-
-                    let role_definition = RoleDefinition {
-                        properties: Some(role_definition_props),
-                        ..Default::default()
-                    };
-
-                    let created_role = client
-                        .create_or_update_role_definition(
-                            &scope,
-                            role_definition_id.clone(),
-                            &role_definition,
-                        )
-                        .await
-                        .context(ErrorData::CloudPlatformError {
-                            message: format!(
-                                "Failed to create custom role definition '{}'",
-                                role_name
-                            ),
-                            resource_id: Some(config_id.clone()),
-                        })?;
-
-                    let role_id = created_role.id.ok_or_else(|| {
-                        AlienError::new(ErrorData::InfrastructureError {
-                            message: "Created role definition missing ID".to_string(),
-                            operation: Some("create_role_definition".to_string()),
-                            resource_id: Some(config_id.clone()),
-                        })
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to create custom role definition '{}'", role_name),
+                        resource_id: Some(config_id.clone()),
                     })?;
 
-                    info!(
-                        role_name = %role_name,
-                        role_id = %role_id,
-                        actions_count = role_def.actions.len(),
-                        data_actions_count = role_def.data_actions.len(),
-                        "Role definition created successfully"
-                    );
+                let role_id = created_role.id.ok_or_else(|| {
+                    AlienError::new(ErrorData::InfrastructureError {
+                        message: "Created role definition missing ID".to_string(),
+                        operation: Some("create_role_definition".to_string()),
+                        resource_id: Some(config_id.clone()),
+                    })
+                })?;
 
-                    Ok::<_, AlienError<ErrorData>>(role_id)
-                }
-            });
+                info!(
+                    role_name = %role_name,
+                    role_id = %role_id,
+                    actions_count = role_def.actions.len(),
+                    data_actions_count = role_def.data_actions.len(),
+                    "Role definition created successfully"
+                );
+
+                Ok::<_, AlienError<ErrorData>>(role_id)
+            }
+        });
 
         let role_ids = futures::future::try_join_all(futures).await?;
         self.custom_role_definition_ids = role_ids;
@@ -457,8 +472,8 @@ impl AzureServiceAccountController {
                     let assignment_id = Uuid::new_v5(
                         &Uuid::NAMESPACE_OID,
                         format!(
-                            "alien:azure:stack-role-assign:{}:{}:{}",
-                            binding.permission_set_id, binding_index, principal_id
+                            "deployment:azure:stack-role-assign:{}:{}:{}",
+                            binding.role_name, binding_index, principal_id
                         )
                         .as_bytes(),
                     )
@@ -474,7 +489,7 @@ impl AzureServiceAccountController {
                             created_on: None,
                             delegated_managed_identity_resource_id: None,
                             description: Some(format!(
-                                "{} role for Alien ServiceAccount {}",
+                                "{} role for runtime service account {}",
                                 binding.role_name, config_id
                             )),
                             principal_id: principal_id.clone(),
@@ -658,7 +673,7 @@ impl AzureServiceAccountController {
                             assignment_id
                         ),
                         resource_id: Some(config.id.clone()),
-                    }))
+                    }));
                 }
             }
         }
@@ -693,7 +708,7 @@ impl AzureServiceAccountController {
                             role_definition_id
                         ),
                         resource_id: Some(config.id.clone()),
-                    }))
+                    }));
                 }
             }
         }
@@ -784,7 +799,7 @@ impl AzureServiceAccountController {
                     return Err(e.context(ErrorData::CloudPlatformError {
                         message: format!("Failed to delete role assignment '{}'", assignment_id),
                         resource_id: Some(config.id.clone()),
-                    }))
+                    }));
                 }
             }
         }
@@ -851,7 +866,7 @@ impl AzureServiceAccountController {
                             role_definition_id
                         ),
                         resource_id: Some(config.id.clone()),
-                    }))
+                    }));
                 }
             }
         }
@@ -909,7 +924,7 @@ impl AzureServiceAccountController {
                 return Err(e.context(ErrorData::CloudPlatformError {
                     message: format!("Failed to delete managed identity '{}'", identity_name),
                     resource_id: Some(config.id.clone()),
-                }))
+                }));
             }
         }
 
@@ -1004,6 +1019,10 @@ impl AzureServiceAccountController {
             .with_stack_prefix(ctx.resource_prefix.to_string())
             .with_subscription_id(azure_config.subscription_id.clone())
             .with_resource_group(resource_group.clone());
+        if let Some(deployment_name) = ctx.deployment_name_for_metadata() {
+            permission_context =
+                permission_context.with_deployment_name(deployment_name.to_string());
+        }
 
         // Compute storage account name deterministically (needed by kv/* and storage/* permission sets).
         // We can't read from state because the storage account may still be provisioning concurrently.

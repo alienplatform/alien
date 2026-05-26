@@ -10,8 +10,6 @@
             "sqs:GetQueueAttributes",
             "sqs:SetQueueAttributes",
             "sqs:ListQueueTags",
-            "sqs:TagQueue",
-            "sqs:UntagQueue",
             "sqs:PurgeQueue"
           ]
         },

@@ -36,12 +36,12 @@ variable "resource_prefix" {
 
 variable "name" {
   type        = string
-  description = "Human-readable deployment name shown in the deployment portal."
+  description = "Human-readable application name shown in setup and cloud IAM review metadata."
 }
 
 variable "token" {
   type        = string
-  description = "Deployment token from the deployment page. This is the same token used by the deploy CLI --token flag."
+  description = "Install token from the application setup page. This is the same token used by the deploy CLI --token flag."
   sensitive   = true
 }
 
@@ -101,6 +101,7 @@ resource "random_id" "resource_prefix" {
 === locals.tf ===
 locals {
   resource_prefix        = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
+  deployment_name        = var.name
   gcp_custom_role_prefix = substr(replace(lower(var.gcp_custom_role_prefix == "" ? local.resource_prefix : var.gcp_custom_role_prefix), "-", "_"), 0, 18)
   deployment_platform    = "gcp"
   deployment_target      = "gcp"
@@ -134,16 +135,16 @@ data "google_project" "current" {
 resource "google_service_account" "management" {
   project      = var.gcp_project
   account_id   = format("%s-%s", trim(substr(replace(lower(format("a-%s-management", local.resource_prefix)), "_", "-"), 0, 21), "-"), substr(sha1(replace(lower(format("%s-management", local.resource_prefix)), "_", "-")), 0, 8))
-  display_name = "Deployment management identity"
-  description  = "${local.resource_prefix} cross-account management service account"
+  display_name = "${local.deployment_name}: Management service account"
+  description  = "Management cloud identity for ${local.deployment_name}. Resource prefix: ${local.resource_prefix}."
 }
 
-resource "google_project_iam_custom_role" "gcp_role_worker_management_part1" {
+resource "google_project_iam_custom_role" "gcp_role_manage_cloud_run_services" {
   count       = var.gcp_manage_custom_roles ? 1 : 0
   project     = var.gcp_project
-  role_id     = format("role_%s_worker_management_part1", local.gcp_custom_role_prefix)
-  title       = "acme-mgmt: Worker management (part 1)"
-  description = "Allows managing function configuration, versions, aliases, and monitoring. Stack: acme-mgmt. Deployment prefix: ${local.resource_prefix}. Permission set: worker/management."
+  role_id     = format("role_%s_manage_cloud_run_services", local.gcp_custom_role_prefix)
+  title       = "${local.deployment_name}: Manage Cloud Run Services"
+  description = "Used by ${local.deployment_name}. Update Cloud Run services, jobs, schedulers, Pub/Sub triggers, and IAM bindings owned by this application. Resource prefix: ${local.resource_prefix}."
   stage       = "GA"
   permissions = [
     "iam.serviceAccounts.actAs",
@@ -192,12 +193,12 @@ resource "google_project_iam_custom_role" "gcp_role_worker_management_part1" {
   ]
 }
 
-resource "google_project_iam_custom_role" "gcp_role_worker_management_part2" {
+resource "google_project_iam_custom_role" "gcp_role_manage_cloud_run_https_endpoints" {
   count       = var.gcp_manage_custom_roles ? 1 : 0
   project     = var.gcp_project
-  role_id     = format("role_%s_worker_management_part2", local.gcp_custom_role_prefix)
-  title       = "acme-mgmt: Worker management (part 2)"
-  description = "Allows managing function configuration, versions, aliases, and monitoring. Stack: acme-mgmt. Deployment prefix: ${local.resource_prefix}. Permission set: worker/management."
+  role_id     = format("role_%s_manage_cloud_run_https_endpoints", local.gcp_custom_role_prefix)
+  title       = "${local.deployment_name}: Manage Cloud Run HTTPS Endpoints"
+  description = "Used by ${local.deployment_name}. Create, update, and delete Google Cloud HTTPS load-balancer resources used by Cloud Run public endpoints. Resource prefix: ${local.resource_prefix}."
   stage       = "GA"
   permissions = [
     "compute.backendServices.create",
@@ -229,24 +230,24 @@ resource "google_project_iam_custom_role" "gcp_role_worker_management_part2" {
   ]
 }
 
-resource "google_project_iam_member" "gcp_role_worker_management_part1_management_binding_0" {
+resource "google_project_iam_member" "gcp_role_manage_cloud_run_services_management_binding_0" {
   project = var.gcp_project
-  role    = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_worker_management_part1[0].name : format("projects/%s/roles/role_%s_worker_management_part1", var.gcp_project, local.gcp_custom_role_prefix)
+  role    = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_manage_cloud_run_services[0].name : format("projects/%s/roles/role_%s_manage_cloud_run_services", var.gcp_project, local.gcp_custom_role_prefix)
   member  = "serviceAccount:${google_service_account.management.email}"
 }
 
-resource "google_project_iam_member" "gcp_role_worker_management_part2_management_binding_1" {
+resource "google_project_iam_member" "gcp_role_manage_cloud_run_https_endpoints_management_binding_1" {
   project = var.gcp_project
-  role    = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_worker_management_part2[0].name : format("projects/%s/roles/role_%s_worker_management_part2", var.gcp_project, local.gcp_custom_role_prefix)
+  role    = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_manage_cloud_run_https_endpoints[0].name : format("projects/%s/roles/role_%s_manage_cloud_run_https_endpoints", var.gcp_project, local.gcp_custom_role_prefix)
   member  = "serviceAccount:${google_service_account.management.email}"
 }
 
-resource "google_project_iam_custom_role" "gcp_role_storage_heartbeat" {
+resource "google_project_iam_custom_role" "gcp_role_check_cloud_storage_health" {
   count       = var.gcp_manage_custom_roles ? 1 : 0
   project     = var.gcp_project
-  role_id     = format("role_%s_storage_heartbeat", local.gcp_custom_role_prefix)
-  title       = "acme-mgmt: Storage heartbeat"
-  description = "Allows readonly monitoring and health checks for storage resources. Stack: acme-mgmt. Deployment prefix: ${local.resource_prefix}. Permission set: storage/heartbeat."
+  role_id     = format("role_%s_check_cloud_storage_health", local.gcp_custom_role_prefix)
+  title       = "${local.deployment_name}: Check Cloud Storage Health"
+  description = "Used by ${local.deployment_name}. Read Cloud Storage bucket configuration needed for application health checks. Resource prefix: ${local.resource_prefix}."
   stage       = "GA"
   permissions = [
     "storage.bucketOperations.get",
@@ -261,9 +262,9 @@ resource "google_project_iam_custom_role" "gcp_role_storage_heartbeat" {
   ]
 }
 
-resource "google_project_iam_member" "gcp_role_storage_heartbeat_management_binding_0" {
+resource "google_project_iam_member" "gcp_role_check_cloud_storage_health_management_binding_0" {
   project = var.gcp_project
-  role    = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_storage_heartbeat[0].name : format("projects/%s/roles/role_%s_storage_heartbeat", var.gcp_project, local.gcp_custom_role_prefix)
+  role    = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_check_cloud_storage_health[0].name : format("projects/%s/roles/role_%s_check_cloud_storage_health", var.gcp_project, local.gcp_custom_role_prefix)
   member  = "serviceAccount:${google_service_account.management.email}"
 }
 
@@ -285,9 +286,9 @@ resource "google_service_account_iam_member" "management_manager_user" {
 resource "time_sleep" "gcp_iam_propagation" {
   create_duration = "120s"
   depends_on = [
-    google_project_iam_member.gcp_role_worker_management_part1_management_binding_0,
-    google_project_iam_member.gcp_role_worker_management_part2_management_binding_1,
-    google_project_iam_member.gcp_role_storage_heartbeat_management_binding_0,
+    google_project_iam_member.gcp_role_manage_cloud_run_services_management_binding_0,
+    google_project_iam_member.gcp_role_manage_cloud_run_https_endpoints_management_binding_1,
+    google_project_iam_member.gcp_role_check_cloud_storage_health_management_binding_0,
     google_service_account_iam_member.management_manager_token_creator,
     google_service_account_iam_member.management_manager_user
   ]
@@ -310,12 +311,12 @@ resource "terraform_data" "deployment_import" {
   }
   depends_on = [
     google_service_account.management,
-    google_project_iam_custom_role.gcp_role_worker_management_part1,
-    google_project_iam_custom_role.gcp_role_worker_management_part2,
-    google_project_iam_member.gcp_role_worker_management_part1_management_binding_0,
-    google_project_iam_member.gcp_role_worker_management_part2_management_binding_1,
-    google_project_iam_custom_role.gcp_role_storage_heartbeat,
-    google_project_iam_member.gcp_role_storage_heartbeat_management_binding_0,
+    google_project_iam_custom_role.gcp_role_manage_cloud_run_services,
+    google_project_iam_custom_role.gcp_role_manage_cloud_run_https_endpoints,
+    google_project_iam_member.gcp_role_manage_cloud_run_services_management_binding_0,
+    google_project_iam_member.gcp_role_manage_cloud_run_https_endpoints_management_binding_1,
+    google_project_iam_custom_role.gcp_role_check_cloud_storage_health,
+    google_project_iam_member.gcp_role_check_cloud_storage_health_management_binding_0,
     google_service_account_iam_member.management_manager_token_creator,
     google_service_account_iam_member.management_manager_user,
     time_sleep.gcp_iam_propagation

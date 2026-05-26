@@ -13,9 +13,9 @@
 * [update](#update) - Update a manager to a specific release ID or active release.
 * [listEvents](#listevents) - Retrieve all events of a manager.
 * [generateManagerToken](#generatemanagertoken) - Generate a short-lived JWT for direct browser → manager communication. Used for fetching command payloads and querying logs without routing sensitive data through the platform API.
+* [resolveGcpOAuthProvider](#resolvegcpoauthprovider) - Resolve decrypted project-level Google Cloud OAuth provider settings for a manager-side deployment bootstrap.
 * [reportHeartbeat](#reportheartbeat) - Report Manager health status and metrics.
 * [getDeployment](#getdeployment) - Get deployment details for a private manager (internal deployment platform, status, resources).
-* [googleCloudConnect](#googlecloudconnect) - Connect a Google Cloud manager via OAuth.
 
 ## list
 
@@ -713,6 +713,83 @@ run();
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
+## resolveGcpOAuthProvider
+
+Resolve decrypted project-level Google Cloud OAuth provider settings for a manager-side deployment bootstrap.
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="resolveManagerGcpOAuthProvider" method="post" path="/v1/managers/{id}/gcp-oauth-provider/resolve" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.managers.resolveGcpOAuthProvider({
+    id: "mgr_enxscjrqiiu2lrc672hwwuc5",
+    workspace: "my-workspace",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { managersResolveGcpOAuthProvider } from "@alienplatform/platform-api/funcs/managersResolveGcpOAuthProvider.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await managersResolveGcpOAuthProvider(alien, {
+    id: "mgr_enxscjrqiiu2lrc672hwwuc5",
+    workspace: "my-workspace",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("managersResolveGcpOAuthProvider failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.ResolveManagerGcpOAuthProviderRequest](../../models/operations/resolvemanagergcpoauthproviderrequest.md)                                                           | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.ResolveManagerGcpOAuthProviderResponse](../../models/resolvemanagergcpoauthproviderresponse.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 401, 403, 404            | application/json         |
+| errors.APIError          | 500                      | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
 ## reportHeartbeat
 
 Report Manager health status and metrics.
@@ -864,86 +941,5 @@ run();
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
 | errors.APIError          | 404                      | application/json         |
-| errors.APIError          | 500                      | application/json         |
-| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
-
-## googleCloudConnect
-
-Connect a Google Cloud manager via OAuth.
-
-### Example Usage
-
-<!-- UsageSnippet language="typescript" operationID="connectManagerToGoogleCloud" method="get" path="/v1/managers/{id}/google-cloud-connect" -->
-```typescript
-import { Alien } from "@alienplatform/platform-api";
-
-const alien = new Alien({
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  await alien.managers.googleCloudConnect({
-    id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-    workspace: "my-workspace",
-    projectId: "<id>",
-    region: "<value>",
-  });
-
-
-}
-
-run();
-```
-
-### Standalone function
-
-The standalone function version of this method:
-
-```typescript
-import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { managersGoogleCloudConnect } from "@alienplatform/platform-api/funcs/managersGoogleCloudConnect.js";
-
-// Use `AlienCore` for best tree-shaking performance.
-// You can create one instance of it to use across an application.
-const alien = new AlienCore({
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const res = await managersGoogleCloudConnect(alien, {
-    id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-    workspace: "my-workspace",
-    projectId: "<id>",
-    region: "<value>",
-  });
-  if (res.ok) {
-    const { value: result } = res;
-    
-  } else {
-    console.log("managersGoogleCloudConnect failed:", res.error);
-  }
-}
-
-run();
-```
-
-### Parameters
-
-| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.ConnectManagerToGoogleCloudRequest](../../models/operations/connectmanagertogooglecloudrequest.md)                                                                 | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
-| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
-| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
-| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
-
-### Response
-
-**Promise\<void\>**
-
-### Errors
-
-| Error Type               | Status Code              | Content Type             |
-| ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 400, 404                 | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |

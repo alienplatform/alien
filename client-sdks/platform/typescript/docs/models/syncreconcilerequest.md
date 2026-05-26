@@ -11,7 +11,8 @@ let value: SyncReconcileRequest = {
   deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
   state: {
     platform: "azure",
-    status: "updating",
+    protocolVersion: 583290,
+    status: "deleting",
   },
 };
 ```

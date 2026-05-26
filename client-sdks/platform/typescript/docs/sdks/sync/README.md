@@ -208,6 +208,7 @@ async function run() {
       deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
       state: {
         platform: "aws",
+        protocolVersion: 149716,
         status: "provisioning-failed",
       },
     },
@@ -240,6 +241,7 @@ async function run() {
       deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
       state: {
         platform: "aws",
+        protocolVersion: 149716,
         status: "provisioning-failed",
       },
     },

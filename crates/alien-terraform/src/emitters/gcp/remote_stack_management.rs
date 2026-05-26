@@ -50,13 +50,12 @@ impl TfEmitter for GcpRemoteStackManagementEmitter {
                 attr("account_id", account_id_template),
                 attr(
                     "display_name",
-                    expr::template("Deployment management identity".to_string()),
+                    expr::template("${local.deployment_name}: Management service account".to_string()),
                 ),
                 attr(
                     "description",
                     expr::template(
-                        "${local.resource_prefix} cross-account management service account"
-                            .to_string(),
+                        "Management cloud identity for ${local.deployment_name}. Resource prefix: ${local.resource_prefix}.".to_string(),
                     ),
                 ),
             ],

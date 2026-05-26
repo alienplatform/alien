@@ -1,6 +1,6 @@
 # SyncAcquireResponseGcpImages
 
-GCP Horizon host image entry.
+GCP Horizon machine image entry.
 
 ## Example Usage
 

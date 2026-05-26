@@ -148,6 +148,7 @@ mod tests {
 
     fn deployment_config() -> DeploymentConfig {
         DeploymentConfig {
+            deployment_name: Some("test deployment".to_string()),
             stack_settings: Default::default(),
             management_config: None,
             environment_variables: EnvironmentVariablesSnapshot {
@@ -192,7 +193,7 @@ mod tests {
     fn horizon_backend() -> ComputeBackend {
         ComputeBackend::Horizon(alien_core::HorizonConfig {
             url: "https://containers.example.com".to_string(),
-            horizon_host_image: None,
+            horizon_machine_image: None,
             clusters: HashMap::new(),
         })
     }

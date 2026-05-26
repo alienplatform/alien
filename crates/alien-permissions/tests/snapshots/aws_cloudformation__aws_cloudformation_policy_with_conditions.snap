@@ -6,7 +6,7 @@ expression: result
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "WorkerExecute1",
+      "Sid": "WorkerExecuteLambdaInvokeWorker",
       "Effect": "Allow",
       "Action": [
         "lambda:InvokeWorker"
@@ -18,7 +18,7 @@ expression: result
       ]
     },
     {
-      "Sid": "WorkerExecute2",
+      "Sid": "WorkerExecuteEcrBatchGetImageAndEcrGetDownloadUrlForLayer",
       "Effect": "Allow",
       "Action": [
         "ecr:BatchGetImage",

@@ -172,6 +172,18 @@ fn is_best_effort_delete_code(code: &str, http_status_code: Option<u16>) -> bool
         || matches!(code, "REMOTE_RESOURCE_NOT_FOUND" | "REMOTE_ACCESS_DENIED")
 }
 
+fn validate_stack_controller_state_versions(state: &StackState) -> Result<()> {
+    for (resource_id, resource_state) in &state.resources {
+        if let Some(value) = &resource_state.internal_state {
+            crate::core::validate_controller_state_value(value, Some(resource_id))?;
+        }
+        if let Some(value) = &resource_state.last_failed_state {
+            crate::core::validate_controller_state_value(value, Some(resource_id))?;
+        }
+    }
+    Ok(())
+}
+
 /// Configuration for creating a [`StackExecutor`] via the builder pattern.
 ///
 /// # Example
@@ -855,6 +867,8 @@ impl StackExecutor {
         suggested_delay_ms: None,
     })]
     pub async fn step(&self, state: StackState) -> Result<StepResult> {
+        validate_stack_controller_state_versions(&state)?;
+
         let mut next_state = state.clone(); // Clone the input state to modify
 
         // --- Planning Phase ---

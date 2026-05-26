@@ -680,6 +680,26 @@ export type EventConfig = {
 };
 
 /**
+ * Represents the target cloud platform.
+ */
+export const EventControllerPlatformEnum = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type EventControllerPlatformEnum = ClosedEnum<
+  typeof EventControllerPlatformEnum
+>;
+
+export type EventControllerPlatformUnion = EventControllerPlatformEnum | any;
+
+/**
  * New ResourceRef that works with any resource type.
  *
  * @remarks
@@ -861,6 +881,7 @@ export type EventResources = {
    * Resource that can hold any resource type in the Alien system. All resources share common 'type' and 'id' fields with additional type-specific properties.
    */
   config: EventConfig;
+  controllerPlatform?: EventControllerPlatformEnum | any | null | undefined;
   /**
    * Complete list of dependencies for this resource, including infrastructure dependencies.
    *
@@ -2037,6 +2058,27 @@ export function eventConfigFromJSON(
 }
 
 /** @internal */
+export const EventControllerPlatformEnum$inboundSchema: z.ZodEnum<
+  typeof EventControllerPlatformEnum
+> = z.enum(EventControllerPlatformEnum);
+
+/** @internal */
+export const EventControllerPlatformUnion$inboundSchema: z.ZodType<
+  EventControllerPlatformUnion,
+  unknown
+> = z.union([EventControllerPlatformEnum$inboundSchema, z.any()]);
+
+export function eventControllerPlatformUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<EventControllerPlatformUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => EventControllerPlatformUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'EventControllerPlatformUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const EventDependency$inboundSchema: z.ZodType<
   EventDependency,
   unknown
@@ -2200,6 +2242,9 @@ export const EventResources$inboundSchema: z.ZodType<EventResources, unknown> =
   z.object({
     _internal: z.nullable(z.any()).optional(),
     config: z.lazy(() => EventConfig$inboundSchema),
+    controllerPlatform: z.nullable(
+      z.union([EventControllerPlatformEnum$inboundSchema, z.any()]),
+    ).optional(),
     dependencies: z.array(z.lazy(() => EventDependency$inboundSchema))
       .optional(),
     error: z.nullable(

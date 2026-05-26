@@ -4,6 +4,8 @@
   "platforms": {
     "aws": [
       {
+        "label": "check-dynamodb-table-health",
+        "description": "Read DynamoDB table configuration needed for application health checks.",
         "grant": {
           "actions": [
             "dynamodb:DescribeTable",
@@ -25,6 +27,8 @@
     ],
     "gcp": [
       {
+        "label": "check-firestore-health",
+        "description": "Read Firestore database metadata needed for application health checks.",
         "grant": {
           "permissions": [
             "datastore.databases.get",
@@ -45,6 +49,8 @@
     ],
     "azure": [
       {
+        "label": "check-table-storage-health",
+        "description": "Read Azure Table Storage account metadata needed for application health checks.",
         "grant": {
           "predefinedRoles": ["Reader"]
         },

@@ -121,6 +121,7 @@ async fn imported_deployment_round_trips_through_sqlite_with_import_source() {
         .create_with_state(
             &Subject::system(),
             CreateImportedDeploymentParams {
+                deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
                 name: "imported-cf-us-east-1".to_string(),
                 deployment_group_id: dg_id.clone(),
                 platform: Platform::Aws,
@@ -174,6 +175,7 @@ async fn loop_acquire_picks_up_imported_deployments_in_provisioning_status() {
         .create_with_state(
             &Subject::system(),
             CreateImportedDeploymentParams {
+                deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
                 name: "imported-cf-us-east-1".to_string(),
                 deployment_group_id: dg_id,
                 platform: Platform::Aws,
@@ -232,6 +234,7 @@ async fn imported_deployment_appears_when_promoted_to_update_pending() {
         .create_with_state(
             &Subject::system(),
             CreateImportedDeploymentParams {
+                deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
                 name: "imported-cf-us-east-1".to_string(),
                 deployment_group_id: dg_id,
                 platform: Platform::Aws,

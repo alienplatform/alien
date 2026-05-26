@@ -290,6 +290,7 @@ async fn setup() -> TestSetup {
         .create_deployment(
             &test_subject(),
             CreateDeploymentParams {
+                deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
                 name: "test-deployment".to_string(),
                 deployment_group_id: dg.id.clone(),
                 platform: Platform::Local,
@@ -298,6 +299,7 @@ async fn setup() -> TestSetup {
                     deployment_model: alien_core::DeploymentModel::Pull,
                     ..Default::default()
                 },
+                stack_state: None,
                 environment_variables: None,
                 deployment_token: Some(deploy_raw.clone()),
             },

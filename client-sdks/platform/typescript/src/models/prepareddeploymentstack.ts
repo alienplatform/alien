@@ -100,9 +100,17 @@ export type PreparedDeploymentStackOverrideAwGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -114,6 +122,10 @@ export type PreparedDeploymentStackOverrideAw = {
    */
   binding: PreparedDeploymentStackOverrideAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: PreparedDeploymentStackOverrideEffect | undefined;
@@ -121,6 +133,10 @@ export type PreparedDeploymentStackOverrideAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: PreparedDeploymentStackOverrideAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -170,9 +186,17 @@ export type PreparedDeploymentStackOverrideAzureGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -184,9 +208,17 @@ export type PreparedDeploymentStackOverrideAzure = {
    */
   binding: PreparedDeploymentStackOverrideAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: PreparedDeploymentStackOverrideAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -266,9 +298,17 @@ export type PreparedDeploymentStackOverrideGcpGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -280,9 +320,17 @@ export type PreparedDeploymentStackOverrideGcp = {
    */
   binding: PreparedDeploymentStackOverrideGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: PreparedDeploymentStackOverrideGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -407,9 +455,17 @@ export type PreparedDeploymentStackExtendAwGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -421,6 +477,10 @@ export type PreparedDeploymentStackExtendAw = {
    */
   binding: PreparedDeploymentStackExtendAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: PreparedDeploymentStackExtendEffect | undefined;
@@ -428,6 +488,10 @@ export type PreparedDeploymentStackExtendAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: PreparedDeploymentStackExtendAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -477,9 +541,17 @@ export type PreparedDeploymentStackExtendAzureGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -491,9 +563,17 @@ export type PreparedDeploymentStackExtendAzure = {
    */
   binding: PreparedDeploymentStackExtendAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: PreparedDeploymentStackExtendAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -573,9 +653,17 @@ export type PreparedDeploymentStackExtendGcpGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -587,9 +675,17 @@ export type PreparedDeploymentStackExtendGcp = {
    */
   binding: PreparedDeploymentStackExtendGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: PreparedDeploymentStackExtendGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -722,9 +818,17 @@ export type PreparedDeploymentStackProfileAwGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -736,6 +840,10 @@ export type PreparedDeploymentStackProfileAw = {
    */
   binding: PreparedDeploymentStackProfileAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: PreparedDeploymentStackProfileEffect | undefined;
@@ -743,6 +851,10 @@ export type PreparedDeploymentStackProfileAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: PreparedDeploymentStackProfileAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -792,9 +904,17 @@ export type PreparedDeploymentStackProfileAzureGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -806,9 +926,17 @@ export type PreparedDeploymentStackProfileAzure = {
    */
   binding: PreparedDeploymentStackProfileAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: PreparedDeploymentStackProfileAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -888,9 +1016,17 @@ export type PreparedDeploymentStackProfileGcpGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -902,9 +1038,17 @@ export type PreparedDeploymentStackProfileGcp = {
    */
   binding: PreparedDeploymentStackProfileGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: PreparedDeploymentStackProfileGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -1194,6 +1338,8 @@ export const PreparedDeploymentStackOverrideAwGrant$inboundSchema: z.ZodType<
   actions: z.nullable(z.array(z.string())).optional(),
   dataActions: z.nullable(z.array(z.string())).optional(),
   permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
 });
 
 export function preparedDeploymentStackOverrideAwGrantFromJSON(
@@ -1213,8 +1359,10 @@ export const PreparedDeploymentStackOverrideAw$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   binding: z.lazy(() => PreparedDeploymentStackOverrideAwBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
   effect: PreparedDeploymentStackOverrideEffect$inboundSchema.optional(),
   grant: z.lazy(() => PreparedDeploymentStackOverrideAwGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function preparedDeploymentStackOverrideAwFromJSON(
@@ -1307,6 +1455,8 @@ export const PreparedDeploymentStackOverrideAzureGrant$inboundSchema: z.ZodType<
   actions: z.nullable(z.array(z.string())).optional(),
   dataActions: z.nullable(z.array(z.string())).optional(),
   permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
 });
 
 export function preparedDeploymentStackOverrideAzureGrantFromJSON(
@@ -1333,7 +1483,9 @@ export const PreparedDeploymentStackOverrideAzure$inboundSchema: z.ZodType<
   binding: z.lazy(() =>
     PreparedDeploymentStackOverrideAzureBinding$inboundSchema
   ),
+  description: z.nullable(z.string()).optional(),
   grant: z.lazy(() => PreparedDeploymentStackOverrideAzureGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function preparedDeploymentStackOverrideAzureFromJSON(
@@ -1541,6 +1693,8 @@ export const PreparedDeploymentStackOverrideGcpGrant$inboundSchema: z.ZodType<
   actions: z.nullable(z.array(z.string())).optional(),
   dataActions: z.nullable(z.array(z.string())).optional(),
   permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
 });
 
 export function preparedDeploymentStackOverrideGcpGrantFromJSON(
@@ -1567,7 +1721,9 @@ export const PreparedDeploymentStackOverrideGcp$inboundSchema: z.ZodType<
   binding: z.lazy(() =>
     PreparedDeploymentStackOverrideGcpBinding$inboundSchema
   ),
+  description: z.nullable(z.string()).optional(),
   grant: z.lazy(() => PreparedDeploymentStackOverrideGcpGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function preparedDeploymentStackOverrideGcpFromJSON(
@@ -1762,6 +1918,8 @@ export const PreparedDeploymentStackExtendAwGrant$inboundSchema: z.ZodType<
   actions: z.nullable(z.array(z.string())).optional(),
   dataActions: z.nullable(z.array(z.string())).optional(),
   permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
 });
 
 export function preparedDeploymentStackExtendAwGrantFromJSON(
@@ -1781,8 +1939,10 @@ export const PreparedDeploymentStackExtendAw$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   binding: z.lazy(() => PreparedDeploymentStackExtendAwBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
   effect: PreparedDeploymentStackExtendEffect$inboundSchema.optional(),
   grant: z.lazy(() => PreparedDeploymentStackExtendAwGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function preparedDeploymentStackExtendAwFromJSON(
@@ -1877,6 +2037,8 @@ export const PreparedDeploymentStackExtendAzureGrant$inboundSchema: z.ZodType<
   actions: z.nullable(z.array(z.string())).optional(),
   dataActions: z.nullable(z.array(z.string())).optional(),
   permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
 });
 
 export function preparedDeploymentStackExtendAzureGrantFromJSON(
@@ -1903,7 +2065,9 @@ export const PreparedDeploymentStackExtendAzure$inboundSchema: z.ZodType<
   binding: z.lazy(() =>
     PreparedDeploymentStackExtendAzureBinding$inboundSchema
   ),
+  description: z.nullable(z.string()).optional(),
   grant: z.lazy(() => PreparedDeploymentStackExtendAzureGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function preparedDeploymentStackExtendAzureFromJSON(
@@ -2103,6 +2267,8 @@ export const PreparedDeploymentStackExtendGcpGrant$inboundSchema: z.ZodType<
   actions: z.nullable(z.array(z.string())).optional(),
   dataActions: z.nullable(z.array(z.string())).optional(),
   permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
 });
 
 export function preparedDeploymentStackExtendGcpGrantFromJSON(
@@ -2122,7 +2288,9 @@ export const PreparedDeploymentStackExtendGcp$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   binding: z.lazy(() => PreparedDeploymentStackExtendGcpBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
   grant: z.lazy(() => PreparedDeploymentStackExtendGcpGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function preparedDeploymentStackExtendGcpFromJSON(
@@ -2335,6 +2503,8 @@ export const PreparedDeploymentStackProfileAwGrant$inboundSchema: z.ZodType<
   actions: z.nullable(z.array(z.string())).optional(),
   dataActions: z.nullable(z.array(z.string())).optional(),
   permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
 });
 
 export function preparedDeploymentStackProfileAwGrantFromJSON(
@@ -2354,8 +2524,10 @@ export const PreparedDeploymentStackProfileAw$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   binding: z.lazy(() => PreparedDeploymentStackProfileAwBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
   effect: PreparedDeploymentStackProfileEffect$inboundSchema.optional(),
   grant: z.lazy(() => PreparedDeploymentStackProfileAwGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function preparedDeploymentStackProfileAwFromJSON(
@@ -2448,6 +2620,8 @@ export const PreparedDeploymentStackProfileAzureGrant$inboundSchema: z.ZodType<
   actions: z.nullable(z.array(z.string())).optional(),
   dataActions: z.nullable(z.array(z.string())).optional(),
   permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
 });
 
 export function preparedDeploymentStackProfileAzureGrantFromJSON(
@@ -2474,7 +2648,9 @@ export const PreparedDeploymentStackProfileAzure$inboundSchema: z.ZodType<
   binding: z.lazy(() =>
     PreparedDeploymentStackProfileAzureBinding$inboundSchema
   ),
+  description: z.nullable(z.string()).optional(),
   grant: z.lazy(() => PreparedDeploymentStackProfileAzureGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function preparedDeploymentStackProfileAzureFromJSON(
@@ -2679,6 +2855,8 @@ export const PreparedDeploymentStackProfileGcpGrant$inboundSchema: z.ZodType<
   actions: z.nullable(z.array(z.string())).optional(),
   dataActions: z.nullable(z.array(z.string())).optional(),
   permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
 });
 
 export function preparedDeploymentStackProfileGcpGrantFromJSON(
@@ -2698,7 +2876,9 @@ export const PreparedDeploymentStackProfileGcp$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   binding: z.lazy(() => PreparedDeploymentStackProfileGcpBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
   grant: z.lazy(() => PreparedDeploymentStackProfileGcpGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function preparedDeploymentStackProfileGcpFromJSON(

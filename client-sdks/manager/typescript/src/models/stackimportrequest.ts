@@ -89,6 +89,10 @@ export type StackImportRequest = {
    */
   setupFingerprintVersion: number;
   /**
+   * Wire-format version for the setup import payload.
+   */
+  setupImportFormatVersion: number;
+  /**
    * Setup target this package was generated for.
    */
   setupTarget: string;
@@ -121,6 +125,7 @@ export type StackImportRequest$Outbound = {
   resources: Array<ImportedResource$Outbound>;
   setupFingerprint: string;
   setupFingerprintVersion: number;
+  setupImportFormatVersion: number;
   setupTarget: string;
   sourceKind?: string | null | undefined;
   stackSettings: StackSettings$Outbound;
@@ -142,6 +147,7 @@ export const StackImportRequest$outboundSchema: z.ZodType<
   resources: z.array(ImportedResource$outboundSchema),
   setupFingerprint: z.string(),
   setupFingerprintVersion: z.int(),
+  setupImportFormatVersion: z.int(),
   setupTarget: z.string(),
   sourceKind: z.nullable(ImportSourceKind$outboundSchema).optional(),
   stackSettings: StackSettings$outboundSchema,

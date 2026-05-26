@@ -45,7 +45,7 @@ impl TfEmitter for GcpBuildEmitter {
             attr("location", expr::raw("var.gcp_region")),
             attr(
                 "description",
-                expr::template(format!("Deployment {} build trigger", build.id)),
+                expr::template(format!("Application build trigger ({})", build.id)),
             ),
             attr(
                 "substitutions",

@@ -344,7 +344,7 @@ impl DeploymentLoop {
             environment_info: deployment.environment_info.clone(),
             runtime_metadata: deployment.runtime_metadata.clone(),
             retry_requested: deployment.retry_requested,
-            protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+            protocol_version: deployment.deployment_protocol_version,
         };
 
         // 4. Build environment variables.
@@ -384,6 +384,9 @@ impl DeploymentLoop {
         .await;
 
         let config = if let Some(mut config) = deployment.deployment_config.clone() {
+            if config.deployment_name.is_none() {
+                config.deployment_name = Some(deployment.name.clone());
+            }
             if config.management_config.is_none() {
                 config.management_config = management_config;
             }
@@ -398,6 +401,7 @@ impl DeploymentLoop {
             config
         } else {
             DeploymentConfig {
+                deployment_name: Some(deployment.name.clone()),
                 stack_settings: deployment.stack_settings.clone(),
                 management_config,
                 environment_variables,

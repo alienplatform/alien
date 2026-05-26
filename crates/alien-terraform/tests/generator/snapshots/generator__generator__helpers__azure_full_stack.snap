@@ -32,12 +32,12 @@ variable "resource_prefix" {
 
 variable "name" {
   type        = string
-  description = "Human-readable deployment name shown in the deployment portal."
+  description = "Human-readable application name shown in setup and cloud IAM review metadata."
 }
 
 variable "token" {
   type        = string
-  description = "Deployment token from the deployment page. This is the same token used by the deploy CLI --token flag."
+  description = "Install token from the application setup page. This is the same token used by the deploy CLI --token flag."
   sensitive   = true
 }
 
@@ -100,6 +100,7 @@ resource "random_id" "resource_prefix" {
 === locals.tf ===
 locals {
   resource_prefix     = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
+  deployment_name     = var.name
   deployment_platform = "azure"
   deployment_target   = "azure"
   deployment_region   = var.azure_location
@@ -145,11 +146,12 @@ locals {
       id   = "default-container-apps-environment"
       type = "azure_container_apps_environment"
       importData = {
-        subscriptionId  = var.azure_subscription_id
-        resourceGroup   = var.azure_resource_group_name
-        environmentName = azurerm_container_app_environment.default_container_apps_environment.name
-        resourceId      = azurerm_container_app_environment.default_container_apps_environment.id
-        defaultDomain   = azurerm_container_app_environment.default_container_apps_environment.default_domain
+        subscriptionId             = var.azure_subscription_id
+        resourceGroup              = var.azure_resource_group_name
+        environmentName            = azurerm_container_app_environment.default_container_apps_environment.name
+        resourceId                 = azurerm_container_app_environment.default_container_apps_environment.id
+        defaultDomain              = azurerm_container_app_environment.default_container_apps_environment.default_domain
+        customDomainVerificationId = azurerm_container_app_environment.default_container_apps_environment.custom_domain_verification_id
       }
     },
     {
@@ -262,11 +264,11 @@ resource "azurerm_resource_group" "default_resource_group" {
   }
 }
 
-resource "azurerm_role_definition" "setup_management_vault_data_write_0" {
-  name               = "${local.resource_prefix}-Vault Data Write Custom 1 [mgmt]"
-  role_definition_id = uuidv5("oid", "deployment:azure:mgmt-res-role-def:${local.resource_prefix}:vault/data-write:0")
+resource "azurerm_role_definition" "setup_management_write_key_vault_secrets_0" {
+  name               = "${local.resource_prefix}-Write Key Vault Secrets [mgmt]"
+  role_definition_id = uuidv5("oid", "deployment:azure:mgmt-res-role-def:${local.resource_prefix}:setup_management_write_key_vault_secrets_0")
   scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
-  description        = "Allows creating, updating, and deleting individual secrets within vault"
+  description        = "Used by $${local.deployment_name}. Create, update, and delete application-owned Azure Key Vault secrets. Resource prefix: $${local.resource_prefix}."
 
   permissions {
     actions = []
@@ -284,11 +286,11 @@ resource "azurerm_role_definition" "setup_management_vault_data_write_0" {
   ]
 }
 
-resource "azurerm_role_definition" "setup_management_worker_management_0" {
-  name               = "${local.resource_prefix}-Worker Management Custom 1 [mgmt]"
-  role_definition_id = uuidv5("oid", "deployment:azure:mgmt-res-role-def:${local.resource_prefix}:worker/management:0")
+resource "azurerm_role_definition" "setup_management_manage_container_apps_0" {
+  name               = "${local.resource_prefix}-Manage Container Apps [mgmt]"
+  role_definition_id = uuidv5("oid", "deployment:azure:mgmt-res-role-def:${local.resource_prefix}:setup_management_manage_container_apps_0")
   scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
-  description        = "Allows managing function configuration, versions, aliases, and monitoring"
+  description        = "Used by $${local.deployment_name}. Update Azure Container Apps, queues, identities, certificates, and role assignments owned by this application. Resource prefix: $${local.resource_prefix}."
 
   permissions {
     actions = [
@@ -556,8 +558,8 @@ resource "azurerm_user_assigned_identity" "execution_sa" {
   ]
 }
 
-resource "azurerm_role_assignment" "execution_sa_storage_data_read_assignment_0" {
-  name               = uuidv5("oid", "deployment:azure:role-assign:execution-sa:storage/data-read:0:${azurerm_user_assigned_identity.execution_sa.principal_id}")
+resource "azurerm_role_assignment" "execution_sa_storage_blob_data_reader___var_azure_resource_group_name__assignment" {
+  name               = uuidv5("oid", "deployment:azure:role-assign:execution-sa:storage_blob_data_reader___var_azure_resource_group_name_:${azurerm_user_assigned_identity.execution_sa.principal_id}")
   scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
   role_definition_id = "/subscriptions/${var.azure_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/2a2b9908-6ea1-4ae2-8e65-a410df84e7d1"
   principal_id       = azurerm_user_assigned_identity.execution_sa.principal_id
@@ -566,8 +568,8 @@ resource "azurerm_role_assignment" "execution_sa_storage_data_read_assignment_0"
   ]
 }
 
-resource "azurerm_role_assignment" "execution_sa_queue_data_write_assignment_0" {
-  name               = uuidv5("oid", "deployment:azure:role-assign:execution-sa:queue/data-write:0:${azurerm_user_assigned_identity.execution_sa.principal_id}")
+resource "azurerm_role_assignment" "execution_sa_azure_service_bus_data_sender___var_azure_resource_group_name__assignment" {
+  name               = uuidv5("oid", "deployment:azure:role-assign:execution-sa:azure_service_bus_data_sender___var_azure_resource_group_name_:${azurerm_user_assigned_identity.execution_sa.principal_id}")
   scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
   role_definition_id = "/subscriptions/${var.azure_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/69a216fc-b8fb-44d8-bc22-1f3c2cd27a39"
   principal_id       = azurerm_user_assigned_identity.execution_sa.principal_id
@@ -596,7 +598,7 @@ resource "azurerm_user_assigned_identity" "management" {
 
 resource "azurerm_role_assignment" "management_existing_vnet_reader_uami" {
   count              = try(local.deployment_settings.network.type, "") == "byo-vnet-azure" ? 1 : 0
-  name               = uuidv5("oid", "alien:azure:existing-vnet-reader:${local.resource_prefix}:uami:${azurerm_user_assigned_identity.management.principal_id}:${try(local.deployment_settings.network.vnet_resource_id, "")}")
+  name               = uuidv5("oid", "deployment:azure:existing-vnet-reader:${local.resource_prefix}:uami:${azurerm_user_assigned_identity.management.principal_id}:${try(local.deployment_settings.network.vnet_resource_id, "")}")
   scope              = try(local.deployment_settings.network.vnet_resource_id, "")
   role_definition_id = "/subscriptions/${var.azure_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/acdd72a7-3385-48ef-bd42-f606fba81ae7"
   principal_id       = azurerm_user_assigned_identity.management.principal_id
@@ -676,10 +678,10 @@ resource "azurerm_key_vault" "secrets" {
   ]
 }
 
-resource "azurerm_role_assignment" "secrets_vault_data_write_management_assignment_0" {
-  name               = uuidv5("oid", "deployment:azure:mgmt-res-role-assign:${local.resource_prefix}:secrets:vault/data-write:0")
+resource "azurerm_role_assignment" "secrets_write_key_vault_secrets_management_assignment_0" {
+  name               = uuidv5("oid", "deployment:azure:mgmt-res-role-assign:${local.resource_prefix}:secrets:write_key_vault_secrets:0")
   scope              = azurerm_key_vault.secrets.id
-  role_definition_id = azurerm_role_definition.setup_management_vault_data_write_0.role_definition_resource_id
+  role_definition_id = azurerm_role_definition.setup_management_write_key_vault_secrets_0.role_definition_resource_id
   principal_id       = azurerm_user_assigned_identity.management.principal_id
   depends_on = [
     azurerm_resource_group.default_resource_group
@@ -771,8 +773,8 @@ resource "terraform_data" "deployment_import" {
   }
   depends_on = [
     azurerm_resource_group.default_resource_group,
-    azurerm_role_definition.setup_management_vault_data_write_0,
-    azurerm_role_definition.setup_management_worker_management_0,
+    azurerm_role_definition.setup_management_write_key_vault_secrets_0,
+    azurerm_role_definition.setup_management_manage_container_apps_0,
     azurerm_storage_account.default_storage_account,
     azurerm_servicebus_namespace.default_service_bus_namespace,
     azurerm_log_analytics_workspace.default_container_apps_environment_logs,
@@ -787,8 +789,8 @@ resource "terraform_data" "deployment_import" {
     azurerm_network_security_group.default_network_workload,
     azurerm_subnet_network_security_group_association.default_network_private,
     azurerm_user_assigned_identity.execution_sa,
-    azurerm_role_assignment.execution_sa_storage_data_read_assignment_0,
-    azurerm_role_assignment.execution_sa_queue_data_write_assignment_0,
+    azurerm_role_assignment.execution_sa_storage_blob_data_reader___var_azure_resource_group_name__assignment,
+    azurerm_role_assignment.execution_sa_azure_service_bus_data_sender___var_azure_resource_group_name__assignment,
     azurerm_user_assigned_identity.management,
     azurerm_role_assignment.management_existing_vnet_reader_uami,
     azurerm_federated_identity_credential.management_fic,
@@ -796,7 +798,7 @@ resource "terraform_data" "deployment_import" {
     azurerm_servicebus_queue.jobs,
     azurerm_storage_table.metadata,
     azurerm_key_vault.secrets,
-    azurerm_role_assignment.secrets_vault_data_write_management_assignment_0,
+    azurerm_role_assignment.secrets_write_key_vault_secrets_management_assignment_0,
     azurerm_container_registry.registry,
     azurerm_user_assigned_identity.registry_pull,
     azurerm_role_assignment.registry_pull_role,

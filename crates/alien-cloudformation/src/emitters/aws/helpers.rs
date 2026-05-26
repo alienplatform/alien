@@ -7,10 +7,9 @@
 
 use crate::template::{CfExpression, CfResource};
 use alien_core::{
-    import::EmitContext, ErrorData, Network, NetworkSettings, Queue, ResourceDefinition,
-    ResourceRef, ResourceType, Result, ServiceAccount, Storage, Vault, Worker,
-    ALIEN_MANAGED_BY_TAG_KEY, ALIEN_MANAGED_BY_TAG_VALUE, ALIEN_RESOURCE_TAG_KEY,
-    ALIEN_STACK_TAG_KEY,
+    import::EmitContext, ErrorData, Network, NetworkSettings, ResourceDefinition, ResourceRef,
+    ResourceType, Result, ServiceAccount, Storage, Worker, ALIEN_MANAGED_BY_TAG_KEY,
+    ALIEN_MANAGED_BY_TAG_VALUE, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
 };
 use alien_error::AlienError;
 use indexmap::IndexMap;
@@ -31,7 +30,7 @@ pub const CONDITION_HAS_VPC_CIDR: &str = "HasVpcCidr";
 const CONDITION_NETWORK_MODE_CREATE: &str = "NetworkModeCreate";
 const CONDITION_NETWORK_MODE_USE_EXISTING: &str = "NetworkModeUseExisting";
 
-pub const INLINE_POLICY_NAME: &str = "alien-managed-policy";
+pub const INLINE_POLICY_NAME: &str = "deployment-permissions";
 
 /// Downcast `ctx.resource.config` to the typed resource definition or return
 /// a typed `UnexpectedResourceType` error.
@@ -289,102 +288,6 @@ pub fn service_account_role_id(ctx: &EmitContext<'_>, profile_name: &str) -> Opt
 
 /// IAM permissions for a function's link to another resource. Returns one
 /// or more statement objects ready to splice into a policy document.
-pub fn link_permission_statements(
-    ctx: &EmitContext<'_>,
-    link: &ResourceRef,
-) -> Result<Vec<CfExpression>> {
-    let logical_id = logical_id_for_ref(ctx, link)?;
-    if link.resource_type == Storage::RESOURCE_TYPE {
-        Ok(vec![CfExpression::object([
-            (
-                "Sid",
-                CfExpression::from(format!("AccessStorage{}", logical_id)),
-            ),
-            ("Effect", CfExpression::from("Allow")),
-            (
-                "Action",
-                CfExpression::list([
-                    CfExpression::from("s3:GetObject"),
-                    CfExpression::from("s3:PutObject"),
-                    CfExpression::from("s3:DeleteObject"),
-                    CfExpression::from("s3:ListBucket"),
-                ]),
-            ),
-            (
-                "Resource",
-                CfExpression::list([
-                    CfExpression::get_att(logical_id, "Arn"),
-                    CfExpression::sub(format!("${{{logical_id}.Arn}}/*")),
-                ]),
-            ),
-        ])])
-    } else if link.resource_type == Queue::RESOURCE_TYPE {
-        Ok(vec![CfExpression::object([
-            (
-                "Sid",
-                CfExpression::from(format!("AccessQueue{}", logical_id)),
-            ),
-            ("Effect", CfExpression::from("Allow")),
-            (
-                "Action",
-                CfExpression::list([
-                    CfExpression::from("sqs:SendMessage"),
-                    CfExpression::from("sqs:ReceiveMessage"),
-                    CfExpression::from("sqs:DeleteMessage"),
-                    CfExpression::from("sqs:GetQueueAttributes"),
-                ]),
-            ),
-            ("Resource", CfExpression::get_att(logical_id, "Arn")),
-        ])])
-    } else if link.resource_type == alien_core::Kv::RESOURCE_TYPE {
-        Ok(vec![CfExpression::object([
-            (
-                "Sid",
-                CfExpression::from(format!("AccessTable{}", logical_id)),
-            ),
-            ("Effect", CfExpression::from("Allow")),
-            (
-                "Action",
-                CfExpression::list([
-                    CfExpression::from("dynamodb:GetItem"),
-                    CfExpression::from("dynamodb:PutItem"),
-                    CfExpression::from("dynamodb:UpdateItem"),
-                    CfExpression::from("dynamodb:DeleteItem"),
-                    CfExpression::from("dynamodb:Query"),
-                    CfExpression::from("dynamodb:Scan"),
-                ]),
-            ),
-            ("Resource", CfExpression::get_att(logical_id, "Arn")),
-        ])])
-    } else if link.resource_type == Vault::RESOURCE_TYPE {
-        Ok(vec![CfExpression::object([
-            (
-                "Sid",
-                CfExpression::from(format!("AccessVault{}", logical_id)),
-            ),
-            ("Effect", CfExpression::from("Allow")),
-            (
-                "Action",
-                CfExpression::list([
-                    CfExpression::from("ssm:GetParameter"),
-                    CfExpression::from("ssm:GetParameters"),
-                    CfExpression::from("ssm:PutParameter"),
-                    CfExpression::from("ssm:DeleteParameter"),
-                ]),
-            ),
-            (
-                "Resource",
-                CfExpression::sub(format!(
-                    "arn:${{AWS::Partition}}:ssm:${{AWS::Region}}:${{AWS::AccountId}}:parameter/${{AWS::StackName}}-{}/*",
-                    link.id
-                )),
-            ),
-        ])])
-    } else {
-        Ok(vec![])
-    }
-}
-
 /// Result of [`role_for_profile_or_fallback`] — either the SA role's ARN
 /// expression and no extra resources, or a fallback role's ARN expression
 /// with the role resource that backs it.

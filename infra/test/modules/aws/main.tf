@@ -769,7 +769,6 @@ resource "aws_iam_policy" "target" {
           "lambda:ListEventSourceMappings",
           "lambda:UpdateEventSourceMapping",
           "lambda:TagResource",
-          "lambda:UntagResource",
           "lambda:ListTags",
         ]
         Resource = "*"
@@ -791,7 +790,6 @@ resource "aws_iam_policy" "target" {
           "iam:ListRolePolicies",
           "iam:ListAttachedRolePolicies",
           "iam:TagRole",
-          "iam:UntagRole",
         ]
         Resource = "*"
       },
@@ -808,7 +806,6 @@ resource "aws_iam_policy" "target" {
           "sqs:ReceiveMessage",
           "sqs:DeleteMessage",
           "sqs:TagQueue",
-          "sqs:UntagQueue",
         ]
         Resource = "*"
       },
@@ -829,7 +826,6 @@ resource "aws_iam_policy" "target" {
           "dynamodb:UpdateTimeToLive",
           "dynamodb:DescribeTimeToLive",
           "dynamodb:TagResource",
-          "dynamodb:UntagResource",
         ]
         Resource = "*"
       },
@@ -1016,7 +1012,7 @@ resource "aws_iam_role_policy" "e2e_ar_push" {
           "ecr:PutImage", "ecr:InitiateLayerUpload", "ecr:UploadLayerPart",
           "ecr:CompleteLayerUpload", "ecr:BatchCheckLayerAvailability",
           "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ecr:ListImages",
-          "ecr:TagResource", "ecr:UntagResource",
+          "ecr:TagResource",
           "ecr:PutLifecyclePolicy", "ecr:DeleteLifecyclePolicy",
           "ecr:PutImageScanningConfiguration", "ecr:PutImageTagMutability",
           "ecr:DescribeImages", "ecr:DescribeImageScanFindings",

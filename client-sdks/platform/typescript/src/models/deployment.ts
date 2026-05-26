@@ -486,6 +486,28 @@ export type DeploymentStackStateConfig = {
 };
 
 /**
+ * Represents the target cloud platform.
+ */
+export const DeploymentControllerPlatformEnum = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type DeploymentControllerPlatformEnum = ClosedEnum<
+  typeof DeploymentControllerPlatformEnum
+>;
+
+export type DeploymentControllerPlatformUnion =
+  | DeploymentControllerPlatformEnum
+  | any;
+
+/**
  * New ResourceRef that works with any resource type.
  *
  * @remarks
@@ -671,6 +693,11 @@ export type DeploymentStackStateResources = {
    * Resource that can hold any resource type in the Alien system. All resources share common 'type' and 'id' fields with additional type-specific properties.
    */
   config: DeploymentStackStateConfig;
+  controllerPlatform?:
+    | DeploymentControllerPlatformEnum
+    | any
+    | null
+    | undefined;
   /**
    * Complete list of dependencies for this resource, including infrastructure dependencies.
    *
@@ -859,6 +886,10 @@ export type DeploymentOverrideAw = {
    */
   binding: DeploymentOverrideAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: DeploymentOverrideEffect | undefined;
@@ -866,6 +897,10 @@ export type DeploymentOverrideAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: DeploymentOverrideAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -937,9 +972,17 @@ export type DeploymentOverrideAzure = {
    */
   binding: DeploymentOverrideAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: DeploymentOverrideAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -1037,9 +1080,17 @@ export type DeploymentOverrideGcp = {
    */
   binding: DeploymentOverrideGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: DeploymentOverrideGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -1182,6 +1233,10 @@ export type DeploymentExtendAw = {
    */
   binding: DeploymentExtendAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: DeploymentExtendEffect | undefined;
@@ -1189,6 +1244,10 @@ export type DeploymentExtendAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: DeploymentExtendAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -1260,9 +1319,17 @@ export type DeploymentExtendAzure = {
    */
   binding: DeploymentExtendAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: DeploymentExtendAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -1360,9 +1427,17 @@ export type DeploymentExtendGcp = {
    */
   binding: DeploymentExtendGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: DeploymentExtendGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -1515,6 +1590,10 @@ export type DeploymentProfileAw = {
    */
   binding: DeploymentProfileAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: DeploymentProfileEffect | undefined;
@@ -1522,6 +1601,10 @@ export type DeploymentProfileAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: DeploymentProfileAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -1593,9 +1676,17 @@ export type DeploymentProfileAzure = {
    */
   binding: DeploymentProfileAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: DeploymentProfileAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -1693,9 +1784,17 @@ export type DeploymentProfileGcp = {
    */
   binding: DeploymentProfileGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: DeploymentProfileGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -2047,6 +2146,10 @@ export type Deployment = {
    * Target platform for the deployment
    */
   platform: DeploymentPlatform;
+  /**
+   * DeploymentState protocol version owned by the runtime/manager
+   */
+  deploymentProtocolVersion: number;
   /**
    * ID of deployment group this deployment belongs to
    */
@@ -2759,6 +2862,27 @@ export function deploymentStackStateConfigFromJSON(
 }
 
 /** @internal */
+export const DeploymentControllerPlatformEnum$inboundSchema: z.ZodEnum<
+  typeof DeploymentControllerPlatformEnum
+> = z.enum(DeploymentControllerPlatformEnum);
+
+/** @internal */
+export const DeploymentControllerPlatformUnion$inboundSchema: z.ZodType<
+  DeploymentControllerPlatformUnion,
+  unknown
+> = z.union([DeploymentControllerPlatformEnum$inboundSchema, z.any()]);
+
+export function deploymentControllerPlatformUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentControllerPlatformUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentControllerPlatformUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentControllerPlatformUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentStackStateDependency$inboundSchema: z.ZodType<
   DeploymentStackStateDependency,
   unknown
@@ -2928,6 +3052,9 @@ export const DeploymentStackStateResources$inboundSchema: z.ZodType<
 > = z.object({
   _internal: z.nullable(z.any()).optional(),
   config: z.lazy(() => DeploymentStackStateConfig$inboundSchema),
+  controllerPlatform: z.nullable(
+    z.union([DeploymentControllerPlatformEnum$inboundSchema, z.any()]),
+  ).optional(),
   dependencies: z.array(
     z.lazy(() => DeploymentStackStateDependency$inboundSchema),
   ).optional(),
@@ -3105,8 +3232,10 @@ export const DeploymentOverrideAw$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   binding: z.lazy(() => DeploymentOverrideAwBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
   effect: DeploymentOverrideEffect$inboundSchema.optional(),
   grant: z.lazy(() => DeploymentOverrideAwGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function deploymentOverrideAwFromJSON(
@@ -3203,7 +3332,9 @@ export const DeploymentOverrideAzure$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   binding: z.lazy(() => DeploymentOverrideAzureBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
   grant: z.lazy(() => DeploymentOverrideAzureGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function deploymentOverrideAzureFromJSON(
@@ -3396,7 +3527,9 @@ export const DeploymentOverrideGcp$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   binding: z.lazy(() => DeploymentOverrideGcpBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
   grant: z.lazy(() => DeploymentOverrideGcpGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function deploymentOverrideGcpFromJSON(
@@ -3584,8 +3717,10 @@ export const DeploymentExtendAw$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   binding: z.lazy(() => DeploymentExtendAwBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
   effect: DeploymentExtendEffect$inboundSchema.optional(),
   grant: z.lazy(() => DeploymentExtendAwGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function deploymentExtendAwFromJSON(
@@ -3682,7 +3817,9 @@ export const DeploymentExtendAzure$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   binding: z.lazy(() => DeploymentExtendAzureBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
   grant: z.lazy(() => DeploymentExtendAzureGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function deploymentExtendAzureFromJSON(
@@ -3868,7 +4005,9 @@ export const DeploymentExtendGcp$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   binding: z.lazy(() => DeploymentExtendGcpBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
   grant: z.lazy(() => DeploymentExtendGcpGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function deploymentExtendGcpFromJSON(
@@ -4075,8 +4214,10 @@ export const DeploymentProfileAw$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   binding: z.lazy(() => DeploymentProfileAwBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
   effect: DeploymentProfileEffect$inboundSchema.optional(),
   grant: z.lazy(() => DeploymentProfileAwGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function deploymentProfileAwFromJSON(
@@ -4173,7 +4314,9 @@ export const DeploymentProfileAzure$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   binding: z.lazy(() => DeploymentProfileAzureBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
   grant: z.lazy(() => DeploymentProfileAzureGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function deploymentProfileAzureFromJSON(
@@ -4365,7 +4508,9 @@ export const DeploymentProfileGcp$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   binding: z.lazy(() => DeploymentProfileGcpBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
   grant: z.lazy(() => DeploymentProfileGcpGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function deploymentProfileGcpFromJSON(
@@ -4691,6 +4836,7 @@ export const Deployment$inboundSchema: z.ZodType<Deployment, unknown> = z
     status: DeploymentStatus$inboundSchema,
     projectId: z.string(),
     platform: DeploymentPlatform$inboundSchema,
+    deploymentProtocolVersion: z.int(),
     deploymentGroupId: z.string(),
     environmentInfo: z.nullable(
       z.union([

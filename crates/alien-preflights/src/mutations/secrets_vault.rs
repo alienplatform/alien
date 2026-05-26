@@ -145,7 +145,7 @@ fn link_vault_to_compute_resources(stack: &mut Stack, vault_id: &str) -> Result<
 /// This permission is added to their profiles, allowing alien-runtime to fetch secrets.
 fn add_vault_read_permissions_to_compute_profiles(
     stack: &mut Stack,
-    _vault_name: &str,
+    vault_name: &str,
 ) -> Result<()> {
     // Get all compute resource permission profile names
     let profile_names: Vec<String> = stack
@@ -184,23 +184,15 @@ fn add_vault_read_permissions_to_compute_profiles(
 
     for profile_name in unique_profiles {
         if let Some(profile) = stack.permissions.profiles.get_mut(&profile_name) {
-            // Add to global scope (*) - simpler than resource-specific scoping
-            if let Some(global_permissions) = profile.0.get_mut("*") {
-                if !global_permissions
-                    .iter()
-                    .any(|p| p.id() == "vault/data-read")
-                {
-                    global_permissions.push(vault_permission.clone());
-                    debug!("Added vault/data-read to profile '{}'", profile_name);
-                }
-            } else {
-                // Create global scope if it doesn't exist
-                profile
-                    .0
-                    .insert("*".to_string(), vec![vault_permission.clone()]);
+            let vault_permissions = profile.0.entry(vault_name.to_string()).or_default();
+            if !vault_permissions
+                .iter()
+                .any(|p| p.id() == "vault/data-read")
+            {
+                vault_permissions.push(vault_permission.clone());
                 debug!(
-                    "Added vault/data-read to new global scope in profile '{}'",
-                    profile_name
+                    "Added vault/data-read to profile '{}' for vault '{}'",
+                    profile_name, vault_name
                 );
             }
         } else {
@@ -380,8 +372,8 @@ mod tests {
             .profiles
             .get("test-profile")
             .unwrap();
-        let global_permissions = function_profile.0.get("*").unwrap();
-        assert!(global_permissions
+        let vault_permissions = function_profile.0.get("secrets").unwrap();
+        assert!(vault_permissions
             .iter()
             .any(|p| p.id() == "vault/data-read"));
     }
@@ -452,8 +444,8 @@ mod tests {
             .profiles
             .get("test-profile")
             .unwrap();
-        let global_permissions = container_profile.0.get("*").unwrap();
-        assert!(global_permissions
+        let vault_permissions = container_profile.0.get("secrets").unwrap();
+        assert!(vault_permissions
             .iter()
             .any(|p| p.id() == "vault/data-read"));
     }
@@ -594,9 +586,9 @@ mod tests {
         // Both profiles should have vault/data-read
         for profile_name in ["api-profile", "worker-profile"] {
             let profile = result_stack.permissions.profiles.get(profile_name).unwrap();
-            let global_permissions = profile.0.get("*").unwrap();
+            let vault_permissions = profile.0.get("secrets").unwrap();
             assert!(
-                global_permissions
+                vault_permissions
                     .iter()
                     .any(|p| p.id() == "vault/data-read"),
                 "Profile {} should have vault/data-read",

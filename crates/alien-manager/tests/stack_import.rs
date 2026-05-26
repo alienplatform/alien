@@ -240,6 +240,7 @@ fn aws_s3_import_request(
     bucket: &str,
 ) -> StackImportRequest {
     StackImportRequest {
+        setup_import_format_version: 1,
         deployment_group_token: "ignored".to_string(),
         deployment_name: deployment_name.to_string(),
         resource_prefix: deployment_name.to_string(),
@@ -288,6 +289,7 @@ fn aws_remote_management_import_request(
     account_id: &str,
 ) -> StackImportRequest {
     StackImportRequest {
+        setup_import_format_version: 1,
         deployment_group_token: "ignored".to_string(),
         deployment_name: deployment_name.to_string(),
         resource_prefix: deployment_name.to_string(),
@@ -324,6 +326,7 @@ fn gcp_remote_management_import_request(
     project_number: Option<&str>,
 ) -> StackImportRequest {
     StackImportRequest {
+        setup_import_format_version: 1,
         deployment_group_token: "ignored".to_string(),
         deployment_name: deployment_name.to_string(),
         resource_prefix: deployment_name.to_string(),
@@ -364,6 +367,7 @@ fn azure_remote_management_import_request(
     tenant_id: &str,
 ) -> StackImportRequest {
     StackImportRequest {
+        setup_import_format_version: 1,
         deployment_group_token: "ignored".to_string(),
         deployment_name: deployment_name.to_string(),
         resource_prefix: deployment_name.to_string(),
@@ -405,6 +409,14 @@ async fn post_import(
     bearer: Option<&str>,
     body: &StackImportRequest,
 ) -> (StatusCode, serde_json::Value) {
+    post_import_json(fixture, bearer, serde_json::to_value(body).unwrap()).await
+}
+
+async fn post_import_json(
+    fixture: &Fixture,
+    bearer: Option<&str>,
+    body: serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
     let router = alien_manager::routes::stack::router().with_state(fixture.state.clone());
 
     let mut req = Request::builder()
@@ -417,7 +429,7 @@ async fn post_import(
     }
 
     let request = req
-        .body(Body::from(serde_json::to_vec(body).unwrap()))
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
         .unwrap();
 
     let response = router.oneshot(request).await.unwrap();
@@ -717,11 +729,13 @@ async fn native_deployment_blocks_imported_name() {
         .create_deployment(
             &alien_manager::auth::Subject::system(),
             CreateDeploymentParams {
+                deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
                 name: "acme-prod".to_string(),
                 deployment_group_id: fixture.deployment_group_id.clone(),
                 platform: Platform::Aws,
                 base_platform: None,
                 stack_settings: StackSettings::default(),
+                stack_state: None,
                 environment_variables: None,
                 deployment_token: None,
             },
@@ -816,6 +830,32 @@ async fn missing_deployment_name_returns_400() {
 
     let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "body = {:#}", json);
+}
+
+#[tokio::test]
+async fn missing_setup_import_format_version_returns_incompatible_error() {
+    let fixture = make_fixture(Some(stack_with_storage("assets"))).await;
+    let body = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
+    let mut json = serde_json::to_value(body).unwrap();
+    json.as_object_mut()
+        .expect("stack import request should serialize to object")
+        .remove("setupImportFormatVersion");
+
+    let (status, json) = post_import_json(&fixture, Some(&fixture.dg_token), json).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body = {:#}", json);
+    assert_eq!(json["code"], "INCOMPATIBLE_SETUP_IMPORT");
+}
+
+#[tokio::test]
+async fn malformed_setup_import_format_version_returns_incompatible_error() {
+    let fixture = make_fixture(Some(stack_with_storage("assets"))).await;
+    let body = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
+    let mut json = serde_json::to_value(body).unwrap();
+    json["setupImportFormatVersion"] = serde_json::Value::String("1".to_string());
+
+    let (status, json) = post_import_json(&fixture, Some(&fixture.dg_token), json).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body = {:#}", json);
+    assert_eq!(json["code"], "INCOMPATIBLE_SETUP_IMPORT");
 }
 
 #[tokio::test]

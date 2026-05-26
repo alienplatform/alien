@@ -11,6 +11,7 @@ pub fn create_test_context() -> PermissionContext {
     PermissionContext::new()
         .with_stack_prefix("my-stack")
         .with_stack_name("byoc-database")
+        .with_deployment_name("Payment Processor")
         .with_resource_name("my-stack-payments-data")
         .with_project_name("my-project")
         .with_project_number("123456789012")
@@ -32,6 +33,8 @@ pub fn create_aws_storage_data_read_permission_set() -> PermissionSet {
         description: "Allows reading data from storage resources".to_string(),
         platforms: PlatformPermissions {
             aws: Some(vec![AwsPlatformPermission {
+                label: None,
+                description: None,
                 effect: Default::default(),
                 grant: PermissionGrant {
                     actions: Some(vec![
@@ -80,6 +83,8 @@ pub fn create_aws_storage_data_read_permission_set_with_condition() -> Permissio
         description: "Allows reading data from storage resources".to_string(),
         platforms: PlatformPermissions {
             aws: Some(vec![AwsPlatformPermission {
+                label: None,
+                description: None,
                 effect: Default::default(),
                 grant: PermissionGrant {
                     actions: Some(vec![
@@ -124,6 +129,8 @@ pub fn create_gcp_storage_data_read_permission_set() -> PermissionSet {
         platforms: PlatformPermissions {
             aws: None,
             gcp: Some(vec![GcpPlatformPermission {
+                label: None,
+                description: None,
                 grant: PermissionGrant {
                     actions: None,
                     permissions: Some(vec![
@@ -166,6 +173,8 @@ pub fn create_azure_storage_data_read_permission_set() -> PermissionSet {
             aws: None,
             gcp: None,
             azure: Some(vec![AzurePlatformPermission {
+                label: None,
+                description: None,
                 grant: PermissionGrant {
                     actions: None,
                     permissions: None,
@@ -197,6 +206,8 @@ pub fn create_azure_custom_permission_set() -> PermissionSet {
             aws: None,
             gcp: None,
             azure: Some(vec![AzurePlatformPermission {
+                label: None,
+                description: None,
                 grant: PermissionGrant {
                     actions: Some(vec!["Microsoft.Storage/storageAccounts/read".to_string()]),
                     permissions: None,
@@ -228,6 +239,8 @@ pub fn create_azure_hybrid_permission_set() -> PermissionSet {
             aws: None,
             gcp: None,
             azure: Some(vec![AzurePlatformPermission {
+                label: None,
+                description: None,
                 grant: PermissionGrant {
                     actions: Some(vec![
                         "Microsoft.ContainerRegistry/registries/write".to_string(),
@@ -260,6 +273,8 @@ pub fn create_permission_set_missing_actions() -> PermissionSet {
         description: "Test permission set with missing actions".to_string(),
         platforms: PlatformPermissions {
             aws: Some(vec![AwsPlatformPermission {
+                label: None,
+                description: None,
                 effect: Default::default(),
                 grant: PermissionGrant {
                     actions: None, // Missing actions for AWS
@@ -291,6 +306,8 @@ pub fn create_permission_set_missing_gcp_permissions() -> PermissionSet {
         platforms: PlatformPermissions {
             aws: None,
             gcp: Some(vec![GcpPlatformPermission {
+                label: None,
+                description: None,
                 grant: PermissionGrant {
                     actions: None,
                     permissions: None, // Missing permissions for GCP
@@ -336,6 +353,8 @@ pub fn create_aws_cloudformation_permission_set() -> PermissionSet {
         description: "Allows reading data from storage resources".to_string(),
         platforms: PlatformPermissions {
             aws: Some(vec![AwsPlatformPermission {
+                label: None,
+                description: None,
                 effect: Default::default(),
                 grant: PermissionGrant {
                     actions: Some(vec![
@@ -385,6 +404,8 @@ pub fn create_aws_lambda_permission_set() -> PermissionSet {
         platforms: PlatformPermissions {
             aws: Some(vec![
                 AwsPlatformPermission {
+                label: None,
+                description: None,
                     effect: Default::default(),
                     grant: PermissionGrant {
                         actions: Some(vec![
@@ -412,6 +433,8 @@ pub fn create_aws_lambda_permission_set() -> PermissionSet {
                 },
                 // Cross-service permission for ECR
                 AwsPlatformPermission {
+                label: None,
+                description: None,
                     effect: Default::default(),
                     grant: PermissionGrant {
                         actions: Some(vec![

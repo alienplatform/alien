@@ -49,6 +49,14 @@ pub trait IamApi: Send + Sync + Debug {
         path: Option<String>,
     ) -> Result<CreatePolicyResponse>;
     async fn delete_policy(&self, policy_arn: &str) -> Result<()>;
+    async fn create_policy_version(
+        &self,
+        policy_arn: &str,
+        policy_document: &str,
+        set_as_default: bool,
+    ) -> Result<CreatePolicyVersionResponse>;
+    async fn delete_policy_version(&self, policy_arn: &str, version_id: &str) -> Result<()>;
+    async fn list_policy_versions(&self, policy_arn: &str) -> Result<ListPolicyVersionsResponse>;
     async fn attach_role_policy(&self, role_name: &str, policy_arn: &str) -> Result<()>;
     async fn detach_role_policy(&self, role_name: &str, policy_arn: &str) -> Result<()>;
     async fn list_role_policies(&self, role_name: &str) -> Result<ListRolePoliciesResponse>;
@@ -470,6 +478,38 @@ impl IamApi for IamClient {
             .await
     }
 
+    async fn create_policy_version(
+        &self,
+        policy_arn: &str,
+        policy_document: &str,
+        set_as_default: bool,
+    ) -> Result<CreatePolicyVersionResponse> {
+        let params = vec![
+            ("PolicyArn".to_string(), policy_arn.to_string()),
+            ("PolicyDocument".to_string(), policy_document.to_string()),
+            ("SetAsDefault".to_string(), set_as_default.to_string()),
+        ];
+        let body = Self::build_form_body("CreatePolicyVersion", "2010-05-08", params);
+        self.post_xml(body, "CreatePolicyVersion", policy_arn).await
+    }
+
+    async fn delete_policy_version(&self, policy_arn: &str, version_id: &str) -> Result<()> {
+        let params = vec![
+            ("PolicyArn".to_string(), policy_arn.to_string()),
+            ("VersionId".to_string(), version_id.to_string()),
+        ];
+        let body = Self::build_form_body("DeletePolicyVersion", "2010-05-08", params);
+        let resource = format!("{}:{}", policy_arn, version_id);
+        self.post_no_response(body, "DeletePolicyVersion", &resource)
+            .await
+    }
+
+    async fn list_policy_versions(&self, policy_arn: &str) -> Result<ListPolicyVersionsResponse> {
+        let params = vec![("PolicyArn".to_string(), policy_arn.to_string())];
+        let body = Self::build_form_body("ListPolicyVersions", "2010-05-08", params);
+        self.post_xml(body, "ListPolicyVersions", policy_arn).await
+    }
+
     async fn detach_role_policy(&self, role_name: &str, policy_arn: &str) -> Result<()> {
         let params = vec![
             ("RoleName".to_string(), role_name.to_string()),
@@ -757,6 +797,48 @@ pub struct Policy {
     pub is_attachable: Option<bool>,
     pub create_date: Option<String>,
     pub update_date: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "PascalCase")]
+pub struct CreatePolicyVersionResponse {
+    pub create_policy_version_result: CreatePolicyVersionResult,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "PascalCase")]
+pub struct CreatePolicyVersionResult {
+    pub policy_version: PolicyVersion,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "PascalCase")]
+pub struct ListPolicyVersionsResponse {
+    pub list_policy_versions_result: ListPolicyVersionsResult,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "PascalCase")]
+pub struct ListPolicyVersionsResult {
+    pub versions: Option<PolicyVersions>,
+    pub is_truncated: Option<bool>,
+    pub marker: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "PascalCase")]
+pub struct PolicyVersions {
+    #[serde(rename = "member", default)]
+    pub member: Vec<PolicyVersion>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "PascalCase")]
+pub struct PolicyVersion {
+    pub document: Option<String>,
+    pub version_id: String,
+    pub is_default_version: bool,
+    pub create_date: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]

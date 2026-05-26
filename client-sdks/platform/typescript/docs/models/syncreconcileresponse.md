@@ -11,7 +11,8 @@ let value: SyncReconcileResponse = {
   success: false,
   current: {
     platform: "aws",
-    status: "delete-pending",
+    protocolVersion: 670484,
+    status: "error",
   },
 };
 ```

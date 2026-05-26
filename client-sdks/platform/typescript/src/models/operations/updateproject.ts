@@ -96,6 +96,10 @@ export type UpdateProjectCloudformation = {
    * Whether CloudFormation package generation is enabled
    */
   enabled: boolean;
+  /**
+   * Human-friendly application name shown in generated install artifacts
+   */
+  displayName?: string | null | undefined;
 };
 
 /**
@@ -142,6 +146,10 @@ export type UpdateProjectTerraform = {
    * Whether Terraform package generation is enabled
    */
   enabled: boolean;
+  /**
+   * Human-friendly application name shown in generated install artifacts
+   */
+  displayName?: string | null | undefined;
 };
 
 /**
@@ -306,6 +314,7 @@ export function updateProjectCliToJSON(
 /** @internal */
 export type UpdateProjectCloudformation$Outbound = {
   enabled: boolean;
+  displayName?: string | null | undefined;
 };
 
 /** @internal */
@@ -314,6 +323,7 @@ export const UpdateProjectCloudformation$outboundSchema: z.ZodType<
   UpdateProjectCloudformation
 > = z.object({
   enabled: z.boolean(),
+  displayName: z.nullable(z.string()).optional(),
 });
 
 export function updateProjectCloudformationToJSON(
@@ -379,6 +389,7 @@ export function updateProjectHelmToJSON(
 /** @internal */
 export type UpdateProjectTerraform$Outbound = {
   enabled: boolean;
+  displayName?: string | null | undefined;
 };
 
 /** @internal */
@@ -387,6 +398,7 @@ export const UpdateProjectTerraform$outboundSchema: z.ZodType<
   UpdateProjectTerraform
 > = z.object({
   enabled: z.boolean(),
+  displayName: z.nullable(z.string()).optional(),
 });
 
 export function updateProjectTerraformToJSON(

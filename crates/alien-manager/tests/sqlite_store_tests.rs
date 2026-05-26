@@ -66,11 +66,13 @@ async fn create_test_deployment(
         .create_deployment(
             &test_subject(),
             CreateDeploymentParams {
+                deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
                 name: name.to_string(),
                 deployment_group_id: group_id.to_string(),
                 platform,
                 base_platform: None,
                 stack_settings: StackSettings::default(),
+                stack_state: None,
                 environment_variables: None,
                 deployment_token: None,
             },

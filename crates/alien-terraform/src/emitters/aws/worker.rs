@@ -15,8 +15,7 @@ use crate::{
 };
 use alien_core::{
     crontab_to_eventbridge::crontab_to_eventbridge, import::EmitContext, ErrorData, Ingress,
-    NetworkSettings, Platform, ResourceRef, Result, Storage, Vault, Worker, WorkerCode,
-    WorkerTrigger,
+    NetworkSettings, Platform, Result, Storage, Worker, WorkerCode, WorkerTrigger,
 };
 use alien_error::AlienError;
 use hcl::expr::Expression;
@@ -73,7 +72,7 @@ impl TfEmitter for AwsWorkerEmitter {
                     [
                         attr(
                             "name",
-                            Expression::String("alien-managed-policy".to_string()),
+                            Expression::String("deployment-permissions".to_string()),
                         ),
                         attr("role", expr::traversal(["aws_iam_role", &role_label, "id"])),
                         attr("policy", lambda_fallback_policy(ctx, function)?),
@@ -271,140 +270,10 @@ fn lambda_fallback_policy(ctx: &EmitContext<'_>, function: &Worker) -> Result<Ex
         ("Resource", Expression::String("*".to_string())),
     ])];
 
-    for trigger in &function.triggers {
-        if let WorkerTrigger::Queue { queue } = trigger {
-            let queue_label = label_for_ref(ctx, queue)?;
-            statements.push(expr::object([
-                ("Sid", Expression::String(format!("ReadQueue{queue_label}"))),
-                ("Effect", Expression::String("Allow".to_string())),
-                (
-                    "Action",
-                    Expression::Array(vec![
-                        Expression::String("sqs:ReceiveMessage".to_string()),
-                        Expression::String("sqs:DeleteMessage".to_string()),
-                        Expression::String("sqs:GetQueueAttributes".to_string()),
-                        Expression::String("sqs:ChangeMessageVisibility".to_string()),
-                    ]),
-                ),
-                (
-                    "Resource",
-                    expr::traversal(["aws_sqs_queue", queue_label, "arn"]),
-                ),
-            ]));
-        }
-    }
-
-    for link in &function.links {
-        statements.extend(link_permission_statements(ctx, link)?);
-    }
-
     Ok(jsonencode(expr::object([
         ("Version", Expression::String("2012-10-17".to_string())),
         ("Statement", Expression::Array(statements)),
     ])))
-}
-
-fn link_permission_statements(
-    ctx: &EmitContext<'_>,
-    link: &ResourceRef,
-) -> Result<Vec<Expression>> {
-    let label = label_for_ref(ctx, link)?;
-    let label_owned = label.to_string();
-    if link.resource_type == Storage::RESOURCE_TYPE {
-        Ok(vec![expr::object([
-            (
-                "Sid",
-                Expression::String(format!("AccessStorage{label_owned}")),
-            ),
-            ("Effect", Expression::String("Allow".to_string())),
-            (
-                "Action",
-                Expression::Array(vec![
-                    Expression::String("s3:GetObject".to_string()),
-                    Expression::String("s3:PutObject".to_string()),
-                    Expression::String("s3:DeleteObject".to_string()),
-                    Expression::String("s3:ListBucket".to_string()),
-                ]),
-            ),
-            (
-                "Resource",
-                Expression::Array(vec![
-                    expr::traversal(["aws_s3_bucket", &label_owned, "arn"]),
-                    expr::raw(format!("\"${{aws_s3_bucket.{label_owned}.arn}}/*\"")),
-                ]),
-            ),
-        ])])
-    } else if link.resource_type == alien_core::Queue::RESOURCE_TYPE {
-        Ok(vec![expr::object([
-            (
-                "Sid",
-                Expression::String(format!("AccessQueue{label_owned}")),
-            ),
-            ("Effect", Expression::String("Allow".to_string())),
-            (
-                "Action",
-                Expression::Array(vec![
-                    Expression::String("sqs:SendMessage".to_string()),
-                    Expression::String("sqs:ReceiveMessage".to_string()),
-                    Expression::String("sqs:DeleteMessage".to_string()),
-                    Expression::String("sqs:GetQueueAttributes".to_string()),
-                ]),
-            ),
-            (
-                "Resource",
-                expr::traversal(["aws_sqs_queue", &label_owned, "arn"]),
-            ),
-        ])])
-    } else if link.resource_type == alien_core::Kv::RESOURCE_TYPE {
-        Ok(vec![expr::object([
-            (
-                "Sid",
-                Expression::String(format!("AccessTable{label_owned}")),
-            ),
-            ("Effect", Expression::String("Allow".to_string())),
-            (
-                "Action",
-                Expression::Array(vec![
-                    Expression::String("dynamodb:GetItem".to_string()),
-                    Expression::String("dynamodb:PutItem".to_string()),
-                    Expression::String("dynamodb:UpdateItem".to_string()),
-                    Expression::String("dynamodb:DeleteItem".to_string()),
-                    Expression::String("dynamodb:Query".to_string()),
-                    Expression::String("dynamodb:Scan".to_string()),
-                ]),
-            ),
-            (
-                "Resource",
-                expr::traversal(["aws_dynamodb_table", &label_owned, "arn"]),
-            ),
-        ])])
-    } else if link.resource_type == Vault::RESOURCE_TYPE {
-        Ok(vec![expr::object([
-            (
-                "Sid",
-                Expression::String(format!("AccessVault{label_owned}")),
-            ),
-            ("Effect", Expression::String("Allow".to_string())),
-            (
-                "Action",
-                Expression::Array(vec![
-                    Expression::String("ssm:GetParameter".to_string()),
-                    Expression::String("ssm:GetParameters".to_string()),
-                    Expression::String("ssm:PutParameter".to_string()),
-                    Expression::String("ssm:DeleteParameter".to_string()),
-                ]),
-            ),
-            (
-                "Resource",
-                expr::template(format!(
-                    "arn:aws:ssm:${{data.aws_region.current.region}}:${{data.aws_caller_identity.current.account_id}}:parameter/${{local.resource_prefix}}-{}/*",
-                    link.id
-                )),
-            ),
-        ])])
-    } else {
-        Ok(vec![])
-    }
 }
 
 fn lambda_vpc_config(ctx: &EmitContext<'_>) -> Option<(Expression, Expression)> {

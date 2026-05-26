@@ -23,8 +23,9 @@ use crate::{
     target::TerraformTarget,
 };
 use alien_core::{
-    import::EmitContext, ownership_policy_for_resource_type, ErrorData, Network, NetworkSettings,
-    Result, Stack, StackSettings,
+    import::{EmitContext, CURRENT_SETUP_IMPORT_FORMAT_VERSION},
+    ownership_policy_for_resource_type, ErrorData, Network, NetworkSettings, Result, Stack,
+    StackSettings,
 };
 use alien_error::{AlienError, IntoAlienError};
 use hcl::{
@@ -66,6 +67,8 @@ pub struct TerraformOptions<'a> {
     /// [`TfRegistry::built_in()`]; plugin-aware callers extend it before
     /// passing.
     pub registry: &'a TfRegistry,
+    /// Human-friendly application name shown in generated review surfaces.
+    pub display_name: Option<String>,
     pub stack_settings: StackSettings,
     /// Optional self-registration settings. When present, the generated module
     /// requires the configured provider and creates its registration resource
@@ -231,6 +234,12 @@ pub fn generate_terraform_module(
     }
 
     let network_vars = network_extra_variables(stack, &labels);
+    let deployment_name_default = options
+        .display_name
+        .as_deref()
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| stack.id())
+        .to_string();
 
     let mut files: IndexMap<String, String> = IndexMap::new();
     files.insert(
@@ -248,6 +257,7 @@ pub fn generate_terraform_module(
             &network_vars,
             &options.stack_settings,
             options.registration.as_ref(),
+            &deployment_name_default,
         )?)?,
     );
     files.insert(
@@ -265,6 +275,7 @@ pub fn generate_terraform_module(
             &options.stack_settings,
             imported_resources,
             &shared_locals,
+            options.registration.is_some(),
         )?)?,
     );
 
@@ -294,7 +305,12 @@ pub fn generate_terraform_module(
     );
     files.insert(
         "README.md".to_string(),
-        readme_md(stack, target, options.registration.as_ref()),
+        readme_md(
+            stack,
+            target,
+            options.registration.as_ref(),
+            options.display_name.as_deref(),
+        ),
     );
 
     let mut module = ModuleFiles { files };
@@ -684,6 +700,7 @@ fn variables_body(
     network_vars: &NetworkVariables,
     stack_settings: &StackSettings,
     registration: Option<&TerraformRegistration>,
+    deployment_name_default: &str,
 ) -> Result<Body> {
     let mut blocks: Vec<Structure> = Vec::new();
     let stack_settings_default = serde_json::to_string(stack_settings)
@@ -699,26 +716,26 @@ fn variables_body(
     if registration.is_some() {
         blocks.push(nested(variable_block(
             "deployment_name",
-            "Deployment name used when registering the resolved stack import. Defaults to the generated resource prefix.",
-            Some(Expression::String(String::new())),
+            "Human-readable application name used in setup and cloud IAM review metadata.",
+            Some(Expression::String(deployment_name_default.to_string())),
             false,
         )));
         blocks.push(nested(variable_block(
             "deployment_group_token",
-            "Deployment group token used when registering the resolved stack import.",
+            "Install token used when registering the resolved cloud resources.",
             None,
             true,
         )));
     } else {
         blocks.push(nested(variable_block(
             "name",
-            "Human-readable deployment name shown in the deployment portal.",
+            "Human-readable application name shown in setup and cloud IAM review metadata.",
             None,
             false,
         )));
         blocks.push(nested(variable_block(
             "token",
-            "Deployment token from the deployment page. This is the same token used by the deploy CLI --token flag.",
+            "Install token from the application setup page. This is the same token used by the deploy CLI --token flag.",
             None,
             true,
         )));
@@ -1149,6 +1166,7 @@ fn locals_body(
     stack_settings: &StackSettings,
     imported_resources: Vec<Expression>,
     extra: &IndexMap<String, Expression>,
+    registration: bool,
 ) -> Result<Body> {
     let mut body: Vec<Structure> = Vec::new();
 
@@ -1157,6 +1175,14 @@ fn locals_body(
         expr::raw(
             "var.resource_prefix == \"\" ? format(\"a%s\", random_id.resource_prefix.hex) : var.resource_prefix",
         ),
+    ));
+    body.push(attr(
+        "deployment_name",
+        expr::raw(if registration {
+            "var.deployment_name"
+        } else {
+            "var.name"
+        }),
     ));
     if matches!(target.platform(), alien_core::Platform::Gcp) {
         body.push(attr(
@@ -1349,16 +1375,17 @@ fn import_body(registration: Option<&TerraformRegistration>, depends_on: &[Expre
                 "deployment_group_token",
                 expr::raw("var.deployment_group_token"),
             ),
-            attr(
-                "name",
-                expr::raw(
-                    "var.deployment_name == \"\" ? local.resource_prefix : var.deployment_name",
-                ),
-            ),
+            attr("name", expr::raw("local.deployment_name")),
             attr("resource_prefix", expr::raw("local.resource_prefix")),
             attr(
                 "setup_target",
                 Expression::String(registration.setup_target.clone()),
+            ),
+            attr(
+                "setup_import_format_version",
+                Expression::Number(hcl::Number::from(i64::from(
+                    CURRENT_SETUP_IMPORT_FORMAT_VERSION,
+                ))),
             ),
             attr(
                 "setup_fingerprint",
@@ -1404,6 +1431,12 @@ fn import_body(registration: Option<&TerraformRegistration>, depends_on: &[Expre
                         .map(|r| r.setup_target.clone())
                         .unwrap_or_default(),
                 ),
+            ),
+            (
+                "setup_import_format_version",
+                Expression::Number(hcl::Number::from(i64::from(
+                    CURRENT_SETUP_IMPORT_FORMAT_VERSION,
+                ))),
             ),
             (
                 "setup_fingerprint",
@@ -1471,6 +1504,13 @@ fn outputs_body(target: TerraformTarget, registration: Option<&TerraformRegistra
                     .unwrap_or_default(),
             ),
             "Setup target.",
+        ),
+        (
+            "deployment_setup_import_format_version",
+            Expression::Number(hcl::Number::from(i64::from(
+                CURRENT_SETUP_IMPORT_FORMAT_VERSION,
+            ))),
+            "Setup import payload format version.",
         ),
         (
             "deployment_setup_fingerprint",
@@ -1555,6 +1595,7 @@ fn readme_md(
     stack: &Stack,
     target: TerraformTarget,
     registration: Option<&TerraformRegistration>,
+    display_name: Option<&str>,
 ) -> String {
     let apply_args = if registration.is_some() {
         "-var='deployment_group_token=...'".to_string()
@@ -1572,13 +1613,14 @@ fn readme_md(
             "This module exposes `deployment_management_config` / `deployment_stack_settings` / `deployment_resources` for external registration flows.\n".to_string()
         });
 
+    let display_name = display_name.unwrap_or_else(|| stack.id());
     format!(
         "# Terraform module - {}\n\n\
 Target: `{}`.\n\n\
 Run:\n\n\
 ```bash\nterraform init -backend=false\nterraform validate\nterraform apply {}\n```\n\n\
 {}",
-        stack.id(),
+        display_name,
         target.name(),
         apply_args,
         registration_note

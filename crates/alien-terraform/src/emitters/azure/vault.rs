@@ -20,8 +20,8 @@ use crate::{
     expr,
 };
 use alien_core::{
-    import::EmitContext, PermissionProfile, PermissionSet, PermissionSetReference,
-    RemoteStackManagement, Result, Vault,
+    import::EmitContext, PermissionProfile, PermissionSetReference, RemoteStackManagement, Result,
+    Vault,
 };
 use alien_error::Context;
 use alien_permissions::{
@@ -170,12 +170,12 @@ fn emit_management_permissions(
                     expr::template(role_definition_id.clone())
                 }
                 AzureRoleDefinitionRef::Custom { key } => {
-                    let index = key
-                        .rsplit(':')
-                        .next()
-                        .and_then(|value| value.parse::<usize>().ok())
+                    let index = grant_plan
+                        .custom_roles
+                        .iter()
+                        .position(|role| role.key == *key)
                         .unwrap_or(0);
-                    let role_label = setup_management_role_label(&permission_set.id, index);
+                    let role_label = setup_management_role_label(&binding.role_name, index);
                     expr::traversal([
                         "azurerm_role_definition",
                         role_label.as_str(),
@@ -188,9 +188,9 @@ fn emit_management_permissions(
                 ctx.resource_id,
                 vault_label,
                 binding_index,
+                &binding.role_name,
                 role_definition_id,
                 principal_id_expr.clone(),
-                &permission_set,
             );
         }
     }
@@ -203,22 +203,19 @@ fn emit_management_role_assignment(
     vault_id: &str,
     vault_label: &str,
     binding_index: usize,
+    role_name: &str,
     role_definition_id: Expression,
     principal_id_expr: Expression,
-    permission_set: &PermissionSet,
 ) {
+    let role_label = sanitize_role_label(role_name);
     fragment.resource_blocks.push(resource_block(
         "azurerm_role_assignment",
-        &format!(
-            "{vault_label}_{}_management_assignment_{binding_index}",
-            sanitize_role_label(&permission_set.id)
-        ),
+        &format!("{vault_label}_{role_label}_management_assignment_{binding_index}"),
         [
             attr(
                 "name",
                 expr::raw(&format!(
-                    "uuidv5(\"oid\", \"deployment:azure:mgmt-res-role-assign:${{local.resource_prefix}}:{}:{}:{binding_index}\")",
-                    vault_id, permission_set.id
+                    "uuidv5(\"oid\", \"deployment:azure:mgmt-res-role-assign:${{local.resource_prefix}}:{vault_id}:{role_label}:{binding_index}\")"
                 )),
             ),
             attr(

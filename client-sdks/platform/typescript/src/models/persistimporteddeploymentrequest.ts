@@ -596,6 +596,10 @@ export type PersistImportedDeploymentRequestOverrideAw = {
    */
   binding: PersistImportedDeploymentRequestOverrideAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: PersistImportedDeploymentRequestOverrideEffect | undefined;
@@ -603,6 +607,10 @@ export type PersistImportedDeploymentRequestOverrideAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: PersistImportedDeploymentRequestOverrideAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -674,9 +682,17 @@ export type PersistImportedDeploymentRequestOverrideAzure = {
    */
   binding: PersistImportedDeploymentRequestOverrideAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: PersistImportedDeploymentRequestOverrideAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -782,9 +798,17 @@ export type PersistImportedDeploymentRequestOverrideGcp = {
    */
   binding: PersistImportedDeploymentRequestOverrideGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: PersistImportedDeploymentRequestOverrideGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -936,6 +960,10 @@ export type PersistImportedDeploymentRequestExtendAw = {
    */
   binding: PersistImportedDeploymentRequestExtendAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: PersistImportedDeploymentRequestExtendEffect | undefined;
@@ -943,6 +971,10 @@ export type PersistImportedDeploymentRequestExtendAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: PersistImportedDeploymentRequestExtendAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -1014,9 +1046,17 @@ export type PersistImportedDeploymentRequestExtendAzure = {
    */
   binding: PersistImportedDeploymentRequestExtendAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: PersistImportedDeploymentRequestExtendAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -1122,9 +1162,17 @@ export type PersistImportedDeploymentRequestExtendGcp = {
    */
   binding: PersistImportedDeploymentRequestExtendGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: PersistImportedDeploymentRequestExtendGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -1281,6 +1329,10 @@ export type PersistImportedDeploymentRequestProfileAw = {
    */
   binding: PersistImportedDeploymentRequestProfileAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: PersistImportedDeploymentRequestProfileEffect | undefined;
@@ -1288,6 +1340,10 @@ export type PersistImportedDeploymentRequestProfileAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: PersistImportedDeploymentRequestProfileAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -1359,9 +1415,17 @@ export type PersistImportedDeploymentRequestProfileAzure = {
    */
   binding: PersistImportedDeploymentRequestProfileAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: PersistImportedDeploymentRequestProfileAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -1467,9 +1531,17 @@ export type PersistImportedDeploymentRequestProfileGcp = {
    */
   binding: PersistImportedDeploymentRequestProfileGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: PersistImportedDeploymentRequestProfileGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -1830,6 +1902,10 @@ export type PersistImportedDeploymentRequest = {
    * Stores deployment state that needs to persist across step calls.
    */
   runtimeMetadata: PersistImportedDeploymentRequestRuntimeMetadata;
+  /**
+   * DeploymentState protocol version owned by the runtime/manager
+   */
+  deploymentProtocolVersion: number;
   /**
    * Deployment status in the deployment lifecycle
    */
@@ -2940,8 +3016,10 @@ export function persistImportedDeploymentRequestOverrideAwGrantToJSON(
 /** @internal */
 export type PersistImportedDeploymentRequestOverrideAw$Outbound = {
   binding: PersistImportedDeploymentRequestOverrideAwBinding$Outbound;
+  description?: string | null | undefined;
   effect?: string | undefined;
   grant: PersistImportedDeploymentRequestOverrideAwGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -2953,11 +3031,13 @@ export const PersistImportedDeploymentRequestOverrideAw$outboundSchema:
     binding: z.lazy(() =>
       PersistImportedDeploymentRequestOverrideAwBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     effect: PersistImportedDeploymentRequestOverrideEffect$outboundSchema
       .optional(),
     grant: z.lazy(() =>
       PersistImportedDeploymentRequestOverrideAwGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function persistImportedDeploymentRequestOverrideAwToJSON(
@@ -3092,7 +3172,9 @@ export function persistImportedDeploymentRequestOverrideAzureGrantToJSON(
 /** @internal */
 export type PersistImportedDeploymentRequestOverrideAzure$Outbound = {
   binding: PersistImportedDeploymentRequestOverrideAzureBinding$Outbound;
+  description?: string | null | undefined;
   grant: PersistImportedDeploymentRequestOverrideAzureGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -3104,9 +3186,11 @@ export const PersistImportedDeploymentRequestOverrideAzure$outboundSchema:
     binding: z.lazy(() =>
       PersistImportedDeploymentRequestOverrideAzureBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       PersistImportedDeploymentRequestOverrideAzureGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function persistImportedDeploymentRequestOverrideAzureToJSON(
@@ -3373,7 +3457,9 @@ export function persistImportedDeploymentRequestOverrideGcpGrantToJSON(
 /** @internal */
 export type PersistImportedDeploymentRequestOverrideGcp$Outbound = {
   binding: PersistImportedDeploymentRequestOverrideGcpBinding$Outbound;
+  description?: string | null | undefined;
   grant: PersistImportedDeploymentRequestOverrideGcpGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -3385,9 +3471,11 @@ export const PersistImportedDeploymentRequestOverrideGcp$outboundSchema:
     binding: z.lazy(() =>
       PersistImportedDeploymentRequestOverrideGcpBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       PersistImportedDeploymentRequestOverrideGcpGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function persistImportedDeploymentRequestOverrideGcpToJSON(
@@ -3675,8 +3763,10 @@ export function persistImportedDeploymentRequestExtendAwGrantToJSON(
 /** @internal */
 export type PersistImportedDeploymentRequestExtendAw$Outbound = {
   binding: PersistImportedDeploymentRequestExtendAwBinding$Outbound;
+  description?: string | null | undefined;
   effect?: string | undefined;
   grant: PersistImportedDeploymentRequestExtendAwGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -3687,11 +3777,13 @@ export const PersistImportedDeploymentRequestExtendAw$outboundSchema: z.ZodType<
   binding: z.lazy(() =>
     PersistImportedDeploymentRequestExtendAwBinding$outboundSchema
   ),
+  description: z.nullable(z.string()).optional(),
   effect: PersistImportedDeploymentRequestExtendEffect$outboundSchema
     .optional(),
   grant: z.lazy(() =>
     PersistImportedDeploymentRequestExtendAwGrant$outboundSchema
   ),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function persistImportedDeploymentRequestExtendAwToJSON(
@@ -3824,7 +3916,9 @@ export function persistImportedDeploymentRequestExtendAzureGrantToJSON(
 /** @internal */
 export type PersistImportedDeploymentRequestExtendAzure$Outbound = {
   binding: PersistImportedDeploymentRequestExtendAzureBinding$Outbound;
+  description?: string | null | undefined;
   grant: PersistImportedDeploymentRequestExtendAzureGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -3836,9 +3930,11 @@ export const PersistImportedDeploymentRequestExtendAzure$outboundSchema:
     binding: z.lazy(() =>
       PersistImportedDeploymentRequestExtendAzureBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       PersistImportedDeploymentRequestExtendAzureGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function persistImportedDeploymentRequestExtendAzureToJSON(
@@ -4104,7 +4200,9 @@ export function persistImportedDeploymentRequestExtendGcpGrantToJSON(
 /** @internal */
 export type PersistImportedDeploymentRequestExtendGcp$Outbound = {
   binding: PersistImportedDeploymentRequestExtendGcpBinding$Outbound;
+  description?: string | null | undefined;
   grant: PersistImportedDeploymentRequestExtendGcpGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -4116,9 +4214,11 @@ export const PersistImportedDeploymentRequestExtendGcp$outboundSchema:
     binding: z.lazy(() =>
       PersistImportedDeploymentRequestExtendGcpBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       PersistImportedDeploymentRequestExtendGcpGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function persistImportedDeploymentRequestExtendGcpToJSON(
@@ -4434,8 +4534,10 @@ export function persistImportedDeploymentRequestProfileAwGrantToJSON(
 /** @internal */
 export type PersistImportedDeploymentRequestProfileAw$Outbound = {
   binding: PersistImportedDeploymentRequestProfileAwBinding$Outbound;
+  description?: string | null | undefined;
   effect?: string | undefined;
   grant: PersistImportedDeploymentRequestProfileAwGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -4447,11 +4549,13 @@ export const PersistImportedDeploymentRequestProfileAw$outboundSchema:
     binding: z.lazy(() =>
       PersistImportedDeploymentRequestProfileAwBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     effect: PersistImportedDeploymentRequestProfileEffect$outboundSchema
       .optional(),
     grant: z.lazy(() =>
       PersistImportedDeploymentRequestProfileAwGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function persistImportedDeploymentRequestProfileAwToJSON(
@@ -4586,7 +4690,9 @@ export function persistImportedDeploymentRequestProfileAzureGrantToJSON(
 /** @internal */
 export type PersistImportedDeploymentRequestProfileAzure$Outbound = {
   binding: PersistImportedDeploymentRequestProfileAzureBinding$Outbound;
+  description?: string | null | undefined;
   grant: PersistImportedDeploymentRequestProfileAzureGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -4598,9 +4704,11 @@ export const PersistImportedDeploymentRequestProfileAzure$outboundSchema:
     binding: z.lazy(() =>
       PersistImportedDeploymentRequestProfileAzureBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       PersistImportedDeploymentRequestProfileAzureGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function persistImportedDeploymentRequestProfileAzureToJSON(
@@ -4867,7 +4975,9 @@ export function persistImportedDeploymentRequestProfileGcpGrantToJSON(
 /** @internal */
 export type PersistImportedDeploymentRequestProfileGcp$Outbound = {
   binding: PersistImportedDeploymentRequestProfileGcpBinding$Outbound;
+  description?: string | null | undefined;
   grant: PersistImportedDeploymentRequestProfileGcpGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -4879,9 +4989,11 @@ export const PersistImportedDeploymentRequestProfileGcp$outboundSchema:
     binding: z.lazy(() =>
       PersistImportedDeploymentRequestProfileGcpBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       PersistImportedDeploymentRequestProfileGcpGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function persistImportedDeploymentRequestProfileGcpToJSON(
@@ -5449,6 +5561,7 @@ export type PersistImportedDeploymentRequest$Outbound = {
     | null
     | undefined;
   runtimeMetadata: PersistImportedDeploymentRequestRuntimeMetadata$Outbound;
+  deploymentProtocolVersion: number;
   status: string;
   currentReleaseId?: string | undefined;
   desiredReleaseId?: string | undefined;
@@ -5502,6 +5615,7 @@ export const PersistImportedDeploymentRequest$outboundSchema: z.ZodType<
   runtimeMetadata: z.lazy(() =>
     PersistImportedDeploymentRequestRuntimeMetadata$outboundSchema
   ),
+  deploymentProtocolVersion: z.int(),
   status: PersistImportedDeploymentRequestStatus$outboundSchema.default(
     "provisioning",
   ),

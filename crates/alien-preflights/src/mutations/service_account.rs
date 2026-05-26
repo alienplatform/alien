@@ -71,11 +71,6 @@ impl StackMutation for ServiceAccountMutation {
 
             let permission_profile =
                 with_runtime_baseline_permissions(&stack, profile_name, permission_profile);
-            let permission_profile = if stack_state.platform == Platform::Aws {
-                with_aws_tag_tamper_protection(&permission_profile)
-            } else {
-                permission_profile
-            };
 
             // Create ServiceAccount from permission profile
             let service_account_id = format!("{}-sa", profile_name);
@@ -123,18 +118,6 @@ impl StackMutation for ServiceAccountMutation {
 
         Ok(stack)
     }
-}
-
-fn with_aws_tag_tamper_protection(profile: &PermissionProfile) -> PermissionProfile {
-    let mut profile = profile.clone();
-    let permission = PermissionSetReference::from_name("aws/tag-tamper-protection");
-
-    let global_permissions = profile.0.entry("*".to_string()).or_default();
-    if !global_permissions.contains(&permission) {
-        global_permissions.push(permission);
-    }
-
-    profile
 }
 
 fn with_runtime_baseline_permissions(
@@ -195,6 +178,9 @@ mod tests {
         assert!(global
             .iter()
             .any(|permission| permission.id() == "worker/execute"));
+        assert!(!global
+            .iter()
+            .any(|permission| permission.id() == "aws/tag-tamper-protection"));
     }
 
     #[test]

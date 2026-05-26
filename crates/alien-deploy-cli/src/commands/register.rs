@@ -148,6 +148,7 @@ struct CfnOutputs {
     region: Option<String>,
     resource_prefix: Option<String>,
     setup_target: Option<String>,
+    setup_import_format_version: Option<u32>,
     setup_fingerprint: Option<String>,
     setup_fingerprint_version: Option<u32>,
     management_config: Option<JsonValue>,
@@ -208,6 +209,16 @@ async fn fetch_cloudformation_outputs(region: &str, stack_name: &str) -> Result<
                 "DeploymentPlatform" => outputs.platform = Some(value.to_string()),
                 "DeploymentRegion" => outputs.region = Some(value.to_string()),
                 "DeploymentSetupTarget" => outputs.setup_target = Some(value.to_string()),
+                "DeploymentSetupImportFormatVersion" => {
+                    let version = value.parse().map_err(|reason| {
+                        AlienError::new(ErrorData::ConfigurationError {
+                            message: format!(
+                                "DeploymentSetupImportFormatVersion output '{value}' is invalid: {reason}"
+                            ),
+                        })
+                    })?;
+                    outputs.setup_import_format_version = Some(version);
+                }
                 "DeploymentSetupFingerprint" => outputs.setup_fingerprint = Some(value.to_string()),
                 "DeploymentSetupFingerprintVersion" => {
                     let version = value.parse().map_err(|reason| {
@@ -353,7 +364,15 @@ fn build_import_request(
         }
     }
 
+    let setup_import_format_version = outputs.setup_import_format_version.ok_or_else(|| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: "CloudFormation output DeploymentSetupImportFormatVersion is required"
+                .to_string(),
+        })
+    })?;
+
     Ok(StackImportRequest {
+        setup_import_format_version,
         deployment_group_token: token.to_string(),
         deployment_name: deployment_name.to_string(),
         resource_prefix,

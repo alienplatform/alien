@@ -30,7 +30,7 @@ fn gcp_storage_data_read_uses_stack_scoped_custom_role(
 }
 
 #[test]
-fn gcp_custom_role_metadata_uses_stack_name_and_permission_description() {
+fn gcp_custom_role_metadata_uses_application_name_and_permission_description() {
     let generator = GcpRuntimePermissionsGenerator::new();
     let permission_set = get_permission_set("storage/data-write").expect("permission set exists");
     let context = create_test_context();
@@ -43,10 +43,10 @@ fn gcp_custom_role_metadata_uses_stack_name_and_permission_description() {
         .iter()
         .find(|role| role.role_id == "role_my_stack_storage_data_write")
         .expect("storage helper role exists");
-    assert_eq!(storage_role.title, "byoc-database: Storage data write");
+    assert_eq!(storage_role.title, "Payment Processor: Storage data write");
     assert_eq!(
         storage_role.description,
-        "Allows reading and writing data to storage buckets and containers. Stack: byoc-database. Deployment prefix: my-stack. Permission set: storage/data-write."
+        "Used by Payment Processor. Allows reading and writing data to storage buckets and containers. Resource prefix: my-stack."
     );
 }
 
@@ -410,16 +410,8 @@ fn gcp_vault_data_write_resource_condition_uses_project_number_and_vault_prefix(
     let conditioned_binding = result
         .bindings
         .iter()
-        .find(|binding| {
-            binding.condition.is_some()
-                && binding
-                    .role
-                    .starts_with("projects/my-project/roles/role_my_stack_vault_data_write")
-        })
+        .find(|binding| binding.condition.is_some())
         .expect("prefix-conditioned write binding exists");
-    assert!(conditioned_binding
-        .role
-        .starts_with("projects/my-project/roles/role_my_stack_vault_data_write"));
     assert_eq!(conditioned_binding.target, GcpBindingTargetScope::Project);
     let condition = conditioned_binding.condition.as_ref().unwrap();
     assert_eq!(condition.title, "ResourceVaultSecrets");

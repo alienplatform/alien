@@ -505,6 +505,28 @@ export type SyncListResponseStackStateConfig = {
 };
 
 /**
+ * Represents the target cloud platform.
+ */
+export const SyncListResponseControllerPlatformEnum = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type SyncListResponseControllerPlatformEnum = ClosedEnum<
+  typeof SyncListResponseControllerPlatformEnum
+>;
+
+export type SyncListResponseControllerPlatformUnion =
+  | SyncListResponseControllerPlatformEnum
+  | any;
+
+/**
  * New ResourceRef that works with any resource type.
  *
  * @remarks
@@ -694,6 +716,11 @@ export type SyncListResponseStackStateResources = {
    * Resource that can hold any resource type in the Alien system. All resources share common 'type' and 'id' fields with additional type-specific properties.
    */
   config: SyncListResponseStackStateConfig;
+  controllerPlatform?:
+    | SyncListResponseControllerPlatformEnum
+    | any
+    | null
+    | undefined;
   /**
    * Complete list of dependencies for this resource, including infrastructure dependencies.
    *
@@ -884,6 +911,10 @@ export type SyncListResponseOverrideAw = {
    */
   binding: SyncListResponseOverrideAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: SyncListResponseOverrideEffect | undefined;
@@ -891,6 +922,10 @@ export type SyncListResponseOverrideAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: SyncListResponseOverrideAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -962,9 +997,17 @@ export type SyncListResponseOverrideAzure = {
    */
   binding: SyncListResponseOverrideAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncListResponseOverrideAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -1066,9 +1109,17 @@ export type SyncListResponseOverrideGcp = {
    */
   binding: SyncListResponseOverrideGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncListResponseOverrideGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -1213,6 +1264,10 @@ export type SyncListResponseExtendAw = {
    */
   binding: SyncListResponseExtendAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: SyncListResponseExtendEffect | undefined;
@@ -1220,6 +1275,10 @@ export type SyncListResponseExtendAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: SyncListResponseExtendAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -1291,9 +1350,17 @@ export type SyncListResponseExtendAzure = {
    */
   binding: SyncListResponseExtendAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncListResponseExtendAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -1391,9 +1458,17 @@ export type SyncListResponseExtendGcp = {
    */
   binding: SyncListResponseExtendGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncListResponseExtendGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -1546,6 +1621,10 @@ export type SyncListResponseProfileAw = {
    */
   binding: SyncListResponseProfileAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: SyncListResponseProfileEffect | undefined;
@@ -1553,6 +1632,10 @@ export type SyncListResponseProfileAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: SyncListResponseProfileAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -1624,9 +1707,17 @@ export type SyncListResponseProfileAzure = {
    */
   binding: SyncListResponseProfileAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncListResponseProfileAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -1724,9 +1815,17 @@ export type SyncListResponseProfileGcp = {
    */
   binding: SyncListResponseProfileGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncListResponseProfileGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -2139,6 +2238,10 @@ export type SyncListResponseDeployment = {
    * Target platform for the deployment
    */
   platform: SyncListResponsePlatform;
+  /**
+   * DeploymentState protocol version owned by the runtime/manager
+   */
+  deploymentProtocolVersion: number;
   /**
    * ID of deployment group this deployment belongs to
    */
@@ -2882,6 +2985,33 @@ export function syncListResponseStackStateConfigFromJSON(
 }
 
 /** @internal */
+export const SyncListResponseControllerPlatformEnum$inboundSchema: z.ZodEnum<
+  typeof SyncListResponseControllerPlatformEnum
+> = z.enum(SyncListResponseControllerPlatformEnum);
+
+/** @internal */
+export const SyncListResponseControllerPlatformUnion$inboundSchema: z.ZodType<
+  SyncListResponseControllerPlatformUnion,
+  unknown
+> = z.union([SyncListResponseControllerPlatformEnum$inboundSchema, z.any()]);
+
+export function syncListResponseControllerPlatformUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponseControllerPlatformUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponseControllerPlatformUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponseControllerPlatformUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const SyncListResponseStackStateDependency$inboundSchema: z.ZodType<
   SyncListResponseStackStateDependency,
   unknown
@@ -3059,6 +3189,9 @@ export const SyncListResponseStackStateResources$inboundSchema: z.ZodType<
 > = z.object({
   _internal: z.nullable(z.any()).optional(),
   config: z.lazy(() => SyncListResponseStackStateConfig$inboundSchema),
+  controllerPlatform: z.nullable(
+    z.union([SyncListResponseControllerPlatformEnum$inboundSchema, z.any()]),
+  ).optional(),
   dependencies: z.array(
     z.lazy(() => SyncListResponseStackStateDependency$inboundSchema),
   ).optional(),
@@ -3245,8 +3378,10 @@ export const SyncListResponseOverrideAw$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   binding: z.lazy(() => SyncListResponseOverrideAwBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
   effect: SyncListResponseOverrideEffect$inboundSchema.optional(),
   grant: z.lazy(() => SyncListResponseOverrideAwGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function syncListResponseOverrideAwFromJSON(
@@ -3348,7 +3483,9 @@ export const SyncListResponseOverrideAzure$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   binding: z.lazy(() => SyncListResponseOverrideAzureBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
   grant: z.lazy(() => SyncListResponseOverrideAzureGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function syncListResponseOverrideAzureFromJSON(
@@ -3551,7 +3688,9 @@ export const SyncListResponseOverrideGcp$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   binding: z.lazy(() => SyncListResponseOverrideGcpBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
   grant: z.lazy(() => SyncListResponseOverrideGcpGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function syncListResponseOverrideGcpFromJSON(
@@ -3743,8 +3882,10 @@ export const SyncListResponseExtendAw$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   binding: z.lazy(() => SyncListResponseExtendAwBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
   effect: SyncListResponseExtendEffect$inboundSchema.optional(),
   grant: z.lazy(() => SyncListResponseExtendAwGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function syncListResponseExtendAwFromJSON(
@@ -3844,7 +3985,9 @@ export const SyncListResponseExtendAzure$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   binding: z.lazy(() => SyncListResponseExtendAzureBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
   grant: z.lazy(() => SyncListResponseExtendAzureGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function syncListResponseExtendAzureFromJSON(
@@ -4046,7 +4189,9 @@ export const SyncListResponseExtendGcp$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   binding: z.lazy(() => SyncListResponseExtendGcpBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
   grant: z.lazy(() => SyncListResponseExtendGcpGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function syncListResponseExtendGcpFromJSON(
@@ -4256,8 +4401,10 @@ export const SyncListResponseProfileAw$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   binding: z.lazy(() => SyncListResponseProfileAwBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
   effect: SyncListResponseProfileEffect$inboundSchema.optional(),
   grant: z.lazy(() => SyncListResponseProfileAwGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function syncListResponseProfileAwFromJSON(
@@ -4357,7 +4504,9 @@ export const SyncListResponseProfileAzure$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   binding: z.lazy(() => SyncListResponseProfileAzureBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
   grant: z.lazy(() => SyncListResponseProfileAzureGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function syncListResponseProfileAzureFromJSON(
@@ -4558,7 +4707,9 @@ export const SyncListResponseProfileGcp$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   binding: z.lazy(() => SyncListResponseProfileGcpBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
   grant: z.lazy(() => SyncListResponseProfileGcpGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function syncListResponseProfileGcpFromJSON(
@@ -4996,6 +5147,7 @@ export const SyncListResponseDeployment$inboundSchema: z.ZodType<
   status: SyncListResponseStatus$inboundSchema,
   projectId: z.string(),
   platform: SyncListResponsePlatform$inboundSchema,
+  deploymentProtocolVersion: z.int(),
   deploymentGroupId: z.string(),
   environmentInfo: z.nullable(
     z.union([

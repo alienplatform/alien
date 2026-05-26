@@ -428,6 +428,10 @@ export type Source = {
    */
   region: string;
   setupTarget: string;
+  /**
+   * Setup import payload format version embedded in the package
+   */
+  setupImportFormatVersion: number;
   setupFingerprint: string;
   setupFingerprintVersion: number;
   /**
@@ -1266,6 +1270,7 @@ export type Source$Outbound = {
   platform: string;
   region: string;
   setupTarget: string;
+  setupImportFormatVersion: number;
   setupFingerprint: string;
   setupFingerprintVersion: number;
   stackSettings: CloudFormationCallbackRequestStackSettings$Outbound;
@@ -1287,6 +1292,7 @@ export const Source$outboundSchema: z.ZodType<Source$Outbound, Source> = z
     platform: CloudFormationCallbackRequestPlatformEnum$outboundSchema,
     region: z.string(),
     setupTarget: z.string(),
+    setupImportFormatVersion: z.int(),
     setupFingerprint: z.string(),
     setupFingerprintVersion: z.int(),
     stackSettings: z.lazy(() =>

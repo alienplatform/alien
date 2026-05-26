@@ -46,7 +46,7 @@ impl TfEmitter for AwsBuildEmitter {
                     [
                         attr(
                             "name",
-                            Expression::String("alien-managed-policy".to_string()),
+                            Expression::String("deployment-permissions".to_string()),
                         ),
                         attr("role", expr::traversal(["aws_iam_role", &role_label, "id"])),
                         attr("policy", logs_policy()),
