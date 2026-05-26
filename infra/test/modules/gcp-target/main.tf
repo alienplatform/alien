@@ -43,7 +43,10 @@ resource "google_compute_network" "e2e" {
   name                    = "alien-e2e-${random_id.suffix.hex}"
   auto_create_subnetworks = false
 
-  depends_on = [google_project_service.target_apis]
+  depends_on = [
+    google_project_service.target_apis,
+    google_project_iam_member.target_roles,
+  ]
 }
 
 resource "google_compute_subnetwork" "e2e" {
@@ -135,6 +138,7 @@ locals {
     "roles/datastore.owner",
     "roles/serviceusage.serviceUsageAdmin",
     "roles/compute.admin",
+    "roles/container.admin",
     "roles/artifactregistry.admin",
     "roles/cloudscheduler.admin",
   ]

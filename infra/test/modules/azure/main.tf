@@ -186,7 +186,7 @@ module "e2e_aks" {
 
   default_agent_pool = {
     count_of       = 3
-    vm_size        = "Standard_DS2_v2"
+    vm_size        = "Standard_D2s_v3"
     vnet_subnet_id = azurerm_subnet.e2e_private.id
 
     upgrade_settings = {

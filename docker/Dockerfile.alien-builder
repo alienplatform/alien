@@ -1,6 +1,6 @@
 # Multi-platform build image for Alien builds
 # Based on Chainguard's Wolfi base with Rust, Python, Node.js, and FluentBit
-FROM cgr.dev/chainguard/wolfi-base:latest
+FROM docker.io/chainguard/wolfi-base:latest
 
 # Get build platform info
 ARG TARGETPLATFORM

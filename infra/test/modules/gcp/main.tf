@@ -24,7 +24,10 @@ resource "google_compute_network" "e2e" {
   name                    = "alien-e2e-${random_id.suffix.hex}"
   auto_create_subnetworks = false
 
-  depends_on = [google_project_service.target_apis]
+  depends_on = [
+    google_project_service.target_apis,
+    google_project_iam_member.target_roles,
+  ]
 }
 
 resource "google_compute_subnetwork" "e2e" {
@@ -166,6 +169,7 @@ locals {
     "roles/datastore.owner",                 # Firestore
     "roles/serviceusage.serviceUsageAdmin",  # Enable/disable APIs
     "roles/compute.admin",                   # All Compute Engine resources
+    "roles/container.admin",                 # GKE clusters
     "roles/artifactregistry.admin",          # Artifact Registry repositories
     "roles/cloudscheduler.admin",            # Cloud Scheduler jobs
   ]
