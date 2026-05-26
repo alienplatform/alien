@@ -108,3 +108,8 @@ output "e2e_k8s_public_host_suffix" {
   value     = "${google_compute_address.e2e_ingress.address}.sslip.io"
   sensitive = true
 }
+
+output "e2e_ingress_ip_address" {
+  value     = google_compute_address.e2e_ingress.address
+  sensitive = true
+}

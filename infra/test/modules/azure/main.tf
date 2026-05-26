@@ -15,7 +15,6 @@ terraform {
       version               = "~> 3.0"
       configuration_aliases = [azuread.management]
     }
-    helm   = { source = "hashicorp/helm", version = "~> 2.0" }
     random = { source = "hashicorp/random", version = "~> 3.0" }
     time   = { source = "hashicorp/time", version = "~> 0.13" }
   }
@@ -179,8 +178,24 @@ module "e2e_aks" {
   enable_telemetry   = false
   kubernetes_version = var.e2e_aks_kubernetes_version
 
+  aad_profile = {
+    enable_azure_rbac = true
+    managed           = true
+    tenant_id         = var.target_tenant_id
+  }
+
+  default_agent_pool = {
+    count_of       = 3
+    vm_size        = "Standard_DS2_v2"
+    vnet_subnet_id = azurerm_subnet.e2e_private.id
+
+    upgrade_settings = {
+      max_surge = "10%"
+    }
+  }
+
   sku = {
-    name = "Automatic"
+    name = "Base"
     tier = "Standard"
   }
 
@@ -218,78 +233,6 @@ resource "time_sleep" "e2e_aks_rbac_propagation" {
 
 locals {
   e2e_aks_kubeconfig = yamldecode(module.e2e_aks.kube_config)
-}
-
-provider "helm" {
-  kubernetes {
-    host                   = local.e2e_aks_kubeconfig.clusters[0].cluster.server
-    cluster_ca_certificate = base64decode(local.e2e_aks_kubeconfig.clusters[0].cluster["certificate-authority-data"])
-
-    exec {
-      api_version = "client.authentication.k8s.io/v1beta1"
-      command     = "kubelogin"
-      args = [
-        "get-token",
-        "--login",
-        "spn",
-        "--environment",
-        "AzurePublicCloud",
-        "--server-id",
-        "6dae42f8-4368-4678-94ff-3960e28e3630",
-        "--client-id",
-        var.target_client_id,
-        "--tenant-id",
-        var.target_tenant_id,
-      ]
-      env = {
-        AAD_SERVICE_PRINCIPAL_CLIENT_SECRET = var.target_client_secret
-      }
-    }
-  }
-}
-
-resource "helm_release" "e2e_ingress_nginx" {
-  name             = "ingress-nginx"
-  repository       = "https://kubernetes.github.io/ingress-nginx"
-  chart            = "ingress-nginx"
-  version          = var.e2e_ingress_nginx_chart_version
-  namespace        = "ingress-nginx"
-  create_namespace = true
-  wait             = true
-  timeout          = 600
-
-  values = [
-    yamlencode({
-      controller = {
-        ingressClass = var.e2e_k8s_ingress_class
-        ingressClassResource = {
-          enabled = true
-          name    = var.e2e_k8s_ingress_class
-        }
-        service = {
-          annotations = {
-            "service.beta.kubernetes.io/azure-load-balancer-resource-group" = azurerm_resource_group.shared_target.name
-            "service.beta.kubernetes.io/azure-pip-name"                     = azurerm_public_ip.e2e_ingress.name
-          }
-        }
-        resources = {
-          requests = {
-            cpu    = "100m"
-            memory = "128Mi"
-          }
-          limits = {
-            cpu    = "500m"
-            memory = "512Mi"
-          }
-        }
-        admissionWebhooks = {
-          enabled = false
-        }
-      }
-    })
-  ]
-
-  depends_on = [time_sleep.e2e_aks_rbac_propagation]
 }
 
 # Custom role that allows using the shared environment. Created once here; the

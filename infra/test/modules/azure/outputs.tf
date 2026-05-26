@@ -157,3 +157,8 @@ output "e2e_k8s_public_host_suffix" {
   value     = "${azurerm_public_ip.e2e_ingress.ip_address}.sslip.io"
   sensitive = true
 }
+
+output "e2e_ingress_public_ip_name" {
+  value     = azurerm_public_ip.e2e_ingress.name
+  sensitive = true
+}

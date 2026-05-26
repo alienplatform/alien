@@ -622,6 +622,28 @@ jobs:
           TF_VAR_azure_target_client_id: ${{ secrets.TEST_AZURE_TARGET_CLIENT_ID }}
           TF_VAR_azure_target_client_secret: ${{ secrets.TEST_AZURE_TARGET_CLIENT_SECRET }}
 
+      - uses: azure/setup-helm@v4
+
+      - name: Install Kubernetes auth helpers
+        run: |
+          if ! command -v aws >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y awscli unzip
+          fi
+          case "$(uname -m)" in
+            aarch64|arm64) KUBELOGIN_ARCH=arm64 ;;
+            x86_64|amd64) KUBELOGIN_ARCH=amd64 ;;
+            *) echo "Unsupported kubelogin architecture: $(uname -m)" >&2; exit 1 ;;
+          esac
+          curl -fsSL -o /tmp/kubelogin.zip "https://github.com/Azure/kubelogin/releases/download/v0.2.17/kubelogin-linux-${KUBELOGIN_ARCH}.zip"
+          unzip -q /tmp/kubelogin.zip -d /tmp/kubelogin
+          sudo install -m 0755 "/tmp/kubelogin/bin/linux_${KUBELOGIN_ARCH}/kubelogin" /usr/local/bin/kubelogin
+
+      - name: Install E2E ingress controllers
+        run: ./scripts/install-e2e-ingress.sh
+        env:
+          TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
+
       - name: Set up Azure OIDC token
         run: |
           # All e2e jobs declare `environment: e2e-tests`, so GitHub emits

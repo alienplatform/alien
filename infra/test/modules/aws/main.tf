@@ -5,7 +5,6 @@ terraform {
       version               = "~> 5.0"
       configuration_aliases = [aws.management, aws.target]
     }
-    helm   = { source = "hashicorp/helm", version = "~> 2.0" }
     random = { source = "hashicorp/random", version = "~> 3.0" }
   }
 }
@@ -273,72 +272,6 @@ resource "aws_eip" "e2e_ingress" {
   tags = {
     Name = "alien-e2e-ingress-${count.index + 1}-${random_id.suffix.hex}"
   }
-}
-
-provider "helm" {
-  kubernetes {
-    host                   = aws_eks_cluster.e2e.endpoint
-    cluster_ca_certificate = base64decode(aws_eks_cluster.e2e.certificate_authority[0].data)
-
-    exec {
-      api_version = "client.authentication.k8s.io/v1beta1"
-      command     = "aws"
-      args        = ["eks", "get-token", "--cluster-name", aws_eks_cluster.e2e.name, "--region", var.target_region]
-      env = {
-        AWS_ACCESS_KEY_ID     = aws_iam_access_key.target.id
-        AWS_SECRET_ACCESS_KEY = aws_iam_access_key.target.secret
-      }
-    }
-  }
-}
-
-resource "helm_release" "e2e_ingress_nginx" {
-  name             = "ingress-nginx"
-  repository       = "https://kubernetes.github.io/ingress-nginx"
-  chart            = "ingress-nginx"
-  version          = var.e2e_ingress_nginx_chart_version
-  namespace        = "ingress-nginx"
-  create_namespace = true
-  wait             = true
-  timeout          = 600
-
-  values = [
-    yamlencode({
-      controller = {
-        ingressClass = var.e2e_k8s_ingress_class
-        ingressClassResource = {
-          enabled = true
-          name    = var.e2e_k8s_ingress_class
-        }
-        service = {
-          type = "LoadBalancer"
-          annotations = {
-            "service.beta.kubernetes.io/aws-load-balancer-eip-allocations" = join(",", aws_eip.e2e_ingress[*].id)
-            "service.beta.kubernetes.io/aws-load-balancer-nlb-target-type" = "ip"
-            "service.beta.kubernetes.io/aws-load-balancer-scheme"          = "internet-facing"
-            "service.beta.kubernetes.io/aws-load-balancer-subnets"         = join(",", aws_subnet.e2e_public[*].id)
-          }
-        }
-        resources = {
-          requests = {
-            cpu    = "100m"
-            memory = "128Mi"
-          }
-          limits = {
-            cpu    = "500m"
-            memory = "512Mi"
-          }
-        }
-        admissionWebhooks = {
-          enabled = false
-        }
-      }
-    })
-  ]
-
-  depends_on = [
-    aws_eks_access_policy_association.e2e_target_admin,
-  ]
 }
 
 resource "aws_eks_access_entry" "e2e_target" {

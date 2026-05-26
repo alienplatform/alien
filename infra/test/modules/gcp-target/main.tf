@@ -5,7 +5,6 @@ terraform {
       version               = "~> 5.0"
       configuration_aliases = [google.management, google.target]
     }
-    helm   = { source = "hashicorp/helm", version = "~> 2.0" }
     random = { source = "hashicorp/random", version = "~> 3.0" }
   }
 }
@@ -108,56 +107,6 @@ resource "google_container_cluster" "e2e" {
   }
 
   depends_on = [google_project_service.target_apis]
-}
-
-provider "helm" {
-  kubernetes {
-    host                   = "https://${google_container_cluster.e2e.endpoint}"
-    cluster_ca_certificate = base64decode(google_container_cluster.e2e.master_auth[0].cluster_ca_certificate)
-    client_certificate     = base64decode(google_container_cluster.e2e.master_auth[0].client_certificate)
-    client_key             = base64decode(google_container_cluster.e2e.master_auth[0].client_key)
-  }
-}
-
-resource "helm_release" "e2e_ingress_nginx" {
-  name             = "ingress-nginx"
-  repository       = "https://kubernetes.github.io/ingress-nginx"
-  chart            = "ingress-nginx"
-  version          = var.e2e_ingress_nginx_chart_version
-  namespace        = "ingress-nginx"
-  create_namespace = true
-  wait             = true
-  timeout          = 600
-
-  values = [
-    yamlencode({
-      controller = {
-        ingressClass = var.e2e_k8s_ingress_class
-        ingressClassResource = {
-          enabled = true
-          name    = var.e2e_k8s_ingress_class
-        }
-        service = {
-          loadBalancerIP = google_compute_address.e2e_ingress.address
-        }
-        resources = {
-          requests = {
-            cpu    = "100m"
-            memory = "128Mi"
-          }
-          limits = {
-            cpu    = "500m"
-            memory = "512Mi"
-          }
-        }
-        admissionWebhooks = {
-          enabled = false
-        }
-      }
-    })
-  ]
-
-  depends_on = [google_container_cluster.e2e]
 }
 
 resource "google_service_account" "target" {

@@ -150,3 +150,8 @@ output "e2e_k8s_public_host_suffix" {
   value     = "${aws_eip.e2e_ingress[0].public_ip}.sslip.io"
   sensitive = true
 }
+
+output "e2e_ingress_eip_allocation_ids" {
+  value     = aws_eip.e2e_ingress[*].id
+  sensitive = true
+}

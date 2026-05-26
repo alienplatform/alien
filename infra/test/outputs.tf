@@ -551,3 +551,32 @@ output "e2e_aks_public_host_suffix" {
   value     = var.e2e_k8s_public_host_suffix != "" ? var.e2e_k8s_public_host_suffix : module.azure.e2e_k8s_public_host_suffix
   sensitive = true
 }
+
+output "e2e_ingress_nginx_chart_version" {
+  value = var.e2e_ingress_nginx_chart_version
+}
+
+output "e2e_eks_ingress_eip_allocation_ids" {
+  value     = module.aws.e2e_ingress_eip_allocation_ids
+  sensitive = true
+}
+
+output "e2e_gke_target_1_ingress_ip_address" {
+  value     = module.gcp_target_1.e2e_ingress_ip_address
+  sensitive = true
+}
+
+output "e2e_gke_target_2_ingress_ip_address" {
+  value     = module.gcp.e2e_ingress_ip_address
+  sensitive = true
+}
+
+output "e2e_gke_target_3_ingress_ip_address" {
+  value     = module.gcp_target_3.e2e_ingress_ip_address
+  sensitive = true
+}
+
+output "e2e_aks_ingress_public_ip_name" {
+  value     = module.azure.e2e_ingress_public_ip_name
+  sensitive = true
+}
