@@ -213,7 +213,9 @@ resource "aws_iam_role" "e2e_eks_node" {
 resource "aws_iam_role_policy_attachment" "e2e_eks_node" {
   provider = aws.target
   for_each = toset([
+    "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy",
     "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPullOnly",
+    "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy",
     "arn:aws:iam::aws:policy/AmazonEKSWorkerNodeMinimalPolicy",
   ])
 
@@ -272,6 +274,33 @@ resource "aws_eip" "e2e_ingress" {
   tags = {
     Name = "alien-e2e-ingress-${count.index + 1}-${random_id.suffix.hex}"
   }
+}
+
+resource "aws_eks_node_group" "e2e" {
+  provider        = aws.target
+  cluster_name    = aws_eks_cluster.e2e.name
+  node_group_name = "alien-e2e-${random_id.suffix.hex}"
+  node_role_arn   = aws_iam_role.e2e_eks_node.arn
+  subnet_ids      = aws_subnet.e2e_private[*].id
+
+  ami_type       = "AL2023_x86_64_STANDARD"
+  capacity_type  = "ON_DEMAND"
+  disk_size      = 20
+  instance_types = ["t3.medium"]
+
+  scaling_config {
+    desired_size = 2
+    max_size     = 3
+    min_size     = 2
+  }
+
+  update_config {
+    max_unavailable = 1
+  }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.e2e_eks_node,
+  ]
 }
 
 resource "aws_eks_access_entry" "e2e_target" {
