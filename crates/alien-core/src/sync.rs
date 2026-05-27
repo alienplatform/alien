@@ -22,6 +22,13 @@ pub struct SyncRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncResponse {
+    /// Authoritative deployment state from the manager.
+    ///
+    /// Pull agents use this to hydrate local state when attaching to an
+    /// already-imported deployment. Absent means the agent's local state is
+    /// already authoritative or no state has been established yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_state: Option<DeploymentState>,
     /// Target deployment the agent should converge toward.
     /// None means no changes needed.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -71,23 +78,27 @@ mod tests {
     #[test]
     fn test_sync_response_empty() {
         let resp = SyncResponse {
+            current_state: None,
             target: None,
             commands_url: None,
         };
         let json = serde_json::to_value(&resp).unwrap();
         // target is None → should be omitted
         assert!(json.get("target").is_none());
+        assert!(json.get("currentState").is_none());
     }
 
     #[test]
     fn test_sync_response_roundtrip_no_target() {
         let resp = SyncResponse {
+            current_state: None,
             target: None,
             commands_url: None,
         };
         let serialized = serde_json::to_string(&resp).unwrap();
         let deserialized: SyncResponse = serde_json::from_str(&serialized).unwrap();
         assert!(deserialized.target.is_none());
+        assert!(deserialized.current_state.is_none());
     }
 
     #[test]

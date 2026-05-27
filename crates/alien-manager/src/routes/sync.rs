@@ -15,14 +15,15 @@ fn deserialize_bool_or_null<'de, D: Deserializer<'de>>(deserializer: D) -> Resul
 }
 
 use alien_core::{
-    sync::TargetDeployment, DeploymentConfig, DeploymentState, EnvironmentVariable,
-    EnvironmentVariablesSnapshot, Platform, ReleaseInfo,
+    sync::TargetDeployment, DeploymentConfig, DeploymentState, DeploymentStatus,
+    EnvironmentVariable, EnvironmentVariablesSnapshot, Platform, ReleaseInfo,
 };
 
 use crate::error::ErrorData;
 use crate::ids;
 use crate::traits::{
-    CreateDeploymentParams, CreateTokenParams, DeploymentFilter, ReconcileData, TokenType,
+    CreateDeploymentParams, CreateTokenParams, DeploymentFilter, DeploymentRecord, ReconcileData,
+    ReleaseRecord, TokenType,
 };
 
 use super::{auth, AppState};
@@ -113,6 +114,12 @@ pub struct AgentSyncRequest {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct AgentSyncResponse {
+    /// Authoritative deployment state from the manager.
+    ///
+    /// Returned when a pull deployment attaches with an empty local state while
+    /// the manager already has imported or previously reconciled state.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_state: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target: Option<serde_json::Value>,
     /// Public URL for the commands API. Cloud-deployed workers use this
@@ -397,9 +404,17 @@ async fn release(
 
 #[cfg(test)]
 mod tests {
-    use alien_core::Platform;
+    use alien_core::{
+        DeploymentState, DeploymentStatus, Platform, StackSettings, StackState,
+        CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+    };
+    use chrono::Utc;
 
-    use super::release_stack_platform;
+    use crate::traits::DeploymentRecord;
+
+    use super::{
+        deployment_state_from_record, release_stack_platform, should_ignore_agent_state_report,
+    };
 
     #[test]
     fn release_stack_platform_uses_base_platform_for_imported_kubernetes_deployments() {
@@ -412,6 +427,100 @@ mod tests {
     #[test]
     fn release_stack_platform_defaults_to_deployment_platform() {
         assert_eq!(release_stack_platform(Platform::Gcp, None), Platform::Gcp);
+    }
+
+    #[test]
+    fn ignores_blank_pull_state_when_manager_has_imported_stack_state() {
+        let deployment =
+            deployment_record_with_state("initial-setup", Some(StackState::new(Platform::Aws)));
+        let agent_state = uninitialized_state();
+
+        assert!(should_ignore_agent_state_report(&deployment, &agent_state));
+    }
+
+    #[test]
+    fn accepts_blank_pull_state_for_uninitialized_manager_deployment() {
+        let deployment = deployment_record_with_state("pending", None);
+        let agent_state = uninitialized_state();
+
+        assert!(!should_ignore_agent_state_report(&deployment, &agent_state));
+    }
+
+    #[test]
+    fn accepts_non_blank_pull_state_even_when_manager_has_state() {
+        let deployment =
+            deployment_record_with_state("initial-setup", Some(StackState::new(Platform::Aws)));
+        let mut agent_state = uninitialized_state();
+        agent_state.status = DeploymentStatus::Provisioning;
+
+        assert!(!should_ignore_agent_state_report(&deployment, &agent_state));
+    }
+
+    #[test]
+    fn builds_authoritative_state_from_manager_record() {
+        let stack_state = StackState::with_resource_prefix(Platform::Aws, "abc123".to_string());
+        let deployment = deployment_record_with_state("initial-setup", Some(stack_state.clone()));
+
+        let state = deployment_state_from_record(&deployment, None, None).unwrap();
+
+        assert_eq!(state.status, DeploymentStatus::InitialSetup);
+        assert_eq!(state.protocol_version, CURRENT_DEPLOYMENT_PROTOCOL_VERSION);
+        assert_eq!(
+            state.stack_state.unwrap().resource_prefix,
+            stack_state.resource_prefix
+        );
+    }
+
+    fn uninitialized_state() -> DeploymentState {
+        DeploymentState {
+            platform: Platform::Kubernetes,
+            status: DeploymentStatus::Pending,
+            current_release: None,
+            target_release: None,
+            stack_state: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        }
+    }
+
+    fn deployment_record_with_state(
+        status: &str,
+        stack_state: Option<StackState>,
+    ) -> DeploymentRecord {
+        let now = Utc::now();
+        DeploymentRecord {
+            id: "dep_test".to_string(),
+            workspace_id: "default".to_string(),
+            project_id: "default".to_string(),
+            name: "test".to_string(),
+            deployment_group_id: "dg_test".to_string(),
+            platform: Platform::Kubernetes,
+            deployment_protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+            base_platform: Some(Platform::Aws),
+            status: status.to_string(),
+            stack_settings: StackSettings::default(),
+            stack_state,
+            environment_info: None,
+            runtime_metadata: None,
+            current_release_id: None,
+            desired_release_id: None,
+            import_source: None,
+            setup_target: None,
+            setup_fingerprint: None,
+            setup_fingerprint_version: None,
+            user_environment_variables: None,
+            management_config: None,
+            deployment_config: None,
+            deployment_token: None,
+            retry_requested: false,
+            locked_by: None,
+            locked_at: None,
+            created_at: now,
+            updated_at: Some(now),
+            error: None,
+        }
     }
 }
 
@@ -458,39 +567,48 @@ async fn agent_sync(
     // If the agent reported its current state, persist it to the deployment record.
     // This is how pull-mode agents propagate status changes (e.g. Pending → Running)
     // back to the manager so that API consumers can observe deployment progress.
+    let mut ignored_agent_state_report = false;
     if let Some(ref current_state_value) = req.current_state {
         match serde_json::from_value::<DeploymentState>(current_state_value.clone()) {
             Ok(mut agent_state) => {
-                // Reconcile registry access before persisting so the flag
-                // is saved in the same DB write.
-                crate::registry_access::reconcile_registry_access(
-                    &state.bindings_provider,
-                    &state.target_bindings_providers,
-                    &req.deployment_id,
-                    &mut agent_state,
-                )
-                .await;
-
-                if let Err(e) = state
-                    .deployment_store
-                    .reconcile(
-                        &subject,
-                        ReconcileData {
-                            deployment_id: req.deployment_id.clone(),
-                            session: "agent-sync".to_string(),
-                            state: agent_state.clone(),
-                            update_heartbeat: true,
-                            error: None,
-                            suggested_delay_ms: None,
-                        },
-                    )
-                    .await
-                {
-                    tracing::warn!(
+                if should_ignore_agent_state_report(&deployment, &agent_state) {
+                    ignored_agent_state_report = true;
+                    tracing::info!(
                         deployment_id = %req.deployment_id,
-                        error = %e,
-                        "Failed to reconcile agent-reported state"
+                        "Ignoring empty pull sync state because manager already has deployment state"
                     );
+                } else {
+                    // Reconcile registry access before persisting so the flag
+                    // is saved in the same DB write.
+                    crate::registry_access::reconcile_registry_access(
+                        &state.bindings_provider,
+                        &state.target_bindings_providers,
+                        &req.deployment_id,
+                        &mut agent_state,
+                    )
+                    .await;
+
+                    if let Err(e) = state
+                        .deployment_store
+                        .reconcile(
+                            &subject,
+                            ReconcileData {
+                                deployment_id: req.deployment_id.clone(),
+                                session: "agent-sync".to_string(),
+                                state: agent_state.clone(),
+                                update_heartbeat: true,
+                                error: None,
+                                suggested_delay_ms: None,
+                            },
+                        )
+                        .await
+                    {
+                        tracing::warn!(
+                            deployment_id = %req.deployment_id,
+                            error = %e,
+                            "Failed to reconcile agent-reported state"
+                        );
+                    }
                 }
             }
             Err(e) => {
@@ -622,7 +740,45 @@ async fn agent_sync(
         None
     };
 
+    let current_state = if ignored_agent_state_report {
+        let release_stack_platform =
+            release_stack_platform(deployment.platform, deployment.base_platform);
+        let current_release = if let Some(ref release_id) = deployment.current_release_id {
+            let system = crate::auth::Subject::system();
+            match state.release_store.get_release(&system, release_id).await {
+                Ok(Some(release)) => release_info_from_record(&release, release_stack_platform),
+                Ok(None) => None,
+                Err(e) => {
+                    tracing::warn!(
+                        deployment_id = %req.deployment_id,
+                        release_id = %release_id,
+                        error = %e,
+                        "Failed to load current release for state hydration"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let target_release = target.as_ref().map(|t| t.release_info.clone());
+        match deployment_state_from_record(&deployment, current_release, target_release) {
+            Some(deployment_state) => match serde_json::to_value(deployment_state) {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    tracing::warn!("Failed to serialize deployment state: {e}");
+                    return ErrorData::internal("Failed to serialize deployment state")
+                        .into_response();
+                }
+            },
+            None => None,
+        }
+    } else {
+        None
+    };
+
     Json(AgentSyncResponse {
+        current_state,
         target: match target.map(|t| serde_json::to_value(&t)).transpose() {
             Ok(v) => v,
             Err(e) => {
@@ -638,6 +794,65 @@ async fn agent_sync(
 
 fn release_stack_platform(platform: Platform, base_platform: Option<Platform>) -> Platform {
     base_platform.unwrap_or(platform)
+}
+
+fn should_ignore_agent_state_report(
+    deployment: &DeploymentRecord,
+    agent_state: &DeploymentState,
+) -> bool {
+    agent_state_is_uninitialized(agent_state) && deployment_has_authoritative_state(deployment)
+}
+
+fn agent_state_is_uninitialized(state: &DeploymentState) -> bool {
+    state.status == DeploymentStatus::Pending
+        && state.current_release.is_none()
+        && state.target_release.is_none()
+        && state.stack_state.is_none()
+        && state.environment_info.is_none()
+        && state.runtime_metadata.is_none()
+}
+
+fn deployment_has_authoritative_state(deployment: &DeploymentRecord) -> bool {
+    deployment.stack_state.is_some()
+        || deployment.environment_info.is_some()
+        || deployment.runtime_metadata.is_some()
+        || deployment.current_release_id.is_some()
+        || deployment.status != "pending"
+}
+
+fn deployment_state_from_record(
+    deployment: &DeploymentRecord,
+    current_release: Option<ReleaseInfo>,
+    target_release: Option<ReleaseInfo>,
+) -> Option<DeploymentState> {
+    let status = deployment_status_from_record(&deployment.status)?;
+    Some(DeploymentState {
+        platform: deployment.platform,
+        status,
+        current_release,
+        target_release,
+        stack_state: deployment.stack_state.clone(),
+        environment_info: deployment.environment_info.clone(),
+        runtime_metadata: deployment.runtime_metadata.clone(),
+        retry_requested: deployment.retry_requested,
+        protocol_version: deployment.deployment_protocol_version,
+    })
+}
+
+fn deployment_status_from_record(status: &str) -> Option<DeploymentStatus> {
+    serde_json::from_value(serde_json::Value::String(status.to_string())).ok()
+}
+
+fn release_info_from_record(
+    release: &ReleaseRecord,
+    release_stack_platform: Platform,
+) -> Option<ReleaseInfo> {
+    Some(ReleaseInfo {
+        release_id: release.id.clone(),
+        version: None,
+        description: None,
+        stack: release.stacks.get(&release_stack_platform)?.clone(),
+    })
 }
 
 /// `POST /v1/initialize` — Inbound: deployment-group bearer (typical),
