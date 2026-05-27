@@ -107,6 +107,7 @@ impl RuntimeEnvironmentRenderer for AwsWorkerEnvironmentRenderer<'_, '_> {
             | RuntimeEnvironmentValue::AzureRegion
             | RuntimeEnvironmentValue::AzureSubscriptionId
             | RuntimeEnvironmentValue::AzureTenantId
+            | RuntimeEnvironmentValue::BasePlatform
             | RuntimeEnvironmentValue::CurrentContainerBindingName
             | RuntimeEnvironmentValue::GcpProjectId
             | RuntimeEnvironmentValue::GcpRegion => Ok(None),
@@ -148,6 +149,7 @@ impl RuntimeEnvironmentRenderer for GcpWorkerEnvironmentRenderer<'_, '_> {
             | RuntimeEnvironmentValue::AzureRegion
             | RuntimeEnvironmentValue::AzureSubscriptionId
             | RuntimeEnvironmentValue::AzureTenantId
+            | RuntimeEnvironmentValue::BasePlatform
             | RuntimeEnvironmentValue::CurrentContainerBindingName => Ok(None),
         }
     }
@@ -196,6 +198,7 @@ impl RuntimeEnvironmentRenderer for AzureWorkerEnvironmentRenderer<'_, '_> {
                 Ok(Some(Expression::String(self.worker_id.to_string())))
             }
             RuntimeEnvironmentValue::AwsAccountId
+            | RuntimeEnvironmentValue::BasePlatform
             | RuntimeEnvironmentValue::CurrentContainerBindingName
             | RuntimeEnvironmentValue::GcpProjectId
             | RuntimeEnvironmentValue::GcpRegion => Ok(None),

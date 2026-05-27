@@ -226,6 +226,7 @@ impl RuntimeEnvironmentRenderer for AwsWorkerEnvironmentRenderer<'_> {
             | RuntimeEnvironmentValue::AzureRegion
             | RuntimeEnvironmentValue::AzureSubscriptionId
             | RuntimeEnvironmentValue::AzureTenantId
+            | RuntimeEnvironmentValue::BasePlatform
             | RuntimeEnvironmentValue::CurrentContainerBindingName
             | RuntimeEnvironmentValue::GcpProjectId
             | RuntimeEnvironmentValue::GcpRegion => Ok(None),
