@@ -1021,16 +1021,12 @@ async fn write_manager_fetch_values(
     values_object.insert("infrastructure".to_string(), Value::Null);
     values_object.insert("runtime".to_string(), runtime_values()?);
     if let Some(helm_target) = helm_target {
-        if !values_object.contains_key("services") {
-            let chart_values = fs::read_to_string(chart_dir.path().join("values.yaml"))
-                .await
-                .context("Failed to read generated chart values.yaml")?;
-            let chart_values: Value =
-                serde_yaml::from_str(&chart_values).context("Failed to parse chart values.yaml")?;
-            if let Some(services) = chart_values.get("services") {
-                values_object.insert("services".to_string(), services.clone());
-            }
-        }
+        let chart_values = fs::read_to_string(chart_dir.path().join("values.yaml"))
+            .await
+            .context("Failed to read generated chart values.yaml")?;
+        let chart_values: Value =
+            serde_yaml::from_str(&chart_values).context("Failed to parse chart values.yaml")?;
+        merge_chart_service_values(values_object, &chart_values)?;
         apply_kubernetes_service_values(values_object, helm_target);
     }
 
@@ -1066,6 +1062,65 @@ fn runtime_values() -> anyhow::Result<Value> {
         runtime["imagePullSecrets"] = image_pull_secrets;
     }
     Ok(runtime)
+}
+
+fn merge_chart_service_values(
+    values_object: &mut serde_json::Map<String, Value>,
+    chart_values: &Value,
+) -> anyhow::Result<()> {
+    let Some(chart_services) = chart_values.get("services") else {
+        return Ok(());
+    };
+    let chart_services = chart_services
+        .as_object()
+        .context("generated chart values services must be an object")?;
+
+    match values_object.get_mut("services") {
+        Some(Value::Object(existing_services)) => {
+            for (resource_id, chart_service) in chart_services {
+                match existing_services.get_mut(resource_id) {
+                    Some(Value::Object(existing_service)) => {
+                        let Some(chart_service) = chart_service.as_object() else {
+                            continue;
+                        };
+                        merge_missing_values(existing_service, chart_service);
+                    }
+                    Some(_) => {}
+                    None => {
+                        existing_services.insert(resource_id.clone(), chart_service.clone());
+                    }
+                }
+            }
+        }
+        Some(Value::Null) | None => {
+            values_object.insert(
+                "services".to_string(),
+                Value::Object(chart_services.clone()),
+            );
+        }
+        Some(_) => {
+            anyhow::bail!("helm_values services must be an object when provided");
+        }
+    }
+
+    Ok(())
+}
+
+fn merge_missing_values(
+    target: &mut serde_json::Map<String, Value>,
+    defaults: &serde_json::Map<String, Value>,
+) {
+    for (key, default_value) in defaults {
+        match (target.get_mut(key), default_value) {
+            (Some(Value::Object(target_object)), Value::Object(default_object)) => {
+                merge_missing_values(target_object, default_object);
+            }
+            (Some(_), _) => {}
+            (None, _) => {
+                target.insert(key.clone(), default_value.clone());
+            }
+        }
+    }
 }
 
 fn split_image_tag(image: &str) -> anyhow::Result<(String, String)> {
@@ -2548,5 +2603,139 @@ mod tests {
 
         assert_eq!(key.len(), 64);
         assert!(key.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn terraform_helm_values_keep_chart_service_routes() {
+        let mut values = serde_json::json!({
+            "serviceAccounts": {},
+            "stackSettings": {},
+        });
+        let values_object = values.as_object_mut().expect("values object");
+        let chart_values = serde_json::json!({
+            "services": {
+                "alien-rs-worker": {
+                    "type": "clusterIp",
+                    "port": 80,
+                    "targetPort": 8080,
+                    "component": "worker",
+                    "host": "",
+                    "publicUrl": "",
+                    "tls": {
+                        "enabled": false,
+                        "secretName": "",
+                    },
+                    "ingress": {
+                        "className": "",
+                        "annotations": {},
+                    },
+                },
+            },
+        });
+
+        merge_chart_service_values(values_object, &chart_values)
+            .expect("chart services should merge");
+
+        assert_eq!(
+            values.pointer("/services/alien-rs-worker/targetPort"),
+            Some(&Value::from(8080))
+        );
+        assert_eq!(
+            values.pointer("/services/alien-rs-worker/component"),
+            Some(&Value::from("worker"))
+        );
+    }
+
+    #[test]
+    fn terraform_helm_values_merge_empty_service_map_from_setup() {
+        let mut values = serde_json::json!({
+            "services": {},
+        });
+        let values_object = values.as_object_mut().expect("values object");
+        let chart_values = serde_json::json!({
+            "services": {
+                "alien-rs-worker": {
+                    "type": "clusterIp",
+                    "port": 80,
+                    "targetPort": 8080,
+                    "component": "worker",
+                    "host": "",
+                    "publicUrl": "",
+                    "tls": {
+                        "enabled": false,
+                        "secretName": "",
+                    },
+                    "ingress": {
+                        "className": "",
+                        "annotations": {},
+                    },
+                },
+            },
+        });
+
+        merge_chart_service_values(values_object, &chart_values)
+            .expect("chart services should merge into an empty setup map");
+
+        assert_eq!(
+            values.pointer("/services/alien-rs-worker/port"),
+            Some(&Value::from(80))
+        );
+    }
+
+    #[test]
+    fn terraform_helm_values_preserve_service_overrides() {
+        let mut values = serde_json::json!({
+            "services": {
+                "alien-rs-worker": {
+                    "host": "worker.example.test",
+                    "ingress": {
+                        "className": "nginx",
+                    },
+                },
+            },
+        });
+        let values_object = values.as_object_mut().expect("values object");
+        let chart_values = serde_json::json!({
+            "services": {
+                "alien-rs-worker": {
+                    "type": "clusterIp",
+                    "port": 80,
+                    "targetPort": 8080,
+                    "component": "worker",
+                    "host": "",
+                    "publicUrl": "",
+                    "tls": {
+                        "enabled": false,
+                        "secretName": "",
+                    },
+                    "ingress": {
+                        "className": "",
+                        "annotations": {
+                            "example": "default",
+                        },
+                    },
+                },
+            },
+        });
+
+        merge_chart_service_values(values_object, &chart_values)
+            .expect("chart defaults should merge under explicit overrides");
+
+        assert_eq!(
+            values.pointer("/services/alien-rs-worker/host"),
+            Some(&Value::from("worker.example.test"))
+        );
+        assert_eq!(
+            values.pointer("/services/alien-rs-worker/ingress/className"),
+            Some(&Value::from("nginx"))
+        );
+        assert_eq!(
+            values.pointer("/services/alien-rs-worker/ingress/annotations/example"),
+            Some(&Value::from("default"))
+        );
+        assert_eq!(
+            values.pointer("/services/alien-rs-worker/targetPort"),
+            Some(&Value::from(8080))
+        );
     }
 }
