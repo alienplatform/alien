@@ -330,7 +330,7 @@ runtime:
     enabled: true
     sizeLimit: 256Mi
   data:
-    mountPath: /var/lib/alien
+    mountPath: /var/lib/alien-agent
     persistence:
       enabled: false
       existingClaim: ""
