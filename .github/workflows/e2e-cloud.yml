@@ -693,6 +693,20 @@ jobs:
             [ -n "$val" ] && echo "::add-mask::$val"
           done < .env.test
 
+      - name: Pre-clean stale AWS E2E resources
+        if: |
+          needs.compute-matrix.outputs.has_push == 'true' ||
+          needs.compute-matrix.outputs.has_terraform == 'true' ||
+          needs.compute-matrix.outputs.has_cloudformation == 'true'
+        continue-on-error: true
+        run: |
+          set -a && source .env.test && set +a
+          export AWS_ACCESS_KEY_ID="$AWS_TARGET_ACCESS_KEY_ID"
+          export AWS_SECRET_ACCESS_KEY="$AWS_TARGET_SECRET_ACCESS_KEY"
+          export AWS_SESSION_TOKEN="${AWS_TARGET_SESSION_TOKEN:-}"
+          export AWS_DEFAULT_REGION="$AWS_TARGET_REGION"
+          ./scripts/cleanup-aws-e2e-resources.sh
+
       - name: Upload .env.test artifact
         uses: actions/upload-artifact@v4
         with:
@@ -1203,69 +1217,7 @@ jobs:
           export AWS_SECRET_ACCESS_KEY="$AWS_TARGET_SECRET_ACCESS_KEY"
           export AWS_SESSION_TOKEN="${AWS_TARGET_SESSION_TOKEN:-}"
           export AWS_DEFAULT_REGION="$AWS_TARGET_REGION"
-          echo "Deleting CloudFormation stacks in target account..."
-          STACKS=$(aws cloudformation list-stacks \
-            --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE ROLLBACK_COMPLETE \
-                                  CREATE_FAILED UPDATE_FAILED DELETE_FAILED \
-            --query 'StackSummaries[].StackName' --output text) || true
-          for stack in $STACKS; do
-            echo "Deleting stack: $stack"
-            aws cloudformation delete-stack --stack-name "$stack" || true
-          done
-
-          echo "Waiting for stack deletions to complete..."
-          for stack in $STACKS; do
-            aws cloudformation wait stack-delete-complete --stack-name "$stack" 2>/dev/null || true
-          done
-
-          echo "Deleting orphaned Lambda functions with alien- prefix..."
-          LAMBDAS=$(aws lambda list-functions --query 'Functions[?starts_with(FunctionName, `alien-`)].FunctionName' --output text) || true
-          for fn in $LAMBDAS; do
-            echo "Deleting Lambda function: $fn"
-            aws lambda delete-function --function-name "$fn" || true
-          done
-
-          echo "Deleting orphaned SQS queues with alien- prefix..."
-          QUEUES=$(aws sqs list-queues --queue-name-prefix alien- --query 'QueueUrls[]' --output text 2>/dev/null) || true
-          for queue in $QUEUES; do
-            echo "Deleting SQS queue: $queue"
-            aws sqs delete-queue --queue-url "$queue" || true
-          done
-
-          echo "Deleting orphaned DynamoDB tables with alien- prefix..."
-          TABLES=$(aws dynamodb list-tables --query 'TableNames[?starts_with(@, `alien-`)]' --output text) || true
-          for table in $TABLES; do
-            echo "Deleting DynamoDB table: $table"
-            aws dynamodb delete-table --table-name "$table" || true
-          done
-
-          echo "Deleting orphaned SSM parameters with /alien- prefix..."
-          PARAMS=$(aws ssm describe-parameters --parameter-filters "Key=Name,Option=BeginsWith,Values=/alien-" --query 'Parameters[].Name' --output text) || true
-          for param in $PARAMS; do
-            echo "Deleting SSM parameter: $param"
-            aws ssm delete-parameter --name "$param" || true
-          done
-
-          echo "Deleting orphaned IAM roles with alien- prefix..."
-          ROLES=$(aws iam list-roles --query 'Roles[?starts_with(RoleName, `alien-`)].RoleName' --output text) || true
-          for role in $ROLES; do
-            case "$role" in
-              alien-e2e-eks-*)
-                echo "Skipping Terraform-managed EKS role: $role"
-                continue
-                ;;
-            esac
-            echo "Detaching policies and deleting IAM role: $role"
-            POLICIES=$(aws iam list-attached-role-policies --role-name "$role" --query 'AttachedPolicies[].PolicyArn' --output text) || true
-            for policy in $POLICIES; do
-              aws iam detach-role-policy --role-name "$role" --policy-arn "$policy" || true
-            done
-            INLINE=$(aws iam list-role-policies --role-name "$role" --query 'PolicyNames[]' --output text) || true
-            for ip in $INLINE; do
-              aws iam delete-role-policy --role-name "$role" --policy-name "$ip" || true
-            done
-            aws iam delete-role --role-name "$role" || true
-          done
+          ./scripts/cleanup-aws-e2e-resources.sh
 
       - name: Clean up GCP resources
         if: always()
