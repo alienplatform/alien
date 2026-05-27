@@ -37,6 +37,9 @@ write_gke_kubeconfig() {
   local project
   local location
   local cluster
+  local context
+  local user
+  local token
 
   jq_value gcp_target_options |
     jq -er --arg target "$target_key" '.[$target].GOOGLE_TARGET_SERVICE_ACCOUNT_KEY' > "$key_file"
@@ -54,6 +57,11 @@ write_gke_kubeconfig() {
     "$cluster" \
     --region "$location" \
     --project "$project" >/dev/null
+  context=$(kubectl --kubeconfig "$path" config current-context)
+  user="gke-target-${target}"
+  token=$(CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud auth print-access-token)
+  kubectl --kubeconfig "$path" config set-credentials "$user" --token "$token" >/dev/null
+  kubectl --kubeconfig "$path" config set-context "$context" --user "$user" >/dev/null
   chmod 600 "$path"
 }
 
