@@ -6,6 +6,7 @@ terraform {
       configuration_aliases = [aws.management, aws.target]
     }
     random = { source = "hashicorp/random", version = "~> 3.0" }
+    tls    = { source = "hashicorp/tls", version = "~> 4.0" }
   }
 }
 
@@ -291,6 +292,24 @@ resource "aws_eks_cluster" "e2e" {
     aws_iam_role_policy_attachment.e2e_eks_cluster,
     aws_iam_role_policy_attachment.e2e_eks_auto_mode_cluster,
     aws_iam_role_policy_attachment.e2e_eks_node,
+  ]
+}
+
+data "tls_certificate" "e2e_eks_oidc" {
+  url = aws_eks_cluster.e2e.identity[0].oidc[0].issuer
+}
+
+resource "aws_iam_openid_connect_provider" "e2e_eks" {
+  provider = aws.target
+
+  url = aws_eks_cluster.e2e.identity[0].oidc[0].issuer
+
+  client_id_list = [
+    "sts.amazonaws.com",
+  ]
+
+  thumbprint_list = [
+    data.tls_certificate.e2e_eks_oidc.certificates[0].sha1_fingerprint,
   ]
 }
 
