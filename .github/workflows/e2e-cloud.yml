@@ -1249,6 +1249,12 @@ jobs:
           echo "Deleting orphaned IAM roles with alien- prefix..."
           ROLES=$(aws iam list-roles --query 'Roles[?starts_with(RoleName, `alien-`)].RoleName' --output text) || true
           for role in $ROLES; do
+            case "$role" in
+              alien-e2e-eks-*)
+                echo "Skipping Terraform-managed EKS role: $role"
+                continue
+                ;;
+            esac
             echo "Detaching policies and deleting IAM role: $role"
             POLICIES=$(aws iam list-attached-role-policies --role-name "$role" --query 'AttachedPolicies[].PolicyArn' --output text) || true
             for policy in $POLICIES; do

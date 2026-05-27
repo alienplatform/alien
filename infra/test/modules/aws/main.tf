@@ -14,7 +14,9 @@ resource "random_id" "suffix" {
 }
 
 locals {
-  e2e_eks_cluster_name = var.e2e_eks_cluster_name != "" ? var.e2e_eks_cluster_name : "alien-e2e-${random_id.suffix.hex}"
+  e2e_eks_cluster_name      = var.e2e_eks_cluster_name != "" ? var.e2e_eks_cluster_name : "alien-e2e-${random_id.suffix.hex}"
+  e2e_eks_cluster_role_name = "alien-e2e-eks-cluster-${random_id.suffix.hex}"
+  e2e_eks_node_role_name    = "alien-e2e-eks-node-${random_id.suffix.hex}"
 }
 
 data "aws_availability_zones" "target" {
@@ -165,7 +167,7 @@ resource "aws_security_group" "e2e" {
 
 resource "aws_iam_role" "e2e_eks_cluster" {
   provider = aws.target
-  name     = "alien-e2e-eks-cluster-${random_id.suffix.hex}"
+  name     = local.e2e_eks_cluster_role_name
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -198,7 +200,7 @@ resource "aws_iam_role_policy_attachment" "e2e_eks_auto_mode_cluster" {
 
 resource "aws_iam_role" "e2e_eks_node" {
   provider = aws.target
-  name     = "alien-e2e-eks-node-${random_id.suffix.hex}"
+  name     = local.e2e_eks_node_role_name
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -252,7 +254,7 @@ resource "aws_iam_role_policy_attachment" "e2e_eks_managed_node" {
 resource "aws_eks_cluster" "e2e" {
   provider                      = aws.target
   name                          = local.e2e_eks_cluster_name
-  role_arn                      = aws_iam_role.e2e_eks_cluster.arn
+  role_arn                      = "arn:aws:iam::${data.aws_caller_identity.target.account_id}:role/${local.e2e_eks_cluster_role_name}"
   version                       = var.e2e_eks_kubernetes_version
   bootstrap_self_managed_addons = false
 
@@ -270,7 +272,7 @@ resource "aws_eks_cluster" "e2e" {
   compute_config {
     enabled       = true
     node_pools    = ["general-purpose", "system"]
-    node_role_arn = aws_iam_role.e2e_eks_node.arn
+    node_role_arn = "arn:aws:iam::${data.aws_caller_identity.target.account_id}:role/${local.e2e_eks_node_role_name}"
   }
 
   kubernetes_network_config {
