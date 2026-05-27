@@ -493,8 +493,10 @@ fn render_management_config(
     platform: Platform,
     stack_settings: &StackSettings,
 ) -> Option<ManagementConfig> {
-    if stack_settings.deployment_model != StackDeploymentModel::Push {
-        return None;
+    match stack_settings.deployment_model {
+        // Setup artifacts are the actor that imports deployment resources. Push
+        // managers and pull agents both need a setup-authored management identity.
+        StackDeploymentModel::Push | StackDeploymentModel::Pull => {}
     }
 
     match platform {
@@ -2305,6 +2307,63 @@ mod tests {
                 .await
                 .is_err(),
             "rendered setup stack is not a valid release/source stack"
+        );
+    }
+
+    #[tokio::test]
+    async fn eks_pull_distribution_values_include_manager_irsa() {
+        let source_stack = Stack::new("distribution-eks-pull".to_string())
+            .permission(
+                "execution",
+                PermissionProfile::new().global(["worker/execute"]),
+            )
+            .add(
+                Worker::new("alien-rs-worker".to_string())
+                    .permissions("execution".to_string())
+                    .code(WorkerCode::Image {
+                        image: "manager.example.com/alien-e2e:tag".to_string(),
+                    })
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let stack_settings = stack_settings_for_flow(DeploymentModel::Pull);
+
+        let rendered_stack = apply_render_mutations(source_stack, Platform::Aws, &stack_settings)
+            .await
+            .expect("distribution render mutations should succeed");
+        assert!(
+            contains_resource_type(&rendered_stack, "remote-stack-management"),
+            "pull-mode Kubernetes setup needs a manager cloud identity"
+        );
+
+        let registry = alien_terraform::TfRegistry::built_in();
+        let module = alien_terraform::generate_terraform_module(
+            &rendered_stack,
+            alien_terraform::TerraformTarget::Eks,
+            alien_terraform::TerraformOptions {
+                display_name: None,
+                registry: &registry,
+                stack_settings,
+                registration: None,
+            },
+        )
+        .expect("Terraform generation should succeed");
+        let rendered = module
+            .iter()
+            .map(|(_, contents)| contents)
+            .collect::<String>();
+
+        assert!(rendered.contains("managerServiceAccount = local.helm_manager_service_account"));
+        assert!(
+            rendered.contains(
+                "\"eks.amazonaws.com/role-arn\" = aws_iam_role.remote_stack_management.arn"
+            ),
+            "Helm values must annotate the manager service account with its IRSA role"
+        );
+        assert!(
+            rendered.contains("id   = \"remote-stack-management\""),
+            "rendered Terraform should include the management identity resource"
         );
     }
 
