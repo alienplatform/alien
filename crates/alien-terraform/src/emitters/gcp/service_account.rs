@@ -29,6 +29,7 @@ use alien_permissions::{
     BindingTarget, PermissionContext,
 };
 use hcl::expr::Expression;
+use hcl::Block;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct GcpServiceAccountEmitter;
@@ -74,6 +75,7 @@ impl TfEmitter for GcpServiceAccountEmitter {
                 permission_set,
                 &context,
                 BindingTarget::Stack,
+                "stack",
             )?;
         }
 
@@ -94,6 +96,7 @@ impl TfEmitter for GcpServiceAccountEmitter {
                                 &permission_set,
                                 &context,
                                 BindingTarget::Resource,
+                                resource_id,
                             )?;
                         }
                     }
@@ -146,6 +149,7 @@ fn emit_project_bindings(
     permission_set: &PermissionSet,
     context: &PermissionContext,
     binding_target: BindingTarget,
+    scope_label: &str,
 ) -> Result<()> {
     if permission_set.platforms.gcp.is_none() {
         return Ok(());
@@ -168,13 +172,15 @@ fn emit_project_bindings(
     for (idx, binding) in bindings.into_iter().enumerate() {
         let role_label = binding_label_for_role(&binding.role, &custom_roles)?;
         let role = role_expression_for_binding(&binding.role, &custom_roles)?;
-        push_iam_member(
+        let binding_label = unique_iam_member_label(
             fragment,
-            &format!("{role_label}_{label}_binding_{idx}"),
-            role,
-            member,
-            &binding,
-        )?;
+            &role_label,
+            label,
+            &permission_set.id,
+            scope_label,
+            idx,
+        );
+        push_iam_member(fragment, &binding_label, role, member, &binding)?;
     }
 
     Ok(())
@@ -182,4 +188,65 @@ fn emit_project_bindings(
 
 fn resolve_permission_set(permission_set_ref: &PermissionSetReference) -> Option<PermissionSet> {
     permission_set_ref.resolve(|name| alien_permissions::get_permission_set(name).cloned())
+}
+
+fn unique_iam_member_label(
+    fragment: &TfFragment,
+    role_label: &str,
+    service_account_label: &str,
+    permission_set_id: &str,
+    scope_label: &str,
+    idx: usize,
+) -> String {
+    let base = format!("{role_label}_{service_account_label}_binding_{idx}");
+    if !iam_member_label_exists(fragment, &base) {
+        return base;
+    }
+
+    let scope = terraform_label_segment(scope_label);
+    let permission = terraform_label_segment(permission_set_id);
+    let scoped = format!("{role_label}_{scope}_{permission}_{service_account_label}_binding_{idx}");
+    if !iam_member_label_exists(fragment, &scoped) {
+        return scoped;
+    }
+
+    let mut suffix = 2;
+    loop {
+        let candidate = format!("{scoped}_{suffix}");
+        if !iam_member_label_exists(fragment, &candidate) {
+            return candidate;
+        }
+        suffix += 1;
+    }
+}
+
+fn iam_member_label_exists(fragment: &TfFragment, label: &str) -> bool {
+    fragment.resource_blocks.iter().any(|block| {
+        is_iam_member_block(block)
+            && block
+                .labels
+                .get(1)
+                .is_some_and(|existing| existing.as_str() == label)
+    })
+}
+
+fn is_iam_member_block(block: &Block) -> bool {
+    block.identifier.as_str() == "resource"
+        && block
+            .labels
+            .first()
+            .is_some_and(|provider_type| provider_type.as_str().ends_with("_iam_member"))
+}
+
+fn terraform_label_segment(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }

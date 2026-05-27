@@ -31,6 +31,42 @@ fn gcp_service_account_with_permission_set() {
 }
 
 #[test]
+fn gcp_service_account_disambiguates_stack_and_resource_role_bindings() {
+    let sa = ServiceAccount::new("execution-sa".to_string())
+        .stack_permission_set(
+            alien_permissions::get_permission_set("vault/data-read")
+                .expect("vault/data-read permission set")
+                .clone(),
+        )
+        .build();
+    let stack = Stack::new("acme-iam".to_string())
+        .permission(
+            "execution",
+            PermissionProfile::new()
+                .global(["vault/data-read"])
+                .resource("alien-vault", ["vault/data-read"]),
+        )
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(sa, ResourceLifecycle::Frozen)
+        .build();
+    let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
+    let rendered = module
+        .iter()
+        .map(|(_, contents)| contents)
+        .collect::<String>();
+
+    assert!(rendered
+        .contains("google_project_iam_member\" \"secretmanager_viewer_execution_sa_binding_0\""));
+    assert!(rendered.contains(
+        "google_project_iam_member\" \"secretmanager_viewer_alien_vault_vault_data_read_execution_sa_binding_0\""
+    ));
+    assert_terraform_valid(&module, "gcp_service_account_duplicate_vault_bindings");
+}
+
+#[test]
 fn gcp_remote_stack_management_role() {
     let stack = Stack::new("acme-mgmt".to_string())
         .management(ManagementPermissions::extend(
