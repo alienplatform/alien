@@ -714,7 +714,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: env-test-e2e
-          path: .env.test
+          path: |
+            .env.test
+            .alien-kubeconfigs/
           if-no-files-found: error
           include-hidden-files: true
           retention-days: 1
