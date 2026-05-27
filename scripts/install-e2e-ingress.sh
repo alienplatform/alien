@@ -29,6 +29,34 @@ write_kubeconfig() {
   chmod 600 "$path"
 }
 
+write_gke_kubeconfig() {
+  local target="$1"
+  local path="$2"
+  local target_key="gcp-target-${target}"
+  local key_file="$tmp_dir/gke-target-${target}-sa.json"
+  local project
+  local location
+  local cluster
+
+  jq_value gcp_target_options |
+    jq -er --arg target "$target_key" '.[$target].GOOGLE_TARGET_SERVICE_ACCOUNT_KEY' > "$key_file"
+  project=$(jq_value gcp_target_options |
+    jq -er --arg target "$target_key" '.[$target].GOOGLE_TARGET_PROJECT_ID')
+  location=$(jq_value gcp_target_options |
+    jq -er --arg target "$target_key" '.[$target].ALIEN_TEST_GKE_CLUSTER_LOCATION')
+  cluster=$(jq_value gcp_target_options |
+    jq -er --arg target "$target_key" '.[$target].ALIEN_TEST_GKE_CLUSTER_NAME')
+
+  CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud auth activate-service-account \
+    --key-file "$key_file" \
+    --project "$project" >/dev/null
+  CLOUDSDK_CORE_DISABLE_PROMPTS=1 KUBECONFIG="$path" gcloud container clusters get-credentials \
+    "$cluster" \
+    --region "$location" \
+    --project "$project" >/dev/null
+  chmod 600 "$path"
+}
+
 write_common_values() {
   local path="$1"
   jq -n --arg ingress_class "$(jq_value e2e_k8s_ingress_class)" '{
@@ -99,7 +127,7 @@ install_ingress "EKS" "$eks_kubeconfig" "$tmp_dir/eks-values.yaml"
 
 for target in 1 2 3; do
   gke_kubeconfig="$tmp_dir/gke-target-${target}.yaml"
-  write_kubeconfig "e2e_gke_target_${target}_kubeconfig" "$gke_kubeconfig"
+  write_gke_kubeconfig "$target" "$gke_kubeconfig"
   jq -s \
     --arg ip "$(jq_value "e2e_gke_target_${target}_ingress_ip_address")" \
     '.[0] * { controller: { service: { loadBalancerIP: $ip } } }' \

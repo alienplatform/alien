@@ -624,6 +624,10 @@ jobs:
 
       - uses: azure/setup-helm@v4
 
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          install_components: gke-gcloud-auth-plugin
+
       - name: Install Kubernetes auth helpers
         run: |
           if ! command -v aws >/dev/null 2>&1; then
