@@ -5,6 +5,8 @@
 //! credentials. This module generates the setup permission set for that first
 //! Frozen-resource phase.
 
+use std::collections::HashSet;
+
 use alien_core::{ownership_policy_for_resource_type, Stack};
 
 use crate::generators::{AwsIamPolicy, AwsRuntimePermissionsGenerator};
@@ -97,10 +99,40 @@ pub fn generate_aws_initial_setup_policy(
         }
     }
 
+    ensure_unique_statement_sids(&mut all_statements);
+
     Ok(AwsIamPolicy {
         version: "2012-10-17".to_string(),
         statement: all_statements,
     })
+}
+
+fn ensure_unique_statement_sids(statements: &mut [crate::generators::AwsIamStatement]) {
+    let mut used = HashSet::new();
+
+    for statement in statements {
+        if used.insert(statement.sid.clone()) {
+            continue;
+        }
+
+        let base = statement.sid.clone();
+        let mut suffix = 2usize;
+        loop {
+            let candidate = suffixed_statement_sid(&base, suffix);
+            if used.insert(candidate.clone()) {
+                statement.sid = candidate;
+                break;
+            }
+            suffix += 1;
+        }
+    }
+}
+
+fn suffixed_statement_sid(base: &str, suffix: usize) -> String {
+    let suffix = suffix.to_string();
+    let max_base_len = 128usize.saturating_sub(suffix.len());
+    let trimmed = base.chars().take(max_base_len).collect::<String>();
+    format!("{trimmed}{suffix}")
 }
 
 #[cfg(test)]
@@ -215,5 +247,25 @@ mod tests {
             actions.iter().any(|action| action.starts_with("s3:")),
             "setup policy should still include frozen-capable resource actions"
         );
+    }
+
+    #[test]
+    fn complete_aws_initial_setup_policy_has_unique_statement_sids() {
+        let context = PermissionContext::new()
+            .with_aws_region("us-east-1")
+            .with_aws_account_id("123456789012")
+            .with_stack_prefix("test-stack")
+            .with_resource_name("test");
+
+        let policy = generate_aws_initial_setup_policy(&context).unwrap();
+        let mut seen = HashSet::new();
+
+        for statement in policy.statement {
+            assert!(
+                seen.insert(statement.sid.clone()),
+                "duplicate AWS IAM statement Sid: {}",
+                statement.sid
+            );
+        }
     }
 }
