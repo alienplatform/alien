@@ -321,10 +321,10 @@ resource "aws_eks_node_group" "e2e" {
   node_role_arn   = aws_iam_role.e2e_eks_managed_node.arn
   subnet_ids      = aws_subnet.e2e_private[*].id
 
-  ami_type       = "AL2023_x86_64_STANDARD"
+  ami_type       = "AL2023_ARM_64_STANDARD"
   capacity_type  = "ON_DEMAND"
   disk_size      = 20
-  instance_types = ["t3.medium"]
+  instance_types = ["t4g.medium"]
 
   scaling_config {
     desired_size = 2
