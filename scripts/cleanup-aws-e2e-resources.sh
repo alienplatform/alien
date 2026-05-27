@@ -178,6 +178,7 @@ for prefix in "${resource_prefix}-"; do
     --query 'QueueUrls[]' \
     --output text 2>/dev/null) || true
   for queue in $queues; do
+    [ "$queue" = "None" ] && continue
     echo "Deleting SQS queue: $queue"
     aws sqs delete-queue --queue-url "$queue" || true
   done
@@ -189,6 +190,15 @@ for prefix in "${resource_prefix}-"; do
   for table in $tables; do
     echo "Deleting DynamoDB table: $table"
     aws dynamodb delete-table --table-name "$table" || true
+  done
+
+  echo "Deleting orphaned ECR repositories with $prefix prefix..."
+  repositories=$(aws ecr describe-repositories \
+    --query "repositories[?starts_with(repositoryName, \`${prefix}\`)].repositoryName" \
+    --output text) || true
+  for repository in $repositories; do
+    echo "Deleting ECR repository: $repository"
+    aws ecr delete-repository --repository-name "$repository" --force || true
   done
 
   echo "Deleting orphaned S3 buckets with $prefix prefix..."
@@ -242,3 +252,28 @@ while read -r policy_name policy_arn; do
   [ -z "${policy_arn:-}" ] && continue
   cleanup_managed_policy "$policy_name" "$policy_arn"
 done <<< "$policies"
+
+if [ -n "${ALIEN_TEST_EKS_CLUSTER_NAME:-}" ]; then
+  echo "Deleting EKS OIDC provider for cluster: $ALIEN_TEST_EKS_CLUSTER_NAME"
+  issuer=$(aws eks describe-cluster \
+    --name "$ALIEN_TEST_EKS_CLUSTER_NAME" \
+    --query 'cluster.identity.oidc.issuer' \
+    --output text 2>/dev/null | sed 's#^https://##') || true
+
+  if [ -n "${issuer:-}" ] && [ "$issuer" != "None" ]; then
+    providers=$(aws iam list-open-id-connect-providers \
+      --query 'OpenIDConnectProviderList[].Arn' \
+      --output text) || true
+    for provider_arn in $providers; do
+      provider_url=$(aws iam get-open-id-connect-provider \
+        --open-id-connect-provider-arn "$provider_arn" \
+        --query 'Url' \
+        --output text 2>/dev/null) || true
+      if [ "$provider_url" = "$issuer" ]; then
+        echo "Deleting IAM OIDC provider: $provider_arn"
+        aws iam delete-open-id-connect-provider \
+          --open-id-connect-provider-arn "$provider_arn" || true
+      fi
+    done
+  fi
+fi
