@@ -294,6 +294,7 @@ runtime:
       memory: 512Mi
   api:
     enabled: false
+    bindHost: 0.0.0.0
     port: 8080
     service:
       type: ClusterIP
@@ -506,6 +507,7 @@ fn values_schema_json() -> String {
           "additionalProperties": false,
           "properties": {
             "enabled": { "type": "boolean" },
+            "bindHost": { "type": "string" },
             "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
             "service": {
               "type": "object",
@@ -994,6 +996,8 @@ spec:
               value: "30"
             - name: OTLP_PORT
               value: {{ .Values.runtime.api.port | quote }}
+            - name: OTLP_HOST
+              value: {{ .Values.runtime.api.bindHost | quote }}
           ports:
             - name: otlp
               containerPort: {{ .Values.runtime.api.port }}

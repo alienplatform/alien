@@ -10,6 +10,7 @@ use alien_core::Platform;
 use alien_error::{AlienError, Context, IntoAlienError};
 use clap::Parser;
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -81,6 +82,9 @@ pub struct Args {
 
     #[arg(long, env = "OTLP_PORT", default_value = "4318")]
     pub otlp_port: u16,
+
+    #[arg(long, env = "OTLP_HOST", default_value = "127.0.0.1")]
+    pub otlp_host: IpAddr,
 
     #[arg(short, long)]
     pub verbose: bool,
@@ -268,6 +272,7 @@ async fn run(args: Args, init_hook: InitHook) -> Result<()> {
         .encryption_key(encryption_key)
         .sync_interval_seconds(args.sync_interval)
         .otlp_server_port(args.otlp_port)
+        .otlp_server_host(args.otlp_host)
         .maybe_namespace(args.namespace)
         .maybe_public_urls(public_urls)
         .stack_settings(stack_settings)

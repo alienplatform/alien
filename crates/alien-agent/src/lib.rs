@@ -76,6 +76,7 @@ pub async fn run_agent_with_cancel(
         deployment_approval = config.requires_deployment_approval(),
         telemetry_approval = config.requires_telemetry_approval(),
         telemetry_enabled = config.is_telemetry_enabled(),
+        otlp_host = %config.otlp_server_host,
         otlp_port = config.otlp_server_port,
         "Starting Alien Agent"
     );
@@ -93,11 +94,14 @@ pub async fn run_agent_with_cancel(
 
     // Start OTLP server (for local functions to send telemetry).
     // This is best-effort — a port conflict should not take down the agent.
+    let otlp_host = config.otlp_server_host;
     let otlp_port = config.otlp_server_port;
     let otlp_db = db.clone();
     let otlp_cancel = cancel.clone();
     tokio::spawn(async move {
-        if let Err(e) = otlp_server::start_otlp_server(otlp_port, otlp_db, otlp_cancel).await {
+        if let Err(e) =
+            otlp_server::start_otlp_server(otlp_host, otlp_port, otlp_db, otlp_cancel).await
+        {
             warn!(error = %e, "OTLP server failed (telemetry collection disabled)");
         }
     });

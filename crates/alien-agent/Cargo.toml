@@ -62,3 +62,6 @@ libc = "0.2"
 [target.'cfg(windows)'.dependencies]
 windows-service = "0.7"
 fs2 = "0.4"
+
+[dev-dependencies]
+tempfile = { workspace = true }
