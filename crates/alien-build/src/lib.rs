@@ -17,10 +17,15 @@ use reqwest::Url;
 use settings::{BinaryTargetExt, BuildSettings, PlatformBuildSettings, PushSettings};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::error::Error as StdError;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use tokio::fs;
+use tokio::time::sleep;
 
-use tracing::info;
+use tracing::{info, warn};
+
+const BASE_IMAGE_BUILD_MAX_ATTEMPTS: usize = 3;
 
 /// Dedupe key for identifying containers that can share the same binary build.
 /// Containers with the same (src, toolchain_type, binary_name) produce identical binaries.
@@ -1425,43 +1430,71 @@ async fn build_target_to_file(
                     base_image
                 );
 
-                // Application files layer
-                let mut app_layer_builder = DockDashLayer::builder().map_dockdash_err()?;
+                let mut build_result = Err(dockdash::Error::Generic {
+                    message: "base image build was not attempted".to_string(),
+                    source: None,
+                });
 
-                for (host_path, container_path) in files_to_package {
-                    let absolute_container_path = if container_path.starts_with("/") {
-                        container_path.clone()
-                    } else if container_path.starts_with("./") {
-                        format!("/app/{}", &container_path[2..])
-                    } else {
-                        format!("/app/{}", container_path)
-                    };
+                for attempt in 1..=BASE_IMAGE_BUILD_MAX_ATTEMPTS {
+                    // Rebuild the lightweight application layer for each retry because
+                    // dockdash layers are consumed by the image builder.
+                    let mut app_layer_builder = DockDashLayer::builder().map_dockdash_err()?;
 
-                    if host_path.is_dir() {
-                        app_layer_builder = app_layer_builder
-                            .directory(host_path, &absolute_container_path)
-                            .map_dockdash_err()?;
-                    } else if host_path.is_file() {
-                        app_layer_builder = app_layer_builder
-                            .file(host_path, &absolute_container_path, None)
-                            .map_dockdash_err()?;
+                    for (host_path, container_path) in files_to_package {
+                        let absolute_container_path = if container_path.starts_with("/") {
+                            container_path.clone()
+                        } else if container_path.starts_with("./") {
+                            format!("/app/{}", &container_path[2..])
+                        } else {
+                            format!("/app/{}", container_path)
+                        };
+
+                        if host_path.is_dir() {
+                            app_layer_builder = app_layer_builder
+                                .directory(host_path, &absolute_container_path)
+                                .map_dockdash_err()?;
+                        } else if host_path.is_file() {
+                            app_layer_builder = app_layer_builder
+                                .file(host_path, &absolute_container_path, None)
+                                .map_dockdash_err()?;
+                        }
+                    }
+
+                    let app_layer = app_layer_builder.build().await.map_dockdash_err()?;
+
+                    let image_builder = DockDashImage::builder()
+                        .from(base_image)
+                        .platform(target.oci_os(), &target.to_dockdash_arch())
+                        .pull_policy(PullPolicy::Always)
+                        .layer(app_layer)
+                        .cmd(toolchain_output.runtime_command.clone()); // Set CMD from toolchain
+
+                    build_result = image_builder
+                        .output_to(output_path.to_path_buf())
+                        .output_name_and_tag(&image_name_for_build)
+                        .build()
+                        .await;
+
+                    match &build_result {
+                        Ok(_) => break,
+                        Err(error)
+                            if attempt < BASE_IMAGE_BUILD_MAX_ATTEMPTS
+                                && is_retryable_dockdash_image_pull_error(error) =>
+                        {
+                            let delay = base_image_build_retry_delay(attempt);
+                            warn!(
+                                base_image,
+                                attempt,
+                                max_attempts = BASE_IMAGE_BUILD_MAX_ATTEMPTS,
+                                delay_secs = delay.as_secs(),
+                                error = %error,
+                                "Transient base image pull/build failure, retrying"
+                            );
+                            sleep(delay).await;
+                        }
+                        Err(_) => break,
                     }
                 }
-
-                let app_layer = app_layer_builder.build().await.map_dockdash_err()?;
-
-                let image_builder = DockDashImage::builder()
-                    .from(base_image)
-                    .platform(target.oci_os(), &target.to_dockdash_arch())
-                    .pull_policy(PullPolicy::Always)
-                    .layer(app_layer)
-                    .cmd(toolchain_output.runtime_command.clone()); // Set CMD from toolchain
-
-                let build_result = image_builder
-                    .output_to(output_path.to_path_buf())
-                    .output_name_and_tag(&image_name_for_build)
-                    .build()
-                    .await;
 
                 match build_result {
                     Ok(result) => {
@@ -1477,11 +1510,7 @@ async fn build_target_to_file(
                             );
                             last_error_msg = Some(e.to_string());
                         } else {
-                            tracing::warn!(
-                                "Failed to build with base image '{}': {}. Not retrying.",
-                                base_image,
-                                e
-                            );
+                            warn!("Failed to build with base image '{}': {}.", base_image, e);
                             return Err(e).map_dockdash_err();
                         }
                     }
@@ -1578,6 +1607,85 @@ async fn build_target_to_file(
     );
 
     Ok(output_path.to_string_lossy().into_owned())
+}
+
+fn base_image_build_retry_delay(attempt: usize) -> Duration {
+    match attempt {
+        1 => Duration::from_secs(2),
+        2 => Duration::from_secs(5),
+        _ => Duration::from_secs(10),
+    }
+}
+
+fn is_retryable_dockdash_image_pull_error(error: &dockdash::Error) -> bool {
+    match error {
+        dockdash::Error::ImagePull { source, .. } => source
+            .as_deref()
+            .map(is_retryable_image_pull_source)
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
+fn is_retryable_image_pull_source(source: &(dyn StdError + Send + Sync + 'static)) -> bool {
+    let mut current = Some(source as &(dyn StdError + 'static));
+
+    while let Some(error) = current {
+        if let Some(oci_error) = error.downcast_ref::<oci_client::errors::OciDistributionError>() {
+            return is_retryable_oci_error(oci_error);
+        }
+
+        if let Some(reqwest_error) = error.downcast_ref::<reqwest::Error>() {
+            return reqwest_error.is_timeout()
+                || reqwest_error.is_connect()
+                || reqwest_error
+                    .status()
+                    .map(|status| status.is_server_error() || status.as_u16() == 429)
+                    .unwrap_or(false);
+        }
+
+        if let Some(io_error) = error.downcast_ref::<std::io::Error>() {
+            return matches!(
+                io_error.kind(),
+                std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::Interrupted
+                    | std::io::ErrorKind::TimedOut
+                    | std::io::ErrorKind::UnexpectedEof
+                    | std::io::ErrorKind::WouldBlock
+            );
+        }
+
+        current = error.source();
+    }
+
+    false
+}
+
+fn is_retryable_oci_error(error: &oci_client::errors::OciDistributionError) -> bool {
+    match error {
+        oci_client::errors::OciDistributionError::ServerError { code, .. } => {
+            *code >= 500 || *code == 429
+        }
+        oci_client::errors::OciDistributionError::RequestError(error) => {
+            error.is_timeout()
+                || error.is_connect()
+                || error
+                    .status()
+                    .map(|status| status.is_server_error() || status.as_u16() == 429)
+                    .unwrap_or(false)
+        }
+        oci_client::errors::OciDistributionError::IoError(error) => matches!(
+            error.kind(),
+            std::io::ErrorKind::ConnectionAborted
+                | std::io::ErrorKind::ConnectionReset
+                | std::io::ErrorKind::Interrupted
+                | std::io::ErrorKind::TimedOut
+                | std::io::ErrorKind::UnexpectedEof
+                | std::io::ErrorKind::WouldBlock
+        ),
+        _ => false,
+    }
 }
 
 /// Pull a Docker image and export it to OCI tarballs for each target architecture.
@@ -1781,6 +1889,48 @@ mod tests {
             .output()
             .map(|output| output.status.success())
             .unwrap_or(false)
+    }
+
+    #[test]
+    fn retryable_image_pull_detects_oci_server_errors() {
+        let error = dockdash::Error::ImagePull {
+            image_ref: "ghcr.io/example/base:tag".to_string(),
+            message: "Failed to pull layer blob sha256:abc".to_string(),
+            source: Some(Box::new(
+                oci_client::errors::OciDistributionError::ServerError {
+                    code: 502,
+                    url: "https://ghcr.io/v2/example/base/blobs/sha256:abc".to_string(),
+                    message: "Bad Gateway".to_string(),
+                },
+            )),
+        };
+
+        assert!(is_retryable_dockdash_image_pull_error(&error));
+    }
+
+    #[test]
+    fn retryable_image_pull_rejects_auth_and_not_found_errors() {
+        let auth_error = dockdash::Error::ImagePull {
+            image_ref: "ghcr.io/example/base:tag".to_string(),
+            message: "Failed to pull layer blob sha256:abc".to_string(),
+            source: Some(Box::new(
+                oci_client::errors::OciDistributionError::UnauthorizedError {
+                    url: "https://ghcr.io/v2/example/base/blobs/sha256:abc".to_string(),
+                },
+            )),
+        };
+        let missing_error = dockdash::Error::ImagePull {
+            image_ref: "ghcr.io/example/base:tag".to_string(),
+            message: "Failed to pull manifest".to_string(),
+            source: Some(Box::new(
+                oci_client::errors::OciDistributionError::ImageManifestNotFoundError(
+                    "ghcr.io/example/base:tag".to_string(),
+                ),
+            )),
+        };
+
+        assert!(!is_retryable_dockdash_image_pull_error(&auth_error));
+        assert!(!is_retryable_dockdash_image_pull_error(&missing_error));
     }
 
     #[tokio::test]

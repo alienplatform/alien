@@ -269,6 +269,7 @@ dependencies = [
  "futures",
  "glob",
  "object_store",
+ "oci-client",
  "rand 0.9.3",
  "reqwest",
  "serde",
