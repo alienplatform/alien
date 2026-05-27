@@ -2,7 +2,7 @@ use crate::aws::AwsClientConfigExt;
 use std::fmt::Debug;
 
 use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsSignConfig};
-use crate::aws::AwsClientConfig;
+use crate::aws::{AwsClientConfig, AwsCredentials};
 use alien_client_core::{ErrorData, Result};
 use alien_error::ContextError;
 use async_trait::async_trait;
@@ -40,13 +40,21 @@ impl StsClient {
         Self { client, config }
     }
 
-    fn sign_config(&self) -> AwsSignConfig {
-        AwsSignConfig {
+    async fn sign_config(&self, operation_name: &str) -> Result<AwsSignConfig> {
+        let config = if operation_name == "AssumeRoleWithWebIdentity" {
+            self.config.clone()
+        } else if matches!(self.config.credentials, AwsCredentials::WebIdentity { .. }) {
+            self.config.get_web_identity_credentials().await?
+        } else {
+            self.config.clone()
+        };
+
+        Ok(AwsSignConfig {
             service_name: "sts".into(),
-            region: self.config.region.clone(),
-            credentials: self.config.get_credentials(),
+            region: config.region.clone(),
+            credentials: config.get_credentials(),
             signing_region: None,
-        }
+        })
     }
 
     fn get_base_url(&self) -> String {
@@ -91,8 +99,8 @@ impl StsClient {
             .content_type_form()
             .body(body.clone());
 
-        let result =
-            crate::aws::aws_request_utils::sign_send_xml(builder, &self.sign_config()).await;
+        let sign_config = self.sign_config(operation_name).await?;
+        let result = crate::aws::aws_request_utils::sign_send_xml(builder, &sign_config).await;
 
         match result {
             Ok(v) => Ok(v),
@@ -475,4 +483,201 @@ pub struct GetCallerIdentityResult {
     pub arn: Option<String>,
     pub user_id: Option<String>,
     pub account: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::{AwsServiceOverrides, AwsWebIdentityConfig};
+    use std::collections::HashMap;
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::{Arc, Mutex};
+
+    #[tokio::test]
+    async fn get_caller_identity_exchanges_web_identity_before_signing() {
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let (endpoint, server) = start_sts_test_server(observed.clone());
+
+        let token_file = tempfile::NamedTempFile::new().expect("create token file");
+        std::fs::write(token_file.path(), "test-web-identity-token").expect("write token file");
+
+        let config = AwsClientConfig {
+            account_id: "123456789012".to_string(),
+            region: "us-east-2".to_string(),
+            credentials: AwsCredentials::WebIdentity {
+                config: AwsWebIdentityConfig {
+                    role_arn: "arn:aws:iam::123456789012:role/test-role".to_string(),
+                    session_name: Some("test-session".to_string()),
+                    web_identity_token_file: token_file.path().display().to_string(),
+                    duration_seconds: Some(900),
+                },
+            },
+            service_overrides: Some(AwsServiceOverrides {
+                endpoints: HashMap::from([("sts".to_string(), endpoint)]),
+            }),
+        };
+
+        let response = StsClient::new(Client::new(), config)
+            .get_caller_identity()
+            .await
+            .expect("get caller identity should use exchanged credentials");
+
+        assert_eq!(
+            response.get_caller_identity_result.account.as_deref(),
+            Some("123456789012")
+        );
+
+        server.join().expect("server thread should finish");
+        let observed = observed.lock().expect("observed requests lock");
+        assert_eq!(observed.len(), 2);
+        assert!(observed[0]
+            .body
+            .contains("Action=AssumeRoleWithWebIdentity"));
+        assert!(observed[1].body.contains("Action=GetCallerIdentity"));
+        assert!(
+            observed[1].authorization.contains("ASIATESTACCESS"),
+            "GetCallerIdentity must be signed with credentials returned by AssumeRoleWithWebIdentity, got: {}",
+            observed[1].authorization
+        );
+    }
+
+    #[derive(Debug)]
+    struct ObservedRequest {
+        body: String,
+        authorization: String,
+    }
+
+    fn start_sts_test_server(
+        observed: Arc<Mutex<Vec<ObservedRequest>>>,
+    ) -> (String, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test STS server");
+        let endpoint = format!("http://{}", listener.local_addr().expect("local addr"));
+        let server = std::thread::spawn(move || {
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().expect("accept STS request");
+                let (headers, body) = read_http_request(&mut stream);
+                let authorization = headers
+                    .lines()
+                    .find_map(|line| {
+                        line.split_once(':').and_then(|(name, value)| {
+                            name.eq_ignore_ascii_case("authorization")
+                                .then(|| value.trim())
+                        })
+                    })
+                    .unwrap_or_default()
+                    .to_string();
+                observed
+                    .lock()
+                    .expect("observed requests lock")
+                    .push(ObservedRequest {
+                        body: body.clone(),
+                        authorization: authorization.clone(),
+                    });
+
+                if body.contains("Action=AssumeRoleWithWebIdentity") {
+                    write_xml_response(&mut stream, assume_role_with_web_identity_response());
+                } else if body.contains("Action=GetCallerIdentity")
+                    && authorization.contains("ASIATESTACCESS")
+                {
+                    write_xml_response(&mut stream, get_caller_identity_response());
+                } else {
+                    write_forbidden_response(&mut stream);
+                }
+            }
+        });
+        (endpoint, server)
+    }
+
+    fn read_http_request(stream: &mut TcpStream) -> (String, String) {
+        let mut buffer = Vec::new();
+        let mut scratch = [0_u8; 4096];
+        let header_end;
+        loop {
+            let read = stream.read(&mut scratch).expect("read request");
+            assert!(read > 0, "connection closed before headers");
+            buffer.extend_from_slice(&scratch[..read]);
+            if let Some(position) = buffer.windows(4).position(|w| w == b"\r\n\r\n") {
+                header_end = position + 4;
+                break;
+            }
+        }
+
+        let headers = String::from_utf8(buffer[..header_end].to_vec()).expect("headers utf8");
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                line.to_ascii_lowercase()
+                    .strip_prefix("content-length: ")
+                    .and_then(|value| value.trim().parse::<usize>().ok())
+            })
+            .expect("content-length header");
+
+        while buffer.len() < header_end + content_length {
+            let read = stream.read(&mut scratch).expect("read request body");
+            assert!(read > 0, "connection closed before body");
+            buffer.extend_from_slice(&scratch[..read]);
+        }
+
+        let body = String::from_utf8(buffer[header_end..header_end + content_length].to_vec())
+            .expect("body utf8");
+        (headers, body)
+    }
+
+    fn write_xml_response(stream: &mut TcpStream, body: String) {
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/xml\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream
+            .write_all(response.as_bytes())
+            .expect("write XML response");
+    }
+
+    fn write_forbidden_response(stream: &mut TcpStream) {
+        let body = r#"<ErrorResponse><Error><Code>AccessDenied</Code><Message>denied</Message></Error></ErrorResponse>"#;
+        let response = format!(
+            "HTTP/1.1 403 Forbidden\r\ncontent-type: text/xml\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream
+            .write_all(response.as_bytes())
+            .expect("write forbidden response");
+    }
+
+    fn assume_role_with_web_identity_response() -> String {
+        r#"<AssumeRoleWithWebIdentityResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/">
+  <AssumeRoleWithWebIdentityResult>
+    <SubjectFromWebIdentityToken>system:serviceaccount:test:agent</SubjectFromWebIdentityToken>
+    <Audience>sts.amazonaws.com</Audience>
+    <Provider>provider</Provider>
+    <AssumedRoleUser>
+      <Arn>arn:aws:sts::123456789012:assumed-role/test-role/test-session</Arn>
+      <AssumedRoleId>AROA:test-session</AssumedRoleId>
+    </AssumedRoleUser>
+    <Credentials>
+      <AccessKeyId>ASIATESTACCESS</AccessKeyId>
+      <SecretAccessKey>test-secret</SecretAccessKey>
+      <SessionToken>test-session-token</SessionToken>
+      <Expiration>2026-05-27T11:00:00Z</Expiration>
+    </Credentials>
+  </AssumeRoleWithWebIdentityResult>
+  <ResponseMetadata><RequestId>request-1</RequestId></ResponseMetadata>
+</AssumeRoleWithWebIdentityResponse>"#
+            .to_string()
+    }
+
+    fn get_caller_identity_response() -> String {
+        r#"<GetCallerIdentityResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/">
+  <GetCallerIdentityResult>
+    <Arn>arn:aws:sts::123456789012:assumed-role/test-role/test-session</Arn>
+    <UserId>AROA:test-session</UserId>
+    <Account>123456789012</Account>
+  </GetCallerIdentityResult>
+  <ResponseMetadata><RequestId>request-2</RequestId></ResponseMetadata>
+</GetCallerIdentityResponse>"#
+            .to_string()
+    }
 }
