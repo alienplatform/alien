@@ -512,6 +512,9 @@ async fn start_generated_helm_agent(
             "repository": repository,
             "tag": tag,
             "pullPolicy": "IfNotPresent",
+        },
+        "encryption": {
+            "key": crate::agent::generate_encryption_key(),
         }
     });
     if let Some(image_pull_secrets) = runtime_image_pull_secrets(&repository) {

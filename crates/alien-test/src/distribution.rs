@@ -1055,6 +1055,9 @@ fn runtime_values() -> anyhow::Result<Value> {
             "repository": repository,
             "tag": tag,
             "pullPolicy": "IfNotPresent",
+        },
+        "encryption": {
+            "key": crate::agent::generate_encryption_key(),
         }
     });
     if let Some(image_pull_secrets) = runtime_image_pull_secrets(&repository) {
@@ -2474,5 +2477,17 @@ mod tests {
         assert!(vars.get("azure_management_principal_id").is_none());
         assert!(vars.get("azure_oidc_issuer").is_none());
         assert!(vars.get("azure_oidc_subject").is_none());
+    }
+
+    #[test]
+    fn runtime_values_include_valid_agent_encryption_key() {
+        let values = runtime_values().expect("runtime values should build");
+        let key = values
+            .pointer("/encryption/key")
+            .and_then(Value::as_str)
+            .expect("runtime encryption key should be present");
+
+        assert_eq!(key.len(), 64);
+        assert!(key.chars().all(|c| c.is_ascii_hexdigit()));
     }
 }

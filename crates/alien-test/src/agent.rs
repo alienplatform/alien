@@ -21,7 +21,7 @@ use crate::{
 pub const TEST_AGENT_LABEL: &str = "alien-test-agent=true";
 
 /// Generate a random 64-character hex string for use as an encryption key.
-fn generate_encryption_key() -> String {
+pub(crate) fn generate_encryption_key() -> String {
     use rand::Rng;
     let mut rng = rand::rng();
     let bytes: Vec<u8> = (0..32).map(|_| rng.random::<u8>()).collect();
