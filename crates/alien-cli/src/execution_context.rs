@@ -432,31 +432,37 @@ impl ExecutionMode {
 
                 info!("Manager: {}", resolved.manager_url);
 
+                // Manager-bound client; workspace lives in default headers.
+                let auth_token = http.bearer_token.clone();
+                let manager_http_client = match &auth_token {
+                    Some(token) => crate::auth::client_with_auth_and_workspace(
+                        &format!("Bearer {}", token),
+                        &workspace,
+                    )?,
+                    None => http.client.clone(),
+                };
+
                 // Now call the manager directly to create/get the artifact registry repo.
                 // The repo logical name is the project ID.
                 let repo_name = create_or_get_artifact_repo(
-                    &http.client,
+                    &manager_http_client,
                     &resolved.manager_url,
                     &resolved.project_id,
                     platform,
-                    &workspace,
                 )
                 .await?;
 
                 info!("Repository: {}", repo_name);
 
-                // Create manager SDK client reusing the authenticated reqwest client
-                let authenticated_client = http.client.clone();
-                let auth_token = http.bearer_token.clone();
                 let manager_client = ServerSdkClient::new_with_client(
                     &resolved.manager_url,
-                    authenticated_client.clone(),
+                    manager_http_client.clone(),
                 );
 
                 Ok(ManagerContext {
                     manager_url: resolved.manager_url,
                     client: manager_client,
-                    http_client: authenticated_client,
+                    http_client: manager_http_client,
                     auth_token,
                     repository_name: Some(repo_name),
                     repository_uri: None,
@@ -568,16 +574,16 @@ struct ResolveResponse {
 
 /// Create or get an artifact registry repository on the manager.
 ///
-/// GET first (repo may exist), POST to create on 404. The `workspace`
-/// argument is sent as `x-alien-workspace` on every request — see
-/// [`ManagerContext::workspace`].
+/// GET first (repo may exist), POST to create on 404. The `client` is
+/// expected to carry the caller's workspace in its default headers (see
+/// [`crate::auth::client_with_auth_and_workspace`]); no per-call header
+/// plumbing happens here.
 #[cfg(feature = "platform")]
 async fn create_or_get_artifact_repo(
     client: &reqwest::Client,
     manager_url: &str,
     project_id: &str,
     platform: &str,
-    workspace: &str,
 ) -> crate::error::Result<String> {
     use alien_error::{Context, IntoAlienError};
 
@@ -588,7 +594,7 @@ async fn create_or_get_artifact_repo(
     );
 
     let get_resp = send_artifact_registry_request_with_retry(
-        || client.get(&get_url).header("x-alien-workspace", workspace),
+        || client.get(&get_url),
         manager_url,
         &get_url,
         "Failed to reach artifact registry on manager",
@@ -621,7 +627,6 @@ async fn create_or_get_artifact_repo(
         || {
             client
                 .post(&create_url)
-                .header("x-alien-workspace", workspace)
                 .json(&serde_json::json!({ "name": project_id }))
         },
         manager_url,
@@ -651,7 +656,7 @@ async fn create_or_get_artifact_repo(
     // Create returned non-success (409 = already exists, or other error).
     // Try GET again — the repo may have been created concurrently.
     let get_resp2 = send_artifact_registry_request_with_retry(
-        || client.get(&get_url).header("x-alien-workspace", workspace),
+        || client.get(&get_url),
         manager_url,
         &get_url,
         "Failed to get artifact repository from manager",

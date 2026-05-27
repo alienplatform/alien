@@ -841,11 +841,12 @@ async fn build_proxy_push_settings(
     // Full repository: host/repo_name (e.g., "manager.alien.dev/alien-e2e")
     let repository = format!("{}/{}", registry_host, repo_name);
 
-    // OCI speaks Basic — the token rides in the password slot. In
-    // platform mode the workspace name goes in the username slot so the
-    // manager can resolve the caller's identity to the right workspace.
-    // Without a workspace, the username stays as the existing "token"
-    // placeholder.
+    // OCI speaks Basic — the token rides in the password slot, the
+    // workspace rides in the username slot. OCI clients can't add custom
+    // headers, and the username slot is exactly where cloud registries
+    // pass tenant/identity info (GCR uses `oauth2accesstoken`, ECR uses
+    // `AWS`). Without a workspace, the username stays as the existing
+    // "token" placeholder.
     let auth = match (&manager.auth_token, &manager.workspace) {
         (Some(token), Some(workspace)) => RegistryAuth::Basic(workspace.clone(), token.clone()),
         (Some(token), None) => RegistryAuth::Basic("token".to_string(), token.clone()),
