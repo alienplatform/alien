@@ -573,7 +573,7 @@ impl KubernetesWorkerController {
         if let Some(deployment_name) = &self.deployment_name {
             Some(ResourceOutputs::new(WorkerOutputs {
                 worker_name: deployment_name.clone(),
-                url: None, // URL comes from Helm-created Service/Ingress, not managed here
+                url: self.public_url.clone(),
                 identifier: Some(format!("deployment/{}", deployment_name)),
                 load_balancer_endpoint: None,
                 commands_push_target: None, // Kubernetes uses polling
@@ -613,6 +613,36 @@ impl KubernetesWorkerController {
         } else {
             Ok(None)
         }
+    }
+}
+
+#[cfg(test)]
+mod output_tests {
+    use alien_core::WorkerOutputs;
+
+    use super::{KubernetesWorkerController, KubernetesWorkerState};
+
+    #[test]
+    fn build_outputs_includes_helm_public_url() {
+        let controller = KubernetesWorkerController {
+            state: KubernetesWorkerState::Ready,
+            deployment_name: Some("test-worker".to_string()),
+            namespace: Some("test-namespace".to_string()),
+            service_name: Some("test-worker".to_string()),
+            public_url: Some("https://worker.example.test".to_string()),
+            worker_id: Some("worker".to_string()),
+            _internal_stay_count: None,
+        };
+
+        let outputs = controller.build_outputs().expect("outputs");
+        let worker_outputs = outputs
+            .downcast_ref::<WorkerOutputs>()
+            .expect("worker outputs");
+
+        assert_eq!(
+            worker_outputs.url.as_deref(),
+            Some("https://worker.example.test")
+        );
     }
 }
 

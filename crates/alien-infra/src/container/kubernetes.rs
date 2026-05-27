@@ -828,7 +828,7 @@ impl KubernetesContainerController {
                 current_replicas: 0, // Will be updated by runtime
                 desired_replicas: 0, // Will be updated by runtime
                 internal_dns: format!("{}.svc.cluster.local", workload_name),
-                url: None,            // Public URL from Helm-created Service/Ingress
+                url: self.public_url.clone(),
                 replicas: Vec::new(), // Replica details tracked separately
                 load_balancer_endpoint: None, // Kubernetes uses Service, not direct LB endpoint
             }))
@@ -867,6 +867,37 @@ impl KubernetesContainerController {
         } else {
             Ok(None)
         }
+    }
+}
+
+#[cfg(test)]
+mod output_tests {
+    use alien_core::ContainerOutputs;
+
+    use super::{KubernetesContainerController, KubernetesContainerState};
+
+    #[test]
+    fn build_outputs_includes_helm_public_url() {
+        let controller = KubernetesContainerController {
+            state: KubernetesContainerState::Ready,
+            workload_name: Some("test-container".to_string()),
+            is_stateful: false,
+            namespace: Some("test-namespace".to_string()),
+            service_name: Some("test-container".to_string()),
+            public_url: Some("https://container.example.test".to_string()),
+            container_id: Some("container".to_string()),
+            _internal_stay_count: None,
+        };
+
+        let outputs = controller.build_outputs().expect("outputs");
+        let container_outputs = outputs
+            .downcast_ref::<ContainerOutputs>()
+            .expect("container outputs");
+
+        assert_eq!(
+            container_outputs.url.as_deref(),
+            Some("https://container.example.test")
+        );
     }
 }
 
