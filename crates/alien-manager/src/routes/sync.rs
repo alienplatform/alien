@@ -395,6 +395,26 @@ async fn release(
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use alien_core::Platform;
+
+    use super::release_stack_platform;
+
+    #[test]
+    fn release_stack_platform_uses_base_platform_for_imported_kubernetes_deployments() {
+        assert_eq!(
+            release_stack_platform(Platform::Kubernetes, Some(Platform::Aws)),
+            Platform::Aws
+        );
+    }
+
+    #[test]
+    fn release_stack_platform_defaults_to_deployment_platform() {
+        assert_eq!(release_stack_platform(Platform::Gcp, None), Platform::Gcp);
+    }
+}
+
 /// `POST /v1/sync` — Inbound: deployment bearer. The agent-driven sync
 /// path; `caller: &Subject` is threaded into the store so embedders see
 /// the agent's own scope.
@@ -507,6 +527,9 @@ async fn agent_sync(
             None
         };
 
+        let release_stack_platform =
+            release_stack_platform(deployment.platform, deployment.base_platform);
+
         // Resolve management config (same pattern as push-mode deployment loop).
         // 1. From deployment record (platform API / private managers)
         // 2. From credential resolver (derived from management binding env vars)
@@ -515,7 +538,7 @@ async fn agent_sync(
         } else {
             state
                 .credential_resolver
-                .resolve_management_config(deployment.platform)
+                .resolve_management_config(release_stack_platform)
                 .await
                 .unwrap_or(None)
         };
@@ -540,18 +563,18 @@ async fn agent_sync(
         let native_image_host = crate::registry_access::derive_native_image_host(
             &state.bindings_provider,
             &state.target_bindings_providers,
-            &deployment.platform,
+            &release_stack_platform,
         )
         .await;
 
         match release {
             Some(r) => {
-                let stack = match r.stacks.get(&deployment.platform) {
+                let stack = match r.stacks.get(&release_stack_platform) {
                     Some(s) => s.clone(),
                     None => {
                         return ErrorData::internal(format!(
                             "Release {} does not contain a stack for platform {}",
-                            r.id, deployment.platform
+                            r.id, release_stack_platform
                         ))
                         .into_response();
                     }
@@ -611,6 +634,10 @@ async fn agent_sync(
         commands_url: Some(state.config.commands_base_url()),
     })
     .into_response()
+}
+
+fn release_stack_platform(platform: Platform, base_platform: Option<Platform>) -> Platform {
+    base_platform.unwrap_or(platform)
 }
 
 /// `POST /v1/initialize` — Inbound: deployment-group bearer (typical),
