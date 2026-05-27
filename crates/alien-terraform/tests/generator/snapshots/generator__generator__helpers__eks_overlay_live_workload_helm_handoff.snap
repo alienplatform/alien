@@ -204,10 +204,6 @@ data "aws_eks_cluster" "target" {
   name = var.eks_cluster_name
 }
 
-data "tls_certificate" "eks_oidc" {
-  url = data.aws_eks_cluster.target.identity[0].oidc[0].issuer
-}
-
 data "aws_iam_policy_document" "execution_sa_assume_role" {
   statement {
     effect = "Allow"
@@ -257,16 +253,6 @@ resource "aws_iam_role_policy" "execution_sa_set_0" {
   policy = jsonencode({ Statement = [{ Action = ["s3:ListBucket", "s3:GetObject", "s3:GetObjectVersion", "s3:GetObjectAcl"], Effect = "Allow", Resource = ["arn:aws:s3:::${local.resource_prefix}-*", "arn:aws:s3:::${local.resource_prefix}-*/*"], Sid = "ReadS3Objects" }], Version = "2012-10-17" })
 }
 
-resource "aws_iam_openid_connect_provider" "target" {
-  url = data.aws_eks_cluster.target.identity[0].oidc[0].issuer
-  client_id_list = [
-    "sts.amazonaws.com"
-  ]
-  thumbprint_list = [
-    data.tls_certificate.eks_oidc.certificates[0].sha1_fingerprint
-  ]
-}
-
 === import.tf ===
 resource "terraform_data" "deployment_import" {
   input = {
@@ -290,8 +276,7 @@ resource "terraform_data" "deployment_import" {
     aws_s3_bucket_public_access_block.data,
     aws_s3_bucket_policy.data,
     aws_iam_role.execution_sa,
-    aws_iam_role_policy.execution_sa_set_0,
-    aws_iam_openid_connect_provider.target
+    aws_iam_role_policy.execution_sa_set_0
   ]
 }
 

@@ -3,7 +3,7 @@
 //! Applied on top of cloud emitters when [`crate::TerraformTarget`] is
 //! `Eks` / `Gke` / `Aks`. Wires service-account identity:
 //!
-//! * EKS → IRSA (IAM Role for Service Account, OIDC provider).
+//! * EKS → IRSA (IAM Role for Service Account).
 //! * GKE → Workload Identity (Google service account binding via the
 //!   `iam.workloadIdentityUser` role).
 //! * AKS → User-Assigned Managed Identity + Federated Identity Credentials.
@@ -175,34 +175,6 @@ fn add_eks_cluster_data(fragment: &mut TfFragment) {
         "aws_eks_cluster",
         "target",
         [attr("name", expr::raw("var.eks_cluster_name"))],
-    ));
-    fragment.data_blocks.push(data_block(
-        "tls_certificate",
-        "eks_oidc",
-        [attr(
-            "url",
-            expr::raw("data.aws_eks_cluster.target.identity[0].oidc[0].issuer"),
-        )],
-    ));
-    fragment.resource_blocks.push(resource_block(
-        "aws_iam_openid_connect_provider",
-        "target",
-        [
-            attr(
-                "url",
-                expr::raw("data.aws_eks_cluster.target.identity[0].oidc[0].issuer"),
-            ),
-            attr(
-                "client_id_list",
-                Expression::Array(vec![Expression::String("sts.amazonaws.com".to_string())]),
-            ),
-            attr(
-                "thumbprint_list",
-                Expression::Array(vec![expr::raw(
-                    "data.tls_certificate.eks_oidc.certificates[0].sha1_fingerprint",
-                )]),
-            ),
-        ],
     ));
 }
 
