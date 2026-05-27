@@ -37,7 +37,8 @@ pub struct TestManager {
     /// Full base URL, e.g. `http://127.0.0.1:12345`.
     pub url: String,
     /// Public base URL (ngrok URL when tunnel is active, otherwise same as `url`).
-    /// Use this for image URI rewriting — it must be reachable from cloud platforms.
+    /// Use this for URLs consumed from cloud runtimes — it must be reachable
+    /// outside the local test runner.
     pub public_url: String,
     /// The raw admin token (unhashed). Use this for `Authorization: Bearer`.
     pub admin_token: String,

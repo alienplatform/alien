@@ -1009,7 +1009,7 @@ async fn write_manager_fetch_values(
         serde_json::json!({
             "token": deployment.token.clone(),
             "name": deployment.name.clone(),
-            "url": prepared.manager.url.clone(),
+            "url": prepared.manager.public_url.clone(),
             "deploymentId": deployment.id.clone(),
             "updates": "auto",
             "telemetry": "auto",

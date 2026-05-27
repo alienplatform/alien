@@ -525,7 +525,7 @@ async fn start_generated_helm_agent(
         "management": {
             "token": deployment.token.clone(),
             "name": deployment.name.clone(),
-            "url": manager.url.clone(),
+            "url": manager.public_url.clone(),
             "deploymentId": deployment.id.clone(),
             "updates": "auto",
             "telemetry": "auto",

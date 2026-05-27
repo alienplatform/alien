@@ -300,7 +300,7 @@ impl TestAlienAgent {
             %release_name,
             %namespace,
             %chart,
-            manager_url = %manager.url,
+            manager_url = %manager.public_url,
             "installing alien-agent via helm"
         );
 
@@ -315,7 +315,7 @@ impl TestAlienAgent {
             namespace,
             "--create-namespace",
             "--set",
-            &format!("syncUrl={}", manager.url),
+            &format!("syncUrl={}", manager.public_url),
             "--set",
             &format!("syncToken={}", manager.admin_token),
             "--set",
