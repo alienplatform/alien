@@ -253,7 +253,7 @@ while read -r policy_name policy_arn; do
   cleanup_managed_policy "$policy_name" "$policy_arn"
 done <<< "$policies"
 
-if [ -n "${ALIEN_TEST_EKS_CLUSTER_NAME:-}" ]; then
+if [ "${ALIEN_E2E_CLEAN_EKS_OIDC_PROVIDER:-false}" = "true" ] && [ -n "${ALIEN_TEST_EKS_CLUSTER_NAME:-}" ]; then
   echo "Deleting EKS OIDC provider for cluster: $ALIEN_TEST_EKS_CLUSTER_NAME"
   issuer=$(aws eks describe-cluster \
     --name "$ALIEN_TEST_EKS_CLUSTER_NAME" \
@@ -276,4 +276,6 @@ if [ -n "${ALIEN_TEST_EKS_CLUSTER_NAME:-}" ]; then
       fi
     done
   fi
+elif [ -n "${ALIEN_TEST_EKS_CLUSTER_NAME:-}" ]; then
+  echo "Skipping EKS OIDC provider cleanup for cluster: $ALIEN_TEST_EKS_CLUSTER_NAME"
 fi
