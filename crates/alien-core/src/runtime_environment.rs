@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 pub const ENV_ALIEN_CURRENT_WORKER_BINDING_NAME: &str = "ALIEN_CURRENT_WORKER_BINDING_NAME";
 pub const ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME: &str = "ALIEN_CURRENT_CONTAINER_BINDING_NAME";
+pub const ENV_ALIEN_BASE_PLATFORM: &str = "ALIEN_BASE_PLATFORM";
 pub const ENV_ALIEN_DEPLOYMENT_TYPE: &str = "ALIEN_DEPLOYMENT_TYPE";
 pub const ENV_ALIEN_LAMBDA_MODE: &str = "ALIEN_LAMBDA_MODE";
 pub const ENV_ALIEN_RUNTIME_SEND_OTLP: &str = "ALIEN_RUNTIME_SEND_OTLP";
@@ -34,6 +35,7 @@ pub enum RuntimeEnvironmentValue {
     AzureRegion,
     AzureSubscriptionId,
     AzureTenantId,
+    BasePlatform,
     CurrentContainerBindingName,
     CurrentWorkerBindingName,
     GcpProjectId,
@@ -177,7 +179,11 @@ pub fn standard_runtime_environment_plan(platform: Platform) -> Vec<RuntimeEnvir
                 value: RuntimeEnvironmentValue::AzureRegion,
             },
         ]),
-        Platform::Kubernetes | Platform::Local | Platform::Test => {}
+        Platform::Kubernetes => entries.push(RuntimeEnvironmentEntry {
+            name: ENV_ALIEN_BASE_PLATFORM,
+            value: RuntimeEnvironmentValue::BasePlatform,
+        }),
+        Platform::Local | Platform::Test => {}
     }
 
     entries
@@ -317,6 +323,7 @@ pub fn is_runtime_environment_contract_name(name: &str) -> bool {
         name,
         ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME
             | ENV_ALIEN_CURRENT_WORKER_BINDING_NAME
+            | ENV_ALIEN_BASE_PLATFORM
             | ENV_ALIEN_DEPLOYMENT_TYPE
             | ENV_ALIEN_LAMBDA_MODE
             | ENV_ALIEN_RUNTIME_SEND_OTLP
@@ -407,6 +414,9 @@ mod tests {
         assert!(is_reserved_runtime_environment_name(
             ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME
         ));
+        assert!(is_reserved_runtime_environment_name(
+            ENV_ALIEN_BASE_PLATFORM
+        ));
         assert!(is_reserved_runtime_environment_name(ENV_ALIEN_SECRETS));
         assert!(is_reserved_runtime_environment_name(
             "ALIEN_STORAGE_BINDING"
@@ -436,5 +446,15 @@ mod tests {
 
         assert!(error.to_string().contains(ENV_ALIEN_TRANSPORT));
         assert!(!error.to_string().contains(ENV_ALIEN_SECRETS));
+    }
+
+    #[test]
+    fn kubernetes_standard_environment_declares_base_platform() {
+        let entries = standard_runtime_environment_plan(Platform::Kubernetes);
+
+        assert!(entries.iter().any(|entry| {
+            entry.name == ENV_ALIEN_BASE_PLATFORM
+                && entry.value == RuntimeEnvironmentValue::BasePlatform
+        }));
     }
 }

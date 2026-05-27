@@ -57,6 +57,11 @@ impl RuntimeEnvironmentRenderer for ControllerRuntimeEnvironmentRenderer<'_, '_>
                 .get_azure_config()
                 .ok()
                 .map(|config| config.tenant_id.clone())),
+            RuntimeEnvironmentValue::BasePlatform => Ok(self
+                .ctx
+                .deployment_config
+                .base_platform
+                .map(|platform| platform.as_str().to_string())),
             RuntimeEnvironmentValue::GcpProjectId => Ok(self
                 .ctx
                 .get_gcp_config()

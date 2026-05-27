@@ -6,10 +6,9 @@ use crate::{
 };
 
 use alien_client_config::ClientConfigExt;
-use alien_core::{ClientConfig, Platform, StackState};
+use alien_core::{ClientConfig, Platform, StackState, ENV_ALIEN_BASE_PLATFORM};
 use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
-use serde::Deserialize;
 use std::{any::Any, collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
 
@@ -80,17 +79,72 @@ impl BindingsProvider {
         let platform = crate::get_platform_from_env(&env)?;
 
         // 2. Load ClientConfig from environment
-        let client_config = ClientConfig::from_env(platform, &env).await.map_err(|e| {
-            AlienError::new(ErrorData::ClientConfigInvalid {
-                platform,
-                message: format!("Failed to load client config: {}", e),
-            })
-        })?;
+        let client_config = Self::client_config_from_env(platform, &env).await?;
 
         // 3. Parse all ALIEN_*_BINDING environment variables
         let bindings = Self::parse_bindings_from_env(&env)?;
 
         Self::new(client_config, bindings)
+    }
+
+    async fn client_config_from_env(
+        platform: Platform,
+        env: &HashMap<String, String>,
+    ) -> Result<ClientConfig> {
+        if platform != Platform::Kubernetes {
+            return Self::load_client_config_from_env(platform, env).await;
+        }
+
+        let Some(base_platform) = Self::base_platform_from_env(env)? else {
+            return Self::load_client_config_from_env(platform, env).await;
+        };
+
+        let kubernetes = match Self::load_client_config_from_env(Platform::Kubernetes, env).await? {
+            ClientConfig::Kubernetes(kubernetes) => kubernetes,
+            _ => unreachable!("kubernetes platform must produce a Kubernetes client config"),
+        };
+        let cloud = Self::load_client_config_from_env(base_platform, env).await?;
+
+        Ok(ClientConfig::KubernetesCloud {
+            kubernetes,
+            cloud: Box::new(cloud),
+        })
+    }
+
+    fn base_platform_from_env(env: &HashMap<String, String>) -> Result<Option<Platform>> {
+        let Some(base_platform) = env.get(ENV_ALIEN_BASE_PLATFORM) else {
+            return Ok(None);
+        };
+
+        let parsed: Platform = base_platform.parse().map_err(|reason| {
+            AlienError::new(ErrorData::InvalidEnvironmentVariable {
+                variable_name: ENV_ALIEN_BASE_PLATFORM.to_string(),
+                value: base_platform.clone(),
+                reason,
+            })
+        })?;
+
+        if !matches!(parsed, Platform::Aws | Platform::Gcp | Platform::Azure) {
+            return Err(AlienError::new(ErrorData::InvalidEnvironmentVariable {
+                variable_name: ENV_ALIEN_BASE_PLATFORM.to_string(),
+                value: base_platform.clone(),
+                reason: "Kubernetes base platform must be aws, gcp, or azure".to_string(),
+            }));
+        }
+
+        Ok(Some(parsed))
+    }
+
+    async fn load_client_config_from_env(
+        platform: Platform,
+        env: &HashMap<String, String>,
+    ) -> Result<ClientConfig> {
+        ClientConfig::from_env(platform, env).await.map_err(|e| {
+            AlienError::new(ErrorData::ClientConfigInvalid {
+                platform,
+                message: format!("Failed to load client config: {}", e),
+            })
+        })
     }
 
     /// Parses all ALIEN_*_BINDING environment variables into a map.
@@ -268,7 +322,7 @@ impl BindingsProvider {
 }
 
 #[cfg(feature = "platform-sdk")]
-#[derive(Deserialize)]
+#[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ResolveCredentialsResponse {
     client_config: ClientConfig,
@@ -1574,6 +1628,61 @@ impl BindingsProviderApi for BindingsProvider {
                 }))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::ENV_ALIEN_DEPLOYMENT_TYPE;
+
+    fn kubernetes_aws_env() -> HashMap<String, String> {
+        HashMap::from([
+            (
+                ENV_ALIEN_DEPLOYMENT_TYPE.to_string(),
+                Platform::Kubernetes.as_str().to_string(),
+            ),
+            (
+                ENV_ALIEN_BASE_PLATFORM.to_string(),
+                Platform::Aws.as_str().to_string(),
+            ),
+            (
+                "KUBERNETES_SERVICE_HOST".to_string(),
+                "10.0.0.1".to_string(),
+            ),
+            ("KUBERNETES_SERVICE_PORT".to_string(), "443".to_string()),
+            ("AWS_REGION".to_string(), "us-east-1".to_string()),
+            ("AWS_ACCOUNT_ID".to_string(), "123456789012".to_string()),
+            ("AWS_ACCESS_KEY_ID".to_string(), "test".to_string()),
+            ("AWS_SECRET_ACCESS_KEY".to_string(), "test".to_string()),
+        ])
+    }
+
+    #[tokio::test]
+    async fn from_env_builds_kubernetes_cloud_config_when_base_platform_is_set() {
+        let provider = BindingsProvider::from_env(kubernetes_aws_env())
+            .await
+            .unwrap();
+
+        assert!(provider.client_config.kubernetes_config().is_some());
+        assert!(provider.client_config.aws_config().is_some());
+        assert!(matches!(
+            provider.client_config,
+            ClientConfig::KubernetesCloud { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn from_env_rejects_non_cloud_kubernetes_base_platform() {
+        let mut env = kubernetes_aws_env();
+        env.insert(
+            ENV_ALIEN_BASE_PLATFORM.to_string(),
+            Platform::Kubernetes.as_str().to_string(),
+        );
+
+        let error = BindingsProvider::from_env(env).await.unwrap_err();
+
+        assert!(error.to_string().contains(ENV_ALIEN_BASE_PLATFORM));
     }
 }
 
