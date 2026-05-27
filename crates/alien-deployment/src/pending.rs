@@ -1,7 +1,8 @@
 use crate::{
     DeploymentConfig, DeploymentState, DeploymentStatus, DeploymentStepResult, ErrorData, Result,
 };
-use alien_core::{Stack, StackState};
+use alien_core::{ClientConfig, Platform, Stack, StackState};
+use alien_error::AlienError;
 use alien_error::Context;
 use tracing::info;
 
@@ -31,18 +32,22 @@ pub async fn handle_pending(
         current.platform
     );
 
-    // Step 2: Collect environment information
+    // Step 2: Collect environment information. Kubernetes deployments may run
+    // on base cloud infrastructure; collect the base cloud environment while
+    // keeping the deployment stack platform as Kubernetes.
+    let (environment_platform, environment_client_config) =
+        environment_collection_context(current.platform, config.base_platform, &client_config)?;
     let environment_info =
-        crate::helpers::collect_environment_info(current.platform, &client_config)
+        crate::helpers::collect_environment_info(environment_platform, &environment_client_config)
             .await
             .context(ErrorData::EnvironmentInfoCollectionFailed {
-                platform: format!("{:?}", current.platform),
+                platform: format!("{:?}", environment_platform),
                 reason: "Failed to collect cloud environment details".to_string(),
             })?;
 
     info!(
         "Collected environment info for platform {:?}",
-        current.platform
+        environment_platform
     );
 
     // Step 3: Run deployment-time preflights (compile-time + mutations + runtime checks)
@@ -93,4 +98,50 @@ pub async fn handle_pending(
         suggested_delay_ms: None,
         update_heartbeat: false,
     })
+}
+
+fn environment_collection_context(
+    platform: Platform,
+    base_platform: Option<Platform>,
+    client_config: &ClientConfig,
+) -> Result<(Platform, ClientConfig)> {
+    let environment_platform = base_platform.unwrap_or(platform);
+    let environment_client_config = client_config
+        .config_for_platform(environment_platform)
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::MissingConfiguration {
+                message: format!(
+                    "Client config for environment platform '{}' is missing",
+                    environment_platform
+                ),
+            })
+        })?;
+    Ok((environment_platform, environment_client_config))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::KubernetesClientConfig;
+
+    #[test]
+    fn kubernetes_base_platform_collects_base_environment() {
+        let client_config = ClientConfig::KubernetesCloud {
+            kubernetes: Box::new(KubernetesClientConfig::InCluster {
+                namespace: Some("alien-test".to_string()),
+                additional_headers: None,
+            }),
+            cloud: Box::new(ClientConfig::Test),
+        };
+
+        let (platform, config) = environment_collection_context(
+            Platform::Kubernetes,
+            Some(Platform::Test),
+            &client_config,
+        )
+        .expect("base platform client config should be selected");
+
+        assert_eq!(platform, Platform::Test);
+        assert!(matches!(config, ClientConfig::Test));
+    }
 }
