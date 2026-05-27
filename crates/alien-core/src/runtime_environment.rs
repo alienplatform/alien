@@ -211,7 +211,11 @@ pub fn worker_transport_runtime_environment_plan(
             name: ENV_ALIEN_TRANSPORT,
             value: RuntimeEnvironmentValue::Literal("container-app"),
         }],
-        Platform::Kubernetes | Platform::Local | Platform::Test => vec![RuntimeEnvironmentEntry {
+        Platform::Kubernetes => vec![RuntimeEnvironmentEntry {
+            name: ENV_ALIEN_TRANSPORT,
+            value: RuntimeEnvironmentValue::Literal("http"),
+        }],
+        Platform::Local | Platform::Test => vec![RuntimeEnvironmentEntry {
             name: ENV_ALIEN_TRANSPORT,
             value: RuntimeEnvironmentValue::Literal("passthrough"),
         }],
@@ -455,6 +459,16 @@ mod tests {
         assert!(entries.iter().any(|entry| {
             entry.name == ENV_ALIEN_BASE_PLATFORM
                 && entry.value == RuntimeEnvironmentValue::BasePlatform
+        }));
+    }
+
+    #[test]
+    fn kubernetes_worker_environment_uses_http_proxy_transport() {
+        let entries = worker_transport_runtime_environment_plan(Platform::Kubernetes);
+
+        assert!(entries.iter().any(|entry| {
+            entry.name == ENV_ALIEN_TRANSPORT
+                && entry.value == RuntimeEnvironmentValue::Literal("http")
         }));
     }
 }

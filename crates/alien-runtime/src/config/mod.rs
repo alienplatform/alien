@@ -161,7 +161,7 @@ impl RuntimeConfig {
             transport_port: match cli.transport {
                 TransportType::CloudRun => cli.cloudrun_port,
                 TransportType::ContainerApp => cli.containerapp_port,
-                TransportType::Local => cli.local_port,
+                TransportType::Http | TransportType::Local => cli.local_port,
                 _ => 8080,
             },
             lambda_mode: cli.lambda_mode,

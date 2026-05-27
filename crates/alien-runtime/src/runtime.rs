@@ -339,6 +339,15 @@ fn spawn_transport(
             Ok(tokio::spawn(async move { transport.run().await }))
         }
 
+        TransportType::Http => {
+            let mut transport =
+                LocalTransport::exposed(transport_port, control_server, shutdown_rx);
+            if let Some(port) = app_http_port {
+                transport = transport.with_app_port(port);
+            }
+            Ok(tokio::spawn(async move { transport.run().await }))
+        }
+
         TransportType::Local => {
             let mut transport = LocalTransport::new(transport_port, control_server, shutdown_rx);
             if let Some(port) = app_http_port {

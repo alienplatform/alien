@@ -42,8 +42,8 @@ pub struct Cli {
     #[arg(long, env = "PORT", default_value_t = 8080)]
     pub containerapp_port: u16,
 
-    // Local options
-    /// Port for Local transport
+    // Local/HTTP proxy options
+    /// Port for Local/HTTP proxy transport
     #[arg(long, env = "PORT", default_value_t = 8080)]
     pub local_port: u16,
 
@@ -132,6 +132,8 @@ pub enum TransportType {
     CloudRun,
     /// Azure Container Apps
     ContainerApp,
+    /// Plain HTTP proxy, exposed on all interfaces
+    Http,
     /// Local Platform - simple HTTP proxy (for VMs, edge, bare metal)
     Local,
     /// Passthrough - app handles HTTP directly
@@ -185,6 +187,15 @@ mod tests {
         .unwrap();
         assert_eq!(cli.transport, TransportType::CloudRun);
         assert_eq!(cli.cloudrun_port, 9000);
+    }
+
+    #[test]
+    fn test_parse_http_transport() {
+        let cli =
+            Cli::try_parse_from(["alien-runtime", "--transport", "http", "--", "app"]).unwrap();
+
+        assert_eq!(cli.transport, TransportType::Http);
+        assert_eq!(cli.local_port, 8080);
     }
 
     #[test]
