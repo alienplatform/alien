@@ -76,6 +76,23 @@ on:
         description: "Build container images (disable to use latest/default images or explicit overrides)"
         type: boolean
         default: true
+      build_base_image:
+        description: "Build alien-base when container image builds are enabled"
+        type: boolean
+        default: true
+      build_agent_image:
+        description: "Build alien-agent when container image builds are enabled"
+        type: boolean
+        default: true
+      image_architectures:
+        description: "Architectures to include in built container images"
+        type: choice
+        default: "auto"
+        options:
+          - auto
+          - x86_64
+          - aarch64
+          - both
       base_image_override:
         description: "Optional alien-base image to use when skipping image builds"
         type: string
@@ -162,6 +179,8 @@ jobs:
       needs_x86_64: ${{ steps.set.outputs.needs_x86_64 }}
       needs_aarch64: ${{ steps.set.outputs.needs_aarch64 }}
       build_images: ${{ steps.set.outputs.build_images }}
+      build_base_image: ${{ steps.set.outputs.build_base_image }}
+      build_agent_image: ${{ steps.set.outputs.build_agent_image }}
       skip_cleanup: ${{ steps.set.outputs.skip_cleanup }}
       test_filter: ${{ steps.set.outputs.test_filter }}
       network_mode: ${{ steps.set.outputs.network_mode }}
@@ -195,6 +214,8 @@ jobs:
             echo "needs_x86_64=false" >> $GITHUB_OUTPUT
             echo "needs_aarch64=false" >> $GITHUB_OUTPUT
             echo "build_images=true" >> $GITHUB_OUTPUT
+            echo "build_base_image=true" >> $GITHUB_OUTPUT
+            echo "build_agent_image=true" >> $GITHUB_OUTPUT
             echo "skip_cleanup=false" >> $GITHUB_OUTPUT
             echo "test_filter=" >> $GITHUB_OUTPUT
             echo "network_mode=none" >> $GITHUB_OUTPUT
@@ -220,6 +241,9 @@ jobs:
             LANG="${{ inputs.language }}"
             NETWORK_MODE="${{ inputs.network_mode }}"
             BUILD_IMAGES="${{ inputs.build_images }}"
+            BUILD_BASE_IMAGE="${{ inputs.build_base_image }}"
+            BUILD_AGENT_IMAGE="${{ inputs.build_agent_image }}"
+            IMAGE_ARCHITECTURES="${{ inputs.image_architectures }}"
             SKIP_CLEANUP="${{ inputs.skip_cleanup }}"
             TEST_FILTER="${{ inputs.test_filter }}"
           else
@@ -236,7 +260,15 @@ jobs:
             LOCAL_LINUX_AGENT=true
             LOCAL_MACOS_AGENT=false
             LOCAL_WINDOWS_AGENT=false
-            LANG=Rust; NETWORK_MODE=none; BUILD_IMAGES=true; SKIP_CLEANUP=false; TEST_FILTER=""
+            LANG=Rust; NETWORK_MODE=none; BUILD_IMAGES=true; BUILD_BASE_IMAGE=true; BUILD_AGENT_IMAGE=true; IMAGE_ARCHITECTURES=auto; SKIP_CLEANUP=false; TEST_FILTER=""
+          fi
+
+          if [ "$BUILD_IMAGES" != "true" ]; then
+            BUILD_BASE_IMAGE=false
+            BUILD_AGENT_IMAGE=false
+          fi
+          if [ "$BUILD_BASE_IMAGE" != "true" ] && [ "$BUILD_AGENT_IMAGE" != "true" ]; then
+            BUILD_IMAGES=false
           fi
 
           # Build push matrix
@@ -347,6 +379,14 @@ jobs:
           # consume the agent image, so keep both architectures available.
           if [ "$HAS_TERRAFORM" = "true" ]; then NEEDS_X86_64=true; NEEDS_AARCH64=true; fi
           if [ "$HAS_CLOUDFORMATION" = "true" ]; then NEEDS_AARCH64=true; fi
+          if [ "$BUILD_IMAGES" = "true" ] && [ "$IMAGE_ARCHITECTURES" != "auto" ]; then
+            case "$IMAGE_ARCHITECTURES" in
+              x86_64) NEEDS_X86_64=true; NEEDS_AARCH64=false ;;
+              aarch64) NEEDS_X86_64=false; NEEDS_AARCH64=true ;;
+              both) NEEDS_X86_64=true; NEEDS_AARCH64=true ;;
+              *) echo "Unsupported image_architectures: $IMAGE_ARCHITECTURES" >&2; exit 1 ;;
+            esac
+          fi
 
           echo "push_matrix=$(echo "$PUSH_ENTRIES" | jq -c '{include: .}')" >> $GITHUB_OUTPUT
           echo "local_matrix=$(echo "$LOCAL_ENTRIES" | jq -c '{include: .}')" >> $GITHUB_OUTPUT
@@ -359,6 +399,8 @@ jobs:
           echo "needs_x86_64=$NEEDS_X86_64" >> $GITHUB_OUTPUT
           echo "needs_aarch64=$NEEDS_AARCH64" >> $GITHUB_OUTPUT
           echo "build_images=$BUILD_IMAGES" >> $GITHUB_OUTPUT
+          echo "build_base_image=$BUILD_BASE_IMAGE" >> $GITHUB_OUTPUT
+          echo "build_agent_image=$BUILD_AGENT_IMAGE" >> $GITHUB_OUTPUT
           echo "skip_cleanup=$SKIP_CLEANUP" >> $GITHUB_OUTPUT
           echo "test_filter=$TEST_FILTER" >> $GITHUB_OUTPUT
           echo "network_mode=$NETWORK_MODE" >> $GITHUB_OUTPUT
@@ -388,15 +430,25 @@ jobs:
           install-protoc: "true"
 
       - name: Build alien-runtime + alien-agent (x86_64)
-        run: depot cargo build --release -p alien-runtime -p alien-agent --target x86_64-unknown-linux-musl
+        run: |
+          PACKAGES=()
+          if [ "${{ needs.compute-matrix.outputs.build_base_image }}" = "true" ]; then
+            PACKAGES+=("-p" "alien-runtime")
+          fi
+          if [ "${{ needs.compute-matrix.outputs.build_agent_image }}" = "true" ]; then
+            PACKAGES+=("-p" "alien-agent")
+          fi
+          depot cargo build --release "${PACKAGES[@]}" --target x86_64-unknown-linux-musl
 
       - uses: actions/upload-artifact@v4
+        if: needs.compute-matrix.outputs.build_base_image == 'true'
         with:
           name: alien-runtime-x86_64
           path: target/x86_64-unknown-linux-musl/release/alien-runtime
           retention-days: 1
 
       - uses: actions/upload-artifact@v4
+        if: needs.compute-matrix.outputs.build_agent_image == 'true'
         with:
           name: alien-agent-x86_64
           path: target/x86_64-unknown-linux-musl/release/alien-agent
@@ -423,15 +475,25 @@ jobs:
           install-protoc: "true"
 
       - name: Build alien-runtime + alien-agent (aarch64)
-        run: depot cargo build --release -p alien-runtime -p alien-agent --target aarch64-unknown-linux-musl
+        run: |
+          PACKAGES=()
+          if [ "${{ needs.compute-matrix.outputs.build_base_image }}" = "true" ]; then
+            PACKAGES+=("-p" "alien-runtime")
+          fi
+          if [ "${{ needs.compute-matrix.outputs.build_agent_image }}" = "true" ]; then
+            PACKAGES+=("-p" "alien-agent")
+          fi
+          depot cargo build --release "${PACKAGES[@]}" --target aarch64-unknown-linux-musl
 
       - uses: actions/upload-artifact@v4
+        if: needs.compute-matrix.outputs.build_base_image == 'true'
         with:
           name: alien-runtime-aarch64
           path: target/aarch64-unknown-linux-musl/release/alien-runtime
           retention-days: 1
 
       - uses: actions/upload-artifact@v4
+        if: needs.compute-matrix.outputs.build_agent_image == 'true'
         with:
           name: alien-agent-aarch64
           path: target/aarch64-unknown-linux-musl/release/alien-agent
@@ -440,9 +502,10 @@ jobs:
   # ── Build container images ─────────────────────────────────────────
 
   build-base-image:
-    needs: [build-x86_64, build-aarch64]
+    needs: [compute-matrix, build-x86_64, build-aarch64]
     if: |
       !cancelled() && !failure() &&
+      needs.compute-matrix.outputs.build_base_image == 'true' &&
       (needs.build-x86_64.result == 'success' || needs.build-aarch64.result == 'success')
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 15
@@ -505,9 +568,10 @@ jobs:
           provenance: false
 
   build-agent-image:
-    needs: [build-x86_64, build-aarch64]
+    needs: [compute-matrix, build-x86_64, build-aarch64]
     if: |
       !cancelled() && !failure() &&
+      needs.compute-matrix.outputs.build_agent_image == 'true' &&
       (needs.build-x86_64.result == 'success' || needs.build-aarch64.result == 'success')
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 15
@@ -844,7 +908,7 @@ jobs:
       - name: Run E2E push test
         env:
           NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
-          ALIEN_OVERRIDE_BASE_IMAGE: ${{ inputs.base_image_override || (needs.compute-matrix.outputs.build_images == 'true' && needs.build-base-image.outputs.base_image || '') }}
+          ALIEN_OVERRIDE_BASE_IMAGE: ${{ inputs.base_image_override || (needs.compute-matrix.outputs.build_base_image == 'true' && needs.build-base-image.outputs.base_image || '') }}
           ALIEN_E2E_NETWORK_MODE: ${{ needs.compute-matrix.outputs.network_mode }}
         run: |
           set -a && source .env.test && set +a
@@ -929,7 +993,7 @@ jobs:
       - name: Run E2E CloudFormation distribution test
         env:
           NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
-          ALIEN_OVERRIDE_BASE_IMAGE: ${{ inputs.base_image_override || (needs.compute-matrix.outputs.build_images == 'true' && needs.build-base-image.outputs.base_image || '') }}
+          ALIEN_OVERRIDE_BASE_IMAGE: ${{ inputs.base_image_override || (needs.compute-matrix.outputs.build_base_image == 'true' && needs.build-base-image.outputs.base_image || '') }}
           ALIEN_E2E_NETWORK_MODE: ${{ needs.compute-matrix.outputs.network_mode }}
         run: |
           set -a && source .env.test && set +a
@@ -983,14 +1047,14 @@ jobs:
           echo "OIDC_REFRESH_PID=$!" >> $GITHUB_ENV
 
       - uses: docker/login-action@v3
-        if: needs.compute-matrix.outputs.build_images == 'true'
+        if: needs.compute-matrix.outputs.build_agent_image == 'true'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Pull agent image
-        if: needs.compute-matrix.outputs.build_images == 'true'
+        if: needs.compute-matrix.outputs.build_agent_image == 'true'
         run: docker pull ${{ needs.build-agent-image.outputs.agent_image }}
 
       - uses: dtolnay/rust-toolchain@nightly
@@ -1063,8 +1127,8 @@ jobs:
       - name: Run E2E Terraform distribution test
         env:
           NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
-          ALIEN_OVERRIDE_BASE_IMAGE: ${{ inputs.base_image_override || (needs.compute-matrix.outputs.build_images == 'true' && needs.build-base-image.outputs.base_image || '') }}
-          ALIEN_TEST_OVERRIDE_AGENT_IMAGE: ${{ inputs.agent_image_override || (needs.compute-matrix.outputs.build_images == 'true' && needs.build-agent-image.outputs.agent_image || '') }}
+          ALIEN_OVERRIDE_BASE_IMAGE: ${{ inputs.base_image_override || (needs.compute-matrix.outputs.build_base_image == 'true' && needs.build-base-image.outputs.base_image || '') }}
+          ALIEN_TEST_OVERRIDE_AGENT_IMAGE: ${{ inputs.agent_image_override || (needs.compute-matrix.outputs.build_agent_image == 'true' && needs.build-agent-image.outputs.agent_image || '') }}
           ALIEN_E2E_NETWORK_MODE: ${{ needs.compute-matrix.outputs.network_mode }}
           ALIEN_TEST_GHCR_USERNAME: ${{ github.actor }}
           ALIEN_TEST_GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
