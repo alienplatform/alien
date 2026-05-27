@@ -435,33 +435,28 @@ pub async fn derive_native_image_host(
     Some(strip_url_scheme(&endpoint).to_string())
 }
 
-/// Load the artifact registry that owns deployment images.
+/// Load the artifact registry that owns deployment images for a target platform.
 ///
-/// Strategy:
-/// 1. Prefer the primary provider. This is where push/proxy routes normally
-///    store deployment images, and it is the registry whose native host is
-///    injected into worker deployment configs.
-/// 2. Fall back to the per-target provider for standalone setups where the
-///    deployment image registry is configured only as a cloud target binding.
+/// Cloud image routes are registered from per-target providers, while the
+/// primary provider is the embedded local fallback. Prefer the target provider
+/// so registry access reconciliation and native image host derivation use the
+/// same ECR/GAR/ACR registry that the proxy pushed images to.
 pub async fn load_artifact_registry(
     primary_provider: &Option<Arc<dyn BindingsProviderApi>>,
     target_providers: &HashMap<Platform, Arc<dyn BindingsProviderApi>>,
     platform: &Platform,
 ) -> Option<Arc<dyn ArtifactRegistry>> {
-    if let Some(ref primary) = primary_provider {
-        for binding_name in ["artifact-registry", "artifacts"] {
-            if let Ok(ar) = primary.load_artifact_registry(binding_name).await {
+    if let Some(target) = target_providers.get(platform) {
+        for binding_name in ["artifacts", "artifact-registry"] {
+            if let Ok(ar) = target.load_artifact_registry(binding_name).await {
                 return Some(ar);
             }
         }
     }
 
-    // Fall back to the per-target provider. Different setups use different
-    // binding names: "artifacts" (env/helm) or "artifact-registry"
-    // (standalone TOML).
-    if let Some(target) = target_providers.get(platform) {
-        for binding_name in ["artifacts", "artifact-registry"] {
-            if let Ok(ar) = target.load_artifact_registry(binding_name).await {
+    if let Some(ref primary) = primary_provider {
+        for binding_name in ["artifact-registry", "artifacts"] {
+            if let Ok(ar) = primary.load_artifact_registry(binding_name).await {
                 return Some(ar);
             }
         }
@@ -473,12 +468,13 @@ pub async fn load_artifact_registry(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_bindings::error::Result;
+    use alien_bindings::error::{ErrorData as BindingErrorData, Result};
     use alien_bindings::traits::{
-        ArtifactRegistryCredentials, ArtifactRegistryPermissions, CrossAccountPermissions,
-        RepositoryResponse,
+        ArtifactRegistryCredentials, ArtifactRegistryPermissions, BindingsProviderApi,
+        CrossAccountPermissions, RepositoryResponse,
     };
     use alien_core::{ReleaseInfo, ResourceLifecycle};
+    use alien_error::AlienError;
     use async_trait::async_trait;
 
     #[derive(Debug)]
@@ -490,6 +486,10 @@ mod tests {
 
     #[async_trait]
     impl ArtifactRegistry for TestArtifactRegistry {
+        fn registry_endpoint(&self) -> String {
+            format!("https://{}.example.com", self.prefix)
+        }
+
         fn upstream_repository_prefix(&self) -> String {
             self.prefix.clone()
         }
@@ -536,6 +536,86 @@ mod tests {
 
         async fn delete_repository(&self, _repo_id: &str) -> Result<()> {
             unimplemented!("not needed for registry access repo-id tests")
+        }
+    }
+
+    #[derive(Debug)]
+    struct TestBindingsProvider {
+        binding_name: &'static str,
+        registry: Arc<dyn ArtifactRegistry>,
+    }
+
+    fn missing_binding(binding_name: &str) -> alien_bindings::error::Error {
+        AlienError::new(BindingErrorData::BindingConfigInvalid {
+            binding_name: binding_name.to_string(),
+            reason: "not found".to_string(),
+        })
+    }
+
+    #[async_trait]
+    impl BindingsProviderApi for TestBindingsProvider {
+        async fn load_artifact_registry(
+            &self,
+            binding_name: &str,
+        ) -> Result<Arc<dyn ArtifactRegistry>> {
+            if binding_name == self.binding_name {
+                Ok(self.registry.clone())
+            } else {
+                Err(missing_binding(binding_name))
+            }
+        }
+
+        async fn load_storage(
+            &self,
+            binding_name: &str,
+        ) -> Result<Arc<dyn alien_bindings::traits::Storage>> {
+            Err(missing_binding(binding_name))
+        }
+
+        async fn load_build(
+            &self,
+            binding_name: &str,
+        ) -> Result<Arc<dyn alien_bindings::traits::Build>> {
+            Err(missing_binding(binding_name))
+        }
+
+        async fn load_vault(
+            &self,
+            binding_name: &str,
+        ) -> Result<Arc<dyn alien_bindings::traits::Vault>> {
+            Err(missing_binding(binding_name))
+        }
+
+        async fn load_kv(&self, binding_name: &str) -> Result<Arc<dyn alien_bindings::traits::Kv>> {
+            Err(missing_binding(binding_name))
+        }
+
+        async fn load_queue(
+            &self,
+            binding_name: &str,
+        ) -> Result<Arc<dyn alien_bindings::traits::Queue>> {
+            Err(missing_binding(binding_name))
+        }
+
+        async fn load_worker(
+            &self,
+            binding_name: &str,
+        ) -> Result<Arc<dyn alien_bindings::traits::Worker>> {
+            Err(missing_binding(binding_name))
+        }
+
+        async fn load_container(
+            &self,
+            binding_name: &str,
+        ) -> Result<Arc<dyn alien_bindings::traits::Container>> {
+            Err(missing_binding(binding_name))
+        }
+
+        async fn load_service_account(
+            &self,
+            binding_name: &str,
+        ) -> Result<Arc<dyn alien_bindings::traits::ServiceAccount>> {
+            Err(missing_binding(binding_name))
         }
     }
 
@@ -594,6 +674,36 @@ mod tests {
                 ResourceLifecycle::Live,
             )
             .build()
+    }
+
+    #[tokio::test]
+    async fn load_artifact_registry_prefers_target_provider() {
+        let primary_registry: Arc<dyn ArtifactRegistry> = Arc::new(TestArtifactRegistry {
+            prefix: "artifacts/default".to_string(),
+        });
+        let target_registry: Arc<dyn ArtifactRegistry> = Arc::new(TestArtifactRegistry {
+            prefix: "alien-e2e".to_string(),
+        });
+        let primary_provider: Arc<dyn BindingsProviderApi> = Arc::new(TestBindingsProvider {
+            binding_name: "artifact-registry",
+            registry: primary_registry,
+        });
+        let target_provider: Arc<dyn BindingsProviderApi> = Arc::new(TestBindingsProvider {
+            binding_name: "artifacts",
+            registry: target_registry,
+        });
+        let target_providers = HashMap::from([(Platform::Aws, target_provider)]);
+
+        let registry =
+            load_artifact_registry(&Some(primary_provider), &target_providers, &Platform::Aws)
+                .await
+                .expect("registry should load");
+
+        assert_eq!(registry.upstream_repository_prefix(), "alien-e2e");
+        assert_eq!(
+            derive_native_image_host(&None, &target_providers, &Platform::Aws).await,
+            Some("alien-e2e.example.com".to_string())
+        );
     }
 
     #[test]
