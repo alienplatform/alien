@@ -57,6 +57,30 @@ write_gke_kubeconfig() {
   chmod 600 "$path"
 }
 
+wait_for_kube_authorization() {
+  local name="$1"
+  local kubeconfig="$2"
+  local attempt
+  local max_attempts=40
+  local delay_seconds=15
+
+  for attempt in $(seq 1 "$max_attempts"); do
+    if kubectl --kubeconfig "$kubeconfig" auth can-i list secrets -n ingress-nginx >/dev/null 2>&1 &&
+      kubectl --kubeconfig "$kubeconfig" auth can-i create clusterrolebindings.rbac.authorization.k8s.io >/dev/null 2>&1; then
+      echo "Kubernetes authorization is ready for ${name}"
+      return 0
+    fi
+
+    echo "Waiting for Kubernetes authorization for ${name} (${attempt}/${max_attempts})"
+    sleep "$delay_seconds"
+  done
+
+  echo "Timed out waiting for Kubernetes authorization for ${name}" >&2
+  kubectl --kubeconfig "$kubeconfig" auth can-i list secrets -n ingress-nginx || true
+  kubectl --kubeconfig "$kubeconfig" auth can-i create clusterrolebindings.rbac.authorization.k8s.io || true
+  return 1
+}
+
 write_common_values() {
   local path="$1"
   jq -n --arg ingress_class "$(jq_value e2e_k8s_ingress_class)" '{
@@ -128,6 +152,7 @@ install_ingress "EKS" "$eks_kubeconfig" "$tmp_dir/eks-values.yaml"
 for target in 1 2 3; do
   gke_kubeconfig="$tmp_dir/gke-target-${target}.yaml"
   write_gke_kubeconfig "$target" "$gke_kubeconfig"
+  wait_for_kube_authorization "GKE target ${target}" "$gke_kubeconfig"
   jq -s \
     --arg ip "$(jq_value "e2e_gke_target_${target}_ingress_ip_address")" \
     '.[0] * { controller: { service: { loadBalancerIP: $ip } } }' \
