@@ -1,0 +1,55 @@
+{
+  "id": "remote-stack-management/provision",
+  "description": "Allows provisioning the cross-account management role and its generated managed policies",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": [
+            "iam:CreateRole",
+            "iam:GetRole",
+            "iam:TagRole",
+            "iam:CreatePolicy",
+            "iam:CreatePolicyVersion",
+            "iam:DeletePolicy",
+            "iam:DeletePolicyVersion",
+            "iam:ListPolicyVersions"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-management",
+              "arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-deployment-management-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}",
+              "arn:aws:iam::${awsAccountId}:policy/${stackPrefix}-deployment-management-*"
+            ]
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": [
+            "iam:AttachRolePolicy",
+            "iam:DetachRolePolicy",
+            "iam:DeleteRolePolicy",
+            "iam:ListAttachedRolePolicies",
+            "iam:ListRolePolicies"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-management"]
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}"]
+          }
+        }
+      }
+    ]
+  }
+}

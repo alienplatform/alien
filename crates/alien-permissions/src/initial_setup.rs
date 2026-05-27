@@ -268,4 +268,28 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn complete_aws_initial_setup_policy_can_create_remote_management_policies() {
+        let context = PermissionContext::new()
+            .with_aws_region("us-east-1")
+            .with_aws_account_id("123456789012")
+            .with_stack_prefix("test-stack")
+            .with_resource_name("test");
+
+        let policy = generate_aws_initial_setup_policy(&context).unwrap();
+        let statements = policy
+            .statement
+            .iter()
+            .filter(|statement| statement.action.contains(&"iam:CreatePolicy".to_string()))
+            .collect::<Vec<_>>();
+
+        assert!(
+            statements.iter().any(|statement| statement.resource.contains(
+                &"arn:aws:iam::123456789012:policy/test-stack-deployment-management-*"
+                    .to_string()
+            )),
+            "initial setup policy must be able to create remote-stack-management managed policies, got {statements:?}"
+        );
+    }
 }
