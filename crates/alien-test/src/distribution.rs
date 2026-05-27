@@ -35,7 +35,7 @@ use crate::{
     config::{AwsConfig, AzureConfig, GcpConfig, KubernetesRuntimeConfig, TestConfig},
     deployment::TestDeployment,
     e2e::{self, DeploymentModel, DistributionFlow, Language, TestContext},
-    helm_values::to_helm_values_yaml,
+    helm_values::{runtime_image_pull_secrets, to_helm_values_yaml},
     manager::TestManager,
 };
 
@@ -1050,13 +1050,17 @@ fn runtime_values() -> anyhow::Result<Value> {
         .filter(|image| !image.is_empty())
         .unwrap_or_else(|| "ghcr.io/alienplatform/alien-agent:latest".to_string());
     let (repository, tag) = split_image_tag(&image)?;
-    Ok(serde_json::json!({
+    let mut runtime = serde_json::json!({
         "image": {
             "repository": repository,
             "tag": tag,
             "pullPolicy": "IfNotPresent",
         }
-    }))
+    });
+    if let Some(image_pull_secrets) = runtime_image_pull_secrets(&repository) {
+        runtime["imagePullSecrets"] = image_pull_secrets;
+    }
+    Ok(runtime)
 }
 
 fn split_image_tag(image: &str) -> anyhow::Result<(String, String)> {

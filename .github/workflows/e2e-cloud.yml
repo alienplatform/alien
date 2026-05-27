@@ -1053,6 +1053,8 @@ jobs:
           ALIEN_OVERRIDE_BASE_IMAGE: ${{ needs.compute-matrix.outputs.build_images == 'true' && needs.build-base-image.outputs.base_image || '' }}
           ALIEN_TEST_OVERRIDE_AGENT_IMAGE: ${{ needs.compute-matrix.outputs.build_images == 'true' && needs.build-agent-image.outputs.agent_image || '' }}
           ALIEN_E2E_NETWORK_MODE: ${{ needs.compute-matrix.outputs.network_mode }}
+          ALIEN_TEST_GHCR_USERNAME: ${{ github.actor }}
+          ALIEN_TEST_GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -a && source .env.test && set +a
           export ALIEN_E2E_RESOURCE_PREFIX="e2e-${ALIEN_E2E_SLOT}-${{ matrix.resource_suffix }}"

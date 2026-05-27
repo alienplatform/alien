@@ -5,12 +5,16 @@
 //! locally. This module provides helpers to start and stop such agents during
 //! E2E tests.
 
-use std::{path::Path, sync::Arc};
+use std::{path::Path, process::Stdio, sync::Arc};
 
 use alien_core::{ClientConfig, Platform};
+use tokio::io::AsyncWriteExt;
 use tracing::info;
 
-use crate::manager::TestManager;
+use crate::{
+    helm_values::{ghcr_pull_credentials, GHCR_PULL_SECRET_NAME},
+    manager::TestManager,
+};
 
 /// Default Docker label applied to test alien-agent containers so they can be
 /// cleaned up afterwards.
@@ -391,6 +395,8 @@ impl TestAlienAgent {
             cmd.arg("--kube-context").arg(context);
         }
 
+        ensure_ghcr_pull_secret(namespace, kubeconfig, kube_context).await?;
+
         let output = cmd.output().await?;
 
         if !output.status.success() {
@@ -460,6 +466,73 @@ impl TestAlienAgent {
         )
         .await
     }
+}
+
+async fn ensure_ghcr_pull_secret(
+    namespace: &str,
+    kubeconfig: Option<&str>,
+    kube_context: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let Some((username, token)) = ghcr_pull_credentials() else {
+        return Ok(());
+    };
+
+    let mut namespace_cmd = kubectl(kubeconfig, kube_context);
+    namespace_cmd.args(["create", "namespace", namespace]);
+    let namespace_output = namespace_cmd.output().await?;
+    if !namespace_output.status.success() {
+        let stderr = String::from_utf8_lossy(&namespace_output.stderr);
+        if !stderr.contains("AlreadyExists") {
+            return Err(format!("Failed to create Kubernetes namespace: {stderr}").into());
+        }
+    }
+
+    let mut create_cmd = kubectl(kubeconfig, kube_context);
+    create_cmd.args([
+        "-n",
+        namespace,
+        "create",
+        "secret",
+        "docker-registry",
+        GHCR_PULL_SECRET_NAME,
+        "--docker-server=ghcr.io",
+        &format!("--docker-username={username}"),
+        &format!("--docker-password={token}"),
+        "--dry-run=client",
+        "-o",
+        "yaml",
+    ]);
+    let secret_yaml = create_cmd.output().await?;
+    if !secret_yaml.status.success() {
+        let stderr = String::from_utf8_lossy(&secret_yaml.stderr);
+        return Err(format!("Failed to render GHCR image pull secret: {stderr}").into());
+    }
+
+    let mut apply_cmd = kubectl(kubeconfig, kube_context);
+    apply_cmd.args(["apply", "-f", "-"]);
+    apply_cmd.stdin(Stdio::piped());
+    let mut child = apply_cmd.spawn()?;
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin.write_all(&secret_yaml.stdout).await?;
+    }
+    let output = child.wait_with_output().await?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Failed to apply GHCR image pull secret: {stderr}").into());
+    }
+
+    Ok(())
+}
+
+fn kubectl(kubeconfig: Option<&str>, kube_context: Option<&str>) -> tokio::process::Command {
+    let mut cmd = tokio::process::Command::new("kubectl");
+    if let Some(kc) = kubeconfig {
+        cmd.env("KUBECONFIG", kc);
+    }
+    if let Some(context) = kube_context {
+        cmd.arg("--context").arg(context);
+    }
+    cmd
 }
 
 impl TestAlienAgent {

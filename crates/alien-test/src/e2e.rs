@@ -14,7 +14,7 @@ use tracing::info;
 use crate::build_push::build_and_push_stack;
 use crate::config::TestConfig;
 use crate::deployment::TestDeployment;
-use crate::helm_values::to_helm_values_yaml;
+use crate::helm_values::{runtime_image_pull_secrets, to_helm_values_yaml};
 use crate::manager::TestManager;
 
 // ---------------------------------------------------------------------------
@@ -507,6 +507,17 @@ async fn start_generated_helm_agent(
     }
 
     let (repository, tag) = split_image_tag(agent_image)?;
+    let mut runtime = serde_json::json!({
+        "image": {
+            "repository": repository,
+            "tag": tag,
+            "pullPolicy": "IfNotPresent",
+        }
+    });
+    if let Some(image_pull_secrets) = runtime_image_pull_secrets(&repository) {
+        runtime["imagePullSecrets"] = image_pull_secrets;
+    }
+
     let values = serde_json::json!({
         "management": {
             "token": deployment.token.clone(),
@@ -517,13 +528,7 @@ async fn start_generated_helm_agent(
             "telemetry": "auto",
             "healthChecks": "on",
         },
-        "runtime": {
-            "image": {
-                "repository": repository,
-                "tag": tag,
-                "pullPolicy": "IfNotPresent",
-            }
-        },
+        "runtime": runtime,
         "stackSettings": {
             "deploymentModel": "pull",
             "updates": "auto",
