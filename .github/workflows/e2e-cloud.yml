@@ -73,9 +73,17 @@ on:
           - create
           - existing
       build_images:
-        description: "Build container images (disable to use latest from main)"
+        description: "Build container images (disable to use latest/default images or explicit overrides)"
         type: boolean
         default: true
+      base_image_override:
+        description: "Optional alien-base image to use when skipping image builds"
+        type: string
+        default: ""
+      agent_image_override:
+        description: "Optional alien-agent image to use when skipping image builds"
+        type: string
+        default: ""
       skip_cleanup:
         description: "Skip post-test resource cleanup (useful for debugging)"
         type: boolean
@@ -836,7 +844,7 @@ jobs:
       - name: Run E2E push test
         env:
           NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
-          ALIEN_OVERRIDE_BASE_IMAGE: ${{ needs.compute-matrix.outputs.build_images == 'true' && needs.build-base-image.outputs.base_image || '' }}
+          ALIEN_OVERRIDE_BASE_IMAGE: ${{ inputs.base_image_override || (needs.compute-matrix.outputs.build_images == 'true' && needs.build-base-image.outputs.base_image || '') }}
           ALIEN_E2E_NETWORK_MODE: ${{ needs.compute-matrix.outputs.network_mode }}
         run: |
           set -a && source .env.test && set +a
@@ -921,7 +929,7 @@ jobs:
       - name: Run E2E CloudFormation distribution test
         env:
           NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
-          ALIEN_OVERRIDE_BASE_IMAGE: ${{ needs.compute-matrix.outputs.build_images == 'true' && needs.build-base-image.outputs.base_image || '' }}
+          ALIEN_OVERRIDE_BASE_IMAGE: ${{ inputs.base_image_override || (needs.compute-matrix.outputs.build_images == 'true' && needs.build-base-image.outputs.base_image || '') }}
           ALIEN_E2E_NETWORK_MODE: ${{ needs.compute-matrix.outputs.network_mode }}
         run: |
           set -a && source .env.test && set +a
@@ -1055,8 +1063,8 @@ jobs:
       - name: Run E2E Terraform distribution test
         env:
           NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
-          ALIEN_OVERRIDE_BASE_IMAGE: ${{ needs.compute-matrix.outputs.build_images == 'true' && needs.build-base-image.outputs.base_image || '' }}
-          ALIEN_TEST_OVERRIDE_AGENT_IMAGE: ${{ needs.compute-matrix.outputs.build_images == 'true' && needs.build-agent-image.outputs.agent_image || '' }}
+          ALIEN_OVERRIDE_BASE_IMAGE: ${{ inputs.base_image_override || (needs.compute-matrix.outputs.build_images == 'true' && needs.build-base-image.outputs.base_image || '') }}
+          ALIEN_TEST_OVERRIDE_AGENT_IMAGE: ${{ inputs.agent_image_override || (needs.compute-matrix.outputs.build_images == 'true' && needs.build-agent-image.outputs.agent_image || '') }}
           ALIEN_E2E_NETWORK_MODE: ${{ needs.compute-matrix.outputs.network_mode }}
           ALIEN_TEST_GHCR_USERNAME: ${{ github.actor }}
           ALIEN_TEST_GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
