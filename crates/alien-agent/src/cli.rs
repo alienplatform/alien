@@ -607,10 +607,10 @@ async fn read_secret_file(path: &std::path::Path, label: &str) -> Result<String>
             },
         )?;
         let mode = metadata.permissions().mode() & 0o777;
-        if mode != 0o600 {
+        if !is_secret_file_mode_allowed(mode) {
             return Err(AlienError::new(ErrorData::ConfigurationError {
                 message: format!(
-                    "{} file '{}' has permissions {:o}; required 0600",
+                    "{} file '{}' has permissions {:o}; required owner-readable with no group write or world access",
                     label,
                     path.display(),
                     mode
@@ -634,6 +634,17 @@ async fn read_secret_file(path: &std::path::Path, label: &str) -> Result<String>
     Ok(trimmed)
 }
 
+#[cfg(unix)]
+fn is_secret_file_mode_allowed(mode: u32) -> bool {
+    let mode = mode & 0o777;
+    let has_owner_read = mode & 0o400 != 0;
+    let has_group_write_or_execute = mode & 0o030 != 0;
+    let has_world_access = mode & 0o007 != 0;
+    let has_owner_execute = mode & 0o100 != 0;
+
+    has_owner_read && !has_owner_execute && !has_group_write_or_execute && !has_world_access
+}
+
 async fn load_encryption_key(file: Option<&std::path::Path>) -> Result<String> {
     if let Some(path) = file {
         return read_secret_file(path, "encryption key").await;
@@ -653,5 +664,26 @@ async fn load_sync_token(file: Option<&std::path::Path>) -> Result<Option<String
     match std::env::var("SYNC_TOKEN") {
         Ok(value) if !value.is_empty() => Ok(Some(value)),
         _ => Ok(None),
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::is_secret_file_mode_allowed;
+
+    #[test]
+    fn secret_file_mode_allows_kubernetes_fs_group_read() {
+        assert!(is_secret_file_mode_allowed(0o600));
+        assert!(is_secret_file_mode_allowed(0o400));
+        assert!(is_secret_file_mode_allowed(0o640));
+        assert!(is_secret_file_mode_allowed(0o440));
+    }
+
+    #[test]
+    fn secret_file_mode_rejects_wider_access() {
+        assert!(!is_secret_file_mode_allowed(0o660));
+        assert!(!is_secret_file_mode_allowed(0o644));
+        assert!(!is_secret_file_mode_allowed(0o700));
+        assert!(!is_secret_file_mode_allowed(0o040));
     }
 }
