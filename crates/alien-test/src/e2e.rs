@@ -14,6 +14,7 @@ use tracing::info;
 use crate::build_push::build_and_push_stack;
 use crate::config::TestConfig;
 use crate::deployment::TestDeployment;
+use crate::helm_values::to_helm_values_yaml;
 use crate::manager::TestManager;
 
 // ---------------------------------------------------------------------------
@@ -532,7 +533,7 @@ async fn start_generated_helm_agent(
         "infrastructure": null,
     });
     let values_path = chart_dir.path().join("values.e2e.yaml");
-    tokio::fs::write(&values_path, serde_yaml::to_string(&values)?).await?;
+    tokio::fs::write(&values_path, to_helm_values_yaml(&values)?).await?;
 
     crate::agent::TestAlienAgent::helm_install_with_values(
         chart_dir.path(),

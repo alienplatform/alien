@@ -35,6 +35,7 @@ use crate::{
     config::{AwsConfig, AzureConfig, GcpConfig, KubernetesRuntimeConfig, TestConfig},
     deployment::TestDeployment,
     e2e::{self, DeploymentModel, DistributionFlow, Language, TestContext},
+    helm_values::to_helm_values_yaml,
     manager::TestManager,
 };
 
@@ -1032,7 +1033,7 @@ async fn write_manager_fetch_values(
     }
 
     let values_path = chart_dir.path().join("distribution-values.yaml");
-    fs::write(&values_path, serde_yaml::to_string(&values)?)
+    fs::write(&values_path, to_helm_values_yaml(&values)?)
         .await
         .context("Failed to write Helm distribution values")?;
     Ok(values_path)
