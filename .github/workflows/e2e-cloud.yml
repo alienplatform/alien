@@ -76,23 +76,6 @@ on:
         description: "Build container images (disable to use latest/default images or explicit overrides)"
         type: boolean
         default: true
-      build_base_image:
-        description: "Build alien-base when container image builds are enabled"
-        type: boolean
-        default: true
-      build_agent_image:
-        description: "Build alien-agent when container image builds are enabled"
-        type: boolean
-        default: true
-      image_architectures:
-        description: "Architectures to include in built container images"
-        type: choice
-        default: "auto"
-        options:
-          - auto
-          - x86_64
-          - aarch64
-          - both
       base_image_override:
         description: "Optional alien-base image to use when skipping image builds"
         type: string
@@ -241,9 +224,8 @@ jobs:
             LANG="${{ inputs.language }}"
             NETWORK_MODE="${{ inputs.network_mode }}"
             BUILD_IMAGES="${{ inputs.build_images }}"
-            BUILD_BASE_IMAGE="${{ inputs.build_base_image }}"
-            BUILD_AGENT_IMAGE="${{ inputs.build_agent_image }}"
-            IMAGE_ARCHITECTURES="${{ inputs.image_architectures }}"
+            BASE_IMAGE_OVERRIDE="${{ inputs.base_image_override }}"
+            AGENT_IMAGE_OVERRIDE="${{ inputs.agent_image_override }}"
             SKIP_CLEANUP="${{ inputs.skip_cleanup }}"
             TEST_FILTER="${{ inputs.test_filter }}"
           else
@@ -260,11 +242,19 @@ jobs:
             LOCAL_LINUX_AGENT=true
             LOCAL_MACOS_AGENT=false
             LOCAL_WINDOWS_AGENT=false
-            LANG=Rust; NETWORK_MODE=none; BUILD_IMAGES=true; BUILD_BASE_IMAGE=true; BUILD_AGENT_IMAGE=true; IMAGE_ARCHITECTURES=auto; SKIP_CLEANUP=false; TEST_FILTER=""
+            LANG=Rust; NETWORK_MODE=none; BUILD_IMAGES=true; BASE_IMAGE_OVERRIDE=""; AGENT_IMAGE_OVERRIDE=""; SKIP_CLEANUP=false; TEST_FILTER=""
           fi
 
+          BUILD_BASE_IMAGE=$BUILD_IMAGES
+          BUILD_AGENT_IMAGE=$BUILD_IMAGES
           if [ "$BUILD_IMAGES" != "true" ]; then
             BUILD_BASE_IMAGE=false
+            BUILD_AGENT_IMAGE=false
+          fi
+          if [ -n "$BASE_IMAGE_OVERRIDE" ]; then
+            BUILD_BASE_IMAGE=false
+          fi
+          if [ -n "$AGENT_IMAGE_OVERRIDE" ]; then
             BUILD_AGENT_IMAGE=false
           fi
           if [ "$BUILD_BASE_IMAGE" != "true" ] && [ "$BUILD_AGENT_IMAGE" != "true" ]; then
@@ -379,14 +369,6 @@ jobs:
           # consume the agent image, so keep both architectures available.
           if [ "$HAS_TERRAFORM" = "true" ]; then NEEDS_X86_64=true; NEEDS_AARCH64=true; fi
           if [ "$HAS_CLOUDFORMATION" = "true" ]; then NEEDS_AARCH64=true; fi
-          if [ "$BUILD_IMAGES" = "true" ] && [ "$IMAGE_ARCHITECTURES" != "auto" ]; then
-            case "$IMAGE_ARCHITECTURES" in
-              x86_64) NEEDS_X86_64=true; NEEDS_AARCH64=false ;;
-              aarch64) NEEDS_X86_64=false; NEEDS_AARCH64=true ;;
-              both) NEEDS_X86_64=true; NEEDS_AARCH64=true ;;
-              *) echo "Unsupported image_architectures: $IMAGE_ARCHITECTURES" >&2; exit 1 ;;
-            esac
-          fi
 
           echo "push_matrix=$(echo "$PUSH_ENTRIES" | jq -c '{include: .}')" >> $GITHUB_OUTPUT
           echo "local_matrix=$(echo "$LOCAL_ENTRIES" | jq -c '{include: .}')" >> $GITHUB_OUTPUT
