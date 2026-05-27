@@ -9,9 +9,16 @@ use alien_core::{NetworkSettings, Platform};
 use anyhow::{bail, Context};
 
 const E2E_SLOT_ENV: &str = "ALIEN_E2E_SLOT";
+const E2E_RESOURCE_PREFIX_ENV: &str = "ALIEN_E2E_RESOURCE_PREFIX";
 const E2E_SLOT_MESSAGE: &str = "Set ALIEN_E2E_SLOT to one of 01..10, e.g. ALIEN_E2E_SLOT=03";
+const E2E_RESOURCE_PREFIX_MESSAGE: &str = "ALIEN_E2E_RESOURCE_PREFIX must be 3-40 characters: lowercase letters, numbers, and hyphens; start with a letter; end with a letter or number; and not contain consecutive hyphens.";
 
 pub fn e2e_resource_prefix() -> anyhow::Result<String> {
+    if let Some(prefix) = env_opt(E2E_RESOURCE_PREFIX_ENV) {
+        validate_e2e_resource_prefix(&prefix)?;
+        return Ok(prefix);
+    }
+
     let slot = env::var(E2E_SLOT_ENV).context(E2E_SLOT_MESSAGE)?;
     e2e_resource_prefix_from_slot(&slot)
 }
@@ -22,6 +29,27 @@ pub fn e2e_resource_prefix_from_slot(slot: &str) -> anyhow::Result<String> {
             Ok(format!("e2e-{slot}"))
         }
         _ => bail!(E2E_SLOT_MESSAGE),
+    }
+}
+
+fn validate_e2e_resource_prefix(prefix: &str) -> anyhow::Result<()> {
+    let valid_len = (3..=40).contains(&prefix.len());
+    let valid_chars = prefix
+        .bytes()
+        .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
+    let valid_edges = prefix
+        .as_bytes()
+        .first()
+        .is_some_and(u8::is_ascii_lowercase)
+        && prefix
+            .as_bytes()
+            .last()
+            .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit());
+
+    if valid_len && valid_chars && valid_edges && !prefix.contains("--") {
+        Ok(())
+    } else {
+        bail!(E2E_RESOURCE_PREFIX_MESSAGE)
     }
 }
 
@@ -647,7 +675,7 @@ impl TestConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::e2e_resource_prefix_from_slot;
+    use super::{e2e_resource_prefix_from_slot, validate_e2e_resource_prefix};
 
     #[test]
     fn e2e_resource_prefix_accepts_bounded_slots() {
@@ -661,6 +689,23 @@ mod tests {
         assert!(e2e_resource_prefix_from_slot("00").is_err());
         assert!(e2e_resource_prefix_from_slot("11").is_err());
         assert!(e2e_resource_prefix_from_slot("random").is_err());
+    }
+
+    #[test]
+    fn e2e_resource_prefix_override_accepts_job_scoped_prefixes() {
+        validate_e2e_resource_prefix("e2e-04-tfaws").unwrap();
+        validate_e2e_resource_prefix("e2e-10-cfaws").unwrap();
+    }
+
+    #[test]
+    fn e2e_resource_prefix_override_rejects_invalid_prefixes() {
+        assert!(validate_e2e_resource_prefix("04-tfaws").is_err());
+        assert!(validate_e2e_resource_prefix("e2e-04--tfaws").is_err());
+        assert!(validate_e2e_resource_prefix("e2e_04_tfaws").is_err());
+        assert!(validate_e2e_resource_prefix("e2e-04-tfaws-").is_err());
+        assert!(
+            validate_e2e_resource_prefix("e2e-04-this-prefix-is-far-too-long-for-e2e").is_err()
+        );
     }
 }
 

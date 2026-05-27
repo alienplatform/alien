@@ -235,26 +235,26 @@ jobs:
           PUSH_ENTRIES='[]'
           if [ "$PUSH_AWS_CLI" = "true" ]; then
             if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
-              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-aws-rust","test_filter":"push_aws_rust","needs_oidc":false}]')
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-aws-rust","test_filter":"push_aws_rust","needs_oidc":false,"resource_suffix":"awsr"}]')
             fi
             if [ "$LANG" = "All" ] || [ "$LANG" = "TypeScript" ]; then
-              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-aws-typescript","test_filter":"push_aws_typescript","needs_oidc":false}]')
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-aws-typescript","test_filter":"push_aws_typescript","needs_oidc":false,"resource_suffix":"awst"}]')
             fi
           fi
           if [ "$PUSH_GCP_CLI" = "true" ]; then
             if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
-              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-gcp-rust","test_filter":"push_gcp_rust","needs_oidc":false}]')
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-gcp-rust","test_filter":"push_gcp_rust","needs_oidc":false,"resource_suffix":"gcpr"}]')
             fi
             if [ "$LANG" = "All" ] || [ "$LANG" = "TypeScript" ]; then
-              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-gcp-typescript","test_filter":"push_gcp_typescript","needs_oidc":false}]')
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-gcp-typescript","test_filter":"push_gcp_typescript","needs_oidc":false,"resource_suffix":"gcpt"}]')
             fi
           fi
           if [ "$PUSH_AZURE_CLI" = "true" ]; then
             if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
-              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-azure-rust","test_filter":"push_azure_rust","needs_oidc":true}]')
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-azure-rust","test_filter":"push_azure_rust","needs_oidc":true,"resource_suffix":"azr"}]')
             fi
             if [ "$LANG" = "All" ] || [ "$LANG" = "TypeScript" ]; then
-              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-azure-typescript","test_filter":"push_azure_typescript","needs_oidc":true}]')
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-azure-typescript","test_filter":"push_azure_typescript","needs_oidc":true,"resource_suffix":"azt"}]')
             fi
           fi
 
@@ -294,22 +294,22 @@ jobs:
           TERRAFORM_ENTRIES='[]'
           if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
             if [ "$PUSH_AWS_TERRAFORM" = "true" ]; then
-              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-aws-push-rust","test_filter":"terraform_aws_push_rust","needs_oidc":false}]')
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-aws-push-rust","test_filter":"terraform_aws_push_rust","needs_oidc":false,"resource_suffix":"tfaws"}]')
             fi
             if [ "$PUSH_GCP_TERRAFORM" = "true" ]; then
-              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-gcp-push-rust","test_filter":"terraform_gcp_push_rust","needs_oidc":false}]')
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-gcp-push-rust","test_filter":"terraform_gcp_push_rust","needs_oidc":false,"resource_suffix":"tfgcp"}]')
             fi
             if [ "$PUSH_AZURE_TERRAFORM" = "true" ]; then
-              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-azure-push-rust","test_filter":"terraform_azure_push_rust","needs_oidc":true}]')
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-azure-push-rust","test_filter":"terraform_azure_push_rust","needs_oidc":true,"resource_suffix":"tfaz"}]')
             fi
             if [ "$KUBERNETES_AWS_TERRAFORM_HELM" = "true" ]; then
-              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-eks-helm-pull-rust","test_filter":"terraform_eks_helm_pull_rust","needs_oidc":false}]')
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-eks-helm-pull-rust","test_filter":"terraform_eks_helm_pull_rust","needs_oidc":false,"resource_suffix":"tfeks"}]')
             fi
             if [ "$KUBERNETES_GCP_TERRAFORM_HELM" = "true" ]; then
-              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-gke-helm-pull-rust","test_filter":"terraform_gke_helm_pull_rust","needs_oidc":false}]')
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-gke-helm-pull-rust","test_filter":"terraform_gke_helm_pull_rust","needs_oidc":false,"resource_suffix":"tfgke"}]')
             fi
             if [ "$KUBERNETES_AZURE_TERRAFORM_HELM" = "true" ]; then
-              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-aks-helm-pull-rust","test_filter":"terraform_aks_helm_pull_rust","needs_oidc":true}]')
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-aks-helm-pull-rust","test_filter":"terraform_aks_helm_pull_rust","needs_oidc":true,"resource_suffix":"tfaks"}]')
             fi
           fi
 
@@ -318,7 +318,7 @@ jobs:
           CLOUDFORMATION_ENTRIES='[]'
           if [ "$PUSH_AWS_CLOUDFORMATION" = "true" ]; then
             if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
-              CLOUDFORMATION_ENTRIES=$(echo "$CLOUDFORMATION_ENTRIES" | jq -c '. + [{"name":"cloudformation-aws-push-rust","test_filter":"cloudformation_aws_push_rust","needs_oidc":false}]')
+              CLOUDFORMATION_ENTRIES=$(echo "$CLOUDFORMATION_ENTRIES" | jq -c '. + [{"name":"cloudformation-aws-push-rust","test_filter":"cloudformation_aws_push_rust","needs_oidc":false,"resource_suffix":"cfaws"}]')
             fi
           fi
 
@@ -705,7 +705,10 @@ jobs:
           export AWS_SECRET_ACCESS_KEY="$AWS_TARGET_SECRET_ACCESS_KEY"
           export AWS_SESSION_TOKEN="${AWS_TARGET_SESSION_TOKEN:-}"
           export AWS_DEFAULT_REGION="$AWS_TARGET_REGION"
-          ./scripts/cleanup-aws-e2e-resources.sh
+          for suffix in "" "-awsr" "-awst" "-cfaws" "-tfaws" "-tfeks"; do
+            export ALIEN_E2E_RESOURCE_PREFIX="e2e-${ALIEN_E2E_SLOT}${suffix}"
+            ./scripts/cleanup-aws-e2e-resources.sh
+          done
 
       - name: Upload .env.test artifact
         uses: actions/upload-artifact@v4
@@ -835,6 +838,7 @@ jobs:
           ALIEN_E2E_NETWORK_MODE: ${{ needs.compute-matrix.outputs.network_mode }}
         run: |
           set -a && source .env.test && set +a
+          export ALIEN_E2E_RESOURCE_PREFIX="e2e-${ALIEN_E2E_SLOT}-${{ matrix.resource_suffix }}"
           depot cargo nextest run -p alien-test --test push ${{ matrix.test_filter }} ${{ needs.compute-matrix.outputs.test_filter }} --no-capture
 
   # ── E2E CloudFormation distribution matrix ─────────────────────────
@@ -919,6 +923,7 @@ jobs:
           ALIEN_E2E_NETWORK_MODE: ${{ needs.compute-matrix.outputs.network_mode }}
         run: |
           set -a && source .env.test && set +a
+          export ALIEN_E2E_RESOURCE_PREFIX="e2e-${ALIEN_E2E_SLOT}-${{ matrix.resource_suffix }}"
           depot cargo nextest run -p alien-test --test distribution ${{ matrix.test_filter }} ${{ needs.compute-matrix.outputs.test_filter }} --no-capture
 
   # ── E2E Terraform distribution matrix ──────────────────────────────
@@ -1048,6 +1053,7 @@ jobs:
           ALIEN_E2E_NETWORK_MODE: ${{ needs.compute-matrix.outputs.network_mode }}
         run: |
           set -a && source .env.test && set +a
+          export ALIEN_E2E_RESOURCE_PREFIX="e2e-${ALIEN_E2E_SLOT}-${{ matrix.resource_suffix }}"
           depot cargo nextest run -p alien-test --test distribution ${{ matrix.test_filter }} ${{ needs.compute-matrix.outputs.test_filter }} --no-capture
 
   # ── E2E local test matrix ──────────────────────────────────────────
@@ -1217,7 +1223,10 @@ jobs:
           export AWS_SECRET_ACCESS_KEY="$AWS_TARGET_SECRET_ACCESS_KEY"
           export AWS_SESSION_TOKEN="${AWS_TARGET_SESSION_TOKEN:-}"
           export AWS_DEFAULT_REGION="$AWS_TARGET_REGION"
-          ./scripts/cleanup-aws-e2e-resources.sh
+          for suffix in "" "-awsr" "-awst" "-cfaws" "-tfaws" "-tfeks"; do
+            export ALIEN_E2E_RESOURCE_PREFIX="e2e-${ALIEN_E2E_SLOT}${suffix}"
+            ./scripts/cleanup-aws-e2e-resources.sh
+          done
 
       - name: Clean up GCP resources
         if: always()

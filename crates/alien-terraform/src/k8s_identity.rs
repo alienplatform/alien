@@ -252,7 +252,7 @@ fn apply_eks(fragment: &mut TfFragment, label: &str, service_account_name: &str)
                         attr(
                             "identifiers",
                             Expression::Array(vec![expr::raw(
-                                "aws_iam_openid_connect_provider.target.arn",
+                                "format(\"arn:aws:iam::%s:oidc-provider/%s\", data.aws_caller_identity.current.account_id, local.eks_oidc_issuer_host_path)",
                             )]),
                         ),
                     ],
