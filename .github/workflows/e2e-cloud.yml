@@ -1019,10 +1019,15 @@ jobs:
 
       - name: Install kubectl and kind
         run: |
-          curl -Lo kubectl https://dl.k8s.io/release/v1.30.0/bin/linux/amd64/kubectl
+          case "$(uname -m)" in
+            x86_64) K8S_ARCH=amd64 ;;
+            aarch64|arm64) K8S_ARCH=arm64 ;;
+            *) echo "Unsupported Kubernetes tooling architecture: $(uname -m)" >&2; exit 1 ;;
+          esac
+          curl -Lo kubectl "https://dl.k8s.io/release/v1.30.0/bin/linux/${K8S_ARCH}/kubectl"
           chmod +x kubectl
           sudo mv kubectl /usr/local/bin/kubectl
-          curl -Lo kind https://kind.sigs.k8s.io/dl/v0.24.0/kind-linux-amd64
+          curl -Lo kind "https://kind.sigs.k8s.io/dl/v0.24.0/kind-linux-${K8S_ARCH}"
           chmod +x kind
           sudo mv kind /usr/local/bin/kind
 
