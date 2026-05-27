@@ -174,7 +174,7 @@ resource "aws_iam_role" "e2e_eks_cluster" {
     Statement = [{
       Effect    = "Allow"
       Principal = { Service = "eks.amazonaws.com" }
-      Action    = "sts:AssumeRole"
+      Action    = ["sts:AssumeRole", "sts:TagSession"]
     }]
   })
 }
