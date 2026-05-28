@@ -564,6 +564,10 @@ mod tests {
             created_at: now,
             updated_at: Some(now),
             error: None,
+            agent_version: None,
+            agent_os: None,
+            agent_arch: None,
+            regime: None,
         }
     }
 }

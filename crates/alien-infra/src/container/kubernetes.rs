@@ -1181,7 +1181,12 @@ impl KubernetesContainerController {
                         }),
                         ..Default::default()
                     }),
-                    storage_class_name: persistent_storage.storage_type.clone(),
+                    // `storage_type` was removed from PersistentStorage in
+                    // 46687c3 "fixes and cleanup" on alon/alien-138-platform-launch;
+                    // the call site here was missed. Leaving storage_class_name None
+                    // selects the cluster's default StorageClass, matching the
+                    // chart's persistentStorage.storageClassName="" behavior.
+                    storage_class_name: None,
                     ..Default::default()
                 }),
                 ..Default::default()

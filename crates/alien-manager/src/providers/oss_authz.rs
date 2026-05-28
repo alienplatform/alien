@@ -275,6 +275,10 @@ mod tests {
             created_at: Utc::now(),
             updated_at: None,
             error: None,
+            agent_version: None,
+            agent_os: None,
+            agent_arch: None,
+            regime: None,
         }
     }
 
