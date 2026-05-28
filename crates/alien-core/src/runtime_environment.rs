@@ -213,7 +213,7 @@ pub fn worker_transport_runtime_environment_plan(
         }],
         Platform::Kubernetes => vec![RuntimeEnvironmentEntry {
             name: ENV_ALIEN_TRANSPORT,
-            value: RuntimeEnvironmentValue::Literal("http"),
+            value: RuntimeEnvironmentValue::Literal("local"),
         }],
         Platform::Local | Platform::Test => vec![RuntimeEnvironmentEntry {
             name: ENV_ALIEN_TRANSPORT,
