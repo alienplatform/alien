@@ -254,7 +254,9 @@ async fn run_deployment_continuously(state: &AgentState) -> Result<usize> {
 ///
 /// Applies public_urls, stack_settings from agent config,
 /// and injects commands polling env vars for K8s/Local platforms.
-/// External bindings are part of stack_settings and flow through naturally.
+/// External bindings live on a separate DeploymentConfig field that the
+/// StackExecutor reads, so they do NOT flow through `stack_settings` alone —
+/// the copy must be explicit (see also alien-deploy-cli's `up` command).
 async fn enrich_config(
     mut config: DeploymentConfig,
     agent_config: &AgentConfig,
@@ -269,6 +271,12 @@ async fn enrich_config(
     // Pass through stack settings from agent config (includes external_bindings)
     if let Some(ref stack_settings) = agent_config.stack_settings {
         config.stack_settings = stack_settings.clone();
+        // external_bindings does NOT flow through stack_settings automatically:
+        // the StackExecutor reads DeploymentConfig::external_bindings, a separate
+        // field. Copy it explicitly, mirroring alien-deploy-cli's `up` command.
+        if let Some(ref ext_bindings) = stack_settings.external_bindings {
+            config.external_bindings = ext_bindings.clone();
+        }
     }
     if config.base_platform.is_none() {
         config.base_platform = agent_config.base_platform;

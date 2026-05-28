@@ -838,6 +838,14 @@ metadata:
 subjects:
   - kind: ServiceAccount
     name: {{ include "alien.managerServiceAccountName" . }}
+  {{- /* Execution ServiceAccounts (workers/daemons/containers) need RBAC to
+         read their own vault secrets (e.g. the injected ALIEN_COMMANDS_TOKEN).
+         Without this binding, the worker pod gets 403 reading any secret
+         provisioned by the KubernetesVaultController. */}}
+  {{- range $name, $account := .Values.serviceAccounts }}
+  - kind: ServiceAccount
+    name: {{ include "alien.serviceAccountName" (dict "root" $ "name" $name) }}
+  {{- end }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -980,6 +988,14 @@ spec:
             {{- end }}
             - name: KUBERNETES_NAMESPACE
               value: {{ .Release.Namespace | quote }}
+            {{- if .Values.serviceAccountPrefix }}
+            # Pin the deployment's resource_prefix to the same value used for
+            # ServiceAccount naming, so Helm-created SAs and vault secret names
+            # stay aligned across agent restarts (pull-model storage is ephemeral
+            # and the agent would otherwise regenerate a random prefix each time).
+            - name: ALIEN_RESOURCE_PREFIX
+              value: {{ .Values.serviceAccountPrefix | quote }}
+            {{- end }}
             - name: SYNC_TOKEN_FILE
               value: /etc/alien/secrets/sync-token
             - name: AGENT_ENCRYPTION_KEY_FILE
