@@ -9,7 +9,7 @@
 
 use crate::db::{Approval, ApprovalStatus};
 use crate::AgentState;
-use alien_core::sync::{SyncRequest, SyncResponse};
+use alien_core::sync::{AgentRegime, SyncRequest, SyncResponse};
 use alien_error::{Context, IntoAlienError};
 use chrono::Utc;
 use reqwest::Client;
@@ -134,6 +134,12 @@ async fn sync_with_manager(
     let sync_request = SyncRequest {
         deployment_id: deployment_id.clone(),
         current_state: Some(deployment_state),
+        // Agent self-update inventory — fleet visibility + upgrade gating.
+        // See internal-docs/alien/02-manager/12-agent-self-update.md.
+        agent_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+        agent_os: Some(std::env::consts::OS.to_string()),
+        agent_arch: Some(std::env::consts::ARCH.to_string()),
+        regime: Some(detect_agent_regime()),
     };
 
     // Call manager with deployment_id in request body.
@@ -281,6 +287,18 @@ fn is_uninitialized_deployment_state(state: &alien_core::DeploymentState) -> boo
         && state.stack_state.is_none()
         && state.environment_info.is_none()
         && state.runtime_metadata.is_none()
+}
+
+/// Detect the agent's supervisor regime. `KUBERNETES_SERVICE_HOST` is the
+/// kubelet-injected signal and takes precedence over any other hint; outside
+/// k8s the agent is supervised as a native OS service via the launcher.
+/// See `internal-docs/alien/02-manager/12-agent-self-update.md`.
+fn detect_agent_regime() -> AgentRegime {
+    if std::env::var_os("KUBERNETES_SERVICE_HOST").is_some() {
+        AgentRegime::Kubernetes
+    } else {
+        AgentRegime::OsService
+    }
 }
 
 #[cfg(test)]

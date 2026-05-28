@@ -35,7 +35,7 @@ impl SqliteDeploymentStore {
     }
 
     /// All columns needed for deployment queries (must match parse_deployment order).
-    const DEPLOYMENT_COLUMNS: [Deployments; 27] = [
+    const DEPLOYMENT_COLUMNS: [Deployments; 31] = [
         Deployments::Id,
         Deployments::Name,
         Deployments::DeploymentGroupId,
@@ -63,6 +63,11 @@ impl SqliteDeploymentStore {
         Deployments::Error,
         Deployments::WorkspaceId,
         Deployments::ProjectId,
+        // ALIEN-59 agent self-update inventory:
+        Deployments::AgentVersion,
+        Deployments::AgentOs,
+        Deployments::AgentArch,
+        Deployments::Regime,
     ];
 
     fn parse_deployment(row: &turso::Row) -> Result<DeploymentRecord, AlienError> {
@@ -131,6 +136,11 @@ impl SqliteDeploymentStore {
             project_id: p
                 .optional_string(26, "project_id")?
                 .unwrap_or_else(|| "default".to_string()),
+            // ALIEN-59: indices match DEPLOYMENT_COLUMNS order.
+            agent_version: p.optional_string(27, "agent_version")?,
+            agent_os: p.optional_string(28, "agent_os")?,
+            agent_arch: p.optional_string(29, "agent_arch")?,
+            regime: p.optional_string(30, "regime")?,
         })
     }
 
@@ -279,6 +289,11 @@ impl DeploymentStore for SqliteDeploymentStore {
             created_at: now,
             updated_at: None,
             error: None,
+            // ALIEN-59 agent self-update inventory — NULL until the agent's first sync.
+            agent_version: None,
+            agent_os: None,
+            agent_arch: None,
+            regime: None,
         })
     }
 
@@ -436,6 +451,11 @@ impl DeploymentStore for SqliteDeploymentStore {
             created_at: now,
             updated_at: None,
             error: None,
+            // ALIEN-59 agent self-update inventory — NULL until the agent's first sync.
+            agent_version: None,
+            agent_os: None,
+            agent_arch: None,
+            regime: None,
         })
     }
 
@@ -683,6 +703,47 @@ impl DeploymentStore for SqliteDeploymentStore {
             .value(Deployments::RetryRequested, 1i64)
             .and_where(Expr::col(Deployments::Id).eq(id))
             .to_string(SqliteQueryBuilder);
+        self.db.execute(&sql).await
+    }
+
+    async fn update_agent_metadata(
+        &self,
+        _caller: &crate::auth::Subject,
+        id: &str,
+        agent_version: Option<&str>,
+        agent_os: Option<&str>,
+        agent_arch: Option<&str>,
+        regime: Option<&str>,
+    ) -> Result<(), AlienError> {
+        // Nothing to do if the agent didn't report any of these fields
+        // (e.g. an older agent on the wire).
+        if agent_version.is_none()
+            && agent_os.is_none()
+            && agent_arch.is_none()
+            && regime.is_none()
+        {
+            return Ok(());
+        }
+        // Build the SQL string in a sub-scope so the non-Send sea_query
+        // `UpdateStatement` is dropped before the await.
+        let sql = {
+            let mut q = Query::update();
+            q.table(Deployments::Table);
+            if let Some(v) = agent_version {
+                q.value(Deployments::AgentVersion, v);
+            }
+            if let Some(v) = agent_os {
+                q.value(Deployments::AgentOs, v);
+            }
+            if let Some(v) = agent_arch {
+                q.value(Deployments::AgentArch, v);
+            }
+            if let Some(v) = regime {
+                q.value(Deployments::Regime, v);
+            }
+            q.and_where(Expr::col(Deployments::Id).eq(id))
+                .to_string(SqliteQueryBuilder)
+        };
         self.db.execute(&sql).await
     }
 

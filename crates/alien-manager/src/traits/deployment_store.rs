@@ -65,6 +65,17 @@ pub struct DeploymentRecord {
     pub created_at: DateTime<Utc>,
     pub updated_at: Option<DateTime<Utc>>,
     pub error: Option<serde_json::Value>,
+    // Agent self-update inventory (ALIEN-59), written by the sync handler.
+    // All four are NULL until the agent has actually reported in.
+    // See internal-docs/alien/02-manager/12-agent-self-update.md.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_os: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_arch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub regime: Option<String>,
 }
 
 impl std::fmt::Debug for DeploymentRecord {
@@ -304,6 +315,23 @@ pub trait DeploymentStore: Send + Sync {
         &self,
         caller: &crate::auth::Subject,
         id: &str,
+    ) -> Result<(), AlienError>;
+
+    /// Persist the agent self-update inventory reported on a `SyncRequest`
+    /// (`agent_version`, `agent_os`, `agent_arch`, `regime`). Called on every
+    /// agent sync — alongside the heartbeat update — so the manager has a
+    /// fleet-wide view of which version each host is on and can decide
+    /// whether to send an `agent_target` in the response.
+    /// See `internal-docs/alien/02-manager/12-agent-self-update.md`.
+    /// A field of `None` leaves the corresponding column untouched.
+    async fn update_agent_metadata(
+        &self,
+        caller: &crate::auth::Subject,
+        id: &str,
+        agent_version: Option<&str>,
+        agent_os: Option<&str>,
+        agent_arch: Option<&str>,
+        regime: Option<&str>,
     ) -> Result<(), AlienError>;
 
     async fn set_redeploy(&self, caller: &crate::auth::Subject, id: &str)

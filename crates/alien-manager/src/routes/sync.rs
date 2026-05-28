@@ -108,6 +108,19 @@ pub struct AgentSyncRequest {
     /// the agent's progress (status, stack_state, etc.).
     #[serde(default)]
     pub current_state: Option<serde_json::Value>,
+    /// Agent binary version (from `env!("CARGO_PKG_VERSION")` at build time).
+    /// See `internal-docs/alien/02-manager/12-agent-self-update.md`.
+    #[serde(default)]
+    pub agent_version: Option<String>,
+    /// Agent host OS — `linux` / `macos` / `windows`.
+    #[serde(default)]
+    pub agent_os: Option<String>,
+    /// Agent host arch — `x86_64` / `aarch64`.
+    #[serde(default)]
+    pub agent_arch: Option<String>,
+    /// Supervisor regime — `os-service` / `kubernetes`.
+    #[serde(default)]
+    pub regime: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -126,6 +139,12 @@ pub struct AgentSyncResponse {
     /// to poll for pending commands instead of the agent's local sync URL.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub commands_url: Option<String>,
+    /// Desired agent self-update target. The payload carries either `binary`
+    /// (OS-service flow) or `helm` (Kubernetes flow); the agent picks the
+    /// one matching its regime. See
+    /// `internal-docs/alien/02-manager/12-agent-self-update.md`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_target: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -589,6 +608,31 @@ async fn agent_sync(
         return ErrorData::forbidden("Access denied").into_response();
     }
 
+    // Persist the agent self-update inventory the agent reported on this sync
+    // (`agent_version`, `agent_os`, `agent_arch`, `regime`). This is the
+    // "same sync handler path that updates last_heartbeat_at" the design doc
+    // names — runs on every sync regardless of whether the agent reported a
+    // state change. Old agents that don't send these fields are no-ops.
+    // See internal-docs/alien/02-manager/12-agent-self-update.md.
+    if let Err(e) = state
+        .deployment_store
+        .update_agent_metadata(
+            &subject,
+            &req.deployment_id,
+            req.agent_version.as_deref(),
+            req.agent_os.as_deref(),
+            req.agent_arch.as_deref(),
+            req.regime.as_deref(),
+        )
+        .await
+    {
+        tracing::warn!(
+            deployment_id = %req.deployment_id,
+            error = %e,
+            "Failed to persist agent self-update inventory; continuing sync"
+        );
+    }
+
     // If the agent reported its current state, persist it to the deployment record.
     // This is how pull-mode agents propagate status changes (e.g. Pending → Running)
     // back to the manager so that API consumers can observe deployment progress.
@@ -813,6 +857,11 @@ async fn agent_sync(
             }
         },
         commands_url: Some(state.config.commands_base_url()),
+        // ALIEN-59: the manager is the single source of truth for the agent's
+        // self-update target. The OSS manager doesn't drive agent upgrades yet
+        // (no signing key / fleet rollout policy), so this stays None — the
+        // wire field exists so newer agents can act on it once enabled.
+        agent_target: None,
     })
     .into_response()
 }
