@@ -234,6 +234,13 @@ pub fn generate_terraform_module(
     }
 
     let network_vars = network_extra_variables(stack, &labels);
+    let include_kubernetes_provider = target == TerraformTarget::Eks
+        && stack.resources().any(|(_, entry)| {
+            entry
+                .config
+                .downcast_ref::<alien_core::KubernetesCluster>()
+                .is_some()
+        });
     let deployment_name_default = options
         .display_name
         .as_deref()
@@ -248,6 +255,7 @@ pub fn generate_terraform_module(
             target,
             options.registration.as_ref(),
             gcp_iam_propagation_barrier.is_some(),
+            include_kubernetes_provider,
         ))?,
     );
     files.insert(
@@ -262,7 +270,7 @@ pub fn generate_terraform_module(
     );
     files.insert(
         "providers.tf".to_string(),
-        render_body(providers_body(target))?,
+        render_body(providers_body(target, include_kubernetes_provider))?,
     );
     files.insert(
         "resource_prefix.tf".to_string(),
@@ -633,6 +641,7 @@ fn versions_body(
     target: TerraformTarget,
     registration: Option<&TerraformRegistration>,
     include_time_provider: bool,
+    include_kubernetes_provider: bool,
 ) -> Body {
     let mut required: Vec<Structure> = vec![attr(
         "required_version",
@@ -660,6 +669,12 @@ fn versions_body(
     }
     if include_time_provider {
         provider_attrs.push(attr("time", provider_decl_attr("hashicorp/time", ">= 0.9")));
+    }
+    if include_kubernetes_provider {
+        provider_attrs.push(attr(
+            "kubernetes",
+            provider_decl_attr("hashicorp/kubernetes", ">= 2.30"),
+        ));
     }
     provider_attrs.push(attr(
         "random",
@@ -1103,7 +1118,7 @@ fn variable_block(
     }
 }
 
-fn providers_body(target: TerraformTarget) -> Body {
+fn providers_body(target: TerraformTarget, include_kubernetes_provider: bool) -> Body {
     let mut structures: Vec<Structure> = Vec::new();
     match target.platform() {
         alien_core::Platform::Aws => {
@@ -1153,6 +1168,22 @@ fn providers_body(target: TerraformTarget) -> Body {
             }));
         }
         _ => {}
+    }
+    if include_kubernetes_provider {
+        structures.push(Structure::Block(Block {
+            identifier: Identifier::sanitized("provider"),
+            labels: vec![BlockLabel::String("kubernetes".to_string())],
+            body: Body::from(vec![
+                attr("host", expr::raw("data.aws_eks_cluster.target.endpoint")),
+                attr(
+                    "cluster_ca_certificate",
+                    expr::raw(
+                        "base64decode(data.aws_eks_cluster.target.certificate_authority[0].data)",
+                    ),
+                ),
+                attr("token", expr::raw("data.aws_eks_cluster_auth.target.token")),
+            ]),
+        }));
     }
     Body::from(structures)
 }
@@ -1729,6 +1760,7 @@ mod tests {
         let versions = render_body(versions_body(
             TerraformTarget::Aws,
             Some(&registration),
+            false,
             false,
         ))
         .expect("versions render");

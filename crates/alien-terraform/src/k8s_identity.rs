@@ -42,6 +42,7 @@ pub(crate) fn overlay_per_resource(
         return Ok(());
     }
 
+    let cluster_label = kubernetes_cluster_label(stack, resource_labels);
     let mut service_accounts: Vec<(String, String, String)> = Vec::new();
     for (resource_id, entry) in stack.resources() {
         let Some(service_account) = entry.config.downcast_ref::<ServiceAccount>() else {
@@ -64,7 +65,7 @@ pub(crate) fn overlay_per_resource(
             continue;
         };
         if !target_cluster_data_added {
-            add_target_cluster_data(fragment, target);
+            add_target_cluster_data(fragment, target, cluster_label.as_deref());
             target_cluster_data_added = true;
         }
         let service_account_name = terraform_service_account_name_expr(permission_profile);
@@ -102,6 +103,7 @@ pub(crate) fn overlay_per_resource(
         resource_labels,
         per_resource,
         &mut target_cluster_data_added,
+        cluster_label.as_deref(),
     );
     shared_locals.insert(
         "helm_manager_service_account".to_string(),
@@ -112,6 +114,12 @@ pub(crate) fn overlay_per_resource(
             "eks_oidc_issuer_host_path".to_string(),
             expr::raw(
                 "trimprefix(data.aws_eks_cluster.target.identity[0].oidc[0].issuer, \"https://\")",
+            ),
+        );
+        shared_locals.insert(
+            "eks_oidc_provider_arn".to_string(),
+            expr::raw(
+                "var.kubernetes_cluster_mode == \"create\" ? aws_iam_openid_connect_provider.eks[0].arn : data.aws_iam_openid_connect_provider.eks_existing[0].arn",
             ),
         );
     }
@@ -125,6 +133,7 @@ fn overlay_manager_service_account(
     resource_labels: &IndexMap<String, String>,
     per_resource: &mut IndexMap<String, TfFragment>,
     target_cluster_data_added: &mut bool,
+    cluster_label: Option<&str>,
 ) -> Option<Expression> {
     let manager_service_account_name = "${local.resource_prefix}-manager-sa".to_string();
     for (resource_id, entry) in stack.resources() {
@@ -138,7 +147,7 @@ fn overlay_manager_service_account(
         let label = resource_labels.get(resource_id)?;
         let fragment = per_resource.get_mut(resource_id)?;
         if !*target_cluster_data_added {
-            add_target_cluster_data(fragment, target);
+            add_target_cluster_data(fragment, target, cluster_label);
             *target_cluster_data_added = true;
         }
         return match target {
@@ -161,40 +170,118 @@ fn terraform_service_account_name_expr(permission_profile: &str) -> String {
     format!("${{local.resource_prefix}}-{permission_profile}-sa")
 }
 
-fn add_target_cluster_data(fragment: &mut TfFragment, target: TerraformTarget) {
+fn kubernetes_cluster_label(
+    stack: &Stack,
+    resource_labels: &IndexMap<String, String>,
+) -> Option<String> {
+    stack.resources().find_map(|(resource_id, entry)| {
+        entry
+            .config
+            .downcast_ref::<alien_core::KubernetesCluster>()
+            .and_then(|_| resource_labels.get(resource_id).cloned())
+    })
+}
+
+fn add_target_cluster_data(
+    fragment: &mut TfFragment,
+    target: TerraformTarget,
+    cluster_label: Option<&str>,
+) {
     match target {
-        TerraformTarget::Eks => add_eks_cluster_data(fragment),
-        TerraformTarget::Gke => add_gke_cluster_data(fragment),
-        TerraformTarget::Aks => add_aks_cluster_data(fragment),
+        TerraformTarget::Eks => add_eks_cluster_data(fragment, cluster_label),
+        TerraformTarget::Gke => add_gke_cluster_data(fragment, cluster_label),
+        TerraformTarget::Aks => add_aks_cluster_data(fragment, cluster_label),
         _ => {}
     }
 }
 
-fn add_eks_cluster_data(fragment: &mut TfFragment) {
+fn add_eks_cluster_data(fragment: &mut TfFragment, cluster_label: Option<&str>) {
+    if cluster_label.is_some() {
+        return;
+    }
     fragment.data_blocks.push(data_block(
         "aws_eks_cluster",
         "target",
         [attr("name", expr::raw("var.eks_cluster_name"))],
     ));
+    fragment.data_blocks.push(data_block(
+        "tls_certificate",
+        "eks_oidc",
+        [attr(
+            "url",
+            expr::raw("data.aws_eks_cluster.target.identity[0].oidc[0].issuer"),
+        )],
+    ));
+    fragment.data_blocks.push(data_block(
+        "aws_iam_openid_connect_provider",
+        "eks_existing",
+        [
+            attr(
+                "count",
+                expr::raw("var.kubernetes_cluster_mode == \"existing\" ? 1 : 0"),
+            ),
+            attr(
+                "url",
+                expr::raw("data.aws_eks_cluster.target.identity[0].oidc[0].issuer"),
+            ),
+        ],
+    ));
+    fragment.resource_blocks.push(resource_block(
+        "aws_iam_openid_connect_provider",
+        "eks",
+        [
+            attr(
+                "count",
+                expr::raw("var.kubernetes_cluster_mode == \"create\" ? 1 : 0"),
+            ),
+            attr(
+                "url",
+                expr::raw("data.aws_eks_cluster.target.identity[0].oidc[0].issuer"),
+            ),
+            attr(
+                "client_id_list",
+                Expression::Array(vec![Expression::String("sts.amazonaws.com".to_string())]),
+            ),
+            attr(
+                "thumbprint_list",
+                Expression::Array(vec![expr::raw(
+                    "data.tls_certificate.eks_oidc.certificates[0].sha1_fingerprint",
+                )]),
+            ),
+            attr(
+                "tags",
+                expr::object([
+                    ("Name", expr::template("${local.resource_prefix}-eks-oidc")),
+                    ("alien-resource-prefix", expr::raw("local.resource_prefix")),
+                ]),
+            ),
+        ],
+    ));
 }
 
-fn add_gke_cluster_data(fragment: &mut TfFragment) {
+fn add_gke_cluster_data(fragment: &mut TfFragment, cluster_label: Option<&str>) {
+    let cluster_name = cluster_label
+        .map(|label| format!("local.{label}_cluster_name"))
+        .unwrap_or_else(|| "var.gke_cluster_name".to_string());
     fragment.data_blocks.push(data_block(
         "google_container_cluster",
         "target",
         [
-            attr("name", expr::raw("var.gke_cluster_name")),
+            attr("name", expr::raw(cluster_name)),
             attr("location", expr::raw("var.gke_cluster_location")),
         ],
     ));
 }
 
-fn add_aks_cluster_data(fragment: &mut TfFragment) {
+fn add_aks_cluster_data(fragment: &mut TfFragment, cluster_label: Option<&str>) {
+    let cluster_name = cluster_label
+        .map(|label| format!("local.{label}_cluster_name"))
+        .unwrap_or_else(|| "var.aks_cluster_name".to_string());
     fragment.data_blocks.push(data_block(
         "azurerm_kubernetes_cluster",
         "target",
         [
-            attr("name", expr::raw("var.aks_cluster_name")),
+            attr("name", expr::raw(cluster_name)),
             attr(
                 "resource_group_name",
                 expr::raw("var.aks_cluster_resource_group_name"),
@@ -223,9 +310,7 @@ fn apply_eks(fragment: &mut TfFragment, label: &str, service_account_name: &str)
                         attr("type", Expression::String("Federated".to_string())),
                         attr(
                             "identifiers",
-                            Expression::Array(vec![expr::raw(
-                                "format(\"arn:aws:iam::%s:oidc-provider/%s\", data.aws_caller_identity.current.account_id, local.eks_oidc_issuer_host_path)",
-                            )]),
+                            Expression::Array(vec![expr::raw("local.eks_oidc_provider_arn")]),
                         ),
                     ],
                 )),

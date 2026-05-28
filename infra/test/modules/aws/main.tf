@@ -6,6 +6,7 @@ terraform {
       configuration_aliases = [aws.management, aws.target]
     }
     random = { source = "hashicorp/random", version = "~> 3.0" }
+    tls    = { source = "hashicorp/tls", version = "~> 4.0" }
   }
 }
 
@@ -294,6 +295,50 @@ resource "aws_eks_cluster" "e2e" {
   ]
 }
 
+data "tls_certificate" "e2e_eks_oidc" {
+  url = aws_eks_cluster.e2e.identity[0].oidc[0].issuer
+}
+
+resource "aws_iam_openid_connect_provider" "e2e_eks" {
+  provider = aws.target
+
+  url             = aws_eks_cluster.e2e.identity[0].oidc[0].issuer
+  client_id_list  = ["sts.amazonaws.com"]
+  thumbprint_list = [data.tls_certificate.e2e_eks_oidc.certificates[0].sha1_fingerprint]
+
+  tags = {
+    Name = "alien-e2e-eks-oidc-${random_id.suffix.hex}"
+  }
+}
+
+resource "aws_iam_role" "e2e_eks_ebs_csi" {
+  provider = aws.target
+  name     = "alien-e2e-eks-ebs-csi-${random_id.suffix.hex}"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Federated = aws_iam_openid_connect_provider.e2e_eks.arn
+      }
+      Action = "sts:AssumeRoleWithWebIdentity"
+      Condition = {
+        StringEquals = {
+          "${replace(aws_eks_cluster.e2e.identity[0].oidc[0].issuer, "https://", "")}:aud" = "sts.amazonaws.com"
+          "${replace(aws_eks_cluster.e2e.identity[0].oidc[0].issuer, "https://", "")}:sub" = "system:serviceaccount:kube-system:ebs-csi-controller-sa"
+        }
+      }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "e2e_eks_ebs_csi" {
+  provider   = aws.target
+  role       = aws_iam_role.e2e_eks_ebs_csi.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
+}
+
 resource "aws_eip" "e2e_ingress" {
   provider = aws.target
   count    = length(aws_subnet.e2e_public)
@@ -359,6 +404,18 @@ resource "aws_eks_addon" "e2e_coredns" {
 
   depends_on = [
     aws_eks_node_group.e2e,
+  ]
+}
+
+resource "aws_eks_addon" "e2e_ebs_csi" {
+  provider                 = aws.target
+  cluster_name             = aws_eks_cluster.e2e.name
+  addon_name               = "aws-ebs-csi-driver"
+  service_account_role_arn = aws_iam_role.e2e_eks_ebs_csi.arn
+
+  depends_on = [
+    aws_eks_node_group.e2e,
+    aws_iam_role_policy_attachment.e2e_eks_ebs_csi,
   ]
 }
 

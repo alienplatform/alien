@@ -75,15 +75,6 @@ pub struct PersistentStorage {
     pub size: String,
     /// Mount path inside the container
     pub mount_path: String,
-    /// Storage type (e.g., "gp3", "io2" for AWS, "pd-ssd" for GCP)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub storage_type: Option<String>,
-    /// IOPS (for storage types that support it)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub iops: Option<u32>,
-    /// Throughput in MiB/s (for storage types that support it)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub throughput: Option<u32>,
 }
 
 /// Autoscaling configuration for stateless containers.
@@ -609,9 +600,6 @@ mod tests {
             .persistent_storage(PersistentStorage {
                 size: "100Gi".to_string(),
                 mount_path: "/var/lib/postgresql/data".to_string(),
-                storage_type: Some("gp3".to_string()),
-                iops: Some(3000),
-                throughput: Some(125),
             })
             .permissions("database".to_string())
             .build();

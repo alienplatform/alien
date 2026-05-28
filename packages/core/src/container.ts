@@ -5,6 +5,7 @@ import {
   type ContainerGpuSpec,
   ContainerSchema,
   type HealthCheck,
+  type PersistentStorage,
   type ResourceSpec,
   type ResourceType,
 } from "./generated/index.js"
@@ -31,6 +32,15 @@ export {
   ContainerCodeSchema,
   ContainerAutoscalingSchema,
 } from "./generated/index.js"
+
+export interface PersistentStorageOptions {
+  /**
+   * Mount path inside the container.
+   *
+   * Defaults to `/data`.
+   */
+  mountPath?: string
+}
 
 /**
  * Represents a long-running container workload.
@@ -280,16 +290,19 @@ export class Container {
   }
 
   /**
-   * Configures persistent storage (requires stateful=true).
+   * Configures persistent storage and marks the container stateful.
    * Data survives container restarts.
    * @param size Storage size (e.g., "100Gi", "500Gi", "1Ti").
+   * @param options Optional mount path.
    * @returns The Container builder instance.
    */
-  public persistentStorage(size: string): this {
-    this._config.persistentStorage = {
+  public persistentStorage(size: string, options: PersistentStorageOptions = {}): this {
+    const persistentStorage: PersistentStorage = {
       size,
-      mountPath: "/data",
+      mountPath: options.mountPath ?? "/data",
     }
+
+    this._config.persistentStorage = persistentStorage
     this._config.stateful = true
     return this
   }

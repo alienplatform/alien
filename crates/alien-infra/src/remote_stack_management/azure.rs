@@ -2,7 +2,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::info;
 use uuid::Uuid;
 
-use crate::core::ResourceControllerContext;
+use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
 use crate::infra_requirements::azure_utils;
 use alien_azure_clients::authorization::Scope;
@@ -18,8 +18,8 @@ use alien_azure_clients::models::authorization_role_definitions::{
 use alien_azure_clients::models::managed_identity::Identity;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    NetworkSettings, RemoteStackManagement, RemoteStackManagementOutputs, ResourceOutputs,
-    ResourceStatus,
+    KubernetesCluster, NetworkSettings, RemoteStackManagement, RemoteStackManagementOutputs,
+    ResourceOutputs, ResourceStatus,
 };
 use alien_error::{AlienError, Context, ContextError};
 use alien_macros::{controller, flow_entry, handler, terminal_state};
@@ -1016,14 +1016,6 @@ impl AzureRemoteStackManagementController {
             })
         })?;
 
-        let global_refs = management_profile.0.get("*").ok_or_else(|| {
-            AlienError::new(ErrorData::InfrastructureError {
-                message: "Management permission profile missing global permissions (*)".to_string(),
-                operation: Some("generate_management_role_definition".to_string()),
-                resource_id: Some("management".to_string()),
-            })
-        })?;
-
         let azure_config = ctx.get_azure_config()?;
         let resource_group_name = azure_utils::get_resource_group_name(ctx.state)?;
         let mut custom_roles = Vec::new();
@@ -1043,34 +1035,36 @@ impl AzureRemoteStackManagementController {
         };
 
         let generator = AzureRuntimePermissionsGenerator::new();
-        for permission_set_ref in global_refs {
-            let Some(permission_set) =
-                permission_set_ref.resolve(|name| get_permission_set(name).cloned())
-            else {
-                tracing::warn!(
-                    permission_set_id = %permission_set_ref.id(),
-                    "Management permission set not found, skipping"
-                );
-                continue;
-            };
+        if let Some(global_refs) = management_profile.0.get("*") {
+            for permission_set_ref in global_refs {
+                let Some(permission_set) =
+                    permission_set_ref.resolve(|name| get_permission_set(name).cloned())
+                else {
+                    tracing::warn!(
+                        permission_set_id = %permission_set_ref.id(),
+                        "Management permission set not found, skipping"
+                    );
+                    continue;
+                };
 
-            if !permission_set.id.ends_with("/provision") {
-                continue;
+                if !permission_set.id.ends_with("/provision") {
+                    continue;
+                }
+
+                let grant_plan = generator
+                    .generate_grant_plan(&permission_set, BindingTarget::Stack, &permission_context)
+                    .context(ErrorData::InfrastructureError {
+                        message: format!(
+                            "Failed to generate Azure role definition for permission set '{}'",
+                            permission_set.id
+                        ),
+                        operation: Some("generate_management_grant_plan".to_string()),
+                        resource_id: Some("management".to_string()),
+                    })?;
+
+                custom_roles.extend(grant_plan.custom_roles);
+                bindings.extend(grant_plan.bindings);
             }
-
-            let grant_plan = generator
-                .generate_grant_plan(&permission_set, BindingTarget::Stack, &permission_context)
-                .context(ErrorData::InfrastructureError {
-                    message: format!(
-                        "Failed to generate Azure role definition for permission set '{}'",
-                        permission_set.id
-                    ),
-                    operation: Some("generate_management_grant_plan".to_string()),
-                    resource_id: Some("management".to_string()),
-                })?;
-
-            custom_roles.extend(grant_plan.custom_roles);
-            bindings.extend(grant_plan.bindings);
         }
 
         let mut seen_stack_management_refs = BTreeSet::new();
@@ -1109,6 +1103,56 @@ impl AzureRemoteStackManagementController {
 
             custom_roles.extend(grant_plan.custom_roles);
             bindings.extend(grant_plan.bindings);
+        }
+
+        for (resource_id, permission_set_refs) in management_profile
+            .0
+            .iter()
+            .filter(|(scope, _)| scope.as_str() != "*")
+        {
+            let Some(resource_entry) = ctx.desired_stack.resources.get(resource_id) else {
+                continue;
+            };
+            let Some(cluster) = resource_entry.config.downcast_ref::<KubernetesCluster>() else {
+                continue;
+            };
+            let permission_context =
+                ResourcePermissionsHelper::azure_kubernetes_cluster_permission_context(
+                    ctx, cluster,
+                )?;
+
+            for permission_set_ref in permission_set_refs {
+                let Some(permission_set) =
+                    permission_set_ref.resolve(|name| get_permission_set(name).cloned())
+                else {
+                    tracing::warn!(
+                        permission_set_id = %permission_set_ref.id(),
+                        "Management permission set not found, skipping"
+                    );
+                    continue;
+                };
+                if permission_set.platforms.azure.is_none() {
+                    continue;
+                }
+
+                let grant_plan = generator
+                    .generate_grant_plan(
+                        &permission_set,
+                        BindingTarget::Resource,
+                        &permission_context,
+                    )
+                    .context(ErrorData::InfrastructureError {
+                        message: format!(
+                            "Failed to generate Azure resource-scoped role definition for permission set '{}'",
+                            permission_set.id
+                        ),
+                        operation: Some("generate_management_grant_plan".to_string()),
+                        resource_id: Some(resource_id.clone()),
+                    })?;
+
+                custom_roles.extend(grant_plan.custom_roles);
+                bindings.extend(grant_plan.bindings);
+            }
         }
 
         Ok(AzureGrantPlan {

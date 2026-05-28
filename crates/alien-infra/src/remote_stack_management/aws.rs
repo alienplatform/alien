@@ -1,12 +1,12 @@
 use std::{collections::HashSet, time::Duration};
 use tracing::{info, warn};
 
-use crate::core::ResourceControllerContext;
+use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
 use alien_aws_clients::iam::{CreateRoleRequest, CreateRoleTag, IamApi};
 use alien_core::{
-    standard_resource_tags, RemoteStackManagement, RemoteStackManagementOutputs, ResourceOutputs,
-    ResourceStatus,
+    standard_resource_tags, KubernetesCluster, RemoteStackManagement, RemoteStackManagementOutputs,
+    ResourceOutputs, ResourceStatus,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::{controller, flow_entry, handler, terminal_state};
@@ -527,15 +527,6 @@ impl AwsRemoteStackManagementController {
                 resource_id: Some("management".to_string()),
             }))?;
 
-        // Get the global permissions for management (should be under "*")
-        let global_permission_set_ids = management_profile.0.get("*").ok_or_else(|| {
-            AlienError::new(ErrorData::InfrastructureError {
-                message: "Management permission profile missing global permissions (*)".to_string(),
-                operation: Some("generate_management_policy_document".to_string()),
-                resource_id: Some("management".to_string()),
-            })
-        })?;
-
         let aws_config = ctx.get_aws_config()?;
         let mut permission_context = PermissionContext::new()
             .with_stack_prefix(ctx.resource_prefix.to_string())
@@ -566,28 +557,37 @@ impl AwsRemoteStackManagementController {
         // statement effects and conditions remain intact.
         let generator = AwsRuntimePermissionsGenerator::new();
         let mut all_statements = Vec::new();
-        for permission_set_ref in global_permission_set_ids {
-            let permission_set =
-                permission_set_ref.resolve(|name| get_permission_set(name).cloned());
-            let Some(permission_set) = permission_set else {
-                continue;
-            };
-            if permission_set.platforms.aws.is_none() {
-                continue;
-            }
+        if let Some(global_permission_set_ids) = management_profile.0.get("*") {
+            for permission_set_ref in global_permission_set_ids {
+                let permission_set =
+                    permission_set_ref.resolve(|name| get_permission_set(name).cloned());
+                let Some(permission_set) = permission_set else {
+                    continue;
+                };
+                if permission_set.platforms.aws.is_none() {
+                    continue;
+                }
 
-            let policy = generator
-                .generate_policy(&permission_set, BindingTarget::Stack, &permission_context)
-                .context(ErrorData::InfrastructureError {
-                    message: format!(
-                        "Failed to generate IAM policy for management permission set '{}'",
-                        permission_set.id
-                    ),
-                    operation: Some("generate_management_policy_document".to_string()),
-                    resource_id: Some("management".to_string()),
-                })?;
-            all_statements.extend(policy.statement);
+                let policy = generator
+                    .generate_policy(&permission_set, BindingTarget::Stack, &permission_context)
+                    .context(ErrorData::InfrastructureError {
+                        message: format!(
+                            "Failed to generate IAM policy for management permission set '{}'",
+                            permission_set.id
+                        ),
+                        operation: Some("generate_management_policy_document".to_string()),
+                        resource_id: Some("management".to_string()),
+                    })?;
+                all_statements.extend(policy.statement);
+            }
         }
+
+        self.append_resource_scoped_management_statements(
+            ctx,
+            management_profile,
+            &generator,
+            &mut all_statements,
+        )?;
 
         // The management role always needs to read itself during heartbeat.
         if let Some(role_name) = &self.role_name {
@@ -608,6 +608,58 @@ impl AwsRemoteStackManagementController {
         }
 
         self.chunk_management_policy_documents(all_statements)
+    }
+
+    fn append_resource_scoped_management_statements(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        management_profile: &alien_core::permissions::PermissionProfile,
+        generator: &AwsRuntimePermissionsGenerator,
+        all_statements: &mut Vec<AwsIamStatement>,
+    ) -> Result<()> {
+        let mut seen = HashSet::new();
+        for (resource_id, permission_set_refs) in management_profile
+            .0
+            .iter()
+            .filter(|(scope, _)| *scope != "*")
+        {
+            let Some(resource_entry) = ctx.desired_stack.resources.get(resource_id) else {
+                continue;
+            };
+            let Some(cluster) = resource_entry.config.downcast_ref::<KubernetesCluster>() else {
+                continue;
+            };
+            let permission_context =
+                ResourcePermissionsHelper::aws_kubernetes_cluster_permission_context(ctx, cluster)?;
+
+            for permission_set_ref in permission_set_refs {
+                if !seen.insert((resource_id.clone(), permission_set_ref.id().to_string())) {
+                    continue;
+                }
+                let Some(permission_set) =
+                    permission_set_ref.resolve(|name| get_permission_set(name).cloned())
+                else {
+                    continue;
+                };
+                if permission_set.platforms.aws.is_none() {
+                    continue;
+                }
+
+                let policy = generator
+                    .generate_policy(&permission_set, BindingTarget::Resource, &permission_context)
+                    .context(ErrorData::InfrastructureError {
+                        message: format!(
+                            "Failed to generate resource-scoped IAM policy for management permission set '{}'",
+                            permission_set.id
+                        ),
+                        operation: Some("generate_management_policy_document".to_string()),
+                        resource_id: Some(resource_id.clone()),
+                    })?;
+                all_statements.extend(policy.statement);
+            }
+        }
+
+        Ok(())
     }
 
     fn chunk_management_policy_documents(

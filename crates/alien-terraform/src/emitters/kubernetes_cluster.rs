@@ -111,6 +111,7 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                 ],
             ));
 
+        add_eks_workload_identity_data(&mut fragment, label);
         fragment.resource_blocks.extend([
             resource_block(
                 "aws_vpc",
@@ -561,6 +562,76 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                 ],
             ),
             resource_block(
+                "aws_iam_role",
+                &format!("{label}_ebs_csi"),
+                [
+                    attr(
+                        "count",
+                        expr::raw("var.kubernetes_cluster_mode == \"create\" ? 1 : 0"),
+                    ),
+                    attr("name", expr::template(format!("${{local.resource_prefix}}-{label}-ebs-csi"))),
+                    attr(
+                        "assume_role_policy",
+                        expr::raw(r#"jsonencode({
+  Version = "2012-10-17"
+  Statement = [{
+    Effect = "Allow"
+    Principal = {
+      Federated = local.eks_oidc_provider_arn
+    }
+    Action = "sts:AssumeRoleWithWebIdentity"
+    Condition = {
+      StringEquals = {
+        "${local.eks_oidc_issuer_host_path}:aud" = "sts.amazonaws.com"
+        "${local.eks_oidc_issuer_host_path}:sub" = "system:serviceaccount:kube-system:ebs-csi-controller-sa"
+      }
+    }
+  }]
+})"#),
+                    ),
+                ],
+            ),
+            resource_block(
+                "aws_iam_role_policy_attachment",
+                &format!("{label}_ebs_csi"),
+                [
+                    attr(
+                        "count",
+                        expr::raw("var.kubernetes_cluster_mode == \"create\" ? 1 : 0"),
+                    ),
+                    attr("role", expr::raw(format!("aws_iam_role.{label}_ebs_csi[0].name"))),
+                    attr(
+                        "policy_arn",
+                        Expression::String(
+                            "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
+                                .to_string(),
+                        ),
+                    ),
+                ],
+            ),
+            resource_block(
+                "aws_eks_addon",
+                &format!("{label}_ebs_csi"),
+                [
+                    attr(
+                        "count",
+                        expr::raw("var.kubernetes_cluster_mode == \"create\" ? 1 : 0"),
+                    ),
+                    attr("cluster_name", expr::raw(format!("aws_eks_cluster.{label}[0].name"))),
+                    attr("addon_name", Expression::String("aws-ebs-csi-driver".to_string())),
+                    attr(
+                        "service_account_role_arn",
+                        expr::raw(format!("aws_iam_role.{label}_ebs_csi[0].arn")),
+                    ),
+                    attr(
+                        "depends_on",
+                        expr::raw(format!(
+                            "[aws_eks_node_group.{label}, aws_iam_role_policy_attachment.{label}_ebs_csi]"
+                        )),
+                    ),
+                ],
+            ),
+            resource_block(
                 "aws_eks_addon",
                 &format!("{label}_kube_proxy"),
                 [
@@ -593,6 +664,7 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                 ],
             ),
         ]);
+        add_eks_gp3_storage_class(&mut fragment, label);
 
         Ok(fragment)
     }
@@ -605,6 +677,130 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
             "cluster_name",
         )
     }
+}
+
+fn add_eks_workload_identity_data(fragment: &mut TfFragment, label: &str) {
+    fragment.data_blocks.push(data_block(
+        "aws_eks_cluster",
+        "target",
+        [
+            attr("name", expr::raw(format!("local.{label}_cluster_name"))),
+            attr(
+                "depends_on",
+                expr::raw(format!("[aws_eks_cluster.{label}]")),
+            ),
+        ],
+    ));
+    fragment.data_blocks.push(data_block(
+        "aws_eks_cluster_auth",
+        "target",
+        [attr(
+            "name",
+            expr::raw(format!("local.{label}_cluster_name")),
+        )],
+    ));
+    fragment.data_blocks.push(data_block(
+        "tls_certificate",
+        "eks_oidc",
+        [attr(
+            "url",
+            expr::raw("data.aws_eks_cluster.target.identity[0].oidc[0].issuer"),
+        )],
+    ));
+    fragment.data_blocks.push(data_block(
+        "aws_iam_openid_connect_provider",
+        "eks_existing",
+        [
+            attr(
+                "count",
+                expr::raw("var.kubernetes_cluster_mode == \"existing\" ? 1 : 0"),
+            ),
+            attr(
+                "url",
+                expr::raw("data.aws_eks_cluster.target.identity[0].oidc[0].issuer"),
+            ),
+        ],
+    ));
+    fragment.locals.insert(
+        "eks_oidc_issuer_host_path".to_string(),
+        expr::raw(
+            "trimprefix(data.aws_eks_cluster.target.identity[0].oidc[0].issuer, \"https://\")",
+        ),
+    );
+    fragment.locals.insert(
+        "eks_oidc_provider_arn".to_string(),
+        expr::raw(
+            "var.kubernetes_cluster_mode == \"create\" ? aws_iam_openid_connect_provider.eks[0].arn : data.aws_iam_openid_connect_provider.eks_existing[0].arn",
+        ),
+    );
+    fragment.resource_blocks.push(resource_block(
+        "aws_iam_openid_connect_provider",
+        "eks",
+        [
+            attr(
+                "count",
+                expr::raw("var.kubernetes_cluster_mode == \"create\" ? 1 : 0"),
+            ),
+            attr(
+                "url",
+                expr::raw("data.aws_eks_cluster.target.identity[0].oidc[0].issuer"),
+            ),
+            attr(
+                "client_id_list",
+                Expression::Array(vec![Expression::String("sts.amazonaws.com".to_string())]),
+            ),
+            attr(
+                "thumbprint_list",
+                Expression::Array(vec![expr::raw(
+                    "data.tls_certificate.eks_oidc.certificates[0].sha1_fingerprint",
+                )]),
+            ),
+            attr(
+                "tags",
+                expr::object([
+                    ("Name", expr::template("${local.resource_prefix}-eks-oidc")),
+                    ("alien-resource-prefix", expr::raw("local.resource_prefix")),
+                ]),
+            ),
+        ],
+    ));
+}
+
+fn add_eks_gp3_storage_class(fragment: &mut TfFragment, label: &str) {
+    fragment.resource_blocks.push(resource_block(
+        "kubernetes_manifest",
+        &format!("{label}_gp3_storage_class"),
+        [
+            attr(
+                "count",
+                expr::raw("var.kubernetes_cluster_mode == \"create\" ? 1 : 0"),
+            ),
+            attr(
+                "manifest",
+                expr::raw(
+                    r#"{
+  apiVersion = "storage.k8s.io/v1"
+  kind       = "StorageClass"
+  metadata = {
+    name = "gp3"
+    annotations = {
+      "storageclass.kubernetes.io/is-default-class" = "true"
+    }
+  }
+  provisioner          = "ebs.csi.aws.com"
+  parameters           = { type = "gp3", fsType = "ext4" }
+  reclaimPolicy        = "Delete"
+  volumeBindingMode    = "WaitForFirstConsumer"
+  allowVolumeExpansion = true
+}"#,
+                ),
+            ),
+            attr(
+                "depends_on",
+                expr::raw(format!("[aws_eks_addon.{label}_ebs_csi]")),
+            ),
+        ],
+    ));
 }
 
 impl TfEmitter for GcpKubernetesClusterEmitter {

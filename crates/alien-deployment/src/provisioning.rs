@@ -1,7 +1,7 @@
 use crate::{
     DeploymentConfig, DeploymentState, DeploymentStatus, DeploymentStepResult, ErrorData, Result,
 };
-use alien_core::{Platform, ResourceLifecycle, Stack, StackStatus};
+use alien_core::{ResourceLifecycle, Stack, StackStatus};
 use alien_error::{AlienError, Context};
 use alien_infra::StackExecutor;
 use tracing::{debug, info};
@@ -86,17 +86,11 @@ pub async fn handle_provisioning(
         info!("Secrets synced to vault successfully");
     }
 
-    let lifecycle_filter = if current.platform == Platform::Kubernetes {
-        vec![ResourceLifecycle::Frozen, ResourceLifecycle::Live]
-    } else {
-        vec![ResourceLifecycle::Live]
-    };
-
-    // Create executor for live resources. Kubernetes handoff also lets the
-    // in-cluster agent finish setup-owned substrate heartbeats.
+    // Create executor for live resources. Setup-owned Frozen resources are
+    // created or imported before this phase.
     let executor = StackExecutor::builder(&target_stack, client_config)
         .deployment_config(&config)
-        .lifecycle_filter(lifecycle_filter)
+        .lifecycle_filter(vec![ResourceLifecycle::Live])
         .service_provider(service_provider)
         .build()
         .context(ErrorData::StackExecutionFailed {

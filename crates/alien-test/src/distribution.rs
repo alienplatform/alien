@@ -2652,6 +2652,30 @@ mod tests {
             rendered.contains("id   = \"remote-stack-management\""),
             "rendered Terraform should include the management identity resource"
         );
+        assert!(
+            rendered.contains("eks:DescribeCluster"),
+            "management role must be able to read the EKS cluster for cloud metadata heartbeat"
+        );
+        assert!(
+            rendered.contains(
+                "arn:aws:eks:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:cluster/${var.kubernetes_cluster_mode == \"create\" ? format(\"%s-k8s\", local.resource_prefix) : var.eks_cluster_name}"
+            ),
+            "EKS cluster read must follow the Terraform-selected cluster name, not only the resource prefix"
+        );
+        assert!(
+            rendered.contains("resource \"aws_iam_openid_connect_provider\" \"eks\"")
+                && rendered.contains("data \"tls_certificate\" \"eks_oidc\""),
+            "Terraform setup must create the EKS OIDC provider before Helm handoff"
+        );
+        assert!(
+            rendered.contains("aws_iam_openid_connect_provider.eks.arn"),
+            "IRSA trust must depend on the Terraform-managed OIDC provider"
+        );
+        assert!(
+            !rendered.contains("iam:CreateOpenIDConnectProvider")
+                && !rendered.contains("iam:UpdateAssumeRolePolicy"),
+            "pull-agent management policy must not include workload identity bootstrap permissions"
+        );
     }
 
     #[tokio::test]
@@ -2697,6 +2721,17 @@ mod tests {
         assert!(
             !contains_resource_type(&rendered_stack, "compute-cluster"),
             "Kubernetes Terraform setup must not reuse the cloud VM compute substrate"
+        );
+        let secrets = rendered_stack
+            .resources
+            .get("secrets")
+            .expect("Kubernetes setup should include the managed secrets vault");
+        assert!(
+            secrets
+                .dependencies
+                .iter()
+                .all(|dependency| dependency.id() != "management-sa"),
+            "cloud-backed Kubernetes setup uses remote-stack-management, not a stack-local management-sa"
         );
 
         let registry = alien_terraform::TfRegistry::built_in();

@@ -19,7 +19,8 @@
 //! remote-stack-management, build, artifact-registry, function} × {Aws, Gcp,
 //! Azure}` (plus GCP `service_activation`, plus the four Azure aux
 //! resources) is registered. `container` and `compute-cluster` are
-//! deliberately *not* asserted — they live in `alien-platform-controllers`.
+//! deliberately *not* asserted — embedders register those controllers
+//! separately.
 
 use alien_core::import::{
     data::{
@@ -27,7 +28,7 @@ use alien_core::import::{
         AwsStorageImportData, AzureContainerAppsEnvironmentImportData,
         AzureRemoteStackManagementImportData, AzureResourceGroupImportData,
         AzureServiceAccountImportData, AzureStorageImportData, GcpBuildImportData, GcpKvImportData,
-        GcpServiceActivationImportData, GcpStorageImportData,
+        GcpServiceActivationImportData, GcpStorageImportData, KubernetesClusterImportData,
     },
     ImportContext,
 };
@@ -35,10 +36,11 @@ use alien_core::{
     ArtifactRegistry, AwsManagementConfig, AzureContainerAppsEnvironment,
     AzureContainerAppsEnvironmentOutputs, AzureManagementConfig, AzureResourceGroup,
     AzureResourceGroupOutputs, AzureServiceBusNamespace, AzureStorageAccount, Build,
-    GcpManagementConfig, Kv, ManagementConfig, Network, Platform, Queue, RemoteStackManagement,
-    RemoteStackManagementOutputs, Resource, ResourceDefinition, ResourceEntry, ResourceLifecycle,
-    ResourceStatus, ResourceType, ServiceAccount, ServiceActivation, StackSettings, Storage, Vault,
-    Worker,
+    GcpManagementConfig, KubernetesCluster, KubernetesClusterOutputs, KubernetesClusterOwnership,
+    KubernetesClusterProvider, KubernetesHeartbeatMode, Kv, ManagementConfig, Network, Platform,
+    Queue, RemoteStackManagement, RemoteStackManagementOutputs, Resource, ResourceDefinition,
+    ResourceEntry, ResourceLifecycle, ResourceStatus, ResourceType, ServiceAccount,
+    ServiceActivation, StackSettings, Storage, Vault, Worker,
 };
 use alien_infra::ImporterRegistry;
 use serde_json::json;
@@ -51,6 +53,15 @@ fn entry<T: ResourceDefinition>(resource: T) -> ResourceEntry {
     ResourceEntry {
         config: Resource::new(resource),
         lifecycle: ResourceLifecycle::Live,
+        dependencies: vec![],
+        remote_access: false,
+    }
+}
+
+fn frozen_entry<T: ResourceDefinition>(resource: T) -> ResourceEntry {
+    ResourceEntry {
+        config: Resource::new(resource),
+        lifecycle: ResourceLifecycle::Frozen,
         dependencies: vec![],
         remote_access: false,
     }
@@ -146,6 +157,46 @@ fn assert_provisioning_with_internal_state(state: &alien_core::StackResourceStat
          got keys: {:?}",
         internal.keys().collect::<Vec<_>>()
     );
+}
+
+#[test]
+fn kubernetes_cluster_handoff_imports_as_running() {
+    let entry = frozen_entry(
+        KubernetesCluster::new("kubernetes".to_string())
+            .provider(KubernetesClusterProvider::Eks)
+            .ownership(KubernetesClusterOwnership::Managed)
+            .namespace("alien-test".to_string())
+            .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+            .build(),
+    );
+    let data = KubernetesClusterImportData {
+        provider: KubernetesClusterProvider::Eks,
+        ownership: KubernetesClusterOwnership::Managed,
+        namespace: "alien-test".to_string(),
+        cluster_name: Some("alien-e2e-a2591da2".to_string()),
+        cluster_id: Some("alien-e2e-a2591da2".to_string()),
+        cloud_metadata_ready: Some(true),
+    };
+    let state = run_through_registry(
+        &KubernetesCluster::RESOURCE_TYPE,
+        Platform::Kubernetes,
+        serde_json::to_value(&data).unwrap(),
+        &entry,
+        "us-east-2",
+        &aws_management_config(),
+    );
+
+    assert_running_with_internal_state(&state);
+    let outputs = state
+        .outputs
+        .as_ref()
+        .and_then(|outputs| outputs.downcast_ref::<KubernetesClusterOutputs>())
+        .expect("KubernetesCluster import must expose typed outputs");
+    assert!(outputs.kubernetes_api_reachable);
+    assert!(outputs.namespace_ready);
+    assert!(outputs.rbac_ready);
+    assert!(!outputs.agent_ready);
+    assert_eq!(outputs.cloud_metadata_ready, Some(true));
 }
 
 #[test]

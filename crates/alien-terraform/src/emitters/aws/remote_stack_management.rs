@@ -21,7 +21,7 @@ use crate::{
     expr,
 };
 use alien_core::{
-    import::EmitContext, ErrorData, PermissionProfile, PermissionSetReference,
+    import::EmitContext, ErrorData, KubernetesCluster, PermissionProfile, PermissionSetReference,
     RemoteStackManagement, Result,
 };
 use alien_error::Context;
@@ -73,6 +73,38 @@ impl TfEmitter for AwsRemoteStackManagementEmitter {
                         })?;
                     statements.extend(policy.statement);
                 }
+            }
+
+            for (resource_id, permission_set_ref) in resource_scoped_permission_refs(profile) {
+                let Some(resource_entry) = ctx.stack.resources.get(resource_id) else {
+                    continue;
+                };
+                let Some(kubernetes_cluster) =
+                    resource_entry.config.downcast_ref::<KubernetesCluster>()
+                else {
+                    continue;
+                };
+                let Some(permission_set) = permission_set_ref
+                    .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+                else {
+                    continue;
+                };
+                if permission_set.platforms.aws.is_none() {
+                    continue;
+                }
+
+                let resource_context = context
+                    .clone()
+                    .with_resource_name(kubernetes_cluster_name(kubernetes_cluster));
+                let policy = generator
+                    .generate_policy(&permission_set, BindingTarget::Resource, &resource_context)
+                    .context(ErrorData::GenericError {
+                        message: format!(
+                            "failed to generate AWS Terraform resource-scoped management policy for permission set '{}'",
+                            permission_set.id
+                        ),
+                    })?;
+                statements.extend(policy.statement);
             }
         }
         emit_iam_managed_policy_chunks(
@@ -163,4 +195,28 @@ fn global_permission_refs(profile: &PermissionProfile) -> Vec<&PermissionSetRefe
         .get("*")
         .map(|refs| refs.iter().collect())
         .unwrap_or_default()
+}
+
+fn resource_scoped_permission_refs(
+    profile: &PermissionProfile,
+) -> Vec<(&str, &PermissionSetReference)> {
+    profile
+        .0
+        .iter()
+        .filter(|(scope, _)| scope.as_str() != "*")
+        .flat_map(|(resource_id, refs)| {
+            refs.iter()
+                .map(move |permission_set_ref| (resource_id.as_str(), permission_set_ref))
+        })
+        .collect()
+}
+
+fn kubernetes_cluster_name(cluster: &KubernetesCluster) -> String {
+    cluster
+        .cloud
+        .as_ref()
+        .and_then(|cloud| cloud.cluster_name.clone())
+        .unwrap_or_else(|| {
+            "${var.kubernetes_cluster_mode == \"create\" ? format(\"%s-k8s\", local.resource_prefix) : var.eks_cluster_name}".to_string()
+        })
 }
