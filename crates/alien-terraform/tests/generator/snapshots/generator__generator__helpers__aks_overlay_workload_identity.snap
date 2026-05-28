@@ -85,6 +85,12 @@ variable "azure_oidc_subject" {
   description = "OIDC subject claim for Azure Federated Identity Credential."
 }
 
+variable "kubernetes_cluster_mode" {
+  type        = string
+  description = "Kubernetes cluster mode. Values: create or existing."
+  default     = "create"
+}
+
 variable "kubernetes_namespace" {
   type        = string
   description = "Kubernetes namespace for runtime resources."
@@ -94,11 +100,13 @@ variable "kubernetes_namespace" {
 variable "aks_cluster_name" {
   type        = string
   description = "Existing AKS cluster name that Helm will install into."
+  default     = ""
 }
 
 variable "aks_cluster_resource_group_name" {
   type        = string
   description = "Resource group containing the existing AKS cluster."
+  default     = ""
 }
 
 === providers.tf ===
@@ -151,7 +159,12 @@ locals {
       }
     }
   ]
-  alien_kubernetes_namespace = var.kubernetes_namespace
+  kubernetes_kubeconfig          = ""
+  kubernetes_kube_context        = ""
+  kubernetes_ingress_class       = ""
+  kubernetes_ingress_annotations = {}
+  kubernetes_public_host_suffix  = ""
+  alien_kubernetes_namespace     = var.kubernetes_namespace
   helm_service_accounts = {
     execution = {
       annotations = {
@@ -235,17 +248,19 @@ resource "azurerm_federated_identity_credential" "execution_sa_federated" {
 === import.tf ===
 resource "terraform_data" "deployment_import" {
   input = {
-    platform                  = local.deployment_platform
-    token                     = var.token
-    name                      = var.name
-    resource_prefix           = local.resource_prefix
-    setup_target              = ""
-    setup_fingerprint         = ""
-    setup_fingerprint_version = 0
-    manager_url               = var.manager_url
-    management_config         = local.deployment_management_config
-    stack_settings            = local.deployment_settings
-    resources                 = local.deployment_resources
+    platform                    = local.deployment_platform
+    token                       = var.token
+    name                        = var.name
+    resource_prefix             = local.resource_prefix
+    setup_target                = ""
+    setup_import_format_version = 1
+    setup_fingerprint           = ""
+    setup_fingerprint_version   = 0
+    manager_url                 = var.manager_url
+    management_config           = local.deployment_management_config
+    stack_settings              = local.deployment_settings
+    resources                   = local.deployment_resources
+    basePlatform                = local.deployment_base_platform
   }
   depends_on = [
     azurerm_resource_group.default_resource_group,
@@ -281,6 +296,11 @@ output "deployment_setup_target" {
   description = "Setup target."
 }
 
+output "deployment_setup_import_format_version" {
+  value       = 1
+  description = "Setup import payload format version."
+}
+
 output "deployment_setup_fingerprint" {
   value       = ""
   description = "Setup compatibility fingerprint."
@@ -310,6 +330,32 @@ output "deployment_resources" {
 output "deployment_base_platform" {
   value       = local.deployment_base_platform
   description = "Base cloud platform for Kubernetes targets."
+}
+
+output "kubernetes_kubeconfig" {
+  value       = local.kubernetes_kubeconfig
+  description = "Kubeconfig for managed Kubernetes clusters created by this module."
+  sensitive   = true
+}
+
+output "kubernetes_kube_context" {
+  value       = local.kubernetes_kube_context
+  description = "Kube context for managed Kubernetes clusters created by this module."
+}
+
+output "kubernetes_ingress_class" {
+  value       = local.kubernetes_ingress_class
+  description = "Ingress class selected by Kubernetes cluster provisioning."
+}
+
+output "kubernetes_ingress_annotations" {
+  value       = jsonencode(local.kubernetes_ingress_annotations)
+  description = "Ingress annotations selected by Kubernetes cluster provisioning."
+}
+
+output "kubernetes_public_host_suffix" {
+  value       = local.kubernetes_public_host_suffix
+  description = "DNS suffix for generated Kubernetes public hosts when known at setup time."
 }
 
 output "helm_values" {

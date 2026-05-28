@@ -106,9 +106,8 @@ impl ImporterRegistry {
     /// # Platform-only resources
     ///
     /// `container` and `compute-cluster` are deliberately **not** registered
-    /// here — their controllers live in `platform/crates/alien-managerx`
-    /// (see ALIEN-120 for the planned `alien-platform-controllers` extraction).
-    /// Platform-mode managers extend the registry on top:
+    /// here. Embedders that provide additional controllers extend the registry
+    /// on top:
     ///
     /// ```ignore
     /// let mut registry = alien_infra::ImporterRegistry::built_in();
@@ -126,6 +125,12 @@ impl ImporterRegistry {
         crate::gcp_importers::register(&mut registry);
         #[cfg(feature = "azure")]
         crate::azure_importers::register(&mut registry);
+        #[cfg(feature = "kubernetes")]
+        registry.register(
+            alien_core::KubernetesCluster::RESOURCE_TYPE,
+            Platform::Kubernetes,
+            crate::kubernetes_cluster::KubernetesClusterImporter,
+        );
         registry
     }
 

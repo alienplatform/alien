@@ -7,6 +7,25 @@ import * as alien from "../index.js"
 const SHARED_IMAGE = "docker.io/library/rust:latest"
 
 describe("Stack builder validation", () => {
+  it("builds a stateful container with persistent storage options", () => {
+    const postgres = new alien.Container("postgres")
+      .code({ type: "image", image: "postgres:16-alpine" })
+      .cpu(0.5)
+      .memory("512Mi")
+      .port(5432)
+      .permissions("database")
+      .persistentStorage("20Gi", {
+        mountPath: "/var/lib/postgresql/data",
+      })
+      .build()
+
+    expect(postgres.config.stateful).toBe(true)
+    expect(postgres.config.persistentStorage).toEqual({
+      size: "20Gi",
+      mountPath: "/var/lib/postgresql/data",
+    })
+  })
+
   it("builds and validates a complex stack with permissions", () => {
     // Storage bucket
     const storage = new alien.Storage("my-test-bucket").publicRead(true).build()

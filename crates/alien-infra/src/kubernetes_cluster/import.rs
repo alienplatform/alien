@@ -1,10 +1,10 @@
 use alien_core::{
     import::{data::KubernetesClusterImportData, ImportContext},
-    ResourceStatus, Result, StackResourceState,
+    Result, StackResourceState,
 };
 
 use crate::import::ResourceImporter;
-use crate::import_helpers::make_imported_state_with_status;
+use crate::import_helpers::make_imported_state;
 use crate::kubernetes_cluster::{KubernetesClusterController, KubernetesClusterState};
 
 #[derive(Debug, Default)]
@@ -19,15 +19,15 @@ impl ResourceImporter for KubernetesClusterImporter {
         ctx: &ImportContext<'_>,
     ) -> Result<StackResourceState> {
         let controller = KubernetesClusterController {
-            state: KubernetesClusterState::CreateStart,
+            state: KubernetesClusterState::Ready,
             provider: Some(data.provider),
             ownership: Some(data.ownership),
             namespace: Some(data.namespace),
             cluster_name: data.cluster_name,
             cluster_id: data.cluster_id,
-            kubernetes_api_reachable: Some(false),
-            namespace_ready: Some(false),
-            rbac_ready: Some(false),
+            kubernetes_api_reachable: Some(true),
+            namespace_ready: Some(true),
+            rbac_ready: Some(true),
             agent_ready: Some(false),
             cloud_metadata_ready: data.cloud_metadata_ready,
             cloud_operation_id: None,
@@ -65,11 +65,11 @@ impl ResourceImporter for KubernetesClusterImporter {
             agent_helm_release: None,
             agent_helm_namespace: None,
             status_message: Some(
-                "Kubernetes cluster was imported from setup metadata; waiting for alien-agent"
+                "Kubernetes setup handoff imported; cluster bootstrap completed by setup"
                     .to_string(),
             ),
             _internal_stay_count: None,
         };
-        make_imported_state_with_status(controller, ctx, ResourceStatus::Pending)
+        make_imported_state(controller, ctx)
     }
 }

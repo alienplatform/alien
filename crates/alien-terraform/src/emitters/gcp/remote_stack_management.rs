@@ -22,8 +22,8 @@ use crate::{
     expr,
 };
 use alien_core::{
-    import::EmitContext, ErrorData, PermissionProfile, PermissionSet, PermissionSetReference,
-    RemoteStackManagement, Result,
+    import::EmitContext, ErrorData, KubernetesCluster, PermissionProfile, PermissionSet,
+    PermissionSetReference, RemoteStackManagement, Result,
 };
 use alien_error::AlienError;
 use alien_permissions::{
@@ -79,6 +79,32 @@ impl TfEmitter for GcpRemoteStackManagementEmitter {
                         &member,
                         &permission_set,
                         &context,
+                        BindingTarget::Stack,
+                    )?;
+                }
+            }
+            for (resource_id, permission_set_ref) in resource_scoped_permission_refs(profile) {
+                let Some(resource_entry) = ctx.stack.resources.get(resource_id) else {
+                    continue;
+                };
+                if resource_entry
+                    .config
+                    .downcast_ref::<KubernetesCluster>()
+                    .is_none()
+                {
+                    continue;
+                }
+                if let Some(permission_set) = permission_set_ref
+                    .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+                {
+                    let binding_label = format!("{label}_{}", terraform_label_segment(resource_id));
+                    emit_project_management_bindings(
+                        &mut fragment,
+                        &binding_label,
+                        &member,
+                        &permission_set,
+                        &context,
+                        BindingTarget::Resource,
                     )?;
                 }
             }
@@ -142,6 +168,7 @@ fn emit_project_management_bindings(
     member: &Expression,
     permission_set: &PermissionSet,
     context: &PermissionContext,
+    binding_target: BindingTarget,
 ) -> Result<()> {
     if permission_set.platforms.gcp.is_none() {
         return Ok(());
@@ -149,7 +176,7 @@ fn emit_project_management_bindings(
 
     let generator = GcpRuntimePermissionsGenerator::new();
     let grant_plan = generator
-        .generate_grant_plan(permission_set, BindingTarget::Stack, context)
+        .generate_grant_plan(permission_set, binding_target, context)
         .map_err(|err| {
             AlienError::new(ErrorData::GenericError {
                 message: format!(
@@ -182,4 +209,31 @@ fn global_permission_refs(profile: &PermissionProfile) -> Vec<&PermissionSetRefe
         .get("*")
         .map(|refs| refs.iter().collect())
         .unwrap_or_default()
+}
+
+fn resource_scoped_permission_refs(
+    profile: &PermissionProfile,
+) -> Vec<(&str, &PermissionSetReference)> {
+    profile
+        .0
+        .iter()
+        .filter(|(scope, _)| scope.as_str() != "*")
+        .flat_map(|(resource_id, refs)| {
+            refs.iter()
+                .map(move |permission_set_ref| (resource_id.as_str(), permission_set_ref))
+        })
+        .collect()
+}
+
+fn terraform_label_segment(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }

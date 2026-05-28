@@ -9,7 +9,7 @@ use alien_azure_clients::authorization::Scope;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::permissions::{PermissionProfile, PermissionSetReference};
 use alien_core::PermissionSet;
-use alien_core::RemoteStackManagement;
+use alien_core::{KubernetesCluster, RemoteStackManagement};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_gcp_clients::iam::{Binding, IamPolicy};
 use alien_permissions::{generators::*, BindingTarget, PermissionContext};
@@ -20,6 +20,118 @@ use tracing::{info, warn};
 pub struct ResourcePermissionsHelper;
 
 impl ResourcePermissionsHelper {
+    pub fn kubernetes_cluster_name_for_permissions(
+        resource_prefix: &str,
+        cluster: &KubernetesCluster,
+    ) -> String {
+        cluster
+            .cloud
+            .as_ref()
+            .and_then(|cloud| cloud.cluster_name.clone())
+            .unwrap_or_else(|| format!("{resource_prefix}-k8s"))
+    }
+
+    pub fn aws_kubernetes_cluster_permission_context(
+        ctx: &ResourceControllerContext<'_>,
+        cluster: &KubernetesCluster,
+    ) -> Result<PermissionContext> {
+        let aws_config = ctx.get_aws_config()?;
+        let cluster_name =
+            Self::kubernetes_cluster_name_for_permissions(ctx.resource_prefix, cluster);
+        let aws_account_id = cluster
+            .cloud
+            .as_ref()
+            .and_then(|cloud| cloud.account_id.clone())
+            .unwrap_or_else(|| aws_config.account_id.clone());
+        let aws_region = cluster
+            .cloud
+            .as_ref()
+            .and_then(|cloud| cloud.region.clone())
+            .unwrap_or_else(|| aws_config.region.clone());
+
+        Ok(PermissionContext::new()
+            .with_aws_account_id(aws_account_id)
+            .with_aws_region(aws_region)
+            .with_stack_prefix(ctx.resource_prefix.to_string())
+            .with_resource_name(cluster_name))
+    }
+
+    pub fn gcp_kubernetes_cluster_permission_context(
+        ctx: &ResourceControllerContext<'_>,
+        cluster: &KubernetesCluster,
+        service_account_name: Option<&str>,
+    ) -> Result<PermissionContext> {
+        let gcp_config = ctx.get_gcp_config()?;
+        let project_id = cluster
+            .cloud
+            .as_ref()
+            .and_then(|cloud| cloud.project_id.clone())
+            .unwrap_or_else(|| gcp_config.project_id.clone());
+        let region = cluster
+            .cloud
+            .as_ref()
+            .and_then(|cloud| cloud.region.clone())
+            .unwrap_or_else(|| gcp_config.region.clone());
+
+        let mut permission_context = PermissionContext::new()
+            .with_stack_prefix(ctx.resource_prefix.to_string())
+            .with_project_name(project_id)
+            .with_region(region)
+            .with_resource_name(Self::kubernetes_cluster_name_for_permissions(
+                ctx.resource_prefix,
+                cluster,
+            ));
+        if let Some(project_number) = &gcp_config.project_number {
+            permission_context = permission_context.with_project_number(project_number.clone());
+        }
+        if let Some(service_account_name) = service_account_name {
+            permission_context =
+                permission_context.with_service_account_name(service_account_name.to_string());
+        }
+        if let Some(deployment_name) = ctx.deployment_name_for_metadata() {
+            permission_context =
+                permission_context.with_deployment_name(deployment_name.to_string());
+        }
+
+        Ok(permission_context)
+    }
+
+    pub fn azure_kubernetes_cluster_permission_context(
+        ctx: &ResourceControllerContext<'_>,
+        cluster: &KubernetesCluster,
+    ) -> Result<PermissionContext> {
+        let azure_config = ctx.get_azure_config()?;
+        let stack_resource_group =
+            crate::infra_requirements::azure_utils::get_resource_group_name(ctx.state)?;
+        let resource_group = cluster
+            .cloud
+            .as_ref()
+            .and_then(|cloud| cloud.resource_group.clone())
+            .unwrap_or_else(|| stack_resource_group.clone());
+        let subscription_id = cluster
+            .cloud
+            .as_ref()
+            .and_then(|cloud| cloud.subscription_id.clone())
+            .unwrap_or_else(|| azure_config.subscription_id.clone());
+
+        let mut permission_context = PermissionContext::new()
+            .with_subscription_id(subscription_id.clone())
+            .with_resource_group(resource_group)
+            .with_stack_prefix(ctx.resource_prefix.to_string())
+            .with_resource_name(Self::kubernetes_cluster_name_for_permissions(
+                ctx.resource_prefix,
+                cluster,
+            ))
+            .with_managing_subscription_id(azure_config.subscription_id.clone())
+            .with_managing_resource_group(stack_resource_group);
+        if let Some(deployment_name) = ctx.deployment_name_for_metadata() {
+            permission_context =
+                permission_context.with_deployment_name(deployment_name.to_string());
+        }
+
+        Ok(permission_context)
+    }
+
     /// Apply resource-scoped permissions for Azure resources
     ///
     /// # Arguments

@@ -5,7 +5,8 @@ use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
 use alien_core::permissions::PermissionSet;
 use alien_core::{
-    RemoteStackManagement, RemoteStackManagementOutputs, ResourceOutputs, ResourceStatus,
+    KubernetesCluster, RemoteStackManagement, RemoteStackManagementOutputs, ResourceOutputs,
+    ResourceStatus,
 };
 use alien_error::{AlienError, Context, ContextError};
 use alien_gcp_clients::iam::{
@@ -231,6 +232,16 @@ impl GcpRemoteStackManagementController {
             }
         }
 
+        let mut owned_role_prefixes = Self::global_management_role_prefixes(&permission_context);
+        Self::append_resource_scoped_management_bindings(
+            ctx,
+            &generator,
+            service_account_id,
+            &mut new_bindings,
+            &mut owned_role_prefixes,
+        )
+        .await?;
+
         let project_id = &gcp_config.project_id;
         let rm_client = ctx
             .service_provider
@@ -245,7 +256,6 @@ impl GcpRemoteStackManagementController {
             })?;
 
         let member = format!("serviceAccount:{service_account_email}");
-        let owned_role_prefixes = Self::global_management_role_prefixes(&permission_context);
         let owned_exact_roles = ResourcePermissionsHelper::gcp_predefined_role_names(&new_bindings);
         let mut all_bindings = current_policy.bindings;
         let changed = ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
@@ -673,6 +683,97 @@ impl GcpRemoteStackManagementController {
                 // controller because they need resource-specific IAM conditions.
                 .filter(|id| !id.starts_with("vault/")),
         )
+    }
+
+    async fn append_resource_scoped_management_bindings(
+        ctx: &ResourceControllerContext<'_>,
+        generator: &GcpRuntimePermissionsGenerator,
+        service_account_id: &str,
+        new_bindings: &mut Vec<Binding>,
+        owned_role_prefixes: &mut Vec<String>,
+    ) -> Result<()> {
+        let Some(management_profile) = ctx.desired_stack.management().profile() else {
+            return Ok(());
+        };
+
+        for (resource_id, permission_set_refs) in management_profile
+            .0
+            .iter()
+            .filter(|(scope, _)| scope.as_str() != "*")
+        {
+            let Some(resource_entry) = ctx.desired_stack.resources.get(resource_id) else {
+                continue;
+            };
+            let Some(cluster) = resource_entry.config.downcast_ref::<KubernetesCluster>() else {
+                continue;
+            };
+            let permission_context =
+                ResourcePermissionsHelper::gcp_kubernetes_cluster_permission_context(
+                    ctx,
+                    cluster,
+                    Some(service_account_id),
+                )?;
+
+            for permission_set_ref in permission_set_refs {
+                let Some(permission_set) =
+                    permission_set_ref.resolve(|name| get_permission_set(name).cloned())
+                else {
+                    continue;
+                };
+                if permission_set.platforms.gcp.is_none() {
+                    continue;
+                }
+
+                let grant_plan = generator
+                    .generate_grant_plan(
+                        &permission_set,
+                        BindingTarget::Resource,
+                        &permission_context,
+                    )
+                    .context(ErrorData::InfrastructureError {
+                        message: format!(
+                            "Failed to generate resource-scoped IAM grant plan for management permission set '{}'",
+                            permission_set.id
+                        ),
+                        operation: Some("binding_role".to_string()),
+                        resource_id: Some(resource_id.clone()),
+                    })?;
+
+                let project_bindings =
+                    grant_plan.bindings_for_target(GcpBindingTargetScope::Project);
+                if project_bindings.is_empty() {
+                    continue;
+                }
+                let selected_custom_roles = grant_plan.custom_roles_for_bindings(&project_bindings);
+                ResourcePermissionsHelper::ensure_gcp_custom_roles(
+                    ctx,
+                    &permission_set.id,
+                    selected_custom_roles,
+                )
+                .await?;
+                owned_role_prefixes.extend(
+                    ResourcePermissionsHelper::gcp_permission_set_custom_role_name_prefixes(
+                        &permission_context,
+                        std::iter::once(permission_set.id.as_str()),
+                    ),
+                );
+
+                for binding in project_bindings {
+                    new_bindings.push(Binding {
+                        role: binding.role,
+                        members: binding.members,
+                        condition: binding.condition.map(|cond| alien_gcp_clients::iam::Expr {
+                            expression: cond.expression,
+                            title: Some(cond.title),
+                            description: Some(cond.description),
+                            location: None,
+                        }),
+                    });
+                }
+            }
+        }
+
+        Ok(())
     }
 
     #[cfg(test)]

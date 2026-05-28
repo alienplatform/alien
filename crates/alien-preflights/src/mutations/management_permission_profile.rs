@@ -127,10 +127,14 @@ fn generate_auto_management_profile(
 
         // Add heartbeat permissions if heartbeat is enabled (Auto or RequiresApproval)
         // Disabled means no infrastructure/IAM permissions at all
-        if config.stack_settings.heartbeats.is_enabled()
-            && resource_needs_cloud_heartbeat_permission(resource_type, resource_entry)
-        {
-            permission_set_ids.insert(format!("{}/heartbeat", resource_type));
+        if config.stack_settings.heartbeats.is_enabled() {
+            add_cloud_heartbeat_permission(
+                resource_id,
+                resource_type,
+                resource_entry,
+                &mut permission_set_ids,
+                &mut resource_permission_set_ids,
+            );
         }
 
         // Add telemetry permissions if telemetry is enabled (Auto or RequiresApproval)
@@ -189,8 +193,9 @@ fn generate_auto_management_profile(
     let valid_permission_refs = resolve_permission_refs(permission_set_ids);
 
     // Create the management permission profile. Auto lifecycle permissions are
-    // wildcard-scoped; command dispatch grants are scoped to the concrete worker
-    // whose command transport they target.
+    // wildcard-scoped. Permissions that address imported/existing physical
+    // resources, such as KubernetesCluster cloud metadata heartbeats, are scoped
+    // to the concrete resource so setup can use its actual provider identity.
     let mut management_permissions = IndexMap::new();
     if !valid_permission_refs.is_empty() {
         management_permissions.insert("*".to_string(), valid_permission_refs);
@@ -224,6 +229,28 @@ fn resource_needs_cloud_heartbeat_permission(
         .is_some_and(|cluster| {
             cluster.heartbeat_mode == KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata
         })
+}
+
+fn add_cloud_heartbeat_permission(
+    resource_id: &str,
+    resource_type: &str,
+    resource_entry: &alien_core::ResourceEntry,
+    permission_set_ids: &mut BTreeSet<String>,
+    resource_permission_set_ids: &mut IndexMap<String, BTreeSet<String>>,
+) {
+    if !resource_needs_cloud_heartbeat_permission(resource_type, resource_entry) {
+        return;
+    }
+
+    let permission_set_id = format!("{}/heartbeat", resource_type);
+    if resource_type == KubernetesCluster::RESOURCE_TYPE.as_ref() {
+        resource_permission_set_ids
+            .entry(resource_id.to_string())
+            .or_default()
+            .insert(permission_set_id);
+    } else {
+        permission_set_ids.insert(permission_set_id);
+    }
 }
 
 #[cfg(test)]
@@ -346,9 +373,13 @@ mod tests {
         let ManagementPermissions::Extend(profile) = result_stack.management() else {
             panic!("Expected Extend management permissions");
         };
+        assert!(
+            !profile.0.contains_key("*"),
+            "KubernetesCluster heartbeat should be resource-scoped because existing clusters do not necessarily use the deployment prefix"
+        );
         let permission_names: Vec<String> = profile
             .0
-            .get("*")
+            .get("kubernetes")
             .unwrap()
             .iter()
             .map(|perm_ref| perm_ref.id().to_string())

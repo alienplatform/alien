@@ -1,6 +1,5 @@
 ---
 source: crates/alien-terraform/tests/generator/helpers.rs
-assertion_line: 55
 expression: buf
 ---
 === versions.tf ===
@@ -160,6 +159,7 @@ locals {
     labels      = {}
   }
   eks_oidc_issuer_host_path = trimprefix(data.aws_eks_cluster.target.identity[0].oidc[0].issuer, "https://")
+  eks_oidc_provider_arn     = var.kubernetes_cluster_mode == "create" ? aws_iam_openid_connect_provider.eks[0].arn : data.aws_iam_openid_connect_provider.eks_existing[0].arn
   helm_values = {
     serviceAccounts       = local.helm_service_accounts
     managerServiceAccount = local.helm_manager_service_account
@@ -217,6 +217,15 @@ data "aws_eks_cluster" "target" {
   name = var.eks_cluster_name
 }
 
+data "tls_certificate" "eks_oidc" {
+  url = data.aws_eks_cluster.target.identity[0].oidc[0].issuer
+}
+
+data "aws_iam_openid_connect_provider" "eks_existing" {
+  count = var.kubernetes_cluster_mode == "existing" ? 1 : 0
+  url   = data.aws_eks_cluster.target.identity[0].oidc[0].issuer
+}
+
 data "aws_iam_policy_document" "execution_sa_assume_role" {
   statement {
     effect = "Allow"
@@ -227,7 +236,7 @@ data "aws_iam_policy_document" "execution_sa_assume_role" {
     principals {
       type = "Federated"
       identifiers = [
-        format("arn:aws:iam::%s:oidc-provider/%s", data.aws_caller_identity.current.account_id, local.eks_oidc_issuer_host_path)
+        local.eks_oidc_provider_arn
       ]
     }
 
@@ -266,6 +275,21 @@ resource "aws_iam_role_policy" "execution_sa_set_0" {
   policy = jsonencode({ Statement = [{ Action = ["s3:ListBucket", "s3:GetObject", "s3:GetObjectVersion", "s3:GetObjectAcl"], Effect = "Allow", Resource = ["arn:aws:s3:::${local.resource_prefix}-*", "arn:aws:s3:::${local.resource_prefix}-*/*"], Sid = "ReadS3Objects" }], Version = "2012-10-17" })
 }
 
+resource "aws_iam_openid_connect_provider" "eks" {
+  count = var.kubernetes_cluster_mode == "create" ? 1 : 0
+  url   = data.aws_eks_cluster.target.identity[0].oidc[0].issuer
+  client_id_list = [
+    "sts.amazonaws.com"
+  ]
+  thumbprint_list = [
+    data.tls_certificate.eks_oidc.certificates[0].sha1_fingerprint
+  ]
+  tags = {
+    Name                    = "${local.resource_prefix}-eks-oidc"
+    "alien-resource-prefix" = local.resource_prefix
+  }
+}
+
 === import.tf ===
 resource "terraform_data" "deployment_import" {
   input = {
@@ -290,7 +314,8 @@ resource "terraform_data" "deployment_import" {
     aws_s3_bucket_public_access_block.data,
     aws_s3_bucket_policy.data,
     aws_iam_role.execution_sa,
-    aws_iam_role_policy.execution_sa_set_0
+    aws_iam_role_policy.execution_sa_set_0,
+    aws_iam_openid_connect_provider.eks
   ]
 }
 

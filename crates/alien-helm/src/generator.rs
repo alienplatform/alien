@@ -722,7 +722,7 @@ fn helpers_tpl() -> String {
 {{- if .Values.fullnameOverride -}}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
-{{- printf "%s-%s" .Release.Name (include "alien.name" .) | trunc 63 | trimSuffix "-" -}}
+{{- .Release.Name | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 {{- end -}}
 
@@ -1477,5 +1477,13 @@ mod tests {
             .assert_ok("helm template manager-fetch path");
         crate::test_utils::helm_template_and_validate(&files, Some(&files["examples/onprem.yaml"]))
             .assert_ok("helm template external-bindings initialize path");
+    }
+
+    #[test]
+    fn fullname_defaults_to_release_name() {
+        let helpers = helpers_tpl();
+
+        assert!(helpers.contains("{{- .Release.Name | trunc 63 | trimSuffix \"-\" -}}"));
+        assert!(!helpers.contains("printf \"%s-%s\" .Release.Name"));
     }
 }
