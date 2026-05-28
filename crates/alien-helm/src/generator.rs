@@ -286,6 +286,9 @@ runtime:
       name: ""
       key: encryption-key
   replicas: 1
+  # Helm's --atomic --wait gives up after this many seconds if /readyz
+  # hasn't returned 200 — the revision is then rolled back automatically.
+  progressDeadlineSeconds: 120
   resources:
     requests:
       cpu: 100m
@@ -299,16 +302,20 @@ runtime:
     service:
       type: ClusterIP
   probes:
+    # /livez is process liveness; /readyz turns 200 only after the agent
+    # completes at least one /v1/sync round-trip with the manager — the
+    # gate Helm's --atomic --wait relies on so a freshly-rolled agent
+    # is not considered ready until it has actually reached the manager.
     liveness:
       enabled: true
-      path: /health
+      path: /livez
       initialDelaySeconds: 10
       periodSeconds: 10
       timeoutSeconds: 2
       failureThreshold: 3
     readiness:
       enabled: true
-      path: /health
+      path: /readyz
       initialDelaySeconds: 5
       periodSeconds: 10
       timeoutSeconds: 2
@@ -360,7 +367,7 @@ runtime:
     );
 
     append_service_accounts(&mut yaml, analysis);
-    yaml.push_str("\nstackSettings: null\n\ninfrastructure: null\n\nbasePlatform: null\nserviceAccountPrefix: \"\"\nmanagerServiceAccount:\n  annotations: {}\n  labels: {}\n");
+    yaml.push_str("\nstackSettings: null\n\ninfrastructure: null\n\nbasePlatform: null\nserviceAccountPrefix: \"\"\nmanagerServiceAccount:\n  annotations: {}\n  labels: {}\n\n# Agent self-update (ALIEN-59). When the agent receives agent_target.helm\n# on /v1/sync it creates a short-lived Helm-runner Job that runs\n# `helm upgrade --atomic`. The Job runs as `alien-agent-upgrader`; we keep\n# the SA optional so charts that don't want self-update can disable it.\nupgrader:\n  enabled: true\n");
     append_services(&mut yaml, analysis);
     yaml.push_str("\npublicUrls: {}\n");
 
@@ -501,6 +508,7 @@ fn values_schema_json() -> String {
           }
         },
         "replicas": { "type": "integer", "minimum": 1 },
+        "progressDeadlineSeconds": { "type": "integer", "minimum": 1 },
         "resources": { "type": "object" },
         "api": {
           "type": "object",
@@ -630,6 +638,13 @@ fn values_schema_json() -> String {
     "infrastructure": { "type": ["object", "null"] },
     "basePlatform": { "type": ["string", "null"], "enum": ["aws", "gcp", "azure", null] },
     "serviceAccountPrefix": { "type": "string" },
+    "upgrader": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" }
+      }
+    },
     "services": {
       "type": "object",
       "additionalProperties": {
@@ -739,6 +754,18 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- regexReplaceAll "[^a-z0-9-]" $raw "-" | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{/*
+  ServiceAccount used by the Helm-runner Job the agent creates when it
+  acts on agent_target.helm. Held as a least-privilege boundary; bound
+  to the existing Role so the Job can mutate the Deployment + release
+  Secrets.
+*/}}
+{{- define "alien.upgraderServiceAccountName" -}}
+{{- $prefix := default (include "alien.fullname" .) .Values.serviceAccountPrefix -}}
+{{- $raw := printf "%s-upgrader-sa" $prefix | lower -}}
+{{- regexReplaceAll "[^a-z0-9-]" $raw "-" | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
 {{- define "alien.serviceAccountName" -}}
 {{- $prefix := default (include "alien.fullname" .root) .root.Values.serviceAccountPrefix -}}
 {{- $raw := printf "%s-%s-sa" $prefix .name | lower -}}
@@ -800,6 +827,22 @@ metadata:
   {{- end }}
 ---
 {{- end }}
+{{- if .Values.upgrader.enabled }}
+# alien-agent-upgrader is the ServiceAccount used by the Helm-runner Job
+# the agent creates when it acts on agent_target.helm. It exists as a
+# least-privilege boundary for the Job — the agent pod itself uses
+# `alien-agent-manager-sa` and only needs to create Jobs + stage
+# ConfigMaps/Secrets. Operators are not restricted by this — the
+# protection against bad helm upgrades is the chart's `required` values,
+# not RBAC.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "alien.upgraderServiceAccountName" . }}
+  labels:
+    {{- include "alien.labels" . | nindent 4 }}
+---
+{{- end }}
 "#
     .to_string()
 }
@@ -846,6 +889,10 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "alien.serviceAccountName" (dict "root" $ "name" $name) }}
   {{- end }}
+  {{- if .Values.upgrader.enabled }}
+  - kind: ServiceAccount
+    name: {{ include "alien.upgraderServiceAccountName" . }}
+  {{- end }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -867,7 +914,7 @@ metadata:
 type: Opaque
 stringData:
   {{- if $createManagementSecret }}
-  sync-token: {{ .Values.management.token | quote }}
+  sync-token: {{ required "management.token or management.existingSecret.name is required — pass the full values document" .Values.management.token | quote }}
   {{- end }}
   {{- if $createEncryptionSecret }}
   encryption-key: {{ required "runtime.encryption.key or runtime.encryption.existingSecret.name is required" .Values.runtime.encryption.key | quote }}
@@ -919,6 +966,11 @@ metadata:
     {{- include "alien.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.runtime.replicas }}
+  # Recreate guarantees exactly one agent runs at any time, so the
+  # InstanceLock is never contended — even during a self-update.
+  strategy:
+    type: Recreate
+  progressDeadlineSeconds: {{ .Values.runtime.progressDeadlineSeconds | default 120 }}
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ include "alien.name" . }}
@@ -978,10 +1030,15 @@ spec:
             - name: BASE_PLATFORM
               value: {{ .Values.basePlatform | quote }}
             {{- end }}
+            # `required` chart guardrail: any helm upgrade that does not
+            # carry the full values document fails to render (Helm aborts
+            # before touching the release). This is the protection against
+            # bare `helm upgrade` silently resetting the agent's manager
+            # config — manager-triggered, operator-triggered, or otherwise.
             - name: SYNC_URL
-              value: {{ .Values.management.url | quote }}
+              value: {{ required "management.url is required — pass the full values document" .Values.management.url | quote }}
             - name: AGENT_NAME
-              value: {{ .Values.management.name | quote }}
+              value: {{ required "management.name is required — pass the full values document" .Values.management.name | quote }}
             {{- if .Values.management.deploymentId }}
             - name: DEPLOYMENT_ID
               value: {{ .Values.management.deploymentId | quote }}

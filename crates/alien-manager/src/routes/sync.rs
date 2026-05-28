@@ -109,7 +109,8 @@ pub struct AgentSyncRequest {
     #[serde(default)]
     pub current_state: Option<serde_json::Value>,
     /// Agent binary version (from `env!("CARGO_PKG_VERSION")` at build time).
-    /// See `internal-docs/alien/02-manager/12-agent-self-update.md`.
+    /// Lets the manager build fleet inventory and decide whether to send an
+    /// `agent_target` in the response.
     #[serde(default)]
     pub agent_version: Option<String>,
     /// Agent host OS — `linux` / `macos` / `windows`.
@@ -141,8 +142,7 @@ pub struct AgentSyncResponse {
     pub commands_url: Option<String>,
     /// Desired agent self-update target. The payload carries either `binary`
     /// (OS-service flow) or `helm` (Kubernetes flow); the agent picks the
-    /// one matching its regime. See
-    /// `internal-docs/alien/02-manager/12-agent-self-update.md`.
+    /// one matching its regime.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_target: Option<serde_json::Value>,
 }
@@ -613,11 +613,10 @@ async fn agent_sync(
     }
 
     // Persist the agent self-update inventory the agent reported on this sync
-    // (`agent_version`, `agent_os`, `agent_arch`, `regime`). This is the
-    // "same sync handler path that updates last_heartbeat_at" the design doc
-    // names — runs on every sync regardless of whether the agent reported a
-    // state change. Old agents that don't send these fields are no-ops.
-    // See internal-docs/alien/02-manager/12-agent-self-update.md.
+    // (`agent_version`, `agent_os`, `agent_arch`, `regime`). Runs on every
+    // sync regardless of whether the agent reported a state change, so the
+    // manager has a fleet-wide view of which version each host is on. Old
+    // agents that don't send these fields are no-ops.
     if let Err(e) = state
         .deployment_store
         .update_agent_metadata(

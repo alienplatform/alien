@@ -43,8 +43,7 @@ pub(crate) enum Deployments {
     /// Project this deployment belongs to. Always `"default"` in this store.
     ProjectId,
     // Agent self-update inventory (ALIEN-59). Populated by the sync handler
-    // from `SyncRequest` fields. See
-    // internal-docs/alien/02-manager/12-agent-self-update.md.
+    // from the matching SyncRequest fields on every /v1/sync.
     /// Agent binary version (e.g. `"1.3.5"`). NULL until first sync.
     AgentVersion,
     /// `linux` / `macos` / `windows`. NULL until first sync.
@@ -332,9 +331,8 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
         "ALTER TABLE releases ADD COLUMN project_id TEXT NOT NULL DEFAULT 'default'",
         "ALTER TABLE deployment_groups ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'default'",
         "ALTER TABLE deployment_groups ADD COLUMN project_id TEXT NOT NULL DEFAULT 'default'",
-        // Agent self-update inventory (ALIEN-59):
-        // populated from the new `SyncRequest` fields. See
-        // internal-docs/alien/02-manager/12-agent-self-update.md.
+        // Agent self-update inventory (ALIEN-59): populated by the sync
+        // handler from the new SyncRequest fields on every /v1/sync.
         "ALTER TABLE deployments ADD COLUMN agent_version TEXT",
         "ALTER TABLE deployments ADD COLUMN agent_os TEXT",
         "ALTER TABLE deployments ADD COLUMN agent_arch TEXT",

@@ -54,6 +54,13 @@ pub async fn run_sync_loop(state: Arc<AgentState>) {
     loop {
         match sync_with_manager(&state, &client, sync_config.url.as_str()).await {
             Ok(has_update) => {
+                // First successful sync turns /readyz from 503 → 200 — the
+                // gate Helm's --atomic --wait relies on so a freshly-rolled
+                // agent isn't marked ready until it has actually talked to
+                // the manager. Idempotent — only the first store matters.
+                state
+                    .first_sync_completed
+                    .store(true, std::sync::atomic::Ordering::Release);
                 if has_update {
                     info!("Received update from manager");
                 } else {
@@ -135,7 +142,6 @@ async fn sync_with_manager(
         deployment_id: deployment_id.clone(),
         current_state: Some(deployment_state),
         // Agent self-update inventory — fleet visibility + upgrade gating.
-        // See internal-docs/alien/02-manager/12-agent-self-update.md.
         agent_version: Some(env!("CARGO_PKG_VERSION").to_string()),
         agent_os: Some(std::env::consts::OS.to_string()),
         agent_arch: Some(std::env::consts::ARCH.to_string()),
@@ -292,7 +298,6 @@ fn is_uninitialized_deployment_state(state: &alien_core::DeploymentState) -> boo
 /// Detect the agent's supervisor regime. `KUBERNETES_SERVICE_HOST` is the
 /// kubelet-injected signal and takes precedence over any other hint; outside
 /// k8s the agent is supervised as a native OS service via the launcher.
-/// See `internal-docs/alien/02-manager/12-agent-self-update.md`.
 fn detect_agent_regime() -> AgentRegime {
     if std::env::var_os("KUBERNETES_SERVICE_HOST").is_some() {
         AgentRegime::Kubernetes

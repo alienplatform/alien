@@ -67,7 +67,6 @@ pub struct DeploymentRecord {
     pub error: Option<serde_json::Value>,
     // Agent self-update inventory (ALIEN-59), written by the sync handler.
     // All four are NULL until the agent has actually reported in.
-    // See internal-docs/alien/02-manager/12-agent-self-update.md.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -321,9 +320,8 @@ pub trait DeploymentStore: Send + Sync {
     /// (`agent_version`, `agent_os`, `agent_arch`, `regime`). Called on every
     /// agent sync — alongside the heartbeat update — so the manager has a
     /// fleet-wide view of which version each host is on and can decide
-    /// whether to send an `agent_target` in the response.
-    /// See `internal-docs/alien/02-manager/12-agent-self-update.md`.
-    /// A field of `None` leaves the corresponding column untouched.
+    /// whether to send an `agent_target` in the response. A field of `None`
+    /// leaves the corresponding column untouched.
     async fn update_agent_metadata(
         &self,
         caller: &crate::auth::Subject,

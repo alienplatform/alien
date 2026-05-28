@@ -159,6 +159,7 @@ mod tests {
                 network: None,
                 domains: None,
                 external_bindings: None,
+                kubernetes: None,
             }))
             .api_server_port(8080)
             .build();
@@ -196,6 +197,7 @@ mod tests {
                 network: None,
                 domains: None,
                 external_bindings: None,
+                kubernetes: None,
             }))
             .build();
 
@@ -217,6 +219,7 @@ mod tests {
                 network: None,
                 domains: None,
                 external_bindings: None,
+                kubernetes: None,
             }))
             .build();
 
@@ -238,6 +241,7 @@ mod tests {
                 network: None,
                 domains: None,
                 external_bindings: None,
+                kubernetes: None,
             }))
             .build();
 

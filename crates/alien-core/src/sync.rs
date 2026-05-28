@@ -17,9 +17,9 @@ pub struct SyncRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_state: Option<DeploymentState>,
     /// Agent binary version, from `env!("CARGO_PKG_VERSION")` at build time.
-    /// Lets the manager render fleet inventory and decide whether to send
-    /// an `agent_target`. Optional for backward compatibility with old agents.
-    /// See `internal-docs/alien/02-manager/12-agent-self-update.md`.
+    /// Lets the manager build fleet-wide version inventory and decide
+    /// whether to send an `agent_target`. Optional for back-compat with
+    /// older agents.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_version: Option<String>,
     /// `linux` / `macos` / `windows`. From `std::env::consts::OS`.
@@ -36,7 +36,7 @@ pub struct SyncRequest {
 
 /// Supervisor regime for an agent. Drives which `agent_target` payload
 /// (`binary` vs `helm`) the manager sends and how the agent actuates the
-/// upgrade. See `internal-docs/alien/02-manager/12-agent-self-update.md`.
+/// upgrade.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AgentRegime {
@@ -69,7 +69,6 @@ pub struct SyncResponse {
     /// Desired agent self-update target. The agent acts on whichever payload
     /// matches its regime: `binary` for `os-service`, `helm` for `kubernetes`.
     /// None means no upgrade pending.
-    /// See `internal-docs/alien/02-manager/12-agent-self-update.md`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_target: Option<AgentTarget>,
 }
@@ -97,11 +96,10 @@ pub struct AgentTarget {
 
 /// OS-service binary upgrade payload — the agent downloads, verifies the
 /// SHA-256, stages the binary, and exits; the launcher performs the
-/// health-gated swap. The `signature` field is **future work** (see
-/// `internal-docs/alien/02-manager/12-agent-self-update.md` →
-/// "Publishing and signing"): it rides along on the wire so newer agents
-/// can enforce it once the signing infrastructure lands, but the current
-/// launcher relies on the SHA-256 and HTTPS download path.
+/// health-gated swap. The `signature` field is **future work**: it rides
+/// along on the wire so newer agents can enforce it once the signing
+/// infrastructure lands, but the current launcher trusts SHA-256 +
+/// HTTPS for the download.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentBinaryTarget {
