@@ -841,12 +841,16 @@ async fn build_proxy_push_settings(
     // Full repository: host/repo_name (e.g., "manager.alien.dev/alien-e2e")
     let repository = format!("{}/{}", registry_host, repo_name);
 
-    // Auth: use the caller's token as Basic auth password.
-    // The manager validates both Bearer and Basic auth — for OCI clients
-    // (which speak Basic), the password is the token.
-    let auth = match &manager.auth_token {
-        Some(token) => RegistryAuth::Basic("token".to_string(), token.clone()),
-        None => RegistryAuth::Anonymous,
+    // OCI speaks Basic — the token rides in the password slot, the
+    // workspace rides in the username slot. OCI clients can't add custom
+    // headers, and the username slot is exactly where cloud registries
+    // pass tenant/identity info (GCR uses `oauth2accesstoken`, ECR uses
+    // `AWS`). Without a workspace, the username stays as the existing
+    // "token" placeholder.
+    let auth = match (&manager.auth_token, &manager.workspace) {
+        (Some(token), Some(workspace)) => RegistryAuth::Basic(workspace.clone(), token.clone()),
+        (Some(token), None) => RegistryAuth::Basic("token".to_string(), token.clone()),
+        (None, _) => RegistryAuth::Anonymous,
     };
 
     info!("   Pushing through manager proxy at {}", repository);

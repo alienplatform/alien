@@ -38,6 +38,10 @@ pub struct ManagerContext {
     pub repository_name: Option<String>,
     /// Repository URI for image pushing (only available via platform discovery).
     pub repository_uri: Option<String>,
+    /// Workspace the caller is acting in. The manager needs it to resolve
+    /// the user's identity — user OAuth tokens don't carry that themselves.
+    /// `None` in single-tenant modes (dev, standalone).
+    pub workspace: Option<String>,
 }
 
 /// Execution mode determines which API the command targets and carries all global flags.
@@ -323,6 +327,7 @@ impl ExecutionMode {
                     auth_token: Some(api_key.clone()),
                     repository_name: None, // Resolved at push time via manager's /v1/build-config
                     repository_uri: Some(server_url.clone()),
+                    workspace: None,
                 })
             }
             Self::Dev { port } => {
@@ -337,6 +342,7 @@ impl ExecutionMode {
                     auth_token: None,
                     repository_name: Some("artifacts/default".to_string()),
                     repository_uri: Some(manager_url),
+                    workspace: None,
                 })
             }
             #[cfg(feature = "platform")]
@@ -426,10 +432,20 @@ impl ExecutionMode {
 
                 info!("Manager: {}", resolved.manager_url);
 
+                // Manager-bound client; workspace lives in default headers.
+                let auth_token = http.bearer_token.clone();
+                let manager_http_client = match &auth_token {
+                    Some(token) => crate::auth::client_with_auth_and_workspace(
+                        &format!("Bearer {}", token),
+                        &workspace,
+                    )?,
+                    None => http.client.clone(),
+                };
+
                 // Now call the manager directly to create/get the artifact registry repo.
                 // The repo logical name is the project ID.
                 let repo_name = create_or_get_artifact_repo(
-                    &http.client,
+                    &manager_http_client,
                     &resolved.manager_url,
                     &resolved.project_id,
                     platform,
@@ -438,21 +454,19 @@ impl ExecutionMode {
 
                 info!("Repository: {}", repo_name);
 
-                // Create manager SDK client reusing the authenticated reqwest client
-                let authenticated_client = http.client.clone();
-                let auth_token = http.bearer_token.clone();
                 let manager_client = ServerSdkClient::new_with_client(
                     &resolved.manager_url,
-                    authenticated_client.clone(),
+                    manager_http_client.clone(),
                 );
 
                 Ok(ManagerContext {
                     manager_url: resolved.manager_url,
                     client: manager_client,
-                    http_client: authenticated_client,
+                    http_client: manager_http_client,
                     auth_token,
                     repository_name: Some(repo_name),
                     repository_uri: None,
+                    workspace: Some(workspace),
                 })
             }
         }
@@ -560,7 +574,10 @@ struct ResolveResponse {
 
 /// Create or get an artifact registry repository on the manager.
 ///
-/// Tries GET first (repo may already exist), then POST to create if 404.
+/// GET first (repo may exist), POST to create on 404. The `client` is
+/// expected to carry the caller's workspace in its default headers (see
+/// [`crate::auth::client_with_auth_and_workspace`]); no per-call header
+/// plumbing happens here.
 #[cfg(feature = "platform")]
 async fn create_or_get_artifact_repo(
     client: &reqwest::Client,
