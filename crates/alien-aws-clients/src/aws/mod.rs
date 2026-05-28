@@ -54,6 +54,7 @@ pub mod credential_provider;
 pub mod dynamodb;
 pub mod ec2;
 pub mod ecr;
+pub mod eks;
 pub mod elbv2;
 pub mod eventbridge;
 pub mod iam;

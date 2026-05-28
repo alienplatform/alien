@@ -105,11 +105,16 @@ output "e2e_gke_kubeconfig" {
 }
 
 output "e2e_k8s_public_host_suffix" {
-  value     = "${google_compute_address.e2e_ingress.address}.sslip.io"
+  value     = "${google_compute_global_address.e2e_ingress.address}.sslip.io"
   sensitive = true
 }
 
 output "e2e_ingress_ip_address" {
-  value     = google_compute_address.e2e_ingress.address
+  value     = google_compute_global_address.e2e_ingress.address
+  sensitive = true
+}
+
+output "e2e_ingress_ip_name" {
+  value     = google_compute_global_address.e2e_ingress.name
   sensitive = true
 }

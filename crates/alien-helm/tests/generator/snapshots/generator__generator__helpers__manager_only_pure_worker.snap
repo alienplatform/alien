@@ -1,5 +1,6 @@
 ---
 source: crates/alien-helm/tests/generator/helpers.rs
+assertion_line: 35
 expression: buf
 ---
 === Chart.yaml ===
@@ -137,6 +138,7 @@ services:
       secretName: ""
     ingress:
       className: ""
+      hostless: false
       annotations: {}
 
 publicUrls: {}
@@ -372,6 +374,7 @@ ephemeralStorage:
             "additionalProperties": false,
             "properties": {
               "className": { "type": "string" },
+              "hostless": { "type": "boolean" },
               "annotations": { "type": "object", "additionalProperties": { "type": "string" } }
             }
           }
@@ -459,8 +462,7 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- end -}}
 
 {{- define "alien.resourceName" -}}
-{{- $prefix := default (include "alien.fullname" .root) .root.Values.serviceAccountPrefix -}}
-{{- $raw := printf "%s-%s" $prefix .name | lower -}}
+{{- $raw := .name | lower -}}
 {{- regexReplaceAll "[^a-z0-9-]" $raw "-" | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
@@ -842,7 +844,7 @@ spec:
 
 === templates/app-ingress.yaml ===
 {{- range $id, $service := .Values.services }}
-{{- if $service.host }}
+{{- if or $service.host $service.ingress.hostless }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -865,7 +867,9 @@ spec:
       secretName: {{ $service.tls.secretName | quote }}
   {{- end }}
   rules:
-    - host: {{ $service.host | quote }}
+    - {{- if $service.host }}
+      host: {{ $service.host | quote }}
+      {{- end }}
       http:
         paths:
           - path: /
@@ -958,6 +962,7 @@ services:
       secretName: ""
     ingress:
       className: ""
+      hostless: false
       annotations: {}
 
 === examples/gke.yaml ===
@@ -989,6 +994,7 @@ services:
       secretName: ""
     ingress:
       className: ""
+      hostless: false
       annotations: {}
 
 === examples/aks.yaml ===
@@ -1020,6 +1026,7 @@ services:
       secretName: ""
     ingress:
       className: ""
+      hostless: false
       annotations: {}
 
 === examples/onprem.yaml ===
@@ -1061,6 +1068,7 @@ services:
       secretName: ""
     ingress:
       className: ""
+      hostless: false
       annotations: {}
 
 === README.md ===

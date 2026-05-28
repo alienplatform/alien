@@ -36,6 +36,10 @@ impl StackMutation for ComputeClusterMutation {
         stack_state: &StackState,
         _config: &DeploymentConfig,
     ) -> bool {
+        if stack_state.platform == Platform::Kubernetes {
+            return false;
+        }
+
         let has_containers = stack
             .resources
             .values()

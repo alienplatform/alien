@@ -38,6 +38,7 @@ alien-aws-clients = { workspace = true, optional = true }
 alien-gcp-clients = { workspace = true, optional = true }
 alien-azure-clients = { workspace = true, optional = true }
 alien-k8s-clients = { workspace = true, optional = true }
+alien-helm = { workspace = true }
 alien-local = { workspace = true, optional = true }
 alien-macros = { workspace = true }
 alien-permissions = { workspace = true }
@@ -48,7 +49,7 @@ serde_json = { workspace = true }
 petgraph = { workspace = true }
 tracing = { workspace = true }
 utoipa = { workspace = true, optional = true }
-tokio = { workspace = true, features = ["sync", "macros", "io-util", "rt", "time"] }
+tokio = { workspace = true, features = ["sync", "macros", "io-util", "process", "rt", "time"] }
 async-trait = { workspace = true }
 indexmap = { workspace = true, features = ["serde"] }
 reqwest = { workspace = true, features = ["json", "rustls-tls-webpki-roots"] }

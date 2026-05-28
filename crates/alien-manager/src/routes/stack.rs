@@ -40,8 +40,8 @@ use alien_core::{
     },
     is_valid_resource_prefix, AwsEnvironmentInfo, AzureEnvironmentInfo, DeploymentConfig,
     DeploymentStatus, EnvironmentInfo, EnvironmentVariablesSnapshot, ExternalBindings,
-    GcpEnvironmentInfo, Platform, ResourceLifecycle, ResourceStatus, RuntimeMetadata, Stack,
-    StackResourceState, StackState, RESOURCE_PREFIX_ERROR_MESSAGE,
+    GcpEnvironmentInfo, KubernetesCluster, Platform, ResourceLifecycle, ResourceStatus,
+    RuntimeMetadata, Stack, StackResourceState, StackState, RESOURCE_PREFIX_ERROR_MESSAGE,
 };
 use alien_error::AlienError;
 
@@ -518,9 +518,9 @@ async fn prepare_import_stack(
     req: &StackImportRequest,
 ) -> crate::error::Result<Stack> {
     let runner = alien_preflights::runner::PreflightRunner::new();
-    let import_platform = req.base_platform.unwrap_or(req.platform);
+    let mutation_platform = req.platform;
     runner
-        .run_template_preflights(&source_stack, import_platform)
+        .run_template_preflights(&source_stack, mutation_platform)
         .await
         .map_err(|err| {
             AlienError::new(ErrorData::BadRequest {
@@ -531,7 +531,7 @@ async fn prepare_import_stack(
             })
         })?;
 
-    let stack_state = StackState::new(import_platform);
+    let stack_state = StackState::new(mutation_platform);
     let config = DeploymentConfig {
         deployment_name: Some(req.deployment_name.clone()),
         stack_settings: req.stack_settings.clone(),
@@ -692,7 +692,7 @@ fn build_stack_state(
     let mut resources: HashMap<String, StackResourceState> = HashMap::new();
 
     for imported in &req.resources {
-        let import_platform = req.base_platform.unwrap_or(req.platform);
+        let import_platform = import_platform_for_resource(state, req, &imported.resource_type);
         let entry = stack.resources.get(&imported.id).ok_or_else(|| {
             AlienError::new(ErrorData::BadRequest {
                 reason: format!(
@@ -743,4 +743,30 @@ fn build_stack_state(
         StackState::with_resource_prefix(req.platform, req.resource_prefix.trim().to_string());
     stack_state.resources = resources;
     Ok(stack_state)
+}
+
+fn import_platform_for_resource(
+    state: &AppState,
+    req: &StackImportRequest,
+    resource_type: &alien_core::ResourceType,
+) -> Platform {
+    if req.platform != Platform::Kubernetes {
+        return req.base_platform.unwrap_or(req.platform);
+    }
+
+    if resource_type == &KubernetesCluster::RESOURCE_TYPE {
+        return req.base_platform.unwrap_or(Platform::Kubernetes);
+    }
+
+    if let Some(base_platform) = req.base_platform {
+        if state
+            .import_registry
+            .importer(resource_type, base_platform)
+            .is_some()
+        {
+            return base_platform;
+        }
+    }
+
+    Platform::Kubernetes
 }

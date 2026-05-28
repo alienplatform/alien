@@ -37,6 +37,8 @@ pub use network::*;
 mod compute_cluster;
 pub use compute_cluster::*;
 
+mod kubernetes_cluster;
+
 mod container;
 pub use container::*;
 

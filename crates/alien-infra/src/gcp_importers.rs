@@ -3,11 +3,15 @@
 //! See [`crate::aws_importers`] for the parent doc. `compute-cluster`
 //! intentionally lives in `alien-platform-controllers`.
 
+#[cfg(feature = "kubernetes")]
+use alien_core::KubernetesCluster;
 use alien_core::{ArtifactRegistry, Build, Kv, Network, Platform, Queue, Storage, Vault, Worker};
 use alien_core::{RemoteStackManagement, ServiceAccount, ServiceActivation};
 
 use crate::artifact_registry::GcpArtifactRegistryImporter;
 use crate::build::GcpBuildImporter;
+#[cfg(feature = "kubernetes")]
+use crate::kubernetes_cluster::KubernetesClusterImporter;
 use crate::kv::GcpKvImporter;
 use crate::network::GcpNetworkImporter;
 use crate::queue::GcpQueueImporter;
@@ -49,4 +53,10 @@ pub fn register(registry: &mut ImporterRegistry) {
             Platform::Gcp,
             GcpServiceActivationImporter,
         );
+    #[cfg(feature = "kubernetes")]
+    registry.register(
+        KubernetesCluster::RESOURCE_TYPE,
+        Platform::Gcp,
+        KubernetesClusterImporter,
+    );
 }

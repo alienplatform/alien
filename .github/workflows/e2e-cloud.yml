@@ -55,14 +55,15 @@ on:
         description: "Local / Windows / Agent"
         type: boolean
         default: false
-      language:
-        description: "Language filter"
+      app:
+        description: "App filter"
         type: choice
-        default: "Rust"
+        default: "comprehensive-rust"
         options:
           - All
-          - Rust
-          - TypeScript
+          - comprehensive-rust
+          - comprehensive-ts
+          - full-stack-microservices
       network_mode:
         description: "Cloud network mode"
         type: choice
@@ -72,6 +73,13 @@ on:
           - use-default
           - create
           - existing
+      kubernetes_cluster_mode:
+        description: "Kubernetes cluster mode for Terraform + Helm E2E"
+        type: choice
+        default: existing
+        options:
+          - existing
+          - create
       build_images:
         description: "Build container images (disable to use latest/default images or explicit overrides)"
         type: boolean
@@ -116,21 +124,6 @@ on:
         default: azure-target-1
         options:
           - azure-target-1
-      e2e_slot:
-        description: "Shared E2E resource slot"
-        type: choice
-        default: "03"
-        options:
-          - "01"
-          - "02"
-          - "03"
-          - "04"
-          - "05"
-          - "06"
-          - "07"
-          - "08"
-          - "09"
-          - "10"
   merge_group:
   pull_request:
     types: [opened, reopened, synchronize, labeled]
@@ -141,7 +134,7 @@ permissions:
   packages: write
 
 env:
-  ALIEN_E2E_SLOT: ${{ inputs.e2e_slot || '03' }}
+  ALIEN_E2E_SLOT: "03"
 
 jobs:
   # ── Compute which tests, platforms, and architectures to run ────────
@@ -221,7 +214,7 @@ jobs:
             LOCAL_LINUX_AGENT="${{ inputs.run_local_linux_agent }}"
             LOCAL_MACOS_AGENT="${{ inputs.run_local_macos_agent }}"
             LOCAL_WINDOWS_AGENT="${{ inputs.run_local_windows_agent }}"
-            LANG="${{ inputs.language }}"
+            APP="${{ inputs.app }}"
             NETWORK_MODE="${{ inputs.network_mode }}"
             BUILD_IMAGES="${{ inputs.build_images }}"
             BASE_IMAGE_OVERRIDE="${{ inputs.base_image_override }}"
@@ -242,7 +235,7 @@ jobs:
             LOCAL_LINUX_AGENT=true
             LOCAL_MACOS_AGENT=false
             LOCAL_WINDOWS_AGENT=false
-            LANG=Rust; NETWORK_MODE=none; BUILD_IMAGES=true; BASE_IMAGE_OVERRIDE=""; AGENT_IMAGE_OVERRIDE=""; SKIP_CLEANUP=false; TEST_FILTER=""
+            APP=comprehensive-rust; NETWORK_MODE=none; BUILD_IMAGES=true; BASE_IMAGE_OVERRIDE=""; AGENT_IMAGE_OVERRIDE=""; SKIP_CLEANUP=false; TEST_FILTER=""
           fi
 
           BUILD_BASE_IMAGE=$BUILD_IMAGES
@@ -264,27 +257,27 @@ jobs:
           # Build push matrix
           PUSH_ENTRIES='[]'
           if [ "$PUSH_AWS_CLI" = "true" ]; then
-            if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
-              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-aws-rust","test_filter":"push_aws_rust","needs_oidc":false,"resource_suffix":"awsr"}]')
+            if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-rust" ]; then
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-aws-comprehensive-rust","test_filter":"push_aws_comprehensive_rust","needs_oidc":false,"resource_suffix":"awscr"}]')
             fi
-            if [ "$LANG" = "All" ] || [ "$LANG" = "TypeScript" ]; then
-              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-aws-typescript","test_filter":"push_aws_typescript","needs_oidc":false,"resource_suffix":"awst"}]')
+            if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-ts" ]; then
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-aws-comprehensive-ts","test_filter":"push_aws_comprehensive_ts","needs_oidc":false,"resource_suffix":"awsct"}]')
             fi
           fi
           if [ "$PUSH_GCP_CLI" = "true" ]; then
-            if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
-              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-gcp-rust","test_filter":"push_gcp_rust","needs_oidc":false,"resource_suffix":"gcpr"}]')
+            if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-rust" ]; then
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-gcp-comprehensive-rust","test_filter":"push_gcp_comprehensive_rust","needs_oidc":false,"resource_suffix":"gcpcr"}]')
             fi
-            if [ "$LANG" = "All" ] || [ "$LANG" = "TypeScript" ]; then
-              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-gcp-typescript","test_filter":"push_gcp_typescript","needs_oidc":false,"resource_suffix":"gcpt"}]')
+            if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-ts" ]; then
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-gcp-comprehensive-ts","test_filter":"push_gcp_comprehensive_ts","needs_oidc":false,"resource_suffix":"gcpct"}]')
             fi
           fi
           if [ "$PUSH_AZURE_CLI" = "true" ]; then
-            if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
-              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-azure-rust","test_filter":"push_azure_rust","needs_oidc":true,"resource_suffix":"azr"}]')
+            if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-rust" ]; then
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-azure-comprehensive-rust","test_filter":"push_azure_comprehensive_rust","needs_oidc":true,"resource_suffix":"azcr"}]')
             fi
-            if [ "$LANG" = "All" ] || [ "$LANG" = "TypeScript" ]; then
-              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-azure-typescript","test_filter":"push_azure_typescript","needs_oidc":true,"resource_suffix":"azt"}]')
+            if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-ts" ]; then
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-azure-comprehensive-ts","test_filter":"push_azure_comprehensive_ts","needs_oidc":true,"resource_suffix":"azct"}]')
             fi
           fi
 
@@ -293,27 +286,27 @@ jobs:
           # Build local matrix (native agent on each OS)
           LOCAL_ENTRIES='[]'
           if [ "$LOCAL_LINUX_AGENT" = "true" ]; then
-            if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
-              LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-linux-rust","os":"depot-ubuntu-24.04-arm-8","test_filter":"pull_local_rust"}]')
+            if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-rust" ]; then
+              LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-linux-comprehensive-rust","os":"depot-ubuntu-24.04-arm-8","test_filter":"pull_local_comprehensive_rust"}]')
             fi
-            if [ "$LANG" = "All" ] || [ "$LANG" = "TypeScript" ]; then
-              LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-linux-typescript","os":"depot-ubuntu-24.04-arm-8","test_filter":"pull_local_typescript"}]')
+            if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-ts" ]; then
+              LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-linux-comprehensive-ts","os":"depot-ubuntu-24.04-arm-8","test_filter":"pull_local_comprehensive_ts"}]')
             fi
           fi
           if [ "$LOCAL_MACOS_AGENT" = "true" ]; then
-            if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
-              LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-macos-rust","os":"depot-macos-latest","test_filter":"pull_local_rust"}]')
+            if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-rust" ]; then
+              LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-macos-comprehensive-rust","os":"depot-macos-latest","test_filter":"pull_local_comprehensive_rust"}]')
             fi
-            if [ "$LANG" = "All" ] || [ "$LANG" = "TypeScript" ]; then
-              LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-macos-typescript","os":"depot-macos-latest","test_filter":"pull_local_typescript"}]')
+            if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-ts" ]; then
+              LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-macos-comprehensive-ts","os":"depot-macos-latest","test_filter":"pull_local_comprehensive_ts"}]')
             fi
           fi
           if [ "$LOCAL_WINDOWS_AGENT" = "true" ]; then
-            if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
-              LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-windows-rust","os":"depot-windows-2025-8","test_filter":"pull_local_rust"}]')
+            if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-rust" ]; then
+              LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-windows-comprehensive-rust","os":"depot-windows-2025-8","test_filter":"pull_local_comprehensive_rust"}]')
             fi
-            if [ "$LANG" = "All" ] || [ "$LANG" = "TypeScript" ]; then
-              LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-windows-typescript","os":"depot-windows-2025-8","test_filter":"pull_local_typescript"}]')
+            if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-ts" ]; then
+              LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-windows-comprehensive-ts","os":"depot-windows-2025-8","test_filter":"pull_local_comprehensive_ts"}]')
             fi
           fi
 
@@ -322,24 +315,35 @@ jobs:
           # Build Terraform distribution matrix. Kubernetes entries provision
           # frozen resources with Terraform and install the agent with Helm.
           TERRAFORM_ENTRIES='[]'
-          if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
+          if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-rust" ]; then
             if [ "$PUSH_AWS_TERRAFORM" = "true" ]; then
-              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-aws-push-rust","test_filter":"terraform_aws_push_rust","needs_oidc":false,"resource_suffix":"tfaws"}]')
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-aws-push-comprehensive-rust","test_filter":"terraform_aws_push_comprehensive_rust","needs_oidc":false,"resource_suffix":"tfawscr"}]')
             fi
             if [ "$PUSH_GCP_TERRAFORM" = "true" ]; then
-              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-gcp-push-rust","test_filter":"terraform_gcp_push_rust","needs_oidc":false,"resource_suffix":"tfgcp"}]')
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-gcp-push-comprehensive-rust","test_filter":"terraform_gcp_push_comprehensive_rust","needs_oidc":false,"resource_suffix":"tfgcpcr"}]')
             fi
             if [ "$PUSH_AZURE_TERRAFORM" = "true" ]; then
-              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-azure-push-rust","test_filter":"terraform_azure_push_rust","needs_oidc":true,"resource_suffix":"tfaz"}]')
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-azure-push-comprehensive-rust","test_filter":"terraform_azure_push_comprehensive_rust","needs_oidc":true,"resource_suffix":"tfazcr"}]')
             fi
             if [ "$KUBERNETES_AWS_TERRAFORM_HELM" = "true" ]; then
-              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-eks-helm-pull-rust","test_filter":"terraform_eks_helm_pull_rust","needs_oidc":false,"resource_suffix":"tfeks"}]')
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-eks-helm-pull-comprehensive-rust","test_filter":"terraform_eks_helm_pull_comprehensive_rust","needs_oidc":false,"resource_suffix":"tfekscr"}]')
             fi
             if [ "$KUBERNETES_GCP_TERRAFORM_HELM" = "true" ]; then
-              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-gke-helm-pull-rust","test_filter":"terraform_gke_helm_pull_rust","needs_oidc":false,"resource_suffix":"tfgke"}]')
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-gke-helm-pull-comprehensive-rust","test_filter":"terraform_gke_helm_pull_comprehensive_rust","needs_oidc":false,"resource_suffix":"tfgkecr"}]')
             fi
             if [ "$KUBERNETES_AZURE_TERRAFORM_HELM" = "true" ]; then
-              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-aks-helm-pull-rust","test_filter":"terraform_aks_helm_pull_rust","needs_oidc":true,"resource_suffix":"tfaks"}]')
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-aks-helm-pull-comprehensive-rust","test_filter":"terraform_aks_helm_pull_comprehensive_rust","needs_oidc":true,"resource_suffix":"tfakscr"}]')
+            fi
+          fi
+          if [ "$APP" = "All" ] || [ "$APP" = "full-stack-microservices" ]; then
+            if [ "$KUBERNETES_AWS_TERRAFORM_HELM" = "true" ]; then
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-eks-helm-pull-full-stack-microservices","test_filter":"terraform_eks_helm_pull_full_stack_microservices","needs_oidc":false,"resource_suffix":"tfeksfs"}]')
+            fi
+            if [ "$KUBERNETES_GCP_TERRAFORM_HELM" = "true" ]; then
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-gke-helm-pull-full-stack-microservices","test_filter":"terraform_gke_helm_pull_full_stack_microservices","needs_oidc":false,"resource_suffix":"tfgkefs"}]')
+            fi
+            if [ "$KUBERNETES_AZURE_TERRAFORM_HELM" = "true" ]; then
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-aks-helm-pull-full-stack-microservices","test_filter":"terraform_aks_helm_pull_full_stack_microservices","needs_oidc":true,"resource_suffix":"tfaksfs"}]')
             fi
           fi
 
@@ -347,8 +351,8 @@ jobs:
           # and currently validates the push/import path.
           CLOUDFORMATION_ENTRIES='[]'
           if [ "$PUSH_AWS_CLOUDFORMATION" = "true" ]; then
-            if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
-              CLOUDFORMATION_ENTRIES=$(echo "$CLOUDFORMATION_ENTRIES" | jq -c '. + [{"name":"cloudformation-aws-push-rust","test_filter":"cloudformation_aws_push_rust","needs_oidc":false,"resource_suffix":"cfaws"}]')
+            if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-rust" ]; then
+              CLOUDFORMATION_ENTRIES=$(echo "$CLOUDFORMATION_ENTRIES" | jq -c '. + [{"name":"cloudformation-aws-push-comprehensive-rust","test_filter":"cloudformation_aws_push_comprehensive_rust","needs_oidc":false,"resource_suffix":"cfawscr"}]')
             fi
           fi
 
@@ -697,8 +701,8 @@ jobs:
           unzip -q /tmp/kubelogin.zip -d /tmp/kubelogin
           sudo install -m 0755 "/tmp/kubelogin/bin/linux_${KUBELOGIN_ARCH}/kubelogin" /usr/local/bin/kubelogin
 
-      - name: Install E2E ingress controllers
-        run: ./scripts/install-e2e-ingress.sh
+      - name: Configure provider-native E2E ingress
+        run: ./scripts/configure-e2e-provider-ingress.sh
         env:
           TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
 
@@ -729,6 +733,8 @@ jobs:
             --azure "${{ inputs.azure_target || 'azure-target-1' }}"
           printf "\nALIEN_E2E_SLOT='%s'\n" "$ALIEN_E2E_SLOT" >> .env.test
           printf "\nALIEN_E2E_SLOT='%s'\n" "$ALIEN_E2E_SLOT" >> .env.test.1password
+          printf "\nALIEN_E2E_KUBERNETES_CLUSTER_MODE='%s'\n" "${{ inputs.kubernetes_cluster_mode || 'existing' }}" >> .env.test
+          printf "\nALIEN_E2E_KUBERNETES_CLUSTER_MODE='%s'\n" "${{ inputs.kubernetes_cluster_mode || 'existing' }}" >> .env.test.1password
           echo "--- verifying .env.test exists ---"
           ls -la .env.test
           wc -l .env.test
@@ -769,7 +775,7 @@ jobs:
           export AWS_SECRET_ACCESS_KEY="$AWS_TARGET_SECRET_ACCESS_KEY"
           export AWS_SESSION_TOKEN="${AWS_TARGET_SESSION_TOKEN:-}"
           export AWS_DEFAULT_REGION="$AWS_TARGET_REGION"
-          for suffix in "" "-awsr" "-awst" "-cfaws" "-tfaws" "-tfeks"; do
+          for suffix in "" "-awscr" "-awsct" "-cfawscr" "-tfawscr" "-tfekscr" "-tfeksfs" "-awsr" "-awst" "-cfaws" "-tfaws" "-tfeks"; do
             export ALIEN_E2E_RESOURCE_PREFIX="e2e-${ALIEN_E2E_SLOT}${suffix}"
             ./scripts/cleanup-aws-e2e-resources.sh
           done
@@ -857,6 +863,10 @@ jobs:
 
       - uses: depot/setup-action@v1
 
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
       - uses: mozilla-actions/sccache-action@v0.0.9
 
       - uses: taiki-e/install-action@cargo-nextest
@@ -880,7 +890,10 @@ jobs:
           cache: pnpm
 
       - name: Install JS dependencies and build packages
-        run: pnpm install --frozen-lockfile && pnpm build
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+          pnpm -C examples install --frozen-lockfile
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
 
@@ -938,6 +951,10 @@ jobs:
 
       - uses: depot/setup-action@v1
 
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
       - uses: mozilla-actions/sccache-action@v0.0.9
 
       - uses: taiki-e/install-action@cargo-nextest
@@ -968,7 +985,10 @@ jobs:
         run: pipx install cfn-lint
 
       - name: Install JS dependencies and build packages
-        run: pnpm install --frozen-lockfile && pnpm build
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+          pnpm -C examples install --frozen-lockfile
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
 
@@ -989,6 +1009,7 @@ jobs:
           ALIEN_E2E_NETWORK_MODE: ${{ needs.compute-matrix.outputs.network_mode }}
         run: |
           set -a && source .env.test && set +a
+          export ALIEN_TEST_BUN_BINARY="$(command -v bun)"
           export ALIEN_E2E_RESOURCE_PREFIX="e2e-${ALIEN_E2E_SLOT}-${{ matrix.resource_suffix }}"
           depot cargo nextest run -p alien-test --test distribution ${{ matrix.test_filter }} ${{ needs.compute-matrix.outputs.test_filter }} --no-capture
 
@@ -1003,7 +1024,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.compute-matrix.outputs.terraform_matrix) }}
-    runs-on: depot-ubuntu-24.04-arm-8
+    runs-on: depot-ubuntu-24.04-16
     timeout-minutes: 90
     env:
       CARGO_INCREMENTAL: "0"
@@ -1052,6 +1073,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
 
       - uses: depot/setup-action@v1
+
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
 
       - uses: mozilla-actions/sccache-action@v0.0.9
 
@@ -1102,7 +1127,10 @@ jobs:
           sudo mv kubeconform /usr/local/bin/kubeconform
 
       - name: Install JS dependencies and build packages
-        run: pnpm install --frozen-lockfile && pnpm build
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+          pnpm -C examples install --frozen-lockfile
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
 
@@ -1126,8 +1154,10 @@ jobs:
           ALIEN_TEST_GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -a && source .env.test && set +a
+          export ALIEN_TEST_BUN_BINARY="$(command -v bun)"
+          "$ALIEN_TEST_BUN_BINARY" --version
           export ALIEN_E2E_RESOURCE_PREFIX="e2e-${ALIEN_E2E_SLOT}-${{ matrix.resource_suffix }}"
-          depot cargo nextest run -p alien-test --test distribution ${{ matrix.test_filter }} ${{ needs.compute-matrix.outputs.test_filter }} --no-capture
+          cargo nextest run -p alien-test --test distribution ${{ matrix.test_filter }} ${{ needs.compute-matrix.outputs.test_filter }} --no-capture
 
   # ── E2E local test matrix ──────────────────────────────────────────
   # Installs alien-agent as an OS service via `alien-deploy up` on each
@@ -1165,6 +1195,11 @@ jobs:
       - uses: depot/setup-action@v1
         if: runner.os != 'Windows'
 
+      - uses: docker/setup-qemu-action@v3
+        if: runner.os == 'Linux'
+        with:
+          platforms: arm64
+
       - uses: mozilla-actions/sccache-action@v0.0.9
 
       - uses: taiki-e/install-action@cargo-nextest
@@ -1200,7 +1235,10 @@ jobs:
           cache: pnpm
 
       - name: Install JS dependencies and build packages
-        run: pnpm install --frozen-lockfile && pnpm build
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+          pnpm -C examples install --frozen-lockfile
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
 
@@ -1296,7 +1334,7 @@ jobs:
           export AWS_SECRET_ACCESS_KEY="$AWS_TARGET_SECRET_ACCESS_KEY"
           export AWS_SESSION_TOKEN="${AWS_TARGET_SESSION_TOKEN:-}"
           export AWS_DEFAULT_REGION="$AWS_TARGET_REGION"
-          for suffix in "" "-awsr" "-awst" "-cfaws" "-tfaws" "-tfeks"; do
+          for suffix in "" "-awscr" "-awsct" "-cfawscr" "-tfawscr" "-tfekscr" "-tfeksfs" "-awsr" "-awst" "-cfaws" "-tfaws" "-tfeks"; do
             export ALIEN_E2E_RESOURCE_PREFIX="e2e-${ALIEN_E2E_SLOT}${suffix}"
             ./scripts/cleanup-aws-e2e-resources.sh
           done

@@ -23,14 +23,17 @@ use alien_commands::dispatchers::NullCommandDispatcher;
 use alien_commands::server::{CommandDispatcher, CommandRegistry, CommandServer};
 use alien_commands::InMemoryCommandRegistry;
 use alien_core::import::{
-    ImportSourceKind, ImportedResource, StackImportRequest, StackImportResponse,
+    ImportSourceKind, ImportedResource, KubernetesClusterImportData, StackImportRequest,
+    StackImportResponse,
 };
+use alien_core::permissions::PermissionProfile;
 use alien_core::{
     AwsEnvironmentInfo, AwsManagementConfig, AwsRemoteStackManagementImportData,
     AwsStorageImportData, AzureEnvironmentInfo, AzureManagementConfig,
     AzureRemoteStackManagementImportData, EnvironmentInfo, GcpEnvironmentInfo, GcpManagementConfig,
-    GcpRemoteStackManagementImportData, ManagementConfig, Platform, RemoteStackManagement,
-    ResourceLifecycle, ResourceStatus, Stack, StackSettings, Storage,
+    GcpRemoteStackManagementImportData, KubernetesCluster, KubernetesClusterOwnership,
+    KubernetesClusterProvider, ManagementConfig, Platform, RemoteStackManagement,
+    ResourceLifecycle, ResourceStatus, Stack, StackSettings, Storage, Worker, WorkerCode,
 };
 use alien_manager::auth::Authz;
 use alien_manager::config::ManagerConfig;
@@ -282,6 +285,24 @@ fn source_stack_without_setup_resources() -> Stack {
     Stack::new("imported".to_string()).build()
 }
 
+fn stack_with_worker(resource_id: &str) -> Stack {
+    Stack::new("imported".to_string())
+        .permission(
+            "execution",
+            PermissionProfile::new().global(["worker/execute"]),
+        )
+        .add(
+            Worker::new(resource_id.to_string())
+                .code(WorkerCode::Image {
+                    image: "public.ecr.aws/lambda/provided:al2023".to_string(),
+                })
+                .permissions("execution".to_string())
+                .build(),
+            ResourceLifecycle::Live,
+        )
+        .build()
+}
+
 fn aws_remote_management_import_request(
     deployment_name: &str,
     region: &str,
@@ -312,6 +333,40 @@ fn aws_remote_management_import_request(
                 role_name: format!("{deployment_name}-management"),
                 role_arn: format!("arn:aws:iam::{account_id}:role/{deployment_name}-management"),
                 management_permissions_applied: true,
+            })
+            .unwrap(),
+        }],
+    }
+}
+
+fn eks_cluster_import_request(deployment_name: &str, region: &str) -> StackImportRequest {
+    StackImportRequest {
+        setup_import_format_version: 1,
+        deployment_group_token: "ignored".to_string(),
+        deployment_name: deployment_name.to_string(),
+        resource_prefix: deployment_name.to_string(),
+        source_kind: Some(ImportSourceKind::Terraform),
+        release_id: None,
+        platform: Platform::Kubernetes,
+        base_platform: Some(Platform::Aws),
+        region: region.to_string(),
+        setup_target: "kubernetes:aws:terraform-helm".to_string(),
+        setup_fingerprint: "test".to_string(),
+        setup_fingerprint_version: 1,
+        stack_settings: StackSettings::default(),
+        management_config: ManagementConfig::Aws(AwsManagementConfig {
+            managing_role_arn: "arn:aws:iam::123456789012:role/AlienManager".to_string(),
+        }),
+        resources: vec![ImportedResource {
+            id: "kubernetes".to_string(),
+            resource_type: KubernetesCluster::RESOURCE_TYPE.into(),
+            import_data: serde_json::to_value(KubernetesClusterImportData {
+                provider: KubernetesClusterProvider::Eks,
+                ownership: KubernetesClusterOwnership::Existing,
+                namespace: "alien-e2e".to_string(),
+                cluster_name: Some("alien-e2e".to_string()),
+                cluster_id: None,
+                cloud_metadata_ready: Some(true),
             })
             .unwrap(),
         }],
@@ -528,6 +583,43 @@ async fn happy_path_creates_imported_deployment() {
     assert_eq!(
         token_record.deployment_id.as_deref(),
         Some(parsed.deployment_id.as_str())
+    );
+}
+
+#[tokio::test]
+async fn kubernetes_import_derives_kubernetes_setup_stack_from_base_cloud_release() {
+    let fixture = make_fixture(Some(stack_with_worker("worker"))).await;
+    let body = eks_cluster_import_request("acme-k8s", "us-east-1");
+
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(status, StatusCode::CREATED, "body = {:#}", json);
+
+    let parsed: StackImportResponse = serde_json::from_value(json).unwrap();
+    let persisted = fixture
+        .deployment_store
+        .get_deployment(
+            &alien_manager::auth::Subject::system(),
+            &parsed.deployment_id,
+        )
+        .await
+        .unwrap()
+        .expect("deployment must persist");
+    let stack_state = persisted.stack_state.expect("stack_state must persist");
+
+    assert_eq!(stack_state.platform, Platform::Kubernetes);
+    assert!(
+        stack_state.resources.contains_key("kubernetes"),
+        "Kubernetes substrate should be present in imported stack state"
+    );
+
+    let prepared_stack = persisted
+        .runtime_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.prepared_stack.as_ref())
+        .expect("prepared_stack must be persisted for imported provisioning");
+    assert!(
+        prepared_stack.resources.contains_key("kubernetes"),
+        "prepared stack should be derived with Kubernetes mutations"
     );
 }
 

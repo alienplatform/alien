@@ -1,0 +1,62 @@
+{
+  "id": "kubernetes-cluster/heartbeat",
+  "description": "Allows readonly cloud metadata heartbeat checks for managed Kubernetes clusters.",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": [
+            "eks:DescribeCluster"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:eks:${awsRegion}:${awsAccountId}:cluster/${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:eks:${awsRegion}:${awsAccountId}:cluster/${resourceName}"
+            ]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": [
+            "container.clusters.get",
+            "container.clusters.list"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.ContainerService/managedClusters/read"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          }
+        }
+      }
+    ]
+  }
+}

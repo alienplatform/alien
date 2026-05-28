@@ -104,18 +104,20 @@ impl std::fmt::Display for DeploymentModel {
     }
 }
 
-/// Supported application languages for test apps.
+/// Supported E2E application fixtures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Language {
-    Rust,
-    TypeScript,
+pub enum TestApp {
+    ComprehensiveRust,
+    ComprehensiveTs,
+    FullStackMicroservices,
 }
 
-impl std::fmt::Display for Language {
+impl std::fmt::Display for TestApp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Language::Rust => write!(f, "rust"),
-            Language::TypeScript => write!(f, "typescript"),
+            TestApp::ComprehensiveRust => write!(f, "comprehensive-rust"),
+            TestApp::ComprehensiveTs => write!(f, "comprehensive-ts"),
+            TestApp::FullStackMicroservices => write!(f, "full-stack-microservices"),
         }
     }
 }
@@ -255,7 +257,7 @@ pub fn exclusion_reason(
     platform: Platform,
     _model: DeploymentModel,
     binding: Binding,
-    language: Language,
+    app: TestApp,
 ) -> Option<&'static str> {
     match binding {
         Binding::Worker => Some("Worker binding test app endpoint not yet implemented"),
@@ -269,7 +271,7 @@ pub fn exclusion_reason(
         // All other gRPC bindings work; only background tasks are affected.
         Binding::WaitUntil
             if platform == Platform::Local
-                && language == Language::TypeScript
+                && app == TestApp::ComprehensiveTs
                 && cfg!(target_os = "windows") =>
         {
             Some("Bun-on-Windows runtime issue: detached async tasks in waitUntil don't execute")
@@ -282,11 +284,12 @@ pub fn exclusion_reason(
 // Path helpers
 // ---------------------------------------------------------------------------
 
-/// Returns the relative path to the test app directory for a given language.
-pub(crate) fn test_app_path(language: Language) -> &'static str {
-    match language {
-        Language::Rust => "test-apps/comprehensive-rust",
-        Language::TypeScript => "test-apps/comprehensive-typescript",
+/// Returns the relative path to the test app directory for a given app.
+pub(crate) fn test_app_path(app: TestApp) -> &'static str {
+    match app {
+        TestApp::ComprehensiveRust => "test-apps/comprehensive-rust",
+        TestApp::ComprehensiveTs => "test-apps/comprehensive-typescript",
+        TestApp::FullStackMicroservices => "../../examples/full-stack-microservices",
     }
 }
 
@@ -294,6 +297,27 @@ pub(crate) fn test_app_path(language: Language) -> &'static str {
 ///
 /// The default alien config file name used by all test apps.
 const CONFIG_FILE: &str = "alien.ts";
+
+fn deployment_environment_variables(
+    app: TestApp,
+) -> Option<Vec<alien_manager_api::types::EnvironmentVariable>> {
+    match app {
+        TestApp::ComprehensiveRust | TestApp::ComprehensiveTs => None,
+        TestApp::FullStackMicroservices => {
+            Some(vec![alien_manager_api::types::EnvironmentVariable {
+                name: "APP_SECRET".to_string(),
+                value: "e2e-full-stack-internal-token".to_string(),
+                type_: alien_manager_api::types::EnvironmentVariableType::Secret,
+                target_resources: Some(vec![
+                    "api".to_string(),
+                    "worker".to_string(),
+                    "scheduler".to_string(),
+                    "dashboard".to_string(),
+                ]),
+            }])
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Platform mapping
@@ -326,8 +350,8 @@ pub struct TestContext {
     pub platform: Platform,
     /// Deployment model (push/pull).
     pub model: DeploymentModel,
-    /// Test app language.
-    pub language: Language,
+    /// Test app app.
+    pub app: TestApp,
     /// Alien-agent handle (pull model only).
     pub agent: Option<crate::agent::TestAlienAgent>,
     /// Distribution artifacts that must be destroyed outside the native
@@ -440,6 +464,13 @@ pub(crate) async fn load_stack_json(
     config_file: &str,
     platform: Platform,
 ) -> anyhow::Result<serde_json::Value> {
+    if !app_dir.is_dir() {
+        anyhow::bail!("Test app directory does not exist: {}", app_dir.display());
+    }
+
+    let bun_binary = std::env::var_os("ALIEN_TEST_BUN_BINARY")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("bun"));
     let script = format!(
         r#"
 const mod = await import('./{config_file}');
@@ -448,12 +479,17 @@ console.log(JSON.stringify(stack));
 "#,
     );
 
-    let output = tokio::process::Command::new("bun")
+    let output = tokio::process::Command::new(&bun_binary)
         .current_dir(app_dir)
         .args(["-e", &script])
         .output()
         .await
-        .context("Failed to run bun to evaluate config file")?;
+        .with_context(|| {
+            format!(
+                "Failed to run bun to evaluate config file using {}",
+                bun_binary.display()
+            )
+        })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -626,7 +662,7 @@ pub(crate) fn e2e_test_apps_root() -> anyhow::Result<PathBuf> {
 // Deploy orchestration
 // ---------------------------------------------------------------------------
 
-/// Deploy a test app to the given platform with the specified model and language.
+/// Deploy a test app to the given platform with the specified model and app.
 ///
 /// Extract ECR image tags from a pushed stack's worker resources.
 pub(crate) fn extract_ecr_image_tags(stack: &Stack) -> Vec<String> {
@@ -656,17 +692,17 @@ pub async fn deploy_test_app(
     manager: &Arc<TestManager>,
     platform: Platform,
     model: DeploymentModel,
-    language: Language,
+    app: TestApp,
 ) -> anyhow::Result<(TestDeployment, Stack)> {
     let e2e_root = e2e_test_apps_root()?;
-    let app_path = e2e_root.join(test_app_path(language));
+    let app_path = e2e_root.join(test_app_path(app));
     let cfg_file = CONFIG_FILE;
 
     let deployment_name = format!(
         "e2e-{}-{}-{}-{}",
         model,
         platform.as_str(),
-        language,
+        app,
         &uuid::Uuid::new_v4().to_string()[..8],
     );
 
@@ -804,7 +840,7 @@ pub async fn deploy_test_app(
         platform: api_platform,
         deployment_group_id: Some(group_id.to_string()),
         stack_settings: Some(stack_settings),
-        environment_variables: None,
+        environment_variables: deployment_environment_variables(app),
         resource_prefix: Some(resource_prefix),
     };
 
@@ -854,10 +890,10 @@ pub struct DeveloperSetupResult {
 pub async fn developer_setup(
     manager: &Arc<TestManager>,
     platform: Platform,
-    language: Language,
+    app: TestApp,
 ) -> anyhow::Result<DeveloperSetupResult> {
     let e2e_root = e2e_test_apps_root()?;
-    let app_path = e2e_root.join(test_app_path(language));
+    let app_path = e2e_root.join(test_app_path(app));
     let cfg_file = CONFIG_FILE;
 
     info!(
@@ -1252,12 +1288,12 @@ pub async fn run_alien_deploy_up(
 // Platform availability
 // ---------------------------------------------------------------------------
 
-/// Check if a platform is available and supported for the given deployment model and language.
+/// Check if a platform is available and supported for the given deployment model and app.
 pub fn is_platform_available(
     config: &TestConfig,
     platform: Platform,
     model: DeploymentModel,
-    _language: Language,
+    _app: TestApp,
 ) -> bool {
     match platform {
         Platform::Local => {
@@ -1344,7 +1380,7 @@ async fn provision_managed_test_secret(
 // Main entry point
 // ---------------------------------------------------------------------------
 
-/// Run the full E2E test flow for a given platform, model, and language.
+/// Run the full E2E test flow for a given platform, model, and app.
 ///
 /// This is the primary entry point that each individual test calls.
 /// It:
@@ -1359,16 +1395,16 @@ async fn provision_managed_test_secret(
 pub async fn setup(
     platform: Platform,
     model: DeploymentModel,
-    language: Language,
+    app: TestApp,
 ) -> anyhow::Result<TestContext> {
     init_tracing();
 
-    let test_name = format!("{}_{}_{}", model, platform.as_str(), language);
+    let test_name = format!("{}_{}_{}", model, platform.as_str(), app);
     info!(%test_name, "Starting E2E test setup");
 
     // Skip if platform credentials are not available
     let config = TestConfig::from_env();
-    if !is_platform_available(&config, platform, model, language) {
+    if !is_platform_available(&config, platform, model, app) {
         anyhow::bail!(
             "Skipping {}: platform credentials not available or platform not supported for this model",
             test_name,
@@ -1422,7 +1458,7 @@ pub async fn setup(
         // ── alien-deploy deploy flow (local pull) ─────────────────────────
         //
         // Developer side: build, push, release, create DG + DG token.
-        let dev = developer_setup(&manager, platform, language).await?;
+        let dev = developer_setup(&manager, platform, app).await?;
 
         // Customer side: alien-deploy deploy installs alien-agent as OS service.
         let deployment =
@@ -1460,7 +1496,7 @@ pub async fn setup(
             );
         }
 
-        let (deployment, stack) = deploy_test_app(&manager, platform, model, language).await?;
+        let (deployment, stack) = deploy_test_app(&manager, platform, model, app).await?;
         info!(
             deployment_id = %deployment.id,
             "Deployment created, waiting for running status"
@@ -1563,7 +1599,7 @@ pub async fn setup(
         manager,
         platform,
         model,
-        language,
+        app,
         agent,
         distribution_cleanups: Vec::new(),
     })
@@ -1576,11 +1612,11 @@ pub async fn setup(
 /// its own initial infrastructure path before reusing the common assertions.
 pub async fn setup_distribution(
     flow: DistributionFlow,
-    language: Language,
+    app: TestApp,
 ) -> anyhow::Result<TestContext> {
     init_tracing();
 
-    crate::distribution::setup_distribution(flow, language).await
+    crate::distribution::setup_distribution(flow, app).await
 }
 
 /// Best-effort cleanup when setup() fails after creating a deployment/agent.
@@ -1640,7 +1676,7 @@ async fn cleanup_failed_setup(
 pub async fn run_e2e_test(
     platform: Platform,
     model: DeploymentModel,
-    language: Language,
+    app: TestApp,
 ) -> anyhow::Result<TestContext> {
-    setup(platform, model, language).await
+    setup(platform, model, app).await
 }

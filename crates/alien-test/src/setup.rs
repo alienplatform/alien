@@ -56,6 +56,7 @@ pub async fn setup_target(
         manager.client(),
         &deployment.id,
         platform,
+        None,
         target_config.clone(),
         management_config,
         &manager.public_url,

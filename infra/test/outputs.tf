@@ -134,11 +134,15 @@ output "aws_target_options" {
       E2E_AWS_AR_PUSH_ROLE_ARN                 = module.aws.e2e_ar_push_role_arn
       E2E_AWS_AR_PULL_ROLE_ARN                 = module.aws.e2e_ar_pull_role_arn
       ALIEN_TEST_K8S_NAMESPACE_PREFIX          = var.e2e_k8s_namespace_prefix
-      ALIEN_TEST_K8S_INGRESS_CLASS             = var.e2e_k8s_ingress_class
+      ALIEN_TEST_K8S_INGRESS_CLASS             = var.e2e_k8s_ingress_class != "" ? var.e2e_k8s_ingress_class : "alb"
+      ALIEN_TEST_K8S_INGRESS_ANNOTATIONS       = jsonencode({})
       ALIEN_TEST_K8S_PUBLIC_HOST_SUFFIX        = var.e2e_k8s_public_host_suffix != "" ? var.e2e_k8s_public_host_suffix : module.aws.e2e_k8s_public_host_suffix
       ALIEN_TEST_K8S_TLS_SECRET_NAME           = var.e2e_k8s_tls_secret_name
       ALIEN_TEST_EKS_CLUSTER_NAME              = module.aws.e2e_eks_cluster_name
       ALIEN_TEST_EKS_KUBE_CONTEXT              = var.e2e_eks_kube_context != "" ? var.e2e_eks_kube_context : module.aws.e2e_eks_kube_context
+      ALIEN_TEST_EKS_INGRESS_CLASS             = var.e2e_k8s_ingress_class != "" ? var.e2e_k8s_ingress_class : "alb"
+      ALIEN_TEST_EKS_INGRESS_ANNOTATIONS       = jsonencode({})
+      ALIEN_TEST_EKS_PUBLIC_HOST_SUFFIX        = var.e2e_k8s_public_host_suffix != "" ? var.e2e_k8s_public_host_suffix : module.aws.e2e_k8s_public_host_suffix
     }
   }
   sensitive = true
@@ -259,9 +263,17 @@ output "gcp_target_options" {
       ALIEN_E2E_GCP_REGION              = module.gcp_target_1.e2e_network_region
       ALIEN_TEST_K8S_NAMESPACE_PREFIX   = var.e2e_k8s_namespace_prefix
       ALIEN_TEST_K8S_INGRESS_CLASS      = var.e2e_k8s_ingress_class
+      ALIEN_TEST_K8S_INGRESS_ANNOTATIONS = jsonencode({
+        "kubernetes.io/ingress.class"                 = "gce"
+        "kubernetes.io/ingress.global-static-ip-name" = module.gcp_target_1.e2e_ingress_ip_name
+      })
       ALIEN_TEST_K8S_PUBLIC_HOST_SUFFIX = var.e2e_k8s_public_host_suffix != "" ? var.e2e_k8s_public_host_suffix : module.gcp_target_1.e2e_k8s_public_host_suffix
       ALIEN_TEST_K8S_TLS_SECRET_NAME    = var.e2e_k8s_tls_secret_name
       ALIEN_TEST_GKE_INGRESS_CLASS      = var.e2e_k8s_ingress_class
+      ALIEN_TEST_GKE_INGRESS_ANNOTATIONS = jsonencode({
+        "kubernetes.io/ingress.class"                 = "gce"
+        "kubernetes.io/ingress.global-static-ip-name" = module.gcp_target_1.e2e_ingress_ip_name
+      })
       ALIEN_TEST_GKE_PUBLIC_HOST_SUFFIX = var.e2e_k8s_public_host_suffix != "" ? var.e2e_k8s_public_host_suffix : module.gcp_target_1.e2e_k8s_public_host_suffix
       ALIEN_TEST_GKE_TLS_SECRET_NAME    = var.e2e_k8s_tls_secret_name
       ALIEN_TEST_GKE_CLUSTER_NAME       = module.gcp_target_1.e2e_gke_cluster_name
@@ -277,9 +289,17 @@ output "gcp_target_options" {
       ALIEN_E2E_GCP_REGION              = module.gcp.e2e_network_region
       ALIEN_TEST_K8S_NAMESPACE_PREFIX   = var.e2e_k8s_namespace_prefix
       ALIEN_TEST_K8S_INGRESS_CLASS      = var.e2e_k8s_ingress_class
+      ALIEN_TEST_K8S_INGRESS_ANNOTATIONS = jsonencode({
+        "kubernetes.io/ingress.class"                 = "gce"
+        "kubernetes.io/ingress.global-static-ip-name" = module.gcp.e2e_ingress_ip_name
+      })
       ALIEN_TEST_K8S_PUBLIC_HOST_SUFFIX = var.e2e_k8s_public_host_suffix != "" ? var.e2e_k8s_public_host_suffix : module.gcp.e2e_k8s_public_host_suffix
       ALIEN_TEST_K8S_TLS_SECRET_NAME    = var.e2e_k8s_tls_secret_name
       ALIEN_TEST_GKE_INGRESS_CLASS      = var.e2e_k8s_ingress_class
+      ALIEN_TEST_GKE_INGRESS_ANNOTATIONS = jsonencode({
+        "kubernetes.io/ingress.class"                 = "gce"
+        "kubernetes.io/ingress.global-static-ip-name" = module.gcp.e2e_ingress_ip_name
+      })
       ALIEN_TEST_GKE_PUBLIC_HOST_SUFFIX = var.e2e_k8s_public_host_suffix != "" ? var.e2e_k8s_public_host_suffix : module.gcp.e2e_k8s_public_host_suffix
       ALIEN_TEST_GKE_TLS_SECRET_NAME    = var.e2e_k8s_tls_secret_name
       ALIEN_TEST_GKE_CLUSTER_NAME       = module.gcp.e2e_gke_cluster_name
@@ -295,9 +315,17 @@ output "gcp_target_options" {
       ALIEN_E2E_GCP_REGION              = module.gcp_target_3.e2e_network_region
       ALIEN_TEST_K8S_NAMESPACE_PREFIX   = var.e2e_k8s_namespace_prefix
       ALIEN_TEST_K8S_INGRESS_CLASS      = var.e2e_k8s_ingress_class
+      ALIEN_TEST_K8S_INGRESS_ANNOTATIONS = jsonencode({
+        "kubernetes.io/ingress.class"                 = "gce"
+        "kubernetes.io/ingress.global-static-ip-name" = module.gcp_target_3.e2e_ingress_ip_name
+      })
       ALIEN_TEST_K8S_PUBLIC_HOST_SUFFIX = var.e2e_k8s_public_host_suffix != "" ? var.e2e_k8s_public_host_suffix : module.gcp_target_3.e2e_k8s_public_host_suffix
       ALIEN_TEST_K8S_TLS_SECRET_NAME    = var.e2e_k8s_tls_secret_name
       ALIEN_TEST_GKE_INGRESS_CLASS      = var.e2e_k8s_ingress_class
+      ALIEN_TEST_GKE_INGRESS_ANNOTATIONS = jsonencode({
+        "kubernetes.io/ingress.class"                 = "gce"
+        "kubernetes.io/ingress.global-static-ip-name" = module.gcp_target_3.e2e_ingress_ip_name
+      })
       ALIEN_TEST_GKE_PUBLIC_HOST_SUFFIX = var.e2e_k8s_public_host_suffix != "" ? var.e2e_k8s_public_host_suffix : module.gcp_target_3.e2e_k8s_public_host_suffix
       ALIEN_TEST_GKE_TLS_SECRET_NAME    = var.e2e_k8s_tls_secret_name
       ALIEN_TEST_GKE_CLUSTER_NAME       = module.gcp_target_3.e2e_gke_cluster_name
@@ -516,12 +544,16 @@ output "azure_target_options" {
       ALIEN_E2E_AZURE_PUBLIC_SUBNET_NAME        = module.azure.e2e_public_subnet_name
       ALIEN_E2E_AZURE_PRIVATE_SUBNET_NAME       = module.azure.e2e_private_subnet_name
       ALIEN_TEST_K8S_NAMESPACE_PREFIX           = var.e2e_k8s_namespace_prefix
-      ALIEN_TEST_K8S_INGRESS_CLASS              = var.e2e_k8s_ingress_class
+      ALIEN_TEST_K8S_INGRESS_CLASS              = var.e2e_k8s_ingress_class != "" ? var.e2e_k8s_ingress_class : "webapprouting.kubernetes.azure.com"
+      ALIEN_TEST_K8S_INGRESS_ANNOTATIONS        = jsonencode({})
       ALIEN_TEST_K8S_PUBLIC_HOST_SUFFIX         = var.e2e_k8s_public_host_suffix != "" ? var.e2e_k8s_public_host_suffix : module.azure.e2e_k8s_public_host_suffix
       ALIEN_TEST_K8S_TLS_SECRET_NAME            = var.e2e_k8s_tls_secret_name
       ALIEN_TEST_AKS_CLUSTER_NAME               = module.azure.e2e_aks_cluster_name
       ALIEN_TEST_AKS_CLUSTER_RESOURCE_GROUP     = var.e2e_aks_cluster_resource_group != "" ? var.e2e_aks_cluster_resource_group : module.azure.e2e_aks_cluster_resource_group
       ALIEN_TEST_AKS_KUBE_CONTEXT               = var.e2e_aks_kube_context != "" ? var.e2e_aks_kube_context : module.azure.e2e_aks_kube_context
+      ALIEN_TEST_AKS_INGRESS_CLASS              = var.e2e_k8s_ingress_class != "" ? var.e2e_k8s_ingress_class : "webapprouting.kubernetes.azure.com"
+      ALIEN_TEST_AKS_INGRESS_ANNOTATIONS        = jsonencode({})
+      ALIEN_TEST_AKS_PUBLIC_HOST_SUFFIX         = var.e2e_k8s_public_host_suffix != "" ? var.e2e_k8s_public_host_suffix : module.azure.e2e_k8s_public_host_suffix
     }
   }
   sensitive = true
@@ -552,12 +584,13 @@ output "e2e_aks_public_host_suffix" {
   sensitive = true
 }
 
-output "e2e_ingress_nginx_chart_version" {
-  value = var.e2e_ingress_nginx_chart_version
-}
-
 output "e2e_eks_ingress_eip_allocation_ids" {
   value     = module.aws.e2e_ingress_eip_allocation_ids
+  sensitive = true
+}
+
+output "e2e_aks_ingress_public_ip_name" {
+  value     = module.azure.e2e_ingress_public_ip_name
   sensitive = true
 }
 
@@ -566,8 +599,18 @@ output "e2e_gke_target_1_ingress_ip_address" {
   sensitive = true
 }
 
+output "e2e_gke_target_1_ingress_ip_name" {
+  value     = module.gcp_target_1.e2e_ingress_ip_name
+  sensitive = true
+}
+
 output "e2e_gke_target_2_ingress_ip_address" {
   value     = module.gcp.e2e_ingress_ip_address
+  sensitive = true
+}
+
+output "e2e_gke_target_2_ingress_ip_name" {
+  value     = module.gcp.e2e_ingress_ip_name
   sensitive = true
 }
 
@@ -576,7 +619,7 @@ output "e2e_gke_target_3_ingress_ip_address" {
   sensitive = true
 }
 
-output "e2e_aks_ingress_public_ip_name" {
-  value     = module.azure.e2e_ingress_public_ip_name
+output "e2e_gke_target_3_ingress_ip_name" {
+  value     = module.gcp_target_3.e2e_ingress_ip_name
   sensitive = true
 }

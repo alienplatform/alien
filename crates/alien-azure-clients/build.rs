@@ -74,6 +74,10 @@ fn generate_azure_models() {
         ),
         ("./openapi/ComputeRP.json", "src/azure/models/compute_rp.rs"),
         ("./openapi/DiskRP.json", "src/azure/models/disk_rp.rs"),
+        (
+            "./openapi/managedClusters.json",
+            "src/azure/models/managed_clusters.rs",
+        ),
     ];
 
     for (src, output_file) in specs.iter() {
@@ -158,6 +162,7 @@ fn generate_azure_models() {
                                     .unwrap_or_default();
                                 if attr_tokens.contains("default")
                                     && !attr_tokens.contains("deserialize_with")
+                                    && !attr_tokens.contains("default =")
                                 {
                                     has_serde_default = true;
                                     break;

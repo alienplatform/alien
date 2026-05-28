@@ -421,7 +421,7 @@ fn append_services(yaml: &mut String, analysis: &ChartAnalysis) {
     } else {
         for service in &analysis.services {
             yaml.push_str(&format!(
-                "  {}:\n    type: clusterIp\n    port: 80\n    targetPort: {}\n    component: {}\n    host: \"\"\n    publicUrl: \"\"\n    tls:\n      enabled: false\n      secretName: \"\"\n    ingress:\n      className: \"\"\n      annotations: {{}}\n",
+                "  {}:\n    type: clusterIp\n    port: 80\n    targetPort: {}\n    component: {}\n    host: \"\"\n    publicUrl: \"\"\n    tls:\n      enabled: false\n      secretName: \"\"\n    ingress:\n      className: \"\"\n      hostless: false\n      annotations: {{}}\n",
                 yaml_key(&service.id),
                 service.target_port,
                 yaml_string(&service.component)
@@ -655,6 +655,7 @@ fn values_schema_json() -> String {
             "additionalProperties": false,
             "properties": {
               "className": { "type": "string" },
+              "hostless": { "type": "boolean" },
               "annotations": { "type": "object", "additionalProperties": { "type": "string" } }
             }
           }
@@ -745,8 +746,7 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- end -}}
 
 {{- define "alien.resourceName" -}}
-{{- $prefix := default (include "alien.fullname" .root) .root.Values.serviceAccountPrefix -}}
-{{- $raw := printf "%s-%s" $prefix .name | lower -}}
+{{- $raw := .name | lower -}}
 {{- regexReplaceAll "[^a-z0-9-]" $raw "-" | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
@@ -1214,7 +1214,7 @@ spec:
 
 fn app_ingress_tpl() -> String {
     r#"{{- range $id, $service := .Values.services }}
-{{- if $service.host }}
+{{- if or $service.host $service.ingress.hostless }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -1237,7 +1237,9 @@ spec:
       secretName: {{ $service.tls.secretName | quote }}
   {{- end }}
   rules:
-    - host: {{ $service.host | quote }}
+    - {{- if $service.host }}
+      host: {{ $service.host | quote }}
+      {{- end }}
       http:
         paths:
           - path: /

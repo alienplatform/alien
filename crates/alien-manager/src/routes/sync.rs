@@ -134,6 +134,10 @@ pub struct AgentSyncResponse {
 pub struct InitializeRequest {
     pub name: Option<String>,
     pub platform: Option<Platform>,
+    /// Optional base cloud platform for Kubernetes setup targets such as
+    /// EKS/GKE/AKS. The runtime platform remains Kubernetes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_platform: Option<Platform>,
     pub stack_settings: Option<alien_core::StackSettings>,
 }
 
@@ -414,6 +418,7 @@ mod tests {
 
     use super::{
         deployment_state_from_record, release_stack_platform, should_ignore_agent_state_report,
+        validate_initialize_base_platform,
     };
 
     #[test]
@@ -427,6 +432,26 @@ mod tests {
     #[test]
     fn release_stack_platform_defaults_to_deployment_platform() {
         assert_eq!(release_stack_platform(Platform::Gcp, None), Platform::Gcp);
+    }
+
+    #[test]
+    fn initialize_accepts_cloud_base_platform_for_kubernetes() {
+        assert_eq!(
+            validate_initialize_base_platform(Platform::Kubernetes, Some(Platform::Gcp)).unwrap(),
+            Some(Platform::Gcp)
+        );
+    }
+
+    #[test]
+    fn initialize_rejects_base_platform_for_non_kubernetes_platform() {
+        assert!(validate_initialize_base_platform(Platform::Aws, Some(Platform::Gcp)).is_err());
+    }
+
+    #[test]
+    fn initialize_rejects_non_cloud_base_platform_for_kubernetes() {
+        assert!(
+            validate_initialize_base_platform(Platform::Kubernetes, Some(Platform::Local)).is_err()
+        );
     }
 
     #[test]
@@ -796,6 +821,28 @@ fn release_stack_platform(platform: Platform, base_platform: Option<Platform>) -
     base_platform.unwrap_or(platform)
 }
 
+fn validate_initialize_base_platform(
+    platform: Platform,
+    base_platform: Option<Platform>,
+) -> std::result::Result<Option<Platform>, alien_error::AlienError<ErrorData>> {
+    let Some(base_platform) = base_platform else {
+        return Ok(None);
+    };
+
+    if platform != Platform::Kubernetes {
+        return Err(ErrorData::bad_request(
+            "basePlatform is only supported when platform is kubernetes",
+        ));
+    }
+
+    match base_platform {
+        Platform::Aws | Platform::Gcp | Platform::Azure => Ok(Some(base_platform)),
+        Platform::Kubernetes | Platform::Local | Platform::Test => Err(ErrorData::bad_request(
+            "basePlatform for kubernetes must be one of aws, gcp, or azure",
+        )),
+    }
+}
+
 fn should_ignore_agent_state_report(
     deployment: &DeploymentRecord,
     agent_state: &DeploymentState,
@@ -900,6 +947,11 @@ async fn initialize(
                 .name
                 .unwrap_or_else(|| format!("agent-{}", &ids::deployment_id()[3..9]));
             let platform = req.platform.unwrap_or(Platform::Kubernetes);
+            let base_platform = match validate_initialize_base_platform(platform, req.base_platform)
+            {
+                Ok(base_platform) => base_platform,
+                Err(e) => return e.into_response(),
+            };
 
             // Idempotency: if a deployment with this name already exists in the
             // group, issue a fresh deployment token and return the existing ID.
@@ -958,7 +1010,7 @@ async fn initialize(
                         name,
                         deployment_group_id: dg_id.clone(),
                         platform,
-                        base_platform: None,
+                        base_platform,
                         stack_settings: settings,
                         stack_state: None,
                         environment_variables: None,

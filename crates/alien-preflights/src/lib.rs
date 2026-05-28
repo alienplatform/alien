@@ -302,6 +302,7 @@ impl PreflightRegistry {
         registry.add_mutation(Box::new(mutations::AzureResourceGroupMutation));
 
         // Phase 2: Resource creation
+        registry.add_mutation(Box::new(mutations::KubernetesClusterMutation));
         registry.add_mutation(Box::new(mutations::ComputeClusterMutation));
         registry.add_mutation(Box::new(mutations::RemoteStackManagementMutation));
         registry.add_mutation(Box::new(mutations::SecretsVaultMutation));

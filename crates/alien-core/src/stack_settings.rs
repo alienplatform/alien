@@ -5,6 +5,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::{KubernetesCloudReference, KubernetesClusterOwnership};
+
 /// AWS management configuration extracted from stack settings
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -284,6 +286,37 @@ pub struct AzureCustomCertificateConfig {
     pub key_vault_certificate_id: String,
 }
 
+/// Kubernetes runtime substrate configuration.
+///
+/// This controls how setup chooses the cluster backing `Platform::Kubernetes`
+/// deployments. When omitted, cloud-backed Kubernetes deployments default to a
+/// managed cluster and generic/on-prem Kubernetes defaults to an external
+/// cluster.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct KubernetesSettings {
+    /// Cluster selection or creation settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cluster: Option<KubernetesClusterSettings>,
+}
+
+/// Kubernetes cluster setup settings.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct KubernetesClusterSettings {
+    /// Whether Alien should create the cluster, use a setup-owned existing
+    /// cluster, or bind to an external/on-prem cluster.
+    pub ownership: KubernetesClusterOwnership,
+    /// Namespace where the Alien chart and application resources run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    /// Optional provider-specific cloud identity for existing clusters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud: Option<KubernetesCloudReference>,
+}
+
 /// User-customizable deployment settings specified at deploy time.
 ///
 /// These settings are provided by the customer via CloudFormation parameters,
@@ -308,6 +341,10 @@ pub struct StackSettings {
     /// Domain configuration (future).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub domains: Option<DomainSettings>,
+
+    /// Kubernetes runtime substrate configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kubernetes: Option<KubernetesSettings>,
 
     /// Deployment model: push (Manager) or pull (Agent).
     /// Default: Push.

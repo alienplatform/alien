@@ -7,7 +7,8 @@ use crate::error::{ErrorData, Result};
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     kubernetes_resource_name, kubernetes_service_account_name, Container, ContainerCode,
-    ContainerOutputs, ContainerStatus, ResourceOutputs, ResourceStatus,
+    ContainerOutputs, ContainerStatus, EnvironmentVariable, EnvironmentVariableType,
+    ResourceOutputs, ResourceStatus, ENV_ALIEN_SECRETS,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
@@ -20,6 +21,7 @@ use k8s_openapi::api::core::v1::{
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
+use k8s_openapi::ByteString;
 
 async fn create_registry_pull_secret(
     secrets_client: &std::sync::Arc<dyn alien_k8s_clients::SecretsApi>,
@@ -80,6 +82,55 @@ async fn create_registry_pull_secret(
             }
         }
     }
+}
+
+#[derive(Debug, Clone)]
+struct KubernetesEnvSecretPlan {
+    secret_name: String,
+    checksum: String,
+    keys: Vec<String>,
+}
+
+fn matches_environment_target(resource_id: &str, target_resources: &Option<Vec<String>>) -> bool {
+    match target_resources {
+        None => true,
+        Some(patterns) if patterns.is_empty() => false,
+        Some(patterns) => patterns.iter().any(|pattern| {
+            if let Some(prefix) = pattern.strip_suffix('*') {
+                resource_id.starts_with(prefix)
+            } else {
+                resource_id == pattern
+            }
+        }),
+    }
+}
+
+fn applicable_secret_environment_variables<'a>(
+    resource_id: &str,
+    variables: &'a [EnvironmentVariable],
+) -> Vec<&'a EnvironmentVariable> {
+    variables
+        .iter()
+        .filter(|var| var.var_type == EnvironmentVariableType::Secret)
+        .filter(|var| matches_environment_target(resource_id, &var.target_resources))
+        .collect()
+}
+
+fn secret_checksum(secret_vars: &[&EnvironmentVariable]) -> String {
+    use sha2::{Digest, Sha256};
+
+    let mut vars = secret_vars.to_vec();
+    vars.sort_by(|left, right| left.name.cmp(&right.name));
+
+    let mut hasher = Sha256::new();
+    for var in vars {
+        hasher.update(var.name.as_bytes());
+        hasher.update(b"=");
+        hasher.update(var.value.as_bytes());
+        hasher.update(b"\n");
+    }
+
+    format!("{:x}", hasher.finalize())
 }
 
 #[controller]
@@ -161,6 +212,9 @@ impl KubernetesContainerController {
         } else {
             None
         };
+        let env_secret_plan = self
+            .reconcile_environment_secret(config, &container_name, &namespace, ctx)
+            .await?;
 
         self.is_stateful = config.stateful;
         self.workload_name = Some(container_name.clone());
@@ -178,6 +232,7 @@ impl KubernetesContainerController {
                     &namespace,
                     &service_account_name,
                     image_pull_secret_name.as_deref(),
+                    env_secret_plan.as_ref(),
                     ctx,
                 )
                 .await?;
@@ -204,6 +259,7 @@ impl KubernetesContainerController {
                     &namespace,
                     &service_account_name,
                     image_pull_secret_name.as_deref(),
+                    env_secret_plan.as_ref(),
                     ctx,
                 )
                 .await?;
@@ -474,6 +530,9 @@ impl KubernetesContainerController {
         } else {
             None
         };
+        let env_secret_plan = self
+            .reconcile_environment_secret(config, workload_name, namespace, ctx)
+            .await?;
         let deployment_client = ctx
             .service_provider
             .get_kubernetes_deployment_client(kubernetes_config)
@@ -500,6 +559,7 @@ impl KubernetesContainerController {
                     namespace,
                     &service_account_name,
                     image_pull_secret_name.as_deref(),
+                    env_secret_plan.as_ref(),
                     ctx,
                 )
                 .await?;
@@ -530,6 +590,7 @@ impl KubernetesContainerController {
                     namespace,
                     &service_account_name,
                     image_pull_secret_name.as_deref(),
+                    env_secret_plan.as_ref(),
                     ctx,
                 )
                 .await?;
@@ -917,6 +978,103 @@ impl KubernetesContainerController {
         }
     }
 
+    async fn reconcile_environment_secret(
+        &self,
+        config: &Container,
+        workload_name: &str,
+        namespace: &str,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<Option<KubernetesEnvSecretPlan>> {
+        let secret_vars = applicable_secret_environment_variables(
+            &config.id,
+            &ctx.deployment_config.environment_variables.variables,
+        );
+        if secret_vars.is_empty() {
+            return Ok(None);
+        }
+
+        let secret_name = format!("{workload_name}-env");
+        let checksum = secret_checksum(&secret_vars);
+        let keys = secret_vars
+            .iter()
+            .map(|var| var.name.clone())
+            .collect::<Vec<_>>();
+
+        let mut secret = Secret {
+            metadata: ObjectMeta {
+                name: Some(secret_name.clone()),
+                namespace: Some(namespace.to_string()),
+                labels: Some(BTreeMap::from([
+                    ("managed-by".to_string(), "alien".to_string()),
+                    ("alien.dev/resource-id".to_string(), config.id.clone()),
+                ])),
+                annotations: Some(BTreeMap::from([(
+                    "alien.dev/env-secret-checksum".to_string(),
+                    checksum.clone(),
+                )])),
+                ..Default::default()
+            },
+            type_: Some("Opaque".to_string()),
+            data: Some(
+                secret_vars
+                    .iter()
+                    .map(|var| (var.name.clone(), ByteString(var.value.as_bytes().to_vec())))
+                    .collect(),
+            ),
+            ..Default::default()
+        };
+
+        let kubernetes_config = ctx.get_kubernetes_config()?;
+        let secrets_client = ctx
+            .service_provider
+            .get_kubernetes_secrets_client(kubernetes_config)
+            .await?;
+
+        match secrets_client.create_secret(namespace, &secret).await {
+            Ok(_) => {}
+            Err(e) => {
+                let err = format!("{e}");
+                if err.contains("AlreadyExists") || err.contains("409") {
+                    let existing = secrets_client
+                        .get_secret(namespace, &secret_name)
+                        .await
+                        .context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Failed to read existing environment Secret for container '{}'",
+                                config.id
+                            ),
+                            resource_id: Some(config.id.clone()),
+                        })?;
+                    secret.metadata.resource_version = existing.metadata.resource_version;
+                    secrets_client
+                        .update_secret(namespace, &secret_name, &secret)
+                        .await
+                        .context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Failed to update environment Secret for container '{}'",
+                                config.id
+                            ),
+                            resource_id: Some(config.id.clone()),
+                        })?;
+                } else {
+                    return Err(e.context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to create environment Secret for container '{}'",
+                            config.id
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    }));
+                }
+            }
+        }
+
+        Ok(Some(KubernetesEnvSecretPlan {
+            secret_name,
+            checksum,
+            keys,
+        }))
+    }
+
     /// Builds a Kubernetes Deployment for stateless containers.
     async fn build_deployment(
         &self,
@@ -925,12 +1083,25 @@ impl KubernetesContainerController {
         namespace: &str,
         service_account_name: &str,
         image_pull_secret_name: Option<&str>,
+        env_secret_plan: Option<&KubernetesEnvSecretPlan>,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<Deployment> {
         let labels = self.build_labels(container_name);
         let pod_spec = self
-            .build_pod_spec(config, service_account_name, image_pull_secret_name, ctx)
+            .build_pod_spec(
+                config,
+                service_account_name,
+                image_pull_secret_name,
+                env_secret_plan,
+                ctx,
+            )
             .await?;
+        let pod_annotations = env_secret_plan.map(|plan| {
+            BTreeMap::from([(
+                "alien.dev/env-secret-checksum".to_string(),
+                plan.checksum.clone(),
+            )])
+        });
 
         let deployment = Deployment {
             metadata: ObjectMeta {
@@ -948,6 +1119,7 @@ impl KubernetesContainerController {
                 template: PodTemplateSpec {
                     metadata: Some(ObjectMeta {
                         labels: Some(labels),
+                        annotations: pod_annotations,
                         ..Default::default()
                     }),
                     spec: Some(pod_spec),
@@ -968,12 +1140,25 @@ impl KubernetesContainerController {
         namespace: &str,
         service_account_name: &str,
         image_pull_secret_name: Option<&str>,
+        env_secret_plan: Option<&KubernetesEnvSecretPlan>,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<StatefulSet> {
         let labels = self.build_labels(container_name);
         let pod_spec = self
-            .build_pod_spec(config, service_account_name, image_pull_secret_name, ctx)
+            .build_pod_spec(
+                config,
+                service_account_name,
+                image_pull_secret_name,
+                env_secret_plan,
+                ctx,
+            )
             .await?;
+        let pod_annotations = env_secret_plan.map(|plan| {
+            BTreeMap::from([(
+                "alien.dev/env-secret-checksum".to_string(),
+                plan.checksum.clone(),
+            )])
+        });
 
         // Build volume claim templates for persistent storage
         let mut volume_claim_templates = Vec::new();
@@ -1021,6 +1206,7 @@ impl KubernetesContainerController {
                 template: PodTemplateSpec {
                     metadata: Some(ObjectMeta {
                         labels: Some(labels),
+                        annotations: pod_annotations,
                         ..Default::default()
                     }),
                     spec: Some(pod_spec),
@@ -1044,6 +1230,7 @@ impl KubernetesContainerController {
         config: &Container,
         service_account_name: &str,
         image_pull_secret_name: Option<&str>,
+        env_secret_plan: Option<&KubernetesEnvSecretPlan>,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<PodSpec> {
         // Determine the container image
@@ -1069,6 +1256,23 @@ impl KubernetesContainerController {
         let (env_map, bindings) = env_builder.build_with_bindings();
 
         let mut env_vars = Vec::new();
+
+        if let Some(plan) = env_secret_plan {
+            for key in &plan.keys {
+                env_vars.push(EnvVar {
+                    name: key.clone(),
+                    value: None,
+                    value_from: Some(k8s_openapi::api::core::v1::EnvVarSource {
+                        secret_key_ref: Some(k8s_openapi::api::core::v1::SecretKeySelector {
+                            name: plan.secret_name.clone(),
+                            key: key.clone(),
+                            optional: Some(false),
+                        }),
+                        ..Default::default()
+                    }),
+                });
+            }
+        }
 
         // Process bindings for Kubernetes SecretRefs
         for (binding_name, binding_json) in bindings {
@@ -1107,6 +1311,9 @@ impl KubernetesContainerController {
 
         // Add all remaining env vars from the builder (includes user vars + injected vars)
         for (key, value) in env_map {
+            if key == ENV_ALIEN_SECRETS && env_secret_plan.is_some() {
+                continue;
+            }
             // Skip if already added as a secret ref
             if !env_vars.iter().any(|ev| ev.name == key) {
                 env_vars.push(EnvVar {
@@ -1273,13 +1480,13 @@ mod tests {
         // Test basic functionality
         assert_eq!(
             kubernetes_resource_name("my-stack", "my-container"),
-            "my-stack-my-container"
+            "my-container"
         );
 
         // Test character filtering and lowercasing
         assert_eq!(
             kubernetes_resource_name("My_Stack!", "Test#123"),
-            "my-stack-test-123"
+            "test-123"
         );
 
         // Test length truncation
@@ -1287,7 +1494,7 @@ mod tests {
         let long_id = "b".repeat(20);
         let result = kubernetes_resource_name(&long_prefix, &long_id);
         assert!(result.len() <= 63);
-        assert!(result.starts_with("aaa"));
+        assert_eq!(result, long_id);
     }
 
     #[test]
@@ -1308,5 +1515,40 @@ mod tests {
         let long_prefix = "a".repeat(50);
         let result = kubernetes_service_account_name(&long_prefix, "reader");
         assert!(result.len() <= 63);
+    }
+
+    #[test]
+    fn deployment_secret_matching_respects_exact_and_wildcard_targets() {
+        let vars = vec![
+            alien_core::EnvironmentVariable {
+                name: "APP_SECRET".to_string(),
+                value: "secret".to_string(),
+                var_type: alien_core::EnvironmentVariableType::Secret,
+                target_resources: Some(vec!["api".to_string()]),
+            },
+            alien_core::EnvironmentVariable {
+                name: "WORKER_SECRET".to_string(),
+                value: "secret".to_string(),
+                var_type: alien_core::EnvironmentVariableType::Secret,
+                target_resources: Some(vec!["worker*".to_string()]),
+            },
+            alien_core::EnvironmentVariable {
+                name: "PLAIN".to_string(),
+                value: "not-secret".to_string(),
+                var_type: alien_core::EnvironmentVariableType::Plain,
+                target_resources: None,
+            },
+        ];
+
+        let api_vars = applicable_secret_environment_variables("api", &vars);
+        assert_eq!(api_vars.len(), 1);
+        assert_eq!(api_vars[0].name, "APP_SECRET");
+
+        let worker_vars = applicable_secret_environment_variables("worker-main", &vars);
+        assert_eq!(worker_vars.len(), 1);
+        assert_eq!(worker_vars[0].name, "WORKER_SECRET");
+
+        let dashboard_vars = applicable_secret_environment_variables("dashboard", &vars);
+        assert!(dashboard_vars.is_empty());
     }
 }

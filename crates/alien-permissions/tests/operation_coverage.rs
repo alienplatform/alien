@@ -86,6 +86,13 @@ fn critical_e2e_provider_operations_are_declared() {
             azure_data_actions: &[],
         },
         OperationCoverage {
+            permission_set_id: "kubernetes-cluster/heartbeat",
+            aws_actions: &["eks:DescribeCluster"],
+            gcp_permissions: &["container.clusters.get", "container.clusters.list"],
+            azure_actions: &["Microsoft.ContainerService/managedClusters/read"],
+            azure_data_actions: &[],
+        },
+        OperationCoverage {
             permission_set_id: "artifact-registry/provision",
             aws_actions: &[
                 "ecr:CreateRepository",

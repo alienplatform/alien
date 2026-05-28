@@ -20,6 +20,7 @@ alien-core = { workspace = true }
 alien-cli-common = { workspace = true }
 alien-error = { workspace = true }
 alien-deployment = { workspace = true }
+alien-helm = { workspace = true }
 alien-infra = { workspace = true, features = ["aws", "gcp", "azure", "test"] }
 alien-local = { workspace = true }
 alien-agent = { path = "../alien-agent" }

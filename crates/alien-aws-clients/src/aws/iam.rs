@@ -38,6 +38,11 @@ pub trait IamApi: Send + Sync + Debug {
     async fn delete_role_policy(&self, role_name: &str, policy_name: &str) -> Result<()>;
     async fn update_assume_role_policy(&self, role_name: &str, policy_document: &str)
         -> Result<()>;
+    async fn create_open_id_connect_provider(
+        &self,
+        request: CreateOpenIdConnectProviderRequest,
+    ) -> Result<CreateOpenIdConnectProviderResponse>;
+    async fn delete_open_id_connect_provider(&self, arn: &str) -> Result<()>;
     async fn list_attached_role_policies(
         &self,
         role_name: &str,
@@ -444,6 +449,46 @@ impl IamApi for IamClient {
             .await
     }
 
+    async fn create_open_id_connect_provider(
+        &self,
+        request: CreateOpenIdConnectProviderRequest,
+    ) -> Result<CreateOpenIdConnectProviderResponse> {
+        let mut params = vec![("Url".to_string(), request.url.clone())];
+        for (index, client_id) in request.client_id_list.iter().enumerate() {
+            params.push((
+                format!("ClientIDList.member.{}", index + 1),
+                client_id.clone(),
+            ));
+        }
+        for (index, thumbprint) in request.thumbprint_list.iter().enumerate() {
+            params.push((
+                format!("ThumbprintList.member.{}", index + 1),
+                thumbprint.clone(),
+            ));
+        }
+        for (index, tag) in request.tags.iter().enumerate() {
+            params.push((format!("Tags.member.{}.Key", index + 1), tag.key.clone()));
+            params.push((
+                format!("Tags.member.{}.Value", index + 1),
+                tag.value.clone(),
+            ));
+        }
+
+        let body = Self::build_form_body("CreateOpenIDConnectProvider", "2010-05-08", params);
+        self.post_xml(body, "CreateOpenIDConnectProvider", &request.url)
+            .await
+    }
+
+    async fn delete_open_id_connect_provider(&self, arn: &str) -> Result<()> {
+        let body = Self::build_form_body(
+            "DeleteOpenIDConnectProvider",
+            "2010-05-08",
+            vec![("OpenIDConnectProviderArn".to_string(), arn.to_string())],
+        );
+        self.post_no_response(body, "DeleteOpenIDConnectProvider", arn)
+            .await
+    }
+
     async fn list_attached_role_policies(
         &self,
         role_name: &str,
@@ -689,6 +734,30 @@ pub struct CreateRoleRequest {
 pub struct CreateRoleTag {
     pub key: String,
     pub value: String,
+}
+
+#[derive(Serialize, Debug, Clone, Builder)]
+#[serde(rename_all = "PascalCase")]
+pub struct CreateOpenIdConnectProviderRequest {
+    pub url: String,
+    #[builder(default)]
+    pub client_id_list: Vec<String>,
+    #[builder(default)]
+    pub thumbprint_list: Vec<String>,
+    #[builder(default)]
+    pub tags: Vec<CreateRoleTag>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "PascalCase")]
+pub struct CreateOpenIdConnectProviderResponse {
+    pub create_open_id_connect_provider_result: CreateOpenIdConnectProviderResult,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "PascalCase")]
+pub struct CreateOpenIdConnectProviderResult {
+    pub open_id_connect_provider_arn: String,
 }
 
 #[derive(Deserialize, Debug)]

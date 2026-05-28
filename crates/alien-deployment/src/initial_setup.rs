@@ -1,7 +1,10 @@
 use crate::{
     DeploymentConfig, DeploymentState, DeploymentStatus, DeploymentStepResult, ErrorData, Result,
 };
-use alien_core::{ResourceLifecycle, ResourceStatus, Stack, StackState, StackStatus};
+use alien_core::{
+    KubernetesCluster, KubernetesClusterOutputs, Platform, ResourceLifecycle, ResourceStatus,
+    Stack, StackState, StackStatus,
+};
 use alien_error::{AlienError, Context};
 use alien_infra::StackExecutor;
 use tracing::{debug, info};
@@ -121,7 +124,9 @@ pub async fn handle_initial_setup(
     })?;
 
     // Check if all resources are deployed
-    let result = if stack_status == StackStatus::Running {
+    let result = if stack_status == StackStatus::Running
+        || kubernetes_setup_handoff_ready(&target_stack, &step_result.next_state)
+    {
         info!("Initial setup complete (frozen resources deployed), transitioning to Provisioning");
 
         // Debug: log all resources in stack state to diagnose external binding persistence
@@ -220,6 +225,51 @@ pub async fn handle_initial_setup(
     Ok(result)
 }
 
+fn kubernetes_setup_handoff_ready(stack: &Stack, stack_state: &StackState) -> bool {
+    if stack_state.platform != Platform::Kubernetes {
+        return false;
+    }
+
+    let mut saw_kubernetes_handoff = false;
+    for (resource_id, entry) in stack
+        .resources()
+        .filter(|(_, entry)| entry.lifecycle == ResourceLifecycle::Frozen)
+    {
+        let Some(resource_state) = stack_state.resources.get(resource_id) else {
+            return false;
+        };
+
+        if resource_state.status == ResourceStatus::Running {
+            continue;
+        }
+
+        if entry.config.resource_type() != KubernetesCluster::RESOURCE_TYPE {
+            return false;
+        }
+
+        let Some(outputs) = resource_state
+            .outputs
+            .as_ref()
+            .and_then(|outputs| outputs.downcast_ref::<KubernetesClusterOutputs>())
+        else {
+            return false;
+        };
+
+        if outputs.kubernetes_api_reachable
+            && outputs.namespace_ready
+            && outputs.rbac_ready
+            && !outputs.agent_ready
+        {
+            saw_kubernetes_handoff = true;
+            continue;
+        }
+
+        return false;
+    }
+
+    saw_kubernetes_handoff
+}
+
 fn compute_lifecycle_status(
     stack: &Stack,
     stack_state: &StackState,
@@ -258,6 +308,111 @@ fn non_running_resources_for_lifecycle(stack: &Stack, stack_state: &StackState) 
             (status != ResourceStatus::Running).then(|| format!("{resource_id}({status:?})"))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::{
+        KubernetesClusterOwnership, KubernetesClusterProvider, KubernetesHeartbeatMode,
+        PermissionsConfig, Resource, ResourceEntry, ResourceOutputs, StackResourceState,
+    };
+    use indexmap::IndexMap;
+
+    fn kubernetes_stack() -> Stack {
+        let cluster = KubernetesCluster::new("kubernetes".to_string())
+            .provider(KubernetesClusterProvider::Eks)
+            .ownership(KubernetesClusterOwnership::Managed)
+            .namespace("default".to_string())
+            .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+            .build();
+        let mut resources = IndexMap::new();
+        resources.insert(
+            "kubernetes".to_string(),
+            ResourceEntry {
+                config: Resource::new(cluster),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                remote_access: false,
+            },
+        );
+        Stack {
+            id: "stack".to_string(),
+            resources,
+            permissions: PermissionsConfig::default(),
+            supported_platforms: None,
+        }
+    }
+
+    #[test]
+    fn kubernetes_setup_handoff_ready_when_agent_helm_installed_but_not_reporting() {
+        let stack = kubernetes_stack();
+        let mut state = StackState::new(Platform::Kubernetes);
+        let config = stack.resources["kubernetes"].config.clone();
+        let resource_state = StackResourceState::new_pending(
+            "kubernetes-cluster".to_string(),
+            config,
+            Some(ResourceLifecycle::Frozen),
+            Vec::new(),
+        )
+        .with_updates(|state| {
+            state.status = ResourceStatus::Provisioning;
+            state.outputs = Some(ResourceOutputs::new(KubernetesClusterOutputs {
+                provider: KubernetesClusterProvider::Eks,
+                ownership: KubernetesClusterOwnership::Managed,
+                namespace: "default".to_string(),
+                cluster_name: Some("cluster".to_string()),
+                cluster_id: Some("cluster".to_string()),
+                kubernetes_api_reachable: true,
+                namespace_ready: true,
+                rbac_ready: true,
+                agent_ready: false,
+                cloud_metadata_ready: Some(true),
+                version: None,
+                status_message: None,
+            }));
+        });
+        state
+            .resources
+            .insert("kubernetes".to_string(), resource_state);
+
+        assert!(kubernetes_setup_handoff_ready(&stack, &state));
+    }
+
+    #[test]
+    fn kubernetes_setup_handoff_waits_for_installed_agent_surface() {
+        let stack = kubernetes_stack();
+        let mut state = StackState::new(Platform::Kubernetes);
+        let config = stack.resources["kubernetes"].config.clone();
+        let resource_state = StackResourceState::new_pending(
+            "kubernetes-cluster".to_string(),
+            config,
+            Some(ResourceLifecycle::Frozen),
+            Vec::new(),
+        )
+        .with_updates(|state| {
+            state.status = ResourceStatus::Provisioning;
+            state.outputs = Some(ResourceOutputs::new(KubernetesClusterOutputs {
+                provider: KubernetesClusterProvider::Eks,
+                ownership: KubernetesClusterOwnership::Managed,
+                namespace: "default".to_string(),
+                cluster_name: Some("cluster".to_string()),
+                cluster_id: Some("cluster".to_string()),
+                kubernetes_api_reachable: false,
+                namespace_ready: false,
+                rbac_ready: false,
+                agent_ready: false,
+                cloud_metadata_ready: Some(true),
+                version: None,
+                status_message: None,
+            }));
+        });
+        state
+            .resources
+            .insert("kubernetes".to_string(), resource_state);
+
+        assert!(!kubernetes_setup_handoff_ready(&stack, &state));
+    }
 }
 
 /// Handle InitialSetupFailed status - retry failed resources and transition back to InitialSetup

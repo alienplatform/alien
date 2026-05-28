@@ -8,6 +8,7 @@ use alien_aws_clients::{
     dynamodb::{DynamoDbApi, DynamoDbClient},
     ec2::{Ec2Api, Ec2Client},
     ecr::{EcrApi, EcrClient},
+    eks::{EksApi, EksClient},
     elbv2::{Elbv2Api, Elbv2Client},
     eventbridge::{EventBridgeApi, EventBridgeClient},
     iam::{IamApi, IamClient},
@@ -30,6 +31,7 @@ use alien_azure_clients::{
     },
     load_balancers::{AzureLoadBalancerClient, LoadBalancerApi},
     long_running_operation::{LongRunningOperationApi, LongRunningOperationClient},
+    managed_clusters::{AzureManagedClustersClient, ManagedClustersApi},
     managed_identity::{AzureManagedIdentityClient, ManagedIdentityApi},
     network::{AzureNetworkClient, NetworkApi as AzureNetworkApi},
     resources::{AzureResourcesClient, ResourcesApi},
@@ -48,6 +50,7 @@ use alien_gcp_clients::{
     cloudrun::{CloudRunApi, CloudRunClient},
     cloudscheduler::{CloudSchedulerApi, CloudSchedulerClient},
     compute::{ComputeApi as GcpComputeApi, ComputeClient as GcpComputeClient},
+    container::{ContainerApi as GkeContainerApi, ContainerClient as GkeContainerClient},
     firestore::{FirestoreApi, FirestoreClient},
     gcs::{GcsApi, GcsClient},
     iam::{IamApi as GcpIamApi, IamClient as GcpIamClient},
@@ -103,6 +106,7 @@ pub trait PlatformServiceProvider: Send + Sync {
         config: &AwsClientConfig,
     ) -> Result<Arc<dyn AutoScalingApi>>;
     async fn get_aws_elbv2_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn Elbv2Api>>;
+    async fn get_aws_eks_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn EksApi>>;
     async fn get_aws_acm_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn AcmApi>>;
     async fn get_aws_apigatewayv2_client(
         &self,
@@ -142,6 +146,10 @@ pub trait PlatformServiceProvider: Send + Sync {
         &self,
         config: &GcpClientConfig,
     ) -> Result<Arc<dyn CloudSchedulerApi>>;
+    fn get_gcp_container_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<Arc<dyn GkeContainerApi>>;
 
     // Azure clients
     fn get_azure_authorization_client(
@@ -180,6 +188,10 @@ pub trait PlatformServiceProvider: Send + Sync {
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn ManagedIdentityApi>>;
+    fn get_azure_managed_clusters_client(
+        &self,
+        config: &AzureClientConfig,
+    ) -> Result<Arc<dyn ManagedClustersApi>>;
     fn get_azure_resources_client(
         &self,
         config: &AzureClientConfig,
@@ -516,6 +528,19 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         )))
     }
 
+    async fn get_aws_eks_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn EksApi>> {
+        let credentials = AwsCredentialProvider::from_config(config.clone())
+            .await
+            .context(crate::error::ErrorData::CloudPlatformError {
+                message: "Failed to create AWS credential provider".to_string(),
+                resource_id: None,
+            })?;
+        Ok(Arc::new(EksClient::new(
+            reqwest::Client::new(),
+            credentials,
+        )))
+    }
+
     async fn get_aws_acm_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn AcmApi>> {
         let credentials = AwsCredentialProvider::from_config(config.clone())
             .await
@@ -664,6 +689,16 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         )))
     }
 
+    fn get_gcp_container_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<Arc<dyn GkeContainerApi>> {
+        Ok(Arc::new(GkeContainerClient::new(
+            reqwest::Client::new(),
+            config.clone(),
+        )))
+    }
+
     // Azure implementations
     fn get_azure_authorization_client(
         &self,
@@ -750,6 +785,16 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn ManagedIdentityApi>> {
         Ok(Arc::new(AzureManagedIdentityClient::new(
+            reqwest::Client::new(),
+            AzureTokenCache::new(config.clone()),
+        )))
+    }
+
+    fn get_azure_managed_clusters_client(
+        &self,
+        config: &AzureClientConfig,
+    ) -> Result<Arc<dyn ManagedClustersApi>> {
+        Ok(Arc::new(AzureManagedClustersClient::new(
             reqwest::Client::new(),
             AzureTokenCache::new(config.clone()),
         )))

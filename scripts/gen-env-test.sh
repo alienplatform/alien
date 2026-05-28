@@ -112,6 +112,13 @@ e2e_gke_cluster_name=$(jq_val e2e_gke_cluster_name)
 e2e_gke_cluster_location=$(jq_val e2e_gke_cluster_location)
 e2e_gke_kube_context=$(jq_val e2e_gke_kube_context)
 e2e_gke_public_host_suffix=$(jq_val e2e_gke_public_host_suffix)
+e2e_gke_ingress_ip_name=$(jq_val e2e_gke_target_3_ingress_ip_name)
+e2e_gke_ingress_annotations=$(
+  jq -nc --arg ip_name "$e2e_gke_ingress_ip_name" '{
+    "kubernetes.io/ingress.class": "gce",
+    "kubernetes.io/ingress.global-static-ip-name": $ip_name
+  }'
+)
 
 azure_management_subscription_id=$(jq_val management_azure_subscription_id)
 azure_management_tenant_id=$(jq_val management_azure_tenant_id)
@@ -215,7 +222,8 @@ E2E_AWS_AR_PULL_ROLE_ARN='${e2e_aws_ar_pull_role_arn}'
 ALIEN_TEST_EKS_KUBECONFIG='${e2e_eks_kubeconfig_path}'
 ALIEN_TEST_EKS_CLUSTER_NAME='${e2e_eks_cluster_name}'
 ALIEN_TEST_EKS_KUBE_CONTEXT='${e2e_eks_kube_context}'
-ALIEN_TEST_EKS_INGRESS_CLASS='${e2e_k8s_ingress_class}'
+ALIEN_TEST_EKS_INGRESS_CLASS='${e2e_k8s_ingress_class:-alb}'
+ALIEN_TEST_EKS_INGRESS_ANNOTATIONS='{}'
 ALIEN_TEST_EKS_PUBLIC_HOST_SUFFIX='${e2e_eks_public_host_suffix}'
 
 # GCP - Management
@@ -253,6 +261,7 @@ ALIEN_TEST_GKE_CLUSTER_NAME='${e2e_gke_cluster_name}'
 ALIEN_TEST_GKE_CLUSTER_LOCATION='${e2e_gke_cluster_location}'
 ALIEN_TEST_GKE_KUBE_CONTEXT='${e2e_gke_kube_context}'
 ALIEN_TEST_GKE_INGRESS_CLASS='${e2e_k8s_ingress_class}'
+ALIEN_TEST_GKE_INGRESS_ANNOTATIONS='${e2e_gke_ingress_annotations}'
 ALIEN_TEST_GKE_PUBLIC_HOST_SUFFIX='${e2e_gke_public_host_suffix}'
 
 # Azure - Management
@@ -306,7 +315,8 @@ ALIEN_TEST_AKS_KUBECONFIG='${e2e_aks_kubeconfig_path}'
 ALIEN_TEST_AKS_CLUSTER_NAME='${e2e_aks_cluster_name}'
 ALIEN_TEST_AKS_CLUSTER_RESOURCE_GROUP='${e2e_aks_cluster_resource_group}'
 ALIEN_TEST_AKS_KUBE_CONTEXT='${e2e_aks_kube_context}'
-ALIEN_TEST_AKS_INGRESS_CLASS='${e2e_k8s_ingress_class}'
+ALIEN_TEST_AKS_INGRESS_CLASS='${e2e_k8s_ingress_class:-webapprouting.kubernetes.azure.com}'
+ALIEN_TEST_AKS_INGRESS_ANNOTATIONS='{}'
 ALIEN_TEST_AKS_PUBLIC_HOST_SUFFIX='${e2e_aks_public_host_suffix}'
 
 # Ngrok (for push-mode E2E tests — cloud functions submit responses via tunnel)

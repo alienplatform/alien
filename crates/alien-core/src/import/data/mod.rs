@@ -5,6 +5,7 @@ use serde::{Deserialize, Deserializer};
 pub mod aws;
 pub mod azure;
 pub mod gcp;
+pub mod kubernetes_cluster;
 
 pub use aws::{
     AwsArtifactRegistryImportData, AwsBuildImportData, AwsComputeClusterImportData,
@@ -25,6 +26,7 @@ pub use gcp::{
     GcpServiceAccountImportData, GcpServiceActivationImportData, GcpStorageImportData,
     GcpVaultImportData, GcpWorkerImportData,
 };
+pub use kubernetes_cluster::KubernetesClusterImportData;
 
 pub(crate) fn deserialize_bool_from_bool_or_string<'de, D>(
     deserializer: D,
@@ -137,6 +139,10 @@ mod schema_snapshots {
             (
                 "gcp_remote_stack_management",
                 schema::<GcpRemoteStackManagementImportData>(),
+            ),
+            (
+                "kubernetes_cluster",
+                schema::<KubernetesClusterImportData>(),
             ),
             (
                 "gcp_service_account",

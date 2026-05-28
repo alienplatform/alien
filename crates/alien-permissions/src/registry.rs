@@ -129,6 +129,7 @@ mod tests {
         assert!(has_permission_set("build/execute"));
         assert!(has_permission_set("build/management"));
         assert!(has_permission_set("build/provision"));
+        assert!(has_permission_set("kubernetes-cluster/heartbeat"));
     }
 
     #[test]

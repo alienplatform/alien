@@ -1378,6 +1378,9 @@
             ],
             "description": "Public URL for the commands API. Cloud-deployed workers use this\nto poll for pending commands instead of the agent's local sync URL."
           },
+          "currentState": {
+            "description": "Authoritative deployment state from the manager.\n\nReturned when a pull deployment attaches with an empty local state while\nthe manager already has imported or previously reconciled state."
+          },
           "target": {}
         }
       },
@@ -2427,6 +2430,17 @@
       "InitializeRequest": {
         "type": "object",
         "properties": {
+          "basePlatform": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Platform",
+                "description": "Optional base cloud platform for Kubernetes setup targets such as\nEKS/GKE/AKS. The runtime platform remains Kubernetes."
+              }
+            ]
+          },
           "name": {
             "type": [
               "string",
@@ -2468,6 +2482,112 @@
             "type": [
               "string",
               "null"
+            ]
+          }
+        }
+      },
+      "KubernetesCloudReference": {
+        "type": "object",
+        "description": "Optional provider-specific identity for a cloud-backed Kubernetes cluster.",
+        "properties": {
+          "accountId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "clusterId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "clusterName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "projectId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "region": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resourceGroup": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "subscriptionId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "KubernetesClusterOwnership": {
+        "type": "string",
+        "description": "Ownership model for the Kubernetes cluster.",
+        "enum": [
+          "managed",
+          "existing",
+          "external"
+        ]
+      },
+      "KubernetesClusterSettings": {
+        "type": "object",
+        "description": "Kubernetes cluster setup settings.",
+        "required": [
+          "ownership"
+        ],
+        "properties": {
+          "cloud": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/KubernetesCloudReference",
+                "description": "Optional provider-specific cloud identity for existing clusters."
+              }
+            ]
+          },
+          "namespace": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Namespace where the Alien chart and application resources run."
+          },
+          "ownership": {
+            "$ref": "#/components/schemas/KubernetesClusterOwnership",
+            "description": "Whether Alien should create the cluster, use a setup-owned existing\ncluster, or bind to an external/on-prem cluster."
+          }
+        }
+      },
+      "KubernetesSettings": {
+        "type": "object",
+        "description": "Kubernetes runtime substrate configuration.\n\nThis controls how setup chooses the cluster backing `Platform::Kubernetes`\ndeployments. When omitted, cloud-backed Kubernetes deployments default to a\nmanaged cluster and generic/on-prem Kubernetes defaults to an external\ncluster.",
+        "properties": {
+          "cluster": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/KubernetesClusterSettings",
+                "description": "Cluster selection or creation settings."
+              }
             ]
           }
         }
@@ -3459,6 +3579,17 @@
           "heartbeats": {
             "$ref": "#/components/schemas/HeartbeatsMode",
             "description": "How heartbeat health checks are handled.\n- off: No heartbeat permissions\n- on: Heartbeat enabled (default)"
+          },
+          "kubernetes": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/KubernetesSettings",
+                "description": "Kubernetes runtime substrate configuration."
+              }
+            ]
           },
           "network": {
             "oneOf": [

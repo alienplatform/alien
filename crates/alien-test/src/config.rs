@@ -177,6 +177,7 @@ pub struct KubernetesRuntimeConfig {
     pub kube_context: Option<String>,
     pub namespace_prefix: String,
     pub ingress_class: Option<String>,
+    pub ingress_annotations: std::collections::BTreeMap<String, String>,
     pub public_host_suffix: Option<String>,
     pub tls_secret_name: Option<String>,
 }
@@ -216,6 +217,12 @@ pub enum E2eNetworkMode {
     Existing,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KubernetesClusterMode {
+    Existing,
+    Create,
+}
+
 /// Top-level test configuration holding optional credentials for every
 /// supported cloud platform, in both management and target roles.
 #[derive(Debug, Clone)]
@@ -232,6 +239,7 @@ pub struct TestConfig {
     pub e2e_artifact_registry: E2eArtifactRegistryConfig,
     pub kubernetes: KubernetesTestConfig,
     pub e2e_network_mode: E2eNetworkMode,
+    pub kubernetes_cluster_mode: KubernetesClusterMode,
 }
 
 impl TestConfig {
@@ -256,6 +264,7 @@ impl TestConfig {
             e2e_artifact_registry: Self::load_e2e_artifact_registry(),
             kubernetes: Self::load_kubernetes(),
             e2e_network_mode: Self::load_e2e_network_mode(),
+            kubernetes_cluster_mode: Self::load_kubernetes_cluster_mode(),
         };
         config.mask_ci_secrets();
         config
@@ -452,6 +461,17 @@ impl TestConfig {
         }
     }
 
+    fn load_kubernetes_cluster_mode() -> KubernetesClusterMode {
+        match env::var("ALIEN_E2E_KUBERNETES_CLUSTER_MODE") {
+            Ok(value) => match value.as_str() {
+                "" | "existing" => KubernetesClusterMode::Existing,
+                "create" => KubernetesClusterMode::Create,
+                _ => panic!("ALIEN_E2E_KUBERNETES_CLUSTER_MODE must be one of: existing, create"),
+            },
+            Err(_) => KubernetesClusterMode::Existing,
+        }
+    }
+
     fn e2e_existing_network_settings(&self, platform: Platform) -> anyhow::Result<NetworkSettings> {
         match platform {
             Platform::Aws => Ok(NetworkSettings::ByoVpcAws {
@@ -581,6 +601,7 @@ impl TestConfig {
                 .unwrap_or_else(|| "alien-test".to_string()),
             ingress_class: env_opt(&format!("ALIEN_TEST_{provider}_INGRESS_CLASS"))
                 .or_else(|| env_opt("ALIEN_TEST_K8S_INGRESS_CLASS")),
+            ingress_annotations: load_kubernetes_ingress_annotations(provider),
             public_host_suffix: env_opt(&format!("ALIEN_TEST_{provider}_PUBLIC_HOST_SUFFIX"))
                 .or_else(|| env_opt("ALIEN_TEST_K8S_PUBLIC_HOST_SUFFIX")),
             tls_secret_name: env_opt(&format!("ALIEN_TEST_{provider}_TLS_SECRET_NAME"))
@@ -711,6 +732,22 @@ mod tests {
 
 fn env_opt(name: &str) -> Option<String> {
     env::var(name).ok().filter(|value| !value.trim().is_empty())
+}
+
+fn load_kubernetes_ingress_annotations(
+    provider: &str,
+) -> std::collections::BTreeMap<String, String> {
+    let Some(raw) = env_opt(&format!("ALIEN_TEST_{provider}_INGRESS_ANNOTATIONS"))
+        .or_else(|| env_opt("ALIEN_TEST_K8S_INGRESS_ANNOTATIONS"))
+    else {
+        return std::collections::BTreeMap::new();
+    };
+
+    serde_json::from_str(&raw).unwrap_or_else(|error| {
+        panic!(
+            "ALIEN_TEST_{provider}_INGRESS_ANNOTATIONS must be a JSON object of string annotations: {error}"
+        )
+    })
 }
 
 fn required_env(name: &str) -> anyhow::Result<String> {

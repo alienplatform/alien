@@ -7,4 +7,6 @@ packages:
   - webhook-api-ts
   - byoc-database
   - endpoint-agent
+  - full-stack-microservices
+  - full-stack-microservices/services/*
   - github-agent/packages/remote-agent

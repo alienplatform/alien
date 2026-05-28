@@ -898,6 +898,10 @@ fn deserialize_controller_by_tag(
         "LocalComputeClusterController" => {
             deser!(crate::compute_cluster::LocalComputeClusterController)
         }
+        #[cfg(feature = "kubernetes")]
+        "KubernetesClusterController" => {
+            deser!(crate::kubernetes_cluster::KubernetesClusterController)
+        }
 
         // Storage controllers
         #[cfg(feature = "aws")]

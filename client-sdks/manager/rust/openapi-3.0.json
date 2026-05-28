@@ -1370,6 +1370,9 @@
             "description": "Public URL for the commands API. Cloud-deployed workers use this\nto poll for pending commands instead of the agent's local sync URL.",
             "nullable": true
           },
+          "currentState": {
+            "description": "Authoritative deployment state from the manager.\n\nReturned when a pull deployment attaches with an empty local state while\nthe manager already has imported or previously reconciled state."
+          },
           "target": {}
         }
       },
@@ -2293,6 +2296,11 @@
       "InitializeRequest": {
         "type": "object",
         "properties": {
+          "basePlatform": {
+            "$ref": "#/components/schemas/Platform",
+            "description": "Optional base cloud platform for Kubernetes setup targets such as\nEKS/GKE/AKS. The runtime platform remains Kubernetes.",
+            "nullable": true
+          },
           "name": {
             "type": "string",
             "nullable": true
@@ -2318,6 +2326,84 @@
           },
           "token": {
             "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "KubernetesCloudReference": {
+        "type": "object",
+        "description": "Optional provider-specific identity for a cloud-backed Kubernetes cluster.",
+        "properties": {
+          "accountId": {
+            "type": "string",
+            "nullable": true
+          },
+          "clusterId": {
+            "type": "string",
+            "nullable": true
+          },
+          "clusterName": {
+            "type": "string",
+            "nullable": true
+          },
+          "projectId": {
+            "type": "string",
+            "nullable": true
+          },
+          "region": {
+            "type": "string",
+            "nullable": true
+          },
+          "resourceGroup": {
+            "type": "string",
+            "nullable": true
+          },
+          "subscriptionId": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "KubernetesClusterOwnership": {
+        "type": "string",
+        "description": "Ownership model for the Kubernetes cluster.",
+        "enum": [
+          "managed",
+          "existing",
+          "external"
+        ]
+      },
+      "KubernetesClusterSettings": {
+        "type": "object",
+        "description": "Kubernetes cluster setup settings.",
+        "required": [
+          "ownership"
+        ],
+        "properties": {
+          "cloud": {
+            "$ref": "#/components/schemas/KubernetesCloudReference",
+            "description": "Optional provider-specific cloud identity for existing clusters.",
+            "nullable": true
+          },
+          "namespace": {
+            "type": "string",
+            "description": "Namespace where the Alien chart and application resources run.",
+            "nullable": true
+          },
+          "ownership": {
+            "$ref": "#/components/schemas/KubernetesClusterOwnership",
+            "description": "Whether Alien should create the cluster, use a setup-owned existing\ncluster, or bind to an external/on-prem cluster."
+          }
+        }
+      },
+      "KubernetesSettings": {
+        "type": "object",
+        "description": "Kubernetes runtime substrate configuration.\n\nThis controls how setup chooses the cluster backing `Platform::Kubernetes`\ndeployments. When omitted, cloud-backed Kubernetes deployments default to a\nmanaged cluster and generic/on-prem Kubernetes defaults to an external\ncluster.",
+        "properties": {
+          "cluster": {
+            "$ref": "#/components/schemas/KubernetesClusterSettings",
+            "description": "Cluster selection or creation settings.",
             "nullable": true
           }
         }
@@ -3224,6 +3310,11 @@
           "heartbeats": {
             "$ref": "#/components/schemas/HeartbeatsMode",
             "description": "How heartbeat health checks are handled.\n- off: No heartbeat permissions\n- on: Heartbeat enabled (default)"
+          },
+          "kubernetes": {
+            "$ref": "#/components/schemas/KubernetesSettings",
+            "description": "Kubernetes runtime substrate configuration.",
+            "nullable": true
           },
           "network": {
             "$ref": "#/components/schemas/NetworkSettings",

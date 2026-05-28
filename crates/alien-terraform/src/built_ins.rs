@@ -6,8 +6,8 @@
 use crate::registry::TfRegistry;
 use alien_core::{
     ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup, AzureServiceBusNamespace,
-    AzureStorageAccount, Build, Kv, Network, Platform, Queue, RemoteStackManagement,
-    ServiceAccount, ServiceActivation, Storage, Vault, Worker,
+    AzureStorageAccount, Build, KubernetesCluster, Kv, Network, Platform, Queue,
+    RemoteStackManagement, ServiceAccount, ServiceActivation, Storage, Vault, Worker,
 };
 
 pub(crate) fn register_all(registry: &mut TfRegistry) {
@@ -41,6 +41,11 @@ fn register_aws(registry: &mut TfRegistry) {
     );
     registry.register(Build::RESOURCE_TYPE, p, aws::AwsBuildEmitter);
     registry.register(Worker::RESOURCE_TYPE, p, aws::AwsWorkerEmitter);
+    registry.register(
+        KubernetesCluster::RESOURCE_TYPE,
+        p,
+        crate::emitters::kubernetes_cluster::AwsKubernetesClusterEmitter,
+    );
 }
 
 fn register_gcp(registry: &mut TfRegistry) {
@@ -72,6 +77,11 @@ fn register_gcp(registry: &mut TfRegistry) {
         ServiceActivation::RESOURCE_TYPE,
         p,
         gcp::GcpServiceActivationEmitter,
+    );
+    registry.register(
+        KubernetesCluster::RESOURCE_TYPE,
+        p,
+        crate::emitters::kubernetes_cluster::GcpKubernetesClusterEmitter,
     );
 }
 
@@ -132,5 +142,10 @@ fn register_azure(registry: &mut TfRegistry) {
         AzureServiceBusNamespace::RESOURCE_TYPE,
         p,
         azure::AzureServiceBusNamespaceEmitter,
+    );
+    registry.register(
+        KubernetesCluster::RESOURCE_TYPE,
+        p,
+        crate::emitters::kubernetes_cluster::AzureKubernetesClusterEmitter,
     );
 }

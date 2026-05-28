@@ -4,6 +4,7 @@ pub mod cloudbuild;
 pub mod cloudrun;
 pub mod cloudscheduler;
 pub mod compute;
+pub mod container;
 pub mod firestore;
 pub mod gcp_request_utils;
 pub mod gcs;

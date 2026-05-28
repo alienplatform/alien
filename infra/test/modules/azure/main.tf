@@ -207,6 +207,15 @@ module "e2e_aks" {
     network_policy      = "cilium"
   }
 
+  ingress_profile = {
+    web_app_routing = {
+      enabled = true
+      nginx = {
+        default_ingress_controller_type = "AnnotationControlled"
+      }
+    }
+  }
+
   role_assignments = {
     target_admin = {
       principal_id               = data.azurerm_client_config.target.object_id

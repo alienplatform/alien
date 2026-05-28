@@ -9,6 +9,8 @@
 //! get their own importers as well. They never appear in the user-authored
 //! stack but the typed payloads must round-trip the same as the rest.
 
+#[cfg(feature = "kubernetes")]
+use alien_core::KubernetesCluster;
 use alien_core::{
     ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup, AzureServiceBusNamespace,
     AzureStorageAccount, Build, Kv, Network, Platform, Queue, RemoteStackManagement,
@@ -17,6 +19,8 @@ use alien_core::{
 
 use crate::artifact_registry::AzureArtifactRegistryImporter;
 use crate::build::AzureBuildImporter;
+#[cfg(feature = "kubernetes")]
+use crate::kubernetes_cluster::KubernetesClusterImporter;
 use crate::kv::AzureKvImporter;
 use crate::network::AzureNetworkImporter;
 use crate::queue::AzureQueueImporter;
@@ -91,4 +95,10 @@ pub fn register(registry: &mut ImporterRegistry) {
             Platform::Azure,
             AzureServiceBusNamespaceImporter,
         );
+    #[cfg(feature = "kubernetes")]
+    registry.register(
+        KubernetesCluster::RESOURCE_TYPE,
+        Platform::Azure,
+        KubernetesClusterImporter,
+    );
 }

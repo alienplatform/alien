@@ -2,8 +2,8 @@ use crate::error::Result;
 use crate::StackMutation;
 use alien_core::permissions::{ManagementPermissions, PermissionProfile, PermissionSetReference};
 use alien_core::{
-    ownership_policy_for_resource_type, DeploymentConfig, Platform, ResourceLifecycle, Stack,
-    StackState, Worker,
+    ownership_policy_for_resource_type, DeploymentConfig, KubernetesCluster,
+    KubernetesHeartbeatMode, Platform, ResourceLifecycle, Stack, StackState, Worker,
 };
 use alien_permissions::get_permission_set;
 use indexmap::IndexMap;
@@ -127,7 +127,9 @@ fn generate_auto_management_profile(
 
         // Add heartbeat permissions if heartbeat is enabled (Auto or RequiresApproval)
         // Disabled means no infrastructure/IAM permissions at all
-        if config.stack_settings.heartbeats.is_enabled() {
+        if config.stack_settings.heartbeats.is_enabled()
+            && resource_needs_cloud_heartbeat_permission(resource_type, resource_entry)
+        {
             permission_set_ids.insert(format!("{}/heartbeat", resource_type));
         }
 
@@ -208,15 +210,32 @@ fn generate_auto_management_profile(
     Ok(Some(PermissionProfile(management_permissions)))
 }
 
+fn resource_needs_cloud_heartbeat_permission(
+    resource_type: &str,
+    resource_entry: &alien_core::ResourceEntry,
+) -> bool {
+    if resource_type != KubernetesCluster::RESOURCE_TYPE.as_ref() {
+        return true;
+    }
+
+    resource_entry
+        .config
+        .downcast_ref::<KubernetesCluster>()
+        .is_some_and(|cluster| {
+            cluster.heartbeat_mode == KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use alien_core::permissions::{ManagementPermissions, PermissionsConfig};
     use alien_core::{
         ArtifactRegistry, CapacityGroup, ComputeCluster, Container, ContainerCode, DeploymentModel,
-        EnvironmentVariablesSnapshot, ExternalBindings, HeartbeatsMode, ResourceEntry,
-        ResourceLifecycle, ResourceSpec, StackSettings, StackState, Storage, TelemetryMode, Worker,
-        WorkerCode,
+        EnvironmentVariablesSnapshot, ExternalBindings, HeartbeatsMode, KubernetesCluster,
+        KubernetesClusterOwnership, KubernetesClusterProvider, KubernetesHeartbeatMode,
+        ResourceEntry, ResourceLifecycle, ResourceSpec, StackSettings, StackState, Storage,
+        TelemetryMode, Worker, WorkerCode,
     };
 
     fn empty_env_snapshot() -> EnvironmentVariablesSnapshot {
@@ -296,6 +315,78 @@ mod tests {
             }
             _ => panic!("Expected Extend management permissions"),
         }
+    }
+
+    #[tokio::test]
+    async fn kubernetes_cluster_cloud_metadata_heartbeat_is_explicit() {
+        let cluster = KubernetesCluster::new("kubernetes".to_string())
+            .provider(KubernetesClusterProvider::Eks)
+            .ownership(KubernetesClusterOwnership::Managed)
+            .namespace("default".to_string())
+            .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+            .build();
+
+        let stack = Stack::new("test-stack".to_string())
+            .add(cluster, ResourceLifecycle::Frozen)
+            .management(ManagementPermissions::Auto)
+            .build();
+        let stack_state = StackState::new(Platform::Kubernetes);
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+
+        let result_stack = ManagementPermissionProfileMutation
+            .mutate(stack, &stack_state, &config)
+            .await
+            .unwrap();
+
+        let ManagementPermissions::Extend(profile) = result_stack.management() else {
+            panic!("Expected Extend management permissions");
+        };
+        let permission_names: Vec<String> = profile
+            .0
+            .get("*")
+            .unwrap()
+            .iter()
+            .map(|perm_ref| perm_ref.id().to_string())
+            .collect();
+        assert!(permission_names.contains(&"kubernetes-cluster/heartbeat".to_string()));
+        assert!(!permission_names.contains(&"compute-cluster/heartbeat".to_string()));
+    }
+
+    #[tokio::test]
+    async fn kubernetes_api_only_heartbeat_gets_no_cloud_metadata_permission() {
+        let cluster = KubernetesCluster::new("kubernetes".to_string())
+            .provider(KubernetesClusterProvider::Generic)
+            .ownership(KubernetesClusterOwnership::External)
+            .namespace("default".to_string())
+            .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApi)
+            .build();
+
+        let stack = Stack::new("test-stack".to_string())
+            .add(cluster, ResourceLifecycle::Frozen)
+            .management(ManagementPermissions::Auto)
+            .build();
+        let stack_state = StackState::new(Platform::Kubernetes);
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+
+        let result_stack = ManagementPermissionProfileMutation
+            .mutate(stack, &stack_state, &config)
+            .await
+            .unwrap();
+
+        assert!(
+            result_stack.management().profile().is_none(),
+            "API-only Kubernetes heartbeat should not author cloud IAM permissions"
+        );
     }
 
     #[tokio::test]

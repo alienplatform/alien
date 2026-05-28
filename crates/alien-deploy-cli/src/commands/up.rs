@@ -12,7 +12,7 @@ use alien_cli_common::network::{self, NetworkArgs, NetworkMode};
 use alien_core::embedded_config::DeployCliConfig;
 use alien_core::{
     ClientConfig, DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus,
-    ManagementConfig, NetworkSettings, Platform, ReleaseInfo, StackSettings, TelemetryMode,
+    ManagementConfig, NetworkSettings, Platform, ReleaseInfo, Stack, StackSettings, TelemetryMode,
     UpdatesMode,
 };
 use alien_deployment::{
@@ -27,7 +27,10 @@ use alien_infra::ClientConfigExt;
 use alien_manager_api::{Client as ServerClient, SdkResultExt as ManagerSdkResultExt};
 use clap::Parser;
 use serde::Deserialize;
-use std::{path::PathBuf, str::FromStr};
+use std::{
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 
 #[derive(Parser, Debug, Clone)]
 #[command(
@@ -68,6 +71,10 @@ pub struct UpArgs {
     #[arg(long)]
     pub platform: Option<String>,
 
+    /// Base cloud platform for managed Kubernetes setup (aws, gcp, azure).
+    #[arg(long, env = "ALIEN_BASE_PLATFORM")]
+    pub base_platform: Option<String>,
+
     /// Allow experimental platforms (kubernetes, local)
     #[arg(long)]
     pub experimental: bool,
@@ -94,6 +101,26 @@ pub struct UpArgs {
     #[arg(long)]
     pub data_dir: Option<String>,
 
+    /// Kubernetes namespace for Helm installs.
+    #[arg(long, env = "ALIEN_KUBERNETES_NAMESPACE")]
+    pub namespace: Option<String>,
+
+    /// Helm release name for Kubernetes installs.
+    #[arg(long, env = "ALIEN_HELM_RELEASE")]
+    pub helm_release: Option<String>,
+
+    /// Kubeconfig path for Kubernetes installs. Defaults to KUBECONFIG or kubectl defaults.
+    #[arg(long, env = "KUBECONFIG")]
+    pub kubeconfig: Option<String>,
+
+    /// Kubernetes context for Helm installs.
+    #[arg(long, env = "ALIEN_KUBE_CONTEXT")]
+    pub kube_context: Option<String>,
+
+    /// alien-agent image for Kubernetes Helm installs.
+    #[arg(long, env = "ALIEN_AGENT_IMAGE")]
+    pub agent_image: Option<String>,
+
     /// TOML file containing deployment settings.
     #[arg(long)]
     pub config: Option<PathBuf>,
@@ -109,6 +136,8 @@ struct DeployConfigFile {
     name: Option<String>,
     /// Target platform: aws, gcp, azure, kubernetes, or local.
     platform: Option<String>,
+    /// Base cloud platform when `platform = "kubernetes"`.
+    base_platform: Option<String>,
     /// Network settings for cloud deployments.
     network: Option<DeployConfigNetwork>,
     /// Update delivery mode.
@@ -210,6 +239,48 @@ mod tests {
         assert!(!requires_install_context(Platform::Local));
         assert!(!requires_install_context(Platform::Test));
     }
+
+    #[test]
+    fn parses_cloud_base_platform_for_kubernetes() {
+        assert_eq!(
+            parse_base_platform(Platform::Kubernetes, Some("aws")).unwrap(),
+            Some(Platform::Aws)
+        );
+    }
+
+    #[test]
+    fn rejects_base_platform_without_kubernetes_runtime() {
+        assert!(parse_base_platform(Platform::Aws, Some("gcp")).is_err());
+    }
+
+    #[test]
+    fn rejects_non_cloud_base_platform_for_kubernetes() {
+        assert!(parse_base_platform(Platform::Kubernetes, Some("local")).is_err());
+    }
+
+    #[test]
+    fn split_image_tag_defaults_missing_tag_to_latest() {
+        assert_eq!(
+            split_image_tag("ghcr.io/alienplatform/alien-agent").unwrap(),
+            (
+                "ghcr.io/alienplatform/alien-agent".to_string(),
+                "latest".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn split_image_tag_preserves_registry_port() {
+        assert_eq!(
+            split_image_tag("localhost:5000/alien-agent:v1").unwrap(),
+            ("localhost:5000/alien-agent".to_string(), "v1".to_string())
+        );
+    }
+
+    #[test]
+    fn sanitize_kubernetes_dns_label_falls_back_when_empty() {
+        assert_eq!(sanitize_kubernetes_dns_label("___"), "alien");
+    }
 }
 
 pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>) -> Result<()> {
@@ -218,6 +289,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
     let resolved = resolve_deployment_info(&args, embedded_config, deploy_config.as_ref())?;
     let token = resolved.token;
     let platform_str = resolved.platform;
+    let base_platform_str = resolved.base_platform;
     let name = resolved.name;
 
     // Check for experimental platforms
@@ -239,6 +311,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
             message: e,
         })
     })?;
+    let base_platform = parse_base_platform(platform, base_platform_str.as_deref())?;
 
     let display_platform = match platform_str.as_str() {
         "aws" => "AWS",
@@ -249,37 +322,50 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         other => other,
     };
 
-    let (manager_url, install_management_config) = if requires_install_context(platform) {
-        output::info("Resolving deployment install context via platform API...");
-        let context =
-            discover_manager_install_context(&resolved.base_url, &token, &platform_str).await?;
-        let management_config = context.management_config.ok_or_else(|| {
-            AlienError::new(ErrorData::ConfigurationError {
-                message: format!(
+    let install_context_platform = base_platform.unwrap_or(platform);
+    let install_context_platform_str = install_context_platform.as_str().to_string();
+    let (manager_url, install_management_config) =
+        if requires_install_context(install_context_platform) {
+            output::info("Resolving deployment install context via platform API...");
+            let context = discover_manager_install_context(
+                &resolved.base_url,
+                &token,
+                &install_context_platform_str,
+            )
+            .await?;
+            let management_config = context.management_config.ok_or_else(|| {
+                AlienError::new(ErrorData::ConfigurationError {
+                    message: format!(
                     "Platform API did not return installContext.managementConfig for {} deployment",
-                    platform.as_str()
+                    install_context_platform.as_str()
                 ),
-            })
-        })?;
-        (context.manager_url, Some(management_config))
-    } else {
-        match resolved.manager_url {
-            Some(url) => (url, None),
-            None => {
-                output::info("Discovering manager via platform API...");
-                let context =
-                    discover_manager_install_context(&resolved.base_url, &token, &platform_str)
-                        .await?;
-                (context.manager_url, context.management_config)
+                })
+            })?;
+            (context.manager_url, Some(management_config))
+        } else {
+            match resolved.manager_url {
+                Some(url) => (url, None),
+                None => {
+                    output::info("Discovering manager via platform API...");
+                    let context = discover_manager_install_context(
+                        &resolved.base_url,
+                        &token,
+                        &install_context_platform_str,
+                    )
+                    .await?;
+                    (context.manager_url, context.management_config)
+                }
             }
-        }
-    };
+        };
 
     let banner_title = embedded_config
         .and_then(|c| c.display_name.as_deref())
         .unwrap_or("Alien Deploy");
     output::banner(banner_title);
     output::label_value("Platform", display_platform);
+    if let Some(base_platform) = base_platform {
+        output::label_value("Base platform", base_platform.as_str());
+    }
     output::label_value("Manager", &manager_url);
     output::label_value("Name", &name);
     eprintln!();
@@ -290,7 +376,15 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
     let client = create_manager_client(&token, &manager_url)?;
 
     // Initialize with manager
-    let init = initialize_deployment(&client, &token, platform, &name, &stack_settings).await?;
+    let init = initialize_deployment(
+        &client,
+        &token,
+        platform,
+        base_platform,
+        &name,
+        &stack_settings,
+    )
+    .await?;
     let deployment_id = init.deployment_id;
     output::success("Connected to manager");
 
@@ -326,18 +420,21 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         return Ok(());
     }
 
-    match platform {
-        Platform::Local | Platform::Kubernetes => {
+    match (platform, base_platform) {
+        (Platform::Local, _) | (Platform::Kubernetes, None) => {
             run_pull_model(
+                &client,
                 &args,
                 &manager_url,
                 &effective_token,
                 &deployment_id,
+                &name,
+                &stack_settings,
                 platform,
             )
             .await?;
         }
-        Platform::Aws | Platform::Gcp | Platform::Azure => {
+        (Platform::Aws | Platform::Gcp | Platform::Azure, _) | (Platform::Kubernetes, Some(_)) => {
             // Build progress callback
             let progress =
                 std::sync::Arc::new(std::sync::Mutex::new(output::DeployProgress::new()));
@@ -352,6 +449,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
                 &client,
                 &deployment_id,
                 platform,
+                base_platform,
                 &manager_url,
                 &effective_token,
                 install_management_config,
@@ -364,7 +462,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
             let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
             p.finish();
         }
-        Platform::Test => {
+        (Platform::Test, _) => {
             output::info("Test platform — no deployment action needed.");
         }
     }
@@ -383,11 +481,45 @@ struct ResolvedInfo {
     /// Platform API base URL used when manager URL must be discovered.
     base_url: String,
     platform: String,
+    base_platform: Option<String>,
     name: String,
 }
 
 fn requires_install_context(platform: Platform) -> bool {
     matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
+}
+
+fn parse_base_platform(
+    platform: Platform,
+    base_platform: Option<&str>,
+) -> Result<Option<Platform>> {
+    let Some(base_platform) = base_platform else {
+        return Ok(None);
+    };
+
+    let parsed = Platform::from_str(base_platform).map_err(|e| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "base-platform".to_string(),
+            message: e,
+        })
+    })?;
+
+    if platform != Platform::Kubernetes {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "base-platform".to_string(),
+            message: "--base-platform is only supported with --platform kubernetes".to_string(),
+        }));
+    }
+
+    match parsed {
+        Platform::Aws | Platform::Gcp | Platform::Azure => Ok(Some(parsed)),
+        Platform::Kubernetes | Platform::Local | Platform::Test => {
+            Err(AlienError::new(ErrorData::ValidationError {
+                field: "base-platform".to_string(),
+                message: "--base-platform must be one of: aws, gcp, azure".to_string(),
+            }))
+        }
+    }
 }
 
 fn load_deploy_config(args: &UpArgs) -> Result<Option<DeployConfigFile>> {
@@ -433,11 +565,16 @@ fn resolve_deployment_info(
                 .clone()
                 .or_else(|| deploy_config.and_then(|c| c.platform.clone()))
                 .unwrap_or_else(|| tracked.platform.clone());
+            let base_platform = args
+                .base_platform
+                .clone()
+                .or_else(|| deploy_config.and_then(|c| c.base_platform.clone()));
             return Ok(ResolvedInfo {
                 token,
                 manager_url,
                 base_url: resolve_base_url(args, embedded_config),
                 platform,
+                base_platform,
                 name: name.clone(),
             });
         }
@@ -462,6 +599,10 @@ fn resolve_deployment_info(
                         .to_string(),
             })
         })?;
+    let base_platform = args
+        .base_platform
+        .clone()
+        .or_else(|| deploy_config.and_then(|c| c.base_platform.clone()));
 
     let name = match args.name.clone() {
         Some(n) => n,
@@ -486,6 +627,7 @@ fn resolve_deployment_info(
         manager_url,
         base_url: resolve_base_url(args, embedded_config),
         platform,
+        base_platform,
         name,
     })
 }
@@ -732,21 +874,14 @@ async fn initialize_deployment(
     client: &ServerClient,
     _token: &str,
     platform: Platform,
+    base_platform: Option<Platform>,
     name: &str,
     stack_settings: &StackSettings,
 ) -> Result<InitResult> {
-    let sdk_platform = match platform {
-        Platform::Aws => alien_manager_api::types::Platform::Aws,
-        Platform::Gcp => alien_manager_api::types::Platform::Gcp,
-        Platform::Azure => alien_manager_api::types::Platform::Azure,
-        Platform::Kubernetes => alien_manager_api::types::Platform::Kubernetes,
-        Platform::Local => alien_manager_api::types::Platform::Local,
-        Platform::Test => alien_manager_api::types::Platform::Test,
-    };
-
     let body = alien_manager_api::types::InitializeRequest {
         name: Some(name.to_string()),
-        platform: Some(sdk_platform),
+        platform: Some(sdk_platform(platform)),
+        base_platform: base_platform.map(sdk_platform),
         stack_settings: Some(sdk_stack_settings(stack_settings)?),
     };
 
@@ -767,6 +902,17 @@ async fn initialize_deployment(
     })
 }
 
+fn sdk_platform(platform: Platform) -> alien_manager_api::types::Platform {
+    match platform {
+        Platform::Aws => alien_manager_api::types::Platform::Aws,
+        Platform::Gcp => alien_manager_api::types::Platform::Gcp,
+        Platform::Azure => alien_manager_api::types::Platform::Azure,
+        Platform::Kubernetes => alien_manager_api::types::Platform::Kubernetes,
+        Platform::Local => alien_manager_api::types::Platform::Local,
+        Platform::Test => alien_manager_api::types::Platform::Test,
+    }
+}
+
 fn sdk_stack_settings(
     stack_settings: &StackSettings,
 ) -> Result<alien_manager_api::types::StackSettings> {
@@ -783,14 +929,28 @@ fn sdk_stack_settings(
 }
 
 async fn run_pull_model(
+    client: &ServerClient,
     args: &UpArgs,
     manager_url: &str,
     token: &str,
     deployment_id: &str,
+    deployment_name: &str,
+    stack_settings: &StackSettings,
     platform: Platform,
 ) -> Result<()> {
     match platform {
-        Platform::Kubernetes => run_kubernetes_pull_model(manager_url, token, deployment_id).await,
+        Platform::Kubernetes => {
+            run_kubernetes_pull_model(
+                client,
+                args,
+                manager_url,
+                token,
+                deployment_id,
+                deployment_name,
+                stack_settings,
+            )
+            .await
+        }
         _ => run_local_pull_model(args, manager_url, token, &platform.to_string()).await,
     }
 }
@@ -944,25 +1104,298 @@ async fn run_agent_foreground(
 }
 
 async fn run_kubernetes_pull_model(
+    client: &ServerClient,
+    args: &UpArgs,
     manager_url: &str,
     token: &str,
     deployment_id: &str,
+    deployment_name: &str,
+    stack_settings: &StackSettings,
 ) -> Result<()> {
-    output::info("Kubernetes platform detected — use Helm to install the agent.");
-    output::info("");
-    output::info("Generate the stack-specific chart and install it:");
-    println!();
-    println!("  alien render --format helm --stack ./alien.ts --output ./dist/helm");
-    println!("  # Edit ./dist/helm/values.yaml:");
-    println!("  #   management.url: {}", manager_url);
-    println!("  #   management.token: {}", token);
-    println!("  #   management.deploymentId: {}", deployment_id);
-    println!("  helm install alien-agent ./dist/helm --namespace <your-app-namespace> --create-namespace");
-    println!();
+    output::info("Kubernetes platform detected — installing alien-agent with Helm.");
+    let stack = fetch_kubernetes_release_stack(client, deployment_id).await?;
+    let namespace = args
+        .namespace
+        .clone()
+        .unwrap_or_else(|| format!("alien-{}", sanitize_kubernetes_dns_label(deployment_name)));
+    let release = args
+        .helm_release
+        .clone()
+        .unwrap_or_else(|| "alien-agent".to_string());
+    let agent_image = args
+        .agent_image
+        .clone()
+        .unwrap_or_else(|| "ghcr.io/alienplatform/alien-agent:latest".to_string());
+
+    let chart_dir = render_kubernetes_helm_chart(&stack, stack_settings, deployment_name)?;
+    let values_file = write_kubernetes_helm_values(
+        chart_dir.path(),
+        manager_url,
+        token,
+        deployment_id,
+        deployment_name,
+        stack_settings,
+        &agent_image,
+    )?;
+
+    helm_upgrade_install(
+        chart_dir.path(),
+        &values_file,
+        &release,
+        &namespace,
+        args.kubeconfig.as_deref(),
+        args.kube_context.as_deref(),
+    )
+    .await?;
+
+    output::success(&format!(
+        "alien-agent Helm release '{}' is installed in namespace '{}'.",
+        release, namespace
+    ));
     output::info(&format!("Deployment ID: {}", deployment_id));
-    output::info("The generated chart is stack-specific; do not use the old generic agent chart.");
 
     Ok(())
+}
+
+async fn fetch_kubernetes_release_stack(
+    client: &ServerClient,
+    deployment_id: &str,
+) -> Result<Stack> {
+    let deployment = client
+        .get_deployment()
+        .id(deployment_id)
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to get deployment from manager".to_string(),
+        })?
+        .into_inner();
+
+    let release_id = deployment
+        .desired_release_id
+        .or(deployment.current_release_id)
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ConfigurationError {
+                message: "Deployment has no release to install as a Kubernetes Helm chart"
+                    .to_string(),
+            })
+        })?;
+    let release = client
+        .get_release()
+        .id(&release_id)
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ConfigurationError {
+            message: format!("Failed to fetch release '{release_id}' from manager"),
+        })?
+        .into_inner();
+    let stack_value = release.stack.kubernetes.ok_or_else(|| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: format!("Release '{release_id}' does not contain a Kubernetes stack"),
+        })
+    })?;
+
+    serde_json::from_value(stack_value)
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: format!("Failed to parse Kubernetes stack from release '{release_id}'"),
+        })
+}
+
+fn render_kubernetes_helm_chart(
+    stack: &Stack,
+    stack_settings: &StackSettings,
+    deployment_name: &str,
+) -> Result<tempfile::TempDir> {
+    let chart_dir =
+        tempfile::tempdir()
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to create temporary Helm chart directory".to_string(),
+            })?;
+    let registry = alien_helm::HelmRegistry::built_in();
+    let mut helm_settings = stack_settings.clone();
+    helm_settings.deployment_model = DeploymentModel::Pull;
+    let chart = alien_helm::generate_helm_chart(
+        stack,
+        alien_helm::HelmOptions {
+            registry: &registry,
+            stack_settings: helm_settings,
+            chart_name: sanitize_kubernetes_dns_label(deployment_name),
+        },
+    )
+    .map_err(|error| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: format!("Failed to generate Kubernetes Helm chart: {error}"),
+        })
+    })?;
+
+    for (relative_path, contents) in chart.files {
+        let path = chart_dir.path().join(relative_path);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).into_alien_error().context(
+                ErrorData::FileOperationFailed {
+                    operation: "create directory".to_string(),
+                    file_path: parent.display().to_string(),
+                    reason: "Failed to create Helm chart output directory".to_string(),
+                },
+            )?;
+        }
+        std::fs::write(&path, contents).into_alien_error().context(
+            ErrorData::FileOperationFailed {
+                operation: "write".to_string(),
+                file_path: path.display().to_string(),
+                reason: "Failed to write generated Helm chart file".to_string(),
+            },
+        )?;
+    }
+
+    Ok(chart_dir)
+}
+
+fn write_kubernetes_helm_values(
+    chart_dir: &Path,
+    manager_url: &str,
+    token: &str,
+    deployment_id: &str,
+    deployment_name: &str,
+    stack_settings: &StackSettings,
+    agent_image: &str,
+) -> Result<PathBuf> {
+    let (repository, tag) = split_image_tag(agent_image)?;
+    let mut helm_settings = stack_settings.clone();
+    helm_settings.deployment_model = DeploymentModel::Pull;
+    let values = serde_json::json!({
+        "management": {
+            "token": token,
+            "name": deployment_name,
+            "url": manager_url,
+            "deploymentId": deployment_id,
+            "updates": "auto",
+            "telemetry": "auto",
+            "healthChecks": "on",
+        },
+        "runtime": {
+            "image": {
+                "repository": repository,
+                "tag": tag,
+                "pullPolicy": "IfNotPresent",
+            },
+            "encryption": {
+                "key": super::agent::generate_encryption_key_public(),
+            }
+        },
+        "stackSettings": helm_settings,
+        "infrastructure": null,
+    });
+    let values_path = chart_dir.join("alien-deploy-values.json");
+    let contents = serde_json::to_string_pretty(&values)
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to serialize Helm values".to_string(),
+        })?;
+    std::fs::write(&values_path, contents)
+        .into_alien_error()
+        .context(ErrorData::FileOperationFailed {
+            operation: "write".to_string(),
+            file_path: values_path.display().to_string(),
+            reason: "Failed to write Helm values file".to_string(),
+        })?;
+    Ok(values_path)
+}
+
+async fn helm_upgrade_install(
+    chart_dir: &Path,
+    values_file: &Path,
+    release: &str,
+    namespace: &str,
+    kubeconfig: Option<&str>,
+    kube_context: Option<&str>,
+) -> Result<()> {
+    let mut cmd = tokio::process::Command::new("helm");
+    cmd.arg("upgrade")
+        .arg("--install")
+        .arg(release)
+        .arg(chart_dir)
+        .arg("--namespace")
+        .arg(namespace)
+        .arg("--create-namespace")
+        .arg("-f")
+        .arg(values_file)
+        .arg("--wait")
+        .arg("--timeout")
+        .arg("300s");
+
+    if let Some(kubeconfig) = kubeconfig {
+        cmd.env("KUBECONFIG", kubeconfig);
+    }
+    if let Some(context) = kube_context {
+        cmd.arg("--kube-context").arg(context);
+    }
+
+    let output = cmd
+        .output()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to execute helm. Ensure Helm is installed and available on PATH."
+                .to_string(),
+        })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!("Helm upgrade/install failed: {stderr}"),
+        }));
+    }
+
+    Ok(())
+}
+
+fn split_image_tag(image: &str) -> Result<(String, String)> {
+    if image.contains('@') {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "agent-image".to_string(),
+            message: "Kubernetes Helm installs require a tag-based agent image, not a digest"
+                .to_string(),
+        }));
+    }
+    let last_slash = image.rfind('/').unwrap_or(0);
+    let tag_separator = image[last_slash..].rfind(':').map(|idx| last_slash + idx);
+    let Some(separator) = tag_separator else {
+        return Ok((image.to_string(), "latest".to_string()));
+    };
+    Ok((
+        image[..separator].to_string(),
+        image[separator + 1..].to_string(),
+    ))
+}
+
+fn sanitize_kubernetes_dns_label(value: &str) -> String {
+    let mut out = String::new();
+    let mut last_dash = false;
+    for ch in value.chars() {
+        let next = if ch.is_ascii_alphanumeric() {
+            last_dash = false;
+            ch.to_ascii_lowercase()
+        } else if !last_dash {
+            last_dash = true;
+            '-'
+        } else {
+            continue;
+        };
+        out.push(next);
+        if out.len() == 63 {
+            break;
+        }
+    }
+    let out = out.trim_matches('-').to_string();
+    if out.is_empty() {
+        "alien".to_string()
+    } else {
+        out
+    }
 }
 
 /// Default releases URL for downloading binaries.
@@ -1081,18 +1514,20 @@ async fn run_push_model(
     client: &ServerClient,
     deployment_id: &str,
     platform: Platform,
+    base_platform: Option<Platform>,
     manager_url: &str,
     deployment_token: &str,
     management_config: Option<ManagementConfig>,
     network_args: &NetworkArgs,
     on_progress: Option<alien_deployment::runner::ProgressCallback>,
 ) -> Result<()> {
-    let client_config = ClientConfig::from_std_env(platform)
+    let credential_platform = base_platform.unwrap_or(platform);
+    let client_config = ClientConfig::from_std_env(credential_platform)
         .await
         .context(ErrorData::ConfigurationError {
             message: format!(
                 "Failed to load {} credentials from environment. Ensure the required environment variables are set.",
-                platform
+                credential_platform
             ),
         })?;
 
@@ -1100,6 +1535,7 @@ async fn run_push_model(
         client,
         deployment_id,
         platform,
+        base_platform,
         client_config,
         management_config,
         manager_url,
@@ -1121,6 +1557,7 @@ pub async fn push_initial_setup(
     client: &ServerClient,
     deployment_id: &str,
     platform: Platform,
+    base_platform: Option<Platform>,
     client_config: ClientConfig,
     management_config: Option<alien_core::ManagementConfig>,
     manager_base_url: &str,
@@ -1167,7 +1604,8 @@ pub async fn push_initial_setup(
                 let rel = resp.into_inner();
                 // The API returns stacks keyed by platform (e.g. {"gcp": {...}}).
                 // Extract the inner stack value for the target platform.
-                let platform_stack_value = match platform {
+                let release_stack_platform = base_platform.unwrap_or(platform);
+                let platform_stack_value = match release_stack_platform {
                     Platform::Aws => rel.stack.aws,
                     Platform::Gcp => rel.stack.gcp,
                     Platform::Azure => rel.stack.azure,
@@ -1180,7 +1618,7 @@ pub async fn push_initial_setup(
                         message: format!(
                             "Release {} has no stack for platform {}",
                             release_id,
-                            platform.as_str()
+                            release_stack_platform.as_str()
                         ),
                     })
                 })?;
@@ -1226,7 +1664,8 @@ pub async fn push_initial_setup(
     // credentials, setting environment_info to the management project.
     // push_initial_setup runs with *target* credentials, so re-collecting
     // ensures the environment_info reflects the actual target project.
-    match alien_deployment::collect_environment_info(platform, &client_config).await {
+    let environment_platform = base_platform.unwrap_or(platform);
+    match alien_deployment::collect_environment_info(environment_platform, &client_config).await {
         Ok(env_info) => {
             state.environment_info = Some(env_info);
         }
@@ -1248,7 +1687,8 @@ pub async fn push_initial_setup(
 
     // Override network settings if the customer provided CLI flags
     if let Some(net_args) = network_args {
-        let network_override = network::parse_network_settings(net_args, platform.as_str())
+        let network_platform = base_platform.unwrap_or(platform);
+        let network_override = network::parse_network_settings(net_args, network_platform.as_str())
             .map_err(|e| {
                 AlienError::new(ErrorData::ValidationError {
                     field: "network".to_string(),
@@ -1279,6 +1719,7 @@ pub async fn push_initial_setup(
     // pull auth (RegistryCredentials, imagePullSecrets) for the manager's registry.
     config.manager_url = Some(manager_base_url.to_string());
     config.deployment_token = Some(deployment_token.to_string());
+    config.base_platform = base_platform;
 
     // Extract external bindings from stack_settings (e.g., shared Container Apps Environment).
     // The JSON deserialization above doesn't connect stack_settings.external_bindings to

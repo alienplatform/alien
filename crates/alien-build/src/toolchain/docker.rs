@@ -53,14 +53,31 @@ impl DockerToolchain {
     fn humanize_buildx_failure(stderr_output: &str) -> String {
         let lower = stderr_output.to_ascii_lowercase();
 
-        if lower.contains("cannot connect to the docker daemon")
+        let summary = if lower.contains("cannot connect to the docker daemon")
             || lower.contains("is the docker daemon running")
             || lower.contains("docker.sock")
         {
-            return "Docker is installed but the daemon is unavailable. Start Docker or OrbStack and retry.".to_string();
-        }
+            "Docker is installed but the daemon is unavailable. Start Docker or OrbStack and retry."
+        } else {
+            "docker buildx build failed"
+        };
 
-        "docker buildx build failed".to_string()
+        let tail = stderr_output
+            .lines()
+            .rev()
+            .filter(|line| !line.trim().is_empty())
+            .take(20)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        if tail.is_empty() {
+            summary.to_string()
+        } else {
+            format!("{summary}; docker output:\n{tail}")
+        }
     }
 }
 

@@ -11,8 +11,9 @@
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
-    AzureResourceGroup, Ingress, ResourceLifecycle, ServiceAccount, Stack, StackSettings, Storage,
-    Worker, WorkerCode,
+    AzureResourceGroup, Ingress, KubernetesCluster, KubernetesClusterOwnership,
+    KubernetesClusterProvider, KubernetesHeartbeatMode, ResourceLifecycle, ServiceAccount, Stack,
+    StackSettings, Storage, Worker, WorkerCode,
 };
 use alien_terraform::TerraformTarget;
 
@@ -100,4 +101,54 @@ fn eks_overlay_leaves_live_workloads_to_helm() {
     let module = render(&stack, TerraformTarget::Eks, StackSettings::default());
     snapshot_module("eks_overlay_live_workload_helm_handoff", &module);
     assert_terraform_valid(&module, "eks_overlay_live_workload_helm_handoff");
+}
+
+#[test]
+fn managed_kubernetes_cluster_emitters_export_runtime_metadata() {
+    for (target, provider, expected) in [
+        (
+            TerraformTarget::Eks,
+            KubernetesClusterProvider::Eks,
+            "aws_eks_cluster",
+        ),
+        (
+            TerraformTarget::Gke,
+            KubernetesClusterProvider::Gke,
+            "google_container_cluster",
+        ),
+        (
+            TerraformTarget::Aks,
+            KubernetesClusterProvider::Aks,
+            "azurerm_kubernetes_cluster",
+        ),
+    ] {
+        let stack = Stack::new(format!("{}-managed-cluster", target.name()))
+            .add(
+                KubernetesCluster::new("kubernetes".to_string())
+                    .provider(provider)
+                    .ownership(KubernetesClusterOwnership::Managed)
+                    .namespace("default".to_string())
+                    .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+
+        let module = render(&stack, target, StackSettings::default());
+        let cluster = module
+            .get("kubernetes.tf")
+            .expect("cluster resource file should render");
+        assert!(cluster.contains(expected));
+        assert!(cluster.contains("kubernetes_cluster_mode"));
+
+        let outputs = module.get("outputs.tf").expect("outputs should render");
+        assert!(outputs.contains("kubernetes_kubeconfig"));
+        assert!(outputs.contains("kubernetes_ingress_class"));
+        assert!(outputs.contains("kubernetes_ingress_annotations"));
+
+        assert_terraform_valid(
+            &module,
+            &format!("{}_managed_kubernetes_cluster", target.name()),
+        );
+    }
 }

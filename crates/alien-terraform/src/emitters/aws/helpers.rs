@@ -5,6 +5,8 @@
 //! resolution) lives here so per-resource emitters stay focused on the
 //! Terraform their cloud team would write.
 
+use std::collections::HashSet;
+
 use crate::{
     block::{attr, block, nested, resource_block},
     emitter::TfFragment,
@@ -379,6 +381,8 @@ pub fn emit_iam_managed_policy_chunks(
 ) -> Result<()> {
     const MAX_MANAGED_POLICY_BYTES: usize = 5_500;
 
+    let mut statements = statements;
+    ensure_unique_statement_sids(&mut statements);
     let chunks = chunk_iam_statements(statements, MAX_MANAGED_POLICY_BYTES)?;
     for (idx, chunk) in chunks.into_iter().enumerate() {
         let policy_label = format!("{base_label}_{idx}");
@@ -411,6 +415,34 @@ pub fn emit_iam_managed_policy_chunks(
     }
 
     Ok(())
+}
+
+fn ensure_unique_statement_sids(statements: &mut [AwsIamStatement]) {
+    let mut used = HashSet::new();
+
+    for statement in statements {
+        if used.insert(statement.sid.clone()) {
+            continue;
+        }
+
+        let base = statement.sid.clone();
+        let mut suffix = 2usize;
+        loop {
+            let candidate = suffixed_statement_sid(&base, suffix);
+            if used.insert(candidate.clone()) {
+                statement.sid = candidate;
+                break;
+            }
+            suffix += 1;
+        }
+    }
+}
+
+fn suffixed_statement_sid(base: &str, suffix: usize) -> String {
+    let suffix = suffix.to_string();
+    let max_base_len = 128usize.saturating_sub(suffix.len());
+    let trimmed = base.chars().take(max_base_len).collect::<String>();
+    format!("{trimmed}{suffix}")
 }
 
 fn chunk_iam_statements(
@@ -575,4 +607,50 @@ pub fn iam_role_managed_policy_attachment(
 /// directly so callers can pass into block bodies.
 pub fn nested_block(name: &str, body: Vec<Structure>) -> Structure {
     nested(block(name, body))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn statement(sid: &str) -> AwsIamStatement {
+        AwsIamStatement {
+            sid: sid.to_string(),
+            effect: "Allow".to_string(),
+            action: vec!["s3:GetObject".to_string()],
+            resource: vec!["*".to_string()],
+            condition: None,
+        }
+    }
+
+    #[test]
+    fn emit_iam_managed_policy_chunks_uniquifies_duplicate_sids() {
+        let mut statements = vec![
+            statement("Duplicate"),
+            statement("Duplicate"),
+            statement("Other"),
+            statement("Duplicate"),
+        ];
+
+        ensure_unique_statement_sids(&mut statements);
+
+        let sids = statements
+            .into_iter()
+            .map(|statement| statement.sid)
+            .collect::<Vec<_>>();
+        assert_eq!(sids, ["Duplicate", "Duplicate2", "Other", "Duplicate3"]);
+    }
+
+    #[test]
+    fn emit_iam_managed_policy_chunks_trims_long_duplicate_sids() {
+        let long_sid = "A".repeat(128);
+        let mut statements = vec![statement(&long_sid), statement(&long_sid)];
+
+        ensure_unique_statement_sids(&mut statements);
+
+        assert_eq!(statements[0].sid.len(), 128);
+        assert_eq!(statements[1].sid.len(), 128);
+        assert!(statements[1].sid.ends_with('2'));
+        assert_eq!(statements[1].sid.chars().filter(|c| *c == 'A').count(), 127);
+    }
 }

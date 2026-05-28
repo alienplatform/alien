@@ -9,10 +9,8 @@ module "aws" {
   management_region = var.aws_management_region
   target_region     = var.aws_target_region
 
-  e2e_k8s_ingress_class           = var.e2e_k8s_ingress_class
-  e2e_eks_cluster_name            = var.e2e_eks_cluster_name
-  e2e_eks_kubernetes_version      = var.e2e_eks_kubernetes_version
-  e2e_ingress_nginx_chart_version = var.e2e_ingress_nginx_chart_version
+  e2e_eks_cluster_name       = var.e2e_eks_cluster_name
+  e2e_eks_kubernetes_version = var.e2e_eks_kubernetes_version
 }
 
 module "gcp" {
@@ -29,10 +27,8 @@ module "gcp" {
   target_region         = var.google_target_region
   target_provider_email = nonsensitive(try(jsondecode(var.google_target_service_account_key).client_email, ""))
 
-  e2e_k8s_ingress_class           = var.e2e_k8s_ingress_class
-  e2e_gke_cluster_name            = var.e2e_gke_cluster_name
-  e2e_gke_release_channel         = var.e2e_gke_release_channel
-  e2e_ingress_nginx_chart_version = var.e2e_ingress_nginx_chart_version
+  e2e_gke_cluster_name    = var.e2e_gke_cluster_name
+  e2e_gke_release_channel = var.e2e_gke_release_channel
 }
 
 module "gcp_target_1" {
@@ -48,10 +44,8 @@ module "gcp_target_1" {
   target_region         = var.google_target_1_region
   target_provider_email = nonsensitive(try(jsondecode(var.google_target_1_service_account_key).client_email, ""))
 
-  e2e_k8s_ingress_class           = var.e2e_k8s_ingress_class
-  e2e_gke_cluster_name            = var.e2e_gke_cluster_name
-  e2e_gke_release_channel         = var.e2e_gke_release_channel
-  e2e_ingress_nginx_chart_version = var.e2e_ingress_nginx_chart_version
+  e2e_gke_cluster_name    = var.e2e_gke_cluster_name
+  e2e_gke_release_channel = var.e2e_gke_release_channel
 }
 
 module "gcp_target_3" {
@@ -67,10 +61,8 @@ module "gcp_target_3" {
   target_region         = var.google_target_3_region
   target_provider_email = nonsensitive(try(jsondecode(var.google_target_3_service_account_key).client_email, ""))
 
-  e2e_k8s_ingress_class           = var.e2e_k8s_ingress_class
-  e2e_gke_cluster_name            = var.e2e_gke_cluster_name
-  e2e_gke_release_channel         = var.e2e_gke_release_channel
-  e2e_ingress_nginx_chart_version = var.e2e_ingress_nginx_chart_version
+  e2e_gke_cluster_name    = var.e2e_gke_cluster_name
+  e2e_gke_release_channel = var.e2e_gke_release_channel
 }
 
 module "azure" {
@@ -93,10 +85,8 @@ module "azure" {
   target_client_id           = var.azure_target_client_id
   target_client_secret       = var.azure_target_client_secret
 
-  e2e_k8s_ingress_class           = var.e2e_k8s_ingress_class
-  e2e_aks_cluster_name            = var.e2e_aks_cluster_name
-  e2e_aks_kubernetes_version      = var.e2e_aks_kubernetes_version
-  e2e_ingress_nginx_chart_version = var.e2e_ingress_nginx_chart_version
+  e2e_aks_cluster_name       = var.e2e_aks_cluster_name
+  e2e_aks_kubernetes_version = var.e2e_aks_kubernetes_version
 }
 
 data "aws_caller_identity" "management" {

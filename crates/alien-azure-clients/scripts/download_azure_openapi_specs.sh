@@ -37,7 +37,8 @@ npx --yes @redocly/cli bundle -o "$TEMP_DIR" \
     $BASE_URL/network/resource-manager/Microsoft.Network/stable/2025-03-01/networkSecurityGroup.json \
     $BASE_URL/network/resource-manager/Microsoft.Network/stable/2025-03-01/loadBalancer.json \
     $BASE_URL/compute/resource-manager/Microsoft.Compute/ComputeRP/stable/2025-04-01/ComputeRP.json \
-    $BASE_URL/compute/resource-manager/Microsoft.Compute/DiskRP/stable/2025-01-02/DiskRP.json
+    $BASE_URL/compute/resource-manager/Microsoft.Compute/DiskRP/stable/2025-01-02/DiskRP.json \
+    $BASE_URL/containerservice/resource-manager/Microsoft.ContainerService/aks/stable/2026-02-01/managedClusters.json
 
 
 # Convert OpenAPI v2 to v3 and apply filters for all JSON files

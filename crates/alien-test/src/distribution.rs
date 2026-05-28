@@ -9,8 +9,6 @@ use std::{collections::BTreeMap, path::Path, sync::Arc, time::Duration};
 use alien_azure_clients::{
     AzureServiceBusManagementClient, AzureTokenCache, ServiceBusManagementApi,
 };
-#[cfg(test)]
-use alien_core::Vault;
 use alien_core::{
     import::{
         AzureRemoteStackManagementImportData, AzureServiceBusNamespaceImportData,
@@ -23,6 +21,8 @@ use alien_core::{
     GcpManagementConfig, ManagementConfig, Platform, Stack, StackSettings, StackState, Worker,
     WorkerCode,
 };
+#[cfg(test)]
+use alien_core::{Container, ContainerCode, ResourceSpec, Vault};
 use alien_gcp_clients::{GcpClientConfigExt, ResourceManagerApi};
 use anyhow::Context;
 use serde_json::Value;
@@ -32,9 +32,12 @@ use tracing::{info, warn};
 
 use crate::{
     build_push::build_and_push_stack,
-    config::{AwsConfig, AzureConfig, GcpConfig, KubernetesRuntimeConfig, TestConfig},
+    config::{
+        AwsConfig, AzureConfig, GcpConfig, KubernetesClusterMode, KubernetesRuntimeConfig,
+        TestConfig,
+    },
     deployment::TestDeployment,
-    e2e::{self, DeploymentModel, DistributionFlow, Language, TestContext},
+    e2e::{self, DeploymentModel, DistributionFlow, TestApp, TestContext},
     helm_values::{runtime_image_pull_secrets, to_helm_values_yaml},
     manager::TestManager,
 };
@@ -191,7 +194,7 @@ struct DistributionPrepared {
     rendered_stack: Stack,
     platform: Platform,
     model: DeploymentModel,
-    language: Language,
+    app: TestApp,
     group_id: String,
     dg_token: String,
 }
@@ -210,9 +213,9 @@ struct KubernetesHelmTarget {
 
 pub async fn setup_distribution(
     flow: DistributionFlow,
-    language: Language,
+    app: TestApp,
 ) -> anyhow::Result<TestContext> {
-    let mut prepared = prepare_distribution(flow, language).await?;
+    let mut prepared = prepare_distribution(flow, app).await?;
 
     let result = match flow {
         DistributionFlow::CloudFormationAwsPush => run_cloudformation_aws(&mut prepared).await,
@@ -251,15 +254,15 @@ pub async fn setup_distribution(
 
 async fn prepare_distribution(
     flow: DistributionFlow,
-    language: Language,
+    app: TestApp,
 ) -> anyhow::Result<DistributionPrepared> {
     let platform = flow.platform();
     let model = flow.deployment_model();
-    let test_name = format!("{}_{}", flow.name(), language);
+    let test_name = format!("{}_{}", flow.name(), app);
     info!(%test_name, "Starting distribution E2E setup");
 
     let config = TestConfig::from_env();
-    if !e2e::is_platform_available(&config, platform, model, language) {
+    if !e2e::is_platform_available(&config, platform, model, app) {
         anyhow::bail!(
             "Skipping {}: platform credentials not available or platform not supported for this distribution flow",
             test_name,
@@ -286,7 +289,7 @@ async fn prepare_distribution(
 
     let build_platform = build_platform_for_flow(flow, &config)?;
     let e2e_root = e2e::e2e_test_apps_root()?;
-    let app_path = e2e_root.join(e2e::test_app_path(language));
+    let app_path = e2e_root.join(e2e::test_app_path(app));
     let stack_json = e2e::load_stack_json(&app_path, "alien.ts", build_platform).await?;
     let stack_value = stack_json
         .get(build_platform.as_str())
@@ -328,7 +331,7 @@ async fn prepare_distribution(
         rendered_stack,
         platform,
         model,
-        language,
+        app,
         group_id,
         dg_token,
     })
@@ -342,7 +345,9 @@ fn missing_distribution_flow_config(
         DistributionFlow::TerraformEksHelmPull => {
             if !config.has_platform(Platform::Aws) {
                 Some("AWS management and target credentials are required")
-            } else if config.kubernetes.eks.is_none() {
+            } else if config.kubernetes_cluster_mode == KubernetesClusterMode::Existing
+                && config.kubernetes.eks.is_none()
+            {
                 Some("ALIEN_TEST_EKS_CLUSTER_NAME and KUBECONFIG are required")
             } else {
                 None
@@ -351,7 +356,9 @@ fn missing_distribution_flow_config(
         DistributionFlow::TerraformGkeHelmPull => {
             if !config.has_platform(Platform::Gcp) {
                 Some("GCP management and target credentials are required")
-            } else if config.kubernetes.gke.is_none() {
+            } else if config.kubernetes_cluster_mode == KubernetesClusterMode::Existing
+                && config.kubernetes.gke.is_none()
+            {
                 Some(
                     "ALIEN_TEST_GKE_CLUSTER_NAME, ALIEN_TEST_GKE_CLUSTER_LOCATION, and KUBECONFIG are required",
                 )
@@ -366,7 +373,9 @@ fn missing_distribution_flow_config(
                 Some(
                     "AZURE_MANAGEMENT_OIDC_ISSUER, AZURE_MANAGEMENT_OIDC_SUBJECT, and AZURE_FEDERATED_TOKEN_FILE are required",
                 )
-            } else if config.kubernetes.aks.is_none() {
+            } else if config.kubernetes_cluster_mode == KubernetesClusterMode::Existing
+                && config.kubernetes.aks.is_none()
+            {
                 Some(
                     "ALIEN_TEST_AKS_CLUSTER_NAME, ALIEN_TEST_AKS_CLUSTER_RESOURCE_GROUP, and KUBECONFIG are required",
                 )
@@ -810,8 +819,19 @@ async fn run_terraform_k8s(
     prepared: &mut DistributionPrepared,
     target: alien_terraform::TerraformTarget,
 ) -> anyhow::Result<TestContext> {
-    let helm_target = required_kubernetes_helm_target(prepared, target)?;
-    let result = apply_terraform_and_import(prepared, target, Some(&helm_target.namespace)).await?;
+    let existing_helm_target = match prepared.config.kubernetes_cluster_mode {
+        KubernetesClusterMode::Existing => Some(required_kubernetes_helm_target(prepared, target)?),
+        KubernetesClusterMode::Create => None,
+    };
+    let namespace = existing_helm_target
+        .as_ref()
+        .map(|target| target.namespace.clone())
+        .unwrap_or_else(|| random_kubernetes_namespace("alien-test"));
+    let result = apply_terraform_and_import(prepared, target, Some(&namespace)).await?;
+    let helm_target = match existing_helm_target {
+        Some(helm_target) => helm_target,
+        None => kubernetes_helm_target_from_outputs(&result.outputs, namespace)?,
+    };
     let chart_dir = match render_helm_chart(prepared).await {
         Ok(chart_dir) => chart_dir,
         Err(error) => {
@@ -886,8 +906,9 @@ async fn apply_terraform_and_import(
     let workdir = tempfile::tempdir().context("Failed to create Terraform workdir")?;
     let registry = alien_terraform::TfRegistry::built_in();
     let stack_settings = stack_settings_for_terraform(prepared)?;
+    let terraform_stack = terraform_stack_for_target(prepared, target, &stack_settings).await?;
     let module = alien_terraform::generate_terraform_module(
-        &prepared.rendered_stack,
+        &terraform_stack,
         target,
         alien_terraform::TerraformOptions {
             display_name: None,
@@ -963,6 +984,61 @@ async fn apply_terraform_and_import(
     }
 }
 
+async fn terraform_stack_for_target(
+    prepared: &DistributionPrepared,
+    target: alien_terraform::TerraformTarget,
+    stack_settings: &StackSettings,
+) -> anyhow::Result<Stack> {
+    if !target.is_kubernetes() {
+        return Ok(prepared.rendered_stack.clone());
+    }
+
+    terraform_kubernetes_stack_for_target(
+        prepared.built_stack.clone(),
+        target,
+        stack_settings.clone(),
+    )
+    .await
+}
+
+async fn terraform_kubernetes_stack_for_target(
+    stack: Stack,
+    target: alien_terraform::TerraformTarget,
+    stack_settings: StackSettings,
+) -> anyhow::Result<Stack> {
+    let runner = alien_preflights::runner::PreflightRunner::new();
+    runner
+        .run_template_preflights(&stack, Platform::Kubernetes)
+        .await?;
+
+    let stack_state = StackState::new(Platform::Kubernetes);
+    let config = DeploymentConfig {
+        deployment_name: Some(stack.id().to_string()),
+        stack_settings: stack_settings.clone(),
+        management_config: render_management_config(target.platform(), &stack_settings),
+        environment_variables: EnvironmentVariablesSnapshot {
+            variables: Vec::new(),
+            hash: "empty".to_string(),
+            created_at: "1970-01-01T00:00:00Z".to_string(),
+        },
+        allow_frozen_changes: false,
+        compute_backend: None,
+        external_bindings: ExternalBindings::default(),
+        base_platform: Some(target.platform()),
+        public_urls: None,
+        domain_metadata: None,
+        monitoring: None,
+        manager_url: None,
+        deployment_token: None,
+        native_image_host: None,
+    };
+
+    runner
+        .apply_mutations(stack, &stack_state, &config)
+        .await
+        .map_err(|error| anyhow::anyhow!("{error}"))
+}
+
 async fn render_helm_chart(prepared: &DistributionPrepared) -> anyhow::Result<TempDir> {
     let stack_settings =
         e2e_stack_settings_for_flow(prepared.model, &prepared.config, Platform::Kubernetes)?;
@@ -979,7 +1055,7 @@ async fn render_helm_chart(prepared: &DistributionPrepared) -> anyhow::Result<Te
         alien_helm::HelmOptions {
             registry: &registry,
             stack_settings,
-            chart_name: format!("alien-e2e-{}", prepared.language),
+            chart_name: format!("alien-e2e-{}", prepared.app),
         },
     )
     .map_err(|error| anyhow::anyhow!("Helm chart render failed: {error}"))?;
@@ -1175,6 +1251,39 @@ fn required_kubernetes_helm_target(
     })
 }
 
+fn kubernetes_helm_target_from_outputs(
+    outputs: &Value,
+    namespace: String,
+) -> anyhow::Result<KubernetesHelmTarget> {
+    let ingress_annotations = terraform_output_string(outputs, "kubernetes_ingress_annotations")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| {
+            serde_json::from_str::<BTreeMap<String, String>>(&value)
+                .context("terraform output kubernetes_ingress_annotations was not a string map")
+        })
+        .transpose()?
+        .unwrap_or_default();
+    Ok(KubernetesHelmTarget {
+        namespace,
+        runtime: KubernetesRuntimeConfig {
+            kubeconfig: terraform_output_string(outputs, "kubernetes_kubeconfig")?,
+            kube_context: terraform_output_string(outputs, "kubernetes_kube_context")
+                .ok()
+                .filter(|value| !value.is_empty()),
+            namespace_prefix: "alien-test".to_string(),
+            ingress_class: terraform_output_string(outputs, "kubernetes_ingress_class")
+                .ok()
+                .filter(|value| !value.is_empty()),
+            ingress_annotations,
+            public_host_suffix: terraform_output_string(outputs, "kubernetes_public_host_suffix")
+                .ok()
+                .filter(|value| !value.is_empty()),
+            tls_secret_name: None,
+        },
+    })
+}
+
 fn random_kubernetes_namespace(prefix: &str) -> String {
     let prefix = sanitize_kubernetes_dns_label(prefix);
     format!("{prefix}-{}", &uuid::Uuid::new_v4().to_string()[..8])
@@ -1230,6 +1339,23 @@ fn apply_kubernetes_service_values(
                     ingress.insert("className".to_string(), Value::String(class_name.clone()));
                 });
         }
+        if !helm_target.runtime.ingress_annotations.is_empty() {
+            service
+                .entry("ingress".to_string())
+                .or_insert_with(|| serde_json::json!({}))
+                .as_object_mut()
+                .map(|ingress| {
+                    let annotations = ingress
+                        .entry("annotations".to_string())
+                        .or_insert_with(|| serde_json::json!({}))
+                        .as_object_mut();
+                    if let Some(annotations) = annotations {
+                        for (key, value) in &helm_target.runtime.ingress_annotations {
+                            annotations.insert(key.clone(), Value::String(value.clone()));
+                        }
+                    }
+                });
+        }
         if let Some(tls_secret_name) = &helm_target.runtime.tls_secret_name {
             service.insert(
                 "tls".to_string(),
@@ -1256,6 +1382,16 @@ fn apply_kubernetes_service_values(
                 "publicUrl".to_string(),
                 Value::String(format!("{scheme}://{host}")),
             );
+        } else if helm_target.runtime.ingress_class.is_some()
+            || !helm_target.runtime.ingress_annotations.is_empty()
+        {
+            service
+                .entry("ingress".to_string())
+                .or_insert_with(|| serde_json::json!({}))
+                .as_object_mut()
+                .map(|ingress| {
+                    ingress.insert("hostless".to_string(), Value::Bool(true));
+                });
         }
     }
 }
@@ -1316,7 +1452,7 @@ fn context_from_deployment(
         manager: prepared.manager.clone(),
         platform: prepared.platform,
         model: prepared.model,
-        language: prepared.language,
+        app: prepared.app,
         agent: None,
         distribution_cleanups: cleanups,
     }
@@ -1327,6 +1463,12 @@ async fn wait_and_finalize(ctx: &mut TestContext) -> anyhow::Result<()> {
         .wait_until_running(Duration::from_secs(600))
         .await
         .map_err(|error| anyhow::anyhow!("Deployment failed to reach running: {error}"))?;
+    if ctx.platform == Platform::Kubernetes
+        && ctx.app == TestApp::FullStackMicroservices
+        && ctx.deployment.url.is_none()
+    {
+        ctx.deployment.url = discover_kubernetes_public_url(ctx).await?;
+    }
     if ctx.model == DeploymentModel::Push
         && matches!(
             ctx.platform,
@@ -1336,6 +1478,76 @@ async fn wait_and_finalize(ctx: &mut TestContext) -> anyhow::Result<()> {
         provision_managed_test_secret(&ctx.manager, &ctx.deployment).await?;
     }
     Ok(())
+}
+
+async fn discover_kubernetes_public_url(ctx: &TestContext) -> anyhow::Result<Option<String>> {
+    let Some((namespace, kubeconfig, kube_context)) =
+        ctx.distribution_cleanups
+            .iter()
+            .find_map(|cleanup| match cleanup {
+                DistributionArtifactCleanup::Helm {
+                    namespace,
+                    kubeconfig,
+                    kube_context,
+                    ..
+                } => Some((
+                    namespace.as_str(),
+                    kubeconfig.as_deref(),
+                    kube_context.as_deref(),
+                )),
+                _ => None,
+            })
+    else {
+        return Ok(None);
+    };
+
+    let timeout = Duration::from_secs(600);
+    let started = tokio::time::Instant::now();
+    loop {
+        let mut cmd = Command::new("kubectl");
+        cmd.args(["get", "ingress", "-n", namespace, "-o", "json"]);
+        if let Some(kubeconfig) = kubeconfig {
+            cmd.env("KUBECONFIG", kubeconfig);
+        }
+        if let Some(kube_context) = kube_context {
+            cmd.args(["--context", kube_context]);
+        }
+        let output = command_output(cmd, "kubectl get ingress -o json").await?;
+        let ingresses: Value = serde_json::from_slice(&output.stdout)
+            .context("Failed to parse kubectl ingress JSON")?;
+        if let Some(address) = first_ingress_address(&ingresses) {
+            return Ok(Some(format!("http://{address}")));
+        }
+        if started.elapsed() >= timeout {
+            anyhow::bail!(
+                "Kubernetes ingress did not receive a public load-balancer address within {timeout:?}"
+            );
+        }
+        tokio::time::sleep(Duration::from_secs(10)).await;
+    }
+}
+
+fn first_ingress_address(ingresses: &Value) -> Option<String> {
+    ingresses
+        .get("items")?
+        .as_array()?
+        .iter()
+        .flat_map(|ingress| {
+            ingress
+                .get("status")
+                .and_then(|status| status.get("loadBalancer"))
+                .and_then(|load_balancer| load_balancer.get("ingress"))
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+        })
+        .find_map(|address| {
+            address
+                .get("hostname")
+                .and_then(Value::as_str)
+                .or_else(|| address.get("ip").and_then(Value::as_str))
+                .map(ToString::to_string)
+        })
 }
 
 async fn provision_managed_test_secret(
@@ -2089,11 +2301,23 @@ fn terraform_tfvars(
         let namespace =
             kubernetes_namespace.context("Kubernetes Terraform target missing namespace")?;
         vars.insert(
+            "kubernetes_cluster_mode".to_string(),
+            Value::String(
+                match prepared.config.kubernetes_cluster_mode {
+                    KubernetesClusterMode::Existing => "existing",
+                    KubernetesClusterMode::Create => "create",
+                }
+                .to_string(),
+            ),
+        );
+        vars.insert(
             "kubernetes_namespace".to_string(),
             Value::String(namespace.to_string()),
         );
         match target {
-            alien_terraform::TerraformTarget::Eks => {
+            alien_terraform::TerraformTarget::Eks
+                if prepared.config.kubernetes_cluster_mode == KubernetesClusterMode::Existing =>
+            {
                 let eks = prepared
                     .config
                     .kubernetes
@@ -2105,7 +2329,9 @@ fn terraform_tfvars(
                     Value::String(eks.cluster_name.clone()),
                 );
             }
-            alien_terraform::TerraformTarget::Gke => {
+            alien_terraform::TerraformTarget::Gke
+                if prepared.config.kubernetes_cluster_mode == KubernetesClusterMode::Existing =>
+            {
                 let gke = prepared
                     .config
                     .kubernetes
@@ -2121,7 +2347,9 @@ fn terraform_tfvars(
                     Value::String(gke.cluster_location.clone()),
                 );
             }
-            alien_terraform::TerraformTarget::Aks => {
+            alien_terraform::TerraformTarget::Aks
+                if prepared.config.kubernetes_cluster_mode == KubernetesClusterMode::Existing =>
+            {
                 let aks = prepared
                     .config
                     .kubernetes
@@ -2384,9 +2612,13 @@ mod tests {
             .build();
         let stack_settings = stack_settings_for_flow(DeploymentModel::Pull);
 
-        let rendered_stack = apply_render_mutations(source_stack, Platform::Aws, &stack_settings)
-            .await
-            .expect("distribution render mutations should succeed");
+        let rendered_stack = terraform_kubernetes_stack_for_target(
+            source_stack,
+            alien_terraform::TerraformTarget::Eks,
+            stack_settings.clone(),
+        )
+        .await
+        .expect("Kubernetes Terraform render mutations should succeed");
         assert!(
             contains_resource_type(&rendered_stack, "remote-stack-management"),
             "pull-mode Kubernetes setup needs a manager cloud identity"
@@ -2420,6 +2652,65 @@ mod tests {
             rendered.contains("id   = \"remote-stack-management\""),
             "rendered Terraform should include the management identity resource"
         );
+    }
+
+    #[tokio::test]
+    async fn eks_pull_distribution_does_not_carry_cloud_compute_cluster() {
+        let source_stack = Stack::new("distribution-eks-containers".to_string())
+            .permission("execution", PermissionProfile::new())
+            .add(
+                Container::new("api".to_string())
+                    .permissions("execution".to_string())
+                    .code(ContainerCode::Image {
+                        image: "manager.example.com/api:tag".to_string(),
+                    })
+                    .cpu(ResourceSpec {
+                        min: "0.25".to_string(),
+                        desired: "0.25".to_string(),
+                    })
+                    .memory(ResourceSpec {
+                        min: "128Mi".to_string(),
+                        desired: "128Mi".to_string(),
+                    })
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let stack_settings = stack_settings_for_flow(DeploymentModel::Pull);
+
+        let rendered_stack = terraform_kubernetes_stack_for_target(
+            source_stack,
+            alien_terraform::TerraformTarget::Eks,
+            stack_settings.clone(),
+        )
+        .await
+        .expect("Kubernetes Terraform render mutations should succeed");
+
+        assert!(
+            contains_resource_type(&rendered_stack, "kubernetes-cluster"),
+            "Kubernetes Terraform setup should include the cluster substrate"
+        );
+        assert!(
+            contains_resource_type(&rendered_stack, "remote-stack-management"),
+            "Kubernetes Terraform setup should include the cloud management identity"
+        );
+        assert!(
+            !contains_resource_type(&rendered_stack, "compute-cluster"),
+            "Kubernetes Terraform setup must not reuse the cloud VM compute substrate"
+        );
+
+        let registry = alien_terraform::TfRegistry::built_in();
+        alien_terraform::generate_terraform_module(
+            &rendered_stack,
+            alien_terraform::TerraformTarget::Eks,
+            alien_terraform::TerraformOptions {
+                display_name: None,
+                registry: &registry,
+                stack_settings,
+                registration: None,
+            },
+        )
+        .expect("Terraform generation should not require a compute-cluster emitter");
     }
 
     fn azure_config(

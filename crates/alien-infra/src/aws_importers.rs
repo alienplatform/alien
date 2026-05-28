@@ -8,11 +8,15 @@
 //! `alien-platform-controllers` (per the OSS / platform split) and is added
 //! by `register_platform_importers` at boot.
 
+#[cfg(feature = "kubernetes")]
+use alien_core::KubernetesCluster;
 use alien_core::{ArtifactRegistry, Build, Kv, Network, Platform, Queue, Storage, Vault, Worker};
 use alien_core::{RemoteStackManagement, ServiceAccount};
 
 use crate::artifact_registry::AwsArtifactRegistryImporter;
 use crate::build::AwsBuildImporter;
+#[cfg(feature = "kubernetes")]
+use crate::kubernetes_cluster::KubernetesClusterImporter;
 use crate::kv::AwsKvImporter;
 use crate::network::AwsNetworkImporter;
 use crate::queue::AwsQueueImporter;
@@ -48,4 +52,10 @@ pub fn register(registry: &mut ImporterRegistry) {
             AwsArtifactRegistryImporter,
         )
         .register(Worker::RESOURCE_TYPE, Platform::Aws, AwsWorkerImporter);
+    #[cfg(feature = "kubernetes")]
+    registry.register(
+        KubernetesCluster::RESOURCE_TYPE,
+        Platform::Aws,
+        KubernetesClusterImporter,
+    );
 }

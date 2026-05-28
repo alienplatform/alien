@@ -640,6 +640,45 @@ impl ResourceRegistry {
             >::new()),
         );
 
+        // Register KubernetesCluster controller. The cluster is selected or
+        // created during setup; this runtime controller records substrate
+        // readiness once the agent is installed and reporting.
+        #[cfg(feature = "kubernetes")]
+        registry.register_controller_factory(
+            alien_core::KubernetesCluster::RESOURCE_TYPE,
+            Platform::Kubernetes,
+            Box::new(DefaultControllerFactory::<
+                crate::kubernetes_cluster::KubernetesClusterController,
+            >::new()),
+        );
+
+        #[cfg(all(feature = "aws", feature = "kubernetes"))]
+        registry.register_controller_factory(
+            alien_core::KubernetesCluster::RESOURCE_TYPE,
+            Platform::Aws,
+            Box::new(DefaultControllerFactory::<
+                crate::kubernetes_cluster::KubernetesClusterController,
+            >::new()),
+        );
+
+        #[cfg(all(feature = "gcp", feature = "kubernetes"))]
+        registry.register_controller_factory(
+            alien_core::KubernetesCluster::RESOURCE_TYPE,
+            Platform::Gcp,
+            Box::new(DefaultControllerFactory::<
+                crate::kubernetes_cluster::KubernetesClusterController,
+            >::new()),
+        );
+
+        #[cfg(all(feature = "azure", feature = "kubernetes"))]
+        registry.register_controller_factory(
+            alien_core::KubernetesCluster::RESOURCE_TYPE,
+            Platform::Azure,
+            Box::new(DefaultControllerFactory::<
+                crate::kubernetes_cluster::KubernetesClusterController,
+            >::new()),
+        );
+
         // Register Local Container controller
         #[cfg(feature = "local")]
         registry.register_controller_factory(

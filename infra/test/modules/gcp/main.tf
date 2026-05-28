@@ -57,10 +57,9 @@ resource "google_compute_router_nat" "e2e" {
 
 # ── Target: shared GKE cluster for Terraform -> Helm E2Es ────────────────────
 
-resource "google_compute_address" "e2e_ingress" {
+resource "google_compute_global_address" "e2e_ingress" {
   provider = google.target
   name     = "alien-e2e-ingress-${random_id.suffix.hex}"
-  region   = var.target_region
 
   depends_on = [google_project_service.target_apis]
 }

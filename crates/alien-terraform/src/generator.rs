@@ -295,6 +295,7 @@ pub fn generate_terraform_module(
     files.insert(
         "import.tf".to_string(),
         render_body(import_body(
+            target,
             options.registration.as_ref(),
             &import_depends_on,
         ))?,
@@ -923,6 +924,12 @@ fn variables_body(
     }
     if target.is_kubernetes() {
         blocks.push(nested(variable_block(
+            "kubernetes_cluster_mode",
+            "Kubernetes cluster mode. Values: create or existing.",
+            Some(Expression::String("create".to_string())),
+            false,
+        )));
+        blocks.push(nested(variable_block(
             "kubernetes_namespace",
             "Kubernetes namespace for runtime resources.",
             Some(Expression::String("default".to_string())),
@@ -933,7 +940,7 @@ fn variables_body(
         blocks.push(nested(variable_block(
             "eks_cluster_name",
             "Existing EKS cluster name that Helm will install into.",
-            None,
+            Some(Expression::String(String::new())),
             false,
         )));
     }
@@ -941,13 +948,13 @@ fn variables_body(
         blocks.push(nested(variable_block(
             "gke_cluster_name",
             "Existing GKE cluster name that Helm will install into.",
-            None,
+            Some(Expression::String(String::new())),
             false,
         )));
         blocks.push(nested(variable_block(
             "gke_cluster_location",
             "Existing GKE cluster location (region or zone).",
-            None,
+            Some(Expression::String(String::new())),
             false,
         )));
     }
@@ -955,13 +962,13 @@ fn variables_body(
         blocks.push(nested(variable_block(
             "aks_cluster_name",
             "Existing AKS cluster name that Helm will install into.",
-            None,
+            Some(Expression::String(String::new())),
             false,
         )));
         blocks.push(nested(variable_block(
             "aks_cluster_resource_group_name",
             "Resource group containing the existing AKS cluster.",
-            None,
+            Some(Expression::String(String::new())),
             false,
         )));
     }
@@ -1228,6 +1235,26 @@ fn locals_body(
         Expression::Array(imported_resources),
     ));
 
+    if target.is_kubernetes() {
+        for (name, value) in [
+            ("kubernetes_kubeconfig", Expression::String(String::new())),
+            ("kubernetes_kube_context", Expression::String(String::new())),
+            (
+                "kubernetes_ingress_class",
+                Expression::String(String::new()),
+            ),
+            ("kubernetes_ingress_annotations", expr::raw("{}")),
+            (
+                "kubernetes_public_host_suffix",
+                Expression::String(String::new()),
+            ),
+        ] {
+            if !extra.contains_key(name) {
+                body.push(attr(name, value));
+            }
+        }
+    }
+
     for (name, value) in extra {
         body.push(attr(name, value.clone()));
     }
@@ -1362,7 +1389,11 @@ fn has_dynamic_gcp_network_settings(network: Option<&NetworkSettings>) -> bool {
     matches!(network, Some(NetworkSettings::Create { .. }))
 }
 
-fn import_body(registration: Option<&TerraformRegistration>, depends_on: &[Expression]) -> Body {
+fn import_body(
+    target: TerraformTarget,
+    registration: Option<&TerraformRegistration>,
+    depends_on: &[Expression],
+) -> Body {
     let depends_on_attr = (!depends_on.is_empty()).then(|| {
         attr(
             "depends_on",
@@ -1407,6 +1438,12 @@ fn import_body(registration: Option<&TerraformRegistration>, depends_on: &[Expre
             attr("stack_settings", expr::raw("local.deployment_settings")),
             attr("resources", expr::raw("local.deployment_resources")),
         ];
+        if target.is_kubernetes() {
+            body.push(attr(
+                "base_platform",
+                expr::raw("local.deployment_base_platform"),
+            ));
+        }
         if let Some(depends_on_attr) = depends_on_attr {
             body.push(depends_on_attr);
         }
@@ -1419,49 +1456,57 @@ fn import_body(registration: Option<&TerraformRegistration>, depends_on: &[Expre
 
     let mut body = vec![attr(
         "input",
-        expr::object([
-            ("platform", expr::raw("local.deployment_platform")),
-            ("token", expr::raw("var.token")),
-            ("name", expr::raw("var.name")),
-            ("resource_prefix", expr::raw("local.resource_prefix")),
-            (
-                "setup_target",
-                Expression::String(
-                    registration
-                        .map(|r| r.setup_target.clone())
-                        .unwrap_or_default(),
+        expr::object(
+            [
+                ("platform", expr::raw("local.deployment_platform")),
+                ("token", expr::raw("var.token")),
+                ("name", expr::raw("var.name")),
+                ("resource_prefix", expr::raw("local.resource_prefix")),
+                (
+                    "setup_target",
+                    Expression::String(
+                        registration
+                            .map(|r| r.setup_target.clone())
+                            .unwrap_or_default(),
+                    ),
                 ),
-            ),
-            (
-                "setup_import_format_version",
-                Expression::Number(hcl::Number::from(i64::from(
-                    CURRENT_SETUP_IMPORT_FORMAT_VERSION,
-                ))),
-            ),
-            (
-                "setup_fingerprint",
-                Expression::String(
-                    registration
-                        .map(|r| r.setup_fingerprint.clone())
-                        .unwrap_or_default(),
+                (
+                    "setup_import_format_version",
+                    Expression::Number(hcl::Number::from(i64::from(
+                        CURRENT_SETUP_IMPORT_FORMAT_VERSION,
+                    ))),
                 ),
+                (
+                    "setup_fingerprint",
+                    Expression::String(
+                        registration
+                            .map(|r| r.setup_fingerprint.clone())
+                            .unwrap_or_default(),
+                    ),
+                ),
+                (
+                    "setup_fingerprint_version",
+                    Expression::Number(hcl::Number::from(i64::from(
+                        registration
+                            .map(|r| r.setup_fingerprint_version)
+                            .unwrap_or_default(),
+                    ))),
+                ),
+                ("manager_url", expr::raw("var.manager_url")),
+                (
+                    "management_config",
+                    expr::raw("local.deployment_management_config"),
+                ),
+                ("stack_settings", expr::raw("local.deployment_settings")),
+                ("resources", expr::raw("local.deployment_resources")),
+            ]
+            .into_iter()
+            .chain(
+                target
+                    .is_kubernetes()
+                    .then(|| ("basePlatform", expr::raw("local.deployment_base_platform"))),
             ),
-            (
-                "setup_fingerprint_version",
-                Expression::Number(hcl::Number::from(i64::from(
-                    registration
-                        .map(|r| r.setup_fingerprint_version)
-                        .unwrap_or_default(),
-                ))),
-            ),
-            ("manager_url", expr::raw("var.manager_url")),
-            (
-                "management_config",
-                expr::raw("local.deployment_management_config"),
-            ),
-            ("stack_settings", expr::raw("local.deployment_settings")),
-            ("resources", expr::raw("local.deployment_resources")),
-        ]),
+        ),
     )];
     if let Some(depends_on_attr) = depends_on_attr {
         body.push(depends_on_attr);
@@ -1563,6 +1608,31 @@ fn outputs_body(target: TerraformTarget, registration: Option<&TerraformRegistra
             "Base cloud platform for Kubernetes targets.",
         ));
         outputs.push((
+            "kubernetes_kubeconfig",
+            expr::raw("local.kubernetes_kubeconfig"),
+            "Kubeconfig for managed Kubernetes clusters created by this module.",
+        ));
+        outputs.push((
+            "kubernetes_kube_context",
+            expr::raw("local.kubernetes_kube_context"),
+            "Kube context for managed Kubernetes clusters created by this module.",
+        ));
+        outputs.push((
+            "kubernetes_ingress_class",
+            expr::raw("local.kubernetes_ingress_class"),
+            "Ingress class selected by Kubernetes cluster provisioning.",
+        ));
+        outputs.push((
+            "kubernetes_ingress_annotations",
+            expr::raw("jsonencode(local.kubernetes_ingress_annotations)"),
+            "Ingress annotations selected by Kubernetes cluster provisioning.",
+        ));
+        outputs.push((
+            "kubernetes_public_host_suffix",
+            expr::raw("local.kubernetes_public_host_suffix"),
+            "DNS suffix for generated Kubernetes public hosts when known at setup time.",
+        ));
+        outputs.push((
             "helm_values",
             expr::raw("jsonencode(local.helm_values)"),
             "Helm values JSON for the manager-fetch Kubernetes install.",
@@ -1576,7 +1646,10 @@ fn outputs_body(target: TerraformTarget, registration: Option<&TerraformRegistra
                 attr("value", value),
                 attr("description", Expression::String(description.to_string())),
             ];
-            if name == "deployment_stack_settings" || name == "helm_values" {
+            if name == "deployment_stack_settings"
+                || name == "helm_values"
+                || name == "kubernetes_kubeconfig"
+            {
                 body.push(attr("sensitive", Expression::Bool(true)));
             }
 
@@ -1662,8 +1735,8 @@ mod tests {
         assert!(versions.contains("example_app ="));
         assert!(versions.contains("registry.example.com/acme/example-app"));
 
-        let import =
-            render_body(import_body(Some(&registration), &[])).expect("registration import render");
+        let import = render_body(import_body(TerraformTarget::Aws, Some(&registration), &[]))
+            .expect("registration import render");
         assert!(import.contains("resource \"example_app_deployment\" \"this\""));
 
         let outputs =

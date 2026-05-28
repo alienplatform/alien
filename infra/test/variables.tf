@@ -172,7 +172,7 @@ variable "e2e_k8s_namespace_prefix" {
 variable "e2e_k8s_ingress_class" {
   description = "IngressClass name used by Kubernetes distribution E2Es."
   type        = string
-  default     = "nginx"
+  default     = ""
 }
 
 variable "e2e_k8s_public_host_suffix" {
@@ -251,10 +251,4 @@ variable "e2e_aks_kubernetes_version" {
   description = "Kubernetes version for the shared AKS cluster."
   type        = string
   default     = "1.35"
-}
-
-variable "e2e_ingress_nginx_chart_version" {
-  description = "ingress-nginx Helm chart version installed into shared Kubernetes E2E clusters."
-  type        = string
-  default     = "4.15.1"
 }

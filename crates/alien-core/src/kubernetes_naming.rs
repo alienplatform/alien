@@ -48,12 +48,8 @@ fn truncate_dns_label(mut name: String) -> String {
 }
 
 /// Canonical Kubernetes workload name for stack resources.
-pub fn kubernetes_resource_name(resource_prefix: &str, resource_id: &str) -> String {
-    truncate_dns_label(format!(
-        "{}-{}",
-        dns_label(resource_prefix),
-        dns_label(resource_id)
-    ))
+pub fn kubernetes_resource_name(_resource_prefix: &str, resource_id: &str) -> String {
+    truncate_dns_label(dns_label(resource_id))
 }
 
 /// Canonical Kubernetes ServiceAccount for a permission profile.
@@ -93,6 +89,15 @@ mod tests {
         assert_eq!(
             kubernetes_service_account_name("My_App!", "Writer#Profile"),
             "my-app-writer-profile-sa"
+        );
+    }
+
+    #[test]
+    fn app_resource_names_are_namespace_local() {
+        assert_eq!(kubernetes_resource_name("e2e-01", "postgres"), "postgres");
+        assert_eq!(
+            kubernetes_resource_name("My_App!", "API#Gateway"),
+            "api-gateway"
         );
     }
 
