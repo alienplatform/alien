@@ -1,0 +1,696 @@
+---
+source: crates/alien-terraform/tests/generator/helpers.rs
+expression: buf
+---
+=== versions.tf ===
+terraform {
+  required_version = ">= 1.5.0"
+
+  required_providers {
+    google = {
+      source  = "hashicorp/google"
+      version = ">= 5.0"
+    }
+    kubernetes = {
+      source  = "hashicorp/kubernetes"
+      version = ">= 2.30"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = ">= 3.6"
+    }
+  }
+}
+
+=== variables.tf ===
+variable "resource_prefix" {
+  type        = string
+  description = "Optional stable physical resource prefix. Leave empty to generate one."
+  default     = ""
+
+  validation {
+    condition     = var.resource_prefix == "" || (can(regex("^[a-z][a-z0-9-]{1,38}[a-z0-9]$", var.resource_prefix)) && length(regexall("--", var.resource_prefix)) == 0)
+    error_message = "resource_prefix must be 3-40 characters: lowercase letters, numbers, and hyphens; start with a letter; end with a letter or number; and not contain consecutive hyphens."
+  }
+}
+
+variable "name" {
+  type        = string
+  description = "Human-readable application name shown in setup and cloud IAM review metadata."
+}
+
+variable "token" {
+  type        = string
+  description = "Install token from the application setup page. This is the same token used by the deploy CLI --token flag."
+  sensitive   = true
+}
+
+variable "manager_url" {
+  type        = string
+  description = "Optional manager endpoint used by pull-style runtimes."
+  default     = ""
+}
+
+variable "stack_settings_json" {
+  type        = string
+  description = "Optional JSON-encoded StackSettings override supplied by deployment installers."
+  default     = "{}"
+  sensitive   = true
+}
+
+variable "gcp_project" {
+  type        = string
+  description = "GCP project ID."
+}
+
+variable "gcp_region" {
+  type        = string
+  description = "GCP region."
+  default     = "us-central1"
+}
+
+variable "managing_service_account_email" {
+  type        = string
+  description = "Email of the manager's service account that may impersonate the management identity. Empty disables the binding."
+  default     = ""
+}
+
+variable "gcp_manage_custom_roles" {
+  type        = bool
+  description = "Whether this module creates the GCP project custom roles it binds. Set to false when those roles are managed outside this stack."
+  default     = true
+}
+
+variable "gcp_custom_role_prefix" {
+  type        = string
+  description = "Prefix used for GCP project custom role IDs when gcp_manage_custom_roles is false. Empty uses resource_prefix."
+  default     = ""
+}
+
+variable "kubernetes_cluster_mode" {
+  type        = string
+  description = "Kubernetes cluster mode. Values: create or existing."
+  default     = "create"
+}
+
+variable "install_metrics_server" {
+  type        = bool
+  description = "Whether to install metrics-server into Kubernetes clusters created by this module."
+  default     = true
+}
+
+variable "kubernetes_namespace" {
+  type        = string
+  description = "Kubernetes namespace for runtime resources."
+  default     = "default"
+}
+
+variable "gke_cluster_name" {
+  type        = string
+  description = "Existing GKE cluster name that Helm will install into."
+  default     = ""
+}
+
+variable "gke_cluster_location" {
+  type        = string
+  description = "Existing GKE cluster location (region or zone)."
+  default     = ""
+}
+
+=== providers.tf ===
+provider "google" {
+  project = var.gcp_project
+  region  = var.gcp_region
+}
+
+provider "kubernetes" {
+  host                   = "https://${data.google_container_cluster.target.endpoint}"
+  cluster_ca_certificate = base64decode(data.google_container_cluster.target.master_auth[0].cluster_ca_certificate)
+  client_certificate     = base64decode(data.google_container_cluster.target.master_auth[0].client_certificate)
+  client_key             = base64decode(data.google_container_cluster.target.master_auth[0].client_key)
+}
+
+=== resource_prefix.tf ===
+resource "random_id" "resource_prefix" {
+  byte_length = 4
+}
+
+=== locals.tf ===
+locals {
+  resource_prefix          = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
+  deployment_name          = var.name
+  gcp_custom_role_prefix   = substr(replace(lower(var.gcp_custom_role_prefix == "" ? local.resource_prefix : var.gcp_custom_role_prefix), "-", "_"), 0, 18)
+  deployment_platform      = "kubernetes"
+  deployment_base_platform = "gcp"
+  deployment_target        = "gke"
+  deployment_region        = var.gcp_region
+  deployment_management_config = {
+    platform            = "gcp"
+    projectId           = var.gcp_project
+    serviceAccountEmail = var.managing_service_account_email
+  }
+  deployment_kubernetes_settings = merge(try(jsondecode(var.stack_settings_json).kubernetes, {}), { exposure = coalesce(try(jsondecode(var.stack_settings_json).kubernetes.exposure, null), local.kubernetes_exposure) })
+  deployment_settings            = merge(jsondecode(var.stack_settings_json), { kubernetes = local.deployment_kubernetes_settings })
+  deployment_resources = [
+    {
+      id   = "kubernetes"
+      type = "kubernetes-cluster"
+      importData = {
+        provider           = "gke"
+        ownership          = var.kubernetes_cluster_mode == "create" ? "managed" : "managed"
+        namespace          = var.kubernetes_namespace
+        clusterName        = local.kubernetes_cluster_name
+        clusterId          = local.kubernetes_cluster_name
+        cloudMetadataReady = true
+      }
+    }
+  ]
+  kubernetes_cluster_name = var.kubernetes_cluster_mode == "create" ? google_container_cluster.kubernetes[0].name : var.gke_cluster_name
+  kubernetes_kube_context = local.kubernetes_cluster_name
+  kubernetes_kubeconfig   = var.kubernetes_cluster_mode == "create" ? yamlencode({ apiVersion = "v1", kind = "Config", clusters = [{ name = google_container_cluster.kubernetes[0].name, cluster = { server = "https://${google_container_cluster.kubernetes[0].endpoint}", "certificate-authority-data" = google_container_cluster.kubernetes[0].master_auth[0].cluster_ca_certificate } }], contexts = [{ name = google_container_cluster.kubernetes[0].name, context = { cluster = google_container_cluster.kubernetes[0].name, user = google_container_cluster.kubernetes[0].name } }], "current-context" = google_container_cluster.kubernetes[0].name, users = [{ name = google_container_cluster.kubernetes[0].name, user = { "client-certificate-data" = google_container_cluster.kubernetes[0].master_auth[0].client_certificate, "client-key-data" = google_container_cluster.kubernetes[0].master_auth[0].client_key } }] }) : ""
+  kubernetes_exposure = {
+    mode = "generated"
+    route = {
+      routeApi         = "gateway"
+      controller       = "networking.gke.io/gateway"
+      gatewayClassName = "gke-l7-global-external-managed"
+      listenerPort     = 443
+      labels           = {}
+      annotations      = {}
+      provider = {
+        provider          = "gkeGateway"
+        staticAddressName = null
+      }
+    }
+    certificate = {
+      mode               = "managedTlsSecret"
+      secretNameTemplate = "alien-{{ resourceId }}-tls"
+    }
+  }
+  helm_service_accounts = {}
+  helm_manager_service_account = {
+    annotations = {}
+    labels      = {}
+  }
+  helm_values = {
+    serviceAccounts       = local.helm_service_accounts
+    managerServiceAccount = local.helm_manager_service_account
+    stackSettings         = local.deployment_settings
+    basePlatform          = local.deployment_base_platform
+    serviceAccountPrefix  = local.resource_prefix
+    heartbeat = {
+      collection = {
+        nodes = {
+          enabled = true
+        }
+      }
+    }
+  }
+}
+
+=== kubernetes.tf ===
+data "google_container_cluster" "target" {
+  name     = local.kubernetes_cluster_name
+  location = var.kubernetes_cluster_mode == "create" ? var.gcp_region : (var.gke_cluster_location == "" ? var.gcp_region : var.gke_cluster_location)
+  depends_on = [
+    google_container_cluster.kubernetes
+  ]
+}
+
+data "google_container_cluster" "kubernetes_existing" {
+  count    = var.kubernetes_cluster_mode == "existing" ? 1 : 0
+  name     = var.gke_cluster_name
+  location = var.gke_cluster_location == "" ? var.gcp_region : var.gke_cluster_location
+}
+
+resource "google_container_cluster" "kubernetes" {
+  count               = var.kubernetes_cluster_mode == "create" ? 1 : 0
+  name                = "${local.resource_prefix}-k8s"
+  location            = var.gcp_region
+  deletion_protection = false
+  enable_autopilot    = true
+
+  ip_allocation_policy {}
+
+  workload_identity_config {
+    workload_pool = "${var.gcp_project}.svc.id.goog"
+  }
+
+  gateway_api_config {
+    channel = "CHANNEL_STANDARD"
+  }
+
+  master_auth {
+    client_certificate_config {
+      issue_client_certificate = true
+    }
+  }
+}
+
+resource "kubernetes_manifest" "kubernetes_metrics_server_service_account" {
+  count = var.kubernetes_cluster_mode == "create" && var.install_metrics_server ? 1 : 0
+  manifest = {
+    apiVersion = "v1"
+    kind       = "ServiceAccount"
+    metadata = {
+      name      = "metrics-server"
+      namespace = "kube-system"
+      labels = {
+        "k8s-app" = "metrics-server"
+      }
+    }
+  }
+  depends_on = [
+    google_container_cluster.kubernetes
+  ]
+}
+
+resource "kubernetes_manifest" "kubernetes_metrics_server_aggregated_metrics_reader" {
+  count = var.kubernetes_cluster_mode == "create" && var.install_metrics_server ? 1 : 0
+  manifest = {
+    apiVersion = "rbac.authorization.k8s.io/v1"
+    kind       = "ClusterRole"
+    metadata = {
+      name = "system:aggregated-metrics-reader"
+      labels = {
+        "rbac.authorization.k8s.io/aggregate-to-admin" = "true"
+        "rbac.authorization.k8s.io/aggregate-to-edit"  = "true"
+        "rbac.authorization.k8s.io/aggregate-to-view"  = "true"
+      }
+    }
+    rules = [
+      {
+        apiGroups = [
+          "metrics.k8s.io"
+        ]
+        resources = [
+          "pods",
+          "nodes"
+        ]
+        verbs = [
+          "get",
+          "list",
+          "watch"
+        ]
+      }
+    ]
+  }
+  depends_on = [
+    google_container_cluster.kubernetes
+  ]
+}
+
+resource "kubernetes_manifest" "kubernetes_metrics_server_cluster_role" {
+  count = var.kubernetes_cluster_mode == "create" && var.install_metrics_server ? 1 : 0
+  manifest = {
+    apiVersion = "rbac.authorization.k8s.io/v1"
+    kind       = "ClusterRole"
+    metadata = {
+      name = "system:metrics-server"
+      labels = {
+        "k8s-app" = "metrics-server"
+      }
+    }
+    rules = [
+      {
+        apiGroups = [
+          ""
+        ]
+        resources = [
+          "nodes/metrics"
+        ]
+        verbs = [
+          "get"
+        ]
+      },
+      {
+        apiGroups = [
+          ""
+        ]
+        resources = [
+          "pods",
+          "nodes"
+        ]
+        verbs = [
+          "get",
+          "list",
+          "watch"
+        ]
+      }
+    ]
+  }
+  depends_on = [
+    google_container_cluster.kubernetes
+  ]
+}
+
+resource "kubernetes_manifest" "kubernetes_metrics_server_auth_reader_role_binding" {
+  count = var.kubernetes_cluster_mode == "create" && var.install_metrics_server ? 1 : 0
+  manifest = {
+    apiVersion = "rbac.authorization.k8s.io/v1"
+    kind       = "RoleBinding"
+    metadata = {
+      name      = "metrics-server-auth-reader"
+      namespace = "kube-system"
+      labels = {
+        "k8s-app" = "metrics-server"
+      }
+    }
+    roleRef = {
+      apiGroup = "rbac.authorization.k8s.io"
+      kind     = "Role"
+      name     = "extension-apiserver-authentication-reader"
+    }
+    subjects = [
+      {
+        kind      = "ServiceAccount"
+        name      = "metrics-server"
+        namespace = "kube-system"
+      }
+    ]
+  }
+  depends_on = [
+    google_container_cluster.kubernetes
+  ]
+}
+
+resource "kubernetes_manifest" "kubernetes_metrics_server_auth_delegator_binding" {
+  count = var.kubernetes_cluster_mode == "create" && var.install_metrics_server ? 1 : 0
+  manifest = {
+    apiVersion = "rbac.authorization.k8s.io/v1"
+    kind       = "ClusterRoleBinding"
+    metadata = {
+      name = "metrics-server:system:auth-delegator"
+      labels = {
+        "k8s-app" = "metrics-server"
+      }
+    }
+    roleRef = {
+      apiGroup = "rbac.authorization.k8s.io"
+      kind     = "ClusterRole"
+      name     = "system:auth-delegator"
+    }
+    subjects = [
+      {
+        kind      = "ServiceAccount"
+        name      = "metrics-server"
+        namespace = "kube-system"
+      }
+    ]
+  }
+  depends_on = [
+    google_container_cluster.kubernetes
+  ]
+}
+
+resource "kubernetes_manifest" "kubernetes_metrics_server_cluster_role_binding" {
+  count = var.kubernetes_cluster_mode == "create" && var.install_metrics_server ? 1 : 0
+  manifest = {
+    apiVersion = "rbac.authorization.k8s.io/v1"
+    kind       = "ClusterRoleBinding"
+    metadata = {
+      name = "system:metrics-server"
+      labels = {
+        "k8s-app" = "metrics-server"
+      }
+    }
+    roleRef = {
+      apiGroup = "rbac.authorization.k8s.io"
+      kind     = "ClusterRole"
+      name     = "system:metrics-server"
+    }
+    subjects = [
+      {
+        kind      = "ServiceAccount"
+        name      = "metrics-server"
+        namespace = "kube-system"
+      }
+    ]
+  }
+  depends_on = [
+    google_container_cluster.kubernetes
+  ]
+}
+
+resource "kubernetes_manifest" "kubernetes_metrics_server_service" {
+  count = var.kubernetes_cluster_mode == "create" && var.install_metrics_server ? 1 : 0
+  manifest = {
+    apiVersion = "v1"
+    kind       = "Service"
+    metadata = {
+      name      = "metrics-server"
+      namespace = "kube-system"
+      labels = {
+        "k8s-app" = "metrics-server"
+      }
+    }
+    spec = {
+      selector = {
+        "k8s-app" = "metrics-server"
+      }
+      ports = [
+        {
+          name       = "https"
+          port       = 443
+          protocol   = "TCP"
+          targetPort = "https"
+        }
+      ]
+    }
+  }
+  depends_on = [
+    google_container_cluster.kubernetes
+  ]
+}
+
+resource "kubernetes_manifest" "kubernetes_metrics_server_deployment" {
+  count = var.kubernetes_cluster_mode == "create" && var.install_metrics_server ? 1 : 0
+  manifest = {
+    apiVersion = "apps/v1"
+    kind       = "Deployment"
+    metadata = {
+      name      = "metrics-server"
+      namespace = "kube-system"
+      labels = {
+        "k8s-app" = "metrics-server"
+      }
+    }
+    spec = {
+      selector = {
+        matchLabels = {
+          "k8s-app" = "metrics-server"
+        }
+      }
+      strategy = {
+        rollingUpdate = {
+          maxUnavailable = 0
+        }
+      }
+      template = {
+        metadata = {
+          labels = {
+            "k8s-app" = "metrics-server"
+          }
+        }
+        spec = {
+          serviceAccountName = "metrics-server"
+          priorityClassName  = "system-cluster-critical"
+          containers = [
+            {
+              name  = "metrics-server"
+              image = "registry.k8s.io/metrics-server/metrics-server:v0.8.1"
+              args = [
+                "--cert-dir=/tmp",
+                "--secure-port=10250",
+                "--kubelet-preferred-address-types=InternalIP,ExternalIP,Hostname",
+                "--kubelet-use-node-status-port",
+                "--metric-resolution=15s"
+              ]
+              ports = [
+                {
+                  name          = "https"
+                  containerPort = 10250
+                  protocol      = "TCP"
+                }
+              ]
+              resources = {
+                requests = {
+                  cpu    = "100m"
+                  memory = "200Mi"
+                }
+              }
+              volumeMounts = [
+                {
+                  name      = "tmp-dir"
+                  mountPath = "/tmp"
+                }
+              ]
+            }
+          ]
+          volumes = [
+            {
+              name     = "tmp-dir"
+              emptyDir = {}
+            }
+          ]
+        }
+      }
+    }
+  }
+  depends_on = [
+    google_container_cluster.kubernetes
+  ]
+}
+
+resource "kubernetes_manifest" "kubernetes_metrics_server_api_service" {
+  count = var.kubernetes_cluster_mode == "create" && var.install_metrics_server ? 1 : 0
+  manifest = {
+    apiVersion = "apiregistration.k8s.io/v1"
+    kind       = "APIService"
+    metadata = {
+      name = "v1beta1.metrics.k8s.io"
+      labels = {
+        "k8s-app" = "metrics-server"
+      }
+    }
+    spec = {
+      group                 = "metrics.k8s.io"
+      version               = "v1beta1"
+      groupPriorityMinimum  = 100
+      versionPriority       = 100
+      insecureSkipTLSVerify = true
+      service = {
+        name      = "metrics-server"
+        namespace = "kube-system"
+      }
+    }
+  }
+  depends_on = [
+    google_container_cluster.kubernetes
+  ]
+}
+
+=== import.tf ===
+resource "terraform_data" "deployment_import" {
+  input = {
+    platform                    = local.deployment_platform
+    token                       = var.token
+    name                        = var.name
+    resource_prefix             = local.resource_prefix
+    setup_target                = ""
+    setup_import_format_version = 1
+    setup_fingerprint           = ""
+    setup_fingerprint_version   = 0
+    manager_url                 = var.manager_url
+    management_config           = local.deployment_management_config
+    stack_settings              = local.deployment_settings
+    resources                   = local.deployment_resources
+    basePlatform                = local.deployment_base_platform
+  }
+  depends_on = [
+    google_container_cluster.kubernetes,
+    kubernetes_manifest.kubernetes_metrics_server_service_account,
+    kubernetes_manifest.kubernetes_metrics_server_aggregated_metrics_reader,
+    kubernetes_manifest.kubernetes_metrics_server_cluster_role,
+    kubernetes_manifest.kubernetes_metrics_server_auth_reader_role_binding,
+    kubernetes_manifest.kubernetes_metrics_server_auth_delegator_binding,
+    kubernetes_manifest.kubernetes_metrics_server_cluster_role_binding,
+    kubernetes_manifest.kubernetes_metrics_server_service,
+    kubernetes_manifest.kubernetes_metrics_server_deployment,
+    kubernetes_manifest.kubernetes_metrics_server_api_service
+  ]
+}
+
+=== outputs.tf ===
+output "deployment_target" {
+  value       = "gke"
+  description = "Terraform module target."
+}
+
+output "deployment_resource_prefix" {
+  value       = local.resource_prefix
+  description = "Physical resource prefix."
+}
+
+output "deployment_platform" {
+  value       = local.deployment_platform
+  description = "Target platform."
+}
+
+output "deployment_region" {
+  value       = local.deployment_region
+  description = "Target cloud region or location."
+}
+
+output "deployment_setup_target" {
+  value       = ""
+  description = "Setup target."
+}
+
+output "deployment_setup_import_format_version" {
+  value       = 1
+  description = "Setup import payload format version."
+}
+
+output "deployment_setup_fingerprint" {
+  value       = ""
+  description = "Setup compatibility fingerprint."
+}
+
+output "deployment_setup_fingerprint_version" {
+  value       = 0
+  description = "Setup fingerprint algorithm version."
+}
+
+output "deployment_management_config" {
+  value       = jsonencode(local.deployment_management_config)
+  description = "Manager import ManagementConfig JSON."
+}
+
+output "deployment_stack_settings" {
+  value       = jsonencode(local.deployment_settings)
+  description = "Manager import StackSettings JSON."
+  sensitive   = true
+}
+
+output "deployment_resources" {
+  value       = jsonencode(local.deployment_resources)
+  description = "Manager import resources JSON."
+}
+
+output "deployment_base_platform" {
+  value       = local.deployment_base_platform
+  description = "Base cloud platform for Kubernetes targets."
+}
+
+output "kubernetes_kubeconfig" {
+  value       = local.kubernetes_kubeconfig
+  description = "Kubeconfig for managed Kubernetes clusters created by this module."
+  sensitive   = true
+}
+
+output "kubernetes_kube_context" {
+  value       = local.kubernetes_kube_context
+  description = "Kube context for managed Kubernetes clusters created by this module."
+}
+
+output "helm_values" {
+  value       = jsonencode(local.helm_values)
+  description = "Helm values JSON for the manager-fetch Kubernetes install."
+  sensitive   = true
+}
+
+=== README.md ===
+# Terraform module - gke-metrics-server
+
+Target: `gke`.
+
+Run:
+
+```bash
+terraform init -backend=false
+terraform validate
+terraform apply -var='name=gke-metrics-server' -var='token=...'
+```
+
+This module exposes `deployment_management_config` / `deployment_stack_settings` / `deployment_resources` for external registration flows.

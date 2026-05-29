@@ -3,9 +3,14 @@ use tracing::{debug, info};
 
 use crate::core::{EnvironmentVariableBuilder, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
-use alien_core::{Build, BuildOutputs, ResourceOutputs, ResourceRef, ResourceStatus};
+use alien_core::{
+    AzureContainerAppsBuildHeartbeatData, Build, BuildHeartbeatData, BuildHeartbeatStatus,
+    BuildOutputs, HeartbeatBackend, ObservedHealth, Platform, ProviderLifecycleState,
+    ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs, ResourceRef, ResourceStatus,
+};
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_macros::{controller, flow_entry, handler, terminal_state};
+use alien_macros::controller;
+use chrono::Utc;
 
 #[controller]
 pub struct AzureBuildController {
@@ -122,6 +127,8 @@ impl AzureBuildController {
             }));
         }
 
+        emit_azure_build_heartbeat(ctx, &config.id, self);
+
         debug!(name = %config.id, "Heartbeat check passed");
         Ok(HandlerAction::Continue {
             state: Ready,
@@ -234,7 +241,7 @@ impl AzureBuildController {
     }
 
     fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
-        use alien_core::bindings::{BindingValue, BuildBinding};
+        use alien_core::bindings::BuildBinding;
 
         if let (
             Some(managed_environment_id),
@@ -395,6 +402,53 @@ impl AzureBuildController {
             _internal_stay_count: None,
         }
     }
+}
+
+fn emit_azure_build_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    controller: &AzureBuildController,
+) {
+    let managed_environment_id = controller
+        .managed_environment_id
+        .clone()
+        .unwrap_or_default();
+    let resource_group_name = controller.resource_group_name.clone().unwrap_or_default();
+
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: Build::RESOURCE_TYPE,
+        controller_platform: Platform::Azure,
+        backend: HeartbeatBackend::Azure,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::Build(BuildHeartbeatData::AzureContainerApps(
+            AzureContainerAppsBuildHeartbeatData {
+                status: BuildHeartbeatStatus {
+                    health: ObservedHealth::Healthy,
+                    lifecycle: ProviderLifecycleState::Running,
+                    message: Some(format!(
+                        "Azure Container Apps build configuration '{}' is ready",
+                        resource_id
+                    )),
+                    stale: false,
+                    partial: false,
+                    collection_issues: vec![],
+                },
+                managed_environment_id,
+                resource_group_name,
+                managed_identity_id: controller.managed_identity_id.clone(),
+                resource_prefix: controller.resource_prefix.clone(),
+                environment_variable_count: controller
+                    .build_env_vars
+                    .as_ref()
+                    .map(|env_vars| env_vars.len() as u32)
+                    .unwrap_or(0),
+                events: vec![],
+            },
+        )),
+        raw: vec![],
+    });
 }
 
 #[cfg(test)]

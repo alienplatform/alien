@@ -8,15 +8,18 @@ use alien_aws_clients::iam::{
     TrustPolicyPrincipalValue, TrustPolicyStatement,
 };
 use alien_core::{
-    standard_resource_tags, Build, ComputeCluster, Container, ResourceOutputs, ResourceStatus,
-    ServiceAccount, ServiceAccountOutputs, Worker,
+    standard_resource_tags, AwsIamRoleServiceAccountHeartbeatData, Build, ComputeCluster,
+    Container, HeartbeatBackend, ObservedHealth, Platform, ProviderLifecycleState,
+    ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs, ResourceStatus, ServiceAccount,
+    ServiceAccountHeartbeatData, ServiceAccountHeartbeatStatus, ServiceAccountOutputs, Worker,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
-use alien_macros::{controller, flow_entry, handler, terminal_state};
+use alien_macros::controller;
 use alien_permissions::{
     generators::{AwsIamPolicy, AwsIamStatement, AwsRuntimePermissionsGenerator},
     BindingTarget, PermissionContext,
 };
+use chrono::Utc;
 
 /// Generates the AWS IAM role name for a ServiceAccount.
 fn get_aws_role_name(prefix: &str, name: &str) -> String {
@@ -210,6 +213,7 @@ impl AwsServiceAccountController {
 
     #[handler(state = Ready, on_failure = RefreshFailed, status = ResourceStatus::Running)]
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<ServiceAccount>()?;
         let aws_config = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
         let role_name = self.role_name.as_ref().unwrap();
@@ -220,14 +224,14 @@ impl AwsServiceAccountController {
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to get IAM role during heartbeat check".to_string(),
-                resource_id: Some(ctx.desired_resource_config::<ServiceAccount>()?.id.clone()),
+                resource_id: Some(config.id.clone()),
             })?;
 
         // Check if role ARN matches what we expect
         if let Some(expected_arn) = &self.role_arn {
             if role.get_role_result.role.arn != *expected_arn {
                 return Err(AlienError::new(ErrorData::ResourceDrift {
-                    resource_id: ctx.desired_resource_config::<ServiceAccount>()?.id.clone(),
+                    resource_id: config.id.clone(),
                     message: format!(
                         "Role ARN changed from {} to {}",
                         expected_arn, role.get_role_result.role.arn
@@ -235,6 +239,41 @@ impl AwsServiceAccountController {
                 }));
             }
         }
+
+        let attached_policies = client
+            .list_attached_role_policies(role_name)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to list attached IAM role policies during heartbeat check"
+                    .to_string(),
+                resource_id: Some(config.id.clone()),
+            })?
+            .list_attached_role_policies_result
+            .attached_policies
+            .map(|policies| policies.member)
+            .unwrap_or_default();
+
+        let inline_policy_names = client
+            .list_role_policies(role_name)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to list inline IAM role policies during heartbeat check"
+                    .to_string(),
+                resource_id: Some(config.id.clone()),
+            })?
+            .list_role_policies_result
+            .policy_names
+            .map(|names| names.member)
+            .unwrap_or_default();
+
+        emit_aws_service_account_heartbeat(
+            ctx,
+            &config.id,
+            &role.get_role_result.role,
+            attached_policies,
+            inline_policy_names,
+            self.stack_permissions_applied,
+        );
 
         Ok(HandlerAction::Continue {
             state: Ready,
@@ -951,4 +990,90 @@ impl AwsServiceAccountController {
             _internal_stay_count: None,
         }
     }
+}
+
+fn emit_aws_service_account_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    role: &alien_aws_clients::iam::Role,
+    attached_policies: Vec<alien_aws_clients::iam::AttachedPolicy>,
+    inline_policy_names: Vec<String>,
+    stack_permissions_applied: bool,
+) {
+    let tag_count = role
+        .tags
+        .as_ref()
+        .map(|tags| tags.member.len() as u32)
+        .unwrap_or(0);
+    let managed_tag_count = role
+        .tags
+        .as_ref()
+        .map(|tags| {
+            tags.member
+                .iter()
+                .filter(|tag| tag.key.starts_with("alien"))
+                .count() as u32
+        })
+        .unwrap_or(0);
+    let attached_policy_names = attached_policies
+        .iter()
+        .map(|policy| policy.policy_name.clone())
+        .collect::<Vec<_>>();
+    let attached_policy_count = attached_policy_names.len() as u32;
+    let inline_policy_count = inline_policy_names.len() as u32;
+    let message = format!("AWS IAM role '{}' is reachable", role.role_name);
+
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: ServiceAccount::RESOURCE_TYPE,
+        controller_platform: Platform::Aws,
+        backend: HeartbeatBackend::Aws,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::ServiceAccount(ServiceAccountHeartbeatData::AwsIamRole(
+            AwsIamRoleServiceAccountHeartbeatData {
+                status: ServiceAccountHeartbeatStatus {
+                    health: ObservedHealth::Healthy,
+                    lifecycle: ProviderLifecycleState::Running,
+                    message: Some(message),
+                    stale: false,
+                    partial: false,
+                    collection_issues: vec![],
+                },
+                role_name: role.role_name.clone(),
+                role_arn: role.arn.clone(),
+                role_id: role.role_id.clone(),
+                path: role.path.clone(),
+                create_date: role.create_date.clone(),
+                description: role.description.clone(),
+                max_session_duration: role.max_session_duration,
+                assume_role_policy_present: role.assume_role_policy_document.is_some(),
+                permissions_boundary_type: role
+                    .permissions_boundary
+                    .as_ref()
+                    .and_then(|boundary| boundary.permissions_boundary_type.clone()),
+                permissions_boundary_arn: role
+                    .permissions_boundary
+                    .as_ref()
+                    .and_then(|boundary| boundary.permissions_boundary_arn.clone()),
+                tag_count,
+                managed_tag_count,
+                attached_policy_count,
+                attached_policy_names,
+                inline_policy_count,
+                inline_policy_names,
+                stack_permissions_applied,
+                last_used_date: role
+                    .role_last_used
+                    .as_ref()
+                    .and_then(|last_used| last_used.last_used_date.clone()),
+                last_used_region: role
+                    .role_last_used
+                    .as_ref()
+                    .and_then(|last_used| last_used.region.clone()),
+                events: vec![],
+            },
+        )),
+        raw: vec![],
+    });
 }

@@ -20,7 +20,6 @@ pub struct AlienManager {
     pub(crate) deployment_store: Arc<dyn DeploymentStore>,
     pub(crate) release_store: Arc<dyn ReleaseStore>,
     pub(crate) credential_resolver: Arc<dyn CredentialResolver>,
-    pub(crate) telemetry_backend: Arc<dyn TelemetryBackend>,
     pub(crate) server_bindings: Arc<ServerBindings>,
     pub(crate) dev_status_tx: Option<tokio::sync::watch::Sender<()>>,
     pub(crate) log_buffer: Arc<LogBuffer>,

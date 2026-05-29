@@ -6,7 +6,6 @@
       {
         "grant": {
           "actions": [
-            "lambda:GetFunction",
             "lambda:GetFunctionConfiguration",
             "lambda:ListVersionsByFunction",
             "lambda:ListAliases",
@@ -25,32 +24,6 @@
           },
           "resource": {
             "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${resourceName}"]
-          }
-        }
-      },
-      {
-        "grant": {
-          "actions": ["ecr:GetAuthorizationToken"]
-        },
-        "binding": {
-          "stack": {
-            "resources": ["*"]
-          },
-          "resource": {
-            "resources": ["*"]
-          }
-        }
-      },
-      {
-        "grant": {
-          "actions": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]
-        },
-        "binding": {
-          "stack": {
-            "resources": ["arn:aws:ecr:*:${managingAccountId}:repository/*"]
-          },
-          "resource": {
-            "resources": ["arn:aws:ecr:*:${managingAccountId}:repository/*"]
           }
         }
       }

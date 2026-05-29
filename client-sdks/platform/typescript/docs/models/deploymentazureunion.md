@@ -3,10 +3,10 @@
 
 ## Supported Types
 
-### `models.DeploymentDomainsAzure`
+### `models.DeploymentAzureStackSettings`
 
 ```typescript
-const value: models.DeploymentDomainsAzure = {
+const value: models.DeploymentAzureStackSettings = {
   keyVaultCertificateId: "<id>",
 };
 ```

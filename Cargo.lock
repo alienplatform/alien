@@ -658,6 +658,7 @@ dependencies = [
  "axum 0.8.8",
  "base64 0.22.1",
  "bon",
+ "chrono",
  "console_error_panic_hook",
  "dirs 6.0.0",
  "dotenvy",

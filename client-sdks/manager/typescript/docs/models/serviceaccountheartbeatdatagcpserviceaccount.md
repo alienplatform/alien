@@ -1,0 +1,65 @@
+# ServiceAccountHeartbeatDataGcpServiceAccount
+
+## Example Usage
+
+```typescript
+import { ServiceAccountHeartbeatDataGcpServiceAccount } from "@alienplatform/manager-api/models";
+
+let value: ServiceAccountHeartbeatDataGcpServiceAccount = {
+  email: "Kraig_Jast-Koss80@yahoo.com",
+  events: [
+    {
+      kind: "<value>",
+      message: "<value>",
+      observedAt: new Date("2024-02-23T02:52:34.144Z"),
+      severity: "info",
+    },
+  ],
+  projectBindingCount: 541422,
+  projectRoles: [
+    "<value 1>",
+  ],
+  serviceAccountBindingCount: 635399,
+  serviceAccountRoles: [
+    "<value 1>",
+    "<value 2>",
+    "<value 3>",
+  ],
+  status: {
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "forbidden",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
+    health: "degraded",
+    lifecycle: "deleting",
+    partial: true,
+    stale: false,
+  },
+  backend: "gcpServiceAccount",
+};
+```
+
+## Fields
+
+| Field                                                                              | Type                                                                               | Required                                                                           | Description                                                                        |
+| ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `description`                                                                      | *string*                                                                           | :heavy_minus_sign:                                                                 | N/A                                                                                |
+| `disabled`                                                                         | *boolean*                                                                          | :heavy_minus_sign:                                                                 | N/A                                                                                |
+| `displayName`                                                                      | *string*                                                                           | :heavy_minus_sign:                                                                 | N/A                                                                                |
+| `email`                                                                            | *string*                                                                           | :heavy_check_mark:                                                                 | N/A                                                                                |
+| `etag`                                                                             | *string*                                                                           | :heavy_minus_sign:                                                                 | N/A                                                                                |
+| `events`                                                                           | [models.HeartbeatEvent](../models/heartbeatevent.md)[]                             | :heavy_check_mark:                                                                 | N/A                                                                                |
+| `name`                                                                             | *string*                                                                           | :heavy_minus_sign:                                                                 | N/A                                                                                |
+| `oauth2ClientId`                                                                   | *string*                                                                           | :heavy_minus_sign:                                                                 | N/A                                                                                |
+| `projectBindingCount`                                                              | *number*                                                                           | :heavy_check_mark:                                                                 | N/A                                                                                |
+| `projectId`                                                                        | *string*                                                                           | :heavy_minus_sign:                                                                 | N/A                                                                                |
+| `projectRoles`                                                                     | *string*[]                                                                         | :heavy_check_mark:                                                                 | N/A                                                                                |
+| `serviceAccountBindingCount`                                                       | *number*                                                                           | :heavy_check_mark:                                                                 | N/A                                                                                |
+| `serviceAccountRoles`                                                              | *string*[]                                                                         | :heavy_check_mark:                                                                 | N/A                                                                                |
+| `status`                                                                           | [models.ServiceAccountHeartbeatStatus](../models/serviceaccountheartbeatstatus.md) | :heavy_check_mark:                                                                 | N/A                                                                                |
+| `uniqueId`                                                                         | *string*                                                                           | :heavy_minus_sign:                                                                 | N/A                                                                                |
+| `backend`                                                                          | *"gcpServiceAccount"*                                                              | :heavy_check_mark:                                                                 | N/A                                                                                |

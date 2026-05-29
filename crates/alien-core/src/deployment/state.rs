@@ -1,6 +1,6 @@
 //! Deployment state, step results, and runtime metadata.
 
-use crate::{Platform, StackState};
+use crate::{Platform, ResourceHeartbeat, StackState};
 use alien_error::AlienError;
 use bon::Builder;
 use serde::{Deserialize, Serialize};
@@ -120,6 +120,10 @@ pub struct DeploymentStepResult {
     /// - `true`: Update lastHeartbeatAt (for successful health checks in Running state)
     #[serde(default, skip_serializing_if = "is_false")]
     pub update_heartbeat: bool,
+
+    /// Typed resource heartbeats emitted by controllers during this step.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub heartbeats: Vec<ResourceHeartbeat>,
 }
 
 pub(crate) fn is_false(b: &bool) -> bool {

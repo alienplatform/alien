@@ -1,12 +1,9 @@
 use crate::azure::common::{AzureClientBase, AzureRequestBuilder};
-use crate::azure::models::blob::BlobContainer;
+use crate::azure::models::blob::{BlobContainer, BlobServiceProperties};
 use crate::azure::token_cache::AzureTokenCache;
 use alien_client_core::{ErrorData, Result};
-
-use alien_error::{AlienError, Context, IntoAlienError};
-use async_trait::async_trait;
-use reqwest::{Client, Method, StatusCode};
-use serde::Deserialize;
+use alien_error::{Context, IntoAlienError};
+use reqwest::{Client, Method};
 
 #[cfg(feature = "test-utils")]
 use mockall::automock;
@@ -33,6 +30,12 @@ pub trait BlobContainerApi: Send + Sync + std::fmt::Debug {
         storage_account_name: &str,
         container_name: &str,
     ) -> Result<BlobContainer>;
+
+    async fn get_blob_service_properties(
+        &self,
+        resource_group_name: &str,
+        storage_account_name: &str,
+    ) -> Result<BlobServiceProperties>;
 
     async fn delete_blob_container(
         &self,
@@ -191,6 +194,58 @@ impl BlobContainerApi for AzureBlobContainerClient {
             })?;
 
         Ok(blob_container)
+    }
+
+    /// Get Blob service properties for a storage account.
+    async fn get_blob_service_properties(
+        &self,
+        resource_group_name: &str,
+        storage_account_name: &str,
+    ) -> Result<BlobServiceProperties> {
+        let bearer_token = self
+            .token_cache
+            .get_bearer_token_with_scope("https://management.azure.com/.default")
+            .await?;
+
+        let url = self.base.build_url(
+            &format!(
+                "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Storage/storageAccounts/{}/blobServices/default",
+                self.token_cache.config().subscription_id, resource_group_name, storage_account_name
+            ),
+            Some(vec![("api-version", "2024-01-01".into())]),
+        );
+
+        let builder = AzureRequestBuilder::new(Method::GET, url.clone()).content_length("");
+
+        let req = builder.build()?;
+        let signed = self.base.sign_request(req, &bearer_token).await?;
+        let resp = self
+            .base
+            .execute_request(signed, "GetBlobServiceProperties", storage_account_name)
+            .await?;
+
+        let body = resp
+            .text()
+            .await
+            .into_alien_error()
+            .context(ErrorData::HttpRequestFailed {
+                message: format!("Azure GetBlobServiceProperties: failed to read response body"),
+            })?;
+
+        let blob_service_properties: BlobServiceProperties = serde_json::from_str(&body)
+            .into_alien_error()
+            .context(ErrorData::HttpResponseError {
+                message: format!(
+                    "Azure GetBlobServiceProperties: JSON parse error. Body: {}",
+                    body
+                ),
+                url: url.clone(),
+                http_status: 200,
+                http_response_text: Some(body.clone()),
+                http_request_text: None,
+            })?;
+
+        Ok(blob_service_properties)
     }
 
     /// Delete a blob container

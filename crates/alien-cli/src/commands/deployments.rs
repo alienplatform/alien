@@ -813,6 +813,7 @@ async fn create_deployment_task(
         network: sdk_network,
         domains: None,
         external_bindings: None,
+        kubernetes: None,
     };
 
     let request = NewDeploymentRequest {

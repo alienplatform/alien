@@ -3,11 +3,17 @@ use tracing::{debug, info};
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use alien_core::{ResourceOutputs, ResourceStatus, ServiceActivation, ServiceActivationOutputs};
+use alien_core::{
+    GcpServiceUsageActivationHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
+    ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
+    ResourceStatus, ServiceActivation, ServiceActivationHeartbeatData,
+    ServiceActivationHeartbeatStatus, ServiceActivationOutputs,
+};
 use alien_error::{AlienError, Context, ContextError as _};
 use alien_gcp_clients::longrunning::OperationResult;
-use alien_gcp_clients::service_usage::{ServiceUsageApi, State};
-use alien_macros::{controller, flow_entry, handler, terminal_state};
+use alien_gcp_clients::service_usage::{Service, State};
+use alien_macros::controller;
+use chrono::Utc;
 
 #[controller]
 pub struct GcpServiceActivationController {
@@ -311,6 +317,15 @@ impl GcpServiceActivationController {
                 },
             )?;
 
+            emit_gcp_service_activation_heartbeat(
+                ctx,
+                &config.id,
+                &gcp_config.project_id,
+                service_name,
+                &self.operation_name,
+                &service,
+            );
+
             if let Some(state) = service.state {
                 if state != State::Enabled {
                     return Err(AlienError::new(ErrorData::ResourceDrift {
@@ -396,6 +411,67 @@ impl GcpServiceActivationController {
             None
         }
     }
+}
+
+fn emit_gcp_service_activation_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    project_id: &str,
+    service_name: &str,
+    last_operation_name: &Option<String>,
+    service: &Service,
+) {
+    let state = service.state.as_ref().map(|state| format!("{:?}", state));
+    let enabled = service.state.as_ref() == Some(&State::Enabled);
+    let health = if enabled {
+        ObservedHealth::Healthy
+    } else {
+        ObservedHealth::Unhealthy
+    };
+    let lifecycle = if enabled {
+        ProviderLifecycleState::Running
+    } else {
+        ProviderLifecycleState::Failed
+    };
+
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: ServiceActivation::RESOURCE_TYPE,
+        controller_platform: Platform::Gcp,
+        backend: HeartbeatBackend::Gcp,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::ServiceActivation(
+            ServiceActivationHeartbeatData::GcpServiceUsage(
+                GcpServiceUsageActivationHeartbeatData {
+                    status: ServiceActivationHeartbeatStatus {
+                        health,
+                        lifecycle,
+                        message: Some(format!(
+                            "GCP service '{}' state is {}",
+                            service_name,
+                            state.as_deref().unwrap_or("unknown")
+                        )),
+                        stale: false,
+                        partial: false,
+                        collection_issues: vec![],
+                    },
+                    project_id: project_id.to_string(),
+                    service_name: service_name.to_string(),
+                    service_resource_name: service.name.clone(),
+                    title: service
+                        .config
+                        .as_ref()
+                        .and_then(|config| config.title.clone()),
+                    state,
+                    enabled,
+                    last_operation_name: last_operation_name.clone(),
+                    events: vec![],
+                },
+            ),
+        ),
+        raw: vec![],
+    });
 }
 
 impl GcpServiceActivationController {

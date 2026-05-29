@@ -6,6 +6,7 @@ import { domainsCreate } from "../funcs/domainsCreate.js";
 import { domainsDelete } from "../funcs/domainsDelete.js";
 import { domainsGet } from "../funcs/domainsGet.js";
 import { domainsList } from "../funcs/domainsList.js";
+import { domainsRefresh } from "../funcs/domainsRefresh.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
 import * as models from "../models/index.js";
 import * as operations from "../models/operations/index.js";
@@ -32,7 +33,7 @@ export class Domains extends ClientSDK {
   async create(
     request?: operations.CreateDomainRequest | undefined,
     options?: RequestOptions,
-  ): Promise<models.Domain> {
+  ): Promise<models.DomainWithUsage> {
     return unwrapAsync(domainsCreate(
       this,
       request,
@@ -46,7 +47,7 @@ export class Domains extends ClientSDK {
   async get(
     request: operations.GetDomainRequest,
     options?: RequestOptions,
-  ): Promise<models.Domain> {
+  ): Promise<models.DomainWithUsage> {
     return unwrapAsync(domainsGet(
       this,
       request,
@@ -62,6 +63,20 @@ export class Domains extends ClientSDK {
     options?: RequestOptions,
   ): Promise<operations.DeleteDomainResponse> {
     return unwrapAsync(domainsDelete(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Refresh workspace domain verification.
+   */
+  async refresh(
+    request: operations.RefreshDomainRequest,
+    options?: RequestOptions,
+  ): Promise<models.DomainWithUsage> {
+    return unwrapAsync(domainsRefresh(
       this,
       request,
       options,

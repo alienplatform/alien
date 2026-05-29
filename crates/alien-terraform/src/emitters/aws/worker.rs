@@ -75,7 +75,7 @@ impl TfEmitter for AwsWorkerEmitter {
                             Expression::String("deployment-permissions".to_string()),
                         ),
                         attr("role", expr::traversal(["aws_iam_role", &role_label, "id"])),
-                        attr("policy", lambda_fallback_policy(ctx, function)?),
+                        attr("policy", lambda_fallback_policy()),
                     ],
                 ));
                 expr::traversal(["aws_iam_role", &role_label, "arn"])
@@ -255,8 +255,8 @@ impl TfEmitter for AwsWorkerEmitter {
     }
 }
 
-fn lambda_fallback_policy(ctx: &EmitContext<'_>, function: &Worker) -> Result<Expression> {
-    let mut statements = vec![expr::object([
+fn lambda_fallback_policy() -> Expression {
+    let statements = vec![expr::object([
         ("Sid", Expression::String("WriteLogs".to_string())),
         ("Effect", Expression::String("Allow".to_string())),
         (
@@ -270,10 +270,10 @@ fn lambda_fallback_policy(ctx: &EmitContext<'_>, function: &Worker) -> Result<Ex
         ("Resource", Expression::String("*".to_string())),
     ])];
 
-    Ok(jsonencode(expr::object([
+    jsonencode(expr::object([
         ("Version", Expression::String("2012-10-17".to_string())),
         ("Statement", Expression::Array(statements)),
-    ])))
+    ]))
 }
 
 fn lambda_vpc_config(ctx: &EmitContext<'_>) -> Option<(Expression, Expression)> {

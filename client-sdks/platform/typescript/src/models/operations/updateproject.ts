@@ -178,6 +178,24 @@ export type UpdateProjectPackagesConfig = {
   terraform?: UpdateProjectTerraform | null | undefined;
 };
 
+/**
+ * Project default private managers for new push deployments.
+ */
+export type UpdateProjectDefaultManagers = {
+  /**
+   * Unique identifier for a default private manager.
+   */
+  aws?: string | null | undefined;
+  /**
+   * Unique identifier for a default private manager.
+   */
+  gcp?: string | null | undefined;
+  /**
+   * Unique identifier for a default private manager.
+   */
+  azure?: string | null | undefined;
+};
+
 export type UpdateProjectRequestBody = {
   /**
    * The Git Repository that will be connected to the project. When this is defined, any pushes to the specified connected Git Repository will be automatically deployed
@@ -202,6 +220,10 @@ export type UpdateProjectRequestBody = {
    * Selected domain for this project (null = default system domain)
    */
   domainId?: string | null | undefined;
+  /**
+   * Project default private managers for new push deployments.
+   */
+  defaultManagers?: UpdateProjectDefaultManagers | null | undefined;
 };
 
 export type UpdateProjectRequest = {
@@ -445,6 +467,33 @@ export function updateProjectPackagesConfigToJSON(
 }
 
 /** @internal */
+export type UpdateProjectDefaultManagers$Outbound = {
+  aws?: string | null | undefined;
+  gcp?: string | null | undefined;
+  azure?: string | null | undefined;
+};
+
+/** @internal */
+export const UpdateProjectDefaultManagers$outboundSchema: z.ZodType<
+  UpdateProjectDefaultManagers$Outbound,
+  UpdateProjectDefaultManagers
+> = z.object({
+  aws: z.nullable(z.string()).optional(),
+  gcp: z.nullable(z.string()).optional(),
+  azure: z.nullable(z.string()).optional(),
+});
+
+export function updateProjectDefaultManagersToJSON(
+  updateProjectDefaultManagers: UpdateProjectDefaultManagers,
+): string {
+  return JSON.stringify(
+    UpdateProjectDefaultManagers$outboundSchema.parse(
+      updateProjectDefaultManagers,
+    ),
+  );
+}
+
+/** @internal */
 export type UpdateProjectRequestBody$Outbound = {
   gitRepository?: UpdateProjectGitRepository$Outbound | null | undefined;
   rootDirectory?: string | null | undefined;
@@ -454,6 +503,7 @@ export type UpdateProjectRequestBody$Outbound = {
     | undefined;
   packagesConfig?: UpdateProjectPackagesConfig$Outbound | null | undefined;
   domainId?: string | null | undefined;
+  defaultManagers?: UpdateProjectDefaultManagers$Outbound | null | undefined;
 };
 
 /** @internal */
@@ -472,6 +522,9 @@ export const UpdateProjectRequestBody$outboundSchema: z.ZodType<
     z.lazy(() => UpdateProjectPackagesConfig$outboundSchema),
   ).optional(),
   domainId: z.nullable(z.string()).optional(),
+  defaultManagers: z.nullable(
+    z.lazy(() => UpdateProjectDefaultManagers$outboundSchema),
+  ).optional(),
 });
 
 export function updateProjectRequestBodyToJSON(

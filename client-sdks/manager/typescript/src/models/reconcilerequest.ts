@@ -3,10 +3,16 @@
  */
 
 import * as z from "zod/v4";
+import {
+  ResourceHeartbeat,
+  ResourceHeartbeat$Outbound,
+  ResourceHeartbeat$outboundSchema,
+} from "./resourceheartbeat.js";
 
 export type ReconcileRequest = {
   deploymentId: string;
   error?: any | undefined;
+  heartbeats?: Array<ResourceHeartbeat> | undefined;
   session: string;
   state: any;
   suggestedDelayMs?: number | null | undefined;
@@ -17,6 +23,7 @@ export type ReconcileRequest = {
 export type ReconcileRequest$Outbound = {
   deploymentId: string;
   error?: any | undefined;
+  heartbeats?: Array<ResourceHeartbeat$Outbound> | undefined;
   session: string;
   state: any;
   suggestedDelayMs?: number | null | undefined;
@@ -30,6 +37,7 @@ export const ReconcileRequest$outboundSchema: z.ZodType<
 > = z.object({
   deploymentId: z.string(),
   error: z.any().optional(),
+  heartbeats: z.array(ResourceHeartbeat$outboundSchema).optional(),
   session: z.string(),
   state: z.any(),
   suggestedDelayMs: z.nullable(z.int()).optional(),

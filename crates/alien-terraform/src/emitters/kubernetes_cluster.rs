@@ -68,25 +68,33 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                 )),
             )
             .with_local(
-                "kubernetes_ingress_class".to_string(),
-                Expression::String("alb".to_string()),
-            )
-            .with_local(
-                "kubernetes_ingress_annotations".to_string(),
-                expr::object([
-                    (
-                        "alb.ingress.kubernetes.io/scheme",
-                        Expression::String("internet-facing".to_string()),
-                    ),
-                    (
-                        "alb.ingress.kubernetes.io/target-type",
-                        Expression::String("ip".to_string()),
-                    ),
-                ]),
-            )
-            .with_local(
-                "kubernetes_public_host_suffix".to_string(),
-                Expression::String(String::new()),
+                "kubernetes_exposure".to_string(),
+                expr::raw(format!(
+                    r#"{{
+  mode = "generated"
+  route = {{
+    routeApi         = "ingress"
+    controller       = "eks.amazonaws.com/alb"
+    ingressClassName = "alb"
+    labels           = {{}}
+    annotations      = {{}}
+    provider = {{
+      provider   = "awsAlb"
+      scheme     = "internet-facing"
+      targetType = "ip"
+      subnetIds  = var.kubernetes_cluster_mode == "create" ? aws_subnet.{label}_public[*].id : []
+    }}
+  }}
+  certificate = {{
+    mode   = "managedAcmImport"
+    region = var.aws_region
+    tags = {{
+      "alien.dev/resource-prefix" = local.resource_prefix
+      "alien.dev/managed-by"      = "alien"
+    }}
+  }}
+}}"#
+                )),
             )
             .with_data(data_block(
                 "aws_availability_zones",
@@ -665,6 +673,11 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
             ),
         ]);
         add_eks_gp3_storage_class(&mut fragment, label);
+        add_metrics_server(
+            &mut fragment,
+            label,
+            expr::raw(format!("[aws_eks_cluster.{label}]")),
+        );
 
         Ok(fragment)
     }
@@ -803,10 +816,273 @@ fn add_eks_gp3_storage_class(fragment: &mut TfFragment, label: &str) {
     ));
 }
 
+fn add_metrics_server(fragment: &mut TfFragment, label: &str, depends_on: Expression) {
+    for (name, manifest) in [
+        (
+            "service_account",
+            r#"{
+  apiVersion = "v1"
+  kind       = "ServiceAccount"
+  metadata = {
+    name      = "metrics-server"
+    namespace = "kube-system"
+    labels = {
+      "k8s-app" = "metrics-server"
+    }
+  }
+}"#,
+        ),
+        (
+            "aggregated_metrics_reader",
+            r#"{
+  apiVersion = "rbac.authorization.k8s.io/v1"
+  kind       = "ClusterRole"
+  metadata = {
+    name = "system:aggregated-metrics-reader"
+    labels = {
+      "rbac.authorization.k8s.io/aggregate-to-admin" = "true"
+      "rbac.authorization.k8s.io/aggregate-to-edit"  = "true"
+      "rbac.authorization.k8s.io/aggregate-to-view"  = "true"
+    }
+  }
+  rules = [{
+    apiGroups = ["metrics.k8s.io"]
+    resources = ["pods", "nodes"]
+    verbs     = ["get", "list", "watch"]
+  }]
+}"#,
+        ),
+        (
+            "cluster_role",
+            r#"{
+  apiVersion = "rbac.authorization.k8s.io/v1"
+  kind       = "ClusterRole"
+  metadata = {
+    name = "system:metrics-server"
+    labels = {
+      "k8s-app" = "metrics-server"
+    }
+  }
+  rules = [
+    {
+      apiGroups = [""]
+      resources = ["nodes/metrics"]
+      verbs     = ["get"]
+    },
+    {
+      apiGroups = [""]
+      resources = ["pods", "nodes"]
+      verbs     = ["get", "list", "watch"]
+    }
+  ]
+}"#,
+        ),
+        (
+            "auth_reader_role_binding",
+            r#"{
+  apiVersion = "rbac.authorization.k8s.io/v1"
+  kind       = "RoleBinding"
+  metadata = {
+    name      = "metrics-server-auth-reader"
+    namespace = "kube-system"
+    labels = {
+      "k8s-app" = "metrics-server"
+    }
+  }
+  roleRef = {
+    apiGroup = "rbac.authorization.k8s.io"
+    kind     = "Role"
+    name     = "extension-apiserver-authentication-reader"
+  }
+  subjects = [{
+    kind      = "ServiceAccount"
+    name      = "metrics-server"
+    namespace = "kube-system"
+  }]
+}"#,
+        ),
+        (
+            "auth_delegator_binding",
+            r#"{
+  apiVersion = "rbac.authorization.k8s.io/v1"
+  kind       = "ClusterRoleBinding"
+  metadata = {
+    name = "metrics-server:system:auth-delegator"
+    labels = {
+      "k8s-app" = "metrics-server"
+    }
+  }
+  roleRef = {
+    apiGroup = "rbac.authorization.k8s.io"
+    kind     = "ClusterRole"
+    name     = "system:auth-delegator"
+  }
+  subjects = [{
+    kind      = "ServiceAccount"
+    name      = "metrics-server"
+    namespace = "kube-system"
+  }]
+}"#,
+        ),
+        (
+            "cluster_role_binding",
+            r#"{
+  apiVersion = "rbac.authorization.k8s.io/v1"
+  kind       = "ClusterRoleBinding"
+  metadata = {
+    name = "system:metrics-server"
+    labels = {
+      "k8s-app" = "metrics-server"
+    }
+  }
+  roleRef = {
+    apiGroup = "rbac.authorization.k8s.io"
+    kind     = "ClusterRole"
+    name     = "system:metrics-server"
+  }
+  subjects = [{
+    kind      = "ServiceAccount"
+    name      = "metrics-server"
+    namespace = "kube-system"
+  }]
+}"#,
+        ),
+        (
+            "service",
+            r#"{
+  apiVersion = "v1"
+  kind       = "Service"
+  metadata = {
+    name      = "metrics-server"
+    namespace = "kube-system"
+    labels = {
+      "k8s-app" = "metrics-server"
+    }
+  }
+  spec = {
+    selector = {
+      "k8s-app" = "metrics-server"
+    }
+    ports = [{
+      name       = "https"
+      port       = 443
+      protocol   = "TCP"
+      targetPort = "https"
+    }]
+  }
+}"#,
+        ),
+        (
+            "deployment",
+            r#"{
+  apiVersion = "apps/v1"
+  kind       = "Deployment"
+  metadata = {
+    name      = "metrics-server"
+    namespace = "kube-system"
+    labels = {
+      "k8s-app" = "metrics-server"
+    }
+  }
+  spec = {
+    selector = {
+      matchLabels = {
+        "k8s-app" = "metrics-server"
+      }
+    }
+    strategy = {
+      rollingUpdate = {
+        maxUnavailable = 0
+      }
+    }
+    template = {
+      metadata = {
+        labels = {
+          "k8s-app" = "metrics-server"
+        }
+      }
+      spec = {
+        serviceAccountName = "metrics-server"
+        priorityClassName  = "system-cluster-critical"
+        containers = [{
+          name  = "metrics-server"
+          image = "registry.k8s.io/metrics-server/metrics-server:v0.8.1"
+          args = [
+            "--cert-dir=/tmp",
+            "--secure-port=10250",
+            "--kubelet-preferred-address-types=InternalIP,ExternalIP,Hostname",
+            "--kubelet-use-node-status-port",
+            "--metric-resolution=15s"
+          ]
+          ports = [{
+            name          = "https"
+            containerPort = 10250
+            protocol      = "TCP"
+          }]
+          resources = {
+            requests = {
+              cpu    = "100m"
+              memory = "200Mi"
+            }
+          }
+          volumeMounts = [{
+            name      = "tmp-dir"
+            mountPath = "/tmp"
+          }]
+        }]
+        volumes = [{
+          name = "tmp-dir"
+          emptyDir = {}
+        }]
+      }
+    }
+  }
+}"#,
+        ),
+        (
+            "api_service",
+            r#"{
+  apiVersion = "apiregistration.k8s.io/v1"
+  kind       = "APIService"
+  metadata = {
+    name = "v1beta1.metrics.k8s.io"
+    labels = {
+      "k8s-app" = "metrics-server"
+    }
+  }
+  spec = {
+    group                    = "metrics.k8s.io"
+    version                  = "v1beta1"
+    groupPriorityMinimum     = 100
+    versionPriority          = 100
+    insecureSkipTLSVerify    = true
+    service = {
+      name      = "metrics-server"
+      namespace = "kube-system"
+    }
+  }
+}"#,
+        ),
+    ] {
+        fragment.resource_blocks.push(resource_block(
+            "kubernetes_manifest",
+            &format!("{label}_metrics_server_{name}"),
+            [
+                attr(
+                    "count",
+                    expr::raw("var.kubernetes_cluster_mode == \"create\" && var.install_metrics_server ? 1 : 0"),
+                ),
+                attr("manifest", expr::raw(manifest)),
+                attr("depends_on", depends_on.clone()),
+            ],
+        ));
+    }
+}
+
 impl TfEmitter for GcpKubernetesClusterEmitter {
     fn emit(&self, ctx: &EmitContext<'_>) -> Result<TfFragment> {
         let label = required_label(ctx)?;
-        Ok(TfFragment::default()
+        let mut fragment = TfFragment::default()
             .with_local(
                 format!("{label}_cluster_name"),
                 expr::raw(format!(
@@ -849,24 +1125,46 @@ impl TfEmitter for GcpKubernetesClusterEmitter {
                 )),
             )
             .with_local(
-                "kubernetes_ingress_class".to_string(),
-                Expression::String(String::new()),
+                "kubernetes_exposure".to_string(),
+                expr::raw(
+                    r#"{
+  mode = "generated"
+  route = {
+    routeApi         = "gateway"
+    controller       = "networking.gke.io/gateway"
+    gatewayClassName = "gke-l7-global-external-managed"
+    listenerPort     = 443
+    labels           = {}
+    annotations      = {}
+    provider = {
+      provider          = "gkeGateway"
+      staticAddressName = null
+    }
+  }
+  certificate = {
+    mode               = "managedTlsSecret"
+    secretNameTemplate = "alien-{{ resourceId }}-tls"
+  }
+}"#,
+                ),
             )
-            .with_local(
-                "kubernetes_ingress_annotations".to_string(),
-                expr::raw(format!(
-                    r#"var.kubernetes_cluster_mode == "create" ? {{
-  "kubernetes.io/ingress.class" = "gce"
-  "kubernetes.io/ingress.global-static-ip-name" = google_compute_global_address.{label}_ingress[0].name
-}} : {{}}"#
-                )),
-            )
-            .with_local(
-                "kubernetes_public_host_suffix".to_string(),
-                expr::raw(format!(
-                    r#"var.kubernetes_cluster_mode == "create" ? "${{google_compute_global_address.{label}_ingress[0].address}}.sslip.io" : """#
-                )),
-            )
+            .with_data(data_block(
+                "google_container_cluster",
+                "target",
+                [
+                    attr("name", expr::raw(format!("local.{label}_cluster_name"))),
+                    attr(
+                        "location",
+                        expr::raw(
+                            "var.kubernetes_cluster_mode == \"create\" ? var.gcp_region : (var.gke_cluster_location == \"\" ? var.gcp_region : var.gke_cluster_location)",
+                        ),
+                    ),
+                    attr(
+                        "depends_on",
+                        expr::raw(format!("[google_container_cluster.{label}]")),
+                    ),
+                ],
+            ))
             .with_data(data_block(
                 "google_container_cluster",
                 &format!("{label}_existing"),
@@ -880,17 +1178,6 @@ impl TfEmitter for GcpKubernetesClusterEmitter {
                         "location",
                         expr::raw("var.gke_cluster_location == \"\" ? var.gcp_region : var.gke_cluster_location"),
                     ),
-                ],
-            ))
-            .with_resource(resource_block(
-                "google_compute_global_address",
-                &format!("{label}_ingress"),
-                [
-                    attr(
-                        "count",
-                        expr::raw("var.kubernetes_cluster_mode == \"create\" ? 1 : 0"),
-                    ),
-                    attr("name", expr::template("${local.resource_prefix}-ingress")),
                 ],
             ))
             .with_resource(resource_block(
@@ -914,6 +1201,10 @@ impl TfEmitter for GcpKubernetesClusterEmitter {
                         )],
                     )),
                     nested(block(
+                        "gateway_api_config",
+                        [attr("channel", Expression::String("CHANNEL_STANDARD".to_string()))],
+                    )),
+                    nested(block(
                         "master_auth",
                         [nested(block(
                             "client_certificate_config",
@@ -921,7 +1212,13 @@ impl TfEmitter for GcpKubernetesClusterEmitter {
                         ))],
                     )),
                 ],
-            )))
+            ));
+        add_metrics_server(
+            &mut fragment,
+            label,
+            expr::raw(format!("[google_container_cluster.{label}]")),
+        );
+        Ok(fragment)
     }
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
@@ -937,7 +1234,7 @@ impl TfEmitter for GcpKubernetesClusterEmitter {
 impl TfEmitter for AzureKubernetesClusterEmitter {
     fn emit(&self, ctx: &EmitContext<'_>) -> Result<TfFragment> {
         let label = required_label(ctx)?;
-        Ok(TfFragment::default()
+        let mut fragment = TfFragment::default()
             .with_local(
                 format!("{label}_cluster_name"),
                 expr::raw(format!(
@@ -955,17 +1252,46 @@ impl TfEmitter for AzureKubernetesClusterEmitter {
                 )),
             )
             .with_local(
-                "kubernetes_ingress_class".to_string(),
-                Expression::String("webapprouting.kubernetes.azure.com".to_string()),
+                "kubernetes_exposure".to_string(),
+                expr::raw(
+                    r#"{
+  mode = "generated"
+  route = {
+    routeApi         = "gateway"
+    controller       = "alb.networking.azure.io/alb-controller"
+    gatewayClassName = "azure-alb-external"
+    listenerPort     = 443
+    labels           = {}
+    annotations      = {}
+    provider = {
+      provider = "azureApplicationGatewayForContainers"
+      frontend = "public"
+    }
+  }
+  certificate = {
+    mode               = "managedTlsSecret"
+    secretNameTemplate = "alien-{{ resourceId }}-tls"
+  }
+}"#,
+                ),
             )
-            .with_local(
-                "kubernetes_ingress_annotations".to_string(),
-                expr::raw("{}"),
-            )
-            .with_local(
-                "kubernetes_public_host_suffix".to_string(),
-                Expression::String(String::new()),
-            )
+            .with_data(data_block(
+                "azurerm_kubernetes_cluster",
+                "target",
+                [
+                    attr("name", expr::raw(format!("local.{label}_cluster_name"))),
+                    attr(
+                        "resource_group_name",
+                        expr::raw(
+                            "var.kubernetes_cluster_mode == \"create\" ? var.azure_resource_group_name : var.aks_cluster_resource_group_name",
+                        ),
+                    ),
+                    attr(
+                        "depends_on",
+                        expr::raw(format!("[azurerm_kubernetes_cluster.{label}]")),
+                    ),
+                ],
+            ))
             .with_data(data_block(
                 "azurerm_kubernetes_cluster",
                 &format!("{label}_existing"),
@@ -1009,13 +1335,15 @@ impl TfEmitter for AzureKubernetesClusterEmitter {
                             attr("tenant_id", expr::raw("var.azure_managing_tenant_id")),
                         ],
                     )),
-                    nested(block(
-                        "web_app_routing",
-                        [attr("dns_zone_ids", Expression::Array(vec![]))],
-                    )),
                     attr("sku_tier", Expression::String("Standard".to_string())),
                 ],
-            )))
+            ));
+        add_metrics_server(
+            &mut fragment,
+            label,
+            expr::raw(format!("[azurerm_kubernetes_cluster.{label}]")),
+        );
+        Ok(fragment)
     }
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {

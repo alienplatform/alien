@@ -1,11 +1,9 @@
-use crate::gcp::GcpClientConfigExt;
 use alien_client_core::RequestBuilderExt;
 use alien_client_core::{ErrorData, Result};
-use alien_error::{AlienError, Context, ContextError, IntoAlienError};
+use alien_error::{Context, ContextError, IntoAlienError};
 use reqwest::RequestBuilder;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
-use tracing::debug;
 
 /// Configuration needed to add Bearer authentication to a GCP request.
 #[derive(Debug, Clone)]

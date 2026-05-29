@@ -150,8 +150,9 @@ pub fn client_with_auth_and_workspace(auth_value: &str, workspace: &str) -> Resu
         HeaderValue::from_str(workspace)
             .into_alien_error()
             .context(ErrorData::AuthenticationFailed {
-                reason: "Invalid workspace name (contains characters not allowed in an HTTP header)"
-                    .to_string(),
+                reason:
+                    "Invalid workspace name (contains characters not allowed in an HTTP header)"
+                        .to_string(),
             })?,
     );
     headers.insert(USER_AGENT, HeaderValue::from_static("alien-cli"));

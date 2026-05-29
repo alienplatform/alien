@@ -132,6 +132,7 @@ pub async fn handle_provisioning(
             error: None,
             suggested_delay_ms: None,
             update_heartbeat: false,
+            heartbeats: vec![],
         }
     } else if stack_status == StackStatus::Failure {
         info!("Live resource deployment failed");
@@ -174,6 +175,7 @@ pub async fn handle_provisioning(
             error,
             suggested_delay_ms: None,
             update_heartbeat: false,
+            heartbeats: vec![],
         }
     } else {
         // Still in progress
@@ -185,6 +187,7 @@ pub async fn handle_provisioning(
             error: None,
             suggested_delay_ms: step_result.suggested_delay_ms,
             update_heartbeat: false,
+            heartbeats: step_result.heartbeats,
         }
     };
 
@@ -218,6 +221,7 @@ pub async fn handle_provisioning_failed(
             error: None,
             suggested_delay_ms: None,
             update_heartbeat: false,
+            heartbeats: vec![],
         });
     }
 
@@ -249,5 +253,6 @@ pub async fn handle_provisioning_failed(
         error: None,
         suggested_delay_ms: None,
         update_heartbeat: false,
+        heartbeats: vec![],
     })
 }

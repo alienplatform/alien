@@ -234,13 +234,13 @@ pub fn generate_terraform_module(
     }
 
     let network_vars = network_extra_variables(stack, &labels);
-    let include_kubernetes_provider = target == TerraformTarget::Eks
-        && stack.resources().any(|(_, entry)| {
-            entry
-                .config
-                .downcast_ref::<alien_core::KubernetesCluster>()
-                .is_some()
-        });
+    let has_kubernetes_cluster = stack.resources().any(|(_, entry)| {
+        entry
+            .config
+            .downcast_ref::<alien_core::KubernetesCluster>()
+            .is_some()
+    });
+    let include_kubernetes_provider = target.is_kubernetes() && has_kubernetes_cluster;
     let deployment_name_default = options
         .display_name
         .as_deref()
@@ -944,6 +944,11 @@ fn variables_body(
             Some(Expression::String("create".to_string())),
             false,
         )));
+        blocks.push(nested(bool_variable_block(
+            "install_metrics_server",
+            "Whether to install metrics-server into Kubernetes clusters created by this module.",
+            Some(true),
+        )));
         blocks.push(nested(variable_block(
             "kubernetes_namespace",
             "Kubernetes namespace for runtime resources.",
@@ -1173,19 +1178,68 @@ fn providers_body(target: TerraformTarget, include_kubernetes_provider: bool) ->
         structures.push(Structure::Block(Block {
             identifier: Identifier::sanitized("provider"),
             labels: vec![BlockLabel::String("kubernetes".to_string())],
-            body: Body::from(vec![
-                attr("host", expr::raw("data.aws_eks_cluster.target.endpoint")),
-                attr(
-                    "cluster_ca_certificate",
-                    expr::raw(
-                        "base64decode(data.aws_eks_cluster.target.certificate_authority[0].data)",
-                    ),
-                ),
-                attr("token", expr::raw("data.aws_eks_cluster_auth.target.token")),
-            ]),
+            body: Body::from(kubernetes_provider_body(target)),
         }));
     }
     Body::from(structures)
+}
+
+fn kubernetes_provider_body(target: TerraformTarget) -> Vec<Structure> {
+    match target {
+        TerraformTarget::Eks => vec![
+            attr("host", expr::raw("data.aws_eks_cluster.target.endpoint")),
+            attr(
+                "cluster_ca_certificate",
+                expr::raw("base64decode(data.aws_eks_cluster.target.certificate_authority[0].data)"),
+            ),
+            attr("token", expr::raw("data.aws_eks_cluster_auth.target.token")),
+        ],
+        TerraformTarget::Gke => vec![
+            attr(
+                "host",
+                expr::raw("\"https://${data.google_container_cluster.target.endpoint}\""),
+            ),
+            attr(
+                "cluster_ca_certificate",
+                expr::raw(
+                    "base64decode(data.google_container_cluster.target.master_auth[0].cluster_ca_certificate)",
+                ),
+            ),
+            attr(
+                "client_certificate",
+                expr::raw(
+                    "base64decode(data.google_container_cluster.target.master_auth[0].client_certificate)",
+                ),
+            ),
+            attr(
+                "client_key",
+                expr::raw("base64decode(data.google_container_cluster.target.master_auth[0].client_key)"),
+            ),
+        ],
+        TerraformTarget::Aks => vec![
+            attr(
+                "host",
+                expr::raw("data.azurerm_kubernetes_cluster.target.kube_config[0].host"),
+            ),
+            attr(
+                "cluster_ca_certificate",
+                expr::raw(
+                    "base64decode(data.azurerm_kubernetes_cluster.target.kube_config[0].cluster_ca_certificate)",
+                ),
+            ),
+            attr(
+                "client_certificate",
+                expr::raw(
+                    "base64decode(data.azurerm_kubernetes_cluster.target.kube_config[0].client_certificate)",
+                ),
+            ),
+            attr(
+                "client_key",
+                expr::raw("base64decode(data.azurerm_kubernetes_cluster.target.kube_config[0].client_key)"),
+            ),
+        ],
+        _ => Vec::new(),
+    }
 }
 
 fn resource_prefix_body() -> Body {
@@ -1257,6 +1311,22 @@ fn locals_body(
         "deployment_management_config",
         management_config_expression(target),
     ));
+    if target.is_kubernetes() {
+        if !extra.contains_key("kubernetes_exposure") {
+            body.push(attr(
+                "kubernetes_exposure",
+                expr::object([("mode", Expression::String("disabled".to_string()))]),
+            ));
+        }
+        body.push(attr(
+            "deployment_kubernetes_settings",
+            expr::raw(
+                r#"merge(try(jsondecode(var.stack_settings_json).kubernetes, {}), {
+  exposure = coalesce(try(jsondecode(var.stack_settings_json).kubernetes.exposure, null), local.kubernetes_exposure)
+})"#,
+            ),
+        ));
+    }
     body.push(attr(
         "deployment_settings",
         stack_settings_expression(target, stack_settings),
@@ -1270,15 +1340,6 @@ fn locals_body(
         for (name, value) in [
             ("kubernetes_kubeconfig", Expression::String(String::new())),
             ("kubernetes_kube_context", Expression::String(String::new())),
-            (
-                "kubernetes_ingress_class",
-                Expression::String(String::new()),
-            ),
-            ("kubernetes_ingress_annotations", expr::raw("{}")),
-            (
-                "kubernetes_public_host_suffix",
-                Expression::String(String::new()),
-            ),
         ] {
             if !extra.contains_key(name) {
                 body.push(attr(name, value));
@@ -1301,6 +1362,16 @@ fn locals_body(
                 ("stackSettings", expr::raw("local.deployment_settings")),
                 ("basePlatform", expr::raw("local.deployment_base_platform")),
                 ("serviceAccountPrefix", expr::raw("local.resource_prefix")),
+                (
+                    "heartbeat",
+                    expr::object([(
+                        "collection",
+                        expr::object([(
+                            "nodes",
+                            expr::object([("enabled", Expression::Bool(true))]),
+                        )]),
+                    )]),
+                ),
             ]),
         ));
     }
@@ -1359,6 +1430,11 @@ fn stack_settings_expression(
         alien_core::Platform::Aws
             if has_dynamic_aws_network_settings(stack_settings.network.as_ref()) =>
         {
+            let kubernetes_settings = if target.is_kubernetes() {
+                "\n  kubernetes = local.deployment_kubernetes_settings"
+            } else {
+                ""
+            };
             return expr::raw(format!(
                 r#"merge(jsondecode(var.stack_settings_json), {{
   network = jsondecode(
@@ -1376,12 +1452,18 @@ fn stack_settings_expression(
       type = "use-default"
     }})
   )
+{kubernetes_settings}
 }})"#
             ));
         }
         alien_core::Platform::Gcp
             if has_dynamic_gcp_network_settings(stack_settings.network.as_ref()) =>
         {
+            let kubernetes_settings = if target.is_kubernetes() {
+                "\n  kubernetes = local.deployment_kubernetes_settings"
+            } else {
+                ""
+            };
             return expr::raw(format!(
                 r#"merge(jsondecode(var.stack_settings_json), {{
   network = jsondecode(
@@ -1398,8 +1480,16 @@ fn stack_settings_expression(
       type = "use-default"
     }})
   )
+{kubernetes_settings}
 }})"#
             ));
+        }
+        _ if target.is_kubernetes() => {
+            return expr::raw(
+                r#"merge(jsondecode(var.stack_settings_json), {
+  kubernetes = local.deployment_kubernetes_settings
+})"#,
+            );
         }
         _ => return expr::raw("jsondecode(var.stack_settings_json)"),
     }
@@ -1647,21 +1737,6 @@ fn outputs_body(target: TerraformTarget, registration: Option<&TerraformRegistra
             "kubernetes_kube_context",
             expr::raw("local.kubernetes_kube_context"),
             "Kube context for managed Kubernetes clusters created by this module.",
-        ));
-        outputs.push((
-            "kubernetes_ingress_class",
-            expr::raw("local.kubernetes_ingress_class"),
-            "Ingress class selected by Kubernetes cluster provisioning.",
-        ));
-        outputs.push((
-            "kubernetes_ingress_annotations",
-            expr::raw("jsonencode(local.kubernetes_ingress_annotations)"),
-            "Ingress annotations selected by Kubernetes cluster provisioning.",
-        ));
-        outputs.push((
-            "kubernetes_public_host_suffix",
-            expr::raw("local.kubernetes_public_host_suffix"),
-            "DNS suffix for generated Kubernetes public hosts when known at setup time.",
         ));
         outputs.push((
             "helm_values",

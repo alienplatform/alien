@@ -10,12 +10,16 @@ use crate::container::local_utils;
 use crate::core::{environment_variables::EnvironmentVariableBuilder, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
 use alien_core::{
-    Container, ContainerCode, ContainerOutputs, ContainerStatus, ExposeProtocol, Kv,
+    Container, ContainerCode, ContainerHeartbeatData, ContainerOutputs, ContainerStatus,
+    HeartbeatBackend, Kv, LocalContainerHeartbeatData, ObservedHealth, Platform,
+    ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData,
     ResourceOutputs as CoreResourceOutputs, ResourceStatus, Storage, Vault,
+    WorkloadHeartbeatStatus,
 };
 use alien_error::{AlienError, Context, IntoAlienError as _};
 use alien_local::{ContainerConfig, ContainerInfo};
 use alien_macros::controller;
+use chrono::Utc;
 
 /// Local Container controller.
 ///
@@ -268,6 +272,8 @@ impl LocalContainerController {
             }
         }
 
+        emit_local_container_heartbeat(ctx, &config, self.container_info.as_ref(), true);
+
         debug!(container_id = %config.id, "Container health check passed");
 
         Ok(HandlerAction::Continue {
@@ -420,4 +426,55 @@ impl LocalContainerController {
             )?,
         ))
     }
+}
+
+fn emit_local_container_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    config: &Container,
+    container_info: Option<&ContainerInfo>,
+    runtime_reachable: bool,
+) {
+    let image = match &config.code {
+        ContainerCode::Image { image } => Some(image.clone()),
+        ContainerCode::Source { .. } => None,
+    };
+    let local_url = container_info
+        .and_then(|info| info.host_port)
+        .map(|port| format!("http://localhost:{port}"));
+
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: config.id.clone(),
+        resource_type: Container::RESOURCE_TYPE,
+        controller_platform: Platform::Local,
+        backend: HeartbeatBackend::Local,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::Container(ContainerHeartbeatData::Local(
+            LocalContainerHeartbeatData {
+                status: WorkloadHeartbeatStatus {
+                    health: ObservedHealth::Healthy,
+                    lifecycle: ProviderLifecycleState::Running,
+                    message: Some(format!("Local container '{}' is running", config.id)),
+                    stale: false,
+                    partial: false,
+                    collection_issues: vec![],
+                },
+                container_id: container_info.map(|info| info.docker_container_id.clone()),
+                name: container_info.map(|info| info.container_id.clone()),
+                image,
+                runtime_status: Some("running".to_string()),
+                restart_count: None,
+                port_count: container_info
+                    .map(|info| info.ports.len() as u32)
+                    .unwrap_or(config.ports.len() as u32),
+                bind_mount_count: config.links.len() as u32,
+                local_url,
+                runtime_reachable,
+                cpu: None,
+                memory: None,
+                events: vec![],
+            },
+        )),
+        raw: vec![],
+    });
 }

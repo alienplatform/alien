@@ -6,11 +6,14 @@ use crate::core::{EnvironmentVariableBuilder, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    kubernetes_build_service_account_name, kubernetes_resource_name, Build, BuildOutputs,
+    kubernetes_build_service_account_name, kubernetes_resource_name, Build, BuildHeartbeatData,
+    BuildHeartbeatStatus, BuildOutputs, HeartbeatBackend, KubernetesBuildHeartbeatData,
+    ObservedHealth, Platform, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData,
     ResourceOutputs, ResourceStatus,
 };
 use alien_error::{AlienError, Context, ContextError};
 use alien_macros::controller;
+use chrono::Utc;
 
 use k8s_openapi::api::batch::v1::{Job, JobSpec};
 use k8s_openapi::api::core::v1::{Container, EnvVar, PodSpec, PodTemplateSpec};
@@ -193,7 +196,7 @@ impl KubernetesBuildController {
                 },
             )?;
 
-            if let Some(status) = job.status {
+            if let Some(status) = &job.status {
                 if let Some(succeeded) = status.succeeded {
                     if succeeded == 0 {
                         return Err(AlienError::new(ErrorData::ResourceDrift {
@@ -203,6 +206,8 @@ impl KubernetesBuildController {
                     }
                 }
             }
+
+            emit_kubernetes_build_heartbeat(ctx, &config.id, job_name, namespace, &job, self);
 
             debug!(job_name=%job_name, namespace=%namespace, "Build Job is healthy");
         }
@@ -799,6 +804,64 @@ impl KubernetesBuildController {
             }
         }
     }
+}
+
+fn emit_kubernetes_build_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    job_name: &str,
+    namespace: &str,
+    job: &Job,
+    controller: &KubernetesBuildController,
+) {
+    let status = job.status.as_ref();
+    let failed = status.and_then(|status| status.failed);
+    let health = if failed.unwrap_or(0) > 0 {
+        ObservedHealth::Unhealthy
+    } else {
+        ObservedHealth::Healthy
+    };
+    let lifecycle = if failed.unwrap_or(0) > 0 {
+        ProviderLifecycleState::Failed
+    } else {
+        ProviderLifecycleState::Running
+    };
+
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: Build::RESOURCE_TYPE,
+        controller_platform: Platform::Kubernetes,
+        backend: HeartbeatBackend::Kubernetes,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::Build(BuildHeartbeatData::KubernetesJob(
+            KubernetesBuildHeartbeatData {
+                status: BuildHeartbeatStatus {
+                    health,
+                    lifecycle,
+                    message: Some(format!("Kubernetes build Job '{}' is reachable", job_name)),
+                    stale: false,
+                    partial: false,
+                    collection_issues: vec![],
+                },
+                job_name: job_name.to_string(),
+                namespace: namespace.to_string(),
+                active: status.and_then(|status| status.active),
+                succeeded: status.and_then(|status| status.succeeded),
+                failed,
+                start_time: status.and_then(|status| status.start_time.as_ref().map(|time| time.0)),
+                completion_time: status
+                    .and_then(|status| status.completion_time.as_ref().map(|time| time.0)),
+                condition_count: status
+                    .and_then(|status| status.conditions.as_ref())
+                    .map(|conditions| conditions.len() as u32)
+                    .unwrap_or(0),
+                image_digest: controller.image_digest.clone(),
+                events: vec![],
+            },
+        )),
+        raw: vec![],
+    });
 }
 
 #[cfg(test)]

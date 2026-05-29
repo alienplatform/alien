@@ -96,6 +96,7 @@ pub async fn handle_running(
                 | alien_core::ResourceStatus::RefreshFailed
         )
     });
+    let heartbeats = step_result.heartbeats.clone();
 
     if has_failed {
         info!("Health check failed for one or more resources");
@@ -112,6 +113,7 @@ pub async fn handle_running(
             error,
             suggested_delay_ms: None,
             update_heartbeat: false,
+            heartbeats: heartbeats.clone(),
         })
     } else {
         info!("Health check passed for all resources");
@@ -123,6 +125,7 @@ pub async fn handle_running(
             error: None,
             suggested_delay_ms: None,
             update_heartbeat: true, // Update heartbeat timestamp for Running status
+            heartbeats,
         })
     }
 }
@@ -154,6 +157,7 @@ pub async fn handle_refresh_failed(
             error: None,
             suggested_delay_ms: None,
             update_heartbeat: false,
+            heartbeats: vec![],
         });
     }
 
@@ -185,5 +189,6 @@ pub async fn handle_refresh_failed(
         error: None,
         suggested_delay_ms: None,
         update_heartbeat: false,
+        heartbeats: vec![],
     })
 }

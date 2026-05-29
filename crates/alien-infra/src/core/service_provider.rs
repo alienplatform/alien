@@ -16,6 +16,7 @@ use alien_aws_clients::{
     s3::{S3Api, S3Client},
     secrets_manager::{SecretsManagerApi, SecretsManagerClient},
     sqs::{SqsApi, SqsClient},
+    ssm::{SsmApi, SsmClient},
     AwsClientConfig, AwsCredentialProvider,
 };
 use alien_azure_clients::{
@@ -62,8 +63,10 @@ use alien_gcp_clients::{
 };
 #[cfg(feature = "kubernetes")]
 use alien_k8s_clients::{
-    deployments::DeploymentApi, jobs::JobApi, kubernetes_client::KubernetesClient, pods::PodApi,
-    secrets::SecretsApi, services::ServiceApi, KubernetesClientConfig,
+    deployments::DeploymentApi, events::EventApi, jobs::JobApi,
+    kubernetes_client::KubernetesClient, metrics::MetricsApi, nodes::NodeApi, pods::PodApi,
+    routes::RouteApi, secrets::SecretsApi, services::ServiceApi, version::VersionApi,
+    KubernetesClientConfig,
 };
 use std::sync::Arc;
 
@@ -95,6 +98,7 @@ pub trait PlatformServiceProvider: Send + Sync {
         &self,
         config: &AwsClientConfig,
     ) -> Result<Arc<dyn SecretsManagerApi>>;
+    async fn get_aws_ssm_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn SsmApi>>;
     async fn get_aws_dynamodb_client(
         &self,
         config: &AwsClientConfig,
@@ -254,6 +258,21 @@ pub trait PlatformServiceProvider: Send + Sync {
         config: &'a KubernetesClientConfig,
     ) -> Result<Arc<dyn PodApi>>;
     #[cfg(feature = "kubernetes")]
+    async fn get_kubernetes_event_client<'a>(
+        &'a self,
+        config: &'a KubernetesClientConfig,
+    ) -> Result<Arc<dyn EventApi>>;
+    #[cfg(feature = "kubernetes")]
+    async fn get_kubernetes_node_client<'a>(
+        &'a self,
+        config: &'a KubernetesClientConfig,
+    ) -> Result<Arc<dyn NodeApi>>;
+    #[cfg(feature = "kubernetes")]
+    async fn get_kubernetes_metrics_client<'a>(
+        &'a self,
+        config: &'a KubernetesClientConfig,
+    ) -> Result<Arc<dyn MetricsApi>>;
+    #[cfg(feature = "kubernetes")]
     async fn get_kubernetes_secrets_client<'a>(
         &'a self,
         config: &'a KubernetesClientConfig,
@@ -263,6 +282,16 @@ pub trait PlatformServiceProvider: Send + Sync {
         &'a self,
         config: &'a KubernetesClientConfig,
     ) -> Result<Arc<dyn ServiceApi>>;
+    #[cfg(feature = "kubernetes")]
+    async fn get_kubernetes_route_client<'a>(
+        &'a self,
+        config: &'a KubernetesClientConfig,
+    ) -> Result<Arc<dyn RouteApi>>;
+    #[cfg(feature = "kubernetes")]
+    async fn get_kubernetes_version_client<'a>(
+        &'a self,
+        config: &'a KubernetesClientConfig,
+    ) -> Result<Arc<dyn VersionApi>>;
 
     // Local platform service managers (return None for non-local platforms)
     #[cfg(feature = "local")]
@@ -452,6 +481,19 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
                 resource_id: None,
             })?;
         Ok(Arc::new(SecretsManagerClient::new(
+            reqwest::Client::new(),
+            credentials,
+        )))
+    }
+
+    async fn get_aws_ssm_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn SsmApi>> {
+        let credentials = AwsCredentialProvider::from_config(config.clone())
+            .await
+            .context(crate::error::ErrorData::CloudPlatformError {
+                message: "Failed to create AWS credential provider".to_string(),
+                resource_id: None,
+            })?;
+        Ok(Arc::new(SsmClient::new(
             reqwest::Client::new(),
             credentials,
         )))
@@ -952,6 +994,48 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
     }
 
     #[cfg(feature = "kubernetes")]
+    async fn get_kubernetes_event_client<'a>(
+        &'a self,
+        config: &'a KubernetesClientConfig,
+    ) -> Result<Arc<dyn EventApi>> {
+        let client = KubernetesClient::new(config.clone()).await.context(
+            crate::error::ErrorData::CloudPlatformError {
+                message: "Failed to create Kubernetes event client".to_string(),
+                resource_id: None,
+            },
+        )?;
+        Ok(Arc::new(client))
+    }
+
+    #[cfg(feature = "kubernetes")]
+    async fn get_kubernetes_node_client<'a>(
+        &'a self,
+        config: &'a KubernetesClientConfig,
+    ) -> Result<Arc<dyn NodeApi>> {
+        let client = KubernetesClient::new(config.clone()).await.context(
+            crate::error::ErrorData::CloudPlatformError {
+                message: "Failed to create Kubernetes node client".to_string(),
+                resource_id: None,
+            },
+        )?;
+        Ok(Arc::new(client))
+    }
+
+    #[cfg(feature = "kubernetes")]
+    async fn get_kubernetes_metrics_client<'a>(
+        &'a self,
+        config: &'a KubernetesClientConfig,
+    ) -> Result<Arc<dyn MetricsApi>> {
+        let client = KubernetesClient::new(config.clone()).await.context(
+            crate::error::ErrorData::CloudPlatformError {
+                message: "Failed to create Kubernetes metrics client".to_string(),
+                resource_id: None,
+            },
+        )?;
+        Ok(Arc::new(client))
+    }
+
+    #[cfg(feature = "kubernetes")]
     async fn get_kubernetes_secrets_client<'a>(
         &'a self,
         config: &'a KubernetesClientConfig,
@@ -973,6 +1057,34 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         let client = KubernetesClient::new(config.clone()).await.context(
             crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to create Kubernetes service client".to_string(),
+                resource_id: None,
+            },
+        )?;
+        Ok(Arc::new(client))
+    }
+
+    #[cfg(feature = "kubernetes")]
+    async fn get_kubernetes_route_client<'a>(
+        &'a self,
+        config: &'a KubernetesClientConfig,
+    ) -> Result<Arc<dyn RouteApi>> {
+        let client = KubernetesClient::new(config.clone()).await.context(
+            crate::error::ErrorData::CloudPlatformError {
+                message: "Failed to create Kubernetes route client".to_string(),
+                resource_id: None,
+            },
+        )?;
+        Ok(Arc::new(client))
+    }
+
+    #[cfg(feature = "kubernetes")]
+    async fn get_kubernetes_version_client<'a>(
+        &'a self,
+        config: &'a KubernetesClientConfig,
+    ) -> Result<Arc<dyn VersionApi>> {
+        let client = KubernetesClient::new(config.clone()).await.context(
+            crate::error::ErrorData::CloudPlatformError {
+                message: "Failed to create Kubernetes version client".to_string(),
                 resource_id: None,
             },
         )?;

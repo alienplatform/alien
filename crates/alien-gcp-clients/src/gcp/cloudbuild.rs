@@ -1,7 +1,6 @@
 use crate::gcp::api_client::{GcpClientBase, GcpServiceConfig};
 use crate::gcp::longrunning::Operation;
 use crate::gcp::GcpClientConfig;
-use crate::gcp::GcpClientConfigExt;
 use alien_client_core::Result;
 use bon::Builder;
 use reqwest::{Client, Method};
@@ -9,7 +8,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Debug;
 
-use async_trait::async_trait;
 #[cfg(feature = "test-utils")]
 use mockall::automock;
 

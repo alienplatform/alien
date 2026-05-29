@@ -11,9 +11,11 @@
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
-    AzureResourceGroup, Ingress, KubernetesCluster, KubernetesClusterOwnership,
-    KubernetesClusterProvider, KubernetesHeartbeatMode, ResourceLifecycle, ServiceAccount, Stack,
-    StackSettings, Storage, Worker, WorkerCode,
+    AzureResourceGroup, Ingress, KubernetesCertificateMode, KubernetesCluster,
+    KubernetesClusterOwnership, KubernetesClusterProvider, KubernetesExposureSettings,
+    KubernetesHeartbeatMode, KubernetesIngressRouteProfile, KubernetesRouteProfile,
+    KubernetesSettings, ResourceLifecycle, ServiceAccount, Stack, StackSettings, Storage, Worker,
+    WorkerCode,
 };
 use alien_terraform::TerraformTarget;
 
@@ -143,12 +145,132 @@ fn managed_kubernetes_cluster_emitters_export_runtime_metadata() {
 
         let outputs = module.get("outputs.tf").expect("outputs should render");
         assert!(outputs.contains("kubernetes_kubeconfig"));
-        assert!(outputs.contains("kubernetes_ingress_class"));
-        assert!(outputs.contains("kubernetes_ingress_annotations"));
+        assert!(!outputs.contains("kubernetes_ingress_class"));
+        assert!(!outputs.contains("kubernetes_ingress_annotations"));
+        assert!(!outputs.contains("kubernetes_public_host_suffix"));
+
+        let main = module.get("locals.tf").expect("locals should render");
+        assert!(main.contains("kubernetes_exposure"));
+        assert!(main.contains(
+            "exposure = coalesce(try(jsondecode(var.stack_settings_json).kubernetes.exposure, null), local.kubernetes_exposure)"
+        ));
+        match target {
+            TerraformTarget::Eks => {
+                assert!(main.contains("routeApi         = \"ingress\""));
+                assert!(main.contains("controller       = \"eks.amazonaws.com/alb\""));
+                assert!(main.contains("ingressClassName = \"alb\""));
+                assert!(main.contains("provider   = \"awsAlb\""));
+                assert!(main.contains("mode   = \"managedAcmImport\""));
+            }
+            TerraformTarget::Gke => {
+                assert!(main.contains("routeApi         = \"gateway\""));
+                assert!(main.contains("gatewayClassName = \"gke-l7-global-external-managed\""));
+                assert!(main.contains("provider          = \"gkeGateway\""));
+                assert!(main.contains("mode               = \"managedTlsSecret\""));
+            }
+            TerraformTarget::Aks => {
+                assert!(main.contains("routeApi         = \"gateway\""));
+                assert!(main.contains("gatewayClassName = \"azure-alb-external\""));
+                assert!(main.contains("provider = \"azureApplicationGatewayForContainers\""));
+                assert!(main.contains("mode               = \"managedTlsSecret\""));
+            }
+            _ => unreachable!("only managed Kubernetes targets are tested here"),
+        }
 
         assert_terraform_valid(
             &module,
             &format!("{}_managed_kubernetes_cluster", target.name()),
         );
+    }
+}
+
+#[test]
+fn managed_kubernetes_cluster_preserves_stack_settings_exposure() {
+    let stack = Stack::new("eks-custom-exposure".to_string())
+        .add(
+            KubernetesCluster::new("kubernetes".to_string())
+                .provider(KubernetesClusterProvider::Eks)
+                .ownership(KubernetesClusterOwnership::Managed)
+                .namespace("default".to_string())
+                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let settings = StackSettings {
+        kubernetes: Some(KubernetesSettings {
+            cluster: None,
+            exposure: Some(KubernetesExposureSettings::Custom {
+                domain: "api.example.com".to_string(),
+                route: KubernetesRouteProfile::Ingress(KubernetesIngressRouteProfile {
+                    controller: Some("eks.amazonaws.com/alb".to_string()),
+                    ingress_class_name: "alb".to_string(),
+                    labels: Default::default(),
+                    annotations: Default::default(),
+                    provider: None,
+                }),
+                certificate: KubernetesCertificateMode::AwsAcmArn {
+                    certificate_arn: "arn:aws:acm:us-east-1:123456789012:certificate/customer"
+                        .to_string(),
+                },
+            }),
+        }),
+        ..StackSettings::default()
+    };
+
+    let module = render(&stack, TerraformTarget::Eks, settings);
+    let locals = module.get("locals.tf").expect("locals should render");
+    let variables = module.get("variables.tf").expect("variables should render");
+
+    assert!(variables.contains("api.example.com"));
+    assert!(variables.contains("certificateArn"));
+    assert!(variables.contains("arn:aws:acm:us-east-1:123456789012:certificate/customer"));
+    assert!(locals.contains(
+        "exposure = coalesce(try(jsondecode(var.stack_settings_json).kubernetes.exposure, null), local.kubernetes_exposure)"
+    ));
+    assert_terraform_valid(&module, "eks_custom_exposure");
+}
+
+#[test]
+fn managed_kubernetes_cluster_emitters_install_metrics_server_for_created_clusters() {
+    for (target, provider) in [
+        (TerraformTarget::Eks, KubernetesClusterProvider::Eks),
+        (TerraformTarget::Gke, KubernetesClusterProvider::Gke),
+        (TerraformTarget::Aks, KubernetesClusterProvider::Aks),
+    ] {
+        let stack = Stack::new(format!("{}-metrics-server", target.name()))
+            .add(
+                KubernetesCluster::new("kubernetes".to_string())
+                    .provider(provider)
+                    .ownership(KubernetesClusterOwnership::Managed)
+                    .namespace("default".to_string())
+                    .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+
+        let module = render(&stack, target, StackSettings::default());
+        snapshot_module(
+            &format!("{}_managed_cluster_metrics_server", target.name()),
+            &module,
+        );
+
+        let variables = module.get("variables.tf").expect("variables should render");
+        assert!(variables.contains(r#"variable "install_metrics_server""#));
+        assert!(variables.contains("default     = true"));
+
+        let providers = module.get("providers.tf").expect("providers should render");
+        assert!(providers.contains(r#"provider "kubernetes""#));
+
+        let cluster = module
+            .get("kubernetes.tf")
+            .expect("cluster resource file should render");
+        assert!(cluster.contains("metrics-server"));
+        assert!(cluster.contains(
+            r#"count = var.kubernetes_cluster_mode == "create" && var.install_metrics_server ? 1 : 0"#
+        ));
+
+        assert_terraform_valid(&module, &format!("{}_metrics_server", target.name()));
     }
 }

@@ -16,7 +16,7 @@ fn deserialize_bool_or_null<'de, D: Deserializer<'de>>(deserializer: D) -> Resul
 
 use alien_core::{
     sync::TargetDeployment, DeploymentConfig, DeploymentState, DeploymentStatus,
-    EnvironmentVariable, EnvironmentVariablesSnapshot, Platform, ReleaseInfo,
+    EnvironmentVariable, EnvironmentVariablesSnapshot, Platform, ReleaseInfo, ResourceHeartbeat,
 };
 
 use crate::error::ErrorData;
@@ -76,6 +76,8 @@ pub struct ReconcileRequest {
     pub error: Option<serde_json::Value>,
     #[serde(default)]
     pub suggested_delay_ms: Option<u64>,
+    #[serde(default)]
+    pub heartbeats: Vec<ResourceHeartbeat>,
 }
 
 #[derive(Debug, Serialize)]
@@ -346,6 +348,7 @@ async fn reconcile(
                 update_heartbeat: req.update_heartbeat,
                 error: req.error,
                 suggested_delay_ms: req.suggested_delay_ms,
+                heartbeats: req.heartbeats,
             },
         )
         .await
@@ -428,16 +431,17 @@ async fn release(
 #[cfg(test)]
 mod tests {
     use alien_core::{
-        DeploymentState, DeploymentStatus, Platform, StackSettings, StackState,
-        CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        DeploymentState, DeploymentStatus, Platform, ResourceHeartbeatData, StackSettings,
+        StackState, CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
     };
     use chrono::Utc;
+    use serde_json::json;
 
     use crate::traits::DeploymentRecord;
 
     use super::{
         deployment_state_from_record, release_stack_platform, should_ignore_agent_state_report,
-        validate_initialize_base_platform,
+        validate_initialize_base_platform, ReconcileRequest,
     };
 
     #[test]
@@ -451,6 +455,76 @@ mod tests {
     #[test]
     fn release_stack_platform_defaults_to_deployment_platform() {
         assert_eq!(release_stack_platform(Platform::Gcp, None), Platform::Gcp);
+    }
+
+    #[test]
+    fn reconcile_request_defaults_missing_heartbeats_to_empty() {
+        let req: ReconcileRequest = serde_json::from_value(json!({
+            "deploymentId": "dep_test",
+            "session": "session_test",
+            "state": { "status": "running" },
+            "updateHeartbeat": true
+        }))
+        .expect("reconcile request without heartbeats should remain compatible");
+
+        assert!(req.heartbeats.is_empty());
+        assert!(req.update_heartbeat);
+    }
+
+    #[test]
+    fn reconcile_request_accepts_typed_heartbeats() {
+        let req: ReconcileRequest = serde_json::from_value(json!({
+            "deploymentId": "dep_test",
+            "session": "session_test",
+            "state": { "status": "running" },
+            "updateHeartbeat": true,
+            "heartbeats": [{
+                "deploymentId": "dep_test",
+                "resourceId": "api",
+                "resourceType": "container",
+                "controllerPlatform": "kubernetes",
+                "backend": "kubernetes",
+                "observedAt": "2026-01-01T00:00:00Z",
+                "data": {
+                    "resourceType": "container",
+                    "data": {
+                        "backend": "kubernetes",
+                        "status": {
+                            "health": "healthy",
+                            "lifecycle": "running",
+                            "message": null,
+                            "stale": false,
+                            "partial": true,
+                            "collectionIssues": [{
+                                "source": "metrics",
+                                "reason": "not-installed",
+                                "severity": "warning",
+                                "message": "metrics API is not installed"
+                            }]
+                        },
+                        "namespace": "default",
+                        "name": "api",
+                        "workloadKind": "deployment",
+                        "replicas": { "desired": 2, "current": 2, "ready": 2, "available": 2, "updated": null, "misscheduled": null },
+                        "restarts": 0,
+                        "cpu": null,
+                        "memory": null,
+                        "workload": null,
+                        "instances": [],
+                        "events": []
+                    }
+                },
+                "raw": []
+            }]
+        }))
+        .expect("reconcile request should accept typed heartbeat envelopes");
+
+        assert_eq!(req.heartbeats.len(), 1);
+        assert_eq!(req.heartbeats[0].resource_id, "api");
+        assert!(matches!(
+            req.heartbeats[0].data,
+            ResourceHeartbeatData::Container(_)
+        ));
     }
 
     #[test]
@@ -669,6 +743,7 @@ async fn agent_sync(
                                 session: "agent-sync".to_string(),
                                 state: agent_state.clone(),
                                 update_heartbeat: true,
+                                heartbeats: vec![],
                                 error: None,
                                 suggested_delay_ms: None,
                             },

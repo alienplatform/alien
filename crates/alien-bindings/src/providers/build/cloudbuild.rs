@@ -3,10 +3,7 @@ use crate::{
     providers::build::script::create_build_wrapper_script,
     traits::{Binding, Build},
 };
-use alien_core::{
-    bindings::{BuildBinding, CloudbuildBuildBinding},
-    BuildConfig, BuildExecution, BuildStatus, ComputeType,
-};
+use alien_core::{bindings::BuildBinding, BuildConfig, BuildExecution, BuildStatus, ComputeType};
 use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
 use std::collections::HashMap;

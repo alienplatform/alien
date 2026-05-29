@@ -346,6 +346,24 @@ export type CreateProjectFromTemplatePackagesConfigResponse = {
   terraform?: CreateProjectFromTemplateTerraformResponse | null | undefined;
 };
 
+/**
+ * Project default private managers for new push deployments.
+ */
+export type CreateProjectFromTemplateDefaultManagers = {
+  /**
+   * Unique identifier for a default private manager.
+   */
+  aws?: string | null | undefined;
+  /**
+   * Unique identifier for a default private manager.
+   */
+  gcp?: string | null | undefined;
+  /**
+   * Unique identifier for a default private manager.
+   */
+  azure?: string | null | undefined;
+};
+
 export type CreateProjectFromTemplateGithubSetup = {
   /**
    * URL to the pull request with the Alien build workflow
@@ -428,6 +446,10 @@ export type CreateProjectFromTemplateResponse = {
    * Selected domain for this project (null = default system domain)
    */
   domainId?: string | null | undefined;
+  /**
+   * Project default private managers for new push deployments.
+   */
+  defaultManagers?: CreateProjectFromTemplateDefaultManagers | null | undefined;
   createdAt: Date;
   /**
    * Unique identifier for the workspace.
@@ -913,6 +935,32 @@ export function createProjectFromTemplatePackagesConfigResponseFromJSON(
 }
 
 /** @internal */
+export const CreateProjectFromTemplateDefaultManagers$inboundSchema: z.ZodType<
+  CreateProjectFromTemplateDefaultManagers,
+  unknown
+> = z.object({
+  aws: z.nullable(z.string()).optional(),
+  gcp: z.nullable(z.string()).optional(),
+  azure: z.nullable(z.string()).optional(),
+});
+
+export function createProjectFromTemplateDefaultManagersFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateProjectFromTemplateDefaultManagers,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateProjectFromTemplateDefaultManagers$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'CreateProjectFromTemplateDefaultManagers' from JSON`,
+  );
+}
+
+/** @internal */
 export const CreateProjectFromTemplateGithubSetup$inboundSchema: z.ZodType<
   CreateProjectFromTemplateGithubSetup,
   unknown
@@ -980,6 +1028,9 @@ export const CreateProjectFromTemplateResponse$inboundSchema: z.ZodType<
     z.lazy(() => CreateProjectFromTemplatePackagesConfigResponse$inboundSchema),
   ).optional(),
   domainId: z.nullable(z.string()).optional(),
+  defaultManagers: z.nullable(
+    z.lazy(() => CreateProjectFromTemplateDefaultManagers$inboundSchema),
+  ).optional(),
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   workspaceId: z.string(),
   githubSetup: z.lazy(() => CreateProjectFromTemplateGithubSetup$inboundSchema)

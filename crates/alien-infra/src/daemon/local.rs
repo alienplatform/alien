@@ -4,14 +4,21 @@ use tracing::{debug, info};
 
 use crate::core::{environment_variables::EnvironmentVariableBuilder, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
-use alien_core::{Daemon, DaemonCode, DaemonOutputs, ResourceOutputs, ResourceStatus};
+use alien_core::{
+    Daemon, DaemonCode, DaemonHeartbeatData, DaemonOutputs, HeartbeatBackend,
+    LocalDaemonHeartbeatData, ObservedHealth, Platform, ProviderLifecycleState, ResourceHeartbeat,
+    ResourceHeartbeatData, ResourceOutputs, ResourceStatus, WorkloadHeartbeatStatus,
+};
 use alien_error::{AlienError, Context};
 use alien_macros::controller;
+use chrono::Utc;
 
 #[controller]
 pub struct LocalDaemonController {
     /// Path to the extracted OCI image directory.
     pub(crate) extracted_image_path: Option<PathBuf>,
+    /// Name used by the local daemon runtime.
+    pub(crate) daemon_name: Option<String>,
 }
 
 #[controller]
@@ -69,6 +76,7 @@ impl LocalDaemonController {
             })?;
 
         self.extracted_image_path = Some(extracted_path);
+        self.daemon_name = Some(config.id.clone());
 
         Ok(HandlerAction::Continue {
             state: StartingProcess,
@@ -97,12 +105,16 @@ impl LocalDaemonController {
 
         info!(daemon_id = %config.id, "Starting daemon runtime");
 
-        let env_vars = EnvironmentVariableBuilder::try_new(&config.environment)?
+        let mut env_builder = EnvironmentVariableBuilder::try_new(&config.environment)?
             .add_standard_alien_env_vars(ctx)?
-            .add_passthrough_transport_env_vars()
             .add_linked_resources(&config.links, ctx, &config.id)
-            .await?
-            .build();
+            .await?;
+
+        if config.commands_enabled {
+            env_builder = env_builder.add_passthrough_transport_env_vars();
+        }
+
+        let env_vars = env_builder.build();
 
         manager.start_daemon(&config.id, env_vars).await.context(
             ErrorData::CloudPlatformError {
@@ -110,6 +122,7 @@ impl LocalDaemonController {
                 resource_id: Some(config.id.clone()),
             },
         )?;
+        self.daemon_name = Some(config.id.clone());
 
         Ok(HandlerAction::Continue {
             state: Ready,
@@ -142,6 +155,8 @@ impl LocalDaemonController {
             })?;
 
         debug!(daemon_id=%config.id, "Daemon health check passed");
+
+        emit_local_daemon_heartbeat(ctx, &config, self.extracted_image_path.as_ref());
 
         Ok(HandlerAction::Continue {
             state: Ready,
@@ -207,6 +222,8 @@ impl LocalDaemonController {
                 message: "Failed to delete daemon".to_string(),
                 resource_id: Some(config.id.clone()),
             })?;
+        self.daemon_name = None;
+        self.extracted_image_path = None;
 
         Ok(HandlerAction::Continue {
             state: Deleted,
@@ -227,9 +244,47 @@ impl LocalDaemonController {
     );
 
     fn build_outputs(&self) -> Option<ResourceOutputs> {
-        Some(ResourceOutputs::new(DaemonOutputs {
-            daemon_name: String::new(),
-            running: true,
-        }))
+        self.daemon_name.as_ref().map(|daemon_name| {
+            ResourceOutputs::new(DaemonOutputs {
+                daemon_name: daemon_name.clone(),
+                running: true,
+            })
+        })
     }
+}
+
+fn emit_local_daemon_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    config: &Daemon,
+    extracted_image_path: Option<&PathBuf>,
+) {
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: config.id.clone(),
+        resource_type: Daemon::RESOURCE_TYPE,
+        controller_platform: Platform::Local,
+        backend: HeartbeatBackend::Local,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::Daemon(DaemonHeartbeatData::Local(LocalDaemonHeartbeatData {
+            status: WorkloadHeartbeatStatus {
+                health: ObservedHealth::Healthy,
+                lifecycle: ProviderLifecycleState::Running,
+                message: Some(format!("Local daemon '{}' is running", config.id)),
+                stale: false,
+                partial: false,
+                collection_issues: vec![],
+            },
+            daemon_name: config.id.clone(),
+            runtime_id: config.id.clone(),
+            pid: None,
+            command_supported: config.commands_enabled,
+            image_path_present: extracted_image_path
+                .map(|path| path.exists())
+                .unwrap_or(false),
+            restart_count: None,
+            exit_reason: None,
+            events: vec![],
+        })),
+        raw: vec![],
+    });
 }

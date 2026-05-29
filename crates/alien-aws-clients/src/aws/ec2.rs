@@ -43,7 +43,6 @@ use mockall::automock;
 #[serde(rename_all = "PascalCase")]
 struct Ec2ErrorResponse {
     pub errors: Ec2ErrorsWrapper,
-    pub request_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

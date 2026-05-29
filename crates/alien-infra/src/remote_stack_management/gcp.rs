@@ -5,20 +5,23 @@ use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
 use alien_core::permissions::PermissionSet;
 use alien_core::{
-    KubernetesCluster, RemoteStackManagement, RemoteStackManagementOutputs, ResourceOutputs,
-    ResourceStatus,
+    GcpRemoteStackManagementHeartbeatData, HeartbeatBackend, KubernetesCluster, ObservedHealth,
+    Platform, ProviderLifecycleState, RemoteStackManagement, RemoteStackManagementHeartbeatData,
+    RemoteStackManagementHeartbeatStatus, RemoteStackManagementOutputs, ResourceHeartbeat,
+    ResourceHeartbeatData, ResourceOutputs, ResourceStatus,
 };
 use alien_error::{AlienError, Context, ContextError};
 use alien_gcp_clients::iam::{
     Binding, CreateServiceAccountRequest, IamPolicy, ServiceAccount as GcpServiceAccount,
 };
-use alien_macros::{controller, flow_entry, handler, terminal_state};
+use alien_macros::controller;
 #[cfg(test)]
 use alien_permissions::generators::GcpIamBinding;
 use alien_permissions::{
     generators::{GcpBindingTargetScope, GcpRuntimePermissionsGenerator},
     get_permission_set, list_permission_set_ids, BindingTarget, PermissionContext,
 };
+use chrono::Utc;
 
 /// Generates the GCP service account ID for RemoteStackManagement.
 fn get_gcp_management_service_account_id(prefix: &str) -> String {
@@ -447,6 +450,8 @@ impl GcpRemoteStackManagementController {
             }
         }
 
+        emit_gcp_remote_stack_management_heartbeat(ctx, self);
+
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: Some(Duration::from_secs(30)), // Check again in 30 seconds
@@ -639,6 +644,47 @@ impl GcpRemoteStackManagementController {
             None
         }
     }
+}
+
+fn emit_gcp_remote_stack_management_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    controller: &GcpRemoteStackManagementController,
+) {
+    let resource_id = ctx
+        .desired_resource_config::<RemoteStackManagement>()
+        .map(|config| config.id.clone())
+        .unwrap_or_else(|_| "remote-stack-management".to_string());
+
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id,
+        resource_type: RemoteStackManagement::RESOURCE_TYPE,
+        controller_platform: Platform::Gcp,
+        backend: HeartbeatBackend::Gcp,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::RemoteStackManagement(
+            RemoteStackManagementHeartbeatData::GcpServiceAccount(
+                GcpRemoteStackManagementHeartbeatData {
+                    status: RemoteStackManagementHeartbeatStatus {
+                        health: ObservedHealth::Healthy,
+                        lifecycle: ProviderLifecycleState::Running,
+                        message: controller.service_account_email.as_ref().map(|email| {
+                            format!("GCP management service account '{}' is reachable", email)
+                        }),
+                        stale: false,
+                        partial: false,
+                        collection_issues: vec![],
+                    },
+                    service_account_email: controller.service_account_email.clone(),
+                    service_account_unique_id: controller.service_account_unique_id.clone(),
+                    role_bound: controller.role_bound,
+                    impersonation_granted: controller.impersonation_granted,
+                    events: vec![],
+                },
+            ),
+        ),
+        raw: vec![],
+    });
 }
 
 // Separate impl block for helper methods

@@ -2,14 +2,12 @@
 
 use crate::grpc::status_conversion::alien_error_to_status;
 use crate::{
-    error::ErrorData,
     traits::{
         MessagePayload as AlienMessagePayload, Queue as AlienQueue,
         QueueMessage as AlienQueueMessage,
     },
     BindingsProviderApi,
 };
-use alien_error::AlienError;
 use async_trait::async_trait;
 use std::sync::Arc;
 use tonic::{Request, Response, Status};

@@ -11,6 +11,7 @@ import {
 } from "./stacksettings.js";
 
 export type InitializeRequest = {
+  basePlatform?: PlatformEnum | null | undefined;
   name?: string | null | undefined;
   platform?: PlatformEnum | null | undefined;
   stackSettings?: StackSettings | null | undefined;
@@ -18,6 +19,7 @@ export type InitializeRequest = {
 
 /** @internal */
 export type InitializeRequest$Outbound = {
+  basePlatform?: string | null | undefined;
   name?: string | null | undefined;
   platform?: string | null | undefined;
   stackSettings?: StackSettings$Outbound | null | undefined;
@@ -28,6 +30,7 @@ export const InitializeRequest$outboundSchema: z.ZodType<
   InitializeRequest$Outbound,
   InitializeRequest
 > = z.object({
+  basePlatform: z.nullable(PlatformEnum$outboundSchema).optional(),
   name: z.nullable(z.string()).optional(),
   platform: z.nullable(PlatformEnum$outboundSchema).optional(),
   stackSettings: z.nullable(StackSettings$outboundSchema).optional(),

@@ -345,6 +345,24 @@ export type CreateProjectPackagesConfigResponse = {
   terraform?: CreateProjectTerraformResponse | null | undefined;
 };
 
+/**
+ * Project default private managers for new push deployments.
+ */
+export type CreateProjectDefaultManagers = {
+  /**
+   * Unique identifier for a default private manager.
+   */
+  aws?: string | null | undefined;
+  /**
+   * Unique identifier for a default private manager.
+   */
+  gcp?: string | null | undefined;
+  /**
+   * Unique identifier for a default private manager.
+   */
+  azure?: string | null | undefined;
+};
+
 export type CreateProjectGithubSetup = {
   /**
    * URL to the pull request with the Alien build workflow
@@ -391,6 +409,10 @@ export type CreateProjectResponse = {
    * Selected domain for this project (null = default system domain)
    */
   domainId?: string | null | undefined;
+  /**
+   * Project default private managers for new push deployments.
+   */
+  defaultManagers?: CreateProjectDefaultManagers | null | undefined;
   createdAt: Date;
   /**
    * Unique identifier for the workspace.
@@ -848,6 +870,26 @@ export function createProjectPackagesConfigResponseFromJSON(
 }
 
 /** @internal */
+export const CreateProjectDefaultManagers$inboundSchema: z.ZodType<
+  CreateProjectDefaultManagers,
+  unknown
+> = z.object({
+  aws: z.nullable(z.string()).optional(),
+  gcp: z.nullable(z.string()).optional(),
+  azure: z.nullable(z.string()).optional(),
+});
+
+export function createProjectDefaultManagersFromJSON(
+  jsonString: string,
+): SafeParseResult<CreateProjectDefaultManagers, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateProjectDefaultManagers$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateProjectDefaultManagers' from JSON`,
+  );
+}
+
+/** @internal */
 export const CreateProjectGithubSetup$inboundSchema: z.ZodType<
   CreateProjectGithubSetup,
   unknown
@@ -884,6 +926,9 @@ export const CreateProjectResponse$inboundSchema: z.ZodType<
     z.lazy(() => CreateProjectPackagesConfigResponse$inboundSchema),
   ).optional(),
   domainId: z.nullable(z.string()).optional(),
+  defaultManagers: z.nullable(
+    z.lazy(() => CreateProjectDefaultManagers$inboundSchema),
+  ).optional(),
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   workspaceId: z.string(),
   githubSetup: z.lazy(() => CreateProjectGithubSetup$inboundSchema).optional(),

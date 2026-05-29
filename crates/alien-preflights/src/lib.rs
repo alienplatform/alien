@@ -230,7 +230,6 @@ impl PreflightRegistry {
         registry.add_compile_time_check(Box::new(compile_time::UniqueResourcesCheck));
         registry.add_compile_time_check(Box::new(compile_time::FrozenResourceLifecycleCheck));
         registry.add_compile_time_check(Box::new(compile_time::ContainerLifecycleCheck));
-        registry.add_compile_time_check(Box::new(compile_time::DaemonPlatformCheck));
         registry.add_compile_time_check(Box::new(compile_time::PublicWorkerLifecycleCheck));
         registry.add_compile_time_check(Box::new(compile_time::LiveProvisionPermissionsCheck));
         registry.add_compile_time_check(Box::new(compile_time::ValidResourceDependenciesCheck));

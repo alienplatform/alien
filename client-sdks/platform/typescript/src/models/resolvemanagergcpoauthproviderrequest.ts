@@ -9,11 +9,16 @@ export type ResolveManagerGcpOAuthProviderRequest = {
    * Deployment-group bearer token whose project-level OAuth provider should be resolved.
    */
   deploymentGroupToken: string;
+  /**
+   * Browser origin that will receive the Google OAuth callback result. Must be a first-party dashboard origin or the active portal origin for the deployment group's project.
+   */
+  returnOrigin?: string | undefined;
 };
 
 /** @internal */
 export type ResolveManagerGcpOAuthProviderRequest$Outbound = {
   deploymentGroupToken: string;
+  returnOrigin?: string | undefined;
 };
 
 /** @internal */
@@ -22,6 +27,7 @@ export const ResolveManagerGcpOAuthProviderRequest$outboundSchema: z.ZodType<
   ResolveManagerGcpOAuthProviderRequest
 > = z.object({
   deploymentGroupToken: z.string(),
+  returnOrigin: z.string().optional(),
 });
 
 export function resolveManagerGcpOAuthProviderRequestToJSON(

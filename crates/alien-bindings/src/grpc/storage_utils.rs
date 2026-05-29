@@ -7,14 +7,13 @@ use crate::grpc::storage_service::alien_bindings::storage::{
     StorageGetRangeOption as ProtoGetRangeOption, StorageHttpMethod as ProtoHttpMethod,
     StorageObjectMeta as ProtoObjectMeta, StoragePutModeEnum as ProtoPutModeEnum,
     StoragePutMultipartOptions as ProtoPutMultipartOptions, StoragePutOptions as ProtoPutOptions,
-    StorageRange as ProtoRange, StorageSignedUrlRequest, StorageSignedUrlResponse,
-    StorageTag as ProtoTag, StorageTagSet as ProtoTagSet,
+    StorageRange as ProtoRange, StorageTag as ProtoTag, StorageTagSet as ProtoTagSet,
     StorageUpdateVersion as ProtoUpdateVersion,
 };
 
 use object_store::{
     path::Path, Attribute as OsAttribute, Attributes as OsAttributes, Error as ObjectStoreError,
-    GetOptions, GetRange as OsGetRange, ObjectMeta, PutMode as OsPutMode, PutMultipartOpts,
+    GetOptions, GetRange as OsGetRange, ObjectMeta, PutMode as OsPutMode, PutMultipartOptions,
     PutOptions, TagSet as OsTagSet, UpdateVersion as OsUpdateVersion,
 };
 use prost_types::Timestamp;
@@ -259,7 +258,7 @@ pub(crate) fn map_os_put_options_to_proto(os_opts: PutOptions) -> Option<ProtoPu
 }
 
 pub(crate) fn map_os_put_multipart_opts_to_proto(
-    os_opts: PutMultipartOpts,
+    os_opts: PutMultipartOptions,
 ) -> Option<ProtoPutMultipartOptions> {
     let are_tags_default = os_opts.tags == OsTagSet::default();
     let are_attributes_empty = os_opts.attributes.is_empty();
@@ -342,8 +341,8 @@ pub(crate) fn map_proto_put_options_to_os(proto_opts: ProtoPutOptions) -> PutOpt
 
 pub(crate) fn map_proto_put_multipart_options_to_os(
     proto_opts: ProtoPutMultipartOptions,
-) -> PutMultipartOpts {
-    PutMultipartOpts {
+) -> PutMultipartOptions {
+    PutMultipartOptions {
         tags: proto_opts
             .tags
             .map_or_else(OsTagSet::default, map_proto_tag_set_to_os),
@@ -426,26 +425,13 @@ pub(crate) fn map_os_object_meta_to_proto(meta: ObjectMeta) -> ProtoObjectMeta {
 
 // --- HTTP Method Conversion ---
 
-use reqwest::Method;
-
-pub(crate) fn map_reqwest_method_to_proto(method: Method) -> ProtoHttpMethod {
-    match method {
-        Method::GET => ProtoHttpMethod::HttpMethodGet,
-        Method::PUT => ProtoHttpMethod::HttpMethodPut,
-        Method::POST => ProtoHttpMethod::HttpMethodPost,
-        Method::DELETE => ProtoHttpMethod::HttpMethodDelete,
-        Method::HEAD => ProtoHttpMethod::HttpMethodHead,
-        _ => ProtoHttpMethod::HttpMethodGet, // Default to GET for unsupported methods
-    }
-}
-
-pub(crate) fn map_proto_method_to_reqwest(proto_method: ProtoHttpMethod) -> Method {
+pub(crate) fn map_proto_method_to_reqwest(proto_method: ProtoHttpMethod) -> reqwest::Method {
     match proto_method {
-        ProtoHttpMethod::HttpMethodGet => Method::GET,
-        ProtoHttpMethod::HttpMethodPut => Method::PUT,
-        ProtoHttpMethod::HttpMethodPost => Method::POST,
-        ProtoHttpMethod::HttpMethodDelete => Method::DELETE,
-        ProtoHttpMethod::HttpMethodHead => Method::HEAD,
+        ProtoHttpMethod::HttpMethodGet => reqwest::Method::GET,
+        ProtoHttpMethod::HttpMethodPut => reqwest::Method::PUT,
+        ProtoHttpMethod::HttpMethodPost => reqwest::Method::POST,
+        ProtoHttpMethod::HttpMethodDelete => reqwest::Method::DELETE,
+        ProtoHttpMethod::HttpMethodHead => reqwest::Method::HEAD,
     }
 }
 
@@ -1271,18 +1257,18 @@ mod tests {
     #[test]
     fn test_map_os_put_multipart_opts_to_proto() {
         // Default options
-        let os_mp_opts_default = PutMultipartOpts::default();
+        let os_mp_opts_default = PutMultipartOptions::default();
         assert!(map_os_put_multipart_opts_to_proto(os_mp_opts_default.clone()).is_none());
 
         // Non-default tags
-        let mut os_mp_opts_tags = PutMultipartOpts::default();
+        let mut os_mp_opts_tags = PutMultipartOptions::default();
         os_mp_opts_tags.tags.push("mpkey", "mpvalue");
         let proto_mp_opts_opt = map_os_put_multipart_opts_to_proto(os_mp_opts_tags);
         assert!(proto_mp_opts_opt.is_some());
         assert!(proto_mp_opts_opt.unwrap().tags.is_some());
 
         // Non-default attributes
-        let mut os_mp_opts_attrs = PutMultipartOpts::default();
+        let mut os_mp_opts_attrs = PutMultipartOptions::default();
         os_mp_opts_attrs
             .attributes
             .insert(OsAttribute::ContentLanguage, "en".into());
@@ -1291,7 +1277,7 @@ mod tests {
         assert!(proto_mp_opts_opt.unwrap().attributes.is_some());
 
         // All non-default
-        let mut os_mp_opts_full = PutMultipartOpts::default();
+        let mut os_mp_opts_full = PutMultipartOptions::default();
         os_mp_opts_full.tags.push("full_mp_key", "full_mp_value");
         os_mp_opts_full
             .attributes

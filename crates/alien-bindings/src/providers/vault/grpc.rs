@@ -1,5 +1,5 @@
 use crate::{
-    error::{Error, ErrorData},
+    error::Error,
     grpc::status_conversion::status_to_alien_error,
     grpc::vault_service::alien_bindings::vault::{
         vault_service_client::VaultServiceClient, DeleteSecretRequest, GetSecretRequest,
@@ -8,9 +8,8 @@ use crate::{
     traits::{Binding, Vault},
 };
 
-use alien_error::{AlienError, Context};
 use async_trait::async_trait;
-use tonic::{transport::Channel, Request, Status};
+use tonic::{transport::Channel, Request};
 
 /// gRPC implementation of the `Vault` trait.
 ///

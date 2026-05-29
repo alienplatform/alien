@@ -33,19 +33,17 @@ use http_body_util::{combinators::BoxBody, BodyExt, Full};
 use hyper::body::Frame;
 use lambda_http::{
     aws_lambda_events::apigw::ApiGatewayV2httpResponse,
-    http::{header::SET_COOKIE, Response, StatusCode},
+    http::{header::SET_COOKIE, Response},
     Body as LambdaBody, Request as LambdaRequest, RequestExt,
 };
 use lambda_runtime::{
-    self as lambda, Diagnostic, Error as LambdaError, LambdaEvent, MetadataPrelude, Service,
-    StreamResponse,
+    self as lambda, Error as LambdaError, LambdaEvent, MetadataPrelude, Service, StreamResponse,
 };
 use pin_project_lite::pin_project;
 use serde_json::Value;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio_stream::Stream;
 use tracing::{debug, error, info, info_span, warn, Instrument};
-use uuid::Uuid;
 
 use crate::{
     config::LambdaMode,
@@ -181,29 +179,6 @@ fn should_register_wait_until_extension() -> bool {
     }
 
     true
-}
-
-/// A boxed body with a single non-empty frame for Lambda streaming.
-/// Lambda streaming mode REQUIRES at least one NON-EMPTY data frame to be sent.
-#[inline]
-fn empty_box_body() -> BoxBody<Bytes, crate::error::Error> {
-    // CRITICAL: Must send at least one byte for Lambda streaming to work
-    Full::new(Bytes::from_static(b" "))
-        .map_err(|e: std::convert::Infallible| match e {})
-        .boxed()
-}
-
-/// Convenience for _streaming_ 500 responses.
-#[inline]
-fn internal_error_response() -> Response<AlienBodyAdapter> {
-    warn!("Creating internal_error_response (500) for streaming Lambda");
-    Response::builder()
-        .status(StatusCode::INTERNAL_SERVER_ERROR)
-        .body(AlienBodyAdapter {
-            inner: empty_box_body(),
-            request_id: "unknown".to_string(),
-        })
-        .expect("building 500 response never fails")
 }
 
 /// Creates a Lambda-streaming-compatible body from bytes.

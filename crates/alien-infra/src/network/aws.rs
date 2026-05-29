@@ -26,27 +26,27 @@ use alien_aws_clients::ec2::{
     AuthorizeSecurityGroupEgressRequest, AuthorizeSecurityGroupIngressRequest,
     CreateInternetGatewayRequest, CreateNatGatewayRequest, CreateRouteRequest,
     CreateRouteTableRequest, CreateSecurityGroupRequest, CreateSubnetRequest, CreateVpcRequest,
-    DeleteRouteRequest, DescribeAvailabilityZonesRequest, DescribeNatGatewaysRequest,
-    DescribeRouteTablesRequest, DescribeSecurityGroupsRequest, DescribeSubnetsRequest,
-    DescribeVpcsRequest, DetachInternetGatewayRequest, Ec2Api, Filter, IpPermission,
-    IpPermissionResponse, IpRange, ModifyVpcAttributeRequest, SecurityGroup, Tag, TagSpecification,
+    DescribeAvailabilityZonesRequest, DescribeNatGatewaysRequest, DescribeSecurityGroupsRequest,
+    DescribeSubnetsRequest, DescribeVpcsRequest, DetachInternetGatewayRequest, Filter,
+    IpPermission, IpPermissionResponse, IpRange, ModifyVpcAttributeRequest, SecurityGroup, Tag,
+    TagSpecification,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    standard_resource_tags, Network, NetworkOutputs, NetworkSettings, ResourceOutputs,
+    standard_resource_tags, AwsVpcNetworkHeartbeatData, HeartbeatBackend, Network,
+    NetworkHeartbeatData, NetworkHeartbeatStatus, NetworkOutputs, NetworkSettings, ObservedHealth,
+    Platform, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
     ResourceStatus,
 };
 use alien_error::{AlienError, Context, ContextError};
-use alien_macros::{controller, flow_entry, handler, terminal_state};
-use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
-use std::any::Any;
+use alien_macros::controller;
+use chrono::Utc;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
-use crate::core::{ResourceController, ResourceControllerContext, ResourceControllerStepResult};
+use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 
 fn is_security_group_duplicate(error: &AlienError<CloudClientErrorData>) -> bool {
@@ -56,6 +56,58 @@ fn is_security_group_duplicate(error: &AlienError<CloudClientErrorData>) -> bool
             if message.contains("InvalidGroup.Duplicate")
                 || message.contains("already exists")
     )
+}
+
+fn emit_aws_network_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    controller: &AwsNetworkController,
+    vpc_state: Option<String>,
+) {
+    let route_table_count = [
+        controller.public_route_table_id.as_ref(),
+        controller.private_route_table_id.as_ref(),
+    ]
+    .into_iter()
+    .filter(|route_table_id| route_table_id.is_some())
+    .count() as u32;
+
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: Network::RESOURCE_TYPE,
+        controller_platform: Platform::Aws,
+        backend: HeartbeatBackend::Aws,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::Network(NetworkHeartbeatData::AwsVpc(
+            AwsVpcNetworkHeartbeatData {
+                status: NetworkHeartbeatStatus {
+                    health: ObservedHealth::Healthy,
+                    lifecycle: ProviderLifecycleState::Running,
+                    message: controller
+                        .vpc_id
+                        .as_ref()
+                        .map(|vpc_id| format!("AWS VPC '{}' is reachable", vpc_id)),
+                    stale: false,
+                    partial: false,
+                    collection_issues: vec![],
+                },
+                vpc_id: controller.vpc_id.clone(),
+                vpc_state,
+                cidr_block: controller.cidr_block.clone(),
+                public_subnet_ids: controller.public_subnet_ids.clone(),
+                private_subnet_ids: controller.private_subnet_ids.clone(),
+                availability_zones: controller.availability_zones.clone(),
+                internet_gateway_id: controller.internet_gateway_id.clone(),
+                nat_gateway_id: controller.nat_gateway_id.clone(),
+                route_table_count,
+                security_group_id: controller.security_group_id.clone(),
+                is_byo_vpc: controller.is_byo_vpc,
+                events: vec![],
+            },
+        )),
+        raw: vec![],
+    });
 }
 
 fn is_security_group_rule_duplicate(error: &AlienError<CloudClientErrorData>) -> bool {
@@ -1533,6 +1585,7 @@ impl AwsNetworkController {
         // For BYO-VPC, we don't need to verify - preflights already validated
         if self.is_byo_vpc {
             debug!(network_id = %config.id, "BYO-VPC network ready");
+            emit_aws_network_heartbeat(ctx, &config.id, self, None);
             return Ok(HandlerAction::Continue {
                 state: Ready,
                 suggested_delay: Some(Duration::from_secs(60)),
@@ -1556,19 +1609,22 @@ impl AwsNetworkController {
                     resource_id: Some(config.id.clone()),
                 })?;
 
-            if vpc_response
+            let vpcs = vpc_response
                 .vpc_set
                 .map(|set| set.items)
-                .unwrap_or_default()
-                .is_empty()
-            {
+                .unwrap_or_default();
+            if vpcs.is_empty() {
                 return Err(AlienError::new(ErrorData::CloudPlatformError {
                     message: "VPC no longer exists".to_string(),
                     resource_id: Some(config.id.clone()),
                 }));
             }
 
+            let vpc_state = vpcs.first().and_then(|vpc| vpc.state.clone());
             debug!(vpc_id = %vpc_id, "VPC exists and is accessible");
+            emit_aws_network_heartbeat(ctx, &config.id, self, vpc_state);
+        } else {
+            emit_aws_network_heartbeat(ctx, &config.id, self, None);
         }
 
         Ok(HandlerAction::Continue {
@@ -1670,7 +1726,7 @@ impl AwsNetworkController {
     ) -> Result<HandlerAction> {
         let aws_cfg = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_ec2_client(aws_cfg).await?;
-        let config = ctx.desired_resource_config::<Network>()?;
+        let _config = ctx.desired_resource_config::<Network>()?;
 
         // Delete NAT Gateway if it exists
         if let Some(nat_gateway_id) = &self.nat_gateway_id {

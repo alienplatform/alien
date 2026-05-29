@@ -1,16 +1,13 @@
 use crate::gcp::api_client::{GcpClientBase, GcpServiceConfig};
 use crate::gcp::iam::IamPolicy;
-use crate::gcp::longrunning::{Operation, OperationResult, Status};
+use crate::gcp::longrunning::Operation;
 use crate::gcp::GcpClientConfig;
-use crate::gcp::GcpClientConfigExt;
 use alien_client_core::Result;
-use alien_error::AlienError;
 use bon::Builder;
 use reqwest::{Client, Method};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use async_trait::async_trait;
 #[cfg(feature = "test-utils")]
 use mockall::automock;
 use std::fmt::Debug;

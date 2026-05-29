@@ -2,11 +2,12 @@ import {
   type DaemonCode,
   type Daemon as DaemonConfig,
   DaemonSchema,
+  type ResourceSpec,
   type ResourceType,
 } from "./generated/index.js"
 import { Resource } from "./resource.js"
 
-export type { Daemon as DaemonConfig, DaemonCode, DaemonOutputs } from "./generated/index.js"
+export type { Daemon as DaemonConfig, DaemonCode, DaemonOutputs, ResourceSpec } from "./generated/index.js"
 export {
   DaemonCodeSchema,
   DaemonSchema as DaemonConfigSchema,
@@ -14,16 +15,17 @@ export {
 } from "./generated/index.js"
 
 /**
- * Represents a resident process that runs alongside local or Kubernetes workloads.
+ * Represents a resident process that runs once per eligible machine or node.
  *
  * Daemons are intended for long-lived background processes such as endpoint
- * agents and local side services. They are only supported on Local and
- * Kubernetes platforms.
+ * agents and local side services.
  */
 export class Daemon {
   private _config: Partial<DaemonConfig> = {
     links: [],
     environment: {},
+    cpu: { min: "0.1", desired: "0.1" },
+    memory: { min: "128Mi", desired: "128Mi" },
   }
 
   /**
@@ -50,6 +52,51 @@ export class Daemon {
    */
   public code(code: DaemonCode): this {
     this._config.code = code
+    return this
+  }
+
+  /**
+   * Sets the ComputeCluster this daemon runs on for AWS/GCP/Azure deployments.
+   * Kubernetes and Local deployments ignore this field.
+   */
+  public cluster(clusterId: string): this {
+    this._config.cluster = clusterId
+    return this
+  }
+
+  /**
+   * Sets CPU resources for each daemon instance.
+   */
+  public cpu(value: number | ResourceSpec): this {
+    if (typeof value === "number") {
+      this._config.cpu = { min: value.toString(), desired: value.toString() }
+    } else {
+      this._config.cpu = value
+    }
+    return this
+  }
+
+  /**
+   * Sets memory resources for each daemon instance.
+   */
+  public memory(size: string): this {
+    this._config.memory = { min: size, desired: size }
+    return this
+  }
+
+  /**
+   * Sets the backend pool/capacity group for daemon placement.
+   */
+  public pool(pool: string): this {
+    this._config.pool = pool
+    return this
+  }
+
+  /**
+   * Overrides the image default command.
+   */
+  public command(command: string[]): this {
+    this._config.command = command
     return this
   }
 

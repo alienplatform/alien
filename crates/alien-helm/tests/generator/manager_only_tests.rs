@@ -4,9 +4,12 @@
 
 use super::helpers::{assert_helm_valid, render, snapshot_chart};
 use alien_core::{
-    Container, ContainerCode, Daemon, DaemonCode, Ingress, PermissionProfile, ResourceLifecycle,
-    ResourceSpec, Stack, StackSettings, ToolchainConfig, Worker, WorkerCode,
+    Container, ContainerCode, Daemon, DaemonCode, Ingress, KubernetesCertificateMode,
+    KubernetesExposureSettings, KubernetesGatewayRouteProfile, KubernetesIngressRouteProfile,
+    KubernetesRouteProfile, KubernetesSettings, PermissionProfile, ResourceLifecycle, ResourceSpec,
+    Stack, StackSettings, ToolchainConfig, Worker, WorkerCode,
 };
+use alien_helm::test_utils::LinterStatus;
 use alien_helm::{generate_helm_chart, HelmOptions, HelmRegistry};
 
 #[test]
@@ -31,6 +34,134 @@ fn pure_worker_chart_emits_service_for_public_ingress() {
 }
 
 #[test]
+fn chart_values_include_kubernetes_exposure_contract() {
+    let stack = Stack::new("k8s-exposure".to_string()).build();
+    let settings = StackSettings {
+        kubernetes: Some(KubernetesSettings {
+            cluster: None,
+            exposure: Some(KubernetesExposureSettings::Generated {
+                route: KubernetesRouteProfile::Ingress(KubernetesIngressRouteProfile {
+                    controller: Some("eks.amazonaws.com/alb".to_string()),
+                    ingress_class_name: "alien-alb".to_string(),
+                    labels: Default::default(),
+                    annotations: Default::default(),
+                    provider: None,
+                }),
+                certificate: KubernetesCertificateMode::ManagedTlsSecret {
+                    secret_name_template: "alien-{{ resourceId }}-tls".to_string(),
+                },
+            }),
+        }),
+        ..StackSettings::default()
+    };
+    let chart = render(&stack, settings);
+    let values = chart.files.get("values.yaml").expect("values.yaml");
+
+    assert!(values.contains("stackSettings:"));
+    assert!(values.contains("kubernetes:"));
+    assert!(values.contains("exposure:"));
+    assert!(values.contains("mode: generated"));
+    assert!(values.contains("routeApi: ingress"));
+    assert!(values.contains("ingressClassName: alien-alb"));
+    assert!(values.contains("mode: managedTlsSecret"));
+    assert!(values.contains("secretNameTemplate: alien-{{ resourceId }}-tls"));
+    assert!(!values.contains("secret_name_template"));
+}
+
+#[test]
+fn chart_removes_manual_public_ingress_values_and_template() {
+    let worker = Worker::new("api".to_string())
+        .code(WorkerCode::Image {
+            image: "registry.example.com/api:1".to_string(),
+        })
+        .permissions("runtime".to_string())
+        .ingress(Ingress::Public)
+        .build();
+    let stack = Stack::new("no-manual-ingress".to_string())
+        .permission(
+            "runtime",
+            PermissionProfile::new().global(["worker/management"]),
+        )
+        .add(worker, ResourceLifecycle::Live)
+        .build();
+    let chart = render(&stack, StackSettings::default());
+    let values = chart.files.get("values.yaml").expect("values.yaml");
+    let schema = chart
+        .files
+        .get("values.schema.json")
+        .expect("values.schema.json");
+    let configmap = chart
+        .files
+        .get("templates/configmap.yaml")
+        .expect("configmap");
+
+    assert!(!chart.files.contains_key("templates/app-ingress.yaml"));
+    assert!(!values.contains("hostless"));
+    assert!(!values.contains("className"));
+    assert!(!values.contains("secretName"));
+    assert!(!schema.contains("\"hostless\""));
+    assert!(!schema.contains("\"className\""));
+    assert!(!schema.contains("\"secretName\""));
+    assert!(!configmap.contains("$service.host"));
+    assert!(!configmap.contains("$service.publicUrl"));
+}
+
+#[test]
+fn chart_role_rbac_is_selected_by_kubernetes_route_api() {
+    let stack = Stack::new("route-rbac".to_string()).build();
+    let settings = StackSettings {
+        kubernetes: Some(KubernetesSettings {
+            cluster: None,
+            exposure: Some(KubernetesExposureSettings::Generated {
+                route: KubernetesRouteProfile::Gateway(KubernetesGatewayRouteProfile {
+                    controller: Some("gateway.networking.k8s.io/gateway".to_string()),
+                    gateway_class_name: "gke-l7-global-external-managed".to_string(),
+                    listener_port: 443,
+                    labels: Default::default(),
+                    annotations: Default::default(),
+                    provider: None,
+                }),
+                certificate: KubernetesCertificateMode::ManagedTlsSecret {
+                    secret_name_template: "alien-{{ resourceId }}-tls".to_string(),
+                },
+            }),
+        }),
+        ..StackSettings::default()
+    };
+    let chart = render(&stack, settings);
+    let role = chart.files.get("templates/role.yaml").expect("role");
+    let values = chart.files.get("values.yaml").expect("values.yaml");
+
+    assert!(values.contains("routeApi: gateway"));
+    assert!(role.contains("resources: [\"networkpolicies\"]"));
+    assert!(role.contains("resources: [\"ingresses\"]"));
+    assert!(role.contains("gateway.networking.k8s.io"));
+    assert!(role.contains("resources: [\"gateways\", \"httproutes\"]"));
+    assert!(role.contains("eq $routeApi \"ingress\""));
+    assert!(role.contains("eq $routeApi \"gateway\""));
+
+    let rendered = alien_helm::test_utils::helm_template(&chart.files, None);
+    match &rendered.status {
+        LinterStatus::Passed => {
+            assert!(rendered
+                .stdout
+                .contains(r#"resources: ["networkpolicies"]"#));
+            assert!(rendered
+                .stdout
+                .contains(r#"apiGroups: ["gateway.networking.k8s.io"]"#));
+            assert!(rendered
+                .stdout
+                .contains(r#"resources: ["gateways", "httproutes"]"#));
+            assert!(!rendered.stdout.contains(r#"resources: ["ingresses"]"#));
+        }
+        LinterStatus::Skipped(reason) => {
+            eprintln!("skipped rendered route RBAC assertions: {reason}");
+        }
+        LinterStatus::Failed(_) => rendered.assert_ok("rendered route RBAC"),
+    }
+}
+
+#[test]
 fn manager_chart_uses_explicit_secrets_and_restricted_defaults() {
     let stack = Stack::new("manager-only".to_string()).build();
     let chart = render(&stack, StackSettings::default());
@@ -43,6 +174,8 @@ fn manager_chart_uses_explicit_secrets_and_restricted_defaults() {
     assert!(values.contains("persistence:"));
     assert!(values.contains("networkPolicy:"));
     assert!(values.contains("pdb:"));
+    assert!(values.contains("heartbeat:"));
+    assert!(values.contains("nodes:"));
 
     let secret = chart.files.get("templates/secret.yaml").expect("secret");
     assert!(!secret.contains("randAlphaNum"));
@@ -56,6 +189,59 @@ fn manager_chart_uses_explicit_secrets_and_restricted_defaults() {
     assert!(deployment.contains("securityContext:"));
     assert!(deployment.contains("mountPath: /tmp"));
     assert!(deployment.contains("mountPath: {{ .Values.runtime.data.mountPath | quote }}"));
+}
+
+#[test]
+fn heartbeat_collection_rbac_is_namespace_scoped_with_optional_node_reads() {
+    let stack = Stack::new("heartbeat-rbac".to_string()).build();
+    let chart = render(&stack, StackSettings::default());
+    let files = chart.files.clone();
+
+    let role = files.get("templates/role.yaml").expect("role");
+    assert!(role.contains(r#"resources: ["events"]"#));
+    assert!(
+        role.contains(r#"resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]"#)
+    );
+    assert!(role.contains(r#"apiGroups: ["metrics.k8s.io"]"#));
+    assert!(role.contains(r#"resources: ["pods"]"#));
+
+    let cluster_role = files
+        .get("templates/clusterrole.yaml")
+        .expect("cluster role");
+    assert!(cluster_role.contains(r#"resources: ["nodes"]"#));
+    assert!(cluster_role.contains(r#"apiGroups: ["metrics.k8s.io"]"#));
+
+    alien_helm::test_utils::helm_template_and_validate(&files, None)
+        .assert_ok("heartbeat RBAC default values");
+
+    let values = files.get("values.yaml").expect("values.yaml");
+    let disabled_values = values.replace(
+        "heartbeat:\n  collection:\n    nodes:\n      enabled: true",
+        "heartbeat:\n  collection:\n    nodes:\n      enabled: false",
+    );
+    alien_helm::test_utils::helm_template_and_validate(&files, Some(&disabled_values))
+        .assert_ok("heartbeat RBAC node collection disabled");
+
+    let rendered = alien_helm::test_utils::helm_template(&files, Some(&disabled_values));
+    match &rendered.status {
+        LinterStatus::Passed => {
+            assert!(!rendered.stdout.contains("kind: ClusterRole"));
+            assert!(!rendered.stdout.contains("kind: ClusterRoleBinding"));
+            assert!(!rendered.stdout.contains(r#"resources: ["nodes"]"#));
+            assert!(rendered.stdout.contains(r#"resources: ["events"]"#));
+            assert!(rendered.stdout.contains(
+                r#"resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]"#
+            ));
+            assert!(rendered.stdout.contains(r#"apiGroups: ["metrics.k8s.io"]"#));
+            assert!(rendered.stdout.contains(r#"resources: ["pods"]"#));
+        }
+        LinterStatus::Skipped(reason) => {
+            eprintln!("skipped rendered RBAC assertions: {reason}");
+        }
+        LinterStatus::Failed(_) => {
+            rendered.assert_ok("rendered heartbeat RBAC node collection disabled")
+        }
+    }
 }
 
 #[test]

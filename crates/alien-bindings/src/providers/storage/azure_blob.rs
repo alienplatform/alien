@@ -14,7 +14,7 @@ use futures::TryStreamExt as _;
 use object_store::signer::Signer;
 use object_store::{
     azure::MicrosoftAzure, path::Path, GetOptions, GetResult, ListResult, ObjectMeta, ObjectStore,
-    PutMultipartOpts, PutOptions, PutPayload, PutResult, Result as ObjectStoreResult,
+    PutMultipartOptions, PutOptions, PutPayload, PutResult, Result as ObjectStoreResult,
 };
 use reqwest::Method;
 use std::collections::HashMap;
@@ -227,7 +227,7 @@ impl ObjectStore for BlobStorage {
     async fn put_multipart_opts(
         &self,
         location: &Path,
-        opts: PutMultipartOpts,
+        opts: PutMultipartOptions,
     ) -> ObjectStoreResult<Box<dyn object_store::MultipartUpload>> {
         let dst = prefixed_path(&self.base_dir, location);
         self.inner.put_multipart_opts(&dst, opts).await

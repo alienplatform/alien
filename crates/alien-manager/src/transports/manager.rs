@@ -10,7 +10,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use alien_bindings::BindingsProviderApi;
-use alien_core::{DeploymentState, Platform};
+use alien_core::{DeploymentState, Platform, ResourceHeartbeat};
 use alien_deployment::transport::{DeploymentLoopTransport, StepReconcileResult};
 use alien_error::AlienError;
 
@@ -53,6 +53,7 @@ impl DeploymentLoopTransport for ManagerTransport {
         step_error: Option<&AlienError>,
         update_heartbeat: bool,
         suggested_delay_ms: Option<u64>,
+        heartbeats: Vec<ResourceHeartbeat>,
     ) -> Result<StepReconcileResult, AlienError> {
         // 1. Reconcile cross-account registry access (best-effort).
         //    This must happen before persisting so the `registry_access_granted`
@@ -83,6 +84,7 @@ impl DeploymentLoopTransport for ManagerTransport {
                     update_heartbeat,
                     error: error_value,
                     suggested_delay_ms,
+                    heartbeats,
                 },
             )
             .await?;

@@ -133,6 +133,47 @@ fn remote_management_policy_documents(ctx: &EmitContext<'_>) -> Result<Vec<CfExp
                 }
             }
         }
+
+        for (resource_id, permission_set_ref) in resource_scoped_permission_refs(profile) {
+            let Some(resource_entry) = ctx.stack.resources.get(resource_id) else {
+                continue;
+            };
+            let Some(permission_set) = permission_set_ref
+                .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+            else {
+                continue;
+            };
+            if permission_set.platforms.aws.is_none()
+                || !resource_scoped_aws_permission_applies(&permission_set.id, resource_entry)
+            {
+                continue;
+            }
+
+            let resource_context = context.clone().with_resource_name(resource_id.to_string());
+            let policy = generator
+                .generate_policy(&permission_set, BindingTarget::Resource, &resource_context)
+                .context(ErrorData::GenericError {
+                    message: "failed to generate AWS resource-scoped management IAM policy"
+                        .to_string(),
+                })?;
+            let policy_value = serde_json::to_value(policy).into_alien_error().context(
+                ErrorData::TemplateSerializationFailed {
+                    format: "CloudFormation IAM policy".to_string(),
+                    reason: "Failed to serialize IAM policy".to_string(),
+                },
+            )?;
+            let CfExpression::Object(mut policy_object) = cf_from_json(policy_value)? else {
+                return Err(AlienError::new(ErrorData::TemplateSerializationFailed {
+                    format: "CloudFormation IAM policy".to_string(),
+                    reason: "policy did not serialize to a JSON object".to_string(),
+                }));
+            };
+            if let Some(CfExpression::List(policy_statements)) =
+                policy_object.shift_remove("Statement")
+            {
+                statements.extend(policy_statements);
+            }
+        }
     }
 
     statements.push(CfExpression::object([
@@ -234,4 +275,25 @@ fn global_permission_refs(profile: &PermissionProfile) -> Vec<&PermissionSetRefe
         .get("*")
         .map(|refs| refs.iter().collect())
         .unwrap_or_default()
+}
+
+fn resource_scoped_permission_refs(
+    profile: &PermissionProfile,
+) -> Vec<(&str, &PermissionSetReference)> {
+    profile
+        .0
+        .iter()
+        .filter(|(scope, _)| scope.as_str() != "*")
+        .flat_map(|(resource_id, refs)| {
+            refs.iter()
+                .map(move |permission_set_ref| (resource_id.as_str(), permission_set_ref))
+        })
+        .collect()
+}
+
+fn resource_scoped_aws_permission_applies(
+    permission_set_id: &str,
+    _resource_entry: &alien_core::ResourceEntry,
+) -> bool {
+    permission_set_id == "kubernetes-public-endpoint/management"
 }

@@ -38,6 +38,22 @@ let value: DeploymentInfo = {
       },
     },
   },
+  setupConfig: {
+    metadata: {
+      "key": "<value>",
+    },
+    policy: {
+      allowedPlatforms: [],
+      allowedSetupMethods: [
+        "google-oauth",
+      ],
+      release: {
+        mode: "fixed",
+        releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+      },
+    },
+    environmentVariables: [],
+  },
 };
 ```
 
@@ -52,3 +68,4 @@ let value: DeploymentInfo = {
 | `project`                                                                          | [models.DeploymentInfoProject](../models/deploymentinfoproject.md)                 | :heavy_check_mark:                                                                 | N/A                                                                                |
 | `packages`                                                                         | [models.Packages](../models/packages.md)                                           | :heavy_check_mark:                                                                 | N/A                                                                                |
 | `installContext`                                                                   | [models.DeploymentInfoInstallContext](../models/deploymentinfoinstallcontext.md)   | :heavy_check_mark:                                                                 | N/A                                                                                |
+| `setupConfig`                                                                      | [models.DeploymentInfoSetupConfig](../models/deploymentinfosetupconfig.md)         | :heavy_minus_sign:                                                                 | N/A                                                                                |

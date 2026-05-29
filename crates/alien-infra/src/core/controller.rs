@@ -558,15 +558,15 @@ use alien_azure_clients::AzureClientConfig;
 use alien_core::ClientConfig;
 use alien_core::{
     AwsManagementConfig, AzureManagementConfig, GcpManagementConfig, KubernetesClientConfig,
-    Platform, Resource, ResourceDefinition, ResourceOutputs, ResourceRef, ResourceStatus,
-    StackState,
+    Platform, Resource, ResourceDefinition, ResourceHeartbeat, ResourceOutputs, ResourceRef,
+    ResourceStatus, StackState,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 #[cfg(feature = "gcp")]
 use alien_gcp_clients::GcpClientConfig;
 use async_trait::async_trait;
 use serde::de::{DeserializeOwned, Error as DeError};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::{any::Any, fmt::Debug};
 
@@ -597,6 +597,36 @@ pub struct ResourceControllerContext<'a> {
     pub service_provider: &'a Arc<dyn PlatformServiceProvider>,
     /// Deployment configuration containing stack settings, management config, and deployment-time settings.
     pub deployment_config: &'a alien_core::DeploymentConfig,
+    /// Per-step typed heartbeat collector.
+    pub heartbeat_collector: HeartbeatCollector,
+}
+
+impl ResourceControllerContext<'_> {
+    pub fn emit_heartbeat(&self, heartbeat: ResourceHeartbeat) {
+        self.heartbeat_collector.emit(heartbeat);
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct HeartbeatCollector {
+    inner: Arc<Mutex<Vec<ResourceHeartbeat>>>,
+}
+
+impl HeartbeatCollector {
+    pub fn emit(&self, heartbeat: ResourceHeartbeat) {
+        self.inner
+            .lock()
+            .expect("heartbeat collector lock poisoned")
+            .push(heartbeat);
+    }
+
+    pub fn drain(&self) -> Vec<ResourceHeartbeat> {
+        self.inner
+            .lock()
+            .expect("heartbeat collector lock poisoned")
+            .drain(..)
+            .collect()
+    }
 }
 
 /// Represents the outcome of a single step in the resource state machine.

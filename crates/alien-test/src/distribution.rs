@@ -1096,14 +1096,13 @@ async fn write_manager_fetch_values(
     );
     values_object.insert("infrastructure".to_string(), Value::Null);
     values_object.insert("runtime".to_string(), runtime_values()?);
-    if let Some(helm_target) = helm_target {
+    if helm_target.is_some() {
         let chart_values = fs::read_to_string(chart_dir.path().join("values.yaml"))
             .await
             .context("Failed to read generated chart values.yaml")?;
         let chart_values: Value =
             serde_yaml::from_str(&chart_values).context("Failed to parse chart values.yaml")?;
         merge_chart_service_values(values_object, &chart_values)?;
-        apply_kubernetes_service_values(values_object, helm_target);
     }
 
     let values_path = chart_dir.path().join("distribution-values.yaml");
@@ -1255,15 +1254,6 @@ fn kubernetes_helm_target_from_outputs(
     outputs: &Value,
     namespace: String,
 ) -> anyhow::Result<KubernetesHelmTarget> {
-    let ingress_annotations = terraform_output_string(outputs, "kubernetes_ingress_annotations")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .map(|value| {
-            serde_json::from_str::<BTreeMap<String, String>>(&value)
-                .context("terraform output kubernetes_ingress_annotations was not a string map")
-        })
-        .transpose()?
-        .unwrap_or_default();
     Ok(KubernetesHelmTarget {
         namespace,
         runtime: KubernetesRuntimeConfig {
@@ -1272,14 +1262,6 @@ fn kubernetes_helm_target_from_outputs(
                 .ok()
                 .filter(|value| !value.is_empty()),
             namespace_prefix: "alien-test".to_string(),
-            ingress_class: terraform_output_string(outputs, "kubernetes_ingress_class")
-                .ok()
-                .filter(|value| !value.is_empty()),
-            ingress_annotations,
-            public_host_suffix: terraform_output_string(outputs, "kubernetes_public_host_suffix")
-                .ok()
-                .filter(|value| !value.is_empty()),
-            tls_secret_name: None,
         },
     })
 }
@@ -1313,86 +1295,6 @@ fn sanitize_kubernetes_dns_label(value: &str) -> String {
             .collect::<String>()
             .trim_matches('-')
             .to_string()
-    }
-}
-
-fn apply_kubernetes_service_values(
-    values_object: &mut serde_json::Map<String, Value>,
-    helm_target: &KubernetesHelmTarget,
-) {
-    let Some(services) = values_object
-        .get_mut("services")
-        .and_then(Value::as_object_mut)
-    else {
-        return;
-    };
-    for (resource_id, service) in services {
-        let Some(service) = service.as_object_mut() else {
-            continue;
-        };
-        if let Some(class_name) = &helm_target.runtime.ingress_class {
-            service
-                .entry("ingress".to_string())
-                .or_insert_with(|| serde_json::json!({}))
-                .as_object_mut()
-                .map(|ingress| {
-                    ingress.insert("className".to_string(), Value::String(class_name.clone()));
-                });
-        }
-        if !helm_target.runtime.ingress_annotations.is_empty() {
-            service
-                .entry("ingress".to_string())
-                .or_insert_with(|| serde_json::json!({}))
-                .as_object_mut()
-                .map(|ingress| {
-                    let annotations = ingress
-                        .entry("annotations".to_string())
-                        .or_insert_with(|| serde_json::json!({}))
-                        .as_object_mut();
-                    if let Some(annotations) = annotations {
-                        for (key, value) in &helm_target.runtime.ingress_annotations {
-                            annotations.insert(key.clone(), Value::String(value.clone()));
-                        }
-                    }
-                });
-        }
-        if let Some(tls_secret_name) = &helm_target.runtime.tls_secret_name {
-            service.insert(
-                "tls".to_string(),
-                serde_json::json!({
-                    "enabled": true,
-                    "secretName": tls_secret_name,
-                }),
-            );
-        }
-        if let Some(host_suffix) = &helm_target.runtime.public_host_suffix {
-            let host = format!(
-                "{}-{}.{}",
-                sanitize_kubernetes_dns_label(resource_id),
-                helm_target.namespace,
-                host_suffix.trim_start_matches('.')
-            );
-            let scheme = if helm_target.runtime.tls_secret_name.is_some() {
-                "https"
-            } else {
-                "http"
-            };
-            service.insert("host".to_string(), Value::String(host.clone()));
-            service.insert(
-                "publicUrl".to_string(),
-                Value::String(format!("{scheme}://{host}")),
-            );
-        } else if helm_target.runtime.ingress_class.is_some()
-            || !helm_target.runtime.ingress_annotations.is_empty()
-        {
-            service
-                .entry("ingress".to_string())
-                .or_insert_with(|| serde_json::json!({}))
-                .as_object_mut()
-                .map(|ingress| {
-                    ingress.insert("hostless".to_string(), Value::Bool(true));
-                });
-        }
     }
 }
 
@@ -2945,16 +2847,6 @@ mod tests {
                     "port": 80,
                     "targetPort": 8080,
                     "component": "worker",
-                    "host": "",
-                    "publicUrl": "",
-                    "tls": {
-                        "enabled": false,
-                        "secretName": "",
-                    },
-                    "ingress": {
-                        "className": "",
-                        "annotations": {},
-                    },
                 },
             },
         });
@@ -2985,16 +2877,6 @@ mod tests {
                     "port": 80,
                     "targetPort": 8080,
                     "component": "worker",
-                    "host": "",
-                    "publicUrl": "",
-                    "tls": {
-                        "enabled": false,
-                        "secretName": "",
-                    },
-                    "ingress": {
-                        "className": "",
-                        "annotations": {},
-                    },
                 },
             },
         });
@@ -3013,10 +2895,8 @@ mod tests {
         let mut values = serde_json::json!({
             "services": {
                 "alien-rs-worker": {
-                    "host": "worker.example.test",
-                    "ingress": {
-                        "className": "nginx",
-                    },
+                    "type": "nodePort",
+                    "port": 8081,
                 },
             },
         });
@@ -3028,18 +2908,6 @@ mod tests {
                     "port": 80,
                     "targetPort": 8080,
                     "component": "worker",
-                    "host": "",
-                    "publicUrl": "",
-                    "tls": {
-                        "enabled": false,
-                        "secretName": "",
-                    },
-                    "ingress": {
-                        "className": "",
-                        "annotations": {
-                            "example": "default",
-                        },
-                    },
                 },
             },
         });
@@ -3048,16 +2916,12 @@ mod tests {
             .expect("chart defaults should merge under explicit overrides");
 
         assert_eq!(
-            values.pointer("/services/alien-rs-worker/host"),
-            Some(&Value::from("worker.example.test"))
+            values.pointer("/services/alien-rs-worker/type"),
+            Some(&Value::from("nodePort"))
         );
         assert_eq!(
-            values.pointer("/services/alien-rs-worker/ingress/className"),
-            Some(&Value::from("nginx"))
-        );
-        assert_eq!(
-            values.pointer("/services/alien-rs-worker/ingress/annotations/example"),
-            Some(&Value::from("default"))
+            values.pointer("/services/alien-rs-worker/port"),
+            Some(&Value::from(8081))
         );
         assert_eq!(
             values.pointer("/services/alien-rs-worker/targetPort"),

@@ -208,25 +208,53 @@ export type SyncListResponseAws = {
 
 export type SyncListResponseAwsUnion = SyncListResponseAws | any;
 
-export type SyncListResponseDomainsAzure = {
+export type SyncListResponseAzureStackSettings = {
   keyVaultCertificateId: string;
 };
 
-export type SyncListResponseAzureUnion = SyncListResponseDomainsAzure | any;
+export type SyncListResponseAzureUnion =
+  | SyncListResponseAzureStackSettings
+  | any;
 
-export type SyncListResponseDomainsGcp = {
+export type SyncListResponseGcpStackSettings = {
   certificateName: string;
 };
 
-export type SyncListResponseGcpUnion = SyncListResponseDomainsGcp | any;
+export type SyncListResponseGcpUnion = SyncListResponseGcpStackSettings | any;
+
+/**
+ * Namespace-scoped Kubernetes TLS Secret reference.
+ */
+export type SyncListResponseTlsSecretRef = {
+  /**
+   * Secret namespace. Defaults to the release namespace when omitted.
+   */
+  namespace?: string | null | undefined;
+  /**
+   * Secret name.
+   */
+  secretName: string;
+};
+
+export type SyncListResponseDomainsKubernetes = {
+  /**
+   * Namespace-scoped Kubernetes TLS Secret reference.
+   */
+  tlsSecretRef: SyncListResponseTlsSecretRef;
+};
+
+export type SyncListResponseDomainsKubernetesUnion =
+  | SyncListResponseDomainsKubernetes
+  | any;
 
 /**
  * Platform-specific certificate references for custom domains.
  */
-export type SyncListResponseCertificate = {
+export type SyncListResponseDomainsCertificate = {
   aws?: SyncListResponseAws | any | null | undefined;
-  azure?: SyncListResponseDomainsAzure | any | null | undefined;
-  gcp?: SyncListResponseDomainsGcp | any | null | undefined;
+  azure?: SyncListResponseAzureStackSettings | any | null | undefined;
+  gcp?: SyncListResponseGcpStackSettings | any | null | undefined;
+  kubernetes?: SyncListResponseDomainsKubernetes | any | null | undefined;
 };
 
 /**
@@ -236,7 +264,7 @@ export type SyncListResponseCustomDomains = {
   /**
    * Platform-specific certificate references for custom domains.
    */
-  certificate: SyncListResponseCertificate;
+  certificate: SyncListResponseDomainsCertificate;
   /**
    * Fully qualified domain name to use.
    */
@@ -286,6 +314,697 @@ export const SyncListResponseHeartbeats = {
 export type SyncListResponseHeartbeats = ClosedEnum<
   typeof SyncListResponseHeartbeats
 >;
+
+/**
+ * Optional provider-specific identity for a cloud-backed Kubernetes cluster.
+ */
+export type SyncListResponseCloud = {
+  accountId?: string | null | undefined;
+  clusterId?: string | null | undefined;
+  clusterName?: string | null | undefined;
+  projectId?: string | null | undefined;
+  region?: string | null | undefined;
+  resourceGroup?: string | null | undefined;
+  subscriptionId?: string | null | undefined;
+};
+
+export type SyncListResponseCloudUnion = SyncListResponseCloud | any;
+
+/**
+ * Ownership model for the Kubernetes cluster.
+ */
+export const SyncListResponseOwnership = {
+  Managed: "managed",
+  Existing: "existing",
+  External: "external",
+} as const;
+/**
+ * Ownership model for the Kubernetes cluster.
+ */
+export type SyncListResponseOwnership = ClosedEnum<
+  typeof SyncListResponseOwnership
+>;
+
+/**
+ * Kubernetes cluster setup settings.
+ */
+export type SyncListResponseCluster = {
+  cloud?: SyncListResponseCloud | any | null | undefined;
+  /**
+   * Namespace where the Alien chart and application resources run.
+   */
+  namespace?: string | null | undefined;
+  /**
+   * Ownership model for the Kubernetes cluster.
+   */
+  ownership: SyncListResponseOwnership;
+};
+
+export type SyncListResponseClusterUnion = SyncListResponseCluster | any;
+
+export type SyncListResponseCertificateNone2 = {
+  mode: "none";
+};
+
+export type SyncListResponseCertificateManagedTLSSecret2 = {
+  mode: "managedTlsSecret";
+  /**
+   * Secret name template. Runtime may substitute resource/deployment tokens.
+   */
+  secretNameTemplate: string;
+};
+
+export type SyncListResponseCertificateAwsAcmArn2 = {
+  /**
+   * Existing ACM certificate ARN.
+   */
+  certificateArn: string;
+  mode: "awsAcmArn";
+};
+
+export type SyncListResponseCertificateManagedAcmImport2 = {
+  mode: "managedAcmImport";
+  /**
+   * ACM region. Defaults to the deployment region when omitted.
+   */
+  region?: string | null | undefined;
+  /**
+   * Tags applied to runtime-imported ACM certificates.
+   */
+  tags?: { [k: string]: string } | undefined;
+};
+
+/**
+ * Namespace-scoped Kubernetes TLS Secret reference.
+ */
+export type SyncListResponseCertificateTLSSecretRef2 = {
+  /**
+   * Secret namespace. Defaults to the release namespace when omitted.
+   */
+  namespace?: string | null | undefined;
+  /**
+   * Secret name.
+   */
+  secretName: string;
+  mode: "tlsSecretRef";
+};
+
+/**
+ * Certificate publication or reference mode for Kubernetes public endpoints.
+ */
+export type SyncListResponseCertificateUnion2 =
+  | SyncListResponseCertificateTLSSecretRef2
+  | SyncListResponseCertificateManagedAcmImport2
+  | SyncListResponseCertificateAwsAcmArn2
+  | SyncListResponseCertificateManagedTLSSecret2
+  | SyncListResponseCertificateNone2;
+
+export const SyncListResponseModeCustom = {
+  Custom: "custom",
+} as const;
+export type SyncListResponseModeCustom = ClosedEnum<
+  typeof SyncListResponseModeCustom
+>;
+
+export const SyncListResponseProviderAzureApplicationGatewayForContainersEnum4 =
+  {
+    AzureApplicationGatewayForContainers:
+      "azureApplicationGatewayForContainers",
+  } as const;
+export type SyncListResponseProviderAzureApplicationGatewayForContainersEnum4 =
+  ClosedEnum<
+    typeof SyncListResponseProviderAzureApplicationGatewayForContainersEnum4
+  >;
+
+export type SyncListResponseProviderAzureApplicationGatewayForContainers4 = {
+  /**
+   * Optional ALB name when using BYO Application Gateway resources.
+   */
+  albName?: string | null | undefined;
+  /**
+   * Optional ALB namespace when using BYO Application Gateway resources.
+   */
+  albNamespace?: string | null | undefined;
+  /**
+   * Public or internal frontend exposure.
+   */
+  frontend: string;
+  provider: SyncListResponseProviderAzureApplicationGatewayForContainersEnum4;
+};
+
+export const SyncListResponseProviderGkeGatewayEnum4 = {
+  GkeGateway: "gkeGateway",
+} as const;
+export type SyncListResponseProviderGkeGatewayEnum4 = ClosedEnum<
+  typeof SyncListResponseProviderGkeGatewayEnum4
+>;
+
+export type SyncListResponseProviderGkeGateway4 = {
+  provider: SyncListResponseProviderGkeGatewayEnum4;
+  /**
+   * Optional static address name for the Gateway frontend.
+   */
+  staticAddressName?: string | null | undefined;
+};
+
+export const SyncListResponseProviderAwsAlbEnum4 = {
+  AwsAlb: "awsAlb",
+} as const;
+export type SyncListResponseProviderAwsAlbEnum4 = ClosedEnum<
+  typeof SyncListResponseProviderAwsAlbEnum4
+>;
+
+export type SyncListResponseProviderAwsAlb4 = {
+  /**
+   * Optional ALB IP address type, such as `dualstack`.
+   */
+  ipAddressType?: string | null | undefined;
+  provider: SyncListResponseProviderAwsAlbEnum4;
+  /**
+   * Internet-facing or internal ALB scheme.
+   */
+  scheme: string;
+  /**
+   * Explicit subnet IDs when the profile cannot rely on controller discovery.
+   */
+  subnetIds?: Array<string> | undefined;
+  /**
+   * ALB target type, usually `ip`.
+   */
+  targetType: string;
+};
+
+export type SyncListResponseProviderUnion4 =
+  | SyncListResponseProviderAwsAlb4
+  | SyncListResponseProviderAzureApplicationGatewayForContainers4
+  | SyncListResponseProviderGkeGateway4
+  | any;
+
+/**
+ * Shared Gateway API route profile values.
+ */
+export type SyncListResponseRouteGateway2 = {
+  /**
+   * Annotations applied to route objects.
+   */
+  annotations?: { [k: string]: string } | undefined;
+  /**
+   * Route controller identifier, for example a cloud Gateway controller.
+   */
+  controller?: string | null | undefined;
+  /**
+   * GatewayClass selected for generated Gateways.
+   */
+  gatewayClassName: string;
+  /**
+   * Labels applied to route objects.
+   */
+  labels?: { [k: string]: string } | undefined;
+  /**
+   * Listener port, usually 443.
+   */
+  listenerPort: number;
+  provider?:
+    | SyncListResponseProviderAwsAlb4
+    | SyncListResponseProviderAzureApplicationGatewayForContainers4
+    | SyncListResponseProviderGkeGateway4
+    | any
+    | null
+    | undefined;
+  routeApi: "gateway";
+};
+
+export const SyncListResponseProviderAzureApplicationGatewayForContainersEnum3 =
+  {
+    AzureApplicationGatewayForContainers:
+      "azureApplicationGatewayForContainers",
+  } as const;
+export type SyncListResponseProviderAzureApplicationGatewayForContainersEnum3 =
+  ClosedEnum<
+    typeof SyncListResponseProviderAzureApplicationGatewayForContainersEnum3
+  >;
+
+export type SyncListResponseProviderAzureApplicationGatewayForContainers3 = {
+  /**
+   * Optional ALB name when using BYO Application Gateway resources.
+   */
+  albName?: string | null | undefined;
+  /**
+   * Optional ALB namespace when using BYO Application Gateway resources.
+   */
+  albNamespace?: string | null | undefined;
+  /**
+   * Public or internal frontend exposure.
+   */
+  frontend: string;
+  provider: SyncListResponseProviderAzureApplicationGatewayForContainersEnum3;
+};
+
+export const SyncListResponseProviderGkeGatewayEnum3 = {
+  GkeGateway: "gkeGateway",
+} as const;
+export type SyncListResponseProviderGkeGatewayEnum3 = ClosedEnum<
+  typeof SyncListResponseProviderGkeGatewayEnum3
+>;
+
+export type SyncListResponseProviderGkeGateway3 = {
+  provider: SyncListResponseProviderGkeGatewayEnum3;
+  /**
+   * Optional static address name for the Gateway frontend.
+   */
+  staticAddressName?: string | null | undefined;
+};
+
+export const SyncListResponseProviderAwsAlbEnum3 = {
+  AwsAlb: "awsAlb",
+} as const;
+export type SyncListResponseProviderAwsAlbEnum3 = ClosedEnum<
+  typeof SyncListResponseProviderAwsAlbEnum3
+>;
+
+export type SyncListResponseProviderAwsAlb3 = {
+  /**
+   * Optional ALB IP address type, such as `dualstack`.
+   */
+  ipAddressType?: string | null | undefined;
+  provider: SyncListResponseProviderAwsAlbEnum3;
+  /**
+   * Internet-facing or internal ALB scheme.
+   */
+  scheme: string;
+  /**
+   * Explicit subnet IDs when the profile cannot rely on controller discovery.
+   */
+  subnetIds?: Array<string> | undefined;
+  /**
+   * ALB target type, usually `ip`.
+   */
+  targetType: string;
+};
+
+export type SyncListResponseProviderUnion3 =
+  | SyncListResponseProviderAwsAlb3
+  | SyncListResponseProviderAzureApplicationGatewayForContainers3
+  | SyncListResponseProviderGkeGateway3
+  | any;
+
+/**
+ * Shared Ingress route profile values.
+ */
+export type SyncListResponseRouteIngress2 = {
+  /**
+   * Annotations applied to route objects.
+   */
+  annotations?: { [k: string]: string } | undefined;
+  /**
+   * Route controller identifier, for example `eks.amazonaws.com/alb`.
+   */
+  controller?: string | null | undefined;
+  /**
+   * `spec.ingressClassName` for generated Ingresses.
+   */
+  ingressClassName: string;
+  /**
+   * Labels applied to route objects.
+   */
+  labels?: { [k: string]: string } | undefined;
+  provider?:
+    | SyncListResponseProviderAwsAlb3
+    | SyncListResponseProviderAzureApplicationGatewayForContainers3
+    | SyncListResponseProviderGkeGateway3
+    | any
+    | null
+    | undefined;
+  routeApi: "ingress";
+};
+
+/**
+ * Kubernetes route API selected for public endpoints.
+ */
+export type SyncListResponseRouteUnion2 =
+  | SyncListResponseRouteIngress2
+  | SyncListResponseRouteGateway2;
+
+export type SyncListResponseExposureCustom = {
+  /**
+   * Certificate publication or reference mode for Kubernetes public endpoints.
+   */
+  certificate:
+    | SyncListResponseCertificateTLSSecretRef2
+    | SyncListResponseCertificateManagedAcmImport2
+    | SyncListResponseCertificateAwsAcmArn2
+    | SyncListResponseCertificateManagedTLSSecret2
+    | SyncListResponseCertificateNone2;
+  /**
+   * Hostname routed by the Kubernetes public endpoint.
+   */
+  domain: string;
+  mode: SyncListResponseModeCustom;
+  /**
+   * Kubernetes route API selected for public endpoints.
+   */
+  route: SyncListResponseRouteIngress2 | SyncListResponseRouteGateway2;
+};
+
+export type SyncListResponseCertificateNone1 = {
+  mode: "none";
+};
+
+export type SyncListResponseCertificateManagedTLSSecret1 = {
+  mode: "managedTlsSecret";
+  /**
+   * Secret name template. Runtime may substitute resource/deployment tokens.
+   */
+  secretNameTemplate: string;
+};
+
+export type SyncListResponseCertificateAwsAcmArn1 = {
+  /**
+   * Existing ACM certificate ARN.
+   */
+  certificateArn: string;
+  mode: "awsAcmArn";
+};
+
+export type SyncListResponseCertificateManagedAcmImport1 = {
+  mode: "managedAcmImport";
+  /**
+   * ACM region. Defaults to the deployment region when omitted.
+   */
+  region?: string | null | undefined;
+  /**
+   * Tags applied to runtime-imported ACM certificates.
+   */
+  tags?: { [k: string]: string } | undefined;
+};
+
+/**
+ * Namespace-scoped Kubernetes TLS Secret reference.
+ */
+export type SyncListResponseCertificateTLSSecretRef1 = {
+  /**
+   * Secret namespace. Defaults to the release namespace when omitted.
+   */
+  namespace?: string | null | undefined;
+  /**
+   * Secret name.
+   */
+  secretName: string;
+  mode: "tlsSecretRef";
+};
+
+/**
+ * Certificate publication or reference mode for Kubernetes public endpoints.
+ */
+export type SyncListResponseCertificateUnion1 =
+  | SyncListResponseCertificateTLSSecretRef1
+  | SyncListResponseCertificateManagedAcmImport1
+  | SyncListResponseCertificateAwsAcmArn1
+  | SyncListResponseCertificateManagedTLSSecret1
+  | SyncListResponseCertificateNone1;
+
+export const SyncListResponseModeGenerated = {
+  Generated: "generated",
+} as const;
+export type SyncListResponseModeGenerated = ClosedEnum<
+  typeof SyncListResponseModeGenerated
+>;
+
+export const SyncListResponseProviderAzureApplicationGatewayForContainersEnum2 =
+  {
+    AzureApplicationGatewayForContainers:
+      "azureApplicationGatewayForContainers",
+  } as const;
+export type SyncListResponseProviderAzureApplicationGatewayForContainersEnum2 =
+  ClosedEnum<
+    typeof SyncListResponseProviderAzureApplicationGatewayForContainersEnum2
+  >;
+
+export type SyncListResponseProviderAzureApplicationGatewayForContainers2 = {
+  /**
+   * Optional ALB name when using BYO Application Gateway resources.
+   */
+  albName?: string | null | undefined;
+  /**
+   * Optional ALB namespace when using BYO Application Gateway resources.
+   */
+  albNamespace?: string | null | undefined;
+  /**
+   * Public or internal frontend exposure.
+   */
+  frontend: string;
+  provider: SyncListResponseProviderAzureApplicationGatewayForContainersEnum2;
+};
+
+export const SyncListResponseProviderGkeGatewayEnum2 = {
+  GkeGateway: "gkeGateway",
+} as const;
+export type SyncListResponseProviderGkeGatewayEnum2 = ClosedEnum<
+  typeof SyncListResponseProviderGkeGatewayEnum2
+>;
+
+export type SyncListResponseProviderGkeGateway2 = {
+  provider: SyncListResponseProviderGkeGatewayEnum2;
+  /**
+   * Optional static address name for the Gateway frontend.
+   */
+  staticAddressName?: string | null | undefined;
+};
+
+export const SyncListResponseProviderAwsAlbEnum2 = {
+  AwsAlb: "awsAlb",
+} as const;
+export type SyncListResponseProviderAwsAlbEnum2 = ClosedEnum<
+  typeof SyncListResponseProviderAwsAlbEnum2
+>;
+
+export type SyncListResponseProviderAwsAlb2 = {
+  /**
+   * Optional ALB IP address type, such as `dualstack`.
+   */
+  ipAddressType?: string | null | undefined;
+  provider: SyncListResponseProviderAwsAlbEnum2;
+  /**
+   * Internet-facing or internal ALB scheme.
+   */
+  scheme: string;
+  /**
+   * Explicit subnet IDs when the profile cannot rely on controller discovery.
+   */
+  subnetIds?: Array<string> | undefined;
+  /**
+   * ALB target type, usually `ip`.
+   */
+  targetType: string;
+};
+
+export type SyncListResponseProviderUnion2 =
+  | SyncListResponseProviderAwsAlb2
+  | SyncListResponseProviderAzureApplicationGatewayForContainers2
+  | SyncListResponseProviderGkeGateway2
+  | any;
+
+/**
+ * Shared Gateway API route profile values.
+ */
+export type SyncListResponseRouteGateway1 = {
+  /**
+   * Annotations applied to route objects.
+   */
+  annotations?: { [k: string]: string } | undefined;
+  /**
+   * Route controller identifier, for example a cloud Gateway controller.
+   */
+  controller?: string | null | undefined;
+  /**
+   * GatewayClass selected for generated Gateways.
+   */
+  gatewayClassName: string;
+  /**
+   * Labels applied to route objects.
+   */
+  labels?: { [k: string]: string } | undefined;
+  /**
+   * Listener port, usually 443.
+   */
+  listenerPort: number;
+  provider?:
+    | SyncListResponseProviderAwsAlb2
+    | SyncListResponseProviderAzureApplicationGatewayForContainers2
+    | SyncListResponseProviderGkeGateway2
+    | any
+    | null
+    | undefined;
+  routeApi: "gateway";
+};
+
+export const SyncListResponseProviderAzureApplicationGatewayForContainersEnum1 =
+  {
+    AzureApplicationGatewayForContainers:
+      "azureApplicationGatewayForContainers",
+  } as const;
+export type SyncListResponseProviderAzureApplicationGatewayForContainersEnum1 =
+  ClosedEnum<
+    typeof SyncListResponseProviderAzureApplicationGatewayForContainersEnum1
+  >;
+
+export type SyncListResponseProviderAzureApplicationGatewayForContainers1 = {
+  /**
+   * Optional ALB name when using BYO Application Gateway resources.
+   */
+  albName?: string | null | undefined;
+  /**
+   * Optional ALB namespace when using BYO Application Gateway resources.
+   */
+  albNamespace?: string | null | undefined;
+  /**
+   * Public or internal frontend exposure.
+   */
+  frontend: string;
+  provider: SyncListResponseProviderAzureApplicationGatewayForContainersEnum1;
+};
+
+export const SyncListResponseProviderGkeGatewayEnum1 = {
+  GkeGateway: "gkeGateway",
+} as const;
+export type SyncListResponseProviderGkeGatewayEnum1 = ClosedEnum<
+  typeof SyncListResponseProviderGkeGatewayEnum1
+>;
+
+export type SyncListResponseProviderGkeGateway1 = {
+  provider: SyncListResponseProviderGkeGatewayEnum1;
+  /**
+   * Optional static address name for the Gateway frontend.
+   */
+  staticAddressName?: string | null | undefined;
+};
+
+export const SyncListResponseProviderAwsAlbEnum1 = {
+  AwsAlb: "awsAlb",
+} as const;
+export type SyncListResponseProviderAwsAlbEnum1 = ClosedEnum<
+  typeof SyncListResponseProviderAwsAlbEnum1
+>;
+
+export type SyncListResponseProviderAwsAlb1 = {
+  /**
+   * Optional ALB IP address type, such as `dualstack`.
+   */
+  ipAddressType?: string | null | undefined;
+  provider: SyncListResponseProviderAwsAlbEnum1;
+  /**
+   * Internet-facing or internal ALB scheme.
+   */
+  scheme: string;
+  /**
+   * Explicit subnet IDs when the profile cannot rely on controller discovery.
+   */
+  subnetIds?: Array<string> | undefined;
+  /**
+   * ALB target type, usually `ip`.
+   */
+  targetType: string;
+};
+
+export type SyncListResponseProviderUnion1 =
+  | SyncListResponseProviderAwsAlb1
+  | SyncListResponseProviderAzureApplicationGatewayForContainers1
+  | SyncListResponseProviderGkeGateway1
+  | any;
+
+/**
+ * Shared Ingress route profile values.
+ */
+export type SyncListResponseRouteIngress1 = {
+  /**
+   * Annotations applied to route objects.
+   */
+  annotations?: { [k: string]: string } | undefined;
+  /**
+   * Route controller identifier, for example `eks.amazonaws.com/alb`.
+   */
+  controller?: string | null | undefined;
+  /**
+   * `spec.ingressClassName` for generated Ingresses.
+   */
+  ingressClassName: string;
+  /**
+   * Labels applied to route objects.
+   */
+  labels?: { [k: string]: string } | undefined;
+  provider?:
+    | SyncListResponseProviderAwsAlb1
+    | SyncListResponseProviderAzureApplicationGatewayForContainers1
+    | SyncListResponseProviderGkeGateway1
+    | any
+    | null
+    | undefined;
+  routeApi: "ingress";
+};
+
+/**
+ * Kubernetes route API selected for public endpoints.
+ */
+export type SyncListResponseRouteUnion1 =
+  | SyncListResponseRouteIngress1
+  | SyncListResponseRouteGateway1;
+
+export type SyncListResponseExposureGenerated = {
+  /**
+   * Certificate publication or reference mode for Kubernetes public endpoints.
+   */
+  certificate:
+    | SyncListResponseCertificateTLSSecretRef1
+    | SyncListResponseCertificateManagedAcmImport1
+    | SyncListResponseCertificateAwsAcmArn1
+    | SyncListResponseCertificateManagedTLSSecret1
+    | SyncListResponseCertificateNone1;
+  mode: SyncListResponseModeGenerated;
+  /**
+   * Kubernetes route API selected for public endpoints.
+   */
+  route: SyncListResponseRouteIngress1 | SyncListResponseRouteGateway1;
+};
+
+export const SyncListResponseModeDisabled = {
+  Disabled: "disabled",
+} as const;
+export type SyncListResponseModeDisabled = ClosedEnum<
+  typeof SyncListResponseModeDisabled
+>;
+
+export type SyncListResponseExposureDisabled = {
+  mode: SyncListResponseModeDisabled;
+};
+
+export type SyncListResponseExposureUnion =
+  | SyncListResponseExposureCustom
+  | SyncListResponseExposureGenerated
+  | SyncListResponseExposureDisabled
+  | any;
+
+/**
+ * Kubernetes runtime substrate configuration.
+ *
+ * @remarks
+ *
+ * This controls how setup chooses the cluster backing `Platform::Kubernetes`
+ * deployments. When omitted, cloud-backed Kubernetes deployments default to a
+ * managed cluster and generic/on-prem Kubernetes defaults to an external
+ * cluster.
+ */
+export type SyncListResponseKubernetes = {
+  cluster?: SyncListResponseCluster | any | null | undefined;
+  exposure?:
+    | SyncListResponseExposureCustom
+    | SyncListResponseExposureGenerated
+    | SyncListResponseExposureDisabled
+    | any
+    | null
+    | undefined;
+};
+
+export type SyncListResponseKubernetesUnion = SyncListResponseKubernetes | any;
 
 export const SyncListResponseTypeByoVnetAzure = {
   ByoVnetAzure: "byo-vnet-azure",
@@ -452,6 +1171,7 @@ export type SyncListResponseStackSettings = {
    * How heartbeat health checks are handled.
    */
   heartbeats?: SyncListResponseHeartbeats | undefined;
+  kubernetes?: SyncListResponseKubernetes | any | null | undefined;
   network?:
     | SyncListResponseNetworkByoVpcAws
     | SyncListResponseNetworkByoVpcGcp
@@ -2558,20 +3278,21 @@ export function syncListResponseAwsUnionFromJSON(
 }
 
 /** @internal */
-export const SyncListResponseDomainsAzure$inboundSchema: z.ZodType<
-  SyncListResponseDomainsAzure,
+export const SyncListResponseAzureStackSettings$inboundSchema: z.ZodType<
+  SyncListResponseAzureStackSettings,
   unknown
 > = z.object({
   keyVaultCertificateId: z.string(),
 });
 
-export function syncListResponseDomainsAzureFromJSON(
+export function syncListResponseAzureStackSettingsFromJSON(
   jsonString: string,
-): SafeParseResult<SyncListResponseDomainsAzure, SDKValidationError> {
+): SafeParseResult<SyncListResponseAzureStackSettings, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => SyncListResponseDomainsAzure$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseDomainsAzure' from JSON`,
+    (x) =>
+      SyncListResponseAzureStackSettings$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseAzureStackSettings' from JSON`,
   );
 }
 
@@ -2580,7 +3301,7 @@ export const SyncListResponseAzureUnion$inboundSchema: z.ZodType<
   SyncListResponseAzureUnion,
   unknown
 > = z.union([
-  z.lazy(() => SyncListResponseDomainsAzure$inboundSchema),
+  z.lazy(() => SyncListResponseAzureStackSettings$inboundSchema),
   z.any(),
 ]);
 
@@ -2595,20 +3316,20 @@ export function syncListResponseAzureUnionFromJSON(
 }
 
 /** @internal */
-export const SyncListResponseDomainsGcp$inboundSchema: z.ZodType<
-  SyncListResponseDomainsGcp,
+export const SyncListResponseGcpStackSettings$inboundSchema: z.ZodType<
+  SyncListResponseGcpStackSettings,
   unknown
 > = z.object({
   certificateName: z.string(),
 });
 
-export function syncListResponseDomainsGcpFromJSON(
+export function syncListResponseGcpStackSettingsFromJSON(
   jsonString: string,
-): SafeParseResult<SyncListResponseDomainsGcp, SDKValidationError> {
+): SafeParseResult<SyncListResponseGcpStackSettings, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => SyncListResponseDomainsGcp$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseDomainsGcp' from JSON`,
+    (x) => SyncListResponseGcpStackSettings$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseGcpStackSettings' from JSON`,
   );
 }
 
@@ -2616,7 +3337,10 @@ export function syncListResponseDomainsGcpFromJSON(
 export const SyncListResponseGcpUnion$inboundSchema: z.ZodType<
   SyncListResponseGcpUnion,
   unknown
-> = z.union([z.lazy(() => SyncListResponseDomainsGcp$inboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => SyncListResponseGcpStackSettings$inboundSchema),
+  z.any(),
+]);
 
 export function syncListResponseGcpUnionFromJSON(
   jsonString: string,
@@ -2629,8 +3353,65 @@ export function syncListResponseGcpUnionFromJSON(
 }
 
 /** @internal */
-export const SyncListResponseCertificate$inboundSchema: z.ZodType<
-  SyncListResponseCertificate,
+export const SyncListResponseTlsSecretRef$inboundSchema: z.ZodType<
+  SyncListResponseTlsSecretRef,
+  unknown
+> = z.object({
+  namespace: z.nullable(z.string()).optional(),
+  secretName: z.string(),
+});
+
+export function syncListResponseTlsSecretRefFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseTlsSecretRef, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseTlsSecretRef$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseTlsSecretRef' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseDomainsKubernetes$inboundSchema: z.ZodType<
+  SyncListResponseDomainsKubernetes,
+  unknown
+> = z.object({
+  tlsSecretRef: z.lazy(() => SyncListResponseTlsSecretRef$inboundSchema),
+});
+
+export function syncListResponseDomainsKubernetesFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseDomainsKubernetes, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseDomainsKubernetes$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseDomainsKubernetes' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseDomainsKubernetesUnion$inboundSchema: z.ZodType<
+  SyncListResponseDomainsKubernetesUnion,
+  unknown
+> = z.union([
+  z.lazy(() => SyncListResponseDomainsKubernetes$inboundSchema),
+  z.any(),
+]);
+
+export function syncListResponseDomainsKubernetesUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseDomainsKubernetesUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponseDomainsKubernetesUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseDomainsKubernetesUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseDomainsCertificate$inboundSchema: z.ZodType<
+  SyncListResponseDomainsCertificate,
   unknown
 > = z.object({
   aws: z.nullable(
@@ -2638,22 +3419,32 @@ export const SyncListResponseCertificate$inboundSchema: z.ZodType<
   ).optional(),
   azure: z.nullable(
     z.union([
-      z.lazy(() => SyncListResponseDomainsAzure$inboundSchema),
+      z.lazy(() => SyncListResponseAzureStackSettings$inboundSchema),
       z.any(),
     ]),
   ).optional(),
   gcp: z.nullable(
-    z.union([z.lazy(() => SyncListResponseDomainsGcp$inboundSchema), z.any()]),
+    z.union([
+      z.lazy(() => SyncListResponseGcpStackSettings$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  kubernetes: z.nullable(
+    z.union([
+      z.lazy(() => SyncListResponseDomainsKubernetes$inboundSchema),
+      z.any(),
+    ]),
   ).optional(),
 });
 
-export function syncListResponseCertificateFromJSON(
+export function syncListResponseDomainsCertificateFromJSON(
   jsonString: string,
-): SafeParseResult<SyncListResponseCertificate, SDKValidationError> {
+): SafeParseResult<SyncListResponseDomainsCertificate, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => SyncListResponseCertificate$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseCertificate' from JSON`,
+    (x) =>
+      SyncListResponseDomainsCertificate$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseDomainsCertificate' from JSON`,
   );
 }
 
@@ -2662,7 +3453,7 @@ export const SyncListResponseCustomDomains$inboundSchema: z.ZodType<
   SyncListResponseCustomDomains,
   unknown
 > = z.object({
-  certificate: z.lazy(() => SyncListResponseCertificate$inboundSchema),
+  certificate: z.lazy(() => SyncListResponseDomainsCertificate$inboundSchema),
   domain: z.string(),
 });
 
@@ -2735,6 +3526,1116 @@ export function syncListResponseExternalBindingsFromJSON(
 export const SyncListResponseHeartbeats$inboundSchema: z.ZodEnum<
   typeof SyncListResponseHeartbeats
 > = z.enum(SyncListResponseHeartbeats);
+
+/** @internal */
+export const SyncListResponseCloud$inboundSchema: z.ZodType<
+  SyncListResponseCloud,
+  unknown
+> = z.object({
+  accountId: z.nullable(z.string()).optional(),
+  clusterId: z.nullable(z.string()).optional(),
+  clusterName: z.nullable(z.string()).optional(),
+  projectId: z.nullable(z.string()).optional(),
+  region: z.nullable(z.string()).optional(),
+  resourceGroup: z.nullable(z.string()).optional(),
+  subscriptionId: z.nullable(z.string()).optional(),
+});
+
+export function syncListResponseCloudFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseCloud, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseCloud$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseCloud' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseCloudUnion$inboundSchema: z.ZodType<
+  SyncListResponseCloudUnion,
+  unknown
+> = z.union([z.lazy(() => SyncListResponseCloud$inboundSchema), z.any()]);
+
+export function syncListResponseCloudUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseCloudUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseCloudUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseCloudUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseOwnership$inboundSchema: z.ZodEnum<
+  typeof SyncListResponseOwnership
+> = z.enum(SyncListResponseOwnership);
+
+/** @internal */
+export const SyncListResponseCluster$inboundSchema: z.ZodType<
+  SyncListResponseCluster,
+  unknown
+> = z.object({
+  cloud: z.nullable(
+    z.union([z.lazy(() => SyncListResponseCloud$inboundSchema), z.any()]),
+  ).optional(),
+  namespace: z.nullable(z.string()).optional(),
+  ownership: SyncListResponseOwnership$inboundSchema,
+});
+
+export function syncListResponseClusterFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseCluster, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseCluster$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseCluster' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseClusterUnion$inboundSchema: z.ZodType<
+  SyncListResponseClusterUnion,
+  unknown
+> = z.union([z.lazy(() => SyncListResponseCluster$inboundSchema), z.any()]);
+
+export function syncListResponseClusterUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseClusterUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseClusterUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseClusterUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseCertificateNone2$inboundSchema: z.ZodType<
+  SyncListResponseCertificateNone2,
+  unknown
+> = z.object({
+  mode: z.literal("none"),
+});
+
+export function syncListResponseCertificateNone2FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseCertificateNone2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseCertificateNone2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseCertificateNone2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseCertificateManagedTLSSecret2$inboundSchema:
+  z.ZodType<SyncListResponseCertificateManagedTLSSecret2, unknown> = z.object({
+    mode: z.literal("managedTlsSecret"),
+    secretNameTemplate: z.string(),
+  });
+
+export function syncListResponseCertificateManagedTLSSecret2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponseCertificateManagedTLSSecret2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponseCertificateManagedTLSSecret2$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponseCertificateManagedTLSSecret2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseCertificateAwsAcmArn2$inboundSchema: z.ZodType<
+  SyncListResponseCertificateAwsAcmArn2,
+  unknown
+> = z.object({
+  certificateArn: z.string(),
+  mode: z.literal("awsAcmArn"),
+});
+
+export function syncListResponseCertificateAwsAcmArn2FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseCertificateAwsAcmArn2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponseCertificateAwsAcmArn2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseCertificateAwsAcmArn2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseCertificateManagedAcmImport2$inboundSchema:
+  z.ZodType<SyncListResponseCertificateManagedAcmImport2, unknown> = z.object({
+    mode: z.literal("managedAcmImport"),
+    region: z.nullable(z.string()).optional(),
+    tags: z.record(z.string(), z.string()).optional(),
+  });
+
+export function syncListResponseCertificateManagedAcmImport2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponseCertificateManagedAcmImport2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponseCertificateManagedAcmImport2$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponseCertificateManagedAcmImport2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseCertificateTLSSecretRef2$inboundSchema: z.ZodType<
+  SyncListResponseCertificateTLSSecretRef2,
+  unknown
+> = z.object({
+  namespace: z.nullable(z.string()).optional(),
+  secretName: z.string(),
+  mode: z.literal("tlsSecretRef"),
+});
+
+export function syncListResponseCertificateTLSSecretRef2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponseCertificateTLSSecretRef2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponseCertificateTLSSecretRef2$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponseCertificateTLSSecretRef2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseCertificateUnion2$inboundSchema: z.ZodType<
+  SyncListResponseCertificateUnion2,
+  unknown
+> = z.union([
+  z.lazy(() => SyncListResponseCertificateTLSSecretRef2$inboundSchema),
+  z.lazy(() => SyncListResponseCertificateManagedAcmImport2$inboundSchema),
+  z.lazy(() => SyncListResponseCertificateAwsAcmArn2$inboundSchema),
+  z.lazy(() => SyncListResponseCertificateManagedTLSSecret2$inboundSchema),
+  z.lazy(() => SyncListResponseCertificateNone2$inboundSchema),
+]);
+
+export function syncListResponseCertificateUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseCertificateUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseCertificateUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseCertificateUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseModeCustom$inboundSchema: z.ZodEnum<
+  typeof SyncListResponseModeCustom
+> = z.enum(SyncListResponseModeCustom);
+
+/** @internal */
+export const SyncListResponseProviderAzureApplicationGatewayForContainersEnum4$inboundSchema:
+  z.ZodEnum<
+    typeof SyncListResponseProviderAzureApplicationGatewayForContainersEnum4
+  > = z.enum(SyncListResponseProviderAzureApplicationGatewayForContainersEnum4);
+
+/** @internal */
+export const SyncListResponseProviderAzureApplicationGatewayForContainers4$inboundSchema:
+  z.ZodType<
+    SyncListResponseProviderAzureApplicationGatewayForContainers4,
+    unknown
+  > = z.object({
+    albName: z.nullable(z.string()).optional(),
+    albNamespace: z.nullable(z.string()).optional(),
+    frontend: z.string(),
+    provider:
+      SyncListResponseProviderAzureApplicationGatewayForContainersEnum4$inboundSchema,
+  });
+
+export function syncListResponseProviderAzureApplicationGatewayForContainers4FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponseProviderAzureApplicationGatewayForContainers4,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponseProviderAzureApplicationGatewayForContainers4$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseProviderAzureApplicationGatewayForContainers4' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseProviderGkeGatewayEnum4$inboundSchema: z.ZodEnum<
+  typeof SyncListResponseProviderGkeGatewayEnum4
+> = z.enum(SyncListResponseProviderGkeGatewayEnum4);
+
+/** @internal */
+export const SyncListResponseProviderGkeGateway4$inboundSchema: z.ZodType<
+  SyncListResponseProviderGkeGateway4,
+  unknown
+> = z.object({
+  provider: SyncListResponseProviderGkeGatewayEnum4$inboundSchema,
+  staticAddressName: z.nullable(z.string()).optional(),
+});
+
+export function syncListResponseProviderGkeGateway4FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseProviderGkeGateway4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponseProviderGkeGateway4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseProviderGkeGateway4' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseProviderAwsAlbEnum4$inboundSchema: z.ZodEnum<
+  typeof SyncListResponseProviderAwsAlbEnum4
+> = z.enum(SyncListResponseProviderAwsAlbEnum4);
+
+/** @internal */
+export const SyncListResponseProviderAwsAlb4$inboundSchema: z.ZodType<
+  SyncListResponseProviderAwsAlb4,
+  unknown
+> = z.object({
+  ipAddressType: z.nullable(z.string()).optional(),
+  provider: SyncListResponseProviderAwsAlbEnum4$inboundSchema,
+  scheme: z.string(),
+  subnetIds: z.array(z.string()).optional(),
+  targetType: z.string(),
+});
+
+export function syncListResponseProviderAwsAlb4FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseProviderAwsAlb4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseProviderAwsAlb4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseProviderAwsAlb4' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseProviderUnion4$inboundSchema: z.ZodType<
+  SyncListResponseProviderUnion4,
+  unknown
+> = z.union([
+  z.lazy(() => SyncListResponseProviderAwsAlb4$inboundSchema),
+  z.lazy(() =>
+    SyncListResponseProviderAzureApplicationGatewayForContainers4$inboundSchema
+  ),
+  z.lazy(() => SyncListResponseProviderGkeGateway4$inboundSchema),
+  z.any(),
+]);
+
+export function syncListResponseProviderUnion4FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseProviderUnion4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseProviderUnion4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseProviderUnion4' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseRouteGateway2$inboundSchema: z.ZodType<
+  SyncListResponseRouteGateway2,
+  unknown
+> = z.object({
+  annotations: z.record(z.string(), z.string()).optional(),
+  controller: z.nullable(z.string()).optional(),
+  gatewayClassName: z.string(),
+  labels: z.record(z.string(), z.string()).optional(),
+  listenerPort: z.int(),
+  provider: z.nullable(
+    z.union([
+      z.lazy(() => SyncListResponseProviderAwsAlb4$inboundSchema),
+      z.lazy(() =>
+        SyncListResponseProviderAzureApplicationGatewayForContainers4$inboundSchema
+      ),
+      z.lazy(() => SyncListResponseProviderGkeGateway4$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  routeApi: z.literal("gateway"),
+});
+
+export function syncListResponseRouteGateway2FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseRouteGateway2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseRouteGateway2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseRouteGateway2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseProviderAzureApplicationGatewayForContainersEnum3$inboundSchema:
+  z.ZodEnum<
+    typeof SyncListResponseProviderAzureApplicationGatewayForContainersEnum3
+  > = z.enum(SyncListResponseProviderAzureApplicationGatewayForContainersEnum3);
+
+/** @internal */
+export const SyncListResponseProviderAzureApplicationGatewayForContainers3$inboundSchema:
+  z.ZodType<
+    SyncListResponseProviderAzureApplicationGatewayForContainers3,
+    unknown
+  > = z.object({
+    albName: z.nullable(z.string()).optional(),
+    albNamespace: z.nullable(z.string()).optional(),
+    frontend: z.string(),
+    provider:
+      SyncListResponseProviderAzureApplicationGatewayForContainersEnum3$inboundSchema,
+  });
+
+export function syncListResponseProviderAzureApplicationGatewayForContainers3FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponseProviderAzureApplicationGatewayForContainers3,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponseProviderAzureApplicationGatewayForContainers3$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseProviderAzureApplicationGatewayForContainers3' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseProviderGkeGatewayEnum3$inboundSchema: z.ZodEnum<
+  typeof SyncListResponseProviderGkeGatewayEnum3
+> = z.enum(SyncListResponseProviderGkeGatewayEnum3);
+
+/** @internal */
+export const SyncListResponseProviderGkeGateway3$inboundSchema: z.ZodType<
+  SyncListResponseProviderGkeGateway3,
+  unknown
+> = z.object({
+  provider: SyncListResponseProviderGkeGatewayEnum3$inboundSchema,
+  staticAddressName: z.nullable(z.string()).optional(),
+});
+
+export function syncListResponseProviderGkeGateway3FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseProviderGkeGateway3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponseProviderGkeGateway3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseProviderGkeGateway3' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseProviderAwsAlbEnum3$inboundSchema: z.ZodEnum<
+  typeof SyncListResponseProviderAwsAlbEnum3
+> = z.enum(SyncListResponseProviderAwsAlbEnum3);
+
+/** @internal */
+export const SyncListResponseProviderAwsAlb3$inboundSchema: z.ZodType<
+  SyncListResponseProviderAwsAlb3,
+  unknown
+> = z.object({
+  ipAddressType: z.nullable(z.string()).optional(),
+  provider: SyncListResponseProviderAwsAlbEnum3$inboundSchema,
+  scheme: z.string(),
+  subnetIds: z.array(z.string()).optional(),
+  targetType: z.string(),
+});
+
+export function syncListResponseProviderAwsAlb3FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseProviderAwsAlb3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseProviderAwsAlb3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseProviderAwsAlb3' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseProviderUnion3$inboundSchema: z.ZodType<
+  SyncListResponseProviderUnion3,
+  unknown
+> = z.union([
+  z.lazy(() => SyncListResponseProviderAwsAlb3$inboundSchema),
+  z.lazy(() =>
+    SyncListResponseProviderAzureApplicationGatewayForContainers3$inboundSchema
+  ),
+  z.lazy(() => SyncListResponseProviderGkeGateway3$inboundSchema),
+  z.any(),
+]);
+
+export function syncListResponseProviderUnion3FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseProviderUnion3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseProviderUnion3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseProviderUnion3' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseRouteIngress2$inboundSchema: z.ZodType<
+  SyncListResponseRouteIngress2,
+  unknown
+> = z.object({
+  annotations: z.record(z.string(), z.string()).optional(),
+  controller: z.nullable(z.string()).optional(),
+  ingressClassName: z.string(),
+  labels: z.record(z.string(), z.string()).optional(),
+  provider: z.nullable(
+    z.union([
+      z.lazy(() => SyncListResponseProviderAwsAlb3$inboundSchema),
+      z.lazy(() =>
+        SyncListResponseProviderAzureApplicationGatewayForContainers3$inboundSchema
+      ),
+      z.lazy(() => SyncListResponseProviderGkeGateway3$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  routeApi: z.literal("ingress"),
+});
+
+export function syncListResponseRouteIngress2FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseRouteIngress2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseRouteIngress2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseRouteIngress2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseRouteUnion2$inboundSchema: z.ZodType<
+  SyncListResponseRouteUnion2,
+  unknown
+> = z.union([
+  z.lazy(() => SyncListResponseRouteIngress2$inboundSchema),
+  z.lazy(() => SyncListResponseRouteGateway2$inboundSchema),
+]);
+
+export function syncListResponseRouteUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseRouteUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseRouteUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseRouteUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseExposureCustom$inboundSchema: z.ZodType<
+  SyncListResponseExposureCustom,
+  unknown
+> = z.object({
+  certificate: z.union([
+    z.lazy(() => SyncListResponseCertificateTLSSecretRef2$inboundSchema),
+    z.lazy(() => SyncListResponseCertificateManagedAcmImport2$inboundSchema),
+    z.lazy(() => SyncListResponseCertificateAwsAcmArn2$inboundSchema),
+    z.lazy(() => SyncListResponseCertificateManagedTLSSecret2$inboundSchema),
+    z.lazy(() => SyncListResponseCertificateNone2$inboundSchema),
+  ]),
+  domain: z.string(),
+  mode: SyncListResponseModeCustom$inboundSchema,
+  route: z.union([
+    z.lazy(() => SyncListResponseRouteIngress2$inboundSchema),
+    z.lazy(() => SyncListResponseRouteGateway2$inboundSchema),
+  ]),
+});
+
+export function syncListResponseExposureCustomFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseExposureCustom, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseExposureCustom$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseExposureCustom' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseCertificateNone1$inboundSchema: z.ZodType<
+  SyncListResponseCertificateNone1,
+  unknown
+> = z.object({
+  mode: z.literal("none"),
+});
+
+export function syncListResponseCertificateNone1FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseCertificateNone1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseCertificateNone1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseCertificateNone1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseCertificateManagedTLSSecret1$inboundSchema:
+  z.ZodType<SyncListResponseCertificateManagedTLSSecret1, unknown> = z.object({
+    mode: z.literal("managedTlsSecret"),
+    secretNameTemplate: z.string(),
+  });
+
+export function syncListResponseCertificateManagedTLSSecret1FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponseCertificateManagedTLSSecret1,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponseCertificateManagedTLSSecret1$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponseCertificateManagedTLSSecret1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseCertificateAwsAcmArn1$inboundSchema: z.ZodType<
+  SyncListResponseCertificateAwsAcmArn1,
+  unknown
+> = z.object({
+  certificateArn: z.string(),
+  mode: z.literal("awsAcmArn"),
+});
+
+export function syncListResponseCertificateAwsAcmArn1FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseCertificateAwsAcmArn1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponseCertificateAwsAcmArn1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseCertificateAwsAcmArn1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseCertificateManagedAcmImport1$inboundSchema:
+  z.ZodType<SyncListResponseCertificateManagedAcmImport1, unknown> = z.object({
+    mode: z.literal("managedAcmImport"),
+    region: z.nullable(z.string()).optional(),
+    tags: z.record(z.string(), z.string()).optional(),
+  });
+
+export function syncListResponseCertificateManagedAcmImport1FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponseCertificateManagedAcmImport1,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponseCertificateManagedAcmImport1$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponseCertificateManagedAcmImport1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseCertificateTLSSecretRef1$inboundSchema: z.ZodType<
+  SyncListResponseCertificateTLSSecretRef1,
+  unknown
+> = z.object({
+  namespace: z.nullable(z.string()).optional(),
+  secretName: z.string(),
+  mode: z.literal("tlsSecretRef"),
+});
+
+export function syncListResponseCertificateTLSSecretRef1FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponseCertificateTLSSecretRef1,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponseCertificateTLSSecretRef1$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponseCertificateTLSSecretRef1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseCertificateUnion1$inboundSchema: z.ZodType<
+  SyncListResponseCertificateUnion1,
+  unknown
+> = z.union([
+  z.lazy(() => SyncListResponseCertificateTLSSecretRef1$inboundSchema),
+  z.lazy(() => SyncListResponseCertificateManagedAcmImport1$inboundSchema),
+  z.lazy(() => SyncListResponseCertificateAwsAcmArn1$inboundSchema),
+  z.lazy(() => SyncListResponseCertificateManagedTLSSecret1$inboundSchema),
+  z.lazy(() => SyncListResponseCertificateNone1$inboundSchema),
+]);
+
+export function syncListResponseCertificateUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseCertificateUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseCertificateUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseCertificateUnion1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseModeGenerated$inboundSchema: z.ZodEnum<
+  typeof SyncListResponseModeGenerated
+> = z.enum(SyncListResponseModeGenerated);
+
+/** @internal */
+export const SyncListResponseProviderAzureApplicationGatewayForContainersEnum2$inboundSchema:
+  z.ZodEnum<
+    typeof SyncListResponseProviderAzureApplicationGatewayForContainersEnum2
+  > = z.enum(SyncListResponseProviderAzureApplicationGatewayForContainersEnum2);
+
+/** @internal */
+export const SyncListResponseProviderAzureApplicationGatewayForContainers2$inboundSchema:
+  z.ZodType<
+    SyncListResponseProviderAzureApplicationGatewayForContainers2,
+    unknown
+  > = z.object({
+    albName: z.nullable(z.string()).optional(),
+    albNamespace: z.nullable(z.string()).optional(),
+    frontend: z.string(),
+    provider:
+      SyncListResponseProviderAzureApplicationGatewayForContainersEnum2$inboundSchema,
+  });
+
+export function syncListResponseProviderAzureApplicationGatewayForContainers2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponseProviderAzureApplicationGatewayForContainers2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponseProviderAzureApplicationGatewayForContainers2$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseProviderAzureApplicationGatewayForContainers2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseProviderGkeGatewayEnum2$inboundSchema: z.ZodEnum<
+  typeof SyncListResponseProviderGkeGatewayEnum2
+> = z.enum(SyncListResponseProviderGkeGatewayEnum2);
+
+/** @internal */
+export const SyncListResponseProviderGkeGateway2$inboundSchema: z.ZodType<
+  SyncListResponseProviderGkeGateway2,
+  unknown
+> = z.object({
+  provider: SyncListResponseProviderGkeGatewayEnum2$inboundSchema,
+  staticAddressName: z.nullable(z.string()).optional(),
+});
+
+export function syncListResponseProviderGkeGateway2FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseProviderGkeGateway2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponseProviderGkeGateway2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseProviderGkeGateway2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseProviderAwsAlbEnum2$inboundSchema: z.ZodEnum<
+  typeof SyncListResponseProviderAwsAlbEnum2
+> = z.enum(SyncListResponseProviderAwsAlbEnum2);
+
+/** @internal */
+export const SyncListResponseProviderAwsAlb2$inboundSchema: z.ZodType<
+  SyncListResponseProviderAwsAlb2,
+  unknown
+> = z.object({
+  ipAddressType: z.nullable(z.string()).optional(),
+  provider: SyncListResponseProviderAwsAlbEnum2$inboundSchema,
+  scheme: z.string(),
+  subnetIds: z.array(z.string()).optional(),
+  targetType: z.string(),
+});
+
+export function syncListResponseProviderAwsAlb2FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseProviderAwsAlb2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseProviderAwsAlb2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseProviderAwsAlb2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseProviderUnion2$inboundSchema: z.ZodType<
+  SyncListResponseProviderUnion2,
+  unknown
+> = z.union([
+  z.lazy(() => SyncListResponseProviderAwsAlb2$inboundSchema),
+  z.lazy(() =>
+    SyncListResponseProviderAzureApplicationGatewayForContainers2$inboundSchema
+  ),
+  z.lazy(() => SyncListResponseProviderGkeGateway2$inboundSchema),
+  z.any(),
+]);
+
+export function syncListResponseProviderUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseProviderUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseProviderUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseProviderUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseRouteGateway1$inboundSchema: z.ZodType<
+  SyncListResponseRouteGateway1,
+  unknown
+> = z.object({
+  annotations: z.record(z.string(), z.string()).optional(),
+  controller: z.nullable(z.string()).optional(),
+  gatewayClassName: z.string(),
+  labels: z.record(z.string(), z.string()).optional(),
+  listenerPort: z.int(),
+  provider: z.nullable(
+    z.union([
+      z.lazy(() => SyncListResponseProviderAwsAlb2$inboundSchema),
+      z.lazy(() =>
+        SyncListResponseProviderAzureApplicationGatewayForContainers2$inboundSchema
+      ),
+      z.lazy(() => SyncListResponseProviderGkeGateway2$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  routeApi: z.literal("gateway"),
+});
+
+export function syncListResponseRouteGateway1FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseRouteGateway1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseRouteGateway1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseRouteGateway1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseProviderAzureApplicationGatewayForContainersEnum1$inboundSchema:
+  z.ZodEnum<
+    typeof SyncListResponseProviderAzureApplicationGatewayForContainersEnum1
+  > = z.enum(SyncListResponseProviderAzureApplicationGatewayForContainersEnum1);
+
+/** @internal */
+export const SyncListResponseProviderAzureApplicationGatewayForContainers1$inboundSchema:
+  z.ZodType<
+    SyncListResponseProviderAzureApplicationGatewayForContainers1,
+    unknown
+  > = z.object({
+    albName: z.nullable(z.string()).optional(),
+    albNamespace: z.nullable(z.string()).optional(),
+    frontend: z.string(),
+    provider:
+      SyncListResponseProviderAzureApplicationGatewayForContainersEnum1$inboundSchema,
+  });
+
+export function syncListResponseProviderAzureApplicationGatewayForContainers1FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponseProviderAzureApplicationGatewayForContainers1,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponseProviderAzureApplicationGatewayForContainers1$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseProviderAzureApplicationGatewayForContainers1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseProviderGkeGatewayEnum1$inboundSchema: z.ZodEnum<
+  typeof SyncListResponseProviderGkeGatewayEnum1
+> = z.enum(SyncListResponseProviderGkeGatewayEnum1);
+
+/** @internal */
+export const SyncListResponseProviderGkeGateway1$inboundSchema: z.ZodType<
+  SyncListResponseProviderGkeGateway1,
+  unknown
+> = z.object({
+  provider: SyncListResponseProviderGkeGatewayEnum1$inboundSchema,
+  staticAddressName: z.nullable(z.string()).optional(),
+});
+
+export function syncListResponseProviderGkeGateway1FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseProviderGkeGateway1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponseProviderGkeGateway1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseProviderGkeGateway1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseProviderAwsAlbEnum1$inboundSchema: z.ZodEnum<
+  typeof SyncListResponseProviderAwsAlbEnum1
+> = z.enum(SyncListResponseProviderAwsAlbEnum1);
+
+/** @internal */
+export const SyncListResponseProviderAwsAlb1$inboundSchema: z.ZodType<
+  SyncListResponseProviderAwsAlb1,
+  unknown
+> = z.object({
+  ipAddressType: z.nullable(z.string()).optional(),
+  provider: SyncListResponseProviderAwsAlbEnum1$inboundSchema,
+  scheme: z.string(),
+  subnetIds: z.array(z.string()).optional(),
+  targetType: z.string(),
+});
+
+export function syncListResponseProviderAwsAlb1FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseProviderAwsAlb1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseProviderAwsAlb1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseProviderAwsAlb1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseProviderUnion1$inboundSchema: z.ZodType<
+  SyncListResponseProviderUnion1,
+  unknown
+> = z.union([
+  z.lazy(() => SyncListResponseProviderAwsAlb1$inboundSchema),
+  z.lazy(() =>
+    SyncListResponseProviderAzureApplicationGatewayForContainers1$inboundSchema
+  ),
+  z.lazy(() => SyncListResponseProviderGkeGateway1$inboundSchema),
+  z.any(),
+]);
+
+export function syncListResponseProviderUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseProviderUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseProviderUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseProviderUnion1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseRouteIngress1$inboundSchema: z.ZodType<
+  SyncListResponseRouteIngress1,
+  unknown
+> = z.object({
+  annotations: z.record(z.string(), z.string()).optional(),
+  controller: z.nullable(z.string()).optional(),
+  ingressClassName: z.string(),
+  labels: z.record(z.string(), z.string()).optional(),
+  provider: z.nullable(
+    z.union([
+      z.lazy(() => SyncListResponseProviderAwsAlb1$inboundSchema),
+      z.lazy(() =>
+        SyncListResponseProviderAzureApplicationGatewayForContainers1$inboundSchema
+      ),
+      z.lazy(() => SyncListResponseProviderGkeGateway1$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  routeApi: z.literal("ingress"),
+});
+
+export function syncListResponseRouteIngress1FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseRouteIngress1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseRouteIngress1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseRouteIngress1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseRouteUnion1$inboundSchema: z.ZodType<
+  SyncListResponseRouteUnion1,
+  unknown
+> = z.union([
+  z.lazy(() => SyncListResponseRouteIngress1$inboundSchema),
+  z.lazy(() => SyncListResponseRouteGateway1$inboundSchema),
+]);
+
+export function syncListResponseRouteUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseRouteUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseRouteUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseRouteUnion1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseExposureGenerated$inboundSchema: z.ZodType<
+  SyncListResponseExposureGenerated,
+  unknown
+> = z.object({
+  certificate: z.union([
+    z.lazy(() => SyncListResponseCertificateTLSSecretRef1$inboundSchema),
+    z.lazy(() => SyncListResponseCertificateManagedAcmImport1$inboundSchema),
+    z.lazy(() => SyncListResponseCertificateAwsAcmArn1$inboundSchema),
+    z.lazy(() => SyncListResponseCertificateManagedTLSSecret1$inboundSchema),
+    z.lazy(() => SyncListResponseCertificateNone1$inboundSchema),
+  ]),
+  mode: SyncListResponseModeGenerated$inboundSchema,
+  route: z.union([
+    z.lazy(() => SyncListResponseRouteIngress1$inboundSchema),
+    z.lazy(() => SyncListResponseRouteGateway1$inboundSchema),
+  ]),
+});
+
+export function syncListResponseExposureGeneratedFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseExposureGenerated, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseExposureGenerated$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseExposureGenerated' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseModeDisabled$inboundSchema: z.ZodEnum<
+  typeof SyncListResponseModeDisabled
+> = z.enum(SyncListResponseModeDisabled);
+
+/** @internal */
+export const SyncListResponseExposureDisabled$inboundSchema: z.ZodType<
+  SyncListResponseExposureDisabled,
+  unknown
+> = z.object({
+  mode: SyncListResponseModeDisabled$inboundSchema,
+});
+
+export function syncListResponseExposureDisabledFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseExposureDisabled, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseExposureDisabled$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseExposureDisabled' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseExposureUnion$inboundSchema: z.ZodType<
+  SyncListResponseExposureUnion,
+  unknown
+> = z.union([
+  z.lazy(() => SyncListResponseExposureCustom$inboundSchema),
+  z.lazy(() => SyncListResponseExposureGenerated$inboundSchema),
+  z.lazy(() => SyncListResponseExposureDisabled$inboundSchema),
+  z.any(),
+]);
+
+export function syncListResponseExposureUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseExposureUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseExposureUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseExposureUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseKubernetes$inboundSchema: z.ZodType<
+  SyncListResponseKubernetes,
+  unknown
+> = z.object({
+  cluster: z.nullable(
+    z.union([z.lazy(() => SyncListResponseCluster$inboundSchema), z.any()]),
+  ).optional(),
+  exposure: z.nullable(
+    z.union([
+      z.lazy(() => SyncListResponseExposureCustom$inboundSchema),
+      z.lazy(() => SyncListResponseExposureGenerated$inboundSchema),
+      z.lazy(() => SyncListResponseExposureDisabled$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+});
+
+export function syncListResponseKubernetesFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseKubernetes, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseKubernetes$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseKubernetes' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseKubernetesUnion$inboundSchema: z.ZodType<
+  SyncListResponseKubernetesUnion,
+  unknown
+> = z.union([z.lazy(() => SyncListResponseKubernetes$inboundSchema), z.any()]);
+
+export function syncListResponseKubernetesUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseKubernetesUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseKubernetesUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseKubernetesUnion' from JSON`,
+  );
+}
 
 /** @internal */
 export const SyncListResponseTypeByoVnetAzure$inboundSchema: z.ZodEnum<
@@ -2932,6 +4833,9 @@ export const SyncListResponseStackSettings$inboundSchema: z.ZodType<
     z.lazy(() => SyncListResponseExternalBindings$inboundSchema),
   ).optional(),
   heartbeats: SyncListResponseHeartbeats$inboundSchema.optional(),
+  kubernetes: z.nullable(
+    z.union([z.lazy(() => SyncListResponseKubernetes$inboundSchema), z.any()]),
+  ).optional(),
   network: z.nullable(
     z.union([
       z.lazy(() => SyncListResponseNetworkByoVpcAws$inboundSchema),

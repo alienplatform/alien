@@ -25,11 +25,14 @@ use alien_gcp_clients::longrunning::OperationResult;
 use alien_gcp_clients::pubsub::{OidcToken, PushConfig, Subscription, Topic};
 // Note: Role controller removed - workers now use ServiceAccount and permission profiles
 use alien_core::{
-    CertificateStatus, DnsRecordStatus, Ingress, Network, ResourceDefinition, ResourceOutputs,
-    ResourceRef, ResourceStatus, Worker, WorkerOutputs,
+    CertificateStatus, DnsRecordStatus, GcpCloudRunWorkerHeartbeatData, HeartbeatBackend, Ingress,
+    Network, ObservedHealth, Platform, ProviderLifecycleState, ResourceDefinition,
+    ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs, ResourceRef, ResourceStatus, Worker,
+    WorkerHeartbeatData, WorkerOutputs, WorkloadHeartbeatStatus,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
+use chrono::Utc;
 use sha2::{Digest, Sha256};
 
 const CLOUD_RUN_SERVICE_NAME_MAX_LEN: usize = 49;
@@ -154,6 +157,72 @@ struct DomainInfo {
     certificate_id: Option<String>,
     ssl_certificate_name: Option<String>,
     uses_custom_domain: bool,
+}
+
+fn emit_gcp_cloud_run_worker_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    worker_config: &Worker,
+    service_name: &str,
+    service: &Service,
+) {
+    let container = service
+        .template
+        .as_ref()
+        .and_then(|template| template.containers.first());
+    let limits = container.and_then(|container| {
+        container
+            .resources
+            .as_ref()
+            .and_then(|resources| resources.limits.as_ref())
+    });
+    let scaling = service.scaling.as_ref();
+
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: worker_config.id.clone(),
+        resource_type: Worker::RESOURCE_TYPE,
+        controller_platform: Platform::Gcp,
+        backend: HeartbeatBackend::Gcp,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::Worker(WorkerHeartbeatData::GcpCloudRun(
+            GcpCloudRunWorkerHeartbeatData {
+                status: WorkloadHeartbeatStatus {
+                    health: ObservedHealth::Healthy,
+                    lifecycle: ProviderLifecycleState::Running,
+                    message: Some(format!("Cloud Run service '{service_name}' is ready")),
+                    stale: false,
+                    partial: false,
+                    collection_issues: vec![],
+                },
+                service: service_name.to_string(),
+                region: Some(
+                    ctx.get_gcp_config()
+                        .map(|config| config.region.clone())
+                        .unwrap_or_default(),
+                ),
+                uri: service.uri.clone(),
+                urls: service.urls.clone(),
+                latest_created_revision: service.latest_created_revision.clone(),
+                latest_ready_revision: service.latest_ready_revision.clone(),
+                generation: service
+                    .generation
+                    .as_deref()
+                    .and_then(|generation| generation.parse::<i64>().ok()),
+                observed_generation: service
+                    .observed_generation
+                    .as_deref()
+                    .and_then(|generation| generation.parse::<i64>().ok()),
+                traffic_count: service.traffic.len() as u32,
+                min_instance_count: scaling.and_then(|scaling| scaling.min_instance_count),
+                max_instance_count: scaling.and_then(|scaling| scaling.max_instance_count),
+                container_image: container.map(|container| container.image.clone()),
+                cpu_limit: limits.and_then(|limits| limits.get("cpu").cloned()),
+                memory_limit: limits.and_then(|limits| limits.get("memory").cloned()),
+                events: vec![],
+            },
+        )),
+        raw: vec![],
+    });
 }
 
 /// Tracks a GCS notification configuration for cleanup during deletion.
@@ -1795,7 +1864,7 @@ impl GcpWorkerController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        let cfg = ctx.desired_resource_config::<Worker>()?;
+        let _cfg = ctx.desired_resource_config::<Worker>()?;
         let service_name = self.service_name.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceControllerConfigError {
                 resource_id: ctx.desired_config.id().to_string(),
@@ -1959,6 +2028,8 @@ impl GcpWorkerController {
                 }
             }
         }
+
+        emit_gcp_cloud_run_worker_heartbeat(ctx, &worker_config, service_name, &service);
 
         debug!(name = %worker_config.id, "Heartbeat check passed");
         Ok(HandlerAction::Continue {

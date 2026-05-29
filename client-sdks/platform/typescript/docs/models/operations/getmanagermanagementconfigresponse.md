@@ -37,10 +37,10 @@ const value: operations.GetManagerManagementConfigAzure = {
 };
 ```
 
-### `operations.Kubernetes`
+### `operations.GetManagerManagementConfigKubernetes`
 
 ```typescript
-const value: operations.Kubernetes = {
+const value: operations.GetManagerManagementConfigKubernetes = {
   platform: "kubernetes",
 };
 ```

@@ -14,7 +14,7 @@ use crate::{
 use alien_core::ClientConfig;
 use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
-use tonic::{transport::Channel, Request, Status};
+use tonic::{transport::Channel, Request};
 
 /// gRPC implementation of the `ServiceAccount` trait.
 ///

@@ -11,7 +11,6 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use async_trait::async_trait;
 #[cfg(feature = "test-utils")]
 use mockall::automock;
 
@@ -23,20 +22,15 @@ use mockall::automock;
 #[serde(rename_all = "PascalCase")]
 struct SqsErrorResponse {
     pub error: SqsErrorDetails,
-    pub request_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct SqsErrorDetails {
-    #[serde(rename = "Type")]
-    pub error_type: Option<String>,
     #[serde(rename = "Code")]
     pub code: String,
     #[serde(rename = "Message")]
     pub message: String,
-    #[serde(rename = "Detail")]
-    pub detail: Option<String>,
 }
 
 #[cfg_attr(feature = "test-utils", automock)]

@@ -1,24 +1,21 @@
-use alien_azure_clients::AzureClientConfig;
-use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
-use std::any::Any;
-use std::collections::HashMap;
-use std::fmt::Debug;
+use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
-use crate::core::{ResourceController, ResourceControllerContext, ResourceControllerStepResult};
+use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use crate::infra_requirements::azure_utils::azure_resource_group_resource_id;
 use alien_azure_clients::models::resources::ResourceGroup;
-use alien_azure_clients::resources::{AzureResourcesClient, ResourcesApi};
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    AzureResourceGroup, AzureResourceGroupOutputs, Resource, ResourceDefinition, ResourceOutputs,
-    ResourceStatus,
+    AzureResourceGroup, AzureResourceGroupHeartbeatData, AzureResourceGroupHeartbeatStatus,
+    AzureResourceGroupOutputs, HeartbeatBackend, ObservedHealth, Platform, ProviderLifecycleState,
+    ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs, ResourceStatus,
+    ALIEN_MANAGED_BY_TAG_KEY, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
 };
 use alien_error::{AlienError, Context, ContextError};
-use alien_macros::{controller, flow_entry, handler, terminal_state};
+use alien_macros::controller;
+use chrono::Utc;
 
 #[controller]
 pub struct AzureResourceGroupController {
@@ -200,7 +197,9 @@ impl AzureResourceGroupController {
                 },
             )?;
 
-            if let Some(properties) = rg.properties {
+            emit_azure_resource_group_heartbeat(ctx, &config.id, &rg);
+
+            if let Some(properties) = &rg.properties {
                 if properties.provisioning_state != Some("Succeeded".to_string()) {
                     return Err(AlienError::new(ErrorData::ResourceDrift {
                         resource_id: config.id.clone(),
@@ -366,6 +365,65 @@ impl AzureResourceGroupController {
             None
         }
     }
+}
+
+fn emit_azure_resource_group_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    rg: &ResourceGroup,
+) {
+    let provisioning_state = rg
+        .properties
+        .as_ref()
+        .and_then(|properties| properties.provisioning_state.clone());
+    let (health, lifecycle) = match provisioning_state.as_deref() {
+        Some("Succeeded") => (ObservedHealth::Healthy, ProviderLifecycleState::Running),
+        Some(_) => (ObservedHealth::Unhealthy, ProviderLifecycleState::Failed),
+        None => (ObservedHealth::Unknown, ProviderLifecycleState::Unknown),
+    };
+    let name = rg.name.clone().unwrap_or_else(|| resource_id.to_string());
+
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: AzureResourceGroup::RESOURCE_TYPE,
+        controller_platform: Platform::Azure,
+        backend: HeartbeatBackend::Azure,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::AzureResourceGroup(AzureResourceGroupHeartbeatData {
+            status: AzureResourceGroupHeartbeatStatus {
+                health,
+                lifecycle,
+                message: Some(format!(
+                    "Azure resource group '{}' provisioning state is {}",
+                    name,
+                    provisioning_state.as_deref().unwrap_or("unknown")
+                )),
+                stale: false,
+                partial: false,
+                collection_issues: vec![],
+            },
+            name,
+            resource_id: rg.id.clone(),
+            location: Some(rg.location.clone()),
+            provisioning_state,
+            managed_tags: managed_tags(&rg.tags),
+            events: vec![],
+        }),
+        raw: vec![],
+    });
+}
+
+fn managed_tags(tags: &HashMap<String, String>) -> BTreeMap<String, String> {
+    tags.iter()
+        .filter(|(key, _)| {
+            matches!(
+                key.as_str(),
+                ALIEN_STACK_TAG_KEY | ALIEN_RESOURCE_TAG_KEY | ALIEN_MANAGED_BY_TAG_KEY
+            )
+        })
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
 }
 
 impl AzureResourceGroupController {

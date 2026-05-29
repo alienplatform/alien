@@ -6,13 +6,18 @@ use tracing::{debug, info};
 use crate::core::ResourceControllerContext;
 use crate::core::ResourcePermissionsHelper;
 use crate::error::{ErrorData, Result};
-use alien_core::{ResourceOutputs, ResourceStatus, Vault, VaultOutputs};
+use alien_core::{
+    GcpSecretManagerVaultHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
+    ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
+    ResourceStatus, Vault, VaultHeartbeatData, VaultHeartbeatStatus, VaultOutputs,
+};
 use alien_gcp_clients::iam::IamPolicy;
 use alien_gcp_clients::resource_manager::GetPolicyOptions;
 use alien_permissions::{
     generators::{GcpBindingTargetScope, GcpRuntimePermissionsGenerator},
     PermissionContext,
 };
+use chrono::Utc;
 
 /// GCP Vault controller.
 ///
@@ -159,6 +164,18 @@ impl GcpVaultController {
             debug!(project_id=%stored_project_id, location=%stored_location, "GCP Secret Manager vault heartbeat check passed");
         }
 
+        if let (Some(project_id), Some(location), Some(vault_prefix)) =
+            (&self.project_id, &self.location, &self.vault_prefix)
+        {
+            emit_gcp_secret_manager_vault_heartbeat(
+                ctx,
+                &config.id,
+                project_id,
+                location,
+                vault_prefix,
+            );
+        }
+
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: Some(Duration::from_secs(30)),
@@ -205,6 +222,44 @@ impl GcpVaultController {
             Ok(None)
         }
     }
+}
+
+fn emit_gcp_secret_manager_vault_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    project_id: &str,
+    location: &str,
+    prefix: &str,
+) {
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: Vault::RESOURCE_TYPE,
+        controller_platform: Platform::Gcp,
+        backend: HeartbeatBackend::Gcp,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::Vault(VaultHeartbeatData::GcpSecretManager(
+            GcpSecretManagerVaultHeartbeatData {
+                status: VaultHeartbeatStatus {
+                    health: ObservedHealth::Healthy,
+                    lifecycle: ProviderLifecycleState::Running,
+                    message: Some(
+                        "GCP Secret Manager namespace prefix is configured; secret metadata was not listed"
+                            .to_string(),
+                    ),
+                    stale: false,
+                    partial: false,
+                    collection_issues: vec![],
+                },
+                project_id: project_id.to_string(),
+                location: location.to_string(),
+                prefix: prefix.to_string(),
+                secret_metadata_listed: false,
+                events: vec![],
+            },
+        )),
+        raw: vec![],
+    });
 }
 
 impl GcpVaultController {

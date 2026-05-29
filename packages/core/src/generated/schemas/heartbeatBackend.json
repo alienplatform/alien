@@ -1,0 +1,1 @@
+{"type":"string","enum":["aws","gcp","azure","kubernetes","local","managed","external","test"],"x-readme-ref-name":"HeartbeatBackend"}

@@ -18,9 +18,9 @@ use crate::{
     Binding,
 };
 
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::AlienError;
 use async_trait::async_trait;
-use tonic::{transport::Channel, Request, Status};
+use tonic::{transport::Channel, Request};
 
 /// gRPC implementation of the `ArtifactRegistry` trait.
 ///

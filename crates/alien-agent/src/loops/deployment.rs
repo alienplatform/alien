@@ -16,6 +16,7 @@ use crate::db::AgentDb;
 use crate::AgentState;
 use alien_core::{
     ClientConfig, DeploymentConfig, DeploymentState, KubernetesClientConfig, Platform,
+    ResourceHeartbeat,
 };
 use alien_deployment::loop_contract::{LoopOperation, LoopOutcome, LoopStopReason};
 use alien_deployment::runner::{RunnerPolicy, RunnerResult};
@@ -47,6 +48,7 @@ impl DeploymentLoopTransport for AgentTransport {
         _step_error: Option<&AlienError>,
         _update_heartbeat: bool,
         _suggested_delay_ms: Option<u64>,
+        _heartbeats: Vec<ResourceHeartbeat>,
     ) -> std::result::Result<StepReconcileResult, AlienError> {
         // Persist state to local DB after each step
         self.db

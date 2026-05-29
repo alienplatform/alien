@@ -18,11 +18,14 @@ use alien_azure_clients::models::authorization_role_definitions::{
 use alien_azure_clients::models::managed_identity::Identity;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    KubernetesCluster, NetworkSettings, RemoteStackManagement, RemoteStackManagementOutputs,
-    ResourceOutputs, ResourceStatus,
+    AzureRemoteStackManagementHeartbeatData, HeartbeatBackend, KubernetesCluster, NetworkSettings,
+    ObservedHealth, Platform, ProviderLifecycleState, RemoteStackManagement,
+    RemoteStackManagementHeartbeatData, RemoteStackManagementHeartbeatStatus,
+    RemoteStackManagementOutputs, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
+    ResourceStatus,
 };
 use alien_error::{AlienError, Context, ContextError};
-use alien_macros::{controller, flow_entry, handler, terminal_state};
+use alien_macros::controller;
 use alien_permissions::{
     generators::{
         dedupe_azure_role_bindings, AzureGrantPlan, AzureRoleDefinitionRef,
@@ -30,6 +33,7 @@ use alien_permissions::{
     },
     get_permission_set, BindingTarget, PermissionContext,
 };
+use chrono::Utc;
 use std::collections::{BTreeSet, HashMap};
 
 #[cfg(not(test))]
@@ -545,6 +549,8 @@ impl AzureRemoteStackManagementController {
             }
         }
 
+        emit_azure_remote_stack_management_heartbeat(ctx, self);
+
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: Some(Duration::from_secs(30)),
@@ -926,6 +932,50 @@ impl AzureRemoteStackManagementController {
             None
         }
     }
+}
+
+fn emit_azure_remote_stack_management_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    controller: &AzureRemoteStackManagementController,
+) {
+    let resource_id = ctx
+        .desired_resource_config::<RemoteStackManagement>()
+        .map(|config| config.id.clone())
+        .unwrap_or_else(|_| "remote-stack-management".to_string());
+
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id,
+        resource_type: RemoteStackManagement::RESOURCE_TYPE,
+        controller_platform: Platform::Azure,
+        backend: HeartbeatBackend::Azure,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::RemoteStackManagement(
+            RemoteStackManagementHeartbeatData::AzureManagedIdentity(
+                AzureRemoteStackManagementHeartbeatData {
+                    status: RemoteStackManagementHeartbeatStatus {
+                        health: ObservedHealth::Healthy,
+                        lifecycle: ProviderLifecycleState::Running,
+                        message: controller.uami_resource_id.as_ref().map(|resource_id| {
+                            format!("Azure management identity '{}' is reachable", resource_id)
+                        }),
+                        stale: false,
+                        partial: false,
+                        collection_issues: vec![],
+                    },
+                    uami_resource_id: controller.uami_resource_id.clone(),
+                    uami_client_id: controller.uami_client_id.clone(),
+                    uami_principal_id: controller.uami_principal_id.clone(),
+                    tenant_id: controller.tenant_id.clone(),
+                    fic_name: controller.fic_name.clone(),
+                    role_definition_id: controller.role_definition_id.clone(),
+                    role_assignment_ids: controller.role_assignment_ids.clone(),
+                    events: vec![],
+                },
+            ),
+        ),
+        raw: vec![],
+    });
 }
 
 fn existing_vnet_reader_assignment_key(

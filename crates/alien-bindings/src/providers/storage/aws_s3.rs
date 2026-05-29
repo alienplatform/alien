@@ -16,7 +16,7 @@ use object_store::signer::Signer;
 use object_store::{
     aws::{AmazonS3, AmazonS3Builder},
     path::Path,
-    GetOptions, GetResult, ListResult, ObjectMeta, ObjectStore, PutMultipartOpts, PutOptions,
+    GetOptions, GetResult, ListResult, ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions,
     PutPayload, PutResult, Result as ObjectStoreResult,
 };
 use reqwest::Method;
@@ -223,7 +223,7 @@ impl ObjectStore for S3Storage {
     async fn put_multipart_opts(
         &self,
         location: &Path,
-        opts: PutMultipartOpts,
+        opts: PutMultipartOptions,
     ) -> ObjectStoreResult<Box<dyn object_store::MultipartUpload>> {
         let dst = prefixed_path(&self.base_dir, location);
         self.inner.put_multipart_opts(&dst, opts).await

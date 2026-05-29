@@ -3,10 +3,10 @@
 
 ## Supported Types
 
-### `models.SyncListResponseDomainsGcp`
+### `models.SyncListResponseGcpStackSettings`
 
 ```typescript
-const value: models.SyncListResponseDomainsGcp = {
+const value: models.SyncListResponseGcpStackSettings = {
   certificateName: "<value>",
 };
 ```

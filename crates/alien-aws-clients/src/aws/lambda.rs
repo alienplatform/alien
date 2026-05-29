@@ -9,7 +9,6 @@ use reqwest::{Client, Method, StatusCode};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-use async_trait::async_trait;
 #[cfg(feature = "test-utils")]
 use mockall::automock;
 
@@ -387,7 +386,7 @@ impl LambdaClient {
                 | StatusCode::BAD_GATEWAY
                 | StatusCode::GATEWAY_TIMEOUT => ErrorData::RemoteServiceUnavailable { message },
                 _ => ErrorData::HttpResponseError {
-                    message: format!("Lambda operation failed: {}", message),
+                    message: format!("Lambda {operation} failed: {message}"),
                     url: format!("lambda.amazonaws.com"),
                     http_status: status.as_u16(),
                     http_response_text: Some(body.into()),

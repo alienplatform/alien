@@ -7,6 +7,10 @@ import { safeParse } from "../lib/schemas.js";
 import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import {
+  DeploymentInfoSetupConfig,
+  DeploymentInfoSetupConfig$inboundSchema,
+} from "./deploymentinfosetupconfig.js";
+import {
   DeploymentPortalAppearance,
   DeploymentPortalAppearance$inboundSchema,
 } from "./deploymentportalappearance.js";
@@ -95,6 +99,10 @@ export type StackSummaryPlatform = ClosedEnum<typeof StackSummaryPlatform>;
 export type ResourceCounts = {
   workers: number;
   containers: number;
+  /**
+   * Workers or Containers that need managed public HTTPS endpoint setup
+   */
+  publicHttpsEndpoints: number;
   /**
    * Storage, queue, KV, vault, database, or cache resources that Kubernetes needs Terraform to provision
    */
@@ -578,6 +586,7 @@ export type DeploymentInfo = {
   project: DeploymentInfoProject;
   packages: Packages;
   installContext: DeploymentInfoInstallContext;
+  setupConfig?: DeploymentInfoSetupConfig | undefined;
 };
 
 /** @internal */
@@ -673,6 +682,7 @@ export const ResourceCounts$inboundSchema: z.ZodType<ResourceCounts, unknown> =
   z.object({
     workers: z.int(),
     containers: z.int(),
+    publicHttpsEndpoints: z.int(),
     externalInfra: z.int(),
     total: z.int(),
   });
@@ -1232,6 +1242,7 @@ export const DeploymentInfo$inboundSchema: z.ZodType<DeploymentInfo, unknown> =
     project: z.lazy(() => DeploymentInfoProject$inboundSchema),
     packages: z.lazy(() => Packages$inboundSchema),
     installContext: z.lazy(() => DeploymentInfoInstallContext$inboundSchema),
+    setupConfig: DeploymentInfoSetupConfig$inboundSchema.optional(),
   });
 
 export function deploymentInfoFromJSON(

@@ -93,6 +93,12 @@ variable "kubernetes_cluster_mode" {
   default     = "create"
 }
 
+variable "install_metrics_server" {
+  type        = bool
+  description = "Whether to install metrics-server into Kubernetes clusters created by this module."
+  default     = true
+}
+
 variable "kubernetes_namespace" {
   type        = string
   description = "Kubernetes namespace for runtime resources."
@@ -136,7 +142,11 @@ locals {
     projectId           = var.gcp_project
     serviceAccountEmail = var.managing_service_account_email
   }
-  deployment_settings = jsondecode(var.stack_settings_json)
+  kubernetes_exposure = {
+    mode = "disabled"
+  }
+  deployment_kubernetes_settings = merge(try(jsondecode(var.stack_settings_json).kubernetes, {}), { exposure = coalesce(try(jsondecode(var.stack_settings_json).kubernetes.exposure, null), local.kubernetes_exposure) })
+  deployment_settings            = merge(jsondecode(var.stack_settings_json), { kubernetes = local.deployment_kubernetes_settings })
   deployment_resources = [
     {
       id   = "data"
@@ -159,12 +169,9 @@ locals {
       }
     }
   ]
-  kubernetes_kubeconfig          = ""
-  kubernetes_kube_context        = ""
-  kubernetes_ingress_class       = ""
-  kubernetes_ingress_annotations = {}
-  kubernetes_public_host_suffix  = ""
-  alien_kubernetes_namespace     = var.kubernetes_namespace
+  kubernetes_kubeconfig      = ""
+  kubernetes_kube_context    = ""
+  alien_kubernetes_namespace = var.kubernetes_namespace
   helm_service_accounts = {
     execution = {
       annotations = {
@@ -183,6 +190,13 @@ locals {
     stackSettings         = local.deployment_settings
     basePlatform          = local.deployment_base_platform
     serviceAccountPrefix  = local.resource_prefix
+    heartbeat = {
+      collection = {
+        nodes = {
+          enabled = true
+        }
+      }
+    }
   }
 }
 
@@ -375,21 +389,6 @@ output "kubernetes_kubeconfig" {
 output "kubernetes_kube_context" {
   value       = local.kubernetes_kube_context
   description = "Kube context for managed Kubernetes clusters created by this module."
-}
-
-output "kubernetes_ingress_class" {
-  value       = local.kubernetes_ingress_class
-  description = "Ingress class selected by Kubernetes cluster provisioning."
-}
-
-output "kubernetes_ingress_annotations" {
-  value       = jsonencode(local.kubernetes_ingress_annotations)
-  description = "Ingress annotations selected by Kubernetes cluster provisioning."
-}
-
-output "kubernetes_public_host_suffix" {
-  value       = local.kubernetes_public_host_suffix
-  description = "DNS suffix for generated Kubernetes public hosts when known at setup time."
 }
 
 output "helm_values" {

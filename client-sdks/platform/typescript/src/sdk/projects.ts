@@ -5,11 +5,15 @@
 import { projectsCreate } from "../funcs/projectsCreate.js";
 import { projectsCreateFromTemplate } from "../funcs/projectsCreateFromTemplate.js";
 import { projectsDelete } from "../funcs/projectsDelete.js";
+import { projectsDeleteDeploymentPortalDomain } from "../funcs/projectsDeleteDeploymentPortalDomain.js";
 import { projectsGet } from "../funcs/projectsGet.js";
 import { projectsGetActiveRelease } from "../funcs/projectsGetActiveRelease.js";
+import { projectsGetDeploymentPortalDomain } from "../funcs/projectsGetDeploymentPortalDomain.js";
 import { projectsGetGcpOAuthProvider } from "../funcs/projectsGetGcpOAuthProvider.js";
 import { projectsGetTemplateUrls } from "../funcs/projectsGetTemplateUrls.js";
 import { projectsList } from "../funcs/projectsList.js";
+import { projectsPutDeploymentPortalDomain } from "../funcs/projectsPutDeploymentPortalDomain.js";
+import { projectsRefreshDeploymentPortalDomain } from "../funcs/projectsRefreshDeploymentPortalDomain.js";
 import { projectsUpdate } from "../funcs/projectsUpdate.js";
 import { projectsUpdateGcpOAuthProvider } from "../funcs/projectsUpdateGcpOAuthProvider.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
@@ -110,6 +114,62 @@ export class Projects extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.ProjectGcpOAuthProvider> {
     return unwrapAsync(projectsUpdateGcpOAuthProvider(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Get the deployment portal domain binding for a project.
+   */
+  async getDeploymentPortalDomain(
+    request: operations.GetProjectDeploymentPortalDomainRequest,
+    options?: RequestOptions,
+  ): Promise<models.DeploymentPortalDomainResponse> {
+    return unwrapAsync(projectsGetDeploymentPortalDomain(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Attach or replace the deployment portal domain binding for a project.
+   */
+  async putDeploymentPortalDomain(
+    request: operations.PutProjectDeploymentPortalDomainRequest,
+    options?: RequestOptions,
+  ): Promise<models.DeploymentPortalDomainResponse> {
+    return unwrapAsync(projectsPutDeploymentPortalDomain(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Remove the deployment portal domain binding from a project.
+   */
+  async deleteDeploymentPortalDomain(
+    request: operations.DeleteProjectDeploymentPortalDomainRequest,
+    options?: RequestOptions,
+  ): Promise<operations.DeleteProjectDeploymentPortalDomainResponse> {
+    return unwrapAsync(projectsDeleteDeploymentPortalDomain(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Refresh the deployment portal domain controller state for a project.
+   */
+  async refreshDeploymentPortalDomain(
+    request: operations.RefreshProjectDeploymentPortalDomainRequest,
+    options?: RequestOptions,
+  ): Promise<models.DeploymentPortalDomainResponse> {
+    return unwrapAsync(projectsRefreshDeploymentPortalDomain(
       this,
       request,
       options,

@@ -6,35 +6,46 @@
 import { Machine } from "@alienplatform/platform-api/models/operations";
 
 let value: Machine = {
+  deploymentId: "<id>",
+  deploymentName: "<value>",
+  deploymentGroupId: "<id>",
+  deploymentGroupName: "<value>",
   machineId: "<id>",
-  capacityGroup: "<value>",
-  zone: "<value>",
-  status: "running",
-  cpu: {
-    total: 7946.62,
-    systemReserve: 7976.32,
-    allocated: 905.61,
+  name: "<value>",
+  backend: "<value>",
+  controllerPlatform: "<value>",
+  ready: false,
+  roles: [],
+  labels: {
+    "key": "<value>",
   },
-  memory: {
-    total: 309543,
-    systemReserve: 760949,
-    allocated: 546260,
-  },
-  replicaCount: 875180,
-  lastHeartbeat: "<value>",
+  kubeletVersion: "<value>",
+  containerRuntimeVersion: "<value>",
+  observedAt: new Date("2025-02-16T02:09:58.768Z"),
+  platformStale: false,
 };
 ```
 
 ## Fields
 
-| Field                                                                                              | Type                                                                                               | Required                                                                                           | Description                                                                                        |
-| -------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `machineId`                                                                                        | *string*                                                                                           | :heavy_check_mark:                                                                                 | N/A                                                                                                |
-| `capacityGroup`                                                                                    | *string*                                                                                           | :heavy_check_mark:                                                                                 | N/A                                                                                                |
-| `zone`                                                                                             | *string*                                                                                           | :heavy_check_mark:                                                                                 | N/A                                                                                                |
-| `status`                                                                                           | [operations.ListDeploymentMachinesStatus](../../models/operations/listdeploymentmachinesstatus.md) | :heavy_check_mark:                                                                                 | N/A                                                                                                |
-| `cpu`                                                                                              | [operations.ListDeploymentMachinesCpu](../../models/operations/listdeploymentmachinescpu.md)       | :heavy_check_mark:                                                                                 | N/A                                                                                                |
-| `memory`                                                                                           | [operations.ListDeploymentMachinesMemory](../../models/operations/listdeploymentmachinesmemory.md) | :heavy_check_mark:                                                                                 | N/A                                                                                                |
-| `gpu`                                                                                              | [operations.ListDeploymentMachinesGpu](../../models/operations/listdeploymentmachinesgpu.md)       | :heavy_minus_sign:                                                                                 | N/A                                                                                                |
-| `replicaCount`                                                                                     | *number*                                                                                           | :heavy_check_mark:                                                                                 | N/A                                                                                                |
-| `lastHeartbeat`                                                                                    | *string*                                                                                           | :heavy_check_mark:                                                                                 | N/A                                                                                                |
+| Field                                                                                         | Type                                                                                          | Required                                                                                      | Description                                                                                   |
+| --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `deploymentId`                                                                                | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| `deploymentName`                                                                              | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| `deploymentGroupId`                                                                           | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| `deploymentGroupName`                                                                         | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| `machineId`                                                                                   | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| `name`                                                                                        | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| `backend`                                                                                     | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| `controllerPlatform`                                                                          | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| `ready`                                                                                       | *boolean*                                                                                     | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| `roles`                                                                                       | *string*[]                                                                                    | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| `labels`                                                                                      | Record<string, *string*>                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| `capacity`                                                                                    | *any*                                                                                         | :heavy_minus_sign:                                                                            | N/A                                                                                           |
+| `allocatable`                                                                                 | *any*                                                                                         | :heavy_minus_sign:                                                                            | N/A                                                                                           |
+| `usage`                                                                                       | *any*                                                                                         | :heavy_minus_sign:                                                                            | N/A                                                                                           |
+| `kubeletVersion`                                                                              | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| `containerRuntimeVersion`                                                                     | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| `observedAt`                                                                                  | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| `platformStale`                                                                               | *boolean*                                                                                     | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| `provider`                                                                                    | *any*                                                                                         | :heavy_minus_sign:                                                                            | N/A                                                                                           |

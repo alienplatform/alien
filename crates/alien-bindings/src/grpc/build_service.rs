@@ -1,8 +1,7 @@
 #![cfg(feature = "grpc")]
 
 use crate::grpc::status_conversion::alien_error_to_status;
-use crate::{error::ErrorData, BindingsProviderApi, Build as AlienBuild};
-use alien_error::AlienError;
+use crate::{BindingsProviderApi, Build as AlienBuild};
 use async_trait::async_trait;
 use std::sync::Arc;
 use tonic::{Request, Response, Status};

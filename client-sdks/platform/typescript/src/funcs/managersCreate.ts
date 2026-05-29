@@ -21,6 +21,7 @@ import {
 import * as errors from "../models/errors/index.js";
 import { ResponseValidationError } from "../models/errors/responsevalidationerror.js";
 import { SDKValidationError } from "../models/errors/sdkvalidationerror.js";
+import * as models from "../models/index.js";
 import * as operations from "../models/operations/index.js";
 import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
@@ -34,7 +35,7 @@ export function managersCreate(
   options?: RequestOptions,
 ): APIPromise<
   Result<
-    operations.CreateManagerResponse,
+    models.CreateManagerResponse,
     | errors.APIError
     | AlienError
     | ResponseValidationError
@@ -60,7 +61,7 @@ async function $do(
 ): Promise<
   [
     Result<
-      operations.CreateManagerResponse,
+      models.CreateManagerResponse,
       | errors.APIError
       | AlienError
       | ResponseValidationError
@@ -150,7 +151,7 @@ async function $do(
   };
 
   const [result] = await M.match<
-    operations.CreateManagerResponse,
+    models.CreateManagerResponse,
     | errors.APIError
     | AlienError
     | ResponseValidationError
@@ -161,7 +162,7 @@ async function $do(
     | UnexpectedClientError
     | SDKValidationError
   >(
-    M.json(201, operations.CreateManagerResponse$inboundSchema),
+    M.json(201, models.CreateManagerResponse$inboundSchema),
     M.jsonErr(409, errors.APIError$inboundSchema),
     M.jsonErr(500, errors.APIError$inboundSchema),
     M.fail("4XX"),

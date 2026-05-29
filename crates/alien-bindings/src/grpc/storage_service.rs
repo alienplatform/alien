@@ -6,8 +6,9 @@ use async_trait::async_trait;
 use futures::{stream::BoxStream, Stream, StreamExt};
 use object_store::{
     path::Path as ObjectStorePath, Error as OsError, GetOptions as OsGetOptions,
-    GetResult as OsGetResult, ObjectMeta as OsObjectMeta, PutMultipartOpts as OsPutMultipartOpts,
-    PutOptions as OsPutOptions, PutPayload, PutResult as OsPutResult,
+    GetResult as OsGetResult, ObjectMeta as OsObjectMeta,
+    PutMultipartOptions as OsPutMultipartOptions, PutOptions as OsPutOptions, PutPayload,
+    PutResult as OsPutResult,
 };
 use std::{pin::Pin, sync::Arc};
 use tokio_stream::once;
@@ -138,7 +139,7 @@ impl StorageService for StorageGrpcServer {
             .await?;
         let path = ObjectStorePath::from(proto_metadata.path);
         let options = proto_metadata.options.map_or_else(
-            OsPutMultipartOpts::default,
+            OsPutMultipartOptions::default,
             super::storage_utils::map_proto_put_multipart_options_to_os,
         );
 
@@ -388,8 +389,8 @@ impl StorageService for StorageGrpcServer {
         let storage = self.get_storage_binding(&req_inner.binding_name).await?;
         let path = ObjectStorePath::from(req_inner.path);
         let method = super::storage_utils::map_proto_method_to_reqwest(
-            StorageHttpMethod::from_i32(req_inner.http_method)
-                .ok_or_else(|| Status::invalid_argument("Invalid HTTP method"))?,
+            StorageHttpMethod::try_from(req_inner.http_method)
+                .map_err(|_| Status::invalid_argument("Invalid HTTP method"))?,
         );
 
         // Calculate duration from current time to expiration time

@@ -45,7 +45,6 @@ use mockall::automock;
 #[serde(rename_all = "PascalCase")]
 struct AutoScalingErrorResponse {
     pub error: AutoScalingErrorWrapper,
-    pub request_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

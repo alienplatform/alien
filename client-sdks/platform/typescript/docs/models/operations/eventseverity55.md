@@ -1,0 +1,15 @@
+# EventSeverity55
+
+## Example Usage
+
+```typescript
+import { EventSeverity55 } from "@alienplatform/platform-api/models/operations";
+
+let value: EventSeverity55 = "info";
+```
+
+## Values
+
+```typescript
+"info" | "warning" | "error"
+```

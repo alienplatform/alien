@@ -1,6 +1,6 @@
 use crate::error::{ErrorData, Result};
 use alien_aws_clients::ssm::{GetParameterRequest, PutParameterRequest, SsmApi, SsmClient};
-use alien_error::{Context, ContextError};
+use alien_error::Context;
 use async_trait::async_trait;
 use std::sync::Arc;
 

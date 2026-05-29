@@ -1,11 +1,10 @@
 use crate::azure::common::{AzureClientBase, AzureRequestBuilder};
-use crate::azure::models::managed_identity::{CloudError, Identity, IdentityUpdate};
+use crate::azure::models::managed_identity::{Identity, IdentityUpdate};
 use crate::azure::token_cache::AzureTokenCache;
 use alien_client_core::{ErrorData, Result};
 
 use alien_error::{Context, IntoAlienError};
-use async_trait::async_trait;
-use reqwest::{Client, Method, StatusCode};
+use reqwest::{Client, Method};
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "test-utils")]

@@ -3,10 +3,16 @@ use tracing::{debug, info};
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use alien_azure_clients::resources::ResourcesApi;
-use alien_core::{ResourceOutputs, ResourceStatus, ServiceActivation, ServiceActivationOutputs};
+use alien_azure_clients::models::resources::Provider;
+use alien_core::{
+    AzureResourceProviderActivationHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
+    ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
+    ResourceStatus, ServiceActivation, ServiceActivationHeartbeatData,
+    ServiceActivationHeartbeatStatus, ServiceActivationOutputs,
+};
 use alien_error::{AlienError, Context, ContextError as _};
-use alien_macros::{controller, flow_entry, handler, terminal_state};
+use alien_macros::controller;
+use chrono::Utc;
 
 #[controller]
 pub struct AzureServiceActivationController {
@@ -248,6 +254,8 @@ impl AzureServiceActivationController {
                         resource_id: Some(config.id.clone()),
                     })?;
 
+            emit_azure_service_activation_heartbeat(ctx, &config.id, service_name, &provider);
+
             if let Some(registration_state) = provider.registration_state {
                 if registration_state.to_lowercase() != "registered" {
                     return Err(AlienError::new(ErrorData::ResourceDrift {
@@ -336,6 +344,67 @@ impl AzureServiceActivationController {
             None
         }
     }
+}
+
+fn emit_azure_service_activation_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    namespace: &str,
+    provider: &Provider,
+) {
+    let registration_state = provider.registration_state.clone();
+    let registered = registration_state
+        .as_deref()
+        .map(|state| state.eq_ignore_ascii_case("registered"))
+        .unwrap_or(false);
+    let health = if registered {
+        ObservedHealth::Healthy
+    } else {
+        ObservedHealth::Unhealthy
+    };
+    let lifecycle = if registered {
+        ProviderLifecycleState::Running
+    } else {
+        ProviderLifecycleState::Failed
+    };
+
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: ServiceActivation::RESOURCE_TYPE,
+        controller_platform: Platform::Azure,
+        backend: HeartbeatBackend::Azure,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::ServiceActivation(
+            ServiceActivationHeartbeatData::AzureResourceProvider(
+                AzureResourceProviderActivationHeartbeatData {
+                    status: ServiceActivationHeartbeatStatus {
+                        health,
+                        lifecycle,
+                        message: Some(format!(
+                            "Azure resource provider '{}' registration state is {}",
+                            namespace,
+                            registration_state.as_deref().unwrap_or("unknown")
+                        )),
+                        stale: false,
+                        partial: false,
+                        collection_issues: vec![],
+                    },
+                    namespace: provider
+                        .namespace
+                        .clone()
+                        .unwrap_or_else(|| namespace.to_string()),
+                    provider_id: provider.id.clone(),
+                    registration_state,
+                    registration_policy: provider.registration_policy.clone(),
+                    resource_type_count: provider.resource_types.len() as u32,
+                    registered,
+                    events: vec![],
+                },
+            ),
+        ),
+        raw: vec![],
+    });
 }
 
 impl AzureServiceActivationController {

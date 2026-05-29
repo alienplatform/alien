@@ -191,6 +191,24 @@ export type ProjectPackagesConfig = {
   terraform?: ProjectTerraform | null | undefined;
 };
 
+/**
+ * Project default private managers for new push deployments.
+ */
+export type ProjectDefaultManagers = {
+  /**
+   * Unique identifier for a default private manager.
+   */
+  aws?: string | null | undefined;
+  /**
+   * Unique identifier for a default private manager.
+   */
+  gcp?: string | null | undefined;
+  /**
+   * Unique identifier for a default private manager.
+   */
+  azure?: string | null | undefined;
+};
+
 export type Project = {
   /**
    * Unique identifier for the project.
@@ -223,6 +241,10 @@ export type Project = {
    * Selected domain for this project (null = default system domain)
    */
   domainId?: string | null | undefined;
+  /**
+   * Project default private managers for new push deployments.
+   */
+  defaultManagers?: ProjectDefaultManagers | null | undefined;
   createdAt: Date;
   /**
    * Unique identifier for the workspace.
@@ -399,6 +421,26 @@ export function projectPackagesConfigFromJSON(
 }
 
 /** @internal */
+export const ProjectDefaultManagers$inboundSchema: z.ZodType<
+  ProjectDefaultManagers,
+  unknown
+> = z.object({
+  aws: z.nullable(z.string()).optional(),
+  gcp: z.nullable(z.string()).optional(),
+  azure: z.nullable(z.string()).optional(),
+});
+
+export function projectDefaultManagersFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectDefaultManagers, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProjectDefaultManagers$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectDefaultManagers' from JSON`,
+  );
+}
+
+/** @internal */
 export const Project$inboundSchema: z.ZodType<Project, unknown> = z.object({
   id: z.string(),
   name: z.string(),
@@ -411,6 +453,9 @@ export const Project$inboundSchema: z.ZodType<Project, unknown> = z.object({
   packagesConfig: z.nullable(z.lazy(() => ProjectPackagesConfig$inboundSchema))
     .optional(),
   domainId: z.nullable(z.string()).optional(),
+  defaultManagers: z.nullable(
+    z.lazy(() => ProjectDefaultManagers$inboundSchema),
+  ).optional(),
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   workspaceId: z.string(),
 });

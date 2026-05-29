@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use alien_core::{
     import::ImportSourceKind, DeleteScope, DeploymentConfig, DeploymentState, EnvironmentInfo,
-    EnvironmentVariable, ManagementConfig, Platform, RuntimeMetadata, StackSettings, StackState,
+    EnvironmentVariable, ManagementConfig, Platform, ResourceHeartbeat, RuntimeMetadata,
+    StackSettings, StackState,
 };
 use alien_error::AlienError;
 
@@ -212,6 +213,7 @@ pub struct ReconcileData {
     pub update_heartbeat: bool,
     pub error: Option<serde_json::Value>,
     pub suggested_delay_ms: Option<u64>,
+    pub heartbeats: Vec<ResourceHeartbeat>,
 }
 
 /// Persistence for deployments and deployment groups.

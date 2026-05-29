@@ -41,7 +41,6 @@ use mockall::automock;
 #[serde(rename_all = "PascalCase")]
 struct Elbv2ErrorResponse {
     pub error: Elbv2ErrorWrapper,
-    pub request_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

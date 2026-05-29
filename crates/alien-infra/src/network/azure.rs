@@ -30,9 +30,14 @@ use alien_azure_clients::azure::models::{
     },
 };
 use alien_azure_clients::long_running_operation::OperationResult;
-use alien_core::{Network, NetworkSettings, ResourceStatus};
+use alien_core::{
+    AzureVnetNetworkHeartbeatData, HeartbeatBackend, Network, NetworkHeartbeatData,
+    NetworkHeartbeatStatus, NetworkSettings, ObservedHealth, Platform, ProviderLifecycleState,
+    ResourceHeartbeat, ResourceHeartbeatData, ResourceStatus,
+};
 use alien_error::{AlienError, Context};
-use alien_macros::{controller, flow_entry, handler, terminal_state};
+use alien_macros::controller;
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
@@ -44,6 +49,53 @@ const AZURE_BYO_VNET_RBAC_WAIT_SECS: u64 = 10;
 pub(crate) struct AzureByoVnetVerificationError {
     pub code: String,
     pub message: String,
+}
+
+fn emit_azure_network_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    controller: &AzureNetworkController,
+) {
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: Network::RESOURCE_TYPE,
+        controller_platform: Platform::Azure,
+        backend: HeartbeatBackend::Azure,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::Network(NetworkHeartbeatData::AzureVnet(
+            AzureVnetNetworkHeartbeatData {
+                status: NetworkHeartbeatStatus {
+                    health: ObservedHealth::Healthy,
+                    lifecycle: ProviderLifecycleState::Running,
+                    message: controller
+                        .vnet_name
+                        .as_ref()
+                        .map(|vnet_name| format!("Azure VNet '{}' is reachable", vnet_name)),
+                    stale: false,
+                    partial: false,
+                    collection_issues: vec![],
+                },
+                vnet_name: controller.vnet_name.clone(),
+                vnet_resource_id: controller.vnet_resource_id.clone(),
+                resource_group: controller.resource_group.clone(),
+                location: controller.location.clone(),
+                cidr_block: controller.cidr_block.clone(),
+                public_subnet_name: controller.public_subnet_name.clone(),
+                private_subnet_name: controller.private_subnet_name.clone(),
+                nat_gateway_id: controller.nat_gateway_id.clone(),
+                public_ip_id: controller.public_ip_id.clone(),
+                nsg_id: controller.nsg_id.clone(),
+                is_byo_vnet: controller.is_byo_vnet,
+                last_byo_vnet_verification_error_code: controller
+                    .last_byo_vnet_verification_error
+                    .as_ref()
+                    .map(|error| error.code.clone()),
+                events: vec![],
+            },
+        )),
+        raw: vec![],
+    });
 }
 
 // =============================================================================================
@@ -648,10 +700,10 @@ impl AzureNetworkController {
                 name: Some(PublicIpAddressSkuName::Standard),
                 tier: None,
             }),
-            properties: Some(Box::new(PublicIpAddressPropertiesFormat {
+            properties: Some(PublicIpAddressPropertiesFormat {
                 public_ip_allocation_method: Some(IpAllocationMethod::Static),
                 ..Default::default()
-            })),
+            }),
             tags: [("managed-by".to_string(), "alien".to_string())]
                 .into_iter()
                 .collect(),
@@ -1053,6 +1105,7 @@ impl AzureNetworkController {
         // For BYO-VNet, we don't need to verify
         if self.is_byo_vnet {
             debug!(network_id = %config.id, "BYO-VNet network ready");
+            emit_azure_network_heartbeat(ctx, &config.id, self);
             return Ok(HandlerAction::Continue {
                 state: Ready,
                 suggested_delay: Some(std::time::Duration::from_secs(60)),
@@ -1076,6 +1129,8 @@ impl AzureNetworkController {
 
             debug!(vnet_name = %vnet_name, "VNet exists and is accessible");
         }
+
+        emit_azure_network_heartbeat(ctx, &config.id, self);
 
         Ok(HandlerAction::Continue {
             state: Ready,

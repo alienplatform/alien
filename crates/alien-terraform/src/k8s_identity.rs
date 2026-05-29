@@ -260,6 +260,9 @@ fn add_eks_cluster_data(fragment: &mut TfFragment, cluster_label: Option<&str>) 
 }
 
 fn add_gke_cluster_data(fragment: &mut TfFragment, cluster_label: Option<&str>) {
+    if cluster_label.is_some() {
+        return;
+    }
     let cluster_name = cluster_label
         .map(|label| format!("local.{label}_cluster_name"))
         .unwrap_or_else(|| "var.gke_cluster_name".to_string());
@@ -274,6 +277,9 @@ fn add_gke_cluster_data(fragment: &mut TfFragment, cluster_label: Option<&str>) 
 }
 
 fn add_aks_cluster_data(fragment: &mut TfFragment, cluster_label: Option<&str>) {
+    if cluster_label.is_some() {
+        return;
+    }
     let cluster_name = cluster_label
         .map(|label| format!("local.{label}_cluster_name"))
         .unwrap_or_else(|| "var.aks_cluster_name".to_string());

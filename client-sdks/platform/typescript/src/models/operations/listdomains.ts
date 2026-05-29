@@ -19,7 +19,7 @@ export type ListDomainsRequest = {
  * Retrieved domains.
  */
 export type ListDomainsResponse = {
-  domains: Array<models.Domain>;
+  domains: Array<models.DomainWithUsage>;
 };
 
 /** @internal */
@@ -48,7 +48,7 @@ export const ListDomainsResponse$inboundSchema: z.ZodType<
   ListDomainsResponse,
   unknown
 > = z.object({
-  domains: z.array(models.Domain$inboundSchema),
+  domains: z.array(models.DomainWithUsage$inboundSchema),
 });
 
 export function listDomainsResponseFromJSON(

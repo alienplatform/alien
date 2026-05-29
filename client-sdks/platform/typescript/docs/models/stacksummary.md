@@ -10,8 +10,9 @@ let value: StackSummary = {
   resourceCounts: {
     workers: 753801,
     containers: 86892,
-    externalInfra: 224741,
-    total: 58173,
+    publicHttpsEndpoints: 224741,
+    externalInfra: 58173,
+    total: 40735,
   },
 };
 ```

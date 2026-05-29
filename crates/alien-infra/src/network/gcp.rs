@@ -9,13 +9,18 @@
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use alien_core::{Network, NetworkSettings, ResourceStatus};
+use alien_core::{
+    GcpVpcNetworkHeartbeatData, HeartbeatBackend, Network, NetworkHeartbeatData,
+    NetworkHeartbeatStatus, NetworkSettings, ObservedHealth, Platform, ProviderLifecycleState,
+    ResourceHeartbeat, ResourceHeartbeatData, ResourceStatus,
+};
 use alien_error::{AlienError, Context};
 use alien_gcp_clients::compute::{
     Firewall, FirewallAllowed, FirewallDirection, Network as GcpNetwork, NetworkRoutingConfig,
     Router, RouterNat, RouterNatSubnetworkToNat, RoutingMode, SourceIpRangesToNat, Subnetwork,
 };
-use alien_macros::{controller, flow_entry, handler, terminal_state};
+use alien_macros::controller;
+use chrono::Utc;
 use tracing::{debug, info};
 
 // =============================================================================================
@@ -43,6 +48,48 @@ pub struct GcpNetworkController {
     // Operation tracking
     pub(crate) pending_operation_name: Option<String>,
     pub(crate) pending_operation_region: Option<String>, // None = global, Some = regional
+}
+
+fn emit_gcp_network_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    controller: &GcpNetworkController,
+) {
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: Network::RESOURCE_TYPE,
+        controller_platform: Platform::Gcp,
+        backend: HeartbeatBackend::Gcp,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::Network(NetworkHeartbeatData::GcpVpc(
+            GcpVpcNetworkHeartbeatData {
+                status: NetworkHeartbeatStatus {
+                    health: ObservedHealth::Healthy,
+                    lifecycle: ProviderLifecycleState::Running,
+                    message: controller
+                        .network_name
+                        .as_ref()
+                        .map(|network_name| format!("GCP VPC '{}' is reachable", network_name)),
+                    stale: false,
+                    partial: false,
+                    collection_issues: vec![],
+                },
+                network_name: controller.network_name.clone(),
+                network_self_link: controller.network_self_link.clone(),
+                subnetwork_name: controller.subnetwork_name.clone(),
+                subnetwork_self_link: controller.subnetwork_self_link.clone(),
+                region: controller.region.clone(),
+                cidr_block: controller.cidr_block.clone(),
+                router_name: controller.router_name.clone(),
+                cloud_nat_name: controller.cloud_nat_name.clone(),
+                firewall_name: controller.firewall_name.clone(),
+                is_byo_vpc: controller.is_byo_vpc,
+                events: vec![],
+            },
+        )),
+        raw: vec![],
+    });
 }
 
 impl GcpNetworkController {
@@ -856,6 +903,7 @@ impl GcpNetworkController {
         // For BYO-VPC, we don't need to verify
         if self.is_byo_vpc {
             debug!(network_id = %config.id, "BYO-VPC network ready");
+            emit_gcp_network_heartbeat(ctx, &config.id, self);
             return Ok(HandlerAction::Continue {
                 state: Ready,
                 suggested_delay: Some(std::time::Duration::from_secs(60)),
@@ -877,6 +925,8 @@ impl GcpNetworkController {
 
             debug!(network_name = %network_name, "Network exists and is accessible");
         }
+
+        emit_gcp_network_heartbeat(ctx, &config.id, self);
 
         Ok(HandlerAction::Continue {
             state: Ready,

@@ -3,8 +3,14 @@ use tracing::info;
 
 use crate::core::ResourceControllerContext;
 use crate::error::Result;
-use alien_core::{ResourceOutputs, ResourceStatus, ServiceAccount, ServiceAccountOutputs};
-use alien_macros::{controller, flow_entry, handler, terminal_state};
+use alien_core::{
+    HeartbeatBackend, LocalServiceAccountHeartbeatData, ObservedHealth, Platform,
+    ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
+    ResourceStatus, ServiceAccount, ServiceAccountHeartbeatData, ServiceAccountHeartbeatStatus,
+    ServiceAccountOutputs,
+};
+use alien_macros::controller;
+use chrono::Utc;
 
 /// Local platform ServiceAccount controller.
 ///
@@ -53,8 +59,12 @@ impl LocalServiceAccountController {
         on_failure = RefreshFailed,
         status = ResourceStatus::Running,
     )]
-    async fn ready(&mut self, _ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
-        // No-op: local platform doesn't need permission checks or heartbeats
+    async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<ServiceAccount>()?;
+        if let Some(identity) = &self.identity {
+            emit_local_service_account_heartbeat(ctx, &config.id, identity);
+        }
+
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: Some(Duration::from_secs(5)),
@@ -149,4 +159,35 @@ impl LocalServiceAccountController {
             _internal_stay_count: None,
         }
     }
+}
+
+fn emit_local_service_account_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    identity: &str,
+) {
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: ServiceAccount::RESOURCE_TYPE,
+        controller_platform: Platform::Local,
+        backend: HeartbeatBackend::Local,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::ServiceAccount(ServiceAccountHeartbeatData::Local(
+            LocalServiceAccountHeartbeatData {
+                status: ServiceAccountHeartbeatStatus {
+                    health: ObservedHealth::Healthy,
+                    lifecycle: ProviderLifecycleState::Running,
+                    message: Some("Local service account identity is configured".to_string()),
+                    stale: false,
+                    partial: false,
+                    collection_issues: vec![],
+                },
+                identity: identity.to_string(),
+                configured: true,
+                events: vec![],
+            },
+        )),
+        raw: vec![],
+    });
 }

@@ -5,6 +5,14 @@ use tracing::{debug, info};
 use crate::core::EnvironmentVariableBuilder;
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
+use crate::kubernetes_public_endpoint::{
+    delete_kubernetes_public_endpoint, reconcile_kubernetes_public_endpoint,
+    worker_public_endpoint_target, KubernetesEndpointAction, KubernetesPublicEndpointState,
+};
+use crate::kubernetes_workload_heartbeat::{
+    emit_kubernetes_workload_heartbeat, label_selector, KubernetesWorkload,
+    KubernetesWorkloadDataKind, KubernetesWorkloadHeartbeatInput,
+};
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     kubernetes_resource_name, kubernetes_service_account_name, ResourceOutputs, ResourceStatus,
@@ -27,10 +35,10 @@ pub struct KubernetesWorkerController {
     pub(crate) namespace: Option<String>,
     /// The service name for the worker (for binding construction)
     pub(crate) service_name: Option<String>,
-    /// The public URL if available (from Helm pre-computed map)
-    pub(crate) public_url: Option<String>,
     /// The worker ID (for binding construction)
     pub(crate) worker_id: Option<String>,
+    /// Public endpoint route/certificate state.
+    pub(crate) public_endpoint: KubernetesPublicEndpointState,
 }
 
 #[controller]
@@ -55,13 +63,6 @@ impl KubernetesWorkerController {
         self.worker_id = Some(config.id.clone());
         self.service_name = Some(function_name.clone());
         self.namespace = Some(namespace.clone());
-        self.public_url = ctx
-            .deployment_config
-            .public_urls
-            .as_ref()
-            .and_then(|urls| urls.get(&config.id))
-            .cloned();
-
         // Generate ServiceAccount name following Helm naming convention
         let service_account_name =
             kubernetes_service_account_name(&ctx.resource_prefix, config.get_permissions());
@@ -184,8 +185,8 @@ impl KubernetesWorkerController {
                             info!(deployment_name=%deployment_name, namespace=%namespace, "Deployment is ready");
 
                             return Ok(HandlerAction::Continue {
-                                state: Ready,
-                                suggested_delay: Some(Duration::from_secs(30)),
+                                state: ReconcilePublicEndpoint,
+                                suggested_delay: None,
                             });
                         } else {
                             debug!(deployment_name=%deployment_name, ready=%ready_replicas, total=%replicas, "Deployment not yet ready");
@@ -215,6 +216,54 @@ impl KubernetesWorkerController {
         })
     }
 
+    #[handler(
+        state = ReconcilePublicEndpoint,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn reconcile_public_endpoint(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<Worker>()?;
+        let deployment_name = self.deployment_name.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: config.id.clone(),
+                message: "Deployment name not set in state".to_string(),
+            })
+        })?;
+        let namespace = self.namespace.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: config.id.clone(),
+                message: "Namespace not set in state".to_string(),
+            })
+        })?;
+        let labels = self.build_labels(deployment_name);
+        let action = reconcile_kubernetes_public_endpoint(
+            ctx,
+            worker_public_endpoint_target(
+                &config.id,
+                deployment_name,
+                namespace,
+                labels,
+                &config.ingress,
+            ),
+            &mut self.public_endpoint,
+        )
+        .await?;
+
+        match action {
+            KubernetesEndpointAction::Ready => Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: Some(Duration::from_secs(30)),
+            }),
+            KubernetesEndpointAction::Waiting { suggested_delay } => Ok(HandlerAction::Stay {
+                max_times: 60,
+                suggested_delay: Some(suggested_delay),
+            }),
+        }
+    }
+
     // ─────────────── READY STATE ────────────────────────────────
     #[handler(
         state = Ready,
@@ -240,7 +289,7 @@ impl KubernetesWorkerController {
                     resource_id: Some(config.id.clone()),
                 })?;
 
-            if let Some(status) = deployment.status {
+            if let Some(status) = deployment.status.clone() {
                 if let (Some(ready_replicas), Some(replicas)) =
                     (status.ready_replicas, status.replicas)
                 {
@@ -254,6 +303,43 @@ impl KubernetesWorkerController {
                         }));
                     }
                 }
+            }
+
+            let labels = self.build_labels(deployment_name);
+            emit_kubernetes_workload_heartbeat(
+                ctx,
+                KubernetesWorkloadHeartbeatInput {
+                    deployment_id: None,
+                    resource_id: config.id.clone(),
+                    resource_type: Worker::RESOURCE_TYPE,
+                    data_kind: KubernetesWorkloadDataKind::Worker,
+                    command_supported: false,
+                    namespace: namespace.clone(),
+                    workload_name: deployment_name.clone(),
+                    workload_kind: alien_core::KubernetesWorkloadKind::Deployment,
+                    workload: KubernetesWorkload::Deployment(deployment),
+                    label_selector: label_selector(&labels)?,
+                },
+            )
+            .await?;
+
+            let action = reconcile_kubernetes_public_endpoint(
+                ctx,
+                worker_public_endpoint_target(
+                    &config.id,
+                    deployment_name,
+                    namespace,
+                    labels,
+                    &config.ingress,
+                ),
+                &mut self.public_endpoint,
+            )
+            .await?;
+            if let KubernetesEndpointAction::Waiting { suggested_delay } = action {
+                return Ok(HandlerAction::Stay {
+                    max_times: 60,
+                    suggested_delay: Some(suggested_delay),
+                });
             }
 
             debug!(deployment_name=%deployment_name, namespace=%namespace, "Worker deployment is healthy");
@@ -397,8 +483,8 @@ impl KubernetesWorkerController {
                         if ready_replicas >= replicas && replicas > 0 {
                             info!(deployment_name=%deployment_name, "Deployment rollout complete");
                             return Ok(HandlerAction::Continue {
-                                state: Ready,
-                                suggested_delay: Some(Duration::from_secs(30)),
+                                state: ReconcilePublicEndpointAfterUpdate,
+                                suggested_delay: None,
                             });
                         } else {
                             debug!(deployment_name=%deployment_name, ready=%ready_replicas, total=%replicas, "Deployment rollout in progress");
@@ -423,6 +509,54 @@ impl KubernetesWorkerController {
         })
     }
 
+    #[handler(
+        state = ReconcilePublicEndpointAfterUpdate,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn reconcile_public_endpoint_after_update(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<Worker>()?;
+        let deployment_name = self.deployment_name.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: config.id.clone(),
+                message: "Deployment name not set in state".to_string(),
+            })
+        })?;
+        let namespace = self.namespace.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: config.id.clone(),
+                message: "Namespace not set in state".to_string(),
+            })
+        })?;
+        let labels = self.build_labels(deployment_name);
+        let action = reconcile_kubernetes_public_endpoint(
+            ctx,
+            worker_public_endpoint_target(
+                &config.id,
+                deployment_name,
+                namespace,
+                labels,
+                &config.ingress,
+            ),
+            &mut self.public_endpoint,
+        )
+        .await?;
+
+        match action {
+            KubernetesEndpointAction::Ready => Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: Some(Duration::from_secs(30)),
+            }),
+            KubernetesEndpointAction::Waiting { suggested_delay } => Ok(HandlerAction::Stay {
+                max_times: 60,
+                suggested_delay: Some(suggested_delay),
+            }),
+        }
+    }
+
     // ─────────────── DELETE FLOW ──────────────────────────────
     #[flow_entry(Delete)]
     #[handler(
@@ -442,6 +576,9 @@ impl KubernetesWorkerController {
         })?;
 
         info!(namespace=%namespace, "Initiating Kubernetes Worker deletion");
+
+        delete_kubernetes_public_endpoint(ctx, &config.id, namespace, &mut self.public_endpoint)
+            .await?;
 
         // Delete Deployment
         if let Some(deployment_name) = &self.deployment_name {
@@ -573,9 +710,9 @@ impl KubernetesWorkerController {
         if let Some(deployment_name) = &self.deployment_name {
             Some(ResourceOutputs::new(WorkerOutputs {
                 worker_name: deployment_name.clone(),
-                url: self.public_url.clone(),
+                url: self.public_endpoint.public_url.clone(),
                 identifier: Some(format!("deployment/{}", deployment_name)),
-                load_balancer_endpoint: None,
+                load_balancer_endpoint: self.public_endpoint.load_balancer_endpoint.clone(),
                 commands_push_target: None, // Kubernetes uses polling
             }))
         } else {
@@ -596,6 +733,7 @@ impl KubernetesWorkerController {
                 service_name: BindingValue::Value(service_name.clone()),
                 service_port: BindingValue::Value(80),
                 public_url: self
+                    .public_endpoint
                     .public_url
                     .as_ref()
                     .map(|url| BindingValue::Value(url.clone())),
@@ -620,17 +758,21 @@ impl KubernetesWorkerController {
 mod output_tests {
     use alien_core::WorkerOutputs;
 
-    use super::{KubernetesWorkerController, KubernetesWorkerState};
+    use super::{KubernetesPublicEndpointState, KubernetesWorkerController, KubernetesWorkerState};
 
     #[test]
-    fn build_outputs_includes_helm_public_url() {
+    fn build_outputs_includes_public_endpoint_url() {
+        let public_endpoint = KubernetesPublicEndpointState {
+            public_url: Some("https://worker.example.test".to_string()),
+            ..Default::default()
+        };
         let controller = KubernetesWorkerController {
             state: KubernetesWorkerState::Ready,
             deployment_name: Some("test-worker".to_string()),
             namespace: Some("test-namespace".to_string()),
             service_name: Some("test-worker".to_string()),
-            public_url: Some("https://worker.example.test".to_string()),
             worker_id: Some("worker".to_string()),
+            public_endpoint,
             _internal_stay_count: None,
         };
 
@@ -655,8 +797,8 @@ impl KubernetesWorkerController {
             deployment_name: Some(function_name.to_string()),
             namespace: Some(namespace.to_string()),
             service_name: Some(function_name.to_string()),
-            public_url: None,
             worker_id: Some("test-worker".to_string()),
+            public_endpoint: KubernetesPublicEndpointState::default(),
             _internal_stay_count: None,
         }
     }

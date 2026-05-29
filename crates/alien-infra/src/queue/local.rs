@@ -3,9 +3,14 @@ use tracing::{debug, info};
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use alien_core::{Queue, QueueOutputs, ResourceOutputs, ResourceStatus};
+use alien_core::{
+    HeartbeatBackend, LocalQueueHeartbeatData, ObservedHealth, Platform, ProviderLifecycleState,
+    Queue, QueueHeartbeatData, QueueHeartbeatStatus, QueueOutputs, ResourceHeartbeat,
+    ResourceHeartbeatData, ResourceOutputs, ResourceStatus,
+};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_macros::controller;
+use chrono::Utc;
 
 #[controller]
 pub struct LocalQueueController {
@@ -82,6 +87,18 @@ impl LocalQueueController {
                 message: format!("Queue health check failed for '{}'", config.id),
                 resource_id: Some(config.id.clone()),
             })?;
+
+        let queue_path =
+            queue_manager
+                .get_queue_path(&config.id)
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to resolve queue path for '{}'", config.id),
+                    resource_id: Some(config.id.clone()),
+                })?;
+
+        self.queue_path = Some(queue_path.display().to_string());
+
+        emit_local_queue_heartbeat(ctx, &config.id, self.queue_path.as_deref());
 
         debug!(queue_id=%config.id, "Queue health check passed");
 
@@ -187,4 +204,34 @@ impl LocalQueueController {
             Ok(None)
         }
     }
+}
+
+fn emit_local_queue_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    queue_path: Option<&str>,
+) {
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: Queue::RESOURCE_TYPE,
+        controller_platform: Platform::Local,
+        backend: HeartbeatBackend::Local,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::Queue(QueueHeartbeatData::Local(LocalQueueHeartbeatData {
+            status: QueueHeartbeatStatus {
+                health: ObservedHealth::Healthy,
+                lifecycle: ProviderLifecycleState::Running,
+                message: Some(format!("Local queue '{}' is reachable", resource_id)),
+                stale: false,
+                partial: false,
+                collection_issues: vec![],
+            },
+            name: resource_id.to_string(),
+            path: queue_path.map(ToString::to_string),
+            service_status: Some("reachable".to_string()),
+            events: vec![],
+        })),
+        raw: vec![],
+    });
 }

@@ -5,15 +5,19 @@ use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
 use alien_aws_clients::iam::{CreateRoleRequest, CreateRoleTag, IamApi};
 use alien_core::{
-    standard_resource_tags, KubernetesCluster, RemoteStackManagement, RemoteStackManagementOutputs,
-    ResourceOutputs, ResourceStatus,
+    standard_resource_tags, AwsRemoteStackManagementHeartbeatData, HeartbeatBackend,
+    KubernetesCluster, ObservedHealth, Platform, ProviderLifecycleState, RemoteStackManagement,
+    RemoteStackManagementHeartbeatData, RemoteStackManagementHeartbeatStatus,
+    RemoteStackManagementOutputs, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
+    ResourceStatus,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
-use alien_macros::{controller, flow_entry, handler, terminal_state};
+use alien_macros::controller;
 use alien_permissions::{
     generators::{AwsIamPolicy, AwsIamStatement, AwsRuntimePermissionsGenerator},
     get_permission_set, BindingTarget, PermissionContext,
 };
+use chrono::Utc;
 
 /// Generates the AWS IAM role name for RemoteStackManagement.
 fn get_aws_management_role_name(prefix: &str) -> String {
@@ -206,6 +210,8 @@ impl AwsRemoteStackManagementController {
                 }));
             }
         }
+
+        emit_aws_remote_stack_management_heartbeat(ctx, self)?;
 
         Ok(HandlerAction::Continue {
             state: Ready,
@@ -474,7 +480,7 @@ impl AwsRemoteStackManagementController {
     );
 
     fn build_outputs(&self) -> Option<ResourceOutputs> {
-        if let (Some(role_arn), Some(role_name)) = (&self.role_arn, &self.role_name) {
+        if let (Some(role_arn), Some(_role_name)) = (&self.role_arn, &self.role_name) {
             Some(ResourceOutputs::new(RemoteStackManagementOutputs {
                 management_resource_id: role_arn.clone(),
                 access_configuration: role_arn.clone(),
@@ -483,6 +489,43 @@ impl AwsRemoteStackManagementController {
             None
         }
     }
+}
+
+fn emit_aws_remote_stack_management_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    controller: &AwsRemoteStackManagementController,
+) -> Result<()> {
+    let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
+
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: config.id.clone(),
+        resource_type: RemoteStackManagement::RESOURCE_TYPE,
+        controller_platform: Platform::Aws,
+        backend: HeartbeatBackend::Aws,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::RemoteStackManagement(
+            RemoteStackManagementHeartbeatData::AwsIamRole(AwsRemoteStackManagementHeartbeatData {
+                status: RemoteStackManagementHeartbeatStatus {
+                    health: ObservedHealth::Healthy,
+                    lifecycle: ProviderLifecycleState::Running,
+                    message: controller.role_name.as_ref().map(|role_name| {
+                        format!("AWS management role '{}' is reachable", role_name)
+                    }),
+                    stale: false,
+                    partial: false,
+                    collection_issues: vec![],
+                },
+                role_name: controller.role_name.clone(),
+                role_arn: controller.role_arn.clone(),
+                management_permissions_applied: controller.management_permissions_applied,
+                events: vec![],
+            }),
+        ),
+        raw: vec![],
+    });
+
+    Ok(())
 }
 
 // Separate impl block for helper methods
@@ -856,7 +899,7 @@ impl AwsRemoteStackManagementController {
 
     async fn reconcile_owned_management_policies(
         &self,
-        ctx: &ResourceControllerContext<'_>,
+        _ctx: &ResourceControllerContext<'_>,
         client: &dyn IamApi,
         role_name: &str,
         desired_policy_arns: &[String],

@@ -22,7 +22,6 @@ use alien_deployment::manager_api_transport::{
 };
 use alien_deployment::runner::{RunnerPolicy, RunnerResult};
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_manager_api::Client as ManagerClient;
 use alien_platform_api::Client as SdkClient;
 use clap::Parser;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
@@ -109,30 +108,6 @@ fn create_platform_client(api_key: &str, base_url: &str) -> Result<SdkClient> {
         })?;
 
     Ok(SdkClient::new_with_client(base_url, http_client))
-}
-
-/// Create authenticated manager client
-fn create_manager_client(token: &str, manager_url: &str) -> Result<ManagerClient> {
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        AUTHORIZATION,
-        HeaderValue::from_str(&format!("Bearer {}", token))
-            .into_alien_error()
-            .context(ErrorData::ConfigurationError {
-                message: "Invalid token format".to_string(),
-            })?,
-    );
-    headers.insert(USER_AGENT, HeaderValue::from_static("alien-cli"));
-
-    let http_client = reqwest::Client::builder()
-        .default_headers(headers)
-        .build()
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to create HTTP client".to_string(),
-        })?;
-
-    Ok(ManagerClient::new_with_client(manager_url, http_client))
 }
 
 /// Main entry point for deploy command
@@ -281,6 +256,7 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                         network: sdk_network,
                         domains: None,
                         external_bindings: None,
+                        kubernetes: None,
                     };
 
                     let create_response = sdk_client

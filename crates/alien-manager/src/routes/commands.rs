@@ -11,7 +11,6 @@ use axum::{
     Router,
 };
 use serde::Deserialize;
-use tracing::error;
 
 use alien_commands::server::{CommandPayloadResponse, StorePayloadRequest};
 use alien_commands::types::*;

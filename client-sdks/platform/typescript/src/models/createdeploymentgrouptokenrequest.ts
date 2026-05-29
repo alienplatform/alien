@@ -3,17 +3,29 @@
  */
 
 import * as z from "zod/v4";
+import {
+  DeploymentSetupConfig,
+  DeploymentSetupConfig$Outbound,
+  DeploymentSetupConfig$outboundSchema,
+} from "./deploymentsetupconfig.js";
 
 export type CreateDeploymentGroupTokenRequest = {
   /**
    * Description for the API key
    */
   description?: string | undefined;
+  /**
+   * Optional expiration date for the API key
+   */
+  expiresAt?: Date | null | undefined;
+  deploymentSetupConfig: DeploymentSetupConfig;
 };
 
 /** @internal */
 export type CreateDeploymentGroupTokenRequest$Outbound = {
   description?: string | undefined;
+  expiresAt?: string | null | undefined;
+  deploymentSetupConfig: DeploymentSetupConfig$Outbound;
 };
 
 /** @internal */
@@ -22,6 +34,8 @@ export const CreateDeploymentGroupTokenRequest$outboundSchema: z.ZodType<
   CreateDeploymentGroupTokenRequest
 > = z.object({
   description: z.string().optional(),
+  expiresAt: z.nullable(z.date().transform(v => v.toISOString())).optional(),
+  deploymentSetupConfig: DeploymentSetupConfig$outboundSchema,
 });
 
 export function createDeploymentGroupTokenRequestToJSON(
