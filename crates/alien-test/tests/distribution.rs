@@ -9,6 +9,7 @@ use anyhow::{anyhow, Context};
 use reqwest::{Client, Response};
 use serde_json::Value;
 use test_context::test_context;
+use tokio::process::Command;
 use tokio::time::{sleep, Duration};
 
 mod common;
@@ -23,9 +24,12 @@ async fn check_distribution_deployment(ctx: &mut alien_test::TestContext) {
                 .await
                 .expect("command checks failed");
         }
-        TestApp::FullStackMicroservices => check_full_stack_microservices(ctx)
-            .await
-            .expect("full-stack microservices checks failed"),
+        TestApp::FullStackMicroservices => {
+            if let Err(error) = check_full_stack_microservices(ctx).await {
+                dump_kubernetes_debug(ctx, &error).await;
+                panic!("full-stack microservices checks failed: {error:#}");
+            }
+        }
     }
 }
 
@@ -51,6 +55,43 @@ async fn expect_json(response: Response, label: &str) -> anyhow::Result<Value> {
     serde_json::from_str(&body).with_context(|| format!("{label} returned invalid JSON: {body}"))
 }
 
+async fn expect_json_get_ready(
+    client: &Client,
+    url: &str,
+    label: &str,
+    expected_service: &str,
+) -> anyhow::Result<Value> {
+    let mut last_error = None;
+
+    for attempt in 1..=60 {
+        match client.get(url).send().await {
+            Ok(response) => match expect_json(response, label).await {
+                Ok(value) => {
+                    let service = string_field(&value, &["service"], label)?;
+                    if service == expected_service {
+                        return Ok(value);
+                    }
+                    last_error = Some(anyhow!(
+                        "{label} did not identify {expected_service}; got service {service}"
+                    ));
+                }
+                Err(error) => {
+                    last_error = Some(error);
+                }
+            },
+            Err(error) => {
+                last_error = Some(error.into());
+            }
+        }
+
+        if attempt < 60 {
+            sleep(Duration::from_secs(5)).await;
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| anyhow!("{label} did not become ready")))
+}
+
 fn string_field<'a>(value: &'a Value, path: &[&str], label: &str) -> anyhow::Result<&'a str> {
     let mut cursor = value;
     for segment in path {
@@ -67,27 +108,15 @@ async fn check_full_stack_microservices(ctx: &alien_test::TestContext) -> anyhow
     let url = public_url(ctx)?;
     let client = Client::builder().timeout(Duration::from_secs(30)).build()?;
 
-    let gateway_health = expect_json(
-        client.get(format!("{url}/health")).send().await?,
+    expect_json_get_ready(
+        &client,
+        &format!("{url}/health"),
         "gateway health",
+        "gateway",
     )
     .await?;
-    if string_field(&gateway_health, &["service"], "gateway health")? != "gateway" {
-        return Err(anyhow!(
-            "gateway health did not identify the gateway service"
-        ));
-    }
 
-    let api_health = expect_json(
-        client.get(format!("{url}/api/health")).send().await?,
-        "api health",
-    )
-    .await?;
-    if string_field(&api_health, &["service"], "api health")? != "api" {
-        return Err(anyhow!(
-            "gateway-to-api route did not reach the api service"
-        ));
-    }
+    expect_json_get_ready(&client, &format!("{url}/api/health"), "api health", "api").await?;
 
     let issue_payload = serde_json::json!({
         "title": "Kubernetes E2E issue",
@@ -199,6 +228,124 @@ async fn check_full_stack_microservices(ctx: &alien_test::TestContext) -> anyhow
             .map(|value| value.to_string())
             .unwrap_or_else(|| "<none>".to_string())
     ))
+}
+
+async fn dump_kubernetes_debug(ctx: &alien_test::TestContext, error: &anyhow::Error) {
+    let Some((namespace, kubeconfig, kube_context)) =
+        ctx.distribution_cleanups
+            .iter()
+            .find_map(|cleanup| match cleanup {
+                alien_test::distribution::DistributionArtifactCleanup::Helm {
+                    namespace,
+                    kubeconfig,
+                    kube_context,
+                    ..
+                } => Some((
+                    namespace.as_str(),
+                    kubeconfig.as_deref(),
+                    kube_context.as_deref(),
+                )),
+                _ => None,
+            })
+    else {
+        return;
+    };
+
+    eprintln!("\n--- Kubernetes debug for namespace {namespace}; check failure: {error:#} ---");
+
+    run_kubectl_debug(
+        namespace,
+        kubeconfig,
+        kube_context,
+        &["get", "pods,svc,ingress,serviceaccount", "-o", "wide"],
+    )
+    .await;
+    run_kubectl_debug(
+        namespace,
+        kubeconfig,
+        kube_context,
+        &[
+            "get",
+            "pods",
+            "-o",
+            "jsonpath={range .items[*]}{.metadata.name}{\" serviceAccount=\"}{.spec.serviceAccountName}{\" phase=\"}{.status.phase}{\" node=\"}{.spec.nodeName}{\"\\n\"}{end}",
+        ],
+    )
+    .await;
+    run_kubectl_debug(
+        namespace,
+        kubeconfig,
+        kube_context,
+        &["get", "serviceaccount", "-o", "yaml"],
+    )
+    .await;
+    run_kubectl_debug(
+        namespace,
+        kubeconfig,
+        kube_context,
+        &[
+            "logs",
+            "-l",
+            "managed-by=alien",
+            "--all-containers",
+            "--tail=200",
+            "--prefix",
+        ],
+    )
+    .await;
+    run_kubectl_debug(
+        namespace,
+        kubeconfig,
+        kube_context,
+        &[
+            "logs",
+            "-l",
+            "app.kubernetes.io/name=alien",
+            "--all-containers",
+            "--tail=200",
+            "--prefix",
+        ],
+    )
+    .await;
+    eprintln!("--- End Kubernetes debug for namespace {namespace} ---\n");
+}
+
+async fn run_kubectl_debug(
+    namespace: &str,
+    kubeconfig: Option<&str>,
+    kube_context: Option<&str>,
+    args: &[&str],
+) {
+    let mut cmd = Command::new("kubectl");
+    cmd.args(["-n", namespace]);
+    cmd.args(args);
+    if let Some(kubeconfig) = kubeconfig {
+        cmd.env("KUBECONFIG", kubeconfig);
+    }
+    if let Some(kube_context) = kube_context {
+        cmd.args(["--context", kube_context]);
+    }
+
+    match cmd.output().await {
+        Ok(output) => {
+            eprintln!("$ kubectl -n {namespace} {}", args.join(" "));
+            if !output.stdout.is_empty() {
+                eprintln!("{}", String::from_utf8_lossy(&output.stdout));
+            }
+            if !output.stderr.is_empty() {
+                eprintln!("{}", String::from_utf8_lossy(&output.stderr));
+            }
+            if !output.status.success() {
+                eprintln!("kubectl exited with {}", output.status);
+            }
+        }
+        Err(error) => {
+            eprintln!(
+                "failed to run kubectl -n {namespace} {}: {error}",
+                args.join(" ")
+            );
+        }
+    }
 }
 
 macro_rules! distribution_test_context {

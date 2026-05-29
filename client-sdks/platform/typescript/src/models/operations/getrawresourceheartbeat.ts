@@ -67,21 +67,6 @@ export const ControllerPlatform = {
  */
 export type ControllerPlatform = ClosedEnum<typeof ControllerPlatform>;
 
-export const EventSeverity59 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity59 = ClosedEnum<typeof EventSeverity59>;
-
-export type GetRawResourceHeartbeatEvent59 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity59;
-  source?: string | null | undefined;
-};
-
 export const Reason59 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
@@ -141,7 +126,6 @@ export type DataStatus59 = {
 export type Data5 = {
   createdAt?: string | null | undefined;
   disableLocalAuth?: boolean | null | undefined;
-  events: Array<GetRawResourceHeartbeatEvent59>;
   location?: string | null | undefined;
   metricId?: string | null | undefined;
   minimumTlsVersion?: string | null | undefined;
@@ -165,21 +149,6 @@ export type Data5 = {
 export type DataAzureServiceBusNamespace = {
   data: Data5;
   resourceType: "azure_service_bus_namespace";
-};
-
-export const EventSeverity58 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity58 = ClosedEnum<typeof EventSeverity58>;
-
-export type GetRawResourceHeartbeatEvent58 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity58;
-  source?: string | null | undefined;
 };
 
 export const Reason58 = {
@@ -249,7 +218,6 @@ export type Data4 = {
   customDomainVerificationId?: string | null | undefined;
   defaultDomain?: string | null | undefined;
   eventStreamEndpoint?: string | null | undefined;
-  events: Array<GetRawResourceHeartbeatEvent58>;
   infrastructureResourceGroup?: string | null | undefined;
   kind?: string | null | undefined;
   location?: string | null | undefined;
@@ -267,21 +235,6 @@ export type Data4 = {
 export type DataAzureContainerAppsEnvironment = {
   data: Data4;
   resourceType: "azure_container_apps_environment";
-};
-
-export const EventSeverity57 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity57 = ClosedEnum<typeof EventSeverity57>;
-
-export type GetRawResourceHeartbeatEvent57 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity57;
-  source?: string | null | undefined;
 };
 
 export type PrimaryEndpoints = {
@@ -362,7 +315,6 @@ export type Data3 = {
   allowBlobPublicAccess?: boolean | null | undefined;
   allowSharedKeyAccess?: boolean | null | undefined;
   encryptionKeySource?: string | null | undefined;
-  events: Array<GetRawResourceHeartbeatEvent57>;
   kind?: string | null | undefined;
   location?: string | null | undefined;
   minimumTlsVersion?: string | null | undefined;
@@ -388,21 +340,6 @@ export type Data3 = {
 export type DataAzureStorageAccount = {
   data: Data3;
   resourceType: "azure_storage_account";
-};
-
-export const EventSeverity56 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity56 = ClosedEnum<typeof EventSeverity56>;
-
-export type GetRawResourceHeartbeatEvent56 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity56;
-  source?: string | null | undefined;
 };
 
 export const Reason56 = {
@@ -462,7 +399,6 @@ export type DataStatus56 = {
 };
 
 export type Data2 = {
-  events: Array<GetRawResourceHeartbeatEvent56>;
   location?: string | null | undefined;
   managedTags: { [k: string]: string };
   name: string;
@@ -474,21 +410,6 @@ export type Data2 = {
 export type DataAzureResourceGroup = {
   data: Data2;
   resourceType: "azure_resource_group";
-};
-
-export const EventSeverity55 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity55 = ClosedEnum<typeof EventSeverity55>;
-
-export type GetRawResourceHeartbeatEvent55 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity55;
-  source?: string | null | undefined;
 };
 
 export const Reason55 = {
@@ -548,7 +469,6 @@ export type DataStatus55 = {
 };
 
 export type DataAzureResourceProvider = {
-  events: Array<GetRawResourceHeartbeatEvent55>;
   namespace: string;
   providerId?: string | null | undefined;
   registered: boolean;
@@ -557,21 +477,6 @@ export type DataAzureResourceProvider = {
   resourceTypeCount: number;
   status: DataStatus55;
   backend: "azureResourceProvider";
-};
-
-export const EventSeverity54 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity54 = ClosedEnum<typeof EventSeverity54>;
-
-export type GetRawResourceHeartbeatEvent54 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity54;
-  source?: string | null | undefined;
 };
 
 export const Reason54 = {
@@ -632,7 +537,6 @@ export type DataStatus54 = {
 
 export type DataGcpServiceUsage = {
   enabled: boolean;
-  events: Array<GetRawResourceHeartbeatEvent54>;
   lastOperationName?: string | null | undefined;
   projectId: string;
   serviceName: string;
@@ -650,19 +554,36 @@ export type DataServiceActivation = {
   resourceType: "service_activation";
 };
 
-export const EventSeverity53 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity53 = ClosedEnum<typeof EventSeverity53>;
+export type InvolvedObject9 = {
+  apiVersion?: string | null | undefined;
+  fieldPath?: string | null | undefined;
+  kind?: string | null | undefined;
+  name?: string | null | undefined;
+  namespace?: string | null | undefined;
+  resourceVersion?: string | null | undefined;
+  uid?: string | null | undefined;
+};
 
-export type GetRawResourceHeartbeatEvent53 = {
-  kind: string;
+export type InvolvedObjectUnion9 = InvolvedObject9 | any;
+
+export type Source9 = {
+  component?: string | null | undefined;
+  host?: string | null | undefined;
+};
+
+export type SourceUnion9 = Source9 | any;
+
+export type GetRawResourceHeartbeatEvent12 = {
+  count?: number | null | undefined;
+  eventTime?: Date | null | undefined;
+  firstTimestamp?: Date | null | undefined;
+  involvedObject?: InvolvedObject9 | any | null | undefined;
+  lastTimestamp?: Date | null | undefined;
   message: string;
-  observedAt: Date;
-  severity: EventSeverity53;
-  source?: string | null | undefined;
+  raw?: any | null | undefined;
+  reason: string;
+  source?: Source9 | any | null | undefined;
+  type?: string | null | undefined;
 };
 
 export const Reason53 = {
@@ -725,7 +646,7 @@ export type DataKubernetesJob = {
   active?: number | null | undefined;
   completionTime?: Date | null | undefined;
   conditionCount: number;
-  events: Array<GetRawResourceHeartbeatEvent53>;
+  events: Array<GetRawResourceHeartbeatEvent12>;
   failed?: number | null | undefined;
   imageDigest?: string | null | undefined;
   jobName: string;
@@ -734,21 +655,6 @@ export type DataKubernetesJob = {
   status: DataStatus53;
   succeeded?: number | null | undefined;
   backend: "kubernetesJob";
-};
-
-export const EventSeverity52 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity52 = ClosedEnum<typeof EventSeverity52>;
-
-export type GetRawResourceHeartbeatEvent52 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity52;
-  source?: string | null | undefined;
 };
 
 export const Reason52 = {
@@ -809,28 +715,12 @@ export type DataStatus52 = {
 
 export type DataAzureContainerApps2 = {
   environmentVariableCount: number;
-  events: Array<GetRawResourceHeartbeatEvent52>;
   managedEnvironmentId: string;
   managedIdentityId?: string | null | undefined;
   resourceGroupName: string;
   resourcePrefix?: string | null | undefined;
   status: DataStatus52;
   backend: "azureContainerApps";
-};
-
-export const EventSeverity51 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity51 = ClosedEnum<typeof EventSeverity51>;
-
-export type GetRawResourceHeartbeatEvent51 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity51;
-  source?: string | null | undefined;
 };
 
 export const Reason51 = {
@@ -892,27 +782,11 @@ export type DataStatus51 = {
 export type DataGcpCloudBuild = {
   buildConfigId: string;
   environmentVariableCount: number;
-  events: Array<GetRawResourceHeartbeatEvent51>;
   location: string;
   projectId: string;
   serviceAccount?: string | null | undefined;
   status: DataStatus51;
   backend: "gcpCloudBuild";
-};
-
-export const EventSeverity50 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity50 = ClosedEnum<typeof EventSeverity50>;
-
-export type GetRawResourceHeartbeatEvent50 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity50;
-  source?: string | null | undefined;
 };
 
 export const Reason50 = {
@@ -982,7 +856,6 @@ export type DataAwsCodeBuild = {
   environmentImage?: string | null | undefined;
   environmentType?: string | null | undefined;
   environmentVariableCount: number;
-  events: Array<GetRawResourceHeartbeatEvent50>;
   imagePullCredentialsType?: string | null | undefined;
   lastModified?: number | null | undefined;
   privilegedMode?: boolean | null | undefined;
@@ -1010,21 +883,6 @@ export type DataBuild = {
     | DataAzureContainerApps2
     | DataKubernetesJob;
   resourceType: "build";
-};
-
-export const EventSeverity49 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity49 = ClosedEnum<typeof EventSeverity49>;
-
-export type GetRawResourceHeartbeatEvent49 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity49;
-  source?: string | null | undefined;
 };
 
 export const Reason49 = {
@@ -1084,26 +942,10 @@ export type DataStatus49 = {
 };
 
 export type DataLocal10 = {
-  events: Array<GetRawResourceHeartbeatEvent49>;
   reachable: boolean;
   registryUrl: string;
   status: DataStatus49;
   backend: "local";
-};
-
-export const EventSeverity48 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity48 = ClosedEnum<typeof EventSeverity48>;
-
-export type GetRawResourceHeartbeatEvent48 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity48;
-  source?: string | null | undefined;
 };
 
 export const Reason48 = {
@@ -1171,7 +1013,6 @@ export type DataAzureContainerRegistry = {
   encryptionKeyIdentifierPresent: boolean;
   encryptionKeyVaultUriPresent: boolean;
   encryptionStatus?: string | null | undefined;
-  events: Array<GetRawResourceHeartbeatEvent48>;
   ipRuleCount: number;
   location: string;
   loginServer?: string | null | undefined;
@@ -1192,21 +1033,6 @@ export type DataAzureContainerRegistry = {
   type?: string | null | undefined;
   zoneRedundancy: string;
   backend: "azureContainerRegistry";
-};
-
-export const EventSeverity47 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity47 = ClosedEnum<typeof EventSeverity47>;
-
-export type GetRawResourceHeartbeatEvent47 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity47;
-  source?: string | null | undefined;
 };
 
 export const Reason47 = {
@@ -1270,7 +1096,6 @@ export type DataGcpArtifactRegistry = {
   cleanupPolicyDryRun?: boolean | null | undefined;
   createTime?: string | null | undefined;
   description?: string | null | undefined;
-  events: Array<GetRawResourceHeartbeatEvent47>;
   format?: string | null | undefined;
   iamBindingCount: number;
   iamPolicyEtagPresent: boolean;
@@ -1289,21 +1114,6 @@ export type DataGcpArtifactRegistry = {
   status: DataStatus47;
   updateTime?: string | null | undefined;
   backend: "gcpArtifactRegistry";
-};
-
-export const EventSeverity46 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity46 = ClosedEnum<typeof EventSeverity46>;
-
-export type GetRawResourceHeartbeatEvent46 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity46;
-  source?: string | null | undefined;
 };
 
 export type Repository = {
@@ -1375,7 +1185,6 @@ export type DataStatus46 = {
 };
 
 export type DataAwsEcr = {
-  events: Array<GetRawResourceHeartbeatEvent46>;
   pullRoleArn?: string | null | undefined;
   pushRoleArn?: string | null | undefined;
   region: string;
@@ -1402,21 +1211,6 @@ export type DataArtifactRegistry = {
     | DataAzureContainerRegistry
     | DataLocal10;
   resourceType: "artifact-registry";
-};
-
-export const EventSeverity45 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity45 = ClosedEnum<typeof EventSeverity45>;
-
-export type GetRawResourceHeartbeatEvent45 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity45;
-  source?: string | null | undefined;
 };
 
 export const Reason45 = {
@@ -1476,7 +1270,6 @@ export type DataStatus45 = {
 };
 
 export type DataAzureManagedIdentity2 = {
-  events: Array<GetRawResourceHeartbeatEvent45>;
   ficName?: string | null | undefined;
   roleAssignmentIds: Array<string>;
   roleDefinitionId?: string | null | undefined;
@@ -1486,21 +1279,6 @@ export type DataAzureManagedIdentity2 = {
   uamiPrincipalId?: string | null | undefined;
   uamiResourceId?: string | null | undefined;
   backend: "azureManagedIdentity";
-};
-
-export const EventSeverity44 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity44 = ClosedEnum<typeof EventSeverity44>;
-
-export type GetRawResourceHeartbeatEvent44 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity44;
-  source?: string | null | undefined;
 };
 
 export const Reason44 = {
@@ -1560,28 +1338,12 @@ export type DataStatus44 = {
 };
 
 export type DataGcpServiceAccount2 = {
-  events: Array<GetRawResourceHeartbeatEvent44>;
   impersonationGranted: boolean;
   roleBound: boolean;
   serviceAccountEmail?: string | null | undefined;
   serviceAccountUniqueId?: string | null | undefined;
   status: DataStatus44;
   backend: "gcpServiceAccount";
-};
-
-export const EventSeverity43 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity43 = ClosedEnum<typeof EventSeverity43>;
-
-export type GetRawResourceHeartbeatEvent43 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity43;
-  source?: string | null | undefined;
 };
 
 export const Reason43 = {
@@ -1641,7 +1403,6 @@ export type DataStatus43 = {
 };
 
 export type DataAwsIamRole2 = {
-  events: Array<GetRawResourceHeartbeatEvent43>;
   managementPermissionsApplied: boolean;
   roleArn?: string | null | undefined;
   roleName?: string | null | undefined;
@@ -1657,21 +1418,6 @@ export type DataUnion11 =
 export type DataRemoteStackManagement = {
   data: DataAwsIamRole2 | DataGcpServiceAccount2 | DataAzureManagedIdentity2;
   resourceType: "remote-stack-management";
-};
-
-export const EventSeverity42 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity42 = ClosedEnum<typeof EventSeverity42>;
-
-export type GetRawResourceHeartbeatEvent42 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity42;
-  source?: string | null | undefined;
 };
 
 export const Reason42 = {
@@ -1732,7 +1478,6 @@ export type DataStatus42 = {
 
 export type DataAzureVnet = {
   cidrBlock?: string | null | undefined;
-  events: Array<GetRawResourceHeartbeatEvent42>;
   isByoVnet: boolean;
   lastByoVnetVerificationErrorCode?: string | null | undefined;
   location?: string | null | undefined;
@@ -1746,21 +1491,6 @@ export type DataAzureVnet = {
   vnetName?: string | null | undefined;
   vnetResourceId?: string | null | undefined;
   backend: "azureVnet";
-};
-
-export const EventSeverity41 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity41 = ClosedEnum<typeof EventSeverity41>;
-
-export type GetRawResourceHeartbeatEvent41 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity41;
-  source?: string | null | undefined;
 };
 
 export const Reason41 = {
@@ -1822,7 +1552,6 @@ export type DataStatus41 = {
 export type DataGcpVpc = {
   cidrBlock?: string | null | undefined;
   cloudNatName?: string | null | undefined;
-  events: Array<GetRawResourceHeartbeatEvent41>;
   firewallName?: string | null | undefined;
   isByoVpc: boolean;
   networkName?: string | null | undefined;
@@ -1833,21 +1562,6 @@ export type DataGcpVpc = {
   subnetworkName?: string | null | undefined;
   subnetworkSelfLink?: string | null | undefined;
   backend: "gcpVpc";
-};
-
-export const EventSeverity40 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity40 = ClosedEnum<typeof EventSeverity40>;
-
-export type GetRawResourceHeartbeatEvent40 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity40;
-  source?: string | null | undefined;
 };
 
 export const Reason40 = {
@@ -1909,7 +1623,6 @@ export type DataStatus40 = {
 export type DataAwsVpc = {
   availabilityZones: Array<string>;
   cidrBlock?: string | null | undefined;
-  events: Array<GetRawResourceHeartbeatEvent40>;
   internetGatewayId?: string | null | undefined;
   isByoVpc: boolean;
   natGatewayId?: string | null | undefined;
@@ -1928,21 +1641,6 @@ export type DataUnion10 = DataAwsVpc | DataGcpVpc | DataAzureVnet;
 export type DataNetwork = {
   data: DataAwsVpc | DataGcpVpc | DataAzureVnet;
   resourceType: "network";
-};
-
-export const EventSeverity39 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity39 = ClosedEnum<typeof EventSeverity39>;
-
-export type GetRawResourceHeartbeatEvent39 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity39;
-  source?: string | null | undefined;
 };
 
 export const Reason39 = {
@@ -2003,25 +1701,9 @@ export type DataStatus39 = {
 
 export type DataLocal9 = {
   configured: boolean;
-  events: Array<GetRawResourceHeartbeatEvent39>;
   identity: string;
   status: DataStatus39;
   backend: "local";
-};
-
-export const EventSeverity38 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity38 = ClosedEnum<typeof EventSeverity38>;
-
-export type GetRawResourceHeartbeatEvent38 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity38;
-  source?: string | null | undefined;
 };
 
 export const Reason38 = {
@@ -2084,7 +1766,6 @@ export type DataAzureManagedIdentity1 = {
   clientId?: string | null | undefined;
   customRoleDefinitionCount: number;
   customRoleDefinitionIds: Array<string>;
-  events: Array<GetRawResourceHeartbeatEvent38>;
   isolationScope?: string | null | undefined;
   location: string;
   managedTagCount: number;
@@ -2099,21 +1780,6 @@ export type DataAzureManagedIdentity1 = {
   tenantId?: string | null | undefined;
   type?: string | null | undefined;
   backend: "azureManagedIdentity";
-};
-
-export const EventSeverity37 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity37 = ClosedEnum<typeof EventSeverity37>;
-
-export type GetRawResourceHeartbeatEvent37 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity37;
-  source?: string | null | undefined;
 };
 
 export const Reason37 = {
@@ -2178,7 +1844,6 @@ export type DataGcpServiceAccount1 = {
   displayName?: string | null | undefined;
   email: string;
   etag?: string | null | undefined;
-  events: Array<GetRawResourceHeartbeatEvent37>;
   name?: string | null | undefined;
   oauth2ClientId?: string | null | undefined;
   projectBindingCount: number;
@@ -2189,21 +1854,6 @@ export type DataGcpServiceAccount1 = {
   status: DataStatus37;
   uniqueId?: string | null | undefined;
   backend: "gcpServiceAccount";
-};
-
-export const EventSeverity36 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity36 = ClosedEnum<typeof EventSeverity36>;
-
-export type GetRawResourceHeartbeatEvent36 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity36;
-  source?: string | null | undefined;
 };
 
 export const Reason36 = {
@@ -2268,7 +1918,6 @@ export type DataAwsIamRole1 = {
   attachedPolicyNames: Array<string>;
   createDate: string;
   description?: string | null | undefined;
-  events: Array<GetRawResourceHeartbeatEvent36>;
   inlinePolicyCount: number;
   inlinePolicyNames: Array<string>;
   lastUsedDate?: string | null | undefined;
@@ -2300,21 +1949,6 @@ export type DataServiceAccount = {
     | DataAzureManagedIdentity1
     | DataLocal9;
   resourceType: "service-account";
-};
-
-export const EventSeverity35 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity35 = ClosedEnum<typeof EventSeverity35>;
-
-export type GetRawResourceHeartbeatEvent35 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity35;
-  source?: string | null | undefined;
 };
 
 export const Reason35 = {
@@ -2374,7 +2008,6 @@ export type DataStatus35 = {
 };
 
 export type DataLocal8 = {
-  events: Array<GetRawResourceHeartbeatEvent35>;
   isDirectory?: boolean | null | undefined;
   modifiedAt?: Date | null | undefined;
   path: string;
@@ -2383,21 +2016,6 @@ export type DataLocal8 = {
   secretMetadataListed: boolean;
   status: DataStatus35;
   backend: "local";
-};
-
-export const EventSeverity34 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity34 = ClosedEnum<typeof EventSeverity34>;
-
-export type GetRawResourceHeartbeatEvent34 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity34;
-  source?: string | null | undefined;
 };
 
 export const Reason34 = {
@@ -2457,27 +2075,11 @@ export type DataStatus34 = {
 };
 
 export type DataKubernetesSecret = {
-  events: Array<GetRawResourceHeartbeatEvent34>;
   namespace: string;
   prefix: string;
   secretMetadataListed: boolean;
   status: DataStatus34;
   backend: "kubernetesSecret";
-};
-
-export const EventSeverity33 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity33 = ClosedEnum<typeof EventSeverity33>;
-
-export type GetRawResourceHeartbeatEvent33 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity33;
-  source?: string | null | undefined;
 };
 
 export const Reason33 = {
@@ -2538,7 +2140,6 @@ export type DataStatus33 = {
 
 export type DataAzureKeyVault = {
   accessPolicyCount: number;
-  events: Array<GetRawResourceHeartbeatEvent33>;
   location?: string | null | undefined;
   name: string;
   privateEndpointConnectionCount: number;
@@ -2556,21 +2157,6 @@ export type DataAzureKeyVault = {
   status: DataStatus33;
   vaultUri?: string | null | undefined;
   backend: "azureKeyVault";
-};
-
-export const EventSeverity32 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity32 = ClosedEnum<typeof EventSeverity32>;
-
-export type GetRawResourceHeartbeatEvent32 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity32;
-  source?: string | null | undefined;
 };
 
 export const Reason32 = {
@@ -2630,28 +2216,12 @@ export type DataStatus32 = {
 };
 
 export type DataGcpSecretManager = {
-  events: Array<GetRawResourceHeartbeatEvent32>;
   location: string;
   prefix: string;
   projectId: string;
   secretMetadataListed: boolean;
   status: DataStatus32;
   backend: "gcpSecretManager";
-};
-
-export const EventSeverity31 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity31 = ClosedEnum<typeof EventSeverity31>;
-
-export type GetRawResourceHeartbeatEvent31 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity31;
-  source?: string | null | undefined;
 };
 
 export const Reason31 = {
@@ -2712,7 +2282,6 @@ export type DataStatus31 = {
 
 export type DataAwsParameterStore = {
   accountId: string;
-  events: Array<GetRawResourceHeartbeatEvent31>;
   hasMoreParameters?: boolean | null | undefined;
   latestModifiedAt?: Date | null | undefined;
   parameterMetadataSampled: boolean;
@@ -2743,21 +2312,6 @@ export type DataVault = {
     | DataKubernetesSecret
     | DataLocal8;
   resourceType: "vault";
-};
-
-export const EventSeverity30 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity30 = ClosedEnum<typeof EventSeverity30>;
-
-export type GetRawResourceHeartbeatEvent30 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity30;
-  source?: string | null | undefined;
 };
 
 export const Reason30 = {
@@ -2818,28 +2372,12 @@ export type DataStatus30 = {
 
 export type DataLocal7 = {
   cloudMetadataSupported: boolean;
-  events: Array<GetRawResourceHeartbeatEvent30>;
   isDirectory?: boolean | null | undefined;
   name: string;
   path: string;
   pathExists: boolean;
   status: DataStatus30;
   backend: "local";
-};
-
-export const EventSeverity29 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity29 = ClosedEnum<typeof EventSeverity29>;
-
-export type GetRawResourceHeartbeatEvent29 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity29;
-  source?: string | null | undefined;
 };
 
 export const Reason29 = {
@@ -2900,7 +2438,6 @@ export type DataStatus29 = {
 
 export type DataAzureTable = {
   endpoint?: string | null | undefined;
-  events: Array<GetRawResourceHeartbeatEvent29>;
   resourceGroup?: string | null | undefined;
   signedIdentifierCount?: number | null | undefined;
   status: DataStatus29;
@@ -2913,21 +2450,6 @@ export type DataAzureTable = {
   tableExists: boolean;
   tableName: string;
   backend: "azureTable";
-};
-
-export const EventSeverity28 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity28 = ClosedEnum<typeof EventSeverity28>;
-
-export type GetRawResourceHeartbeatEvent28 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity28;
-  source?: string | null | undefined;
 };
 
 export const Reason28 = {
@@ -2998,7 +2520,6 @@ export type DataGcpFirestore = {
   deleteTime?: string | null | undefined;
   earliestVersionTime?: string | null | undefined;
   endpoint?: string | null | undefined;
-  events: Array<GetRawResourceHeartbeatEvent28>;
   locationId?: string | null | undefined;
   pointInTimeRecoveryEnablement?: string | null | undefined;
   projectId?: string | null | undefined;
@@ -3007,21 +2528,6 @@ export type DataGcpFirestore = {
   updateTime?: string | null | undefined;
   versionRetentionPeriod?: string | null | undefined;
   backend: "gcpFirestore";
-};
-
-export const EventSeverity27 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity27 = ClosedEnum<typeof EventSeverity27>;
-
-export type GetRawResourceHeartbeatEvent27 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity27;
-  source?: string | null | undefined;
 };
 
 export type KeySchema = {
@@ -3088,7 +2594,6 @@ export type DataStatus27 = {
 export type DataAwsDynamoDb = {
   billingMode?: string | null | undefined;
   deletionProtectionEnabled?: boolean | null | undefined;
-  events: Array<GetRawResourceHeartbeatEvent27>;
   globalSecondaryIndexCount?: number | null | undefined;
   itemCount?: number | null | undefined;
   keySchema: Array<KeySchema>;
@@ -3120,21 +2625,6 @@ export type DataUnion7 =
 export type DataKv = {
   data: DataAwsDynamoDb | DataGcpFirestore | DataAzureTable | DataLocal7;
   resourceType: "kv";
-};
-
-export const EventSeverity26 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity26 = ClosedEnum<typeof EventSeverity26>;
-
-export type GetRawResourceHeartbeatEvent26 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity26;
-  source?: string | null | undefined;
 };
 
 export const Reason26 = {
@@ -3194,27 +2684,11 @@ export type DataStatus26 = {
 };
 
 export type DataLocal6 = {
-  events: Array<GetRawResourceHeartbeatEvent26>;
   name: string;
   path?: string | null | undefined;
   serviceStatus?: string | null | undefined;
   status: DataStatus26;
   backend: "local";
-};
-
-export const EventSeverity25 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity25 = ClosedEnum<typeof EventSeverity25>;
-
-export type GetRawResourceHeartbeatEvent25 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity25;
-  source?: string | null | undefined;
 };
 
 export const Reason25 = {
@@ -3286,7 +2760,6 @@ export type DataAzureServiceBus = {
   enableExpress?: boolean | null | undefined;
   enablePartitioning?: boolean | null | undefined;
   endpoint?: string | null | undefined;
-  events: Array<GetRawResourceHeartbeatEvent25>;
   forwardDeadLetteredMessagesTo?: string | null | undefined;
   forwardTo?: string | null | undefined;
   lockDuration?: string | null | undefined;
@@ -3308,21 +2781,6 @@ export type DataAzureServiceBus = {
   transferMessageCount?: number | null | undefined;
   updatedAt?: string | null | undefined;
   backend: "azureServiceBus";
-};
-
-export const EventSeverity24 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity24 = ClosedEnum<typeof EventSeverity24>;
-
-export type GetRawResourceHeartbeatEvent24 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity24;
-  source?: string | null | undefined;
 };
 
 export const Reason24 = {
@@ -3383,7 +2841,6 @@ export type DataStatus24 = {
 
 export type DataGcpPubSub = {
   endpoint?: string | null | undefined;
-  events: Array<GetRawResourceHeartbeatEvent24>;
   kmsKeyName?: string | null | undefined;
   messageStorageAllowedPersistenceRegions: Array<string>;
   messageStorageEnforceInTransit?: boolean | null | undefined;
@@ -3418,21 +2875,6 @@ export type DataGcpPubSub = {
   topicName: string;
   topicState?: string | null | undefined;
   backend: "gcpPubSub";
-};
-
-export const EventSeverity23 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity23 = ClosedEnum<typeof EventSeverity23>;
-
-export type GetRawResourceHeartbeatEvent23 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity23;
-  source?: string | null | undefined;
 };
 
 export const Reason23 = {
@@ -3499,7 +2941,6 @@ export type DataAwsSqs = {
   contentBasedDeduplication?: boolean | null | undefined;
   deduplicationScope?: string | null | undefined;
   delaySeconds?: number | null | undefined;
-  events: Array<GetRawResourceHeartbeatEvent23>;
   fifoQueue?: boolean | null | undefined;
   fifoThroughputLimit?: string | null | undefined;
   kmsDataKeyReusePeriodSeconds?: number | null | undefined;
@@ -3548,19 +2989,36 @@ export type Cpu10 = {
 
 export type CpuUnion10 = Cpu10 | any;
 
-export const EventSeverity22 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity22 = ClosedEnum<typeof EventSeverity22>;
+export type InvolvedObject8 = {
+  apiVersion?: string | null | undefined;
+  fieldPath?: string | null | undefined;
+  kind?: string | null | undefined;
+  name?: string | null | undefined;
+  namespace?: string | null | undefined;
+  resourceVersion?: string | null | undefined;
+  uid?: string | null | undefined;
+};
 
-export type GetRawResourceHeartbeatEvent22 = {
-  kind: string;
+export type InvolvedObjectUnion8 = InvolvedObject8 | any;
+
+export type Source8 = {
+  component?: string | null | undefined;
+  host?: string | null | undefined;
+};
+
+export type SourceUnion8 = Source8 | any;
+
+export type GetRawResourceHeartbeatEvent11 = {
+  count?: number | null | undefined;
+  eventTime?: Date | null | undefined;
+  firstTimestamp?: Date | null | undefined;
+  involvedObject?: InvolvedObject8 | any | null | undefined;
+  lastTimestamp?: Date | null | undefined;
   message: string;
-  observedAt: Date;
-  severity: EventSeverity22;
-  source?: string | null | undefined;
+  raw?: any | null | undefined;
+  reason: string;
+  source?: Source8 | any | null | undefined;
+  type?: string | null | undefined;
 };
 
 export const MemoryUnit10 = {
@@ -3792,7 +3250,7 @@ export type DataStatus22 = {
 
 export type Data1 = {
   cpu?: Cpu10 | any | null | undefined;
-  events: Array<GetRawResourceHeartbeatEvent22>;
+  events: Array<GetRawResourceHeartbeatEvent11>;
   memory?: Memory10 | any | null | undefined;
   name: string;
   namespace?: string | null | undefined;
@@ -3807,21 +3265,6 @@ export type Data1 = {
 export type DataKubernetesCluster = {
   data: Data1;
   resourceType: "kubernetes-cluster";
-};
-
-export const EventSeverity21 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity21 = ClosedEnum<typeof EventSeverity21>;
-
-export type GetRawResourceHeartbeatEvent21 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity21;
-  source?: string | null | undefined;
 };
 
 export type Nodes4 = {
@@ -3892,7 +3335,6 @@ export type DataLocal5 = {
   dockerAvailable: boolean;
   dockerOs?: string | null | undefined;
   dockerVersion?: string | null | undefined;
-  events: Array<GetRawResourceHeartbeatEvent21>;
   hostIdentifier?: string | null | undefined;
   name: string;
   networkAvailable: boolean;
@@ -3956,21 +3398,6 @@ export type Cpu9 = {
 };
 
 export type CpuUnion9 = Cpu9 | any;
-
-export const EventSeverity20 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity20 = ClosedEnum<typeof EventSeverity20>;
-
-export type GetRawResourceHeartbeatEvent20 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity20;
-  source?: string | null | undefined;
-};
 
 export const MemoryUnit9 = {
   Count: "count",
@@ -4063,7 +3490,6 @@ export type DataAzure2 = {
   backendClusterId?: string | null | undefined;
   capacityGroups: Array<CapacityGroup3>;
   cpu?: Cpu9 | any | null | undefined;
-  events: Array<GetRawResourceHeartbeatEvent20>;
   memory?: Memory9 | any | null | undefined;
   name: string;
   nodes: Nodes3;
@@ -4125,21 +3551,6 @@ export type Cpu8 = {
 };
 
 export type CpuUnion8 = Cpu8 | any;
-
-export const EventSeverity19 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity19 = ClosedEnum<typeof EventSeverity19>;
-
-export type GetRawResourceHeartbeatEvent19 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity19;
-  source?: string | null | undefined;
-};
 
 export const MemoryUnit8 = {
   Count: "count",
@@ -4232,7 +3643,6 @@ export type DataGcp2 = {
   backendClusterId?: string | null | undefined;
   capacityGroups: Array<CapacityGroup2>;
   cpu?: Cpu8 | any | null | undefined;
-  events: Array<GetRawResourceHeartbeatEvent19>;
   memory?: Memory8 | any | null | undefined;
   name: string;
   nodes: Nodes2;
@@ -4294,21 +3704,6 @@ export type Cpu7 = {
 };
 
 export type CpuUnion7 = Cpu7 | any;
-
-export const EventSeverity18 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity18 = ClosedEnum<typeof EventSeverity18>;
-
-export type GetRawResourceHeartbeatEvent18 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity18;
-  source?: string | null | undefined;
-};
 
 export const MemoryUnit7 = {
   Count: "count",
@@ -4401,7 +3796,6 @@ export type DataAws2 = {
   backendClusterId?: string | null | undefined;
   capacityGroups: Array<CapacityGroup1>;
   cpu?: Cpu7 | any | null | undefined;
-  events: Array<GetRawResourceHeartbeatEvent18>;
   memory?: Memory7 | any | null | undefined;
   name: string;
   nodes: Nodes1;
@@ -4418,19 +3812,85 @@ export type DataComputeCluster = {
   resourceType: "compute-cluster";
 };
 
-export const EventSeverity17 = {
+export const DaemonInstanceCpuUnit = {
+  Count: "count",
+  Percent: "percent",
+  Bytes: "bytes",
+  Cores: "cores",
+  Milliseconds: "milliseconds",
+  RequestsPerSecond: "requests-per-second",
+} as const;
+export type DaemonInstanceCpuUnit = ClosedEnum<typeof DaemonInstanceCpuUnit>;
+
+export type DaemonInstanceCpu = {
+  unit: DaemonInstanceCpuUnit;
+  value: number;
+};
+
+export type DaemonInstanceCpuUnion4 = DaemonInstanceCpu | any;
+
+export const DaemonInstanceKind = {
+  Container: "container",
+  Process: "process",
+  Daemon: "daemon",
+} as const;
+export type DaemonInstanceKind = ClosedEnum<typeof DaemonInstanceKind>;
+
+export const DaemonInstanceMemoryUnit = {
+  Count: "count",
+  Percent: "percent",
+  Bytes: "bytes",
+  Cores: "cores",
+  Milliseconds: "milliseconds",
+  RequestsPerSecond: "requests-per-second",
+} as const;
+export type DaemonInstanceMemoryUnit = ClosedEnum<
+  typeof DaemonInstanceMemoryUnit
+>;
+
+export type DaemonInstanceMemory = {
+  unit: DaemonInstanceMemoryUnit;
+  value: number;
+};
+
+export type DaemonInstanceMemoryUnion4 = DaemonInstanceMemory | any;
+
+export type DaemonInstance4 = {
+  cpu?: DaemonInstanceCpu | any | null | undefined;
+  kind: DaemonInstanceKind;
+  memory?: DaemonInstanceMemory | any | null | undefined;
+  name: string;
+  phase?: string | null | undefined;
+  pid?: number | null | undefined;
+  ready: boolean;
+  restartCount?: number | null | undefined;
+  unitId: string;
+};
+
+export type DaemonInstanceUnion = DaemonInstance4 | any;
+
+export const EventSeverity3 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type EventSeverity17 = ClosedEnum<typeof EventSeverity17>;
+export type EventSeverity3 = ClosedEnum<typeof EventSeverity3>;
 
-export type GetRawResourceHeartbeatEvent17 = {
+export type Subject3 = {
+  id?: string | null | undefined;
+  kind: string;
+  name?: string | null | undefined;
+};
+
+export type SubjectUnion3 = Subject3 | any;
+
+export type GetRawResourceHeartbeatEvent10 = {
   kind: string;
   message: string;
-  observedAt: Date;
-  severity: EventSeverity17;
-  source?: string | null | undefined;
+  raw?: any | null | undefined;
+  severity: EventSeverity3;
+  subject?: Subject3 | any | null | undefined;
+  timestamp: Date;
 };
 
 export const Reason17 = {
@@ -4491,8 +3951,9 @@ export type DataStatus17 = {
 
 export type DataLocal4 = {
   commandSupported: boolean;
+  daemonInstance?: DaemonInstance4 | any | null | undefined;
   daemonName: string;
-  events: Array<GetRawResourceHeartbeatEvent17>;
+  events: Array<GetRawResourceHeartbeatEvent10>;
   exitReason?: string | null | undefined;
   imagePathPresent: boolean;
   pid?: number | null | undefined;
@@ -4519,75 +3980,36 @@ export type Cpu6 = {
 
 export type CpuUnion6 = Cpu6 | any;
 
-export const EventSeverity16 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity16 = ClosedEnum<typeof EventSeverity16>;
-
-export type GetRawResourceHeartbeatEvent16 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity16;
-  source?: string | null | undefined;
-};
-
-export const CpuInstanceUnit6 = {
-  Count: "count",
-  Percent: "percent",
-  Bytes: "bytes",
-  Cores: "cores",
-  Milliseconds: "milliseconds",
-  RequestsPerSecond: "requests-per-second",
-} as const;
-export type CpuInstanceUnit6 = ClosedEnum<typeof CpuInstanceUnit6>;
-
-export type CpuInstance6 = {
-  unit: CpuInstanceUnit6;
-  value: number;
-};
-
-export type InstanceCpuUnion6 = CpuInstance6 | any;
-
-export const MemoryInstanceUnit6 = {
-  Count: "count",
-  Percent: "percent",
-  Bytes: "bytes",
-  Cores: "cores",
-  Milliseconds: "milliseconds",
-  RequestsPerSecond: "requests-per-second",
-} as const;
-export type MemoryInstanceUnit6 = ClosedEnum<typeof MemoryInstanceUnit6>;
-
-export type MemoryInstance6 = {
-  unit: MemoryInstanceUnit6;
-  value: number;
-};
-
-export type InstanceMemoryUnion6 = MemoryInstance6 | any;
-
-export type OwnerReference3 = {
-  controller: boolean;
-  kind: string;
-  name: string;
-  uid: string;
-};
-
-export type GetRawResourceHeartbeatInstance6 = {
-  cpu?: CpuInstance6 | any | null | undefined;
-  memory?: MemoryInstance6 | any | null | undefined;
-  name: string;
-  nodeName?: string | null | undefined;
-  ownerReferences: Array<OwnerReference3>;
-  phase?: string | null | undefined;
-  podIp?: string | null | undefined;
-  ready: boolean;
-  restartCount: number;
-  terminatedReason?: string | null | undefined;
+export type InvolvedObject7 = {
+  apiVersion?: string | null | undefined;
+  fieldPath?: string | null | undefined;
+  kind?: string | null | undefined;
+  name?: string | null | undefined;
+  namespace?: string | null | undefined;
+  resourceVersion?: string | null | undefined;
   uid?: string | null | undefined;
-  waitingReason?: string | null | undefined;
+};
+
+export type InvolvedObjectUnion7 = InvolvedObject7 | any;
+
+export type Source7 = {
+  component?: string | null | undefined;
+  host?: string | null | undefined;
+};
+
+export type SourceUnion7 = Source7 | any;
+
+export type GetRawResourceHeartbeatEvent9 = {
+  count?: number | null | undefined;
+  eventTime?: Date | null | undefined;
+  firstTimestamp?: Date | null | undefined;
+  involvedObject?: InvolvedObject7 | any | null | undefined;
+  lastTimestamp?: Date | null | undefined;
+  message: string;
+  raw?: any | null | undefined;
+  reason: string;
+  source?: Source7 | any | null | undefined;
+  type?: string | null | undefined;
 };
 
 export const MemoryUnit6 = {
@@ -4606,6 +4028,62 @@ export type Memory6 = {
 };
 
 export type MemoryUnion6 = Memory6 | any;
+
+export const CpuPodUnit3 = {
+  Count: "count",
+  Percent: "percent",
+  Bytes: "bytes",
+  Cores: "cores",
+  Milliseconds: "milliseconds",
+  RequestsPerSecond: "requests-per-second",
+} as const;
+export type CpuPodUnit3 = ClosedEnum<typeof CpuPodUnit3>;
+
+export type CpuPod3 = {
+  unit: CpuPodUnit3;
+  value: number;
+};
+
+export type PodCpuUnion3 = CpuPod3 | any;
+
+export const MemoryPodUnit3 = {
+  Count: "count",
+  Percent: "percent",
+  Bytes: "bytes",
+  Cores: "cores",
+  Milliseconds: "milliseconds",
+  RequestsPerSecond: "requests-per-second",
+} as const;
+export type MemoryPodUnit3 = ClosedEnum<typeof MemoryPodUnit3>;
+
+export type MemoryPod3 = {
+  unit: MemoryPodUnit3;
+  value: number;
+};
+
+export type PodMemoryUnion3 = MemoryPod3 | any;
+
+export type OwnerReference3 = {
+  controller: boolean;
+  kind: string;
+  name: string;
+  uid: string;
+};
+
+export type Pod3 = {
+  cpu?: CpuPod3 | any | null | undefined;
+  memory?: MemoryPod3 | any | null | undefined;
+  name: string;
+  nodeName?: string | null | undefined;
+  ownerReferences: Array<OwnerReference3>;
+  phase?: string | null | undefined;
+  podIp?: string | null | undefined;
+  ready: boolean;
+  restartCount: number;
+  terminatedReason?: string | null | undefined;
+  uid?: string | null | undefined;
+  waitingReason?: string | null | undefined;
+};
 
 export type Replicas4 = {
   available?: number | null | undefined;
@@ -4696,11 +4174,11 @@ export type WorkloadUnion3 = Workload3 | any;
 export type DataKubernetes3 = {
   commandSupported: boolean;
   cpu?: Cpu6 | any | null | undefined;
-  events: Array<GetRawResourceHeartbeatEvent16>;
-  instances: Array<GetRawResourceHeartbeatInstance6>;
+  events: Array<GetRawResourceHeartbeatEvent9>;
   memory?: Memory6 | any | null | undefined;
   name: string;
   namespace: string;
+  pods: Array<Pod3>;
   replicas: Replicas4;
   restarts?: number | null | undefined;
   status: DataStatus16;
@@ -4708,22 +4186,7 @@ export type DataKubernetes3 = {
   backend: "kubernetes";
 };
 
-export const EventSeverity15 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity15 = ClosedEnum<typeof EventSeverity15>;
-
-export type GetRawResourceHeartbeatEvent15 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity15;
-  source?: string | null | undefined;
-};
-
-export const CpuInstanceUnit5 = {
+export const CpuDaemonInstanceUnit3 = {
   Count: "count",
   Percent: "percent",
   Bytes: "bytes",
@@ -4731,16 +4194,16 @@ export const CpuInstanceUnit5 = {
   Milliseconds: "milliseconds",
   RequestsPerSecond: "requests-per-second",
 } as const;
-export type CpuInstanceUnit5 = ClosedEnum<typeof CpuInstanceUnit5>;
+export type CpuDaemonInstanceUnit3 = ClosedEnum<typeof CpuDaemonInstanceUnit3>;
 
-export type CpuInstance5 = {
-  unit: CpuInstanceUnit5;
+export type CpuDaemonInstance3 = {
+  unit: CpuDaemonInstanceUnit3;
   value: number;
 };
 
-export type InstanceCpuUnion5 = CpuInstance5 | any;
+export type DaemonInstanceCpuUnion3 = CpuDaemonInstance3 | any;
 
-export const MemoryInstanceUnit5 = {
+export const MemoryDaemonInstanceUnit3 = {
   Count: "count",
   Percent: "percent",
   Bytes: "bytes",
@@ -4748,20 +4211,22 @@ export const MemoryInstanceUnit5 = {
   Milliseconds: "milliseconds",
   RequestsPerSecond: "requests-per-second",
 } as const;
-export type MemoryInstanceUnit5 = ClosedEnum<typeof MemoryInstanceUnit5>;
+export type MemoryDaemonInstanceUnit3 = ClosedEnum<
+  typeof MemoryDaemonInstanceUnit3
+>;
 
-export type MemoryInstance5 = {
-  unit: MemoryInstanceUnit5;
+export type MemoryDaemonInstance3 = {
+  unit: MemoryDaemonInstanceUnit3;
   value: number;
 };
 
-export type InstanceMemoryUnion5 = MemoryInstance5 | any;
+export type DaemonInstanceMemoryUnion3 = MemoryDaemonInstance3 | any;
 
-export type GetRawResourceHeartbeatInstance5 = {
-  cpu?: CpuInstance5 | any | null | undefined;
+export type DaemonInstance3 = {
+  cpu?: CpuDaemonInstance3 | any | null | undefined;
   ip?: string | null | undefined;
   machineId?: string | null | undefined;
-  memory?: MemoryInstance5 | any | null | undefined;
+  memory?: MemoryDaemonInstance3 | any | null | undefined;
   message?: string | null | undefined;
   metricsHealthy?: boolean | null | undefined;
   metricsLastUpdated?: string | null | undefined;
@@ -4776,6 +4241,39 @@ export type GetRawResourceHeartbeatInstance5 = {
   status?: string | null | undefined;
   terminatedReason?: string | null | undefined;
   waitingReason?: string | null | undefined;
+};
+
+export type InvolvedObject6 = {
+  details?: any | null | undefined;
+  id?: string | null | undefined;
+  kind?: string | null | undefined;
+  machineId?: string | null | undefined;
+  name?: string | null | undefined;
+  replicaId?: string | null | undefined;
+};
+
+export type InvolvedObjectUnion6 = InvolvedObject6 | any;
+
+export type Source6 = {
+  component?: string | null | undefined;
+  host?: string | null | undefined;
+};
+
+export type SourceUnion6 = Source6 | any;
+
+export type GetRawResourceHeartbeatEvent8 = {
+  count?: number | null | undefined;
+  details?: any | null | undefined;
+  eventId?: string | null | undefined;
+  eventTime?: Date | null | undefined;
+  firstTimestamp?: Date | null | undefined;
+  involvedObject?: InvolvedObject6 | any | null | undefined;
+  lastTimestamp?: Date | null | undefined;
+  message: string;
+  raw?: any | null | undefined;
+  reason: string;
+  source?: Source6 | any | null | undefined;
+  type?: string | null | undefined;
 };
 
 export const Reason15 = {
@@ -4838,37 +4336,22 @@ export type DataAzure1 = {
   assignedMachines: number;
   capacityGroup: string;
   commandSupported: boolean;
+  daemonInstances: Array<DaemonInstance3>;
   daemonName: string;
   desiredMachines: number;
-  events: Array<GetRawResourceHeartbeatEvent15>;
+  events: Array<GetRawResourceHeartbeatEvent8>;
   healthyInstances: number;
   horizonClusterId: string;
   horizonStatus: string;
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
-  instances: Array<GetRawResourceHeartbeatInstance5>;
   latestUpdateTimestamp: string;
   status: DataStatus15;
   unavailableInstances: number;
   backend: "azure";
 };
 
-export const EventSeverity14 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity14 = ClosedEnum<typeof EventSeverity14>;
-
-export type GetRawResourceHeartbeatEvent14 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity14;
-  source?: string | null | undefined;
-};
-
-export const CpuInstanceUnit4 = {
+export const CpuDaemonInstanceUnit2 = {
   Count: "count",
   Percent: "percent",
   Bytes: "bytes",
@@ -4876,16 +4359,16 @@ export const CpuInstanceUnit4 = {
   Milliseconds: "milliseconds",
   RequestsPerSecond: "requests-per-second",
 } as const;
-export type CpuInstanceUnit4 = ClosedEnum<typeof CpuInstanceUnit4>;
+export type CpuDaemonInstanceUnit2 = ClosedEnum<typeof CpuDaemonInstanceUnit2>;
 
-export type CpuInstance4 = {
-  unit: CpuInstanceUnit4;
+export type CpuDaemonInstance2 = {
+  unit: CpuDaemonInstanceUnit2;
   value: number;
 };
 
-export type InstanceCpuUnion4 = CpuInstance4 | any;
+export type DaemonInstanceCpuUnion2 = CpuDaemonInstance2 | any;
 
-export const MemoryInstanceUnit4 = {
+export const MemoryDaemonInstanceUnit2 = {
   Count: "count",
   Percent: "percent",
   Bytes: "bytes",
@@ -4893,20 +4376,22 @@ export const MemoryInstanceUnit4 = {
   Milliseconds: "milliseconds",
   RequestsPerSecond: "requests-per-second",
 } as const;
-export type MemoryInstanceUnit4 = ClosedEnum<typeof MemoryInstanceUnit4>;
+export type MemoryDaemonInstanceUnit2 = ClosedEnum<
+  typeof MemoryDaemonInstanceUnit2
+>;
 
-export type MemoryInstance4 = {
-  unit: MemoryInstanceUnit4;
+export type MemoryDaemonInstance2 = {
+  unit: MemoryDaemonInstanceUnit2;
   value: number;
 };
 
-export type InstanceMemoryUnion4 = MemoryInstance4 | any;
+export type DaemonInstanceMemoryUnion2 = MemoryDaemonInstance2 | any;
 
-export type GetRawResourceHeartbeatInstance4 = {
-  cpu?: CpuInstance4 | any | null | undefined;
+export type DaemonInstance2 = {
+  cpu?: CpuDaemonInstance2 | any | null | undefined;
   ip?: string | null | undefined;
   machineId?: string | null | undefined;
-  memory?: MemoryInstance4 | any | null | undefined;
+  memory?: MemoryDaemonInstance2 | any | null | undefined;
   message?: string | null | undefined;
   metricsHealthy?: boolean | null | undefined;
   metricsLastUpdated?: string | null | undefined;
@@ -4921,6 +4406,39 @@ export type GetRawResourceHeartbeatInstance4 = {
   status?: string | null | undefined;
   terminatedReason?: string | null | undefined;
   waitingReason?: string | null | undefined;
+};
+
+export type InvolvedObject5 = {
+  details?: any | null | undefined;
+  id?: string | null | undefined;
+  kind?: string | null | undefined;
+  machineId?: string | null | undefined;
+  name?: string | null | undefined;
+  replicaId?: string | null | undefined;
+};
+
+export type InvolvedObjectUnion5 = InvolvedObject5 | any;
+
+export type Source5 = {
+  component?: string | null | undefined;
+  host?: string | null | undefined;
+};
+
+export type SourceUnion5 = Source5 | any;
+
+export type GetRawResourceHeartbeatEvent7 = {
+  count?: number | null | undefined;
+  details?: any | null | undefined;
+  eventId?: string | null | undefined;
+  eventTime?: Date | null | undefined;
+  firstTimestamp?: Date | null | undefined;
+  involvedObject?: InvolvedObject5 | any | null | undefined;
+  lastTimestamp?: Date | null | undefined;
+  message: string;
+  raw?: any | null | undefined;
+  reason: string;
+  source?: Source5 | any | null | undefined;
+  type?: string | null | undefined;
 };
 
 export const Reason14 = {
@@ -4983,37 +4501,22 @@ export type DataGcp1 = {
   assignedMachines: number;
   capacityGroup: string;
   commandSupported: boolean;
+  daemonInstances: Array<DaemonInstance2>;
   daemonName: string;
   desiredMachines: number;
-  events: Array<GetRawResourceHeartbeatEvent14>;
+  events: Array<GetRawResourceHeartbeatEvent7>;
   healthyInstances: number;
   horizonClusterId: string;
   horizonStatus: string;
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
-  instances: Array<GetRawResourceHeartbeatInstance4>;
   latestUpdateTimestamp: string;
   status: DataStatus14;
   unavailableInstances: number;
   backend: "gcp";
 };
 
-export const EventSeverity13 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity13 = ClosedEnum<typeof EventSeverity13>;
-
-export type GetRawResourceHeartbeatEvent13 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity13;
-  source?: string | null | undefined;
-};
-
-export const CpuInstanceUnit3 = {
+export const CpuDaemonInstanceUnit1 = {
   Count: "count",
   Percent: "percent",
   Bytes: "bytes",
@@ -5021,16 +4524,16 @@ export const CpuInstanceUnit3 = {
   Milliseconds: "milliseconds",
   RequestsPerSecond: "requests-per-second",
 } as const;
-export type CpuInstanceUnit3 = ClosedEnum<typeof CpuInstanceUnit3>;
+export type CpuDaemonInstanceUnit1 = ClosedEnum<typeof CpuDaemonInstanceUnit1>;
 
-export type CpuInstance3 = {
-  unit: CpuInstanceUnit3;
+export type CpuDaemonInstance1 = {
+  unit: CpuDaemonInstanceUnit1;
   value: number;
 };
 
-export type InstanceCpuUnion3 = CpuInstance3 | any;
+export type DaemonInstanceCpuUnion1 = CpuDaemonInstance1 | any;
 
-export const MemoryInstanceUnit3 = {
+export const MemoryDaemonInstanceUnit1 = {
   Count: "count",
   Percent: "percent",
   Bytes: "bytes",
@@ -5038,20 +4541,22 @@ export const MemoryInstanceUnit3 = {
   Milliseconds: "milliseconds",
   RequestsPerSecond: "requests-per-second",
 } as const;
-export type MemoryInstanceUnit3 = ClosedEnum<typeof MemoryInstanceUnit3>;
+export type MemoryDaemonInstanceUnit1 = ClosedEnum<
+  typeof MemoryDaemonInstanceUnit1
+>;
 
-export type MemoryInstance3 = {
-  unit: MemoryInstanceUnit3;
+export type MemoryDaemonInstance1 = {
+  unit: MemoryDaemonInstanceUnit1;
   value: number;
 };
 
-export type InstanceMemoryUnion3 = MemoryInstance3 | any;
+export type DaemonInstanceMemoryUnion1 = MemoryDaemonInstance1 | any;
 
-export type GetRawResourceHeartbeatInstance3 = {
-  cpu?: CpuInstance3 | any | null | undefined;
+export type DaemonInstance1 = {
+  cpu?: CpuDaemonInstance1 | any | null | undefined;
   ip?: string | null | undefined;
   machineId?: string | null | undefined;
-  memory?: MemoryInstance3 | any | null | undefined;
+  memory?: MemoryDaemonInstance1 | any | null | undefined;
   message?: string | null | undefined;
   metricsHealthy?: boolean | null | undefined;
   metricsLastUpdated?: string | null | undefined;
@@ -5066,6 +4571,39 @@ export type GetRawResourceHeartbeatInstance3 = {
   status?: string | null | undefined;
   terminatedReason?: string | null | undefined;
   waitingReason?: string | null | undefined;
+};
+
+export type InvolvedObject4 = {
+  details?: any | null | undefined;
+  id?: string | null | undefined;
+  kind?: string | null | undefined;
+  machineId?: string | null | undefined;
+  name?: string | null | undefined;
+  replicaId?: string | null | undefined;
+};
+
+export type InvolvedObjectUnion4 = InvolvedObject4 | any;
+
+export type Source4 = {
+  component?: string | null | undefined;
+  host?: string | null | undefined;
+};
+
+export type SourceUnion4 = Source4 | any;
+
+export type GetRawResourceHeartbeatEvent6 = {
+  count?: number | null | undefined;
+  details?: any | null | undefined;
+  eventId?: string | null | undefined;
+  eventTime?: Date | null | undefined;
+  firstTimestamp?: Date | null | undefined;
+  involvedObject?: InvolvedObject4 | any | null | undefined;
+  lastTimestamp?: Date | null | undefined;
+  message: string;
+  raw?: any | null | undefined;
+  reason: string;
+  source?: Source4 | any | null | undefined;
+  type?: string | null | undefined;
 };
 
 export const Reason13 = {
@@ -5128,15 +4666,15 @@ export type DataAws1 = {
   assignedMachines: number;
   capacityGroup: string;
   commandSupported: boolean;
+  daemonInstances: Array<DaemonInstance1>;
   daemonName: string;
   desiredMachines: number;
-  events: Array<GetRawResourceHeartbeatEvent13>;
+  events: Array<GetRawResourceHeartbeatEvent6>;
   healthyInstances: number;
   horizonClusterId: string;
   horizonStatus: string;
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
-  instances: Array<GetRawResourceHeartbeatInstance3>;
   latestUpdateTimestamp: string;
   status: DataStatus13;
   unavailableInstances: number;
@@ -5155,6 +4693,63 @@ export type DataDaemon = {
   resourceType: "daemon";
 };
 
+export const ContainerUnitCpuUnit = {
+  Count: "count",
+  Percent: "percent",
+  Bytes: "bytes",
+  Cores: "cores",
+  Milliseconds: "milliseconds",
+  RequestsPerSecond: "requests-per-second",
+} as const;
+export type ContainerUnitCpuUnit = ClosedEnum<typeof ContainerUnitCpuUnit>;
+
+export type ContainerUnitCpu = {
+  unit: ContainerUnitCpuUnit;
+  value: number;
+};
+
+export type ContainerUnitCpuUnion = ContainerUnitCpu | any;
+
+export const ContainerUnitKind = {
+  Container: "container",
+  Process: "process",
+  Daemon: "daemon",
+} as const;
+export type ContainerUnitKind = ClosedEnum<typeof ContainerUnitKind>;
+
+export const ContainerUnitMemoryUnit = {
+  Count: "count",
+  Percent: "percent",
+  Bytes: "bytes",
+  Cores: "cores",
+  Milliseconds: "milliseconds",
+  RequestsPerSecond: "requests-per-second",
+} as const;
+export type ContainerUnitMemoryUnit = ClosedEnum<
+  typeof ContainerUnitMemoryUnit
+>;
+
+export type ContainerUnitMemory = {
+  unit: ContainerUnitMemoryUnit;
+  value: number;
+};
+
+export type ContainerUnitMemoryUnion = ContainerUnitMemory | any;
+
+export type ContainerUnit = {
+  cpu?: ContainerUnitCpu | any | null | undefined;
+  kind: ContainerUnitKind;
+  memory?: ContainerUnitMemory | any | null | undefined;
+  name: string;
+  phase?: string | null | undefined;
+  pid?: number | null | undefined;
+  ready: boolean;
+  restartCount?: number | null | undefined;
+  unitId: string;
+};
+
+export type ContainerUnitUnion = ContainerUnit | any;
+
 export const CpuUnit5 = {
   Count: "count",
   Percent: "percent",
@@ -5172,19 +4767,28 @@ export type Cpu5 = {
 
 export type CpuUnion5 = Cpu5 | any;
 
-export const EventSeverity12 = {
+export const EventSeverity2 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type EventSeverity12 = ClosedEnum<typeof EventSeverity12>;
+export type EventSeverity2 = ClosedEnum<typeof EventSeverity2>;
 
-export type GetRawResourceHeartbeatEvent12 = {
+export type Subject2 = {
+  id?: string | null | undefined;
+  kind: string;
+  name?: string | null | undefined;
+};
+
+export type SubjectUnion2 = Subject2 | any;
+
+export type GetRawResourceHeartbeatEvent5 = {
   kind: string;
   message: string;
-  observedAt: Date;
-  severity: EventSeverity12;
-  source?: string | null | undefined;
+  raw?: any | null | undefined;
+  severity: EventSeverity2;
+  subject?: Subject2 | any | null | undefined;
+  timestamp: Date;
 };
 
 export const MemoryUnit5 = {
@@ -5263,8 +4867,9 @@ export type DataStatus12 = {
 export type DataLocal3 = {
   bindMountCount: number;
   containerId?: string | null | undefined;
+  containerUnit?: ContainerUnit | any | null | undefined;
   cpu?: Cpu5 | any | null | undefined;
-  events: Array<GetRawResourceHeartbeatEvent12>;
+  events: Array<GetRawResourceHeartbeatEvent5>;
   image?: string | null | undefined;
   localUrl?: string | null | undefined;
   memory?: Memory5 | any | null | undefined;
@@ -5294,75 +4899,36 @@ export type Cpu4 = {
 
 export type CpuUnion4 = Cpu4 | any;
 
-export const EventSeverity11 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity11 = ClosedEnum<typeof EventSeverity11>;
-
-export type GetRawResourceHeartbeatEvent11 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity11;
-  source?: string | null | undefined;
-};
-
-export const CpuInstanceUnit2 = {
-  Count: "count",
-  Percent: "percent",
-  Bytes: "bytes",
-  Cores: "cores",
-  Milliseconds: "milliseconds",
-  RequestsPerSecond: "requests-per-second",
-} as const;
-export type CpuInstanceUnit2 = ClosedEnum<typeof CpuInstanceUnit2>;
-
-export type CpuInstance2 = {
-  unit: CpuInstanceUnit2;
-  value: number;
-};
-
-export type InstanceCpuUnion2 = CpuInstance2 | any;
-
-export const MemoryInstanceUnit2 = {
-  Count: "count",
-  Percent: "percent",
-  Bytes: "bytes",
-  Cores: "cores",
-  Milliseconds: "milliseconds",
-  RequestsPerSecond: "requests-per-second",
-} as const;
-export type MemoryInstanceUnit2 = ClosedEnum<typeof MemoryInstanceUnit2>;
-
-export type MemoryInstance2 = {
-  unit: MemoryInstanceUnit2;
-  value: number;
-};
-
-export type InstanceMemoryUnion2 = MemoryInstance2 | any;
-
-export type OwnerReference2 = {
-  controller: boolean;
-  kind: string;
-  name: string;
-  uid: string;
-};
-
-export type GetRawResourceHeartbeatInstance2 = {
-  cpu?: CpuInstance2 | any | null | undefined;
-  memory?: MemoryInstance2 | any | null | undefined;
-  name: string;
-  nodeName?: string | null | undefined;
-  ownerReferences: Array<OwnerReference2>;
-  phase?: string | null | undefined;
-  podIp?: string | null | undefined;
-  ready: boolean;
-  restartCount: number;
-  terminatedReason?: string | null | undefined;
+export type InvolvedObject3 = {
+  apiVersion?: string | null | undefined;
+  fieldPath?: string | null | undefined;
+  kind?: string | null | undefined;
+  name?: string | null | undefined;
+  namespace?: string | null | undefined;
+  resourceVersion?: string | null | undefined;
   uid?: string | null | undefined;
-  waitingReason?: string | null | undefined;
+};
+
+export type InvolvedObjectUnion3 = InvolvedObject3 | any;
+
+export type Source3 = {
+  component?: string | null | undefined;
+  host?: string | null | undefined;
+};
+
+export type SourceUnion3 = Source3 | any;
+
+export type GetRawResourceHeartbeatEvent4 = {
+  count?: number | null | undefined;
+  eventTime?: Date | null | undefined;
+  firstTimestamp?: Date | null | undefined;
+  involvedObject?: InvolvedObject3 | any | null | undefined;
+  lastTimestamp?: Date | null | undefined;
+  message: string;
+  raw?: any | null | undefined;
+  reason: string;
+  source?: Source3 | any | null | undefined;
+  type?: string | null | undefined;
 };
 
 export const MemoryUnit4 = {
@@ -5381,6 +4947,62 @@ export type Memory4 = {
 };
 
 export type MemoryUnion4 = Memory4 | any;
+
+export const CpuPodUnit2 = {
+  Count: "count",
+  Percent: "percent",
+  Bytes: "bytes",
+  Cores: "cores",
+  Milliseconds: "milliseconds",
+  RequestsPerSecond: "requests-per-second",
+} as const;
+export type CpuPodUnit2 = ClosedEnum<typeof CpuPodUnit2>;
+
+export type CpuPod2 = {
+  unit: CpuPodUnit2;
+  value: number;
+};
+
+export type PodCpuUnion2 = CpuPod2 | any;
+
+export const MemoryPodUnit2 = {
+  Count: "count",
+  Percent: "percent",
+  Bytes: "bytes",
+  Cores: "cores",
+  Milliseconds: "milliseconds",
+  RequestsPerSecond: "requests-per-second",
+} as const;
+export type MemoryPodUnit2 = ClosedEnum<typeof MemoryPodUnit2>;
+
+export type MemoryPod2 = {
+  unit: MemoryPodUnit2;
+  value: number;
+};
+
+export type PodMemoryUnion2 = MemoryPod2 | any;
+
+export type OwnerReference2 = {
+  controller: boolean;
+  kind: string;
+  name: string;
+  uid: string;
+};
+
+export type Pod2 = {
+  cpu?: CpuPod2 | any | null | undefined;
+  memory?: MemoryPod2 | any | null | undefined;
+  name: string;
+  nodeName?: string | null | undefined;
+  ownerReferences: Array<OwnerReference2>;
+  phase?: string | null | undefined;
+  podIp?: string | null | undefined;
+  ready: boolean;
+  restartCount: number;
+  terminatedReason?: string | null | undefined;
+  uid?: string | null | undefined;
+  waitingReason?: string | null | undefined;
+};
 
 export type Replicas3 = {
   available?: number | null | undefined;
@@ -5479,11 +5101,11 @@ export type WorkloadKind2 = ClosedEnum<typeof WorkloadKind2>;
 
 export type DataKubernetes2 = {
   cpu?: Cpu4 | any | null | undefined;
-  events: Array<GetRawResourceHeartbeatEvent11>;
-  instances: Array<GetRawResourceHeartbeatInstance2>;
+  events: Array<GetRawResourceHeartbeatEvent4>;
   memory?: Memory4 | any | null | undefined;
   name: string;
   namespace: string;
+  pods: Array<Pod2>;
   replicas: Replicas3;
   restarts?: number | null | undefined;
   status: DataStatus11;
@@ -5509,19 +5131,37 @@ export type Cpu3 = {
 
 export type CpuUnion3 = Cpu3 | any;
 
-export const EventSeverity10 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity10 = ClosedEnum<typeof EventSeverity10>;
+export type InvolvedObject2 = {
+  details?: any | null | undefined;
+  id?: string | null | undefined;
+  kind?: string | null | undefined;
+  machineId?: string | null | undefined;
+  name?: string | null | undefined;
+  replicaId?: string | null | undefined;
+};
 
-export type GetRawResourceHeartbeatEvent10 = {
-  kind: string;
+export type InvolvedObjectUnion2 = InvolvedObject2 | any;
+
+export type Source2 = {
+  component?: string | null | undefined;
+  host?: string | null | undefined;
+};
+
+export type SourceUnion2 = Source2 | any;
+
+export type GetRawResourceHeartbeatEvent3 = {
+  count?: number | null | undefined;
+  details?: any | null | undefined;
+  eventId?: string | null | undefined;
+  eventTime?: Date | null | undefined;
+  firstTimestamp?: Date | null | undefined;
+  involvedObject?: InvolvedObject2 | any | null | undefined;
+  lastTimestamp?: Date | null | undefined;
   message: string;
-  observedAt: Date;
-  severity: EventSeverity10;
-  source?: string | null | undefined;
+  raw?: any | null | undefined;
+  reason: string;
+  source?: Source2 | any | null | undefined;
+  type?: string | null | undefined;
 };
 
 export const MemoryUnit3 = {
@@ -5540,6 +5180,61 @@ export type Memory3 = {
 };
 
 export type MemoryUnion3 = Memory3 | any;
+
+export const CpuReplicaUnitUnit = {
+  Count: "count",
+  Percent: "percent",
+  Bytes: "bytes",
+  Cores: "cores",
+  Milliseconds: "milliseconds",
+  RequestsPerSecond: "requests-per-second",
+} as const;
+export type CpuReplicaUnitUnit = ClosedEnum<typeof CpuReplicaUnitUnit>;
+
+export type CpuReplicaUnit = {
+  unit: CpuReplicaUnitUnit;
+  value: number;
+};
+
+export type ReplicaUnitCpuUnion = CpuReplicaUnit | any;
+
+export const MemoryReplicaUnitUnit = {
+  Count: "count",
+  Percent: "percent",
+  Bytes: "bytes",
+  Cores: "cores",
+  Milliseconds: "milliseconds",
+  RequestsPerSecond: "requests-per-second",
+} as const;
+export type MemoryReplicaUnitUnit = ClosedEnum<typeof MemoryReplicaUnitUnit>;
+
+export type MemoryReplicaUnit = {
+  unit: MemoryReplicaUnitUnit;
+  value: number;
+};
+
+export type ReplicaUnitMemoryUnion = MemoryReplicaUnit | any;
+
+export type ReplicaUnit = {
+  cpu?: CpuReplicaUnit | any | null | undefined;
+  ip?: string | null | undefined;
+  machineId?: string | null | undefined;
+  memory?: MemoryReplicaUnit | any | null | undefined;
+  message?: string | null | undefined;
+  metricsHealthy?: boolean | null | undefined;
+  metricsLastUpdated?: string | null | undefined;
+  metricsStatus?: string | null | undefined;
+  name: string;
+  nodeName?: string | null | undefined;
+  phase?: string | null | undefined;
+  ready: boolean;
+  reason?: string | null | undefined;
+  replicaId: string;
+  restartCount?: number | null | undefined;
+  status?: string | null | undefined;
+  terminatedReason?: string | null | undefined;
+  waitingReason?: string | null | undefined;
+};
 
 export type Replicas2 = {
   available?: number | null | undefined;
@@ -5617,9 +5312,10 @@ export type DataHorizonPlatform = {
   attentionCount: number;
   containerId: string;
   cpu?: Cpu3 | any | null | undefined;
-  events: Array<GetRawResourceHeartbeatEvent10>;
+  events: Array<GetRawResourceHeartbeatEvent3>;
   image?: string | null | undefined;
   memory?: Memory3 | any | null | undefined;
+  replicaUnits: Array<ReplicaUnit>;
   replicas: Replicas2;
   schedulingMode: SchedulingMode;
   status: DataStatus10;
@@ -5650,19 +5346,28 @@ export type Cpu2 = {
 
 export type CpuUnion2 = Cpu2 | any;
 
-export const EventSeverity9 = {
+export const EventSeverity1 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type EventSeverity9 = ClosedEnum<typeof EventSeverity9>;
+export type EventSeverity1 = ClosedEnum<typeof EventSeverity1>;
 
-export type GetRawResourceHeartbeatEvent9 = {
+export type Subject1 = {
+  id?: string | null | undefined;
+  kind: string;
+  name?: string | null | undefined;
+};
+
+export type SubjectUnion1 = Subject1 | any;
+
+export type GetRawResourceHeartbeatEvent2 = {
   kind: string;
   message: string;
-  observedAt: Date;
-  severity: EventSeverity9;
-  source?: string | null | undefined;
+  raw?: any | null | undefined;
+  severity: EventSeverity1;
+  subject?: Subject1 | any | null | undefined;
+  timestamp: Date;
 };
 
 export const MemoryUnit2 = {
@@ -5681,6 +5386,61 @@ export type Memory2 = {
 };
 
 export type MemoryUnion2 = Memory2 | any;
+
+export const ProcessCpuUnit = {
+  Count: "count",
+  Percent: "percent",
+  Bytes: "bytes",
+  Cores: "cores",
+  Milliseconds: "milliseconds",
+  RequestsPerSecond: "requests-per-second",
+} as const;
+export type ProcessCpuUnit = ClosedEnum<typeof ProcessCpuUnit>;
+
+export type ProcessCpu = {
+  unit: ProcessCpuUnit;
+  value: number;
+};
+
+export type ProcessCpuUnion = ProcessCpu | any;
+
+export const ProcessKind = {
+  Container: "container",
+  Process: "process",
+  Daemon: "daemon",
+} as const;
+export type ProcessKind = ClosedEnum<typeof ProcessKind>;
+
+export const ProcessMemoryUnit = {
+  Count: "count",
+  Percent: "percent",
+  Bytes: "bytes",
+  Cores: "cores",
+  Milliseconds: "milliseconds",
+  RequestsPerSecond: "requests-per-second",
+} as const;
+export type ProcessMemoryUnit = ClosedEnum<typeof ProcessMemoryUnit>;
+
+export type ProcessMemory = {
+  unit: ProcessMemoryUnit;
+  value: number;
+};
+
+export type ProcessMemoryUnion = ProcessMemory | any;
+
+export type Process = {
+  cpu?: ProcessCpu | any | null | undefined;
+  kind: ProcessKind;
+  memory?: ProcessMemory | any | null | undefined;
+  name: string;
+  phase?: string | null | undefined;
+  pid?: number | null | undefined;
+  ready: boolean;
+  restartCount?: number | null | undefined;
+  unitId: string;
+};
+
+export type ProcessUnion = Process | any;
 
 export const Reason9 = {
   Forbidden: "forbidden",
@@ -5741,10 +5501,11 @@ export type DataStatus9 = {
 export type DataLocal2 = {
   commandSupported: boolean;
   cpu?: Cpu2 | any | null | undefined;
-  events: Array<GetRawResourceHeartbeatEvent9>;
+  events: Array<GetRawResourceHeartbeatEvent2>;
   imagePathPresent: boolean;
   memory?: Memory2 | any | null | undefined;
   pid?: number | null | undefined;
+  process?: Process | any | null | undefined;
   readinessProbeOk?: boolean | null | undefined;
   status: DataStatus9;
   triggerCount: number;
@@ -5768,75 +5529,36 @@ export type Cpu1 = {
 
 export type CpuUnion1 = Cpu1 | any;
 
-export const EventSeverity8 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity8 = ClosedEnum<typeof EventSeverity8>;
-
-export type GetRawResourceHeartbeatEvent8 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity8;
-  source?: string | null | undefined;
-};
-
-export const CpuInstanceUnit1 = {
-  Count: "count",
-  Percent: "percent",
-  Bytes: "bytes",
-  Cores: "cores",
-  Milliseconds: "milliseconds",
-  RequestsPerSecond: "requests-per-second",
-} as const;
-export type CpuInstanceUnit1 = ClosedEnum<typeof CpuInstanceUnit1>;
-
-export type CpuInstance1 = {
-  unit: CpuInstanceUnit1;
-  value: number;
-};
-
-export type InstanceCpuUnion1 = CpuInstance1 | any;
-
-export const MemoryInstanceUnit1 = {
-  Count: "count",
-  Percent: "percent",
-  Bytes: "bytes",
-  Cores: "cores",
-  Milliseconds: "milliseconds",
-  RequestsPerSecond: "requests-per-second",
-} as const;
-export type MemoryInstanceUnit1 = ClosedEnum<typeof MemoryInstanceUnit1>;
-
-export type MemoryInstance1 = {
-  unit: MemoryInstanceUnit1;
-  value: number;
-};
-
-export type InstanceMemoryUnion1 = MemoryInstance1 | any;
-
-export type OwnerReference1 = {
-  controller: boolean;
-  kind: string;
-  name: string;
-  uid: string;
-};
-
-export type GetRawResourceHeartbeatInstance1 = {
-  cpu?: CpuInstance1 | any | null | undefined;
-  memory?: MemoryInstance1 | any | null | undefined;
-  name: string;
-  nodeName?: string | null | undefined;
-  ownerReferences: Array<OwnerReference1>;
-  phase?: string | null | undefined;
-  podIp?: string | null | undefined;
-  ready: boolean;
-  restartCount: number;
-  terminatedReason?: string | null | undefined;
+export type InvolvedObject1 = {
+  apiVersion?: string | null | undefined;
+  fieldPath?: string | null | undefined;
+  kind?: string | null | undefined;
+  name?: string | null | undefined;
+  namespace?: string | null | undefined;
+  resourceVersion?: string | null | undefined;
   uid?: string | null | undefined;
-  waitingReason?: string | null | undefined;
+};
+
+export type InvolvedObjectUnion1 = InvolvedObject1 | any;
+
+export type Source1 = {
+  component?: string | null | undefined;
+  host?: string | null | undefined;
+};
+
+export type SourceUnion1 = Source1 | any;
+
+export type GetRawResourceHeartbeatEvent1 = {
+  count?: number | null | undefined;
+  eventTime?: Date | null | undefined;
+  firstTimestamp?: Date | null | undefined;
+  involvedObject?: InvolvedObject1 | any | null | undefined;
+  lastTimestamp?: Date | null | undefined;
+  message: string;
+  raw?: any | null | undefined;
+  reason: string;
+  source?: Source1 | any | null | undefined;
+  type?: string | null | undefined;
 };
 
 export const MemoryUnit1 = {
@@ -5855,6 +5577,62 @@ export type Memory1 = {
 };
 
 export type MemoryUnion1 = Memory1 | any;
+
+export const CpuPodUnit1 = {
+  Count: "count",
+  Percent: "percent",
+  Bytes: "bytes",
+  Cores: "cores",
+  Milliseconds: "milliseconds",
+  RequestsPerSecond: "requests-per-second",
+} as const;
+export type CpuPodUnit1 = ClosedEnum<typeof CpuPodUnit1>;
+
+export type CpuPod1 = {
+  unit: CpuPodUnit1;
+  value: number;
+};
+
+export type PodCpuUnion1 = CpuPod1 | any;
+
+export const MemoryPodUnit1 = {
+  Count: "count",
+  Percent: "percent",
+  Bytes: "bytes",
+  Cores: "cores",
+  Milliseconds: "milliseconds",
+  RequestsPerSecond: "requests-per-second",
+} as const;
+export type MemoryPodUnit1 = ClosedEnum<typeof MemoryPodUnit1>;
+
+export type MemoryPod1 = {
+  unit: MemoryPodUnit1;
+  value: number;
+};
+
+export type PodMemoryUnion1 = MemoryPod1 | any;
+
+export type OwnerReference1 = {
+  controller: boolean;
+  kind: string;
+  name: string;
+  uid: string;
+};
+
+export type Pod1 = {
+  cpu?: CpuPod1 | any | null | undefined;
+  memory?: MemoryPod1 | any | null | undefined;
+  name: string;
+  nodeName?: string | null | undefined;
+  ownerReferences: Array<OwnerReference1>;
+  phase?: string | null | undefined;
+  podIp?: string | null | undefined;
+  ready: boolean;
+  restartCount: number;
+  terminatedReason?: string | null | undefined;
+  uid?: string | null | undefined;
+  waitingReason?: string | null | undefined;
+};
 
 export type Replicas1 = {
   available?: number | null | undefined;
@@ -5953,11 +5731,11 @@ export type WorkloadKind1 = ClosedEnum<typeof WorkloadKind1>;
 
 export type DataKubernetes1 = {
   cpu?: Cpu1 | any | null | undefined;
-  events: Array<GetRawResourceHeartbeatEvent8>;
-  instances: Array<GetRawResourceHeartbeatInstance1>;
+  events: Array<GetRawResourceHeartbeatEvent1>;
   memory?: Memory1 | any | null | undefined;
   name: string;
   namespace: string;
+  pods: Array<Pod1>;
   replicas: Replicas1;
   restarts?: number | null | undefined;
   status: DataStatus8;
@@ -5965,21 +5743,6 @@ export type DataKubernetes1 = {
   workload?: Workload1 | any | null | undefined;
   workloadKind: WorkloadKind1;
   backend: "kubernetes";
-};
-
-export const EventSeverity7 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity7 = ClosedEnum<typeof EventSeverity7>;
-
-export type GetRawResourceHeartbeatEvent7 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity7;
-  source?: string | null | undefined;
 };
 
 export const Reason7 = {
@@ -6042,7 +5805,6 @@ export type DataAzureContainerApps1 = {
   appName: string;
   cpu?: number | null | undefined;
   environmentName?: string | null | undefined;
-  events: Array<GetRawResourceHeartbeatEvent7>;
   ingressFqdn?: string | null | undefined;
   maxReplicas?: number | null | undefined;
   memory?: string | null | undefined;
@@ -6052,21 +5814,6 @@ export type DataAzureContainerApps1 = {
   runningStatus?: string | null | undefined;
   status: DataStatus7;
   backend: "azureContainerApps";
-};
-
-export const EventSeverity6 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity6 = ClosedEnum<typeof EventSeverity6>;
-
-export type GetRawResourceHeartbeatEvent6 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity6;
-  source?: string | null | undefined;
 };
 
 export const Reason6 = {
@@ -6128,7 +5875,6 @@ export type DataStatus6 = {
 export type DataGcpCloudRun = {
   containerImage?: string | null | undefined;
   cpuLimit?: string | null | undefined;
-  events: Array<GetRawResourceHeartbeatEvent6>;
   generation?: number | null | undefined;
   latestCreatedRevision?: string | null | undefined;
   latestReadyRevision?: string | null | undefined;
@@ -6143,21 +5889,6 @@ export type DataGcpCloudRun = {
   uri?: string | null | undefined;
   urls: Array<string>;
   backend: "gcpCloudRun";
-};
-
-export const EventSeverity5 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity5 = ClosedEnum<typeof EventSeverity5>;
-
-export type GetRawResourceHeartbeatEvent5 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity5;
-  source?: string | null | undefined;
 };
 
 export const Reason5 = {
@@ -6218,7 +5949,6 @@ export type DataStatus5 = {
 
 export type DataAwsLambda = {
   codeSha256?: string | null | undefined;
-  events: Array<GetRawResourceHeartbeatEvent5>;
   functionName: string;
   functionUrlAuthType?: string | null | undefined;
   functionUrlCorsPresent: boolean;
@@ -6256,21 +5986,6 @@ export type DataWorker = {
     | DataKubernetes1
     | DataLocal2;
   resourceType: "worker";
-};
-
-export const EventSeverity4 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity4 = ClosedEnum<typeof EventSeverity4>;
-
-export type GetRawResourceHeartbeatEvent4 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity4;
-  source?: string | null | undefined;
 };
 
 export const Reason4 = {
@@ -6330,7 +6045,6 @@ export type DataStatus4 = {
 };
 
 export type DataLocal1 = {
-  events: Array<GetRawResourceHeartbeatEvent4>;
   isDirectory?: boolean | null | undefined;
   modifiedAt?: Date | null | undefined;
   path: string;
@@ -6338,21 +6052,6 @@ export type DataLocal1 = {
   readonly?: boolean | null | undefined;
   status: DataStatus4;
   backend: "local";
-};
-
-export const EventSeverity3 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity3 = ClosedEnum<typeof EventSeverity3>;
-
-export type GetRawResourceHeartbeatEvent3 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity3;
-  source?: string | null | undefined;
 };
 
 export const Reason3 = {
@@ -6425,7 +6124,6 @@ export type DataAzureBlob = {
   containerDeleteRetentionEnabled?: boolean | null | undefined;
   containerPublicAccess?: string | null | undefined;
   encryptionKeySource?: string | null | undefined;
-  events: Array<GetRawResourceHeartbeatEvent3>;
   fileEncryptionEnabled?: boolean | null | undefined;
   location?: string | null | undefined;
   name: string;
@@ -6443,21 +6141,6 @@ export type DataAzureBlob = {
   storageAccountName?: string | null | undefined;
   tableEncryptionEnabled?: boolean | null | undefined;
   backend: "azureBlob";
-};
-
-export const EventSeverity2 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity2 = ClosedEnum<typeof EventSeverity2>;
-
-export type GetRawResourceHeartbeatEvent2 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity2;
-  source?: string | null | undefined;
 };
 
 export const Reason2 = {
@@ -6520,7 +6203,6 @@ export type DataGcpCloudStorage = {
   bucketId?: string | null | undefined;
   defaultKmsKeyName?: string | null | undefined;
   encryptionConfigPresent: boolean;
-  events: Array<GetRawResourceHeartbeatEvent2>;
   lifecyclePresent: boolean;
   lifecycleRuleCount?: number | null | undefined;
   location?: string | null | undefined;
@@ -6538,21 +6220,6 @@ export type DataGcpCloudStorage = {
   uniformBucketLevelAccessLockedTime?: string | null | undefined;
   versioningEnabled?: boolean | null | undefined;
   backend: "gcpCloudStorage";
-};
-
-export const EventSeverity1 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity1 = ClosedEnum<typeof EventSeverity1>;
-
-export type GetRawResourceHeartbeatEvent1 = {
-  kind: string;
-  message: string;
-  observedAt: Date;
-  severity: EventSeverity1;
-  source?: string | null | undefined;
 };
 
 export const Reason1 = {
@@ -6619,7 +6286,6 @@ export type DataAwsS3 = {
   bucketPolicyPresent?: boolean | null | undefined;
   encryptionConfigPresent: boolean;
   encryptionEnabled?: boolean | null | undefined;
-  events: Array<GetRawResourceHeartbeatEvent1>;
   ignorePublicAcls?: boolean | null | undefined;
   lifecyclePresent: boolean;
   lifecycleRuleCount?: number | null | undefined;
@@ -6800,32 +6466,6 @@ export const ControllerPlatform$inboundSchema: z.ZodEnum<
 > = z.enum(ControllerPlatform);
 
 /** @internal */
-export const EventSeverity59$inboundSchema: z.ZodEnum<typeof EventSeverity59> =
-  z.enum(EventSeverity59);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent59$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent59,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity59$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent59FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent59, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent59$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent59' from JSON`,
-  );
-}
-
-/** @internal */
 export const Reason59$inboundSchema: z.ZodEnum<typeof Reason59> = z.enum(
   Reason59,
 );
@@ -6891,7 +6531,6 @@ export function dataStatus59FromJSON(
 export const Data5$inboundSchema: z.ZodType<Data5, unknown> = z.object({
   createdAt: z.nullable(z.string()).optional(),
   disableLocalAuth: z.nullable(z.boolean()).optional(),
-  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent59$inboundSchema)),
   location: z.nullable(z.string()).optional(),
   metricId: z.nullable(z.string()).optional(),
   minimumTlsVersion: z.nullable(z.string()).optional(),
@@ -6938,32 +6577,6 @@ export function dataAzureServiceBusNamespaceFromJSON(
     jsonString,
     (x) => DataAzureServiceBusNamespace$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DataAzureServiceBusNamespace' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventSeverity58$inboundSchema: z.ZodEnum<typeof EventSeverity58> =
-  z.enum(EventSeverity58);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent58$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent58,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity58$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent58FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent58, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent58$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent58' from JSON`,
   );
 }
 
@@ -7055,7 +6668,6 @@ export const Data4$inboundSchema: z.ZodType<Data4, unknown> = z.object({
   customDomainVerificationId: z.nullable(z.string()).optional(),
   defaultDomain: z.nullable(z.string()).optional(),
   eventStreamEndpoint: z.nullable(z.string()).optional(),
-  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent58$inboundSchema)),
   infrastructureResourceGroup: z.nullable(z.string()).optional(),
   kind: z.nullable(z.string()).optional(),
   location: z.nullable(z.string()).optional(),
@@ -7096,32 +6708,6 @@ export function dataAzureContainerAppsEnvironmentFromJSON(
     jsonString,
     (x) => DataAzureContainerAppsEnvironment$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DataAzureContainerAppsEnvironment' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventSeverity57$inboundSchema: z.ZodEnum<typeof EventSeverity57> =
-  z.enum(EventSeverity57);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent57$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent57,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity57$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent57FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent57, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent57$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent57' from JSON`,
   );
 }
 
@@ -7238,7 +6824,6 @@ export const Data3$inboundSchema: z.ZodType<Data3, unknown> = z.object({
   allowBlobPublicAccess: z.nullable(z.boolean()).optional(),
   allowSharedKeyAccess: z.nullable(z.boolean()).optional(),
   encryptionKeySource: z.nullable(z.string()).optional(),
-  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent57$inboundSchema)),
   kind: z.nullable(z.string()).optional(),
   location: z.nullable(z.string()).optional(),
   minimumTlsVersion: z.nullable(z.string()).optional(),
@@ -7287,32 +6872,6 @@ export function dataAzureStorageAccountFromJSON(
     jsonString,
     (x) => DataAzureStorageAccount$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DataAzureStorageAccount' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventSeverity56$inboundSchema: z.ZodEnum<typeof EventSeverity56> =
-  z.enum(EventSeverity56);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent56$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent56,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity56$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent56FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent56, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent56$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent56' from JSON`,
   );
 }
 
@@ -7380,7 +6939,6 @@ export function dataStatus56FromJSON(
 
 /** @internal */
 export const Data2$inboundSchema: z.ZodType<Data2, unknown> = z.object({
-  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent56$inboundSchema)),
   location: z.nullable(z.string()).optional(),
   managedTags: z.record(z.string(), z.string()),
   name: z.string(),
@@ -7415,32 +6973,6 @@ export function dataAzureResourceGroupFromJSON(
     jsonString,
     (x) => DataAzureResourceGroup$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DataAzureResourceGroup' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventSeverity55$inboundSchema: z.ZodEnum<typeof EventSeverity55> =
-  z.enum(EventSeverity55);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent55$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent55,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity55$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent55FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent55, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent55$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent55' from JSON`,
   );
 }
 
@@ -7511,7 +7043,6 @@ export const DataAzureResourceProvider$inboundSchema: z.ZodType<
   DataAzureResourceProvider,
   unknown
 > = z.object({
-  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent55$inboundSchema)),
   namespace: z.string(),
   providerId: z.nullable(z.string()).optional(),
   registered: z.boolean(),
@@ -7529,32 +7060,6 @@ export function dataAzureResourceProviderFromJSON(
     jsonString,
     (x) => DataAzureResourceProvider$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DataAzureResourceProvider' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventSeverity54$inboundSchema: z.ZodEnum<typeof EventSeverity54> =
-  z.enum(EventSeverity54);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent54$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent54,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity54$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent54FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent54, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent54$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent54' from JSON`,
   );
 }
 
@@ -7626,7 +7131,6 @@ export const DataGcpServiceUsage$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   enabled: z.boolean(),
-  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent54$inboundSchema)),
   lastOperationName: z.nullable(z.string()).optional(),
   projectId: z.string(),
   serviceName: z.string(),
@@ -7687,28 +7191,108 @@ export function dataServiceActivationFromJSON(
 }
 
 /** @internal */
-export const EventSeverity53$inboundSchema: z.ZodEnum<typeof EventSeverity53> =
-  z.enum(EventSeverity53);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent53$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent53,
+export const InvolvedObject9$inboundSchema: z.ZodType<
+  InvolvedObject9,
   unknown
 > = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity53$inboundSchema,
-  source: z.nullable(z.string()).optional(),
+  apiVersion: z.nullable(z.string()).optional(),
+  fieldPath: z.nullable(z.string()).optional(),
+  kind: z.nullable(z.string()).optional(),
+  name: z.nullable(z.string()).optional(),
+  namespace: z.nullable(z.string()).optional(),
+  resourceVersion: z.nullable(z.string()).optional(),
+  uid: z.nullable(z.string()).optional(),
 });
 
-export function getRawResourceHeartbeatEvent53FromJSON(
+export function involvedObject9FromJSON(
   jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent53, SDKValidationError> {
+): SafeParseResult<InvolvedObject9, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => GetRawResourceHeartbeatEvent53$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent53' from JSON`,
+    (x) => InvolvedObject9$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'InvolvedObject9' from JSON`,
+  );
+}
+
+/** @internal */
+export const InvolvedObjectUnion9$inboundSchema: z.ZodType<
+  InvolvedObjectUnion9,
+  unknown
+> = z.union([z.lazy(() => InvolvedObject9$inboundSchema), z.any()]);
+
+export function involvedObjectUnion9FromJSON(
+  jsonString: string,
+): SafeParseResult<InvolvedObjectUnion9, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => InvolvedObjectUnion9$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'InvolvedObjectUnion9' from JSON`,
+  );
+}
+
+/** @internal */
+export const Source9$inboundSchema: z.ZodType<Source9, unknown> = z.object({
+  component: z.nullable(z.string()).optional(),
+  host: z.nullable(z.string()).optional(),
+});
+
+export function source9FromJSON(
+  jsonString: string,
+): SafeParseResult<Source9, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Source9$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Source9' from JSON`,
+  );
+}
+
+/** @internal */
+export const SourceUnion9$inboundSchema: z.ZodType<SourceUnion9, unknown> = z
+  .union([z.lazy(() => Source9$inboundSchema), z.any()]);
+
+export function sourceUnion9FromJSON(
+  jsonString: string,
+): SafeParseResult<SourceUnion9, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SourceUnion9$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SourceUnion9' from JSON`,
+  );
+}
+
+/** @internal */
+export const GetRawResourceHeartbeatEvent12$inboundSchema: z.ZodType<
+  GetRawResourceHeartbeatEvent12,
+  unknown
+> = z.object({
+  count: z.nullable(z.int()).optional(),
+  eventTime: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  firstTimestamp: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  involvedObject: z.nullable(
+    z.union([z.lazy(() => InvolvedObject9$inboundSchema), z.any()]),
+  ).optional(),
+  lastTimestamp: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  message: z.string(),
+  raw: z.nullable(z.any()).optional(),
+  reason: z.string(),
+  source: z.nullable(z.union([z.lazy(() => Source9$inboundSchema), z.any()]))
+    .optional(),
+  type: z.nullable(z.string()).optional(),
+});
+
+export function getRawResourceHeartbeatEvent12FromJSON(
+  jsonString: string,
+): SafeParseResult<GetRawResourceHeartbeatEvent12, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => GetRawResourceHeartbeatEvent12$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetRawResourceHeartbeatEvent12' from JSON`,
   );
 }
 
@@ -7784,7 +7368,7 @@ export const DataKubernetesJob$inboundSchema: z.ZodType<
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   ).optional(),
   conditionCount: z.int(),
-  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent53$inboundSchema)),
+  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent12$inboundSchema)),
   failed: z.nullable(z.int()).optional(),
   imageDigest: z.nullable(z.string()).optional(),
   jobName: z.string(),
@@ -7804,32 +7388,6 @@ export function dataKubernetesJobFromJSON(
     jsonString,
     (x) => DataKubernetesJob$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DataKubernetesJob' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventSeverity52$inboundSchema: z.ZodEnum<typeof EventSeverity52> =
-  z.enum(EventSeverity52);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent52$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent52,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity52$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent52FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent52, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent52$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent52' from JSON`,
   );
 }
 
@@ -7901,7 +7459,6 @@ export const DataAzureContainerApps2$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   environmentVariableCount: z.int(),
-  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent52$inboundSchema)),
   managedEnvironmentId: z.string(),
   managedIdentityId: z.nullable(z.string()).optional(),
   resourceGroupName: z.string(),
@@ -7917,32 +7474,6 @@ export function dataAzureContainerApps2FromJSON(
     jsonString,
     (x) => DataAzureContainerApps2$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DataAzureContainerApps2' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventSeverity51$inboundSchema: z.ZodEnum<typeof EventSeverity51> =
-  z.enum(EventSeverity51);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent51$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent51,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity51$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent51FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent51, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent51$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent51' from JSON`,
   );
 }
 
@@ -8015,7 +7546,6 @@ export const DataGcpCloudBuild$inboundSchema: z.ZodType<
 > = z.object({
   buildConfigId: z.string(),
   environmentVariableCount: z.int(),
-  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent51$inboundSchema)),
   location: z.string(),
   projectId: z.string(),
   serviceAccount: z.nullable(z.string()).optional(),
@@ -8030,32 +7560,6 @@ export function dataGcpCloudBuildFromJSON(
     jsonString,
     (x) => DataGcpCloudBuild$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DataGcpCloudBuild' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventSeverity50$inboundSchema: z.ZodEnum<typeof EventSeverity50> =
-  z.enum(EventSeverity50);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent50$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent50,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity50$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent50FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent50, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent50$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent50' from JSON`,
   );
 }
 
@@ -8136,7 +7640,6 @@ export const DataAwsCodeBuild$inboundSchema: z.ZodType<
   environmentImage: z.nullable(z.string()).optional(),
   environmentType: z.nullable(z.string()).optional(),
   environmentVariableCount: z.int(),
-  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent50$inboundSchema)),
   imagePullCredentialsType: z.nullable(z.string()).optional(),
   lastModified: z.nullable(z.number()).optional(),
   privilegedMode: z.nullable(z.boolean()).optional(),
@@ -8198,32 +7701,6 @@ export function dataBuildFromJSON(
     jsonString,
     (x) => DataBuild$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DataBuild' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventSeverity49$inboundSchema: z.ZodEnum<typeof EventSeverity49> =
-  z.enum(EventSeverity49);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent49$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent49,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity49$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent49FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent49, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent49$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent49' from JSON`,
   );
 }
 
@@ -8292,7 +7769,6 @@ export function dataStatus49FromJSON(
 /** @internal */
 export const DataLocal10$inboundSchema: z.ZodType<DataLocal10, unknown> = z
   .object({
-    events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent49$inboundSchema)),
     reachable: z.boolean(),
     registryUrl: z.string(),
     status: z.lazy(() => DataStatus49$inboundSchema),
@@ -8306,32 +7782,6 @@ export function dataLocal10FromJSON(
     jsonString,
     (x) => DataLocal10$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DataLocal10' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventSeverity48$inboundSchema: z.ZodEnum<typeof EventSeverity48> =
-  z.enum(EventSeverity48);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent48$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent48,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity48$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent48FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent48, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent48$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent48' from JSON`,
   );
 }
 
@@ -8410,7 +7860,6 @@ export const DataAzureContainerRegistry$inboundSchema: z.ZodType<
   encryptionKeyIdentifierPresent: z.boolean(),
   encryptionKeyVaultUriPresent: z.boolean(),
   encryptionStatus: z.nullable(z.string()).optional(),
-  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent48$inboundSchema)),
   ipRuleCount: z.int(),
   location: z.string(),
   loginServer: z.nullable(z.string()).optional(),
@@ -8440,32 +7889,6 @@ export function dataAzureContainerRegistryFromJSON(
     jsonString,
     (x) => DataAzureContainerRegistry$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DataAzureContainerRegistry' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventSeverity47$inboundSchema: z.ZodEnum<typeof EventSeverity47> =
-  z.enum(EventSeverity47);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent47$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent47,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity47$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent47FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent47, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent47$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent47' from JSON`,
   );
 }
 
@@ -8540,7 +7963,6 @@ export const DataGcpArtifactRegistry$inboundSchema: z.ZodType<
   cleanupPolicyDryRun: z.nullable(z.boolean()).optional(),
   createTime: z.nullable(z.string()).optional(),
   description: z.nullable(z.string()).optional(),
-  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent47$inboundSchema)),
   format: z.nullable(z.string()).optional(),
   iamBindingCount: z.int(),
   iamPolicyEtagPresent: z.boolean(),
@@ -8568,32 +7990,6 @@ export function dataGcpArtifactRegistryFromJSON(
     jsonString,
     (x) => DataGcpArtifactRegistry$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DataGcpArtifactRegistry' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventSeverity46$inboundSchema: z.ZodEnum<typeof EventSeverity46> =
-  z.enum(EventSeverity46);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent46$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent46,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity46$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent46FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent46, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent46$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent46' from JSON`,
   );
 }
 
@@ -8686,7 +8082,6 @@ export function dataStatus46FromJSON(
 /** @internal */
 export const DataAwsEcr$inboundSchema: z.ZodType<DataAwsEcr, unknown> = z
   .object({
-    events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent46$inboundSchema)),
     pullRoleArn: z.nullable(z.string()).optional(),
     pushRoleArn: z.nullable(z.string()).optional(),
     region: z.string(),
@@ -8750,32 +8145,6 @@ export function dataArtifactRegistryFromJSON(
     jsonString,
     (x) => DataArtifactRegistry$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DataArtifactRegistry' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventSeverity45$inboundSchema: z.ZodEnum<typeof EventSeverity45> =
-  z.enum(EventSeverity45);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent45$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent45,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity45$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent45FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent45, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent45$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent45' from JSON`,
   );
 }
 
@@ -8846,7 +8215,6 @@ export const DataAzureManagedIdentity2$inboundSchema: z.ZodType<
   DataAzureManagedIdentity2,
   unknown
 > = z.object({
-  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent45$inboundSchema)),
   ficName: z.nullable(z.string()).optional(),
   roleAssignmentIds: z.array(z.string()),
   roleDefinitionId: z.nullable(z.string()).optional(),
@@ -8865,32 +8233,6 @@ export function dataAzureManagedIdentity2FromJSON(
     jsonString,
     (x) => DataAzureManagedIdentity2$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DataAzureManagedIdentity2' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventSeverity44$inboundSchema: z.ZodEnum<typeof EventSeverity44> =
-  z.enum(EventSeverity44);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent44$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent44,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity44$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent44FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent44, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent44$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent44' from JSON`,
   );
 }
 
@@ -8961,7 +8303,6 @@ export const DataGcpServiceAccount2$inboundSchema: z.ZodType<
   DataGcpServiceAccount2,
   unknown
 > = z.object({
-  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent44$inboundSchema)),
   impersonationGranted: z.boolean(),
   roleBound: z.boolean(),
   serviceAccountEmail: z.nullable(z.string()).optional(),
@@ -8977,32 +8318,6 @@ export function dataGcpServiceAccount2FromJSON(
     jsonString,
     (x) => DataGcpServiceAccount2$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DataGcpServiceAccount2' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventSeverity43$inboundSchema: z.ZodEnum<typeof EventSeverity43> =
-  z.enum(EventSeverity43);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent43$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent43,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity43$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent43FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent43, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent43$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent43' from JSON`,
   );
 }
 
@@ -9073,7 +8388,6 @@ export const DataAwsIamRole2$inboundSchema: z.ZodType<
   DataAwsIamRole2,
   unknown
 > = z.object({
-  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent43$inboundSchema)),
   managementPermissionsApplied: z.boolean(),
   roleArn: z.nullable(z.string()).optional(),
   roleName: z.nullable(z.string()).optional(),
@@ -9129,32 +8443,6 @@ export function dataRemoteStackManagementFromJSON(
     jsonString,
     (x) => DataRemoteStackManagement$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DataRemoteStackManagement' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventSeverity42$inboundSchema: z.ZodEnum<typeof EventSeverity42> =
-  z.enum(EventSeverity42);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent42$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent42,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity42$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent42FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent42, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent42$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent42' from JSON`,
   );
 }
 
@@ -9224,7 +8512,6 @@ export function dataStatus42FromJSON(
 export const DataAzureVnet$inboundSchema: z.ZodType<DataAzureVnet, unknown> = z
   .object({
     cidrBlock: z.nullable(z.string()).optional(),
-    events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent42$inboundSchema)),
     isByoVnet: z.boolean(),
     lastByoVnetVerificationErrorCode: z.nullable(z.string()).optional(),
     location: z.nullable(z.string()).optional(),
@@ -9247,32 +8534,6 @@ export function dataAzureVnetFromJSON(
     jsonString,
     (x) => DataAzureVnet$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DataAzureVnet' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventSeverity41$inboundSchema: z.ZodEnum<typeof EventSeverity41> =
-  z.enum(EventSeverity41);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent41$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent41,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity41$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent41FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent41, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent41$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent41' from JSON`,
   );
 }
 
@@ -9343,7 +8604,6 @@ export const DataGcpVpc$inboundSchema: z.ZodType<DataGcpVpc, unknown> = z
   .object({
     cidrBlock: z.nullable(z.string()).optional(),
     cloudNatName: z.nullable(z.string()).optional(),
-    events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent41$inboundSchema)),
     firewallName: z.nullable(z.string()).optional(),
     isByoVpc: z.boolean(),
     networkName: z.nullable(z.string()).optional(),
@@ -9363,32 +8623,6 @@ export function dataGcpVpcFromJSON(
     jsonString,
     (x) => DataGcpVpc$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DataGcpVpc' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventSeverity40$inboundSchema: z.ZodEnum<typeof EventSeverity40> =
-  z.enum(EventSeverity40);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent40$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent40,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity40$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent40FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent40, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent40$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent40' from JSON`,
   );
 }
 
@@ -9459,7 +8693,6 @@ export const DataAwsVpc$inboundSchema: z.ZodType<DataAwsVpc, unknown> = z
   .object({
     availabilityZones: z.array(z.string()),
     cidrBlock: z.nullable(z.string()).optional(),
-    events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent40$inboundSchema)),
     internetGatewayId: z.nullable(z.string()).optional(),
     isByoVpc: z.boolean(),
     natGatewayId: z.nullable(z.string()).optional(),
@@ -9519,32 +8752,6 @@ export function dataNetworkFromJSON(
     jsonString,
     (x) => DataNetwork$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DataNetwork' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventSeverity39$inboundSchema: z.ZodEnum<typeof EventSeverity39> =
-  z.enum(EventSeverity39);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent39$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent39,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity39$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent39FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent39, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent39$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent39' from JSON`,
   );
 }
 
@@ -9614,7 +8821,6 @@ export function dataStatus39FromJSON(
 export const DataLocal9$inboundSchema: z.ZodType<DataLocal9, unknown> = z
   .object({
     configured: z.boolean(),
-    events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent39$inboundSchema)),
     identity: z.string(),
     status: z.lazy(() => DataStatus39$inboundSchema),
     backend: z.literal("local"),
@@ -9627,32 +8833,6 @@ export function dataLocal9FromJSON(
     jsonString,
     (x) => DataLocal9$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DataLocal9' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventSeverity38$inboundSchema: z.ZodEnum<typeof EventSeverity38> =
-  z.enum(EventSeverity38);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent38$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent38,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity38$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent38FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent38, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent38$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent38' from JSON`,
   );
 }
 
@@ -9726,7 +8906,6 @@ export const DataAzureManagedIdentity1$inboundSchema: z.ZodType<
   clientId: z.nullable(z.string()).optional(),
   customRoleDefinitionCount: z.int(),
   customRoleDefinitionIds: z.array(z.string()),
-  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent38$inboundSchema)),
   isolationScope: z.nullable(z.string()).optional(),
   location: z.string(),
   managedTagCount: z.int(),
@@ -9750,32 +8929,6 @@ export function dataAzureManagedIdentity1FromJSON(
     jsonString,
     (x) => DataAzureManagedIdentity1$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DataAzureManagedIdentity1' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventSeverity37$inboundSchema: z.ZodEnum<typeof EventSeverity37> =
-  z.enum(EventSeverity37);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent37$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent37,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity37$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent37FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent37, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent37$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent37' from JSON`,
   );
 }
 
@@ -9851,7 +9004,6 @@ export const DataGcpServiceAccount1$inboundSchema: z.ZodType<
   displayName: z.nullable(z.string()).optional(),
   email: z.string(),
   etag: z.nullable(z.string()).optional(),
-  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent37$inboundSchema)),
   name: z.nullable(z.string()).optional(),
   oauth2ClientId: z.nullable(z.string()).optional(),
   projectBindingCount: z.int(),
@@ -9871,32 +9023,6 @@ export function dataGcpServiceAccount1FromJSON(
     jsonString,
     (x) => DataGcpServiceAccount1$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DataGcpServiceAccount1' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventSeverity36$inboundSchema: z.ZodEnum<typeof EventSeverity36> =
-  z.enum(EventSeverity36);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent36$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent36,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity36$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent36FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent36, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent36$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent36' from JSON`,
   );
 }
 
@@ -9972,7 +9098,6 @@ export const DataAwsIamRole1$inboundSchema: z.ZodType<
   attachedPolicyNames: z.array(z.string()),
   createDate: z.string(),
   description: z.nullable(z.string()).optional(),
-  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent36$inboundSchema)),
   inlinePolicyCount: z.int(),
   inlinePolicyNames: z.array(z.string()),
   lastUsedDate: z.nullable(z.string()).optional(),
@@ -10046,32 +9171,6 @@ export function dataServiceAccountFromJSON(
 }
 
 /** @internal */
-export const EventSeverity35$inboundSchema: z.ZodEnum<typeof EventSeverity35> =
-  z.enum(EventSeverity35);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent35$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent35,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity35$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent35FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent35, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent35$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent35' from JSON`,
-  );
-}
-
-/** @internal */
 export const Reason35$inboundSchema: z.ZodEnum<typeof Reason35> = z.enum(
   Reason35,
 );
@@ -10136,7 +9235,6 @@ export function dataStatus35FromJSON(
 /** @internal */
 export const DataLocal8$inboundSchema: z.ZodType<DataLocal8, unknown> = z
   .object({
-    events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent35$inboundSchema)),
     isDirectory: z.nullable(z.boolean()).optional(),
     modifiedAt: z.nullable(
       z.iso.datetime({ offset: true }).transform(v => new Date(v)),
@@ -10156,32 +9254,6 @@ export function dataLocal8FromJSON(
     jsonString,
     (x) => DataLocal8$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DataLocal8' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventSeverity34$inboundSchema: z.ZodEnum<typeof EventSeverity34> =
-  z.enum(EventSeverity34);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent34$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent34,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity34$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent34FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent34, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent34$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent34' from JSON`,
   );
 }
 
@@ -10252,7 +9324,6 @@ export const DataKubernetesSecret$inboundSchema: z.ZodType<
   DataKubernetesSecret,
   unknown
 > = z.object({
-  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent34$inboundSchema)),
   namespace: z.string(),
   prefix: z.string(),
   secretMetadataListed: z.boolean(),
@@ -10267,32 +9338,6 @@ export function dataKubernetesSecretFromJSON(
     jsonString,
     (x) => DataKubernetesSecret$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DataKubernetesSecret' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventSeverity33$inboundSchema: z.ZodEnum<typeof EventSeverity33> =
-  z.enum(EventSeverity33);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent33$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent33,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity33$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent33FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent33, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent33$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent33' from JSON`,
   );
 }
 
@@ -10364,7 +9409,6 @@ export const DataAzureKeyVault$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   accessPolicyCount: z.int(),
-  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent33$inboundSchema)),
   location: z.nullable(z.string()).optional(),
   name: z.string(),
   privateEndpointConnectionCount: z.int(),
@@ -10391,32 +9435,6 @@ export function dataAzureKeyVaultFromJSON(
     jsonString,
     (x) => DataAzureKeyVault$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DataAzureKeyVault' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventSeverity32$inboundSchema: z.ZodEnum<typeof EventSeverity32> =
-  z.enum(EventSeverity32);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent32$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent32,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity32$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent32FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent32, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent32$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent32' from JSON`,
   );
 }
 
@@ -10487,7 +9505,6 @@ export const DataGcpSecretManager$inboundSchema: z.ZodType<
   DataGcpSecretManager,
   unknown
 > = z.object({
-  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent32$inboundSchema)),
   location: z.string(),
   prefix: z.string(),
   projectId: z.string(),
@@ -10503,32 +9520,6 @@ export function dataGcpSecretManagerFromJSON(
     jsonString,
     (x) => DataGcpSecretManager$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DataGcpSecretManager' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventSeverity31$inboundSchema: z.ZodEnum<typeof EventSeverity31> =
-  z.enum(EventSeverity31);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent31$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent31,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity31$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent31FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent31, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent31$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent31' from JSON`,
   );
 }
 
@@ -10600,7 +9591,6 @@ export const DataAwsParameterStore$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   accountId: z.string(),
-  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent31$inboundSchema)),
   hasMoreParameters: z.nullable(z.boolean()).optional(),
   latestModifiedAt: z.nullable(
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
@@ -10672,32 +9662,6 @@ export function dataVaultFromJSON(
 }
 
 /** @internal */
-export const EventSeverity30$inboundSchema: z.ZodEnum<typeof EventSeverity30> =
-  z.enum(EventSeverity30);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent30$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent30,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity30$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent30FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent30, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent30$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent30' from JSON`,
-  );
-}
-
-/** @internal */
 export const Reason30$inboundSchema: z.ZodEnum<typeof Reason30> = z.enum(
   Reason30,
 );
@@ -10763,7 +9727,6 @@ export function dataStatus30FromJSON(
 export const DataLocal7$inboundSchema: z.ZodType<DataLocal7, unknown> = z
   .object({
     cloudMetadataSupported: z.boolean(),
-    events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent30$inboundSchema)),
     isDirectory: z.nullable(z.boolean()).optional(),
     name: z.string(),
     path: z.string(),
@@ -10779,32 +9742,6 @@ export function dataLocal7FromJSON(
     jsonString,
     (x) => DataLocal7$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DataLocal7' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventSeverity29$inboundSchema: z.ZodEnum<typeof EventSeverity29> =
-  z.enum(EventSeverity29);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent29$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent29,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity29$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent29FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent29, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent29$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent29' from JSON`,
   );
 }
 
@@ -10874,7 +9811,6 @@ export function dataStatus29FromJSON(
 export const DataAzureTable$inboundSchema: z.ZodType<DataAzureTable, unknown> =
   z.object({
     endpoint: z.nullable(z.string()).optional(),
-    events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent29$inboundSchema)),
     resourceGroup: z.nullable(z.string()).optional(),
     signedIdentifierCount: z.nullable(z.int()).optional(),
     status: z.lazy(() => DataStatus29$inboundSchema),
@@ -10896,32 +9832,6 @@ export function dataAzureTableFromJSON(
     jsonString,
     (x) => DataAzureTable$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DataAzureTable' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventSeverity28$inboundSchema: z.ZodEnum<typeof EventSeverity28> =
-  z.enum(EventSeverity28);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent28$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent28,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity28$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent28FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent28, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent28$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent28' from JSON`,
   );
 }
 
@@ -11003,7 +9913,6 @@ export const DataGcpFirestore$inboundSchema: z.ZodType<
   deleteTime: z.nullable(z.string()).optional(),
   earliestVersionTime: z.nullable(z.string()).optional(),
   endpoint: z.nullable(z.string()).optional(),
-  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent28$inboundSchema)),
   locationId: z.nullable(z.string()).optional(),
   pointInTimeRecoveryEnablement: z.nullable(z.string()).optional(),
   projectId: z.nullable(z.string()).optional(),
@@ -11021,32 +9930,6 @@ export function dataGcpFirestoreFromJSON(
     jsonString,
     (x) => DataGcpFirestore$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DataGcpFirestore' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventSeverity27$inboundSchema: z.ZodEnum<typeof EventSeverity27> =
-  z.enum(EventSeverity27);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent27$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent27,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity27$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent27FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent27, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent27$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent27' from JSON`,
   );
 }
 
@@ -11135,7 +10018,6 @@ export const DataAwsDynamoDb$inboundSchema: z.ZodType<
 > = z.object({
   billingMode: z.nullable(z.string()).optional(),
   deletionProtectionEnabled: z.nullable(z.boolean()).optional(),
-  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent27$inboundSchema)),
   globalSecondaryIndexCount: z.nullable(z.int()).optional(),
   itemCount: z.nullable(z.int()).optional(),
   keySchema: z.array(z.lazy(() => KeySchema$inboundSchema)),
@@ -11210,32 +10092,6 @@ export function dataKvFromJSON(
 }
 
 /** @internal */
-export const EventSeverity26$inboundSchema: z.ZodEnum<typeof EventSeverity26> =
-  z.enum(EventSeverity26);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent26$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent26,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity26$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent26FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent26, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent26$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent26' from JSON`,
-  );
-}
-
-/** @internal */
 export const Reason26$inboundSchema: z.ZodEnum<typeof Reason26> = z.enum(
   Reason26,
 );
@@ -11300,7 +10156,6 @@ export function dataStatus26FromJSON(
 /** @internal */
 export const DataLocal6$inboundSchema: z.ZodType<DataLocal6, unknown> = z
   .object({
-    events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent26$inboundSchema)),
     name: z.string(),
     path: z.nullable(z.string()).optional(),
     serviceStatus: z.nullable(z.string()).optional(),
@@ -11315,32 +10170,6 @@ export function dataLocal6FromJSON(
     jsonString,
     (x) => DataLocal6$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DataLocal6' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventSeverity25$inboundSchema: z.ZodEnum<typeof EventSeverity25> =
-  z.enum(EventSeverity25);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent25$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent25,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity25$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent25FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent25, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent25$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent25' from JSON`,
   );
 }
 
@@ -11423,7 +10252,6 @@ export const DataAzureServiceBus$inboundSchema: z.ZodType<
   enableExpress: z.nullable(z.boolean()).optional(),
   enablePartitioning: z.nullable(z.boolean()).optional(),
   endpoint: z.nullable(z.string()).optional(),
-  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent25$inboundSchema)),
   forwardDeadLetteredMessagesTo: z.nullable(z.string()).optional(),
   forwardTo: z.nullable(z.string()).optional(),
   lockDuration: z.nullable(z.string()).optional(),
@@ -11454,32 +10282,6 @@ export function dataAzureServiceBusFromJSON(
     jsonString,
     (x) => DataAzureServiceBus$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DataAzureServiceBus' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventSeverity24$inboundSchema: z.ZodEnum<typeof EventSeverity24> =
-  z.enum(EventSeverity24);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent24$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent24,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity24$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent24FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent24, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent24$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent24' from JSON`,
   );
 }
 
@@ -11549,7 +10351,6 @@ export function dataStatus24FromJSON(
 export const DataGcpPubSub$inboundSchema: z.ZodType<DataGcpPubSub, unknown> = z
   .object({
     endpoint: z.nullable(z.string()).optional(),
-    events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent24$inboundSchema)),
     kmsKeyName: z.nullable(z.string()).optional(),
     messageStorageAllowedPersistenceRegions: z.array(z.string()),
     messageStorageEnforceInTransit: z.nullable(z.boolean()).optional(),
@@ -11594,32 +10395,6 @@ export function dataGcpPubSubFromJSON(
     jsonString,
     (x) => DataGcpPubSub$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DataGcpPubSub' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventSeverity23$inboundSchema: z.ZodEnum<typeof EventSeverity23> =
-  z.enum(EventSeverity23);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent23$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent23,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity23$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent23FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent23, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent23$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent23' from JSON`,
   );
 }
 
@@ -11695,7 +10470,6 @@ export const DataAwsSqs$inboundSchema: z.ZodType<DataAwsSqs, unknown> = z
     contentBasedDeduplication: z.nullable(z.boolean()).optional(),
     deduplicationScope: z.nullable(z.string()).optional(),
     delaySeconds: z.nullable(z.int()).optional(),
-    events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent23$inboundSchema)),
     fifoQueue: z.nullable(z.boolean()).optional(),
     fifoThroughputLimit: z.nullable(z.string()).optional(),
     kmsDataKeyReusePeriodSeconds: z.nullable(z.int()).optional(),
@@ -11804,28 +10578,108 @@ export function cpuUnion10FromJSON(
 }
 
 /** @internal */
-export const EventSeverity22$inboundSchema: z.ZodEnum<typeof EventSeverity22> =
-  z.enum(EventSeverity22);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent22$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent22,
+export const InvolvedObject8$inboundSchema: z.ZodType<
+  InvolvedObject8,
   unknown
 > = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity22$inboundSchema,
-  source: z.nullable(z.string()).optional(),
+  apiVersion: z.nullable(z.string()).optional(),
+  fieldPath: z.nullable(z.string()).optional(),
+  kind: z.nullable(z.string()).optional(),
+  name: z.nullable(z.string()).optional(),
+  namespace: z.nullable(z.string()).optional(),
+  resourceVersion: z.nullable(z.string()).optional(),
+  uid: z.nullable(z.string()).optional(),
 });
 
-export function getRawResourceHeartbeatEvent22FromJSON(
+export function involvedObject8FromJSON(
   jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent22, SDKValidationError> {
+): SafeParseResult<InvolvedObject8, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => GetRawResourceHeartbeatEvent22$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent22' from JSON`,
+    (x) => InvolvedObject8$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'InvolvedObject8' from JSON`,
+  );
+}
+
+/** @internal */
+export const InvolvedObjectUnion8$inboundSchema: z.ZodType<
+  InvolvedObjectUnion8,
+  unknown
+> = z.union([z.lazy(() => InvolvedObject8$inboundSchema), z.any()]);
+
+export function involvedObjectUnion8FromJSON(
+  jsonString: string,
+): SafeParseResult<InvolvedObjectUnion8, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => InvolvedObjectUnion8$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'InvolvedObjectUnion8' from JSON`,
+  );
+}
+
+/** @internal */
+export const Source8$inboundSchema: z.ZodType<Source8, unknown> = z.object({
+  component: z.nullable(z.string()).optional(),
+  host: z.nullable(z.string()).optional(),
+});
+
+export function source8FromJSON(
+  jsonString: string,
+): SafeParseResult<Source8, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Source8$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Source8' from JSON`,
+  );
+}
+
+/** @internal */
+export const SourceUnion8$inboundSchema: z.ZodType<SourceUnion8, unknown> = z
+  .union([z.lazy(() => Source8$inboundSchema), z.any()]);
+
+export function sourceUnion8FromJSON(
+  jsonString: string,
+): SafeParseResult<SourceUnion8, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SourceUnion8$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SourceUnion8' from JSON`,
+  );
+}
+
+/** @internal */
+export const GetRawResourceHeartbeatEvent11$inboundSchema: z.ZodType<
+  GetRawResourceHeartbeatEvent11,
+  unknown
+> = z.object({
+  count: z.nullable(z.int()).optional(),
+  eventTime: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  firstTimestamp: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  involvedObject: z.nullable(
+    z.union([z.lazy(() => InvolvedObject8$inboundSchema), z.any()]),
+  ).optional(),
+  lastTimestamp: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  message: z.string(),
+  raw: z.nullable(z.any()).optional(),
+  reason: z.string(),
+  source: z.nullable(z.union([z.lazy(() => Source8$inboundSchema), z.any()]))
+    .optional(),
+  type: z.nullable(z.string()).optional(),
+});
+
+export function getRawResourceHeartbeatEvent11FromJSON(
+  jsonString: string,
+): SafeParseResult<GetRawResourceHeartbeatEvent11, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => GetRawResourceHeartbeatEvent11$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetRawResourceHeartbeatEvent11' from JSON`,
   );
 }
 
@@ -12313,7 +11167,7 @@ export function dataStatus22FromJSON(
 export const Data1$inboundSchema: z.ZodType<Data1, unknown> = z.object({
   cpu: z.nullable(z.union([z.lazy(() => Cpu10$inboundSchema), z.any()]))
     .optional(),
-  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent22$inboundSchema)),
+  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent11$inboundSchema)),
   memory: z.nullable(z.union([z.lazy(() => Memory10$inboundSchema), z.any()]))
     .optional(),
   name: z.string(),
@@ -12352,32 +11206,6 @@ export function dataKubernetesClusterFromJSON(
     jsonString,
     (x) => DataKubernetesCluster$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DataKubernetesCluster' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventSeverity21$inboundSchema: z.ZodEnum<typeof EventSeverity21> =
-  z.enum(EventSeverity21);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent21$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent21,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity21$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent21FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent21, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent21$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent21' from JSON`,
   );
 }
 
@@ -12468,7 +11296,6 @@ export const DataLocal5$inboundSchema: z.ZodType<DataLocal5, unknown> = z
     dockerAvailable: z.boolean(),
     dockerOs: z.nullable(z.string()).optional(),
     dockerVersion: z.nullable(z.string()).optional(),
-    events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent21$inboundSchema)),
     hostIdentifier: z.nullable(z.string()).optional(),
     name: z.string(),
     networkAvailable: z.boolean(),
@@ -12629,32 +11456,6 @@ export function cpuUnion9FromJSON(
 }
 
 /** @internal */
-export const EventSeverity20$inboundSchema: z.ZodEnum<typeof EventSeverity20> =
-  z.enum(EventSeverity20);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent20$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent20,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity20$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent20FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent20, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent20$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent20' from JSON`,
-  );
-}
-
-/** @internal */
 export const MemoryUnit9$inboundSchema: z.ZodEnum<typeof MemoryUnit9> = z.enum(
   MemoryUnit9,
 );
@@ -12795,7 +11596,6 @@ export const DataAzure2$inboundSchema: z.ZodType<DataAzure2, unknown> = z
     capacityGroups: z.array(z.lazy(() => CapacityGroup3$inboundSchema)),
     cpu: z.nullable(z.union([z.lazy(() => Cpu9$inboundSchema), z.any()]))
       .optional(),
-    events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent20$inboundSchema)),
     memory: z.nullable(z.union([z.lazy(() => Memory9$inboundSchema), z.any()]))
       .optional(),
     name: z.string(),
@@ -12955,32 +11755,6 @@ export function cpuUnion8FromJSON(
 }
 
 /** @internal */
-export const EventSeverity19$inboundSchema: z.ZodEnum<typeof EventSeverity19> =
-  z.enum(EventSeverity19);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent19$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent19,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity19$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent19FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent19, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent19$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent19' from JSON`,
-  );
-}
-
-/** @internal */
 export const MemoryUnit8$inboundSchema: z.ZodEnum<typeof MemoryUnit8> = z.enum(
   MemoryUnit8,
 );
@@ -13120,7 +11894,6 @@ export const DataGcp2$inboundSchema: z.ZodType<DataGcp2, unknown> = z.object({
   capacityGroups: z.array(z.lazy(() => CapacityGroup2$inboundSchema)),
   cpu: z.nullable(z.union([z.lazy(() => Cpu8$inboundSchema), z.any()]))
     .optional(),
-  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent19$inboundSchema)),
   memory: z.nullable(z.union([z.lazy(() => Memory8$inboundSchema), z.any()]))
     .optional(),
   name: z.string(),
@@ -13280,32 +12053,6 @@ export function cpuUnion7FromJSON(
 }
 
 /** @internal */
-export const EventSeverity18$inboundSchema: z.ZodEnum<typeof EventSeverity18> =
-  z.enum(EventSeverity18);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent18$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent18,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity18$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent18FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent18, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent18$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent18' from JSON`,
-  );
-}
-
-/** @internal */
 export const MemoryUnit7$inboundSchema: z.ZodEnum<typeof MemoryUnit7> = z.enum(
   MemoryUnit7,
 );
@@ -13445,7 +12192,6 @@ export const DataAws2$inboundSchema: z.ZodType<DataAws2, unknown> = z.object({
   capacityGroups: z.array(z.lazy(() => CapacityGroup1$inboundSchema)),
   cpu: z.nullable(z.union([z.lazy(() => Cpu7$inboundSchema), z.any()]))
     .optional(),
-  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent18$inboundSchema)),
   memory: z.nullable(z.union([z.lazy(() => Memory7$inboundSchema), z.any()]))
     .optional(),
   name: z.string(),
@@ -13511,28 +12257,192 @@ export function dataComputeClusterFromJSON(
 }
 
 /** @internal */
-export const EventSeverity17$inboundSchema: z.ZodEnum<typeof EventSeverity17> =
-  z.enum(EventSeverity17);
+export const DaemonInstanceCpuUnit$inboundSchema: z.ZodEnum<
+  typeof DaemonInstanceCpuUnit
+> = z.enum(DaemonInstanceCpuUnit);
 
 /** @internal */
-export const GetRawResourceHeartbeatEvent17$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent17,
+export const DaemonInstanceCpu$inboundSchema: z.ZodType<
+  DaemonInstanceCpu,
+  unknown
+> = z.object({
+  unit: DaemonInstanceCpuUnit$inboundSchema,
+  value: z.number(),
+});
+
+export function daemonInstanceCpuFromJSON(
+  jsonString: string,
+): SafeParseResult<DaemonInstanceCpu, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DaemonInstanceCpu$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DaemonInstanceCpu' from JSON`,
+  );
+}
+
+/** @internal */
+export const DaemonInstanceCpuUnion4$inboundSchema: z.ZodType<
+  DaemonInstanceCpuUnion4,
+  unknown
+> = z.union([z.lazy(() => DaemonInstanceCpu$inboundSchema), z.any()]);
+
+export function daemonInstanceCpuUnion4FromJSON(
+  jsonString: string,
+): SafeParseResult<DaemonInstanceCpuUnion4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DaemonInstanceCpuUnion4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DaemonInstanceCpuUnion4' from JSON`,
+  );
+}
+
+/** @internal */
+export const DaemonInstanceKind$inboundSchema: z.ZodEnum<
+  typeof DaemonInstanceKind
+> = z.enum(DaemonInstanceKind);
+
+/** @internal */
+export const DaemonInstanceMemoryUnit$inboundSchema: z.ZodEnum<
+  typeof DaemonInstanceMemoryUnit
+> = z.enum(DaemonInstanceMemoryUnit);
+
+/** @internal */
+export const DaemonInstanceMemory$inboundSchema: z.ZodType<
+  DaemonInstanceMemory,
+  unknown
+> = z.object({
+  unit: DaemonInstanceMemoryUnit$inboundSchema,
+  value: z.number(),
+});
+
+export function daemonInstanceMemoryFromJSON(
+  jsonString: string,
+): SafeParseResult<DaemonInstanceMemory, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DaemonInstanceMemory$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DaemonInstanceMemory' from JSON`,
+  );
+}
+
+/** @internal */
+export const DaemonInstanceMemoryUnion4$inboundSchema: z.ZodType<
+  DaemonInstanceMemoryUnion4,
+  unknown
+> = z.union([z.lazy(() => DaemonInstanceMemory$inboundSchema), z.any()]);
+
+export function daemonInstanceMemoryUnion4FromJSON(
+  jsonString: string,
+): SafeParseResult<DaemonInstanceMemoryUnion4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DaemonInstanceMemoryUnion4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DaemonInstanceMemoryUnion4' from JSON`,
+  );
+}
+
+/** @internal */
+export const DaemonInstance4$inboundSchema: z.ZodType<
+  DaemonInstance4,
+  unknown
+> = z.object({
+  cpu: z.nullable(
+    z.union([z.lazy(() => DaemonInstanceCpu$inboundSchema), z.any()]),
+  ).optional(),
+  kind: DaemonInstanceKind$inboundSchema,
+  memory: z.nullable(
+    z.union([z.lazy(() => DaemonInstanceMemory$inboundSchema), z.any()]),
+  ).optional(),
+  name: z.string(),
+  phase: z.nullable(z.string()).optional(),
+  pid: z.nullable(z.int()).optional(),
+  ready: z.boolean(),
+  restartCount: z.nullable(z.int()).optional(),
+  unitId: z.string(),
+});
+
+export function daemonInstance4FromJSON(
+  jsonString: string,
+): SafeParseResult<DaemonInstance4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DaemonInstance4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DaemonInstance4' from JSON`,
+  );
+}
+
+/** @internal */
+export const DaemonInstanceUnion$inboundSchema: z.ZodType<
+  DaemonInstanceUnion,
+  unknown
+> = z.union([z.lazy(() => DaemonInstance4$inboundSchema), z.any()]);
+
+export function daemonInstanceUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DaemonInstanceUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DaemonInstanceUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DaemonInstanceUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const EventSeverity3$inboundSchema: z.ZodEnum<typeof EventSeverity3> = z
+  .enum(EventSeverity3);
+
+/** @internal */
+export const Subject3$inboundSchema: z.ZodType<Subject3, unknown> = z.object({
+  id: z.nullable(z.string()).optional(),
+  kind: z.string(),
+  name: z.nullable(z.string()).optional(),
+});
+
+export function subject3FromJSON(
+  jsonString: string,
+): SafeParseResult<Subject3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Subject3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Subject3' from JSON`,
+  );
+}
+
+/** @internal */
+export const SubjectUnion3$inboundSchema: z.ZodType<SubjectUnion3, unknown> = z
+  .union([z.lazy(() => Subject3$inboundSchema), z.any()]);
+
+export function subjectUnion3FromJSON(
+  jsonString: string,
+): SafeParseResult<SubjectUnion3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SubjectUnion3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SubjectUnion3' from JSON`,
+  );
+}
+
+/** @internal */
+export const GetRawResourceHeartbeatEvent10$inboundSchema: z.ZodType<
+  GetRawResourceHeartbeatEvent10,
   unknown
 > = z.object({
   kind: z.string(),
   message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity17$inboundSchema,
-  source: z.nullable(z.string()).optional(),
+  raw: z.nullable(z.any()).optional(),
+  severity: EventSeverity3$inboundSchema,
+  subject: z.nullable(z.union([z.lazy(() => Subject3$inboundSchema), z.any()]))
+    .optional(),
+  timestamp: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
 });
 
-export function getRawResourceHeartbeatEvent17FromJSON(
+export function getRawResourceHeartbeatEvent10FromJSON(
   jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent17, SDKValidationError> {
+): SafeParseResult<GetRawResourceHeartbeatEvent10, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => GetRawResourceHeartbeatEvent17$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent17' from JSON`,
+    (x) => GetRawResourceHeartbeatEvent10$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetRawResourceHeartbeatEvent10' from JSON`,
   );
 }
 
@@ -13602,8 +12512,11 @@ export function dataStatus17FromJSON(
 export const DataLocal4$inboundSchema: z.ZodType<DataLocal4, unknown> = z
   .object({
     commandSupported: z.boolean(),
+    daemonInstance: z.nullable(
+      z.union([z.lazy(() => DaemonInstance4$inboundSchema), z.any()]),
+    ).optional(),
     daemonName: z.string(),
-    events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent17$inboundSchema)),
+    events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent10$inboundSchema)),
     exitReason: z.nullable(z.string()).optional(),
     imagePathPresent: z.boolean(),
     pid: z.nullable(z.int()).optional(),
@@ -13661,159 +12574,108 @@ export function cpuUnion6FromJSON(
 }
 
 /** @internal */
-export const EventSeverity16$inboundSchema: z.ZodEnum<typeof EventSeverity16> =
-  z.enum(EventSeverity16);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent16$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent16,
+export const InvolvedObject7$inboundSchema: z.ZodType<
+  InvolvedObject7,
   unknown
 > = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity16$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent16FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent16, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent16$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent16' from JSON`,
-  );
-}
-
-/** @internal */
-export const CpuInstanceUnit6$inboundSchema: z.ZodEnum<
-  typeof CpuInstanceUnit6
-> = z.enum(CpuInstanceUnit6);
-
-/** @internal */
-export const CpuInstance6$inboundSchema: z.ZodType<CpuInstance6, unknown> = z
-  .object({
-    unit: CpuInstanceUnit6$inboundSchema,
-    value: z.number(),
-  });
-
-export function cpuInstance6FromJSON(
-  jsonString: string,
-): SafeParseResult<CpuInstance6, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CpuInstance6$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CpuInstance6' from JSON`,
-  );
-}
-
-/** @internal */
-export const InstanceCpuUnion6$inboundSchema: z.ZodType<
-  InstanceCpuUnion6,
-  unknown
-> = z.union([z.lazy(() => CpuInstance6$inboundSchema), z.any()]);
-
-export function instanceCpuUnion6FromJSON(
-  jsonString: string,
-): SafeParseResult<InstanceCpuUnion6, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => InstanceCpuUnion6$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'InstanceCpuUnion6' from JSON`,
-  );
-}
-
-/** @internal */
-export const MemoryInstanceUnit6$inboundSchema: z.ZodEnum<
-  typeof MemoryInstanceUnit6
-> = z.enum(MemoryInstanceUnit6);
-
-/** @internal */
-export const MemoryInstance6$inboundSchema: z.ZodType<
-  MemoryInstance6,
-  unknown
-> = z.object({
-  unit: MemoryInstanceUnit6$inboundSchema,
-  value: z.number(),
-});
-
-export function memoryInstance6FromJSON(
-  jsonString: string,
-): SafeParseResult<MemoryInstance6, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => MemoryInstance6$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'MemoryInstance6' from JSON`,
-  );
-}
-
-/** @internal */
-export const InstanceMemoryUnion6$inboundSchema: z.ZodType<
-  InstanceMemoryUnion6,
-  unknown
-> = z.union([z.lazy(() => MemoryInstance6$inboundSchema), z.any()]);
-
-export function instanceMemoryUnion6FromJSON(
-  jsonString: string,
-): SafeParseResult<InstanceMemoryUnion6, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => InstanceMemoryUnion6$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'InstanceMemoryUnion6' from JSON`,
-  );
-}
-
-/** @internal */
-export const OwnerReference3$inboundSchema: z.ZodType<
-  OwnerReference3,
-  unknown
-> = z.object({
-  controller: z.boolean(),
-  kind: z.string(),
-  name: z.string(),
-  uid: z.string(),
-});
-
-export function ownerReference3FromJSON(
-  jsonString: string,
-): SafeParseResult<OwnerReference3, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => OwnerReference3$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'OwnerReference3' from JSON`,
-  );
-}
-
-/** @internal */
-export const GetRawResourceHeartbeatInstance6$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatInstance6,
-  unknown
-> = z.object({
-  cpu: z.nullable(z.union([z.lazy(() => CpuInstance6$inboundSchema), z.any()]))
-    .optional(),
-  memory: z.nullable(
-    z.union([z.lazy(() => MemoryInstance6$inboundSchema), z.any()]),
-  ).optional(),
-  name: z.string(),
-  nodeName: z.nullable(z.string()).optional(),
-  ownerReferences: z.array(z.lazy(() => OwnerReference3$inboundSchema)),
-  phase: z.nullable(z.string()).optional(),
-  podIp: z.nullable(z.string()).optional(),
-  ready: z.boolean(),
-  restartCount: z.int(),
-  terminatedReason: z.nullable(z.string()).optional(),
+  apiVersion: z.nullable(z.string()).optional(),
+  fieldPath: z.nullable(z.string()).optional(),
+  kind: z.nullable(z.string()).optional(),
+  name: z.nullable(z.string()).optional(),
+  namespace: z.nullable(z.string()).optional(),
+  resourceVersion: z.nullable(z.string()).optional(),
   uid: z.nullable(z.string()).optional(),
-  waitingReason: z.nullable(z.string()).optional(),
 });
 
-export function getRawResourceHeartbeatInstance6FromJSON(
+export function involvedObject7FromJSON(
   jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatInstance6, SDKValidationError> {
+): SafeParseResult<InvolvedObject7, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => GetRawResourceHeartbeatInstance6$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatInstance6' from JSON`,
+    (x) => InvolvedObject7$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'InvolvedObject7' from JSON`,
+  );
+}
+
+/** @internal */
+export const InvolvedObjectUnion7$inboundSchema: z.ZodType<
+  InvolvedObjectUnion7,
+  unknown
+> = z.union([z.lazy(() => InvolvedObject7$inboundSchema), z.any()]);
+
+export function involvedObjectUnion7FromJSON(
+  jsonString: string,
+): SafeParseResult<InvolvedObjectUnion7, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => InvolvedObjectUnion7$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'InvolvedObjectUnion7' from JSON`,
+  );
+}
+
+/** @internal */
+export const Source7$inboundSchema: z.ZodType<Source7, unknown> = z.object({
+  component: z.nullable(z.string()).optional(),
+  host: z.nullable(z.string()).optional(),
+});
+
+export function source7FromJSON(
+  jsonString: string,
+): SafeParseResult<Source7, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Source7$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Source7' from JSON`,
+  );
+}
+
+/** @internal */
+export const SourceUnion7$inboundSchema: z.ZodType<SourceUnion7, unknown> = z
+  .union([z.lazy(() => Source7$inboundSchema), z.any()]);
+
+export function sourceUnion7FromJSON(
+  jsonString: string,
+): SafeParseResult<SourceUnion7, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SourceUnion7$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SourceUnion7' from JSON`,
+  );
+}
+
+/** @internal */
+export const GetRawResourceHeartbeatEvent9$inboundSchema: z.ZodType<
+  GetRawResourceHeartbeatEvent9,
+  unknown
+> = z.object({
+  count: z.nullable(z.int()).optional(),
+  eventTime: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  firstTimestamp: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  involvedObject: z.nullable(
+    z.union([z.lazy(() => InvolvedObject7$inboundSchema), z.any()]),
+  ).optional(),
+  lastTimestamp: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  message: z.string(),
+  raw: z.nullable(z.any()).optional(),
+  reason: z.string(),
+  source: z.nullable(z.union([z.lazy(() => Source7$inboundSchema), z.any()]))
+    .optional(),
+  type: z.nullable(z.string()).optional(),
+});
+
+export function getRawResourceHeartbeatEvent9FromJSON(
+  jsonString: string,
+): SafeParseResult<GetRawResourceHeartbeatEvent9, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => GetRawResourceHeartbeatEvent9$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetRawResourceHeartbeatEvent9' from JSON`,
   );
 }
 
@@ -13849,6 +12711,127 @@ export function memoryUnion6FromJSON(
     jsonString,
     (x) => MemoryUnion6$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'MemoryUnion6' from JSON`,
+  );
+}
+
+/** @internal */
+export const CpuPodUnit3$inboundSchema: z.ZodEnum<typeof CpuPodUnit3> = z.enum(
+  CpuPodUnit3,
+);
+
+/** @internal */
+export const CpuPod3$inboundSchema: z.ZodType<CpuPod3, unknown> = z.object({
+  unit: CpuPodUnit3$inboundSchema,
+  value: z.number(),
+});
+
+export function cpuPod3FromJSON(
+  jsonString: string,
+): SafeParseResult<CpuPod3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CpuPod3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CpuPod3' from JSON`,
+  );
+}
+
+/** @internal */
+export const PodCpuUnion3$inboundSchema: z.ZodType<PodCpuUnion3, unknown> = z
+  .union([z.lazy(() => CpuPod3$inboundSchema), z.any()]);
+
+export function podCpuUnion3FromJSON(
+  jsonString: string,
+): SafeParseResult<PodCpuUnion3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PodCpuUnion3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PodCpuUnion3' from JSON`,
+  );
+}
+
+/** @internal */
+export const MemoryPodUnit3$inboundSchema: z.ZodEnum<typeof MemoryPodUnit3> = z
+  .enum(MemoryPodUnit3);
+
+/** @internal */
+export const MemoryPod3$inboundSchema: z.ZodType<MemoryPod3, unknown> = z
+  .object({
+    unit: MemoryPodUnit3$inboundSchema,
+    value: z.number(),
+  });
+
+export function memoryPod3FromJSON(
+  jsonString: string,
+): SafeParseResult<MemoryPod3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => MemoryPod3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'MemoryPod3' from JSON`,
+  );
+}
+
+/** @internal */
+export const PodMemoryUnion3$inboundSchema: z.ZodType<
+  PodMemoryUnion3,
+  unknown
+> = z.union([z.lazy(() => MemoryPod3$inboundSchema), z.any()]);
+
+export function podMemoryUnion3FromJSON(
+  jsonString: string,
+): SafeParseResult<PodMemoryUnion3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PodMemoryUnion3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PodMemoryUnion3' from JSON`,
+  );
+}
+
+/** @internal */
+export const OwnerReference3$inboundSchema: z.ZodType<
+  OwnerReference3,
+  unknown
+> = z.object({
+  controller: z.boolean(),
+  kind: z.string(),
+  name: z.string(),
+  uid: z.string(),
+});
+
+export function ownerReference3FromJSON(
+  jsonString: string,
+): SafeParseResult<OwnerReference3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => OwnerReference3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'OwnerReference3' from JSON`,
+  );
+}
+
+/** @internal */
+export const Pod3$inboundSchema: z.ZodType<Pod3, unknown> = z.object({
+  cpu: z.nullable(z.union([z.lazy(() => CpuPod3$inboundSchema), z.any()]))
+    .optional(),
+  memory: z.nullable(z.union([z.lazy(() => MemoryPod3$inboundSchema), z.any()]))
+    .optional(),
+  name: z.string(),
+  nodeName: z.nullable(z.string()).optional(),
+  ownerReferences: z.array(z.lazy(() => OwnerReference3$inboundSchema)),
+  phase: z.nullable(z.string()).optional(),
+  podIp: z.nullable(z.string()).optional(),
+  ready: z.boolean(),
+  restartCount: z.int(),
+  terminatedReason: z.nullable(z.string()).optional(),
+  uid: z.nullable(z.string()).optional(),
+  waitingReason: z.nullable(z.string()).optional(),
+});
+
+export function pod3FromJSON(
+  jsonString: string,
+): SafeParseResult<Pod3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Pod3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Pod3' from JSON`,
   );
 }
 
@@ -14002,14 +12985,12 @@ export const DataKubernetes3$inboundSchema: z.ZodType<
   commandSupported: z.boolean(),
   cpu: z.nullable(z.union([z.lazy(() => Cpu6$inboundSchema), z.any()]))
     .optional(),
-  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent16$inboundSchema)),
-  instances: z.array(
-    z.lazy(() => GetRawResourceHeartbeatInstance6$inboundSchema),
-  ),
+  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent9$inboundSchema)),
   memory: z.nullable(z.union([z.lazy(() => Memory6$inboundSchema), z.any()]))
     .optional(),
   name: z.string(),
   namespace: z.string(),
+  pods: z.array(z.lazy(() => Pod3$inboundSchema)),
   replicas: z.lazy(() => Replicas4$inboundSchema),
   restarts: z.nullable(z.int()).optional(),
   status: z.lazy(() => DataStatus16$inboundSchema),
@@ -14030,120 +13011,97 @@ export function dataKubernetes3FromJSON(
 }
 
 /** @internal */
-export const EventSeverity15$inboundSchema: z.ZodEnum<typeof EventSeverity15> =
-  z.enum(EventSeverity15);
+export const CpuDaemonInstanceUnit3$inboundSchema: z.ZodEnum<
+  typeof CpuDaemonInstanceUnit3
+> = z.enum(CpuDaemonInstanceUnit3);
 
 /** @internal */
-export const GetRawResourceHeartbeatEvent15$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent15,
+export const CpuDaemonInstance3$inboundSchema: z.ZodType<
+  CpuDaemonInstance3,
   unknown
 > = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity15$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent15FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent15, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent15$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent15' from JSON`,
-  );
-}
-
-/** @internal */
-export const CpuInstanceUnit5$inboundSchema: z.ZodEnum<
-  typeof CpuInstanceUnit5
-> = z.enum(CpuInstanceUnit5);
-
-/** @internal */
-export const CpuInstance5$inboundSchema: z.ZodType<CpuInstance5, unknown> = z
-  .object({
-    unit: CpuInstanceUnit5$inboundSchema,
-    value: z.number(),
-  });
-
-export function cpuInstance5FromJSON(
-  jsonString: string,
-): SafeParseResult<CpuInstance5, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CpuInstance5$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CpuInstance5' from JSON`,
-  );
-}
-
-/** @internal */
-export const InstanceCpuUnion5$inboundSchema: z.ZodType<
-  InstanceCpuUnion5,
-  unknown
-> = z.union([z.lazy(() => CpuInstance5$inboundSchema), z.any()]);
-
-export function instanceCpuUnion5FromJSON(
-  jsonString: string,
-): SafeParseResult<InstanceCpuUnion5, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => InstanceCpuUnion5$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'InstanceCpuUnion5' from JSON`,
-  );
-}
-
-/** @internal */
-export const MemoryInstanceUnit5$inboundSchema: z.ZodEnum<
-  typeof MemoryInstanceUnit5
-> = z.enum(MemoryInstanceUnit5);
-
-/** @internal */
-export const MemoryInstance5$inboundSchema: z.ZodType<
-  MemoryInstance5,
-  unknown
-> = z.object({
-  unit: MemoryInstanceUnit5$inboundSchema,
+  unit: CpuDaemonInstanceUnit3$inboundSchema,
   value: z.number(),
 });
 
-export function memoryInstance5FromJSON(
+export function cpuDaemonInstance3FromJSON(
   jsonString: string,
-): SafeParseResult<MemoryInstance5, SDKValidationError> {
+): SafeParseResult<CpuDaemonInstance3, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => MemoryInstance5$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'MemoryInstance5' from JSON`,
+    (x) => CpuDaemonInstance3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CpuDaemonInstance3' from JSON`,
   );
 }
 
 /** @internal */
-export const InstanceMemoryUnion5$inboundSchema: z.ZodType<
-  InstanceMemoryUnion5,
+export const DaemonInstanceCpuUnion3$inboundSchema: z.ZodType<
+  DaemonInstanceCpuUnion3,
   unknown
-> = z.union([z.lazy(() => MemoryInstance5$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => CpuDaemonInstance3$inboundSchema), z.any()]);
 
-export function instanceMemoryUnion5FromJSON(
+export function daemonInstanceCpuUnion3FromJSON(
   jsonString: string,
-): SafeParseResult<InstanceMemoryUnion5, SDKValidationError> {
+): SafeParseResult<DaemonInstanceCpuUnion3, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => InstanceMemoryUnion5$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'InstanceMemoryUnion5' from JSON`,
+    (x) => DaemonInstanceCpuUnion3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DaemonInstanceCpuUnion3' from JSON`,
   );
 }
 
 /** @internal */
-export const GetRawResourceHeartbeatInstance5$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatInstance5,
+export const MemoryDaemonInstanceUnit3$inboundSchema: z.ZodEnum<
+  typeof MemoryDaemonInstanceUnit3
+> = z.enum(MemoryDaemonInstanceUnit3);
+
+/** @internal */
+export const MemoryDaemonInstance3$inboundSchema: z.ZodType<
+  MemoryDaemonInstance3,
   unknown
 > = z.object({
-  cpu: z.nullable(z.union([z.lazy(() => CpuInstance5$inboundSchema), z.any()]))
-    .optional(),
+  unit: MemoryDaemonInstanceUnit3$inboundSchema,
+  value: z.number(),
+});
+
+export function memoryDaemonInstance3FromJSON(
+  jsonString: string,
+): SafeParseResult<MemoryDaemonInstance3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => MemoryDaemonInstance3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'MemoryDaemonInstance3' from JSON`,
+  );
+}
+
+/** @internal */
+export const DaemonInstanceMemoryUnion3$inboundSchema: z.ZodType<
+  DaemonInstanceMemoryUnion3,
+  unknown
+> = z.union([z.lazy(() => MemoryDaemonInstance3$inboundSchema), z.any()]);
+
+export function daemonInstanceMemoryUnion3FromJSON(
+  jsonString: string,
+): SafeParseResult<DaemonInstanceMemoryUnion3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DaemonInstanceMemoryUnion3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DaemonInstanceMemoryUnion3' from JSON`,
+  );
+}
+
+/** @internal */
+export const DaemonInstance3$inboundSchema: z.ZodType<
+  DaemonInstance3,
+  unknown
+> = z.object({
+  cpu: z.nullable(
+    z.union([z.lazy(() => CpuDaemonInstance3$inboundSchema), z.any()]),
+  ).optional(),
   ip: z.nullable(z.string()).optional(),
   machineId: z.nullable(z.string()).optional(),
   memory: z.nullable(
-    z.union([z.lazy(() => MemoryInstance5$inboundSchema), z.any()]),
+    z.union([z.lazy(() => MemoryDaemonInstance3$inboundSchema), z.any()]),
   ).optional(),
   message: z.nullable(z.string()).optional(),
   metricsHealthy: z.nullable(z.boolean()).optional(),
@@ -14161,13 +13119,120 @@ export const GetRawResourceHeartbeatInstance5$inboundSchema: z.ZodType<
   waitingReason: z.nullable(z.string()).optional(),
 });
 
-export function getRawResourceHeartbeatInstance5FromJSON(
+export function daemonInstance3FromJSON(
   jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatInstance5, SDKValidationError> {
+): SafeParseResult<DaemonInstance3, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => GetRawResourceHeartbeatInstance5$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatInstance5' from JSON`,
+    (x) => DaemonInstance3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DaemonInstance3' from JSON`,
+  );
+}
+
+/** @internal */
+export const InvolvedObject6$inboundSchema: z.ZodType<
+  InvolvedObject6,
+  unknown
+> = z.object({
+  details: z.nullable(z.any()).optional(),
+  id: z.nullable(z.string()).optional(),
+  kind: z.nullable(z.string()).optional(),
+  machineId: z.nullable(z.string()).optional(),
+  name: z.nullable(z.string()).optional(),
+  replicaId: z.nullable(z.string()).optional(),
+});
+
+export function involvedObject6FromJSON(
+  jsonString: string,
+): SafeParseResult<InvolvedObject6, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => InvolvedObject6$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'InvolvedObject6' from JSON`,
+  );
+}
+
+/** @internal */
+export const InvolvedObjectUnion6$inboundSchema: z.ZodType<
+  InvolvedObjectUnion6,
+  unknown
+> = z.union([z.lazy(() => InvolvedObject6$inboundSchema), z.any()]);
+
+export function involvedObjectUnion6FromJSON(
+  jsonString: string,
+): SafeParseResult<InvolvedObjectUnion6, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => InvolvedObjectUnion6$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'InvolvedObjectUnion6' from JSON`,
+  );
+}
+
+/** @internal */
+export const Source6$inboundSchema: z.ZodType<Source6, unknown> = z.object({
+  component: z.nullable(z.string()).optional(),
+  host: z.nullable(z.string()).optional(),
+});
+
+export function source6FromJSON(
+  jsonString: string,
+): SafeParseResult<Source6, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Source6$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Source6' from JSON`,
+  );
+}
+
+/** @internal */
+export const SourceUnion6$inboundSchema: z.ZodType<SourceUnion6, unknown> = z
+  .union([z.lazy(() => Source6$inboundSchema), z.any()]);
+
+export function sourceUnion6FromJSON(
+  jsonString: string,
+): SafeParseResult<SourceUnion6, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SourceUnion6$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SourceUnion6' from JSON`,
+  );
+}
+
+/** @internal */
+export const GetRawResourceHeartbeatEvent8$inboundSchema: z.ZodType<
+  GetRawResourceHeartbeatEvent8,
+  unknown
+> = z.object({
+  count: z.nullable(z.int()).optional(),
+  details: z.nullable(z.any()).optional(),
+  eventId: z.nullable(z.string()).optional(),
+  eventTime: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  firstTimestamp: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  involvedObject: z.nullable(
+    z.union([z.lazy(() => InvolvedObject6$inboundSchema), z.any()]),
+  ).optional(),
+  lastTimestamp: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  message: z.string(),
+  raw: z.nullable(z.any()).optional(),
+  reason: z.string(),
+  source: z.nullable(z.union([z.lazy(() => Source6$inboundSchema), z.any()]))
+    .optional(),
+  type: z.nullable(z.string()).optional(),
+});
+
+export function getRawResourceHeartbeatEvent8FromJSON(
+  jsonString: string,
+): SafeParseResult<GetRawResourceHeartbeatEvent8, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => GetRawResourceHeartbeatEvent8$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetRawResourceHeartbeatEvent8' from JSON`,
   );
 }
 
@@ -14239,17 +13304,15 @@ export const DataAzure1$inboundSchema: z.ZodType<DataAzure1, unknown> = z
     assignedMachines: z.int(),
     capacityGroup: z.string(),
     commandSupported: z.boolean(),
+    daemonInstances: z.array(z.lazy(() => DaemonInstance3$inboundSchema)),
     daemonName: z.string(),
     desiredMachines: z.int(),
-    events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent15$inboundSchema)),
+    events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent8$inboundSchema)),
     healthyInstances: z.int(),
     horizonClusterId: z.string(),
     horizonStatus: z.string(),
     horizonStatusMessage: z.nullable(z.string()).optional(),
     horizonStatusReason: z.nullable(z.string()).optional(),
-    instances: z.array(
-      z.lazy(() => GetRawResourceHeartbeatInstance5$inboundSchema),
-    ),
     latestUpdateTimestamp: z.string(),
     status: z.lazy(() => DataStatus15$inboundSchema),
     unavailableInstances: z.int(),
@@ -14267,120 +13330,97 @@ export function dataAzure1FromJSON(
 }
 
 /** @internal */
-export const EventSeverity14$inboundSchema: z.ZodEnum<typeof EventSeverity14> =
-  z.enum(EventSeverity14);
+export const CpuDaemonInstanceUnit2$inboundSchema: z.ZodEnum<
+  typeof CpuDaemonInstanceUnit2
+> = z.enum(CpuDaemonInstanceUnit2);
 
 /** @internal */
-export const GetRawResourceHeartbeatEvent14$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent14,
+export const CpuDaemonInstance2$inboundSchema: z.ZodType<
+  CpuDaemonInstance2,
   unknown
 > = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity14$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent14FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent14, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent14$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent14' from JSON`,
-  );
-}
-
-/** @internal */
-export const CpuInstanceUnit4$inboundSchema: z.ZodEnum<
-  typeof CpuInstanceUnit4
-> = z.enum(CpuInstanceUnit4);
-
-/** @internal */
-export const CpuInstance4$inboundSchema: z.ZodType<CpuInstance4, unknown> = z
-  .object({
-    unit: CpuInstanceUnit4$inboundSchema,
-    value: z.number(),
-  });
-
-export function cpuInstance4FromJSON(
-  jsonString: string,
-): SafeParseResult<CpuInstance4, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CpuInstance4$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CpuInstance4' from JSON`,
-  );
-}
-
-/** @internal */
-export const InstanceCpuUnion4$inboundSchema: z.ZodType<
-  InstanceCpuUnion4,
-  unknown
-> = z.union([z.lazy(() => CpuInstance4$inboundSchema), z.any()]);
-
-export function instanceCpuUnion4FromJSON(
-  jsonString: string,
-): SafeParseResult<InstanceCpuUnion4, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => InstanceCpuUnion4$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'InstanceCpuUnion4' from JSON`,
-  );
-}
-
-/** @internal */
-export const MemoryInstanceUnit4$inboundSchema: z.ZodEnum<
-  typeof MemoryInstanceUnit4
-> = z.enum(MemoryInstanceUnit4);
-
-/** @internal */
-export const MemoryInstance4$inboundSchema: z.ZodType<
-  MemoryInstance4,
-  unknown
-> = z.object({
-  unit: MemoryInstanceUnit4$inboundSchema,
+  unit: CpuDaemonInstanceUnit2$inboundSchema,
   value: z.number(),
 });
 
-export function memoryInstance4FromJSON(
+export function cpuDaemonInstance2FromJSON(
   jsonString: string,
-): SafeParseResult<MemoryInstance4, SDKValidationError> {
+): SafeParseResult<CpuDaemonInstance2, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => MemoryInstance4$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'MemoryInstance4' from JSON`,
+    (x) => CpuDaemonInstance2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CpuDaemonInstance2' from JSON`,
   );
 }
 
 /** @internal */
-export const InstanceMemoryUnion4$inboundSchema: z.ZodType<
-  InstanceMemoryUnion4,
+export const DaemonInstanceCpuUnion2$inboundSchema: z.ZodType<
+  DaemonInstanceCpuUnion2,
   unknown
-> = z.union([z.lazy(() => MemoryInstance4$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => CpuDaemonInstance2$inboundSchema), z.any()]);
 
-export function instanceMemoryUnion4FromJSON(
+export function daemonInstanceCpuUnion2FromJSON(
   jsonString: string,
-): SafeParseResult<InstanceMemoryUnion4, SDKValidationError> {
+): SafeParseResult<DaemonInstanceCpuUnion2, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => InstanceMemoryUnion4$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'InstanceMemoryUnion4' from JSON`,
+    (x) => DaemonInstanceCpuUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DaemonInstanceCpuUnion2' from JSON`,
   );
 }
 
 /** @internal */
-export const GetRawResourceHeartbeatInstance4$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatInstance4,
+export const MemoryDaemonInstanceUnit2$inboundSchema: z.ZodEnum<
+  typeof MemoryDaemonInstanceUnit2
+> = z.enum(MemoryDaemonInstanceUnit2);
+
+/** @internal */
+export const MemoryDaemonInstance2$inboundSchema: z.ZodType<
+  MemoryDaemonInstance2,
   unknown
 > = z.object({
-  cpu: z.nullable(z.union([z.lazy(() => CpuInstance4$inboundSchema), z.any()]))
-    .optional(),
+  unit: MemoryDaemonInstanceUnit2$inboundSchema,
+  value: z.number(),
+});
+
+export function memoryDaemonInstance2FromJSON(
+  jsonString: string,
+): SafeParseResult<MemoryDaemonInstance2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => MemoryDaemonInstance2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'MemoryDaemonInstance2' from JSON`,
+  );
+}
+
+/** @internal */
+export const DaemonInstanceMemoryUnion2$inboundSchema: z.ZodType<
+  DaemonInstanceMemoryUnion2,
+  unknown
+> = z.union([z.lazy(() => MemoryDaemonInstance2$inboundSchema), z.any()]);
+
+export function daemonInstanceMemoryUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<DaemonInstanceMemoryUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DaemonInstanceMemoryUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DaemonInstanceMemoryUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const DaemonInstance2$inboundSchema: z.ZodType<
+  DaemonInstance2,
+  unknown
+> = z.object({
+  cpu: z.nullable(
+    z.union([z.lazy(() => CpuDaemonInstance2$inboundSchema), z.any()]),
+  ).optional(),
   ip: z.nullable(z.string()).optional(),
   machineId: z.nullable(z.string()).optional(),
   memory: z.nullable(
-    z.union([z.lazy(() => MemoryInstance4$inboundSchema), z.any()]),
+    z.union([z.lazy(() => MemoryDaemonInstance2$inboundSchema), z.any()]),
   ).optional(),
   message: z.nullable(z.string()).optional(),
   metricsHealthy: z.nullable(z.boolean()).optional(),
@@ -14398,13 +13438,120 @@ export const GetRawResourceHeartbeatInstance4$inboundSchema: z.ZodType<
   waitingReason: z.nullable(z.string()).optional(),
 });
 
-export function getRawResourceHeartbeatInstance4FromJSON(
+export function daemonInstance2FromJSON(
   jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatInstance4, SDKValidationError> {
+): SafeParseResult<DaemonInstance2, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => GetRawResourceHeartbeatInstance4$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatInstance4' from JSON`,
+    (x) => DaemonInstance2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DaemonInstance2' from JSON`,
+  );
+}
+
+/** @internal */
+export const InvolvedObject5$inboundSchema: z.ZodType<
+  InvolvedObject5,
+  unknown
+> = z.object({
+  details: z.nullable(z.any()).optional(),
+  id: z.nullable(z.string()).optional(),
+  kind: z.nullable(z.string()).optional(),
+  machineId: z.nullable(z.string()).optional(),
+  name: z.nullable(z.string()).optional(),
+  replicaId: z.nullable(z.string()).optional(),
+});
+
+export function involvedObject5FromJSON(
+  jsonString: string,
+): SafeParseResult<InvolvedObject5, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => InvolvedObject5$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'InvolvedObject5' from JSON`,
+  );
+}
+
+/** @internal */
+export const InvolvedObjectUnion5$inboundSchema: z.ZodType<
+  InvolvedObjectUnion5,
+  unknown
+> = z.union([z.lazy(() => InvolvedObject5$inboundSchema), z.any()]);
+
+export function involvedObjectUnion5FromJSON(
+  jsonString: string,
+): SafeParseResult<InvolvedObjectUnion5, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => InvolvedObjectUnion5$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'InvolvedObjectUnion5' from JSON`,
+  );
+}
+
+/** @internal */
+export const Source5$inboundSchema: z.ZodType<Source5, unknown> = z.object({
+  component: z.nullable(z.string()).optional(),
+  host: z.nullable(z.string()).optional(),
+});
+
+export function source5FromJSON(
+  jsonString: string,
+): SafeParseResult<Source5, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Source5$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Source5' from JSON`,
+  );
+}
+
+/** @internal */
+export const SourceUnion5$inboundSchema: z.ZodType<SourceUnion5, unknown> = z
+  .union([z.lazy(() => Source5$inboundSchema), z.any()]);
+
+export function sourceUnion5FromJSON(
+  jsonString: string,
+): SafeParseResult<SourceUnion5, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SourceUnion5$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SourceUnion5' from JSON`,
+  );
+}
+
+/** @internal */
+export const GetRawResourceHeartbeatEvent7$inboundSchema: z.ZodType<
+  GetRawResourceHeartbeatEvent7,
+  unknown
+> = z.object({
+  count: z.nullable(z.int()).optional(),
+  details: z.nullable(z.any()).optional(),
+  eventId: z.nullable(z.string()).optional(),
+  eventTime: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  firstTimestamp: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  involvedObject: z.nullable(
+    z.union([z.lazy(() => InvolvedObject5$inboundSchema), z.any()]),
+  ).optional(),
+  lastTimestamp: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  message: z.string(),
+  raw: z.nullable(z.any()).optional(),
+  reason: z.string(),
+  source: z.nullable(z.union([z.lazy(() => Source5$inboundSchema), z.any()]))
+    .optional(),
+  type: z.nullable(z.string()).optional(),
+});
+
+export function getRawResourceHeartbeatEvent7FromJSON(
+  jsonString: string,
+): SafeParseResult<GetRawResourceHeartbeatEvent7, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => GetRawResourceHeartbeatEvent7$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetRawResourceHeartbeatEvent7' from JSON`,
   );
 }
 
@@ -14475,17 +13622,15 @@ export const DataGcp1$inboundSchema: z.ZodType<DataGcp1, unknown> = z.object({
   assignedMachines: z.int(),
   capacityGroup: z.string(),
   commandSupported: z.boolean(),
+  daemonInstances: z.array(z.lazy(() => DaemonInstance2$inboundSchema)),
   daemonName: z.string(),
   desiredMachines: z.int(),
-  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent14$inboundSchema)),
+  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent7$inboundSchema)),
   healthyInstances: z.int(),
   horizonClusterId: z.string(),
   horizonStatus: z.string(),
   horizonStatusMessage: z.nullable(z.string()).optional(),
   horizonStatusReason: z.nullable(z.string()).optional(),
-  instances: z.array(
-    z.lazy(() => GetRawResourceHeartbeatInstance4$inboundSchema),
-  ),
   latestUpdateTimestamp: z.string(),
   status: z.lazy(() => DataStatus14$inboundSchema),
   unavailableInstances: z.int(),
@@ -14503,120 +13648,97 @@ export function dataGcp1FromJSON(
 }
 
 /** @internal */
-export const EventSeverity13$inboundSchema: z.ZodEnum<typeof EventSeverity13> =
-  z.enum(EventSeverity13);
+export const CpuDaemonInstanceUnit1$inboundSchema: z.ZodEnum<
+  typeof CpuDaemonInstanceUnit1
+> = z.enum(CpuDaemonInstanceUnit1);
 
 /** @internal */
-export const GetRawResourceHeartbeatEvent13$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent13,
+export const CpuDaemonInstance1$inboundSchema: z.ZodType<
+  CpuDaemonInstance1,
   unknown
 > = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity13$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent13FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent13, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent13$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent13' from JSON`,
-  );
-}
-
-/** @internal */
-export const CpuInstanceUnit3$inboundSchema: z.ZodEnum<
-  typeof CpuInstanceUnit3
-> = z.enum(CpuInstanceUnit3);
-
-/** @internal */
-export const CpuInstance3$inboundSchema: z.ZodType<CpuInstance3, unknown> = z
-  .object({
-    unit: CpuInstanceUnit3$inboundSchema,
-    value: z.number(),
-  });
-
-export function cpuInstance3FromJSON(
-  jsonString: string,
-): SafeParseResult<CpuInstance3, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CpuInstance3$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CpuInstance3' from JSON`,
-  );
-}
-
-/** @internal */
-export const InstanceCpuUnion3$inboundSchema: z.ZodType<
-  InstanceCpuUnion3,
-  unknown
-> = z.union([z.lazy(() => CpuInstance3$inboundSchema), z.any()]);
-
-export function instanceCpuUnion3FromJSON(
-  jsonString: string,
-): SafeParseResult<InstanceCpuUnion3, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => InstanceCpuUnion3$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'InstanceCpuUnion3' from JSON`,
-  );
-}
-
-/** @internal */
-export const MemoryInstanceUnit3$inboundSchema: z.ZodEnum<
-  typeof MemoryInstanceUnit3
-> = z.enum(MemoryInstanceUnit3);
-
-/** @internal */
-export const MemoryInstance3$inboundSchema: z.ZodType<
-  MemoryInstance3,
-  unknown
-> = z.object({
-  unit: MemoryInstanceUnit3$inboundSchema,
+  unit: CpuDaemonInstanceUnit1$inboundSchema,
   value: z.number(),
 });
 
-export function memoryInstance3FromJSON(
+export function cpuDaemonInstance1FromJSON(
   jsonString: string,
-): SafeParseResult<MemoryInstance3, SDKValidationError> {
+): SafeParseResult<CpuDaemonInstance1, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => MemoryInstance3$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'MemoryInstance3' from JSON`,
+    (x) => CpuDaemonInstance1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CpuDaemonInstance1' from JSON`,
   );
 }
 
 /** @internal */
-export const InstanceMemoryUnion3$inboundSchema: z.ZodType<
-  InstanceMemoryUnion3,
+export const DaemonInstanceCpuUnion1$inboundSchema: z.ZodType<
+  DaemonInstanceCpuUnion1,
   unknown
-> = z.union([z.lazy(() => MemoryInstance3$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => CpuDaemonInstance1$inboundSchema), z.any()]);
 
-export function instanceMemoryUnion3FromJSON(
+export function daemonInstanceCpuUnion1FromJSON(
   jsonString: string,
-): SafeParseResult<InstanceMemoryUnion3, SDKValidationError> {
+): SafeParseResult<DaemonInstanceCpuUnion1, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => InstanceMemoryUnion3$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'InstanceMemoryUnion3' from JSON`,
+    (x) => DaemonInstanceCpuUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DaemonInstanceCpuUnion1' from JSON`,
   );
 }
 
 /** @internal */
-export const GetRawResourceHeartbeatInstance3$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatInstance3,
+export const MemoryDaemonInstanceUnit1$inboundSchema: z.ZodEnum<
+  typeof MemoryDaemonInstanceUnit1
+> = z.enum(MemoryDaemonInstanceUnit1);
+
+/** @internal */
+export const MemoryDaemonInstance1$inboundSchema: z.ZodType<
+  MemoryDaemonInstance1,
   unknown
 > = z.object({
-  cpu: z.nullable(z.union([z.lazy(() => CpuInstance3$inboundSchema), z.any()]))
-    .optional(),
+  unit: MemoryDaemonInstanceUnit1$inboundSchema,
+  value: z.number(),
+});
+
+export function memoryDaemonInstance1FromJSON(
+  jsonString: string,
+): SafeParseResult<MemoryDaemonInstance1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => MemoryDaemonInstance1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'MemoryDaemonInstance1' from JSON`,
+  );
+}
+
+/** @internal */
+export const DaemonInstanceMemoryUnion1$inboundSchema: z.ZodType<
+  DaemonInstanceMemoryUnion1,
+  unknown
+> = z.union([z.lazy(() => MemoryDaemonInstance1$inboundSchema), z.any()]);
+
+export function daemonInstanceMemoryUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<DaemonInstanceMemoryUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DaemonInstanceMemoryUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DaemonInstanceMemoryUnion1' from JSON`,
+  );
+}
+
+/** @internal */
+export const DaemonInstance1$inboundSchema: z.ZodType<
+  DaemonInstance1,
+  unknown
+> = z.object({
+  cpu: z.nullable(
+    z.union([z.lazy(() => CpuDaemonInstance1$inboundSchema), z.any()]),
+  ).optional(),
   ip: z.nullable(z.string()).optional(),
   machineId: z.nullable(z.string()).optional(),
   memory: z.nullable(
-    z.union([z.lazy(() => MemoryInstance3$inboundSchema), z.any()]),
+    z.union([z.lazy(() => MemoryDaemonInstance1$inboundSchema), z.any()]),
   ).optional(),
   message: z.nullable(z.string()).optional(),
   metricsHealthy: z.nullable(z.boolean()).optional(),
@@ -14634,13 +13756,120 @@ export const GetRawResourceHeartbeatInstance3$inboundSchema: z.ZodType<
   waitingReason: z.nullable(z.string()).optional(),
 });
 
-export function getRawResourceHeartbeatInstance3FromJSON(
+export function daemonInstance1FromJSON(
   jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatInstance3, SDKValidationError> {
+): SafeParseResult<DaemonInstance1, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => GetRawResourceHeartbeatInstance3$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatInstance3' from JSON`,
+    (x) => DaemonInstance1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DaemonInstance1' from JSON`,
+  );
+}
+
+/** @internal */
+export const InvolvedObject4$inboundSchema: z.ZodType<
+  InvolvedObject4,
+  unknown
+> = z.object({
+  details: z.nullable(z.any()).optional(),
+  id: z.nullable(z.string()).optional(),
+  kind: z.nullable(z.string()).optional(),
+  machineId: z.nullable(z.string()).optional(),
+  name: z.nullable(z.string()).optional(),
+  replicaId: z.nullable(z.string()).optional(),
+});
+
+export function involvedObject4FromJSON(
+  jsonString: string,
+): SafeParseResult<InvolvedObject4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => InvolvedObject4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'InvolvedObject4' from JSON`,
+  );
+}
+
+/** @internal */
+export const InvolvedObjectUnion4$inboundSchema: z.ZodType<
+  InvolvedObjectUnion4,
+  unknown
+> = z.union([z.lazy(() => InvolvedObject4$inboundSchema), z.any()]);
+
+export function involvedObjectUnion4FromJSON(
+  jsonString: string,
+): SafeParseResult<InvolvedObjectUnion4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => InvolvedObjectUnion4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'InvolvedObjectUnion4' from JSON`,
+  );
+}
+
+/** @internal */
+export const Source4$inboundSchema: z.ZodType<Source4, unknown> = z.object({
+  component: z.nullable(z.string()).optional(),
+  host: z.nullable(z.string()).optional(),
+});
+
+export function source4FromJSON(
+  jsonString: string,
+): SafeParseResult<Source4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Source4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Source4' from JSON`,
+  );
+}
+
+/** @internal */
+export const SourceUnion4$inboundSchema: z.ZodType<SourceUnion4, unknown> = z
+  .union([z.lazy(() => Source4$inboundSchema), z.any()]);
+
+export function sourceUnion4FromJSON(
+  jsonString: string,
+): SafeParseResult<SourceUnion4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SourceUnion4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SourceUnion4' from JSON`,
+  );
+}
+
+/** @internal */
+export const GetRawResourceHeartbeatEvent6$inboundSchema: z.ZodType<
+  GetRawResourceHeartbeatEvent6,
+  unknown
+> = z.object({
+  count: z.nullable(z.int()).optional(),
+  details: z.nullable(z.any()).optional(),
+  eventId: z.nullable(z.string()).optional(),
+  eventTime: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  firstTimestamp: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  involvedObject: z.nullable(
+    z.union([z.lazy(() => InvolvedObject4$inboundSchema), z.any()]),
+  ).optional(),
+  lastTimestamp: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  message: z.string(),
+  raw: z.nullable(z.any()).optional(),
+  reason: z.string(),
+  source: z.nullable(z.union([z.lazy(() => Source4$inboundSchema), z.any()]))
+    .optional(),
+  type: z.nullable(z.string()).optional(),
+});
+
+export function getRawResourceHeartbeatEvent6FromJSON(
+  jsonString: string,
+): SafeParseResult<GetRawResourceHeartbeatEvent6, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => GetRawResourceHeartbeatEvent6$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetRawResourceHeartbeatEvent6' from JSON`,
   );
 }
 
@@ -14711,17 +13940,15 @@ export const DataAws1$inboundSchema: z.ZodType<DataAws1, unknown> = z.object({
   assignedMachines: z.int(),
   capacityGroup: z.string(),
   commandSupported: z.boolean(),
+  daemonInstances: z.array(z.lazy(() => DaemonInstance1$inboundSchema)),
   daemonName: z.string(),
   desiredMachines: z.int(),
-  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent13$inboundSchema)),
+  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent6$inboundSchema)),
   healthyInstances: z.int(),
   horizonClusterId: z.string(),
   horizonStatus: z.string(),
   horizonStatusMessage: z.nullable(z.string()).optional(),
   horizonStatusReason: z.nullable(z.string()).optional(),
-  instances: z.array(
-    z.lazy(() => GetRawResourceHeartbeatInstance3$inboundSchema),
-  ),
   latestUpdateTimestamp: z.string(),
   status: z.lazy(() => DataStatus13$inboundSchema),
   unavailableInstances: z.int(),
@@ -14783,6 +14010,135 @@ export function dataDaemonFromJSON(
 }
 
 /** @internal */
+export const ContainerUnitCpuUnit$inboundSchema: z.ZodEnum<
+  typeof ContainerUnitCpuUnit
+> = z.enum(ContainerUnitCpuUnit);
+
+/** @internal */
+export const ContainerUnitCpu$inboundSchema: z.ZodType<
+  ContainerUnitCpu,
+  unknown
+> = z.object({
+  unit: ContainerUnitCpuUnit$inboundSchema,
+  value: z.number(),
+});
+
+export function containerUnitCpuFromJSON(
+  jsonString: string,
+): SafeParseResult<ContainerUnitCpu, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ContainerUnitCpu$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ContainerUnitCpu' from JSON`,
+  );
+}
+
+/** @internal */
+export const ContainerUnitCpuUnion$inboundSchema: z.ZodType<
+  ContainerUnitCpuUnion,
+  unknown
+> = z.union([z.lazy(() => ContainerUnitCpu$inboundSchema), z.any()]);
+
+export function containerUnitCpuUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<ContainerUnitCpuUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ContainerUnitCpuUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ContainerUnitCpuUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const ContainerUnitKind$inboundSchema: z.ZodEnum<
+  typeof ContainerUnitKind
+> = z.enum(ContainerUnitKind);
+
+/** @internal */
+export const ContainerUnitMemoryUnit$inboundSchema: z.ZodEnum<
+  typeof ContainerUnitMemoryUnit
+> = z.enum(ContainerUnitMemoryUnit);
+
+/** @internal */
+export const ContainerUnitMemory$inboundSchema: z.ZodType<
+  ContainerUnitMemory,
+  unknown
+> = z.object({
+  unit: ContainerUnitMemoryUnit$inboundSchema,
+  value: z.number(),
+});
+
+export function containerUnitMemoryFromJSON(
+  jsonString: string,
+): SafeParseResult<ContainerUnitMemory, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ContainerUnitMemory$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ContainerUnitMemory' from JSON`,
+  );
+}
+
+/** @internal */
+export const ContainerUnitMemoryUnion$inboundSchema: z.ZodType<
+  ContainerUnitMemoryUnion,
+  unknown
+> = z.union([z.lazy(() => ContainerUnitMemory$inboundSchema), z.any()]);
+
+export function containerUnitMemoryUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<ContainerUnitMemoryUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ContainerUnitMemoryUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ContainerUnitMemoryUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const ContainerUnit$inboundSchema: z.ZodType<ContainerUnit, unknown> = z
+  .object({
+    cpu: z.nullable(
+      z.union([z.lazy(() => ContainerUnitCpu$inboundSchema), z.any()]),
+    ).optional(),
+    kind: ContainerUnitKind$inboundSchema,
+    memory: z.nullable(
+      z.union([z.lazy(() => ContainerUnitMemory$inboundSchema), z.any()]),
+    ).optional(),
+    name: z.string(),
+    phase: z.nullable(z.string()).optional(),
+    pid: z.nullable(z.int()).optional(),
+    ready: z.boolean(),
+    restartCount: z.nullable(z.int()).optional(),
+    unitId: z.string(),
+  });
+
+export function containerUnitFromJSON(
+  jsonString: string,
+): SafeParseResult<ContainerUnit, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ContainerUnit$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ContainerUnit' from JSON`,
+  );
+}
+
+/** @internal */
+export const ContainerUnitUnion$inboundSchema: z.ZodType<
+  ContainerUnitUnion,
+  unknown
+> = z.union([z.lazy(() => ContainerUnit$inboundSchema), z.any()]);
+
+export function containerUnitUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<ContainerUnitUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ContainerUnitUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ContainerUnitUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const CpuUnit5$inboundSchema: z.ZodEnum<typeof CpuUnit5> = z.enum(
   CpuUnit5,
 );
@@ -14820,28 +14176,61 @@ export function cpuUnion5FromJSON(
 }
 
 /** @internal */
-export const EventSeverity12$inboundSchema: z.ZodEnum<typeof EventSeverity12> =
-  z.enum(EventSeverity12);
+export const EventSeverity2$inboundSchema: z.ZodEnum<typeof EventSeverity2> = z
+  .enum(EventSeverity2);
 
 /** @internal */
-export const GetRawResourceHeartbeatEvent12$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent12,
+export const Subject2$inboundSchema: z.ZodType<Subject2, unknown> = z.object({
+  id: z.nullable(z.string()).optional(),
+  kind: z.string(),
+  name: z.nullable(z.string()).optional(),
+});
+
+export function subject2FromJSON(
+  jsonString: string,
+): SafeParseResult<Subject2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Subject2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Subject2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SubjectUnion2$inboundSchema: z.ZodType<SubjectUnion2, unknown> = z
+  .union([z.lazy(() => Subject2$inboundSchema), z.any()]);
+
+export function subjectUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<SubjectUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SubjectUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SubjectUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const GetRawResourceHeartbeatEvent5$inboundSchema: z.ZodType<
+  GetRawResourceHeartbeatEvent5,
   unknown
 > = z.object({
   kind: z.string(),
   message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity12$inboundSchema,
-  source: z.nullable(z.string()).optional(),
+  raw: z.nullable(z.any()).optional(),
+  severity: EventSeverity2$inboundSchema,
+  subject: z.nullable(z.union([z.lazy(() => Subject2$inboundSchema), z.any()]))
+    .optional(),
+  timestamp: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
 });
 
-export function getRawResourceHeartbeatEvent12FromJSON(
+export function getRawResourceHeartbeatEvent5FromJSON(
   jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent12, SDKValidationError> {
+): SafeParseResult<GetRawResourceHeartbeatEvent5, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => GetRawResourceHeartbeatEvent12$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent12' from JSON`,
+    (x) => GetRawResourceHeartbeatEvent5$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetRawResourceHeartbeatEvent5' from JSON`,
   );
 }
 
@@ -14947,9 +14336,12 @@ export const DataLocal3$inboundSchema: z.ZodType<DataLocal3, unknown> = z
   .object({
     bindMountCount: z.int(),
     containerId: z.nullable(z.string()).optional(),
+    containerUnit: z.nullable(
+      z.union([z.lazy(() => ContainerUnit$inboundSchema), z.any()]),
+    ).optional(),
     cpu: z.nullable(z.union([z.lazy(() => Cpu5$inboundSchema), z.any()]))
       .optional(),
-    events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent12$inboundSchema)),
+    events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent5$inboundSchema)),
     image: z.nullable(z.string()).optional(),
     localUrl: z.nullable(z.string()).optional(),
     memory: z.nullable(z.union([z.lazy(() => Memory5$inboundSchema), z.any()]))
@@ -15011,159 +14403,108 @@ export function cpuUnion4FromJSON(
 }
 
 /** @internal */
-export const EventSeverity11$inboundSchema: z.ZodEnum<typeof EventSeverity11> =
-  z.enum(EventSeverity11);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent11$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent11,
+export const InvolvedObject3$inboundSchema: z.ZodType<
+  InvolvedObject3,
   unknown
 > = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity11$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent11FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent11, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent11$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent11' from JSON`,
-  );
-}
-
-/** @internal */
-export const CpuInstanceUnit2$inboundSchema: z.ZodEnum<
-  typeof CpuInstanceUnit2
-> = z.enum(CpuInstanceUnit2);
-
-/** @internal */
-export const CpuInstance2$inboundSchema: z.ZodType<CpuInstance2, unknown> = z
-  .object({
-    unit: CpuInstanceUnit2$inboundSchema,
-    value: z.number(),
-  });
-
-export function cpuInstance2FromJSON(
-  jsonString: string,
-): SafeParseResult<CpuInstance2, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CpuInstance2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CpuInstance2' from JSON`,
-  );
-}
-
-/** @internal */
-export const InstanceCpuUnion2$inboundSchema: z.ZodType<
-  InstanceCpuUnion2,
-  unknown
-> = z.union([z.lazy(() => CpuInstance2$inboundSchema), z.any()]);
-
-export function instanceCpuUnion2FromJSON(
-  jsonString: string,
-): SafeParseResult<InstanceCpuUnion2, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => InstanceCpuUnion2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'InstanceCpuUnion2' from JSON`,
-  );
-}
-
-/** @internal */
-export const MemoryInstanceUnit2$inboundSchema: z.ZodEnum<
-  typeof MemoryInstanceUnit2
-> = z.enum(MemoryInstanceUnit2);
-
-/** @internal */
-export const MemoryInstance2$inboundSchema: z.ZodType<
-  MemoryInstance2,
-  unknown
-> = z.object({
-  unit: MemoryInstanceUnit2$inboundSchema,
-  value: z.number(),
-});
-
-export function memoryInstance2FromJSON(
-  jsonString: string,
-): SafeParseResult<MemoryInstance2, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => MemoryInstance2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'MemoryInstance2' from JSON`,
-  );
-}
-
-/** @internal */
-export const InstanceMemoryUnion2$inboundSchema: z.ZodType<
-  InstanceMemoryUnion2,
-  unknown
-> = z.union([z.lazy(() => MemoryInstance2$inboundSchema), z.any()]);
-
-export function instanceMemoryUnion2FromJSON(
-  jsonString: string,
-): SafeParseResult<InstanceMemoryUnion2, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => InstanceMemoryUnion2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'InstanceMemoryUnion2' from JSON`,
-  );
-}
-
-/** @internal */
-export const OwnerReference2$inboundSchema: z.ZodType<
-  OwnerReference2,
-  unknown
-> = z.object({
-  controller: z.boolean(),
-  kind: z.string(),
-  name: z.string(),
-  uid: z.string(),
-});
-
-export function ownerReference2FromJSON(
-  jsonString: string,
-): SafeParseResult<OwnerReference2, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => OwnerReference2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'OwnerReference2' from JSON`,
-  );
-}
-
-/** @internal */
-export const GetRawResourceHeartbeatInstance2$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatInstance2,
-  unknown
-> = z.object({
-  cpu: z.nullable(z.union([z.lazy(() => CpuInstance2$inboundSchema), z.any()]))
-    .optional(),
-  memory: z.nullable(
-    z.union([z.lazy(() => MemoryInstance2$inboundSchema), z.any()]),
-  ).optional(),
-  name: z.string(),
-  nodeName: z.nullable(z.string()).optional(),
-  ownerReferences: z.array(z.lazy(() => OwnerReference2$inboundSchema)),
-  phase: z.nullable(z.string()).optional(),
-  podIp: z.nullable(z.string()).optional(),
-  ready: z.boolean(),
-  restartCount: z.int(),
-  terminatedReason: z.nullable(z.string()).optional(),
+  apiVersion: z.nullable(z.string()).optional(),
+  fieldPath: z.nullable(z.string()).optional(),
+  kind: z.nullable(z.string()).optional(),
+  name: z.nullable(z.string()).optional(),
+  namespace: z.nullable(z.string()).optional(),
+  resourceVersion: z.nullable(z.string()).optional(),
   uid: z.nullable(z.string()).optional(),
-  waitingReason: z.nullable(z.string()).optional(),
 });
 
-export function getRawResourceHeartbeatInstance2FromJSON(
+export function involvedObject3FromJSON(
   jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatInstance2, SDKValidationError> {
+): SafeParseResult<InvolvedObject3, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => GetRawResourceHeartbeatInstance2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatInstance2' from JSON`,
+    (x) => InvolvedObject3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'InvolvedObject3' from JSON`,
+  );
+}
+
+/** @internal */
+export const InvolvedObjectUnion3$inboundSchema: z.ZodType<
+  InvolvedObjectUnion3,
+  unknown
+> = z.union([z.lazy(() => InvolvedObject3$inboundSchema), z.any()]);
+
+export function involvedObjectUnion3FromJSON(
+  jsonString: string,
+): SafeParseResult<InvolvedObjectUnion3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => InvolvedObjectUnion3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'InvolvedObjectUnion3' from JSON`,
+  );
+}
+
+/** @internal */
+export const Source3$inboundSchema: z.ZodType<Source3, unknown> = z.object({
+  component: z.nullable(z.string()).optional(),
+  host: z.nullable(z.string()).optional(),
+});
+
+export function source3FromJSON(
+  jsonString: string,
+): SafeParseResult<Source3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Source3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Source3' from JSON`,
+  );
+}
+
+/** @internal */
+export const SourceUnion3$inboundSchema: z.ZodType<SourceUnion3, unknown> = z
+  .union([z.lazy(() => Source3$inboundSchema), z.any()]);
+
+export function sourceUnion3FromJSON(
+  jsonString: string,
+): SafeParseResult<SourceUnion3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SourceUnion3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SourceUnion3' from JSON`,
+  );
+}
+
+/** @internal */
+export const GetRawResourceHeartbeatEvent4$inboundSchema: z.ZodType<
+  GetRawResourceHeartbeatEvent4,
+  unknown
+> = z.object({
+  count: z.nullable(z.int()).optional(),
+  eventTime: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  firstTimestamp: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  involvedObject: z.nullable(
+    z.union([z.lazy(() => InvolvedObject3$inboundSchema), z.any()]),
+  ).optional(),
+  lastTimestamp: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  message: z.string(),
+  raw: z.nullable(z.any()).optional(),
+  reason: z.string(),
+  source: z.nullable(z.union([z.lazy(() => Source3$inboundSchema), z.any()]))
+    .optional(),
+  type: z.nullable(z.string()).optional(),
+});
+
+export function getRawResourceHeartbeatEvent4FromJSON(
+  jsonString: string,
+): SafeParseResult<GetRawResourceHeartbeatEvent4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => GetRawResourceHeartbeatEvent4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetRawResourceHeartbeatEvent4' from JSON`,
   );
 }
 
@@ -15199,6 +14540,127 @@ export function memoryUnion4FromJSON(
     jsonString,
     (x) => MemoryUnion4$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'MemoryUnion4' from JSON`,
+  );
+}
+
+/** @internal */
+export const CpuPodUnit2$inboundSchema: z.ZodEnum<typeof CpuPodUnit2> = z.enum(
+  CpuPodUnit2,
+);
+
+/** @internal */
+export const CpuPod2$inboundSchema: z.ZodType<CpuPod2, unknown> = z.object({
+  unit: CpuPodUnit2$inboundSchema,
+  value: z.number(),
+});
+
+export function cpuPod2FromJSON(
+  jsonString: string,
+): SafeParseResult<CpuPod2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CpuPod2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CpuPod2' from JSON`,
+  );
+}
+
+/** @internal */
+export const PodCpuUnion2$inboundSchema: z.ZodType<PodCpuUnion2, unknown> = z
+  .union([z.lazy(() => CpuPod2$inboundSchema), z.any()]);
+
+export function podCpuUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<PodCpuUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PodCpuUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PodCpuUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const MemoryPodUnit2$inboundSchema: z.ZodEnum<typeof MemoryPodUnit2> = z
+  .enum(MemoryPodUnit2);
+
+/** @internal */
+export const MemoryPod2$inboundSchema: z.ZodType<MemoryPod2, unknown> = z
+  .object({
+    unit: MemoryPodUnit2$inboundSchema,
+    value: z.number(),
+  });
+
+export function memoryPod2FromJSON(
+  jsonString: string,
+): SafeParseResult<MemoryPod2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => MemoryPod2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'MemoryPod2' from JSON`,
+  );
+}
+
+/** @internal */
+export const PodMemoryUnion2$inboundSchema: z.ZodType<
+  PodMemoryUnion2,
+  unknown
+> = z.union([z.lazy(() => MemoryPod2$inboundSchema), z.any()]);
+
+export function podMemoryUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<PodMemoryUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PodMemoryUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PodMemoryUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const OwnerReference2$inboundSchema: z.ZodType<
+  OwnerReference2,
+  unknown
+> = z.object({
+  controller: z.boolean(),
+  kind: z.string(),
+  name: z.string(),
+  uid: z.string(),
+});
+
+export function ownerReference2FromJSON(
+  jsonString: string,
+): SafeParseResult<OwnerReference2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => OwnerReference2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'OwnerReference2' from JSON`,
+  );
+}
+
+/** @internal */
+export const Pod2$inboundSchema: z.ZodType<Pod2, unknown> = z.object({
+  cpu: z.nullable(z.union([z.lazy(() => CpuPod2$inboundSchema), z.any()]))
+    .optional(),
+  memory: z.nullable(z.union([z.lazy(() => MemoryPod2$inboundSchema), z.any()]))
+    .optional(),
+  name: z.string(),
+  nodeName: z.nullable(z.string()).optional(),
+  ownerReferences: z.array(z.lazy(() => OwnerReference2$inboundSchema)),
+  phase: z.nullable(z.string()).optional(),
+  podIp: z.nullable(z.string()).optional(),
+  ready: z.boolean(),
+  restartCount: z.int(),
+  terminatedReason: z.nullable(z.string()).optional(),
+  uid: z.nullable(z.string()).optional(),
+  waitingReason: z.nullable(z.string()).optional(),
+});
+
+export function pod2FromJSON(
+  jsonString: string,
+): SafeParseResult<Pod2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Pod2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Pod2' from JSON`,
   );
 }
 
@@ -15355,14 +14817,12 @@ export const DataKubernetes2$inboundSchema: z.ZodType<
 > = z.object({
   cpu: z.nullable(z.union([z.lazy(() => Cpu4$inboundSchema), z.any()]))
     .optional(),
-  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent11$inboundSchema)),
-  instances: z.array(
-    z.lazy(() => GetRawResourceHeartbeatInstance2$inboundSchema),
-  ),
+  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent4$inboundSchema)),
   memory: z.nullable(z.union([z.lazy(() => Memory4$inboundSchema), z.any()]))
     .optional(),
   name: z.string(),
   namespace: z.string(),
+  pods: z.array(z.lazy(() => Pod2$inboundSchema)),
   replicas: z.lazy(() => Replicas3$inboundSchema),
   restarts: z.nullable(z.int()).optional(),
   status: z.lazy(() => DataStatus11$inboundSchema),
@@ -15421,28 +14881,109 @@ export function cpuUnion3FromJSON(
 }
 
 /** @internal */
-export const EventSeverity10$inboundSchema: z.ZodEnum<typeof EventSeverity10> =
-  z.enum(EventSeverity10);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent10$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent10,
+export const InvolvedObject2$inboundSchema: z.ZodType<
+  InvolvedObject2,
   unknown
 > = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity10$inboundSchema,
-  source: z.nullable(z.string()).optional(),
+  details: z.nullable(z.any()).optional(),
+  id: z.nullable(z.string()).optional(),
+  kind: z.nullable(z.string()).optional(),
+  machineId: z.nullable(z.string()).optional(),
+  name: z.nullable(z.string()).optional(),
+  replicaId: z.nullable(z.string()).optional(),
 });
 
-export function getRawResourceHeartbeatEvent10FromJSON(
+export function involvedObject2FromJSON(
   jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent10, SDKValidationError> {
+): SafeParseResult<InvolvedObject2, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => GetRawResourceHeartbeatEvent10$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent10' from JSON`,
+    (x) => InvolvedObject2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'InvolvedObject2' from JSON`,
+  );
+}
+
+/** @internal */
+export const InvolvedObjectUnion2$inboundSchema: z.ZodType<
+  InvolvedObjectUnion2,
+  unknown
+> = z.union([z.lazy(() => InvolvedObject2$inboundSchema), z.any()]);
+
+export function involvedObjectUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<InvolvedObjectUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => InvolvedObjectUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'InvolvedObjectUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const Source2$inboundSchema: z.ZodType<Source2, unknown> = z.object({
+  component: z.nullable(z.string()).optional(),
+  host: z.nullable(z.string()).optional(),
+});
+
+export function source2FromJSON(
+  jsonString: string,
+): SafeParseResult<Source2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Source2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Source2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SourceUnion2$inboundSchema: z.ZodType<SourceUnion2, unknown> = z
+  .union([z.lazy(() => Source2$inboundSchema), z.any()]);
+
+export function sourceUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<SourceUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SourceUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SourceUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const GetRawResourceHeartbeatEvent3$inboundSchema: z.ZodType<
+  GetRawResourceHeartbeatEvent3,
+  unknown
+> = z.object({
+  count: z.nullable(z.int()).optional(),
+  details: z.nullable(z.any()).optional(),
+  eventId: z.nullable(z.string()).optional(),
+  eventTime: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  firstTimestamp: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  involvedObject: z.nullable(
+    z.union([z.lazy(() => InvolvedObject2$inboundSchema), z.any()]),
+  ).optional(),
+  lastTimestamp: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  message: z.string(),
+  raw: z.nullable(z.any()).optional(),
+  reason: z.string(),
+  source: z.nullable(z.union([z.lazy(() => Source2$inboundSchema), z.any()]))
+    .optional(),
+  type: z.nullable(z.string()).optional(),
+});
+
+export function getRawResourceHeartbeatEvent3FromJSON(
+  jsonString: string,
+): SafeParseResult<GetRawResourceHeartbeatEvent3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => GetRawResourceHeartbeatEvent3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetRawResourceHeartbeatEvent3' from JSON`,
   );
 }
 
@@ -15478,6 +15019,121 @@ export function memoryUnion3FromJSON(
     jsonString,
     (x) => MemoryUnion3$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'MemoryUnion3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CpuReplicaUnitUnit$inboundSchema: z.ZodEnum<
+  typeof CpuReplicaUnitUnit
+> = z.enum(CpuReplicaUnitUnit);
+
+/** @internal */
+export const CpuReplicaUnit$inboundSchema: z.ZodType<CpuReplicaUnit, unknown> =
+  z.object({
+    unit: CpuReplicaUnitUnit$inboundSchema,
+    value: z.number(),
+  });
+
+export function cpuReplicaUnitFromJSON(
+  jsonString: string,
+): SafeParseResult<CpuReplicaUnit, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CpuReplicaUnit$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CpuReplicaUnit' from JSON`,
+  );
+}
+
+/** @internal */
+export const ReplicaUnitCpuUnion$inboundSchema: z.ZodType<
+  ReplicaUnitCpuUnion,
+  unknown
+> = z.union([z.lazy(() => CpuReplicaUnit$inboundSchema), z.any()]);
+
+export function replicaUnitCpuUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<ReplicaUnitCpuUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ReplicaUnitCpuUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ReplicaUnitCpuUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const MemoryReplicaUnitUnit$inboundSchema: z.ZodEnum<
+  typeof MemoryReplicaUnitUnit
+> = z.enum(MemoryReplicaUnitUnit);
+
+/** @internal */
+export const MemoryReplicaUnit$inboundSchema: z.ZodType<
+  MemoryReplicaUnit,
+  unknown
+> = z.object({
+  unit: MemoryReplicaUnitUnit$inboundSchema,
+  value: z.number(),
+});
+
+export function memoryReplicaUnitFromJSON(
+  jsonString: string,
+): SafeParseResult<MemoryReplicaUnit, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => MemoryReplicaUnit$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'MemoryReplicaUnit' from JSON`,
+  );
+}
+
+/** @internal */
+export const ReplicaUnitMemoryUnion$inboundSchema: z.ZodType<
+  ReplicaUnitMemoryUnion,
+  unknown
+> = z.union([z.lazy(() => MemoryReplicaUnit$inboundSchema), z.any()]);
+
+export function replicaUnitMemoryUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<ReplicaUnitMemoryUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ReplicaUnitMemoryUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ReplicaUnitMemoryUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const ReplicaUnit$inboundSchema: z.ZodType<ReplicaUnit, unknown> = z
+  .object({
+    cpu: z.nullable(
+      z.union([z.lazy(() => CpuReplicaUnit$inboundSchema), z.any()]),
+    ).optional(),
+    ip: z.nullable(z.string()).optional(),
+    machineId: z.nullable(z.string()).optional(),
+    memory: z.nullable(
+      z.union([z.lazy(() => MemoryReplicaUnit$inboundSchema), z.any()]),
+    ).optional(),
+    message: z.nullable(z.string()).optional(),
+    metricsHealthy: z.nullable(z.boolean()).optional(),
+    metricsLastUpdated: z.nullable(z.string()).optional(),
+    metricsStatus: z.nullable(z.string()).optional(),
+    name: z.string(),
+    nodeName: z.nullable(z.string()).optional(),
+    phase: z.nullable(z.string()).optional(),
+    ready: z.boolean(),
+    reason: z.nullable(z.string()).optional(),
+    replicaId: z.string(),
+    restartCount: z.nullable(z.int()).optional(),
+    status: z.nullable(z.string()).optional(),
+    terminatedReason: z.nullable(z.string()).optional(),
+    waitingReason: z.nullable(z.string()).optional(),
+  });
+
+export function replicaUnitFromJSON(
+  jsonString: string,
+): SafeParseResult<ReplicaUnit, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ReplicaUnit$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ReplicaUnit' from JSON`,
   );
 }
 
@@ -15576,10 +15232,11 @@ export const DataHorizonPlatform$inboundSchema: z.ZodType<
   containerId: z.string(),
   cpu: z.nullable(z.union([z.lazy(() => Cpu3$inboundSchema), z.any()]))
     .optional(),
-  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent10$inboundSchema)),
+  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent3$inboundSchema)),
   image: z.nullable(z.string()).optional(),
   memory: z.nullable(z.union([z.lazy(() => Memory3$inboundSchema), z.any()]))
     .optional(),
+  replicaUnits: z.array(z.lazy(() => ReplicaUnit$inboundSchema)),
   replicas: z.lazy(() => Replicas2$inboundSchema),
   schedulingMode: SchedulingMode$inboundSchema,
   status: z.lazy(() => DataStatus10$inboundSchema),
@@ -15674,28 +15331,61 @@ export function cpuUnion2FromJSON(
 }
 
 /** @internal */
-export const EventSeverity9$inboundSchema: z.ZodEnum<typeof EventSeverity9> = z
-  .enum(EventSeverity9);
+export const EventSeverity1$inboundSchema: z.ZodEnum<typeof EventSeverity1> = z
+  .enum(EventSeverity1);
 
 /** @internal */
-export const GetRawResourceHeartbeatEvent9$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent9,
+export const Subject1$inboundSchema: z.ZodType<Subject1, unknown> = z.object({
+  id: z.nullable(z.string()).optional(),
+  kind: z.string(),
+  name: z.nullable(z.string()).optional(),
+});
+
+export function subject1FromJSON(
+  jsonString: string,
+): SafeParseResult<Subject1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Subject1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Subject1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SubjectUnion1$inboundSchema: z.ZodType<SubjectUnion1, unknown> = z
+  .union([z.lazy(() => Subject1$inboundSchema), z.any()]);
+
+export function subjectUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<SubjectUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SubjectUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SubjectUnion1' from JSON`,
+  );
+}
+
+/** @internal */
+export const GetRawResourceHeartbeatEvent2$inboundSchema: z.ZodType<
+  GetRawResourceHeartbeatEvent2,
   unknown
 > = z.object({
   kind: z.string(),
   message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity9$inboundSchema,
-  source: z.nullable(z.string()).optional(),
+  raw: z.nullable(z.any()).optional(),
+  severity: EventSeverity1$inboundSchema,
+  subject: z.nullable(z.union([z.lazy(() => Subject1$inboundSchema), z.any()]))
+    .optional(),
+  timestamp: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
 });
 
-export function getRawResourceHeartbeatEvent9FromJSON(
+export function getRawResourceHeartbeatEvent2FromJSON(
   jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent9, SDKValidationError> {
+): SafeParseResult<GetRawResourceHeartbeatEvent2, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => GetRawResourceHeartbeatEvent9$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent9' from JSON`,
+    (x) => GetRawResourceHeartbeatEvent2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetRawResourceHeartbeatEvent2' from JSON`,
   );
 }
 
@@ -15731,6 +15421,126 @@ export function memoryUnion2FromJSON(
     jsonString,
     (x) => MemoryUnion2$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'MemoryUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProcessCpuUnit$inboundSchema: z.ZodEnum<typeof ProcessCpuUnit> = z
+  .enum(ProcessCpuUnit);
+
+/** @internal */
+export const ProcessCpu$inboundSchema: z.ZodType<ProcessCpu, unknown> = z
+  .object({
+    unit: ProcessCpuUnit$inboundSchema,
+    value: z.number(),
+  });
+
+export function processCpuFromJSON(
+  jsonString: string,
+): SafeParseResult<ProcessCpu, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProcessCpu$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProcessCpu' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProcessCpuUnion$inboundSchema: z.ZodType<
+  ProcessCpuUnion,
+  unknown
+> = z.union([z.lazy(() => ProcessCpu$inboundSchema), z.any()]);
+
+export function processCpuUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<ProcessCpuUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProcessCpuUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProcessCpuUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProcessKind$inboundSchema: z.ZodEnum<typeof ProcessKind> = z.enum(
+  ProcessKind,
+);
+
+/** @internal */
+export const ProcessMemoryUnit$inboundSchema: z.ZodEnum<
+  typeof ProcessMemoryUnit
+> = z.enum(ProcessMemoryUnit);
+
+/** @internal */
+export const ProcessMemory$inboundSchema: z.ZodType<ProcessMemory, unknown> = z
+  .object({
+    unit: ProcessMemoryUnit$inboundSchema,
+    value: z.number(),
+  });
+
+export function processMemoryFromJSON(
+  jsonString: string,
+): SafeParseResult<ProcessMemory, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProcessMemory$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProcessMemory' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProcessMemoryUnion$inboundSchema: z.ZodType<
+  ProcessMemoryUnion,
+  unknown
+> = z.union([z.lazy(() => ProcessMemory$inboundSchema), z.any()]);
+
+export function processMemoryUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<ProcessMemoryUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProcessMemoryUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProcessMemoryUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const Process$inboundSchema: z.ZodType<Process, unknown> = z.object({
+  cpu: z.nullable(z.union([z.lazy(() => ProcessCpu$inboundSchema), z.any()]))
+    .optional(),
+  kind: ProcessKind$inboundSchema,
+  memory: z.nullable(
+    z.union([z.lazy(() => ProcessMemory$inboundSchema), z.any()]),
+  ).optional(),
+  name: z.string(),
+  phase: z.nullable(z.string()).optional(),
+  pid: z.nullable(z.int()).optional(),
+  ready: z.boolean(),
+  restartCount: z.nullable(z.int()).optional(),
+  unitId: z.string(),
+});
+
+export function processFromJSON(
+  jsonString: string,
+): SafeParseResult<Process, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Process$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Process' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProcessUnion$inboundSchema: z.ZodType<ProcessUnion, unknown> = z
+  .union([z.lazy(() => Process$inboundSchema), z.any()]);
+
+export function processUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<ProcessUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProcessUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProcessUnion' from JSON`,
   );
 }
 
@@ -15798,11 +15608,13 @@ export const DataLocal2$inboundSchema: z.ZodType<DataLocal2, unknown> = z
     commandSupported: z.boolean(),
     cpu: z.nullable(z.union([z.lazy(() => Cpu2$inboundSchema), z.any()]))
       .optional(),
-    events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent9$inboundSchema)),
+    events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent2$inboundSchema)),
     imagePathPresent: z.boolean(),
     memory: z.nullable(z.union([z.lazy(() => Memory2$inboundSchema), z.any()]))
       .optional(),
     pid: z.nullable(z.int()).optional(),
+    process: z.nullable(z.union([z.lazy(() => Process$inboundSchema), z.any()]))
+      .optional(),
     readinessProbeOk: z.nullable(z.boolean()).optional(),
     status: z.lazy(() => DataStatus9$inboundSchema),
     triggerCount: z.int(),
@@ -15857,159 +15669,108 @@ export function cpuUnion1FromJSON(
 }
 
 /** @internal */
-export const EventSeverity8$inboundSchema: z.ZodEnum<typeof EventSeverity8> = z
-  .enum(EventSeverity8);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent8$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent8,
+export const InvolvedObject1$inboundSchema: z.ZodType<
+  InvolvedObject1,
   unknown
 > = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity8$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent8FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent8, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent8$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent8' from JSON`,
-  );
-}
-
-/** @internal */
-export const CpuInstanceUnit1$inboundSchema: z.ZodEnum<
-  typeof CpuInstanceUnit1
-> = z.enum(CpuInstanceUnit1);
-
-/** @internal */
-export const CpuInstance1$inboundSchema: z.ZodType<CpuInstance1, unknown> = z
-  .object({
-    unit: CpuInstanceUnit1$inboundSchema,
-    value: z.number(),
-  });
-
-export function cpuInstance1FromJSON(
-  jsonString: string,
-): SafeParseResult<CpuInstance1, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CpuInstance1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CpuInstance1' from JSON`,
-  );
-}
-
-/** @internal */
-export const InstanceCpuUnion1$inboundSchema: z.ZodType<
-  InstanceCpuUnion1,
-  unknown
-> = z.union([z.lazy(() => CpuInstance1$inboundSchema), z.any()]);
-
-export function instanceCpuUnion1FromJSON(
-  jsonString: string,
-): SafeParseResult<InstanceCpuUnion1, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => InstanceCpuUnion1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'InstanceCpuUnion1' from JSON`,
-  );
-}
-
-/** @internal */
-export const MemoryInstanceUnit1$inboundSchema: z.ZodEnum<
-  typeof MemoryInstanceUnit1
-> = z.enum(MemoryInstanceUnit1);
-
-/** @internal */
-export const MemoryInstance1$inboundSchema: z.ZodType<
-  MemoryInstance1,
-  unknown
-> = z.object({
-  unit: MemoryInstanceUnit1$inboundSchema,
-  value: z.number(),
-});
-
-export function memoryInstance1FromJSON(
-  jsonString: string,
-): SafeParseResult<MemoryInstance1, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => MemoryInstance1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'MemoryInstance1' from JSON`,
-  );
-}
-
-/** @internal */
-export const InstanceMemoryUnion1$inboundSchema: z.ZodType<
-  InstanceMemoryUnion1,
-  unknown
-> = z.union([z.lazy(() => MemoryInstance1$inboundSchema), z.any()]);
-
-export function instanceMemoryUnion1FromJSON(
-  jsonString: string,
-): SafeParseResult<InstanceMemoryUnion1, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => InstanceMemoryUnion1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'InstanceMemoryUnion1' from JSON`,
-  );
-}
-
-/** @internal */
-export const OwnerReference1$inboundSchema: z.ZodType<
-  OwnerReference1,
-  unknown
-> = z.object({
-  controller: z.boolean(),
-  kind: z.string(),
-  name: z.string(),
-  uid: z.string(),
-});
-
-export function ownerReference1FromJSON(
-  jsonString: string,
-): SafeParseResult<OwnerReference1, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => OwnerReference1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'OwnerReference1' from JSON`,
-  );
-}
-
-/** @internal */
-export const GetRawResourceHeartbeatInstance1$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatInstance1,
-  unknown
-> = z.object({
-  cpu: z.nullable(z.union([z.lazy(() => CpuInstance1$inboundSchema), z.any()]))
-    .optional(),
-  memory: z.nullable(
-    z.union([z.lazy(() => MemoryInstance1$inboundSchema), z.any()]),
-  ).optional(),
-  name: z.string(),
-  nodeName: z.nullable(z.string()).optional(),
-  ownerReferences: z.array(z.lazy(() => OwnerReference1$inboundSchema)),
-  phase: z.nullable(z.string()).optional(),
-  podIp: z.nullable(z.string()).optional(),
-  ready: z.boolean(),
-  restartCount: z.int(),
-  terminatedReason: z.nullable(z.string()).optional(),
+  apiVersion: z.nullable(z.string()).optional(),
+  fieldPath: z.nullable(z.string()).optional(),
+  kind: z.nullable(z.string()).optional(),
+  name: z.nullable(z.string()).optional(),
+  namespace: z.nullable(z.string()).optional(),
+  resourceVersion: z.nullable(z.string()).optional(),
   uid: z.nullable(z.string()).optional(),
-  waitingReason: z.nullable(z.string()).optional(),
 });
 
-export function getRawResourceHeartbeatInstance1FromJSON(
+export function involvedObject1FromJSON(
   jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatInstance1, SDKValidationError> {
+): SafeParseResult<InvolvedObject1, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => GetRawResourceHeartbeatInstance1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatInstance1' from JSON`,
+    (x) => InvolvedObject1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'InvolvedObject1' from JSON`,
+  );
+}
+
+/** @internal */
+export const InvolvedObjectUnion1$inboundSchema: z.ZodType<
+  InvolvedObjectUnion1,
+  unknown
+> = z.union([z.lazy(() => InvolvedObject1$inboundSchema), z.any()]);
+
+export function involvedObjectUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<InvolvedObjectUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => InvolvedObjectUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'InvolvedObjectUnion1' from JSON`,
+  );
+}
+
+/** @internal */
+export const Source1$inboundSchema: z.ZodType<Source1, unknown> = z.object({
+  component: z.nullable(z.string()).optional(),
+  host: z.nullable(z.string()).optional(),
+});
+
+export function source1FromJSON(
+  jsonString: string,
+): SafeParseResult<Source1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Source1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Source1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SourceUnion1$inboundSchema: z.ZodType<SourceUnion1, unknown> = z
+  .union([z.lazy(() => Source1$inboundSchema), z.any()]);
+
+export function sourceUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<SourceUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SourceUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SourceUnion1' from JSON`,
+  );
+}
+
+/** @internal */
+export const GetRawResourceHeartbeatEvent1$inboundSchema: z.ZodType<
+  GetRawResourceHeartbeatEvent1,
+  unknown
+> = z.object({
+  count: z.nullable(z.int()).optional(),
+  eventTime: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  firstTimestamp: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  involvedObject: z.nullable(
+    z.union([z.lazy(() => InvolvedObject1$inboundSchema), z.any()]),
+  ).optional(),
+  lastTimestamp: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  message: z.string(),
+  raw: z.nullable(z.any()).optional(),
+  reason: z.string(),
+  source: z.nullable(z.union([z.lazy(() => Source1$inboundSchema), z.any()]))
+    .optional(),
+  type: z.nullable(z.string()).optional(),
+});
+
+export function getRawResourceHeartbeatEvent1FromJSON(
+  jsonString: string,
+): SafeParseResult<GetRawResourceHeartbeatEvent1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => GetRawResourceHeartbeatEvent1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetRawResourceHeartbeatEvent1' from JSON`,
   );
 }
 
@@ -16045,6 +15806,127 @@ export function memoryUnion1FromJSON(
     jsonString,
     (x) => MemoryUnion1$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'MemoryUnion1' from JSON`,
+  );
+}
+
+/** @internal */
+export const CpuPodUnit1$inboundSchema: z.ZodEnum<typeof CpuPodUnit1> = z.enum(
+  CpuPodUnit1,
+);
+
+/** @internal */
+export const CpuPod1$inboundSchema: z.ZodType<CpuPod1, unknown> = z.object({
+  unit: CpuPodUnit1$inboundSchema,
+  value: z.number(),
+});
+
+export function cpuPod1FromJSON(
+  jsonString: string,
+): SafeParseResult<CpuPod1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CpuPod1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CpuPod1' from JSON`,
+  );
+}
+
+/** @internal */
+export const PodCpuUnion1$inboundSchema: z.ZodType<PodCpuUnion1, unknown> = z
+  .union([z.lazy(() => CpuPod1$inboundSchema), z.any()]);
+
+export function podCpuUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<PodCpuUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PodCpuUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PodCpuUnion1' from JSON`,
+  );
+}
+
+/** @internal */
+export const MemoryPodUnit1$inboundSchema: z.ZodEnum<typeof MemoryPodUnit1> = z
+  .enum(MemoryPodUnit1);
+
+/** @internal */
+export const MemoryPod1$inboundSchema: z.ZodType<MemoryPod1, unknown> = z
+  .object({
+    unit: MemoryPodUnit1$inboundSchema,
+    value: z.number(),
+  });
+
+export function memoryPod1FromJSON(
+  jsonString: string,
+): SafeParseResult<MemoryPod1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => MemoryPod1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'MemoryPod1' from JSON`,
+  );
+}
+
+/** @internal */
+export const PodMemoryUnion1$inboundSchema: z.ZodType<
+  PodMemoryUnion1,
+  unknown
+> = z.union([z.lazy(() => MemoryPod1$inboundSchema), z.any()]);
+
+export function podMemoryUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<PodMemoryUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PodMemoryUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PodMemoryUnion1' from JSON`,
+  );
+}
+
+/** @internal */
+export const OwnerReference1$inboundSchema: z.ZodType<
+  OwnerReference1,
+  unknown
+> = z.object({
+  controller: z.boolean(),
+  kind: z.string(),
+  name: z.string(),
+  uid: z.string(),
+});
+
+export function ownerReference1FromJSON(
+  jsonString: string,
+): SafeParseResult<OwnerReference1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => OwnerReference1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'OwnerReference1' from JSON`,
+  );
+}
+
+/** @internal */
+export const Pod1$inboundSchema: z.ZodType<Pod1, unknown> = z.object({
+  cpu: z.nullable(z.union([z.lazy(() => CpuPod1$inboundSchema), z.any()]))
+    .optional(),
+  memory: z.nullable(z.union([z.lazy(() => MemoryPod1$inboundSchema), z.any()]))
+    .optional(),
+  name: z.string(),
+  nodeName: z.nullable(z.string()).optional(),
+  ownerReferences: z.array(z.lazy(() => OwnerReference1$inboundSchema)),
+  phase: z.nullable(z.string()).optional(),
+  podIp: z.nullable(z.string()).optional(),
+  ready: z.boolean(),
+  restartCount: z.int(),
+  terminatedReason: z.nullable(z.string()).optional(),
+  uid: z.nullable(z.string()).optional(),
+  waitingReason: z.nullable(z.string()).optional(),
+});
+
+export function pod1FromJSON(
+  jsonString: string,
+): SafeParseResult<Pod1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Pod1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Pod1' from JSON`,
   );
 }
 
@@ -16197,14 +16079,12 @@ export const DataKubernetes1$inboundSchema: z.ZodType<
 > = z.object({
   cpu: z.nullable(z.union([z.lazy(() => Cpu1$inboundSchema), z.any()]))
     .optional(),
-  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent8$inboundSchema)),
-  instances: z.array(
-    z.lazy(() => GetRawResourceHeartbeatInstance1$inboundSchema),
-  ),
+  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent1$inboundSchema)),
   memory: z.nullable(z.union([z.lazy(() => Memory1$inboundSchema), z.any()]))
     .optional(),
   name: z.string(),
   namespace: z.string(),
+  pods: z.array(z.lazy(() => Pod1$inboundSchema)),
   replicas: z.lazy(() => Replicas1$inboundSchema),
   restarts: z.nullable(z.int()).optional(),
   status: z.lazy(() => DataStatus8$inboundSchema),
@@ -16223,32 +16103,6 @@ export function dataKubernetes1FromJSON(
     jsonString,
     (x) => DataKubernetes1$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DataKubernetes1' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventSeverity7$inboundSchema: z.ZodEnum<typeof EventSeverity7> = z
-  .enum(EventSeverity7);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent7$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent7,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity7$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent7FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent7, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent7$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent7' from JSON`,
   );
 }
 
@@ -16318,7 +16172,6 @@ export const DataAzureContainerApps1$inboundSchema: z.ZodType<
   appName: z.string(),
   cpu: z.nullable(z.number()).optional(),
   environmentName: z.nullable(z.string()).optional(),
-  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent7$inboundSchema)),
   ingressFqdn: z.nullable(z.string()).optional(),
   maxReplicas: z.nullable(z.int()).optional(),
   memory: z.nullable(z.string()).optional(),
@@ -16337,32 +16190,6 @@ export function dataAzureContainerApps1FromJSON(
     jsonString,
     (x) => DataAzureContainerApps1$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DataAzureContainerApps1' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventSeverity6$inboundSchema: z.ZodEnum<typeof EventSeverity6> = z
-  .enum(EventSeverity6);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent6$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent6,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity6$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent6FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent6, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent6$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent6' from JSON`,
   );
 }
 
@@ -16431,7 +16258,6 @@ export const DataGcpCloudRun$inboundSchema: z.ZodType<
 > = z.object({
   containerImage: z.nullable(z.string()).optional(),
   cpuLimit: z.nullable(z.string()).optional(),
-  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent6$inboundSchema)),
   generation: z.nullable(z.int()).optional(),
   latestCreatedRevision: z.nullable(z.string()).optional(),
   latestReadyRevision: z.nullable(z.string()).optional(),
@@ -16455,32 +16281,6 @@ export function dataGcpCloudRunFromJSON(
     jsonString,
     (x) => DataGcpCloudRun$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DataGcpCloudRun' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventSeverity5$inboundSchema: z.ZodEnum<typeof EventSeverity5> = z
-  .enum(EventSeverity5);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent5$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent5,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity5$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent5FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent5, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent5$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent5' from JSON`,
   );
 }
 
@@ -16546,7 +16346,6 @@ export function dataStatus5FromJSON(
 export const DataAwsLambda$inboundSchema: z.ZodType<DataAwsLambda, unknown> = z
   .object({
     codeSha256: z.nullable(z.string()).optional(),
-    events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent5$inboundSchema)),
     functionName: z.string(),
     functionUrlAuthType: z.nullable(z.string()).optional(),
     functionUrlCorsPresent: z.boolean(),
@@ -16624,32 +16423,6 @@ export function dataWorkerFromJSON(
 }
 
 /** @internal */
-export const EventSeverity4$inboundSchema: z.ZodEnum<typeof EventSeverity4> = z
-  .enum(EventSeverity4);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent4$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent4,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity4$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent4FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent4, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent4$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent4' from JSON`,
-  );
-}
-
-/** @internal */
 export const Reason4$inboundSchema: z.ZodEnum<typeof Reason4> = z.enum(Reason4);
 
 /** @internal */
@@ -16710,7 +16483,6 @@ export function dataStatus4FromJSON(
 /** @internal */
 export const DataLocal1$inboundSchema: z.ZodType<DataLocal1, unknown> = z
   .object({
-    events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent4$inboundSchema)),
     isDirectory: z.nullable(z.boolean()).optional(),
     modifiedAt: z.nullable(
       z.iso.datetime({ offset: true }).transform(v => new Date(v)),
@@ -16729,32 +16501,6 @@ export function dataLocal1FromJSON(
     jsonString,
     (x) => DataLocal1$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DataLocal1' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventSeverity3$inboundSchema: z.ZodEnum<typeof EventSeverity3> = z
-  .enum(EventSeverity3);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent3$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent3,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity3$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent3FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent3, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent3$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent3' from JSON`,
   );
 }
 
@@ -16832,7 +16578,6 @@ export const DataAzureBlob$inboundSchema: z.ZodType<DataAzureBlob, unknown> = z
     containerDeleteRetentionEnabled: z.nullable(z.boolean()).optional(),
     containerPublicAccess: z.nullable(z.string()).optional(),
     encryptionKeySource: z.nullable(z.string()).optional(),
-    events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent3$inboundSchema)),
     fileEncryptionEnabled: z.nullable(z.boolean()).optional(),
     location: z.nullable(z.string()).optional(),
     name: z.string(),
@@ -16859,32 +16604,6 @@ export function dataAzureBlobFromJSON(
     jsonString,
     (x) => DataAzureBlob$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DataAzureBlob' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventSeverity2$inboundSchema: z.ZodEnum<typeof EventSeverity2> = z
-  .enum(EventSeverity2);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent2$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent2,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity2$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent2FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent2, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent2' from JSON`,
   );
 }
 
@@ -16954,7 +16673,6 @@ export const DataGcpCloudStorage$inboundSchema: z.ZodType<
   bucketId: z.nullable(z.string()).optional(),
   defaultKmsKeyName: z.nullable(z.string()).optional(),
   encryptionConfigPresent: z.boolean(),
-  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent2$inboundSchema)),
   lifecyclePresent: z.boolean(),
   lifecycleRuleCount: z.nullable(z.int()).optional(),
   location: z.nullable(z.string()).optional(),
@@ -16981,32 +16699,6 @@ export function dataGcpCloudStorageFromJSON(
     jsonString,
     (x) => DataGcpCloudStorage$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DataGcpCloudStorage' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventSeverity1$inboundSchema: z.ZodEnum<typeof EventSeverity1> = z
-  .enum(EventSeverity1);
-
-/** @internal */
-export const GetRawResourceHeartbeatEvent1$inboundSchema: z.ZodType<
-  GetRawResourceHeartbeatEvent1,
-  unknown
-> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  severity: EventSeverity1$inboundSchema,
-  source: z.nullable(z.string()).optional(),
-});
-
-export function getRawResourceHeartbeatEvent1FromJSON(
-  jsonString: string,
-): SafeParseResult<GetRawResourceHeartbeatEvent1, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => GetRawResourceHeartbeatEvent1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetRawResourceHeartbeatEvent1' from JSON`,
   );
 }
 
@@ -17077,7 +16769,6 @@ export const DataAwsS3$inboundSchema: z.ZodType<DataAwsS3, unknown> = z.object({
   bucketPolicyPresent: z.nullable(z.boolean()).optional(),
   encryptionConfigPresent: z.boolean(),
   encryptionEnabled: z.nullable(z.boolean()).optional(),
-  events: z.array(z.lazy(() => GetRawResourceHeartbeatEvent1$inboundSchema)),
   ignorePublicAcls: z.nullable(z.boolean()).optional(),
   lifecyclePresent: z.boolean(),
   lifecycleRuleCount: z.nullable(z.int()).optional(),

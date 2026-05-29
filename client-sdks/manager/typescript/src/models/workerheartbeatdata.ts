@@ -4,15 +4,15 @@
 
 import * as z from "zod/v4";
 import {
-  HeartbeatEvent,
-  HeartbeatEvent$Outbound,
-  HeartbeatEvent$outboundSchema,
-} from "./heartbeatevent.js";
+  KubernetesEventSnapshot,
+  KubernetesEventSnapshot$Outbound,
+  KubernetesEventSnapshot$outboundSchema,
+} from "./kuberneteseventsnapshot.js";
 import {
-  KubernetesPodInstanceStatus,
-  KubernetesPodInstanceStatus$Outbound,
-  KubernetesPodInstanceStatus$outboundSchema,
-} from "./kubernetespodinstancestatus.js";
+  KubernetesPodRuntimeUnitStatus,
+  KubernetesPodRuntimeUnitStatus$Outbound,
+  KubernetesPodRuntimeUnitStatus$outboundSchema,
+} from "./kubernetespodruntimeunitstatus.js";
 import {
   KubernetesWorkloadKind,
   KubernetesWorkloadKind$outboundSchema,
@@ -22,6 +22,16 @@ import {
   KubernetesWorkloadStatus$Outbound,
   KubernetesWorkloadStatus$outboundSchema,
 } from "./kubernetesworkloadstatus.js";
+import {
+  LocalRuntimeEventSnapshot,
+  LocalRuntimeEventSnapshot$Outbound,
+  LocalRuntimeEventSnapshot$outboundSchema,
+} from "./localruntimeeventsnapshot.js";
+import {
+  LocalRuntimeUnitStatus,
+  LocalRuntimeUnitStatus$Outbound,
+  LocalRuntimeUnitStatus$outboundSchema,
+} from "./localruntimeunitstatus.js";
 import {
   MetricSample,
   MetricSample$Outbound,
@@ -41,10 +51,11 @@ import {
 export type WorkerHeartbeatDataLocal = {
   commandSupported: boolean;
   cpu?: MetricSample | null | undefined;
-  events: Array<HeartbeatEvent>;
+  events: Array<LocalRuntimeEventSnapshot>;
   imagePathPresent: boolean;
   memory?: MetricSample | null | undefined;
   pid?: number | null | undefined;
+  process?: LocalRuntimeUnitStatus | null | undefined;
   readinessProbeOk?: boolean | null | undefined;
   status: WorkloadHeartbeatStatus;
   triggerCount: number;
@@ -53,11 +64,11 @@ export type WorkerHeartbeatDataLocal = {
 
 export type WorkerHeartbeatDataKubernetes = {
   cpu?: MetricSample | null | undefined;
-  events: Array<HeartbeatEvent>;
-  instances: Array<KubernetesPodInstanceStatus>;
+  events: Array<KubernetesEventSnapshot>;
   memory?: MetricSample | null | undefined;
   name: string;
   namespace: string;
+  pods: Array<KubernetesPodRuntimeUnitStatus>;
   replicas: WorkloadReplicaStatus;
   restarts?: number | null | undefined;
   status: WorkloadHeartbeatStatus;
@@ -71,7 +82,6 @@ export type WorkerHeartbeatDataAzureContainerApps = {
   appName: string;
   cpu?: number | null | undefined;
   environmentName?: string | null | undefined;
-  events: Array<HeartbeatEvent>;
   ingressFqdn?: string | null | undefined;
   maxReplicas?: number | null | undefined;
   memory?: string | null | undefined;
@@ -86,7 +96,6 @@ export type WorkerHeartbeatDataAzureContainerApps = {
 export type WorkerHeartbeatDataGcpCloudRun = {
   containerImage?: string | null | undefined;
   cpuLimit?: string | null | undefined;
-  events: Array<HeartbeatEvent>;
   generation?: number | null | undefined;
   latestCreatedRevision?: string | null | undefined;
   latestReadyRevision?: string | null | undefined;
@@ -105,7 +114,6 @@ export type WorkerHeartbeatDataGcpCloudRun = {
 
 export type WorkerHeartbeatDataAwsLambda = {
   codeSha256?: string | null | undefined;
-  events: Array<HeartbeatEvent>;
   functionName: string;
   functionUrlAuthType?: string | null | undefined;
   functionUrlCorsPresent: boolean;
@@ -139,10 +147,11 @@ export type WorkerHeartbeatData =
 export type WorkerHeartbeatDataLocal$Outbound = {
   commandSupported: boolean;
   cpu?: MetricSample$Outbound | null | undefined;
-  events: Array<HeartbeatEvent$Outbound>;
+  events: Array<LocalRuntimeEventSnapshot$Outbound>;
   imagePathPresent: boolean;
   memory?: MetricSample$Outbound | null | undefined;
   pid?: number | null | undefined;
+  process?: LocalRuntimeUnitStatus$Outbound | null | undefined;
   readinessProbeOk?: boolean | null | undefined;
   status: WorkloadHeartbeatStatus$Outbound;
   triggerCount: number;
@@ -156,10 +165,11 @@ export const WorkerHeartbeatDataLocal$outboundSchema: z.ZodType<
 > = z.object({
   commandSupported: z.boolean(),
   cpu: z.nullable(MetricSample$outboundSchema).optional(),
-  events: z.array(HeartbeatEvent$outboundSchema),
+  events: z.array(LocalRuntimeEventSnapshot$outboundSchema),
   imagePathPresent: z.boolean(),
   memory: z.nullable(MetricSample$outboundSchema).optional(),
   pid: z.nullable(z.int()).optional(),
+  process: z.nullable(LocalRuntimeUnitStatus$outboundSchema).optional(),
   readinessProbeOk: z.nullable(z.boolean()).optional(),
   status: WorkloadHeartbeatStatus$outboundSchema,
   triggerCount: z.int(),
@@ -177,11 +187,11 @@ export function workerHeartbeatDataLocalToJSON(
 /** @internal */
 export type WorkerHeartbeatDataKubernetes$Outbound = {
   cpu?: MetricSample$Outbound | null | undefined;
-  events: Array<HeartbeatEvent$Outbound>;
-  instances: Array<KubernetesPodInstanceStatus$Outbound>;
+  events: Array<KubernetesEventSnapshot$Outbound>;
   memory?: MetricSample$Outbound | null | undefined;
   name: string;
   namespace: string;
+  pods: Array<KubernetesPodRuntimeUnitStatus$Outbound>;
   replicas: WorkloadReplicaStatus$Outbound;
   restarts?: number | null | undefined;
   status: WorkloadHeartbeatStatus$Outbound;
@@ -197,11 +207,11 @@ export const WorkerHeartbeatDataKubernetes$outboundSchema: z.ZodType<
   WorkerHeartbeatDataKubernetes
 > = z.object({
   cpu: z.nullable(MetricSample$outboundSchema).optional(),
-  events: z.array(HeartbeatEvent$outboundSchema),
-  instances: z.array(KubernetesPodInstanceStatus$outboundSchema),
+  events: z.array(KubernetesEventSnapshot$outboundSchema),
   memory: z.nullable(MetricSample$outboundSchema).optional(),
   name: z.string(),
   namespace: z.string(),
+  pods: z.array(KubernetesPodRuntimeUnitStatus$outboundSchema),
   replicas: WorkloadReplicaStatus$outboundSchema,
   restarts: z.nullable(z.int()).optional(),
   status: WorkloadHeartbeatStatus$outboundSchema,
@@ -226,7 +236,6 @@ export type WorkerHeartbeatDataAzureContainerApps$Outbound = {
   appName: string;
   cpu?: number | null | undefined;
   environmentName?: string | null | undefined;
-  events: Array<HeartbeatEvent$Outbound>;
   ingressFqdn?: string | null | undefined;
   maxReplicas?: number | null | undefined;
   memory?: string | null | undefined;
@@ -246,7 +255,6 @@ export const WorkerHeartbeatDataAzureContainerApps$outboundSchema: z.ZodType<
   appName: z.string(),
   cpu: z.nullable(z.number()).optional(),
   environmentName: z.nullable(z.string()).optional(),
-  events: z.array(HeartbeatEvent$outboundSchema),
   ingressFqdn: z.nullable(z.string()).optional(),
   maxReplicas: z.nullable(z.int()).optional(),
   memory: z.nullable(z.string()).optional(),
@@ -272,7 +280,6 @@ export function workerHeartbeatDataAzureContainerAppsToJSON(
 export type WorkerHeartbeatDataGcpCloudRun$Outbound = {
   containerImage?: string | null | undefined;
   cpuLimit?: string | null | undefined;
-  events: Array<HeartbeatEvent$Outbound>;
   generation?: number | null | undefined;
   latestCreatedRevision?: string | null | undefined;
   latestReadyRevision?: string | null | undefined;
@@ -296,7 +303,6 @@ export const WorkerHeartbeatDataGcpCloudRun$outboundSchema: z.ZodType<
 > = z.object({
   containerImage: z.nullable(z.string()).optional(),
   cpuLimit: z.nullable(z.string()).optional(),
-  events: z.array(HeartbeatEvent$outboundSchema),
   generation: z.nullable(z.int()).optional(),
   latestCreatedRevision: z.nullable(z.string()).optional(),
   latestReadyRevision: z.nullable(z.string()).optional(),
@@ -326,7 +332,6 @@ export function workerHeartbeatDataGcpCloudRunToJSON(
 /** @internal */
 export type WorkerHeartbeatDataAwsLambda$Outbound = {
   codeSha256?: string | null | undefined;
-  events: Array<HeartbeatEvent$Outbound>;
   functionName: string;
   functionUrlAuthType?: string | null | undefined;
   functionUrlCorsPresent: boolean;
@@ -355,7 +360,6 @@ export const WorkerHeartbeatDataAwsLambda$outboundSchema: z.ZodType<
   WorkerHeartbeatDataAwsLambda
 > = z.object({
   codeSha256: z.nullable(z.string()).optional(),
-  events: z.array(HeartbeatEvent$outboundSchema),
   functionName: z.string(),
   functionUrlAuthType: z.nullable(z.string()).optional(),
   functionUrlCorsPresent: z.boolean(),

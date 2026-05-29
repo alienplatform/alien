@@ -4,8 +4,8 @@
 */
 
 import * as z from "zod";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
-import { KubernetesPodInstanceStatusSchema } from "./kubernetes-pod-instance-status-schema.js";
+import { KubernetesEventSnapshotSchema } from "./kubernetes-event-snapshot-schema.js";
+import { KubernetesPodRuntimeUnitStatusSchema } from "./kubernetes-pod-runtime-unit-status-schema.js";
 import { KubernetesWorkloadKindSchema } from "./kubernetes-workload-kind-schema.js";
 import { KubernetesWorkloadStatusSchema } from "./kubernetes-workload-status-schema.js";
 import { MetricSampleSchema } from "./metric-sample-schema.js";
@@ -17,16 +17,16 @@ export const KubernetesWorkerHeartbeatDataSchema = z.object({
                 return z.union([MetricSampleSchema, z.null()]).optional()
               },
 get "events"(){
-                return z.array(HeartbeatEventSchema)
-              },
-get "instances"(){
-                return z.array(KubernetesPodInstanceStatusSchema)
+                return z.array(KubernetesEventSnapshotSchema)
               },
 get "memory"(){
                 return z.union([MetricSampleSchema, z.null()]).optional()
               },
 "name": z.string(),
 "namespace": z.string(),
+get "pods"(){
+                return z.array(KubernetesPodRuntimeUnitStatusSchema)
+              },
 get "replicas"(){
                 return WorkloadReplicaStatusSchema
               },

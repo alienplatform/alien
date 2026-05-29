@@ -7,29 +7,14 @@ import { StorageHeartbeatDataGcpCloudStorage } from "@alienplatform/manager-api/
 
 let value: StorageHeartbeatDataGcpCloudStorage = {
   encryptionConfigPresent: false,
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-02-23T02:52:34.144Z"),
-      severity: "info",
-    },
-  ],
-  lifecyclePresent: true,
+  lifecyclePresent: false,
   name: "<value>",
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "forbidden",
-        severity: "info",
-        source: "<value>",
-      },
-    ],
+    collectionIssues: [],
     health: "degraded",
-    lifecycle: "updating",
+    lifecycle: "stopping",
     partial: true,
-    stale: false,
+    stale: true,
   },
   backend: "gcpCloudStorage",
 };
@@ -42,7 +27,6 @@ let value: StorageHeartbeatDataGcpCloudStorage = {
 | `bucketId`                                                           | *string*                                                             | :heavy_minus_sign:                                                   | N/A                                                                  |
 | `defaultKmsKeyName`                                                  | *string*                                                             | :heavy_minus_sign:                                                   | N/A                                                                  |
 | `encryptionConfigPresent`                                            | *boolean*                                                            | :heavy_check_mark:                                                   | N/A                                                                  |
-| `events`                                                             | [models.HeartbeatEvent](../models/heartbeatevent.md)[]               | :heavy_check_mark:                                                   | N/A                                                                  |
 | `lifecyclePresent`                                                   | *boolean*                                                            | :heavy_check_mark:                                                   | N/A                                                                  |
 | `lifecycleRuleCount`                                                 | *number*                                                             | :heavy_minus_sign:                                                   | N/A                                                                  |
 | `location`                                                           | *string*                                                             | :heavy_minus_sign:                                                   | N/A                                                                  |

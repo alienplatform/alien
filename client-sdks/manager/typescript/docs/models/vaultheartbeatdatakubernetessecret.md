@@ -6,7 +6,6 @@
 import { VaultHeartbeatDataKubernetesSecret } from "@alienplatform/manager-api/models";
 
 let value: VaultHeartbeatDataKubernetesSecret = {
-  events: [],
   namespace: "<value>",
   prefix: "<value>",
   secretMetadataListed: true,
@@ -19,8 +18,8 @@ let value: VaultHeartbeatDataKubernetesSecret = {
         source: "<value>",
       },
     ],
-    health: "healthy",
-    lifecycle: "updating",
+    health: "unhealthy",
+    lifecycle: "scaling",
     partial: true,
     stale: true,
   },
@@ -32,7 +31,6 @@ let value: VaultHeartbeatDataKubernetesSecret = {
 
 | Field                                                            | Type                                                             | Required                                                         | Description                                                      |
 | ---------------------------------------------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------- |
-| `events`                                                         | [models.HeartbeatEvent](../models/heartbeatevent.md)[]           | :heavy_check_mark:                                               | N/A                                                              |
 | `namespace`                                                      | *string*                                                         | :heavy_check_mark:                                               | N/A                                                              |
 | `prefix`                                                         | *string*                                                         | :heavy_check_mark:                                               | N/A                                                              |
 | `secretMetadataListed`                                           | *boolean*                                                        | :heavy_check_mark:                                               | N/A                                                              |

@@ -26,7 +26,7 @@ export type CreateProjectTypeRequest = ClosedEnum<
 /**
  * The Git Repository that will be connected to the project. When this is defined, any pushes to the specified connected Git Repository will be automatically deployed
  */
-export type CreateProjectGitRepositoryRequest = {
+export type GitRepositoryRequest = {
   /**
    * The Git Provider of the repository
    */
@@ -153,7 +153,7 @@ export type CreateProjectRequestBody = {
   /**
    * The Git Repository that will be connected to the project. When this is defined, any pushes to the specified connected Git Repository will be automatically deployed
    */
-  gitRepository?: CreateProjectGitRepositoryRequest | null | undefined;
+  gitRepository?: GitRepositoryRequest | null | undefined;
   /**
    * The name of a directory or relative path to the source code of your project. When null is used it will default to the project root
    */
@@ -427,27 +427,25 @@ export const CreateProjectTypeRequest$outboundSchema: z.ZodEnum<
 > = z.enum(CreateProjectTypeRequest);
 
 /** @internal */
-export type CreateProjectGitRepositoryRequest$Outbound = {
+export type GitRepositoryRequest$Outbound = {
   type: string;
   repo: string;
 };
 
 /** @internal */
-export const CreateProjectGitRepositoryRequest$outboundSchema: z.ZodType<
-  CreateProjectGitRepositoryRequest$Outbound,
-  CreateProjectGitRepositoryRequest
+export const GitRepositoryRequest$outboundSchema: z.ZodType<
+  GitRepositoryRequest$Outbound,
+  GitRepositoryRequest
 > = z.object({
   type: CreateProjectTypeRequest$outboundSchema,
   repo: z.string(),
 });
 
-export function createProjectGitRepositoryRequestToJSON(
-  createProjectGitRepositoryRequest: CreateProjectGitRepositoryRequest,
+export function gitRepositoryRequestToJSON(
+  gitRepositoryRequest: GitRepositoryRequest,
 ): string {
   return JSON.stringify(
-    CreateProjectGitRepositoryRequest$outboundSchema.parse(
-      createProjectGitRepositoryRequest,
-    ),
+    GitRepositoryRequest$outboundSchema.parse(gitRepositoryRequest),
   );
 }
 
@@ -623,7 +621,7 @@ export function createProjectPackagesConfigRequestToJSON(
 /** @internal */
 export type CreateProjectRequestBody$Outbound = {
   name: string;
-  gitRepository?: CreateProjectGitRepositoryRequest$Outbound | null | undefined;
+  gitRepository?: GitRepositoryRequest$Outbound | null | undefined;
   rootDirectory?: string | null | undefined;
   packagesConfig?:
     | CreateProjectPackagesConfigRequest$Outbound
@@ -637,9 +635,8 @@ export const CreateProjectRequestBody$outboundSchema: z.ZodType<
   CreateProjectRequestBody
 > = z.object({
   name: z.string(),
-  gitRepository: z.nullable(
-    z.lazy(() => CreateProjectGitRepositoryRequest$outboundSchema),
-  ).optional(),
+  gitRepository: z.nullable(z.lazy(() => GitRepositoryRequest$outboundSchema))
+    .optional(),
   rootDirectory: z.nullable(z.string()).optional(),
   packagesConfig: z.nullable(
     z.lazy(() => CreateProjectPackagesConfigRequest$outboundSchema),

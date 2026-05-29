@@ -8,23 +8,15 @@
 ```typescript
 const value: operations.DataAwsS3 = {
   encryptionConfigPresent: true,
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-11-04T18:46:41.433Z"),
-      severity: "warning",
-    },
-  ],
-  lifecyclePresent: true,
+  lifecyclePresent: false,
   name: "<value>",
   publicAccessBlockPresent: true,
   status: {
     collectionIssues: [],
-    health: "unhealthy",
-    lifecycle: "failed",
-    partial: false,
-    stale: true,
+    health: "unknown",
+    lifecycle: "scaling",
+    partial: true,
+    stale: false,
   },
   backend: "awsS3",
 };
@@ -35,14 +27,6 @@ const value: operations.DataAwsS3 = {
 ```typescript
 const value: operations.DataGcpCloudStorage = {
   encryptionConfigPresent: false,
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2026-04-25T23:42:18.878Z"),
-      severity: "error",
-    },
-  ],
   lifecyclePresent: false,
   name: "<value>",
   status: {
@@ -55,8 +39,8 @@ const value: operations.DataGcpCloudStorage = {
       },
     ],
     health: "unhealthy",
-    lifecycle: "updating",
-    partial: true,
+    lifecycle: "stopped",
+    partial: false,
     stale: false,
   },
   backend: "gcpCloudStorage",
@@ -67,28 +51,20 @@ const value: operations.DataGcpCloudStorage = {
 
 ```typescript
 const value: operations.DataAzureBlob = {
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2025-01-01T04:44:50.232Z"),
-      severity: "info",
-    },
-  ],
   name: "<value>",
   status: {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "api-unavailable",
-        severity: "error",
+        reason: "not-installed",
+        severity: "info",
         source: "<value>",
       },
     ],
     health: "degraded",
-    lifecycle: "running",
+    lifecycle: "scaling",
     partial: false,
-    stale: true,
+    stale: false,
   },
   backend: "azureBlob",
 };
@@ -98,29 +74,21 @@ const value: operations.DataAzureBlob = {
 
 ```typescript
 const value: operations.DataLocal1 = {
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2025-07-12T08:12:10.995Z"),
-      severity: "error",
-    },
-  ],
-  path: "/usr/share",
+  path: "/usr/lib",
   pathExists: false,
   status: {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "api-unavailable",
+        reason: "timed-out",
         severity: "warning",
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "deleting",
-    partial: true,
-    stale: true,
+    health: "unhealthy",
+    lifecycle: "scaling",
+    partial: false,
+    stale: false,
   },
   backend: "local",
 };

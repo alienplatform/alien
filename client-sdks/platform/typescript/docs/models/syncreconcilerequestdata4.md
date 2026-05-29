@@ -6,16 +6,15 @@
 import { SyncReconcileRequestData4 } from "@alienplatform/platform-api/models";
 
 let value: SyncReconcileRequestData4 = {
-  events: [],
   name: "<value>",
   status: {
     collectionIssues: [],
-    health: "healthy",
-    lifecycle: "updating",
+    health: "unknown",
+    lifecycle: "scaling",
     partial: true,
-    stale: false,
+    stale: true,
   },
-  workloadProfileCount: 739391,
+  workloadProfileCount: 977521,
   workloadProfiles: [
     {
       name: "<value>",
@@ -27,21 +26,20 @@ let value: SyncReconcileRequestData4 = {
 
 ## Fields
 
-| Field                                                                            | Type                                                                             | Required                                                                         | Description                                                                      |
-| -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `customDomainVerificationId`                                                     | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `defaultDomain`                                                                  | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `eventStreamEndpoint`                                                            | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `events`                                                                         | [models.SyncReconcileRequestEvent58](../models/syncreconcilerequestevent58.md)[] | :heavy_check_mark:                                                               | N/A                                                                              |
-| `infrastructureResourceGroup`                                                    | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `kind`                                                                           | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `location`                                                                       | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `name`                                                                           | *string*                                                                         | :heavy_check_mark:                                                               | N/A                                                                              |
-| `provisioningState`                                                              | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `resourceGroup`                                                                  | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `resourceId`                                                                     | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `staticIp`                                                                       | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `status`                                                                         | [models.HeartbeatStatus58](../models/heartbeatstatus58.md)                       | :heavy_check_mark:                                                               | N/A                                                                              |
-| `workloadProfileCount`                                                           | *number*                                                                         | :heavy_check_mark:                                                               | N/A                                                                              |
-| `workloadProfiles`                                                               | [models.WorkloadProfile](../models/workloadprofile.md)[]                         | :heavy_check_mark:                                                               | N/A                                                                              |
-| `zoneRedundant`                                                                  | *boolean*                                                                        | :heavy_minus_sign:                                                               | N/A                                                                              |
+| Field                                                      | Type                                                       | Required                                                   | Description                                                |
+| ---------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- |
+| `customDomainVerificationId`                               | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
+| `defaultDomain`                                            | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
+| `eventStreamEndpoint`                                      | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
+| `infrastructureResourceGroup`                              | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
+| `kind`                                                     | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
+| `location`                                                 | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
+| `name`                                                     | *string*                                                   | :heavy_check_mark:                                         | N/A                                                        |
+| `provisioningState`                                        | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
+| `resourceGroup`                                            | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
+| `resourceId`                                               | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
+| `staticIp`                                                 | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
+| `status`                                                   | [models.HeartbeatStatus58](../models/heartbeatstatus58.md) | :heavy_check_mark:                                         | N/A                                                        |
+| `workloadProfileCount`                                     | *number*                                                   | :heavy_check_mark:                                         | N/A                                                        |
+| `workloadProfiles`                                         | [models.WorkloadProfile](../models/workloadprofile.md)[]   | :heavy_check_mark:                                         | N/A                                                        |
+| `zoneRedundant`                                            | *boolean*                                                  | :heavy_minus_sign:                                         | N/A                                                        |

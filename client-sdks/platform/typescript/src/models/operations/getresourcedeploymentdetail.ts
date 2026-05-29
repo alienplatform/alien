@@ -53,8 +53,9 @@ export type GetResourceDeploymentDetailDeployment = {
   observedAt: Date;
 };
 
-export type GetResourceDeploymentDetailInstance = {
-  instanceId: string;
+export type RuntimeUnit = {
+  unitId: string;
+  unitKind: string;
   name: string;
   ready: boolean;
   phase: string | null;
@@ -69,15 +70,28 @@ export type GetResourceDeploymentDetailInstance = {
   provider?: any | null | undefined;
 };
 
+export const SubjectKind = {
+  Resource: "resource",
+  RuntimeUnit: "runtimeUnit",
+  Machine: "machine",
+  CapacityGroup: "capacityGroup",
+  External: "external",
+} as const;
+export type SubjectKind = ClosedEnum<typeof SubjectKind>;
+
 export type GetResourceDeploymentDetailEvent = {
+  eventId: string | null;
   eventIndex: number;
   observedAt: Date;
   severity: string;
   kind: string;
   message: string;
   source: string | null;
+  subjectKind: SubjectKind;
+  subjectId: string | null;
+  subjectName: string | null;
   platformStale: boolean;
-  provider?: any | null | undefined;
+  providerEvent?: any | null | undefined;
 };
 
 /**
@@ -85,7 +99,7 @@ export type GetResourceDeploymentDetailEvent = {
  */
 export type GetResourceDeploymentDetailResponse = {
   deployment: GetResourceDeploymentDetailDeployment;
-  instances: Array<GetResourceDeploymentDetailInstance>;
+  runtimeUnits: Array<RuntimeUnit>;
   events: Array<GetResourceDeploymentDetailEvent>;
 };
 
@@ -162,49 +176,56 @@ export function getResourceDeploymentDetailDeploymentFromJSON(
 }
 
 /** @internal */
-export const GetResourceDeploymentDetailInstance$inboundSchema: z.ZodType<
-  GetResourceDeploymentDetailInstance,
-  unknown
-> = z.object({
-  instanceId: z.string(),
-  name: z.string(),
-  ready: z.boolean(),
-  phase: z.nullable(z.string()),
-  nodeName: z.nullable(z.string()),
-  restartCount: z.int(),
-  waitingReason: z.nullable(z.string()),
-  terminatedReason: z.nullable(z.string()),
-  cpu: z.nullable(z.any()).optional(),
-  memory: z.nullable(z.any()).optional(),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  platformStale: z.boolean(),
-  provider: z.nullable(z.any()).optional(),
-});
+export const RuntimeUnit$inboundSchema: z.ZodType<RuntimeUnit, unknown> = z
+  .object({
+    unitId: z.string(),
+    unitKind: z.string(),
+    name: z.string(),
+    ready: z.boolean(),
+    phase: z.nullable(z.string()),
+    nodeName: z.nullable(z.string()),
+    restartCount: z.int(),
+    waitingReason: z.nullable(z.string()),
+    terminatedReason: z.nullable(z.string()),
+    cpu: z.nullable(z.any()).optional(),
+    memory: z.nullable(z.any()).optional(),
+    observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+    platformStale: z.boolean(),
+    provider: z.nullable(z.any()).optional(),
+  });
 
-export function getResourceDeploymentDetailInstanceFromJSON(
+export function runtimeUnitFromJSON(
   jsonString: string,
-): SafeParseResult<GetResourceDeploymentDetailInstance, SDKValidationError> {
+): SafeParseResult<RuntimeUnit, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) =>
-      GetResourceDeploymentDetailInstance$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetResourceDeploymentDetailInstance' from JSON`,
+    (x) => RuntimeUnit$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'RuntimeUnit' from JSON`,
   );
 }
+
+/** @internal */
+export const SubjectKind$inboundSchema: z.ZodEnum<typeof SubjectKind> = z.enum(
+  SubjectKind,
+);
 
 /** @internal */
 export const GetResourceDeploymentDetailEvent$inboundSchema: z.ZodType<
   GetResourceDeploymentDetailEvent,
   unknown
 > = z.object({
+  eventId: z.nullable(z.string()),
   eventIndex: z.int(),
   observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   severity: z.string(),
   kind: z.string(),
   message: z.string(),
   source: z.nullable(z.string()),
+  subjectKind: SubjectKind$inboundSchema,
+  subjectId: z.nullable(z.string()),
+  subjectName: z.nullable(z.string()),
   platformStale: z.boolean(),
-  provider: z.nullable(z.any()).optional(),
+  providerEvent: z.nullable(z.any()).optional(),
 });
 
 export function getResourceDeploymentDetailEventFromJSON(
@@ -223,9 +244,7 @@ export const GetResourceDeploymentDetailResponse$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   deployment: z.lazy(() => GetResourceDeploymentDetailDeployment$inboundSchema),
-  instances: z.array(
-    z.lazy(() => GetResourceDeploymentDetailInstance$inboundSchema),
-  ),
+  runtimeUnits: z.array(z.lazy(() => RuntimeUnit$inboundSchema)),
   events: z.array(z.lazy(() => GetResourceDeploymentDetailEvent$inboundSchema)),
 });
 

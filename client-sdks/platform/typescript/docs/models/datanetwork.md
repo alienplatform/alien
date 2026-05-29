@@ -7,21 +7,13 @@ import { DataNetwork } from "@alienplatform/platform-api/models";
 
 let value: DataNetwork = {
   data: {
-    events: [],
-    isByoVnet: false,
+    isByoVnet: true,
     status: {
-      collectionIssues: [
-        {
-          message: "<value>",
-          reason: "forbidden",
-          severity: "warning",
-          source: "<value>",
-        },
-      ],
-      health: "unknown",
-      lifecycle: "deleting",
-      partial: false,
-      stale: false,
+      collectionIssues: [],
+      health: "unhealthy",
+      lifecycle: "unknown",
+      partial: true,
+      stale: true,
     },
     backend: "azureVnet",
   },

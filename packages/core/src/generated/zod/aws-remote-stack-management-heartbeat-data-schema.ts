@@ -4,14 +4,10 @@
 */
 
 import * as z from "zod";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 import { RemoteStackManagementHeartbeatStatusSchema } from "./remote-stack-management-heartbeat-status-schema.js";
 
 export const AwsRemoteStackManagementHeartbeatDataSchema = z.object({
-    get "events"(){
-                return z.array(HeartbeatEventSchema)
-              },
-"managementPermissionsApplied": z.boolean(),
+    "managementPermissionsApplied": z.boolean(),
 "roleArn": z.string().nullish(),
 "roleName": z.string().nullish(),
 get "status"(){

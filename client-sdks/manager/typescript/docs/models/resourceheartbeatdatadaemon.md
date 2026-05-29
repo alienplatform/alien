@@ -10,20 +10,24 @@ let value: ResourceHeartbeatDataDaemon = {
     assignedMachines: 351239,
     capacityGroup: "<value>",
     commandSupported: true,
-    daemonName: "<value>",
-    desiredMachines: 723101,
-    events: [
+    daemonInstances: [
       {
-        kind: "<value>",
-        message: "<value>",
-        observedAt: new Date("2024-02-23T02:52:34.144Z"),
-        severity: "info",
+        name: "<value>",
+        ready: true,
+        replicaId: "<id>",
       },
     ],
-    healthyInstances: 920664,
+    daemonName: "<value>",
+    desiredMachines: 633734,
+    events: [
+      {
+        message: "<value>",
+        reason: "<value>",
+      },
+    ],
+    healthyInstances: 102281,
     horizonClusterId: "<id>",
     horizonStatus: "<value>",
-    instances: [],
     latestUpdateTimestamp: "<value>",
     status: {
       collectionIssues: [],

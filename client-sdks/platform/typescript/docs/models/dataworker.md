@@ -12,8 +12,8 @@ let value: DataWorker = {
       {
         kind: "<value>",
         message: "<value>",
-        observedAt: new Date("2024-05-06T03:27:45.769Z"),
         severity: "info",
+        timestamp: new Date("2024-07-21T11:12:11.792Z"),
       },
     ],
     imagePathPresent: true,

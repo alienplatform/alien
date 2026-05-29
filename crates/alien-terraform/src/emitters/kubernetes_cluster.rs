@@ -4,8 +4,8 @@ use crate::{
     expr,
 };
 use alien_core::{
-    import::EmitContext, ErrorData, KubernetesCluster, KubernetesClusterOwnership,
-    KubernetesClusterProvider, Result,
+    import::EmitContext, Container, ErrorData, ExposeProtocol, Ingress, KubernetesCluster,
+    KubernetesClusterOwnership, KubernetesClusterProvider, Result, Stack, Worker,
 };
 use alien_error::AlienError;
 use hcl::expr::Expression;
@@ -673,6 +673,9 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
             ),
         ]);
         add_eks_gp3_storage_class(&mut fragment, label);
+        if stack_has_public_https_endpoint(ctx.stack) {
+            add_eks_auto_mode_ingress_class(&mut fragment, label);
+        }
         add_metrics_server(
             &mut fragment,
             label,
@@ -814,6 +817,87 @@ fn add_eks_gp3_storage_class(fragment: &mut TfFragment, label: &str) {
             ),
         ],
     ));
+}
+
+fn add_eks_auto_mode_ingress_class(fragment: &mut TfFragment, label: &str) {
+    for (name, manifest) in [
+        (
+            "alb_ingress_class_params",
+            r#"{
+  apiVersion = "eks.amazonaws.com/v1"
+  kind       = "IngressClassParams"
+  metadata = {
+    name = "alb"
+  }
+  spec = {
+    scheme     = "internet-facing"
+    targetType = "ip"
+  }
+}"#,
+        ),
+        (
+            "alb_ingress_class",
+            r#"{
+  apiVersion = "networking.k8s.io/v1"
+  kind       = "IngressClass"
+  metadata = {
+    name = "alb"
+  }
+  spec = {
+    controller = "eks.amazonaws.com/alb"
+    parameters = {
+      apiGroup = "eks.amazonaws.com"
+      kind     = "IngressClassParams"
+      name     = "alb"
+    }
+  }
+}"#,
+        ),
+    ] {
+        fragment.resource_blocks.push(resource_block(
+            "kubernetes_manifest",
+            &format!("{label}_{name}"),
+            [
+                attr(
+                    "count",
+                    generated_kubernetes_exposure_count_expr(
+                        "var.kubernetes_cluster_mode == \"create\"",
+                    ),
+                ),
+                attr("manifest", expr::raw(manifest)),
+                attr(
+                    "depends_on",
+                    expr::raw(format!("[aws_eks_cluster.{label}]")),
+                ),
+            ],
+        ));
+    }
+}
+
+fn generated_kubernetes_exposure_count_expr(cluster_mode_condition: &str) -> Expression {
+    expr::raw(format!(
+        "{cluster_mode_condition} && try(jsondecode(var.stack_settings_json).kubernetes.exposure.mode, \"generated\") == \"generated\" ? 1 : 0"
+    ))
+}
+
+fn stack_has_public_https_endpoint(stack: &Stack) -> bool {
+    stack.resources().any(|(_, entry)| {
+        entry
+            .config
+            .downcast_ref::<Worker>()
+            .map(|worker| worker.ingress == Ingress::Public)
+            .unwrap_or(false)
+            || entry
+                .config
+                .downcast_ref::<Container>()
+                .map(|container| {
+                    container
+                        .ports
+                        .iter()
+                        .any(|port| matches!(port.expose, Some(ExposeProtocol::Http)))
+                })
+                .unwrap_or(false)
+    })
 }
 
 fn add_metrics_server(fragment: &mut TfFragment, label: &str, depends_on: Expression) {
@@ -1319,6 +1403,8 @@ impl TfEmitter for AzureKubernetesClusterEmitter {
                     attr("location", expr::raw("var.azure_location")),
                     attr("resource_group_name", expr::raw("var.azure_resource_group_name")),
                     attr("dns_prefix", expr::template("${local.resource_prefix}-k8s")),
+                    attr("oidc_issuer_enabled", Expression::Bool(true)),
+                    attr("workload_identity_enabled", Expression::Bool(true)),
                     nested(block(
                         "default_node_pool",
                         [
@@ -1335,14 +1421,78 @@ impl TfEmitter for AzureKubernetesClusterEmitter {
                             attr("tenant_id", expr::raw("var.azure_managing_tenant_id")),
                         ],
                     )),
+                    nested(block(
+                        "network_profile",
+                        [
+                            attr("network_plugin", Expression::String("azure".to_string())),
+                            attr("load_balancer_sku", Expression::String("standard".to_string())),
+                        ],
+                    )),
                     attr("sku_tier", Expression::String("Standard".to_string())),
                 ],
             ));
-        add_metrics_server(
-            &mut fragment,
-            label,
-            expr::raw(format!("[azurerm_kubernetes_cluster.{label}]")),
-        );
+        let has_public_https_endpoint = stack_has_public_https_endpoint(ctx.stack);
+        if has_public_https_endpoint {
+            fragment.resource_blocks.push(resource_block(
+                "azapi_update_resource",
+                &format!("{label}_alb_controller"),
+                [
+                    attr(
+                        "count",
+                        generated_kubernetes_exposure_count_expr(
+                            "var.kubernetes_cluster_mode == \"create\" || var.kubernetes_cluster_mode == \"existing\"",
+                        ),
+                    ),
+                    attr(
+                        "type",
+                        Expression::String(
+                            "Microsoft.ContainerService/managedClusters@2025-09-02-preview"
+                                .to_string(),
+                        ),
+                    ),
+                    attr(
+                        "resource_id",
+                        expr::raw(format!(
+                            "var.kubernetes_cluster_mode == \"create\" ? azurerm_kubernetes_cluster.{label}[0].id : data.azurerm_kubernetes_cluster.{label}_existing[0].id"
+                        )),
+                    ),
+                    attr(
+                        "body",
+                        expr::raw(
+                            r#"{
+  properties = {
+    oidcIssuerProfile = {
+      enabled = true
+    }
+    securityProfile = {
+      workloadIdentity = {
+        enabled = true
+      }
+    }
+    ingressProfile = {
+      applicationLoadBalancer = {
+        enabled = true
+      }
+      gatewayAPI = {
+        installation = "Standard"
+      }
+    }
+  }
+}"#,
+                        ),
+                    ),
+                    attr("depends_on", expr::raw(format!("[azurerm_kubernetes_cluster.{label}]"))),
+                ],
+            ));
+        }
+        let metrics_server_depends_on = if has_public_https_endpoint {
+            expr::raw(format!(
+                "[azurerm_kubernetes_cluster.{label}, azapi_update_resource.{label}_alb_controller]"
+            ))
+        } else {
+            expr::raw(format!("[azurerm_kubernetes_cluster.{label}]"))
+        };
+        add_metrics_server(&mut fragment, label, metrics_server_depends_on);
         Ok(fragment)
     }
 

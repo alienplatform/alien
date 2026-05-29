@@ -18,7 +18,9 @@ use alien_core::{
     AwsManagementConfig, AzureClientConfig, AzureCredentials, AzureManagementConfig,
     DeploymentConfig, DeploymentModel as StackDeploymentModel, EnvironmentVariablesSnapshot,
     ExternalBinding, ExternalBindings, GcpClientConfig, GcpCredentials, GcpImpersonationConfig,
-    GcpManagementConfig, ManagementConfig, Platform, Stack, StackSettings, StackState, Worker,
+    GcpManagementConfig, KubernetesCertificateMode, KubernetesExposureSettings,
+    KubernetesIngressRouteProfile, KubernetesRouteProfile, KubernetesRouteProviderOptions,
+    KubernetesSettings, ManagementConfig, Platform, Stack, StackSettings, StackState, Worker,
     WorkerCode,
 };
 #[cfg(test)]
@@ -195,6 +197,7 @@ struct DistributionPrepared {
     platform: Platform,
     model: DeploymentModel,
     app: TestApp,
+    flow: DistributionFlow,
     group_id: String,
     dg_token: String,
 }
@@ -332,6 +335,7 @@ async fn prepare_distribution(
         platform,
         model,
         app,
+        flow,
         group_id,
         dg_token,
     })
@@ -465,9 +469,21 @@ fn e2e_stack_settings_for_flow(
     Ok(settings)
 }
 
-fn stack_settings_for_terraform(prepared: &DistributionPrepared) -> anyhow::Result<StackSettings> {
+fn stack_settings_for_terraform(
+    prepared: &DistributionPrepared,
+    target: alien_terraform::TerraformTarget,
+) -> anyhow::Result<StackSettings> {
     let mut settings =
         e2e_stack_settings_for_flow(prepared.model, &prepared.config, prepared.platform)?;
+    if let Some(exposure) = e2e_kubernetes_exposure(prepared.flow, prepared.app, target) {
+        let mut kubernetes = settings.kubernetes.unwrap_or_else(|| KubernetesSettings {
+            cluster: None,
+            exposure: None,
+        });
+        kubernetes.exposure = Some(exposure);
+        settings.kubernetes = Some(kubernetes);
+    }
+
     if prepared.platform != Platform::Azure {
         return Ok(settings);
     }
@@ -496,6 +512,34 @@ fn stack_settings_for_terraform(prepared: &DistributionPrepared) -> anyhow::Resu
     settings.external_bindings = Some(external_bindings);
     info!("Injected shared Container Apps Environment into Terraform stack settings");
     Ok(settings)
+}
+
+fn e2e_kubernetes_exposure(
+    flow: DistributionFlow,
+    app: TestApp,
+    target: alien_terraform::TerraformTarget,
+) -> Option<KubernetesExposureSettings> {
+    if flow != DistributionFlow::TerraformEksHelmPull
+        || app != TestApp::FullStackMicroservices
+        || target != alien_terraform::TerraformTarget::Eks
+    {
+        return None;
+    }
+
+    Some(KubernetesExposureSettings::Generated {
+        route: KubernetesRouteProfile::Ingress(KubernetesIngressRouteProfile {
+            controller: Some("eks.amazonaws.com/alb".to_string()),
+            ingress_class_name: "alb".to_string(),
+            provider: Some(KubernetesRouteProviderOptions::AwsAlb {
+                scheme: "internet-facing".to_string(),
+                target_type: "ip".to_string(),
+                ip_address_type: None,
+                subnet_ids: vec![],
+            }),
+            ..Default::default()
+        }),
+        certificate: KubernetesCertificateMode::None,
+    })
 }
 
 fn render_management_config(
@@ -905,7 +949,7 @@ async fn apply_terraform_and_import(
 ) -> anyhow::Result<TerraformApplyResult> {
     let workdir = tempfile::tempdir().context("Failed to create Terraform workdir")?;
     let registry = alien_terraform::TfRegistry::built_in();
-    let stack_settings = stack_settings_for_terraform(prepared)?;
+    let stack_settings = stack_settings_for_terraform(prepared, target)?;
     let terraform_stack = terraform_stack_for_target(prepared, target, &stack_settings).await?;
     let module = alien_terraform::generate_terraform_module(
         &terraform_stack,
@@ -1365,12 +1409,6 @@ async fn wait_and_finalize(ctx: &mut TestContext) -> anyhow::Result<()> {
         .wait_until_running(Duration::from_secs(600))
         .await
         .map_err(|error| anyhow::anyhow!("Deployment failed to reach running: {error}"))?;
-    if ctx.platform == Platform::Kubernetes
-        && ctx.app == TestApp::FullStackMicroservices
-        && ctx.deployment.url.is_none()
-    {
-        ctx.deployment.url = discover_kubernetes_public_url(ctx).await?;
-    }
     if ctx.model == DeploymentModel::Push
         && matches!(
             ctx.platform,
@@ -1380,76 +1418,6 @@ async fn wait_and_finalize(ctx: &mut TestContext) -> anyhow::Result<()> {
         provision_managed_test_secret(&ctx.manager, &ctx.deployment).await?;
     }
     Ok(())
-}
-
-async fn discover_kubernetes_public_url(ctx: &TestContext) -> anyhow::Result<Option<String>> {
-    let Some((namespace, kubeconfig, kube_context)) =
-        ctx.distribution_cleanups
-            .iter()
-            .find_map(|cleanup| match cleanup {
-                DistributionArtifactCleanup::Helm {
-                    namespace,
-                    kubeconfig,
-                    kube_context,
-                    ..
-                } => Some((
-                    namespace.as_str(),
-                    kubeconfig.as_deref(),
-                    kube_context.as_deref(),
-                )),
-                _ => None,
-            })
-    else {
-        return Ok(None);
-    };
-
-    let timeout = Duration::from_secs(600);
-    let started = tokio::time::Instant::now();
-    loop {
-        let mut cmd = Command::new("kubectl");
-        cmd.args(["get", "ingress", "-n", namespace, "-o", "json"]);
-        if let Some(kubeconfig) = kubeconfig {
-            cmd.env("KUBECONFIG", kubeconfig);
-        }
-        if let Some(kube_context) = kube_context {
-            cmd.args(["--context", kube_context]);
-        }
-        let output = command_output(cmd, "kubectl get ingress -o json").await?;
-        let ingresses: Value = serde_json::from_slice(&output.stdout)
-            .context("Failed to parse kubectl ingress JSON")?;
-        if let Some(address) = first_ingress_address(&ingresses) {
-            return Ok(Some(format!("http://{address}")));
-        }
-        if started.elapsed() >= timeout {
-            anyhow::bail!(
-                "Kubernetes ingress did not receive a public load-balancer address within {timeout:?}"
-            );
-        }
-        tokio::time::sleep(Duration::from_secs(10)).await;
-    }
-}
-
-fn first_ingress_address(ingresses: &Value) -> Option<String> {
-    ingresses
-        .get("items")?
-        .as_array()?
-        .iter()
-        .flat_map(|ingress| {
-            ingress
-                .get("status")
-                .and_then(|status| status.get("loadBalancer"))
-                .and_then(|load_balancer| load_balancer.get("ingress"))
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-        })
-        .find_map(|address| {
-            address
-                .get("hostname")
-                .and_then(Value::as_str)
-                .or_else(|| address.get("ip").and_then(Value::as_str))
-                .map(ToString::to_string)
-        })
 }
 
 async fn provision_managed_test_secret(

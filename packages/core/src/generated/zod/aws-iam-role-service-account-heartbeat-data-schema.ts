@@ -4,7 +4,6 @@
 */
 
 import * as z from "zod";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 import { ServiceAccountHeartbeatStatusSchema } from "./service-account-heartbeat-status-schema.js";
 
 export const AwsIamRoleServiceAccountHeartbeatDataSchema = z.object({
@@ -13,9 +12,6 @@ export const AwsIamRoleServiceAccountHeartbeatDataSchema = z.object({
 "attachedPolicyNames": z.array(z.string()),
 "createDate": z.string(),
 "description": z.string().nullish(),
-get "events"(){
-                return z.array(HeartbeatEventSchema)
-              },
 "inlinePolicyCount": z.int().min(0),
 "inlinePolicyNames": z.array(z.string()),
 "lastUsedDate": z.string().nullish(),

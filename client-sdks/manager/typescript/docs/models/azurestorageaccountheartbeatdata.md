@@ -6,23 +6,15 @@
 import { AzureStorageAccountHeartbeatData } from "@alienplatform/manager-api/models";
 
 let value: AzureStorageAccountHeartbeatData = {
-  events: [],
   name: "<value>",
   primaryEndpoints: {},
   secondaryEndpoints: {},
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "forbidden",
-        severity: "info",
-        source: "<value>",
-      },
-    ],
+    collectionIssues: [],
     health: "degraded",
-    lifecycle: "updating",
+    lifecycle: "stopping",
     partial: true,
-    stale: false,
+    stale: true,
   },
 };
 ```
@@ -34,7 +26,6 @@ let value: AzureStorageAccountHeartbeatData = {
 | `allowBlobPublicAccess`                                                          | *boolean*                                                                        | :heavy_minus_sign:                                                               | N/A                                                                              |
 | `allowSharedKeyAccess`                                                           | *boolean*                                                                        | :heavy_minus_sign:                                                               | N/A                                                                              |
 | `encryptionKeySource`                                                            | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `events`                                                                         | [models.HeartbeatEvent](../models/heartbeatevent.md)[]                           | :heavy_check_mark:                                                               | N/A                                                                              |
 | `kind`                                                                           | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
 | `location`                                                                       | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
 | `minimumTlsVersion`                                                              | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |

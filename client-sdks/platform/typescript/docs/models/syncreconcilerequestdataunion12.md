@@ -7,40 +7,25 @@
 
 ```typescript
 const value: models.DataAwsEcr = {
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2025-07-20T04:34:55.254Z"),
-      severity: "info",
-    },
-  ],
   region: "<value>",
   registryId: "<id>",
-  registryUri: "https://shiny-shadowbox.info/",
+  registryUri: "https://mindless-bench.com",
   repositories: [
     {
-      createdAt: 3232.31,
+      createdAt: 8040.15,
       kmsKeyPresent: true,
       registryId: "<id>",
       repositoryArn: "<value>",
       repositoryName: "<value>",
-      repositoryUri: "https://back-wear.com/",
+      repositoryUri: "https://glossy-disclosure.info",
     },
   ],
   repositoriesTruncated: true,
-  repositoryCount: 601812,
+  repositoryCount: 980949,
   repositoryPrefix: "<value>",
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "collection-failed",
-        severity: "error",
-        source: "<value>",
-      },
-    ],
-    health: "unhealthy",
+    collectionIssues: [],
+    health: "unknown",
     lifecycle: "stopped",
     partial: false,
     stale: false,
@@ -54,28 +39,20 @@ const value: models.DataAwsEcr = {
 ```typescript
 const value: models.DataGcpArtifactRegistry = {
   cleanupPolicyCount: 150101,
-  events: [],
-  iamBindingCount: 412960,
+  iamBindingCount: 410292,
   iamPolicyEtagPresent: true,
   iamRoles: [],
-  kmsKeyNamePresent: false,
-  labelCount: 394471,
+  kmsKeyNamePresent: true,
+  labelCount: 560331,
   location: "<value>",
   projectId: "<id>",
   repositoryId: "<id>",
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "forbidden",
-        severity: "warning",
-        source: "<value>",
-      },
-    ],
+    collectionIssues: [],
     health: "degraded",
-    lifecycle: "stopping",
+    lifecycle: "stopped",
     partial: false,
-    stale: true,
+    stale: false,
   },
   backend: "gcpArtifactRegistry",
 };
@@ -93,29 +70,21 @@ const value: models.DataAzureContainerRegistry = {
   ],
   encryptionKeyIdentifierPresent: false,
   encryptionKeyVaultUriPresent: false,
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2025-03-09T17:11:17.646Z"),
-      severity: "info",
-    },
-  ],
-  ipRuleCount: 284832,
+  ipRuleCount: 806238,
   location: "<value>",
-  managedTagCount: 849232,
+  managedTagCount: 395726,
   name: "<value>",
   networkRuleBypassOptions: "<value>",
   policiesPresent: true,
-  policyCount: 875905,
-  privateEndpointConnectionCount: 997002,
+  policyCount: 284832,
+  privateEndpointConnectionCount: 849232,
   publicNetworkAccess: "<value>",
   resourceGroup: "<value>",
   skuName: "<value>",
   status: {
     collectionIssues: [],
     health: "unhealthy",
-    lifecycle: "deleting",
+    lifecycle: "failed",
     partial: true,
     stale: false,
   },
@@ -128,13 +97,12 @@ const value: models.DataAzureContainerRegistry = {
 
 ```typescript
 const value: models.DataLocal10 = {
-  events: [],
   reachable: true,
-  registryUrl: "https://fearless-exhaust.biz",
+  registryUrl: "https://white-doorpost.biz/",
   status: {
     collectionIssues: [],
-    health: "degraded",
-    lifecycle: "failed",
+    health: "unknown",
+    lifecycle: "stopping",
     partial: false,
     stale: false,
   },

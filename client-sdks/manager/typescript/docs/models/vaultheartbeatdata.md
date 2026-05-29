@@ -8,8 +8,7 @@
 ```typescript
 const value: models.VaultHeartbeatDataAwsParameterStore = {
   accountId: "<id>",
-  events: [],
-  parameterMetadataSampled: false,
+  parameterMetadataSampled: true,
   prefix: "<value>",
   region: "<value>",
   status: {
@@ -21,8 +20,8 @@ const value: models.VaultHeartbeatDataAwsParameterStore = {
         source: "<value>",
       },
     ],
-    health: "healthy",
-    lifecycle: "updating",
+    health: "unhealthy",
+    lifecycle: "scaling",
     partial: true,
     stale: true,
   },
@@ -34,18 +33,10 @@ const value: models.VaultHeartbeatDataAwsParameterStore = {
 
 ```typescript
 const value: models.VaultHeartbeatDataGcpSecretManager = {
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-02-23T02:52:34.144Z"),
-      severity: "info",
-    },
-  ],
   location: "<value>",
   prefix: "<value>",
   projectId: "<id>",
-  secretMetadataListed: true,
+  secretMetadataListed: false,
   status: {
     collectionIssues: [
       {
@@ -55,8 +46,8 @@ const value: models.VaultHeartbeatDataGcpSecretManager = {
         source: "<value>",
       },
     ],
-    health: "healthy",
-    lifecycle: "updating",
+    health: "unhealthy",
+    lifecycle: "scaling",
     partial: true,
     stale: true,
   },
@@ -69,14 +60,13 @@ const value: models.VaultHeartbeatDataGcpSecretManager = {
 ```typescript
 const value: models.VaultHeartbeatDataAzureKeyVault = {
   accessPolicyCount: 590752,
-  events: [],
   name: "<value>",
-  privateEndpointConnectionCount: 929405,
+  privateEndpointConnectionCount: 62989,
   publicNetworkAccess: "<value>",
-  rbacAuthorizationEnabled: true,
+  rbacAuthorizationEnabled: false,
   secretMetadataListed: true,
-  softDeleteEnabled: false,
-  softDeleteRetentionDays: 926964,
+  softDeleteEnabled: true,
+  softDeleteRetentionDays: 839995,
   status: {
     collectionIssues: [
       {
@@ -86,8 +76,8 @@ const value: models.VaultHeartbeatDataAzureKeyVault = {
         source: "<value>",
       },
     ],
-    health: "healthy",
-    lifecycle: "updating",
+    health: "unhealthy",
+    lifecycle: "scaling",
     partial: true,
     stale: true,
   },
@@ -99,7 +89,6 @@ const value: models.VaultHeartbeatDataAzureKeyVault = {
 
 ```typescript
 const value: models.VaultHeartbeatDataKubernetesSecret = {
-  events: [],
   namespace: "<value>",
   prefix: "<value>",
   secretMetadataListed: true,
@@ -112,8 +101,8 @@ const value: models.VaultHeartbeatDataKubernetesSecret = {
         source: "<value>",
       },
     ],
-    health: "healthy",
-    lifecycle: "updating",
+    health: "unhealthy",
+    lifecycle: "scaling",
     partial: true,
     stale: true,
   },
@@ -125,17 +114,9 @@ const value: models.VaultHeartbeatDataKubernetesSecret = {
 
 ```typescript
 const value: models.VaultHeartbeatDataLocal = {
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-02-23T02:52:34.144Z"),
-      severity: "info",
-    },
-  ],
-  path: "/var/tmp",
+  path: "/sys",
   pathExists: false,
-  secretMetadataListed: true,
+  secretMetadataListed: false,
   status: {
     collectionIssues: [
       {
@@ -145,8 +126,8 @@ const value: models.VaultHeartbeatDataLocal = {
         source: "<value>",
       },
     ],
-    health: "healthy",
-    lifecycle: "updating",
+    health: "unhealthy",
+    lifecycle: "scaling",
     partial: true,
     stale: true,
   },

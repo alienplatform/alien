@@ -6,7 +6,6 @@
 import * as z from "zod";
 import { ComputeCapacityGroupStatusSchema } from "./compute-capacity-group-status-schema.js";
 import { ComputeClusterHeartbeatStatusSchema } from "./compute-cluster-heartbeat-status-schema.js";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 import { MetricSampleSchema } from "./metric-sample-schema.js";
 import { ObservedCountsSchema } from "./observed-counts-schema.js";
 import { ProviderFleetStatusSchema } from "./provider-fleet-status-schema.js";
@@ -18,9 +17,6 @@ get "capacityGroups"(){
               },
 get "cpu"(){
                 return z.union([MetricSampleSchema, z.null()]).optional()
-              },
-get "events"(){
-                return z.array(HeartbeatEventSchema)
               },
 get "memory"(){
                 return z.union([MetricSampleSchema, z.null()]).optional()

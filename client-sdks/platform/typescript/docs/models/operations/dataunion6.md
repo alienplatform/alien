@@ -8,11 +8,10 @@
 ```typescript
 const value: operations.DataAwsSqs = {
   approximateCounts: false,
-  events: [],
   name: "<value>",
   status: {
     collectionIssues: [],
-    health: "degraded",
+    health: "healthy",
     lifecycle: "stopping",
     partial: false,
     stale: false,
@@ -25,25 +24,16 @@ const value: operations.DataAwsSqs = {
 
 ```typescript
 const value: operations.DataGcpPubSub = {
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-08-12T10:51:43.799Z"),
-      severity: "warning",
-    },
-  ],
   messageStorageAllowedPersistenceRegions: [
     "<value 1>",
     "<value 2>",
-    "<value 3>",
   ],
   status: {
     collectionIssues: [],
     health: "healthy",
-    lifecycle: "updating",
+    lifecycle: "failed",
     partial: true,
-    stale: false,
+    stale: true,
   },
   subscriptionLabels: {
     "key": "<value>",
@@ -63,21 +53,20 @@ const value: operations.DataGcpPubSub = {
 
 ```typescript
 const value: operations.DataAzureServiceBus = {
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2025-12-11T21:43:07.631Z"),
-      severity: "error",
-    },
-  ],
   name: "<value>",
   namespaceName: "<value>",
   status: {
-    collectionIssues: [],
-    health: "healthy",
-    lifecycle: "stopping",
-    partial: false,
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "timed-out",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
+    health: "degraded",
+    lifecycle: "deleting",
+    partial: true,
     stale: true,
   },
   backend: "azureServiceBus",
@@ -88,14 +77,13 @@ const value: operations.DataAzureServiceBus = {
 
 ```typescript
 const value: operations.DataLocal6 = {
-  events: [],
   name: "<value>",
   status: {
     collectionIssues: [],
-    health: "unknown",
-    lifecycle: "deleting",
-    partial: true,
-    stale: false,
+    health: "healthy",
+    lifecycle: "creating",
+    partial: false,
+    stale: true,
   },
   backend: "local",
 };

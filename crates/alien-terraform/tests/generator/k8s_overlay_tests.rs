@@ -14,8 +14,9 @@ use alien_core::{
     AzureResourceGroup, Ingress, KubernetesCertificateMode, KubernetesCluster,
     KubernetesClusterOwnership, KubernetesClusterProvider, KubernetesExposureSettings,
     KubernetesHeartbeatMode, KubernetesIngressRouteProfile, KubernetesRouteProfile,
-    KubernetesSettings, ResourceLifecycle, ServiceAccount, Stack, StackSettings, Storage, Worker,
-    WorkerCode,
+    KubernetesSettings, ManagementPermissions, PermissionProfile, PermissionsConfig,
+    RemoteStackManagement, ResourceLifecycle, ServiceAccount, Stack, StackSettings, Storage,
+    Worker, WorkerCode,
 };
 use alien_terraform::TerraformTarget;
 
@@ -44,6 +45,38 @@ fn eks_overlay_emits_irsa_service_account_annotation() {
     let module = render(&stack, TerraformTarget::Eks, StackSettings::default());
     snapshot_module("eks_overlay_irsa", &module);
     assert_terraform_valid(&module, "eks_overlay_irsa");
+}
+
+#[test]
+fn eks_storage_profile_permissions_attach_to_irsa_role() {
+    let stack = Stack::new("eks-storage-permissions".to_string())
+        .permissions(PermissionsConfig::new().with_profile(
+            "app",
+            PermissionProfile::new().resource("files", ["storage/data-read", "storage/data-write"]),
+        ))
+        .add(
+            Storage::new("files".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            ServiceAccount::new("app-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    let module = render(&stack, TerraformTarget::Eks, StackSettings::default());
+    let rendered = module
+        .iter()
+        .map(|(_, contents)| contents.as_ref())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(
+        rendered.contains("resource \"aws_iam_role_policy\" \"files_app_sa_storage-data-write_1\"")
+    );
+    assert!(rendered.contains("\"s3:PutObject\""));
+    assert!(rendered.contains("arn:aws:s3:::${aws_s3_bucket.files.bucket}/*"));
+    assert_terraform_valid(&module, "eks_storage_profile_permissions");
 }
 
 #[test]
@@ -142,7 +175,6 @@ fn managed_kubernetes_cluster_emitters_export_runtime_metadata() {
             .expect("cluster resource file should render");
         assert!(cluster.contains(expected));
         assert!(cluster.contains("kubernetes_cluster_mode"));
-
         let outputs = module.get("outputs.tf").expect("outputs should render");
         assert!(outputs.contains("kubernetes_kubeconfig"));
         assert!(!outputs.contains("kubernetes_ingress_class"));
@@ -152,7 +184,7 @@ fn managed_kubernetes_cluster_emitters_export_runtime_metadata() {
         let main = module.get("locals.tf").expect("locals should render");
         assert!(main.contains("kubernetes_exposure"));
         assert!(main.contains(
-            "exposure = coalesce(try(jsondecode(var.stack_settings_json).kubernetes.exposure, null), local.kubernetes_exposure)"
+            "exposure = jsondecode(try(jsondecode(var.stack_settings_json).kubernetes.exposure, null) == null ? jsonencode(local.kubernetes_exposure) : jsonencode(jsondecode(var.stack_settings_json).kubernetes.exposure))"
         ));
         match target {
             TerraformTarget::Eks => {
@@ -182,6 +214,88 @@ fn managed_kubernetes_cluster_emitters_export_runtime_metadata() {
             &format!("{}_managed_kubernetes_cluster", target.name()),
         );
     }
+}
+
+#[test]
+fn managed_kubernetes_clusters_install_generated_public_endpoint_support() {
+    for (target, provider, expected) in [
+        (
+            TerraformTarget::Eks,
+            KubernetesClusterProvider::Eks,
+            r#"kind       = "IngressClassParams""#,
+        ),
+        (
+            TerraformTarget::Aks,
+            KubernetesClusterProvider::Aks,
+            r#"resource "azapi_update_resource" "kubernetes_alb_controller""#,
+        ),
+    ] {
+        let stack = Stack::new(format!("{}-public-endpoint", target.name()))
+            .add(
+                KubernetesCluster::new("kubernetes".to_string())
+                    .provider(provider)
+                    .ownership(KubernetesClusterOwnership::Managed)
+                    .namespace("default".to_string())
+                    .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Worker::new("api".to_string())
+                    .code(WorkerCode::Image {
+                        image: "example.com/api:latest".to_string(),
+                    })
+                    .permissions("execution".to_string())
+                    .ingress(Ingress::Public)
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+
+        let module = render(&stack, target, StackSettings::default());
+        let cluster = module
+            .get("kubernetes.tf")
+            .expect("cluster resource file should render");
+        assert!(cluster.contains(expected));
+        if target == TerraformTarget::Eks {
+            assert!(cluster.contains(r#"controller = "eks.amazonaws.com/alb""#));
+        }
+        if target == TerraformTarget::Aks {
+            assert!(cluster.contains(r#"applicationLoadBalancer = {"#));
+            assert!(cluster.contains(r#"installation = "Standard""#));
+        }
+        assert_terraform_valid(&module, &format!("{}_public_endpoint", target.name()));
+    }
+}
+
+#[test]
+fn eks_managed_cluster_with_remote_management_irsa_is_valid() {
+    let stack = Stack::new("eks-managed-remote-management".to_string())
+        .management(ManagementPermissions::extend(
+            PermissionProfile::new().resource("kubernetes", ["kubernetes-cluster/heartbeat"]),
+        ))
+        .add(
+            KubernetesCluster::new("kubernetes".to_string())
+                .provider(KubernetesClusterProvider::Eks)
+                .ownership(KubernetesClusterOwnership::Managed)
+                .namespace("default".to_string())
+                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteStackManagement::new("remote-stack-management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let settings = StackSettings {
+        deployment_model: alien_core::DeploymentModel::Pull,
+        ..StackSettings::default()
+    };
+
+    let module = render(&stack, TerraformTarget::Eks, settings);
+    snapshot_module("eks_managed_cluster_remote_management_irsa", &module);
+    assert_terraform_valid(&module, "eks_managed_cluster_remote_management_irsa");
 }
 
 #[test]
@@ -226,7 +340,7 @@ fn managed_kubernetes_cluster_preserves_stack_settings_exposure() {
     assert!(variables.contains("certificateArn"));
     assert!(variables.contains("arn:aws:acm:us-east-1:123456789012:certificate/customer"));
     assert!(locals.contains(
-        "exposure = coalesce(try(jsondecode(var.stack_settings_json).kubernetes.exposure, null), local.kubernetes_exposure)"
+        "exposure = jsondecode(try(jsondecode(var.stack_settings_json).kubernetes.exposure, null) == null ? jsonencode(local.kubernetes_exposure) : jsonencode(jsondecode(var.stack_settings_json).kubernetes.exposure))"
     ));
     assert_terraform_valid(&module, "eks_custom_exposure");
 }

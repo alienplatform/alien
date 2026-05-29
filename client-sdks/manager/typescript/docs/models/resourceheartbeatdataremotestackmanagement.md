@@ -7,21 +7,13 @@ import { ResourceHeartbeatDataRemoteStackManagement } from "@alienplatform/manag
 
 let value: ResourceHeartbeatDataRemoteStackManagement = {
   data: {
-    events: [],
     managementPermissionsApplied: true,
     status: {
-      collectionIssues: [
-        {
-          message: "<value>",
-          reason: "forbidden",
-          severity: "info",
-          source: "<value>",
-        },
-      ],
-      health: "healthy",
-      lifecycle: "creating",
+      collectionIssues: [],
+      health: "unhealthy",
+      lifecycle: "running",
       partial: true,
-      stale: false,
+      stale: true,
     },
     backend: "awsIamRole",
   },

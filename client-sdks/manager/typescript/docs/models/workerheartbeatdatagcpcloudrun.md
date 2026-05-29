@@ -6,14 +6,6 @@
 import { WorkerHeartbeatDataGcpCloudRun } from "@alienplatform/manager-api/models";
 
 let value: WorkerHeartbeatDataGcpCloudRun = {
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-02-23T02:52:34.144Z"),
-      severity: "info",
-    },
-  ],
   service: "<value>",
   status: {
     collectionIssues: [],
@@ -22,10 +14,11 @@ let value: WorkerHeartbeatDataGcpCloudRun = {
     partial: false,
     stale: true,
   },
-  trafficCount: 874910,
+  trafficCount: 570634,
   urls: [
     "<value 1>",
     "<value 2>",
+    "<value 3>",
   ],
   backend: "gcpCloudRun",
 };
@@ -37,7 +30,6 @@ let value: WorkerHeartbeatDataGcpCloudRun = {
 | ---------------------------------------------------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------- |
 | `containerImage`                                                       | *string*                                                               | :heavy_minus_sign:                                                     | N/A                                                                    |
 | `cpuLimit`                                                             | *string*                                                               | :heavy_minus_sign:                                                     | N/A                                                                    |
-| `events`                                                               | [models.HeartbeatEvent](../models/heartbeatevent.md)[]                 | :heavy_check_mark:                                                     | N/A                                                                    |
 | `generation`                                                           | *number*                                                               | :heavy_minus_sign:                                                     | N/A                                                                    |
 | `latestCreatedRevision`                                                | *string*                                                               | :heavy_minus_sign:                                                     | N/A                                                                    |
 | `latestReadyRevision`                                                  | *string*                                                               | :heavy_minus_sign:                                                     | N/A                                                                    |

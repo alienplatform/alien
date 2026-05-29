@@ -4,14 +4,10 @@
 */
 
 import * as z from "zod";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 import { QueueHeartbeatStatusSchema } from "./queue-heartbeat-status-schema.js";
 
 export const LocalQueueHeartbeatDataSchema = z.object({
-    get "events"(){
-                return z.array(HeartbeatEventSchema)
-              },
-"name": z.string(),
+    "name": z.string(),
 "path": z.string().nullish(),
 "serviceStatus": z.string().nullish(),
 get "status"(){

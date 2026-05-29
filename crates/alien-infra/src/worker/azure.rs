@@ -237,7 +237,6 @@ fn emit_azure_container_apps_worker_heartbeat(
                 max_replicas: scale.map(|scale| scale.max_replicas),
                 cpu: resources.and_then(|resources| resources.cpu),
                 memory: resources.and_then(|resources| resources.memory.clone()),
-                events: vec![],
             },
         )),
         raw: vec![],

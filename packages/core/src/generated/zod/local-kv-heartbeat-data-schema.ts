@@ -4,14 +4,10 @@
 */
 
 import * as z from "zod";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 import { KvHeartbeatStatusSchema } from "./kv-heartbeat-status-schema.js";
 
 export const LocalKvHeartbeatDataSchema = z.object({
     "cloudMetadataSupported": z.boolean(),
-get "events"(){
-                return z.array(HeartbeatEventSchema)
-              },
 "isDirectory": z.boolean().nullish(),
 "name": z.string(),
 "path": z.string(),

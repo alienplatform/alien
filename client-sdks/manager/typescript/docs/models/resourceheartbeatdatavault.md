@@ -7,10 +7,9 @@ import { ResourceHeartbeatDataVault } from "@alienplatform/manager-api/models";
 
 let value: ResourceHeartbeatDataVault = {
   data: {
-    events: [],
     namespace: "<value>",
     prefix: "<value>",
-    secretMetadataListed: false,
+    secretMetadataListed: true,
     status: {
       collectionIssues: [
         {
@@ -20,8 +19,8 @@ let value: ResourceHeartbeatDataVault = {
           source: "<value>",
         },
       ],
-      health: "healthy",
-      lifecycle: "updating",
+      health: "unhealthy",
+      lifecycle: "scaling",
       partial: true,
       stale: true,
     },

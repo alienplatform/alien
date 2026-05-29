@@ -4,18 +4,12 @@
 
 import * as z from "zod/v4";
 import {
-  HeartbeatEvent,
-  HeartbeatEvent$Outbound,
-  HeartbeatEvent$outboundSchema,
-} from "./heartbeatevent.js";
-import {
   RemoteStackManagementHeartbeatStatus,
   RemoteStackManagementHeartbeatStatus$Outbound,
   RemoteStackManagementHeartbeatStatus$outboundSchema,
 } from "./remotestackmanagementheartbeatstatus.js";
 
 export type RemoteStackManagementHeartbeatDataAzureManagedIdentity = {
-  events: Array<HeartbeatEvent>;
   ficName?: string | null | undefined;
   roleAssignmentIds: Array<string>;
   roleDefinitionId?: string | null | undefined;
@@ -28,7 +22,6 @@ export type RemoteStackManagementHeartbeatDataAzureManagedIdentity = {
 };
 
 export type RemoteStackManagementHeartbeatDataGcpServiceAccount = {
-  events: Array<HeartbeatEvent>;
   impersonationGranted: boolean;
   roleBound: boolean;
   serviceAccountEmail?: string | null | undefined;
@@ -38,7 +31,6 @@ export type RemoteStackManagementHeartbeatDataGcpServiceAccount = {
 };
 
 export type RemoteStackManagementHeartbeatDataAwsIamRole = {
-  events: Array<HeartbeatEvent>;
   managementPermissionsApplied: boolean;
   roleArn?: string | null | undefined;
   roleName?: string | null | undefined;
@@ -53,7 +45,6 @@ export type RemoteStackManagementHeartbeatData =
 
 /** @internal */
 export type RemoteStackManagementHeartbeatDataAzureManagedIdentity$Outbound = {
-  events: Array<HeartbeatEvent$Outbound>;
   ficName?: string | null | undefined;
   roleAssignmentIds: Array<string>;
   roleDefinitionId?: string | null | undefined;
@@ -71,7 +62,6 @@ export const RemoteStackManagementHeartbeatDataAzureManagedIdentity$outboundSche
     RemoteStackManagementHeartbeatDataAzureManagedIdentity$Outbound,
     RemoteStackManagementHeartbeatDataAzureManagedIdentity
   > = z.object({
-    events: z.array(HeartbeatEvent$outboundSchema),
     ficName: z.nullable(z.string()).optional(),
     roleAssignmentIds: z.array(z.string()),
     roleDefinitionId: z.nullable(z.string()).optional(),
@@ -96,7 +86,6 @@ export function remoteStackManagementHeartbeatDataAzureManagedIdentityToJSON(
 
 /** @internal */
 export type RemoteStackManagementHeartbeatDataGcpServiceAccount$Outbound = {
-  events: Array<HeartbeatEvent$Outbound>;
   impersonationGranted: boolean;
   roleBound: boolean;
   serviceAccountEmail?: string | null | undefined;
@@ -111,7 +100,6 @@ export const RemoteStackManagementHeartbeatDataGcpServiceAccount$outboundSchema:
     RemoteStackManagementHeartbeatDataGcpServiceAccount$Outbound,
     RemoteStackManagementHeartbeatDataGcpServiceAccount
   > = z.object({
-    events: z.array(HeartbeatEvent$outboundSchema),
     impersonationGranted: z.boolean(),
     roleBound: z.boolean(),
     serviceAccountEmail: z.nullable(z.string()).optional(),
@@ -133,7 +121,6 @@ export function remoteStackManagementHeartbeatDataGcpServiceAccountToJSON(
 
 /** @internal */
 export type RemoteStackManagementHeartbeatDataAwsIamRole$Outbound = {
-  events: Array<HeartbeatEvent$Outbound>;
   managementPermissionsApplied: boolean;
   roleArn?: string | null | undefined;
   roleName?: string | null | undefined;
@@ -147,7 +134,6 @@ export const RemoteStackManagementHeartbeatDataAwsIamRole$outboundSchema:
     RemoteStackManagementHeartbeatDataAwsIamRole$Outbound,
     RemoteStackManagementHeartbeatDataAwsIamRole
   > = z.object({
-    events: z.array(HeartbeatEvent$outboundSchema),
     managementPermissionsApplied: z.boolean(),
     roleArn: z.nullable(z.string()).optional(),
     roleName: z.nullable(z.string()).optional(),

@@ -4,18 +4,12 @@
 
 import * as z from "zod/v4";
 import {
-  HeartbeatEvent,
-  HeartbeatEvent$Outbound,
-  HeartbeatEvent$outboundSchema,
-} from "./heartbeatevent.js";
-import {
   StorageHeartbeatStatus,
   StorageHeartbeatStatus$Outbound,
   StorageHeartbeatStatus$outboundSchema,
 } from "./storageheartbeatstatus.js";
 
 export type StorageHeartbeatDataLocal = {
-  events: Array<HeartbeatEvent>;
   isDirectory?: boolean | null | undefined;
   modifiedAt?: Date | null | undefined;
   path: string;
@@ -39,7 +33,6 @@ export type StorageHeartbeatDataAzureBlob = {
   containerDeleteRetentionEnabled?: boolean | null | undefined;
   containerPublicAccess?: string | null | undefined;
   encryptionKeySource?: string | null | undefined;
-  events: Array<HeartbeatEvent>;
   fileEncryptionEnabled?: boolean | null | undefined;
   location?: string | null | undefined;
   name: string;
@@ -63,7 +56,6 @@ export type StorageHeartbeatDataGcpCloudStorage = {
   bucketId?: string | null | undefined;
   defaultKmsKeyName?: string | null | undefined;
   encryptionConfigPresent: boolean;
-  events: Array<HeartbeatEvent>;
   lifecyclePresent: boolean;
   lifecycleRuleCount?: number | null | undefined;
   location?: string | null | undefined;
@@ -91,7 +83,6 @@ export type StorageHeartbeatDataAwsS3 = {
   bucketPolicyPresent?: boolean | null | undefined;
   encryptionConfigPresent: boolean;
   encryptionEnabled?: boolean | null | undefined;
-  events: Array<HeartbeatEvent>;
   ignorePublicAcls?: boolean | null | undefined;
   lifecyclePresent: boolean;
   lifecycleRuleCount?: number | null | undefined;
@@ -113,7 +104,6 @@ export type StorageHeartbeatData =
 
 /** @internal */
 export type StorageHeartbeatDataLocal$Outbound = {
-  events: Array<HeartbeatEvent$Outbound>;
   isDirectory?: boolean | null | undefined;
   modifiedAt?: string | null | undefined;
   path: string;
@@ -128,7 +118,6 @@ export const StorageHeartbeatDataLocal$outboundSchema: z.ZodType<
   StorageHeartbeatDataLocal$Outbound,
   StorageHeartbeatDataLocal
 > = z.object({
-  events: z.array(HeartbeatEvent$outboundSchema),
   isDirectory: z.nullable(z.boolean()).optional(),
   modifiedAt: z.nullable(z.date().transform(v => v.toISOString())).optional(),
   path: z.string(),
@@ -161,7 +150,6 @@ export type StorageHeartbeatDataAzureBlob$Outbound = {
   containerDeleteRetentionEnabled?: boolean | null | undefined;
   containerPublicAccess?: string | null | undefined;
   encryptionKeySource?: string | null | undefined;
-  events: Array<HeartbeatEvent$Outbound>;
   fileEncryptionEnabled?: boolean | null | undefined;
   location?: string | null | undefined;
   name: string;
@@ -199,7 +187,6 @@ export const StorageHeartbeatDataAzureBlob$outboundSchema: z.ZodType<
   containerDeleteRetentionEnabled: z.nullable(z.boolean()).optional(),
   containerPublicAccess: z.nullable(z.string()).optional(),
   encryptionKeySource: z.nullable(z.string()).optional(),
-  events: z.array(HeartbeatEvent$outboundSchema),
   fileEncryptionEnabled: z.nullable(z.boolean()).optional(),
   location: z.nullable(z.string()).optional(),
   name: z.string(),
@@ -234,7 +221,6 @@ export type StorageHeartbeatDataGcpCloudStorage$Outbound = {
   bucketId?: string | null | undefined;
   defaultKmsKeyName?: string | null | undefined;
   encryptionConfigPresent: boolean;
-  events: Array<HeartbeatEvent$Outbound>;
   lifecyclePresent: boolean;
   lifecycleRuleCount?: number | null | undefined;
   location?: string | null | undefined;
@@ -262,7 +248,6 @@ export const StorageHeartbeatDataGcpCloudStorage$outboundSchema: z.ZodType<
   bucketId: z.nullable(z.string()).optional(),
   defaultKmsKeyName: z.nullable(z.string()).optional(),
   encryptionConfigPresent: z.boolean(),
-  events: z.array(HeartbeatEvent$outboundSchema),
   lifecyclePresent: z.boolean(),
   lifecycleRuleCount: z.nullable(z.int()).optional(),
   location: z.nullable(z.string()).optional(),
@@ -301,7 +286,6 @@ export type StorageHeartbeatDataAwsS3$Outbound = {
   bucketPolicyPresent?: boolean | null | undefined;
   encryptionConfigPresent: boolean;
   encryptionEnabled?: boolean | null | undefined;
-  events: Array<HeartbeatEvent$Outbound>;
   ignorePublicAcls?: boolean | null | undefined;
   lifecyclePresent: boolean;
   lifecycleRuleCount?: number | null | undefined;
@@ -327,7 +311,6 @@ export const StorageHeartbeatDataAwsS3$outboundSchema: z.ZodType<
   bucketPolicyPresent: z.nullable(z.boolean()).optional(),
   encryptionConfigPresent: z.boolean(),
   encryptionEnabled: z.nullable(z.boolean()).optional(),
-  events: z.array(HeartbeatEvent$outboundSchema),
   ignorePublicAcls: z.nullable(z.boolean()).optional(),
   lifecyclePresent: z.boolean(),
   lifecycleRuleCount: z.nullable(z.int()).optional(),

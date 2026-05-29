@@ -4,16 +4,12 @@
 */
 
 import * as z from "zod";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 import { WorkloadHeartbeatStatusSchema } from "./workload-heartbeat-status-schema.js";
 
 export const AzureContainerAppsWorkerHeartbeatDataSchema = z.object({
     "appName": z.string(),
 "cpu": z.number().nullish(),
 "environmentName": z.string().nullish(),
-get "events"(){
-                return z.array(HeartbeatEventSchema)
-              },
 "ingressFqdn": z.string().nullish(),
 "maxReplicas": z.int().nullish(),
 "memory": z.string().nullish(),

@@ -9,15 +9,21 @@
 const value: models.DataAwsCodeBuild = {
   encryptionKeyPresent: true,
   environmentVariableCount: 879452,
-  events: [],
   projectName: "<value>",
-  serviceRolePresent: false,
+  serviceRolePresent: true,
   status: {
-    collectionIssues: [],
-    health: "unhealthy",
-    lifecycle: "stopped",
-    partial: true,
-    stale: false,
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "api-unavailable",
+        severity: "error",
+        source: "<value>",
+      },
+    ],
+    health: "degraded",
+    lifecycle: "unknown",
+    partial: false,
+    stale: true,
   },
   backend: "awsCodeBuild",
 };
@@ -29,20 +35,19 @@ const value: models.DataAwsCodeBuild = {
 const value: models.DataGcpCloudBuild = {
   buildConfigId: "<id>",
   environmentVariableCount: 982514,
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-11-14T23:58:06.955Z"),
-      severity: "warning",
-    },
-  ],
   location: "<value>",
   projectId: "<id>",
   status: {
-    collectionIssues: [],
-    health: "unhealthy",
-    lifecycle: "updating",
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "api-unavailable",
+        severity: "error",
+        source: "<value>",
+      },
+    ],
+    health: "healthy",
+    lifecycle: "scaling",
     partial: true,
     stale: false,
   },
@@ -55,29 +60,21 @@ const value: models.DataGcpCloudBuild = {
 ```typescript
 const value: models.DataAzureContainerApps2 = {
   environmentVariableCount: 246098,
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-12-26T22:26:53.665Z"),
-      severity: "info",
-    },
-  ],
   managedEnvironmentId: "<id>",
   resourceGroupName: "<value>",
   status: {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "collection-failed",
-        severity: "warning",
+        reason: "not-installed",
+        severity: "info",
         source: "<value>",
       },
     ],
-    health: "unknown",
-    lifecycle: "failed",
+    health: "unhealthy",
+    lifecycle: "deleting",
     partial: true,
-    stale: false,
+    stale: true,
   },
   backend: "azureContainerApps",
 };

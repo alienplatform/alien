@@ -8,14 +8,6 @@ import { KvHeartbeatDataGcpFirestore } from "@alienplatform/manager-api/models";
 let value: KvHeartbeatDataGcpFirestore = {
   cmekEnabled: true,
   databaseName: "<value>",
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-02-23T02:52:34.144Z"),
-      severity: "info",
-    },
-  ],
   sourceInfoPresent: false,
   status: {
     collectionIssues: [
@@ -26,8 +18,8 @@ let value: KvHeartbeatDataGcpFirestore = {
         source: "<value>",
       },
     ],
-    health: "unknown",
-    lifecycle: "stopped",
+    health: "degraded",
+    lifecycle: "creating",
     partial: false,
     stale: false,
   },
@@ -50,7 +42,6 @@ let value: KvHeartbeatDataGcpFirestore = {
 | `deleteTime`                                               | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
 | `earliestVersionTime`                                      | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
 | `endpoint`                                                 | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
-| `events`                                                   | [models.HeartbeatEvent](../models/heartbeatevent.md)[]     | :heavy_check_mark:                                         | N/A                                                        |
 | `locationId`                                               | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
 | `pointInTimeRecoveryEnablement`                            | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
 | `projectId`                                                | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |

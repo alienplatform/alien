@@ -4,15 +4,11 @@
 */
 
 import * as z from "zod";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 import { WorkloadHeartbeatStatusSchema } from "./workload-heartbeat-status-schema.js";
 
 export const GcpCloudRunWorkerHeartbeatDataSchema = z.object({
     "containerImage": z.string().nullish(),
 "cpuLimit": z.string().nullish(),
-get "events"(){
-                return z.array(HeartbeatEventSchema)
-              },
 "generation": z.int().nullish(),
 "latestCreatedRevision": z.string().nullish(),
 "latestReadyRevision": z.string().nullish(),

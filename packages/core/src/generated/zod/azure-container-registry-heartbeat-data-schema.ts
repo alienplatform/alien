@@ -5,7 +5,6 @@
 
 import * as z from "zod";
 import { ArtifactRegistryHeartbeatStatusSchema } from "./artifact-registry-heartbeat-status-schema.js";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 
 export const AzureContainerRegistryHeartbeatDataSchema = z.object({
     "adminUserEnabled": z.boolean(),
@@ -16,9 +15,6 @@ export const AzureContainerRegistryHeartbeatDataSchema = z.object({
 "encryptionKeyIdentifierPresent": z.boolean(),
 "encryptionKeyVaultUriPresent": z.boolean(),
 "encryptionStatus": z.string().nullish(),
-get "events"(){
-                return z.array(HeartbeatEventSchema)
-              },
 "ipRuleCount": z.int().min(0),
 "location": z.string(),
 "loginServer": z.string().nullish(),

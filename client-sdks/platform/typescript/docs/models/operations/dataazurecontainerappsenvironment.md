@@ -7,16 +7,15 @@ import { DataAzureContainerAppsEnvironment } from "@alienplatform/platform-api/m
 
 let value: DataAzureContainerAppsEnvironment = {
   data: {
-    events: [],
     name: "<value>",
     status: {
       collectionIssues: [],
-      health: "degraded",
-      lifecycle: "updating",
+      health: "unknown",
+      lifecycle: "stopped",
       partial: true,
       stale: true,
     },
-    workloadProfileCount: 388415,
+    workloadProfileCount: 415280,
     workloadProfiles: [],
   },
   resourceType: "azure_container_apps_environment",

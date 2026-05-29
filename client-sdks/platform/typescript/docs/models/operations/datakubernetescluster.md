@@ -9,26 +9,17 @@ let value: DataKubernetesCluster = {
   data: {
     events: [
       {
-        kind: "<value>",
         message: "<value>",
-        observedAt: new Date("2024-08-02T12:07:39.617Z"),
-        severity: "error",
+        reason: "<value>",
       },
     ],
     name: "<value>",
     nodeCounts: {},
     podCounts: {},
     status: {
-      collectionIssues: [
-        {
-          message: "<value>",
-          reason: "timed-out",
-          severity: "error",
-          source: "<value>",
-        },
-      ],
-      health: "unknown",
-      lifecycle: "stopping",
+      collectionIssues: [],
+      health: "unhealthy",
+      lifecycle: "failed",
       partial: false,
       stale: false,
     },

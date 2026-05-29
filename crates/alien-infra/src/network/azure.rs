@@ -91,7 +91,6 @@ fn emit_azure_network_heartbeat(
                     .last_byo_vnet_verification_error
                     .as_ref()
                     .map(|error| error.code.clone()),
-                events: vec![],
             },
         )),
         raw: vec![],

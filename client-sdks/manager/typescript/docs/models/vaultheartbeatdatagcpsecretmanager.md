@@ -6,18 +6,10 @@
 import { VaultHeartbeatDataGcpSecretManager } from "@alienplatform/manager-api/models";
 
 let value: VaultHeartbeatDataGcpSecretManager = {
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-02-23T02:52:34.144Z"),
-      severity: "info",
-    },
-  ],
   location: "<value>",
   prefix: "<value>",
   projectId: "<id>",
-  secretMetadataListed: true,
+  secretMetadataListed: false,
   status: {
     collectionIssues: [
       {
@@ -27,8 +19,8 @@ let value: VaultHeartbeatDataGcpSecretManager = {
         source: "<value>",
       },
     ],
-    health: "healthy",
-    lifecycle: "updating",
+    health: "unhealthy",
+    lifecycle: "scaling",
     partial: true,
     stale: true,
   },
@@ -40,7 +32,6 @@ let value: VaultHeartbeatDataGcpSecretManager = {
 
 | Field                                                            | Type                                                             | Required                                                         | Description                                                      |
 | ---------------------------------------------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------- |
-| `events`                                                         | [models.HeartbeatEvent](../models/heartbeatevent.md)[]           | :heavy_check_mark:                                               | N/A                                                              |
 | `location`                                                       | *string*                                                         | :heavy_check_mark:                                               | N/A                                                              |
 | `prefix`                                                         | *string*                                                         | :heavy_check_mark:                                               | N/A                                                              |
 | `projectId`                                                      | *string*                                                         | :heavy_check_mark:                                               | N/A                                                              |

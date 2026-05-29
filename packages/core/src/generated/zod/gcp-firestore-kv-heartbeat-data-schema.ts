@@ -4,7 +4,6 @@
 */
 
 import * as z from "zod";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 import { KvHeartbeatStatusSchema } from "./kv-heartbeat-status-schema.js";
 
 export const GcpFirestoreKvHeartbeatDataSchema = z.object({
@@ -19,9 +18,6 @@ export const GcpFirestoreKvHeartbeatDataSchema = z.object({
 "deleteTime": z.string().nullish(),
 "earliestVersionTime": z.string().nullish(),
 "endpoint": z.string().nullish(),
-get "events"(){
-                return z.array(HeartbeatEventSchema)
-              },
 "locationId": z.string().nullish(),
 "pointInTimeRecoveryEnablement": z.string().nullish(),
 "projectId": z.string().nullish(),

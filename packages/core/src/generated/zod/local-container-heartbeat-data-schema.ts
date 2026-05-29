@@ -4,18 +4,22 @@
 */
 
 import * as z from "zod";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
+import { LocalRuntimeEventSnapshotSchema } from "./local-runtime-event-snapshot-schema.js";
+import { LocalRuntimeUnitStatusSchema } from "./local-runtime-unit-status-schema.js";
 import { MetricSampleSchema } from "./metric-sample-schema.js";
 import { WorkloadHeartbeatStatusSchema } from "./workload-heartbeat-status-schema.js";
 
 export const LocalContainerHeartbeatDataSchema = z.object({
     "bindMountCount": z.int().min(0),
 "containerId": z.string().nullish(),
+get "containerUnit"(){
+                return z.union([LocalRuntimeUnitStatusSchema, z.null()]).optional()
+              },
 get "cpu"(){
                 return z.union([MetricSampleSchema, z.null()]).optional()
               },
 get "events"(){
-                return z.array(HeartbeatEventSchema)
+                return z.array(LocalRuntimeEventSnapshotSchema)
               },
 "image": z.string().nullish(),
 "localUrl": z.string().nullish(),

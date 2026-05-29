@@ -121,6 +121,7 @@ export * from "./updatecommandrequest.js";
 export * from "./updatedeploymentenvironmentvariablesrequest.js";
 export * from "./updatedeploymentgrouprequest.js";
 export * from "./updatemanagerrequest.js";
+export * from "./updateproject.js";
 export * from "./updateprojectgcpoauthprovider.js";
 export * from "./userprofile.js";
 export * from "./userprofilesetuprequest.js";

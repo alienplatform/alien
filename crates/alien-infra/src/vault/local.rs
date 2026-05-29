@@ -265,7 +265,6 @@ fn emit_local_vault_heartbeat(
             readonly,
             modified_at,
             secret_metadata_listed: false,
-            events: vec![],
         })),
         raw: vec![],
     });

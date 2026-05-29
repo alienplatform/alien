@@ -4,14 +4,10 @@
 */
 
 import * as z from "zod";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 import { VaultHeartbeatStatusSchema } from "./vault-heartbeat-status-schema.js";
 
 export const AwsParameterStoreVaultHeartbeatDataSchema = z.object({
     "accountId": z.string(),
-get "events"(){
-                return z.array(HeartbeatEventSchema)
-              },
 "hasMoreParameters": z.boolean().nullish(),
 "latestModifiedAt": z.iso.datetime().nullish(),
 "parameterMetadataSampled": z.boolean(),

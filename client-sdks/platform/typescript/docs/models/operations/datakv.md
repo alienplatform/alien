@@ -7,30 +7,22 @@ import { DataKv } from "@alienplatform/platform-api/models/operations";
 
 let value: DataKv = {
   data: {
-    events: [
-      {
-        kind: "<value>",
-        message: "<value>",
-        observedAt: new Date("2025-06-08T10:49:40.534Z"),
-        severity: "warning",
-      },
-    ],
     status: {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "forbidden",
-          severity: "info",
+          reason: "api-unavailable",
+          severity: "warning",
           source: "<value>",
         },
       ],
       health: "degraded",
-      lifecycle: "failed",
+      lifecycle: "unknown",
       partial: true,
-      stale: true,
+      stale: false,
     },
     storageAccountName: "<value>",
-    tableExists: true,
+    tableExists: false,
     tableName: "<value>",
     backend: "azureTable",
   },

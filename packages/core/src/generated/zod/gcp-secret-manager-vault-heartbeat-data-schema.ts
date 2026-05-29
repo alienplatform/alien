@@ -4,14 +4,10 @@
 */
 
 import * as z from "zod";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 import { VaultHeartbeatStatusSchema } from "./vault-heartbeat-status-schema.js";
 
 export const GcpSecretManagerVaultHeartbeatDataSchema = z.object({
-    get "events"(){
-                return z.array(HeartbeatEventSchema)
-              },
-"location": z.string(),
+    "location": z.string(),
 "prefix": z.string(),
 "projectId": z.string(),
 "secretMetadataListed": z.boolean(),

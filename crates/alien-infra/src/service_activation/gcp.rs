@@ -466,7 +466,6 @@ fn emit_gcp_service_activation_heartbeat(
                     state,
                     enabled,
                     last_operation_name: last_operation_name.clone(),
-                    events: vec![],
                 },
             ),
         ),

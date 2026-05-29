@@ -472,7 +472,6 @@ fn emit_gcp_build_heartbeat(
                     .as_ref()
                     .map(|env_vars| env_vars.len() as u32)
                     .unwrap_or(0),
-                events: vec![],
             },
         )),
         raw: vec![],

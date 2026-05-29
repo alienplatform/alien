@@ -445,7 +445,6 @@ fn emit_gcp_firestore_kv_heartbeat(
                 database_edition: serialize_enum_opt(database.database_edition),
                 cmek_enabled: database.cmek_config.is_some(),
                 source_info_present: database.source_info.is_some(),
-                events: vec![],
             },
         )),
         raw: vec![],

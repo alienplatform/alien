@@ -10,8 +10,9 @@ let value: DataContainer = {
     attentionCount: 486054,
     containerId: "<id>",
     events: [],
+    replicaUnits: [],
     replicas: {},
-    schedulingMode: "replicated",
+    schedulingMode: "stateful",
     status: {
       collectionIssues: [
         {
@@ -21,9 +22,9 @@ let value: DataContainer = {
           source: "<value>",
         },
       ],
-      health: "unhealthy",
-      lifecycle: "running",
-      partial: true,
+      health: "healthy",
+      lifecycle: "creating",
+      partial: false,
       stale: false,
     },
     backend: "horizonPlatform",

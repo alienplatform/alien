@@ -7,10 +7,9 @@
 
 ```typescript
 const value: models.WorkerHeartbeatDataAwsLambda = {
-  events: [],
   functionName: "<value>",
-  functionUrlCorsPresent: false,
-  layerCount: 109377,
+  functionUrlCorsPresent: true,
+  layerCount: 637035,
   status: {
     collectionIssues: [],
     health: "unknown",
@@ -18,7 +17,7 @@ const value: models.WorkerHeartbeatDataAwsLambda = {
     partial: false,
     stale: true,
   },
-  triggerCount: 947900,
+  triggerCount: 109377,
   backend: "awsLambda",
 };
 ```
@@ -27,14 +26,6 @@ const value: models.WorkerHeartbeatDataAwsLambda = {
 
 ```typescript
 const value: models.WorkerHeartbeatDataGcpCloudRun = {
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-02-23T02:52:34.144Z"),
-      severity: "info",
-    },
-  ],
   service: "<value>",
   status: {
     collectionIssues: [],
@@ -43,10 +34,11 @@ const value: models.WorkerHeartbeatDataGcpCloudRun = {
     partial: false,
     stale: true,
   },
-  trafficCount: 874910,
+  trafficCount: 570634,
   urls: [
     "<value 1>",
     "<value 2>",
+    "<value 3>",
   ],
   backend: "gcpCloudRun",
 };
@@ -57,14 +49,6 @@ const value: models.WorkerHeartbeatDataGcpCloudRun = {
 ```typescript
 const value: models.WorkerHeartbeatDataAzureContainerApps = {
   appName: "<value>",
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-02-23T02:52:34.144Z"),
-      severity: "info",
-    },
-  ],
   status: {
     collectionIssues: [],
     health: "unknown",
@@ -82,15 +66,13 @@ const value: models.WorkerHeartbeatDataAzureContainerApps = {
 const value: models.WorkerHeartbeatDataKubernetes = {
   events: [
     {
-      kind: "<value>",
       message: "<value>",
-      observedAt: new Date("2024-02-23T02:52:34.144Z"),
-      severity: "info",
+      reason: "<value>",
     },
   ],
-  instances: [],
   name: "<value>",
   namespace: "<value>",
+  pods: [],
   replicas: {},
   status: {
     collectionIssues: [],
@@ -114,11 +96,11 @@ const value: models.WorkerHeartbeatDataLocal = {
     {
       kind: "<value>",
       message: "<value>",
-      observedAt: new Date("2024-02-23T02:52:34.144Z"),
-      severity: "info",
+      severity: "error",
+      timestamp: new Date("2026-10-18T22:04:45.971Z"),
     },
   ],
-  imagePathPresent: false,
+  imagePathPresent: true,
   status: {
     collectionIssues: [],
     health: "unknown",
@@ -126,7 +108,7 @@ const value: models.WorkerHeartbeatDataLocal = {
     partial: false,
     stale: true,
   },
-  triggerCount: 932409,
+  triggerCount: 305200,
   backend: "local",
 };
 ```

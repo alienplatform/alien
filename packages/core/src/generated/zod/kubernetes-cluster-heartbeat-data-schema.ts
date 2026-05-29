@@ -4,8 +4,8 @@
 */
 
 import * as z from "zod";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 import { KubernetesClusterNodeStatusSchema } from "./kubernetes-cluster-node-status-schema.js";
+import { KubernetesEventSnapshotSchema } from "./kubernetes-event-snapshot-schema.js";
 import { MetricSampleSchema } from "./metric-sample-schema.js";
 import { ObservedCountsSchema } from "./observed-counts-schema.js";
 import { WorkloadHeartbeatStatusSchema } from "./workload-heartbeat-status-schema.js";
@@ -15,7 +15,7 @@ export const KubernetesClusterHeartbeatDataSchema = z.object({
                 return z.union([MetricSampleSchema, z.null()]).optional()
               },
 get "events"(){
-                return z.array(HeartbeatEventSchema)
+                return z.array(KubernetesEventSnapshotSchema)
               },
 get "memory"(){
                 return z.union([MetricSampleSchema, z.null()]).optional()

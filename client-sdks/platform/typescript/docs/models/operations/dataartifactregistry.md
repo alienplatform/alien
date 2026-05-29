@@ -7,20 +7,12 @@ import { DataArtifactRegistry } from "@alienplatform/platform-api/models/operati
 
 let value: DataArtifactRegistry = {
   data: {
-    events: [
-      {
-        kind: "<value>",
-        message: "<value>",
-        observedAt: new Date("2026-05-25T20:34:34.708Z"),
-        severity: "error",
-      },
-    ],
     reachable: false,
-    registryUrl: "https://international-consistency.net/",
+    registryUrl: "https://tedious-reach.com",
     status: {
       collectionIssues: [],
-      health: "degraded",
-      lifecycle: "failed",
+      health: "unknown",
+      lifecycle: "stopping",
       partial: false,
       stale: false,
     },

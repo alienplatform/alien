@@ -535,7 +535,6 @@ fn emit_azure_storage_account_heartbeat(
             network_resource_access_rule_count: properties
                 .and_then(|p| p.network_acls.as_ref())
                 .map(|rules| rules.resource_access_rules.len() as u32),
-            events: vec![],
         }),
         raw: vec![],
     });

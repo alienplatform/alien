@@ -7,14 +7,6 @@ import { WorkerHeartbeatDataAzureContainerApps } from "@alienplatform/manager-ap
 
 let value: WorkerHeartbeatDataAzureContainerApps = {
   appName: "<value>",
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-02-23T02:52:34.144Z"),
-      severity: "info",
-    },
-  ],
   status: {
     collectionIssues: [],
     health: "unknown",
@@ -33,7 +25,6 @@ let value: WorkerHeartbeatDataAzureContainerApps = {
 | `appName`                                                              | *string*                                                               | :heavy_check_mark:                                                     | N/A                                                                    |
 | `cpu`                                                                  | *number*                                                               | :heavy_minus_sign:                                                     | N/A                                                                    |
 | `environmentName`                                                      | *string*                                                               | :heavy_minus_sign:                                                     | N/A                                                                    |
-| `events`                                                               | [models.HeartbeatEvent](../models/heartbeatevent.md)[]                 | :heavy_check_mark:                                                     | N/A                                                                    |
 | `ingressFqdn`                                                          | *string*                                                               | :heavy_minus_sign:                                                     | N/A                                                                    |
 | `maxReplicas`                                                          | *number*                                                               | :heavy_minus_sign:                                                     | N/A                                                                    |
 | `memory`                                                               | *string*                                                               | :heavy_minus_sign:                                                     | N/A                                                                    |

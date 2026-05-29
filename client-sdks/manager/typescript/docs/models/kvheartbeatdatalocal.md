@@ -7,10 +7,9 @@ import { KvHeartbeatDataLocal } from "@alienplatform/manager-api/models";
 
 let value: KvHeartbeatDataLocal = {
   cloudMetadataSupported: true,
-  events: [],
   name: "<value>",
-  path: "/var/tmp",
-  pathExists: true,
+  path: "/etc",
+  pathExists: false,
   status: {
     collectionIssues: [
       {
@@ -20,8 +19,8 @@ let value: KvHeartbeatDataLocal = {
         source: "<value>",
       },
     ],
-    health: "unknown",
-    lifecycle: "stopped",
+    health: "degraded",
+    lifecycle: "creating",
     partial: false,
     stale: false,
   },
@@ -34,7 +33,6 @@ let value: KvHeartbeatDataLocal = {
 | Field                                                      | Type                                                       | Required                                                   | Description                                                |
 | ---------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- |
 | `cloudMetadataSupported`                                   | *boolean*                                                  | :heavy_check_mark:                                         | N/A                                                        |
-| `events`                                                   | [models.HeartbeatEvent](../models/heartbeatevent.md)[]     | :heavy_check_mark:                                         | N/A                                                        |
 | `isDirectory`                                              | *boolean*                                                  | :heavy_minus_sign:                                         | N/A                                                        |
 | `name`                                                     | *string*                                                   | :heavy_check_mark:                                         | N/A                                                        |
 | `path`                                                     | *string*                                                   | :heavy_check_mark:                                         | N/A                                                        |

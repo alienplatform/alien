@@ -5,14 +5,10 @@
 
 import * as z from "zod";
 import { BuildHeartbeatStatusSchema } from "./build-heartbeat-status-schema.js";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 
 export const GcpCloudBuildHeartbeatDataSchema = z.object({
     "buildConfigId": z.string(),
 "environmentVariableCount": z.int().min(0),
-get "events"(){
-                return z.array(HeartbeatEventSchema)
-              },
 "location": z.string(),
 "projectId": z.string(),
 "serviceAccount": z.string().nullish(),

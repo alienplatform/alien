@@ -6,7 +6,6 @@
 import { KvHeartbeatDataAzureTable } from "@alienplatform/manager-api/models";
 
 let value: KvHeartbeatDataAzureTable = {
-  events: [],
   status: {
     collectionIssues: [
       {
@@ -16,13 +15,13 @@ let value: KvHeartbeatDataAzureTable = {
         source: "<value>",
       },
     ],
-    health: "unknown",
-    lifecycle: "stopped",
+    health: "degraded",
+    lifecycle: "creating",
     partial: false,
     stale: false,
   },
   storageAccountName: "<value>",
-  tableExists: false,
+  tableExists: true,
   tableName: "<value>",
   backend: "azureTable",
 };
@@ -33,7 +32,6 @@ let value: KvHeartbeatDataAzureTable = {
 | Field                                                      | Type                                                       | Required                                                   | Description                                                |
 | ---------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- |
 | `endpoint`                                                 | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
-| `events`                                                   | [models.HeartbeatEvent](../models/heartbeatevent.md)[]     | :heavy_check_mark:                                         | N/A                                                        |
 | `resourceGroup`                                            | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
 | `signedIdentifierCount`                                    | *number*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
 | `status`                                                   | [models.KvHeartbeatStatus](../models/kvheartbeatstatus.md) | :heavy_check_mark:                                         | N/A                                                        |

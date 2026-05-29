@@ -147,9 +147,13 @@ app.post("/internal/maintenance", async c => {
   return c.json({ created: true, issueId: id })
 })
 
-Bun.serve({
-  port,
-  fetch: app.fetch,
-})
+if (import.meta.main) {
+  Bun.serve({
+    port,
+    fetch: app.fetch,
+  })
 
-console.log(`api listening on ${port}`)
+  console.log(`api listening on ${port}`)
+}
+
+export default app

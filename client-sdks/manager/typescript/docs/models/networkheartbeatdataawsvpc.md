@@ -7,21 +7,17 @@ import { NetworkHeartbeatDataAwsVpc } from "@alienplatform/manager-api/models";
 
 let value: NetworkHeartbeatDataAwsVpc = {
   availabilityZones: [],
-  events: [],
   isByoVpc: true,
-  privateSubnetIds: [
-    "<value 1>",
-    "<value 2>",
-  ],
+  privateSubnetIds: [],
   publicSubnetIds: [
     "<value 1>",
     "<value 2>",
   ],
-  routeTableCount: 501979,
+  routeTableCount: 704849,
   status: {
     collectionIssues: [],
-    health: "degraded",
-    lifecycle: "scaling",
+    health: "healthy",
+    lifecycle: "stopped",
     partial: true,
     stale: true,
   },
@@ -35,7 +31,6 @@ let value: NetworkHeartbeatDataAwsVpc = {
 | -------------------------------------------------------------------- | -------------------------------------------------------------------- | -------------------------------------------------------------------- | -------------------------------------------------------------------- |
 | `availabilityZones`                                                  | *string*[]                                                           | :heavy_check_mark:                                                   | N/A                                                                  |
 | `cidrBlock`                                                          | *string*                                                             | :heavy_minus_sign:                                                   | N/A                                                                  |
-| `events`                                                             | [models.HeartbeatEvent](../models/heartbeatevent.md)[]               | :heavy_check_mark:                                                   | N/A                                                                  |
 | `internetGatewayId`                                                  | *string*                                                             | :heavy_minus_sign:                                                   | N/A                                                                  |
 | `isByoVpc`                                                           | *boolean*                                                            | :heavy_check_mark:                                                   | N/A                                                                  |
 | `natGatewayId`                                                       | *string*                                                             | :heavy_minus_sign:                                                   | N/A                                                                  |

@@ -1166,7 +1166,6 @@ fn emit_azure_service_account_heartbeat(
                     custom_role_definition_count: custom_role_definition_ids.len() as u32,
                     custom_role_definition_ids: custom_role_definition_ids.to_vec(),
                     stack_permissions_applied,
-                    events: vec![],
                 },
             ),
         ),

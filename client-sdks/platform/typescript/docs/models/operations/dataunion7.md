@@ -7,29 +7,26 @@
 
 ```typescript
 const value: operations.DataAwsDynamoDb = {
-  events: [
+  keySchema: [
     {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2026-11-03T14:53:55.376Z"),
-      severity: "warning",
+      attributeName: "<value>",
+      keyType: "<value>",
     },
   ],
-  keySchema: [],
   name: "<value>",
   status: {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "api-unavailable",
+        reason: "collection-failed",
         severity: "warning",
         source: "<value>",
       },
     ],
     health: "unhealthy",
-    lifecycle: "deleted",
-    partial: false,
-    stale: true,
+    lifecycle: "scaling",
+    partial: true,
+    stale: false,
   },
   backend: "awsDynamoDb",
 };
@@ -41,28 +38,13 @@ const value: operations.DataAwsDynamoDb = {
 const value: operations.DataGcpFirestore = {
   cmekEnabled: false,
   databaseName: "<value>",
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-02-13T08:16:25.783Z"),
-      severity: "info",
-    },
-  ],
-  sourceInfoPresent: true,
+  sourceInfoPresent: false,
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "collection-failed",
-        severity: "info",
-        source: "<value>",
-      },
-    ],
-    health: "unhealthy",
-    lifecycle: "creating",
+    collectionIssues: [],
+    health: "unknown",
+    lifecycle: "running",
     partial: false,
-    stale: true,
+    stale: false,
   },
   backend: "gcpFirestore",
 };
@@ -72,27 +54,19 @@ const value: operations.DataGcpFirestore = {
 
 ```typescript
 const value: operations.DataAzureTable = {
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2025-06-08T10:49:40.534Z"),
-      severity: "warning",
-    },
-  ],
   status: {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
-        severity: "info",
+        reason: "api-unavailable",
+        severity: "warning",
         source: "<value>",
       },
     ],
     health: "degraded",
-    lifecycle: "failed",
+    lifecycle: "unknown",
     partial: true,
-    stale: true,
+    stale: false,
   },
   storageAccountName: "<value>",
   tableExists: false,
@@ -106,16 +80,15 @@ const value: operations.DataAzureTable = {
 ```typescript
 const value: operations.DataLocal7 = {
   cloudMetadataSupported: false,
-  events: [],
   name: "<value>",
-  path: "/usr/src",
-  pathExists: true,
+  path: "/dev",
+  pathExists: false,
   status: {
     collectionIssues: [],
-    health: "unhealthy",
-    lifecycle: "running",
+    health: "healthy",
+    lifecycle: "deleted",
     partial: true,
-    stale: false,
+    stale: true,
   },
   backend: "local",
 };

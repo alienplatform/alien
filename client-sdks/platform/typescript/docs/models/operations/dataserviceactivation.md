@@ -8,28 +8,20 @@ import { DataServiceActivation } from "@alienplatform/platform-api/models/operat
 let value: DataServiceActivation = {
   data: {
     enabled: true,
-    events: [
-      {
-        kind: "<value>",
-        message: "<value>",
-        observedAt: new Date("2025-06-11T19:58:11.111Z"),
-        severity: "error",
-      },
-    ],
     projectId: "<id>",
     serviceName: "<value>",
     status: {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "collection-failed",
-          severity: "info",
+          reason: "api-unavailable",
+          severity: "error",
           source: "<value>",
         },
       ],
-      health: "healthy",
-      lifecycle: "stopping",
-      partial: false,
+      health: "unhealthy",
+      lifecycle: "stopped",
+      partial: true,
       stale: true,
     },
     backend: "gcpServiceUsage",

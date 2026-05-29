@@ -8,26 +8,17 @@ import { Data1 } from "@alienplatform/platform-api/models/operations";
 let value: Data1 = {
   events: [
     {
-      kind: "<value>",
       message: "<value>",
-      observedAt: new Date("2024-08-02T12:07:39.617Z"),
-      severity: "error",
+      reason: "<value>",
     },
   ],
   name: "<value>",
   nodeCounts: {},
   podCounts: {},
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "timed-out",
-        severity: "error",
-        source: "<value>",
-      },
-    ],
-    health: "unknown",
-    lifecycle: "stopping",
+    collectionIssues: [],
+    health: "unhealthy",
+    lifecycle: "failed",
     partial: false,
     stale: false,
   },
@@ -39,7 +30,7 @@ let value: Data1 = {
 | Field                                                                                                    | Type                                                                                                     | Required                                                                                                 | Description                                                                                              |
 | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
 | `cpu`                                                                                                    | *operations.CpuUnion10*                                                                                  | :heavy_minus_sign:                                                                                       | N/A                                                                                                      |
-| `events`                                                                                                 | [operations.GetRawResourceHeartbeatEvent22](../../models/operations/getrawresourceheartbeatevent22.md)[] | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
+| `events`                                                                                                 | [operations.GetRawResourceHeartbeatEvent11](../../models/operations/getrawresourceheartbeatevent11.md)[] | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
 | `memory`                                                                                                 | *operations.MemoryUnion10*                                                                               | :heavy_minus_sign:                                                                                       | N/A                                                                                                      |
 | `name`                                                                                                   | *string*                                                                                                 | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
 | `namespace`                                                                                              | *string*                                                                                                 | :heavy_minus_sign:                                                                                       | N/A                                                                                                      |

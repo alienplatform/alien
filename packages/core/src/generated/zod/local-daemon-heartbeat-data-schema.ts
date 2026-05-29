@@ -4,14 +4,18 @@
 */
 
 import * as z from "zod";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
+import { LocalRuntimeEventSnapshotSchema } from "./local-runtime-event-snapshot-schema.js";
+import { LocalRuntimeUnitStatusSchema } from "./local-runtime-unit-status-schema.js";
 import { WorkloadHeartbeatStatusSchema } from "./workload-heartbeat-status-schema.js";
 
 export const LocalDaemonHeartbeatDataSchema = z.object({
     "commandSupported": z.boolean(),
+get "daemonInstance"(){
+                return z.union([LocalRuntimeUnitStatusSchema, z.null()]).optional()
+              },
 "daemonName": z.string(),
 get "events"(){
-                return z.array(HeartbeatEventSchema)
+                return z.array(LocalRuntimeEventSnapshotSchema)
               },
 "exitReason": z.string().nullish(),
 "imagePathPresent": z.boolean(),

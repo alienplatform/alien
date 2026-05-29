@@ -4,14 +4,10 @@
 */
 
 import * as z from "zod";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 import { RemoteStackManagementHeartbeatStatusSchema } from "./remote-stack-management-heartbeat-status-schema.js";
 
 export const GcpRemoteStackManagementHeartbeatDataSchema = z.object({
-    get "events"(){
-                return z.array(HeartbeatEventSchema)
-              },
-"impersonationGranted": z.boolean(),
+    "impersonationGranted": z.boolean(),
 "roleBound": z.boolean(),
 "serviceAccountEmail": z.string().nullish(),
 "serviceAccountUniqueId": z.string().nullish(),

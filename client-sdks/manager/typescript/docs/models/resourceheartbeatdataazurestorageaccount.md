@@ -7,23 +7,15 @@ import { ResourceHeartbeatDataAzureStorageAccount } from "@alienplatform/manager
 
 let value: ResourceHeartbeatDataAzureStorageAccount = {
   data: {
-    events: [],
     name: "<value>",
     primaryEndpoints: {},
     secondaryEndpoints: {},
     status: {
-      collectionIssues: [
-        {
-          message: "<value>",
-          reason: "forbidden",
-          severity: "info",
-          source: "<value>",
-        },
-      ],
+      collectionIssues: [],
       health: "degraded",
-      lifecycle: "updating",
+      lifecycle: "stopping",
       partial: true,
-      stale: false,
+      stale: true,
     },
   },
   resourceType: "azure_storage_account",

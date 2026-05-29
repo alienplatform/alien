@@ -51,6 +51,7 @@ pub(crate) struct KubernetesPublicEndpointTarget<'a> {
     pub(crate) selector: BTreeMap<String, String>,
     pub(crate) service_port: u16,
     pub(crate) target_port: u16,
+    pub(crate) health_check_path: Option<String>,
     pub(crate) public: bool,
 }
 
@@ -62,8 +63,8 @@ pub(crate) enum KubernetesEndpointAction {
 
 #[derive(Debug, Clone)]
 struct EndpointPlan {
-    hostname: String,
-    public_url: String,
+    hostname: Option<String>,
+    public_url: Option<String>,
     route: KubernetesRouteProfile,
     certificate: EndpointCertificate,
 }
@@ -325,7 +326,10 @@ pub(crate) async fn reconcile_kubernetes_public_endpoint(
     )
     .await?;
 
-    state.public_url = Some(plan.public_url);
+    state.public_url = plan
+        .public_url
+        .clone()
+        .or_else(|| endpoint.as_ref().map(load_balancer_endpoint_url));
     state.load_balancer_endpoint = endpoint;
 
     if state.load_balancer_endpoint.is_none() {
@@ -605,6 +609,7 @@ pub(crate) fn worker_public_endpoint_target<'a>(
     namespace: &'a str,
     selector: BTreeMap<String, String>,
     ingress: &Ingress,
+    health_check_path: Option<&str>,
 ) -> KubernetesPublicEndpointTarget<'a> {
     KubernetesPublicEndpointTarget {
         resource_id,
@@ -614,6 +619,7 @@ pub(crate) fn worker_public_endpoint_target<'a>(
         selector,
         service_port: 80,
         target_port: 8080,
+        health_check_path: health_check_path.map(ToString::to_string),
         public: matches!(ingress, Ingress::Public),
     }
 }
@@ -624,6 +630,7 @@ pub(crate) fn container_public_endpoint_target<'a>(
     namespace: &'a str,
     selector: BTreeMap<String, String>,
     ports: &'a [alien_core::ContainerPort],
+    health_check_path: Option<&str>,
 ) -> Result<KubernetesPublicEndpointTarget<'a>> {
     let http_port = ports
         .iter()
@@ -638,6 +645,7 @@ pub(crate) fn container_public_endpoint_target<'a>(
         selector,
         service_port: http_port.unwrap_or(80),
         target_port: http_port.unwrap_or(80),
+        health_check_path: health_check_path.map(ToString::to_string),
         public: http_port.is_some(),
     })
 }
@@ -672,18 +680,55 @@ fn resolve_endpoint_plan(
                 .deployment_config
                 .domain_metadata
                 .as_ref()
-                .and_then(|metadata| metadata.resources.get(target.resource_id))
-                .ok_or_else(|| {
-                    AlienError::new(ErrorData::ResourceControllerConfigError {
-                        resource_id: target.resource_id.to_string(),
-                        message:
-                            "Generated Kubernetes exposure requires domainMetadata for the resource"
-                                .to_string(),
-                    })
-                })?;
+                .and_then(|metadata| metadata.resources.get(target.resource_id));
+
+            let Some(domain) = domain else {
+                if matches!(certificate, KubernetesCertificateMode::None) {
+                    return Ok(EndpointPlanResolution::Ready(EndpointPlan {
+                        hostname: None,
+                        public_url: None,
+                        route: route.clone(),
+                        certificate: EndpointCertificate::None,
+                    }));
+                }
+
+                return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
+                    resource_id: target.resource_id.to_string(),
+                    message:
+                        "Generated Kubernetes exposure requires domainMetadata for managed TLS"
+                            .to_string(),
+                }));
+            };
+
+            if domain.certificate_status != CertificateStatus::Issued
+                && !matches!(
+                    certificate,
+                    KubernetesCertificateMode::None
+                        | KubernetesCertificateMode::AwsAcmArn { .. }
+                        | KubernetesCertificateMode::TlsSecretRef(_)
+                )
+            {
+                return Ok(EndpointPlanResolution::Waiting);
+            }
+
+            if domain.certificate_status != CertificateStatus::Issued
+                && matches!(certificate, KubernetesCertificateMode::None)
+            {
+                return Ok(EndpointPlanResolution::Ready(EndpointPlan {
+                    hostname: Some(domain.fqdn.clone()),
+                    public_url: Some(format!("http://{}", domain.fqdn)),
+                    route: route.clone(),
+                    certificate: EndpointCertificate::None,
+                }));
+            }
 
             if domain.certificate_status != CertificateStatus::Issued {
-                return Ok(EndpointPlanResolution::Waiting);
+                return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
+                    resource_id: target.resource_id.to_string(),
+                    message:
+                        "Generated Kubernetes exposure references a non-managed certificate but domainMetadata certificate is not issued"
+                            .to_string(),
+                }));
             }
 
             let certificate = match certificate {
@@ -749,9 +794,15 @@ fn resolve_endpoint_plan(
                 }
             };
 
+            let public_url = if matches!(certificate, EndpointCertificate::None) {
+                format!("http://{}", domain.fqdn)
+            } else {
+                format!("https://{}", domain.fqdn)
+            };
+
             Ok(EndpointPlanResolution::Ready(EndpointPlan {
-                hostname: domain.fqdn.clone(),
-                public_url: format!("https://{}", domain.fqdn),
+                hostname: Some(domain.fqdn.clone()),
+                public_url: Some(public_url),
                 route: route.clone(),
                 certificate,
             }))
@@ -777,9 +828,14 @@ fn resolve_endpoint_plan(
                     }));
                 }
             };
+            let public_url = if matches!(certificate, EndpointCertificate::None) {
+                format!("http://{}", domain)
+            } else {
+                format!("https://{}", domain)
+            };
             Ok(EndpointPlanResolution::Ready(EndpointPlan {
-                hostname: domain.clone(),
-                public_url: format!("https://{}", domain),
+                hostname: Some(domain.clone()),
+                public_url: Some(public_url),
                 route: route.clone(),
                 certificate,
             }))
@@ -820,6 +876,19 @@ fn build_ingress(
     tls_ref: Option<&KubernetesTlsSecretRef>,
 ) -> Result<K8sIngress> {
     let mut annotations = profile.annotations.clone();
+    if matches!(
+        &profile.provider,
+        Some(KubernetesRouteProviderOptions::AwsAlb { .. })
+    ) {
+        if let Some(path) = target.health_check_path.as_ref() {
+            annotations
+                .entry("alb.ingress.kubernetes.io/healthcheck-path".to_string())
+                .or_insert_with(|| path.clone());
+            annotations
+                .entry("alb.ingress.kubernetes.io/success-codes".to_string())
+                .or_insert_with(|| "200".to_string());
+        }
+    }
     if let EndpointCertificate::AwsAcmArn(certificate_arn) = &plan.certificate {
         match &profile.provider {
             Some(KubernetesRouteProviderOptions::AwsAlb { .. }) => {
@@ -858,7 +927,7 @@ fn build_ingress(
         spec: Some(IngressSpec {
             ingress_class_name: Some(profile.ingress_class_name.clone()),
             rules: Some(vec![IngressRule {
-                host: Some(plan.hostname.clone()),
+                host: plan.hostname.clone(),
                 http: Some(HTTPIngressRuleValue {
                     paths: vec![HTTPIngressPath {
                         path: Some("/".to_string()),
@@ -876,11 +945,13 @@ fn build_ingress(
                     }],
                 }),
             }]),
-            tls: tls_ref.map(|secret| {
-                vec![IngressTLS {
-                    hosts: Some(vec![plan.hostname.clone()]),
-                    secret_name: Some(secret.secret_name.clone()),
-                }]
+            tls: tls_ref.and_then(|secret| {
+                plan.hostname.as_ref().map(|hostname| {
+                    vec![IngressTLS {
+                        hosts: Some(vec![hostname.clone()]),
+                        secret_name: Some(secret.secret_name.clone()),
+                    }]
+                })
             }),
             ..Default::default()
         }),
@@ -915,15 +986,18 @@ fn build_gateway(
 
     let labels = merge_labels(endpoint_labels(target, gateway_name), &profile.labels);
     let annotations = btree_from_hash(&profile.annotations);
+    let uses_tls = tls_ref.is_some();
     let mut listener = json!({
-        "name": "https",
-        "hostname": plan.hostname,
+        "name": if uses_tls { "https" } else { "http" },
         "port": profile.listener_port,
-        "protocol": "HTTPS",
+        "protocol": if uses_tls { "HTTPS" } else { "HTTP" },
         "allowedRoutes": {
             "namespaces": { "from": "Same" }
         }
     });
+    if let Some(hostname) = &plan.hostname {
+        listener["hostname"] = json!(hostname);
+    }
 
     if let Some(secret_ref) = tls_ref {
         listener["tls"] = json!({
@@ -958,7 +1032,7 @@ fn build_http_route(
     gateway_name: &str,
     route_name: &str,
 ) -> Value {
-    json!({
+    let mut route = json!({
         "apiVersion": "gateway.networking.k8s.io/v1",
         "kind": "HTTPRoute",
         "metadata": {
@@ -970,7 +1044,6 @@ fn build_http_route(
             "parentRefs": [{
                 "name": gateway_name,
             }],
-            "hostnames": [plan.hostname],
             "rules": [{
                 "matches": [{
                     "path": {
@@ -984,7 +1057,11 @@ fn build_http_route(
                 }]
             }]
         }
-    })
+    });
+    if let Some(hostname) = &plan.hostname {
+        route["spec"]["hostnames"] = json!([hostname]);
+    }
+    route
 }
 
 async fn upsert_service(
@@ -1257,6 +1334,14 @@ async fn observe_gateway_endpoint(
     }))
 }
 
+fn load_balancer_endpoint_url(endpoint: &LoadBalancerEndpoint) -> String {
+    if endpoint.dns_name.starts_with("http://") || endpoint.dns_name.starts_with("https://") {
+        endpoint.dns_name.clone()
+    } else {
+        format!("http://{}", endpoint.dns_name)
+    }
+}
+
 fn delete_not_found_ok(result: alien_client_core::Result<()>, name: &str) -> Result<()> {
     match result {
         Ok(()) => {
@@ -1391,6 +1476,7 @@ mod tests {
             selector: BTreeMap::from([("app".to_string(), "api".to_string())]),
             service_port: 8080,
             target_port: 8080,
+            health_check_path: None,
             public: true,
         }
     }
@@ -1406,6 +1492,7 @@ mod tests {
                 port: 8080,
                 expose: Some(ExposeProtocol::Http),
             }],
+            None,
         )
         .expect("target");
 
@@ -1418,8 +1505,8 @@ mod tests {
     fn ingress_with_byo_acm_arn_sets_alb_certificate_annotation() {
         let target = endpoint_target();
         let plan = EndpointPlan {
-            hostname: "api.example.com".to_string(),
-            public_url: "https://api.example.com".to_string(),
+            hostname: Some("api.example.com".to_string()),
+            public_url: Some("https://api.example.com".to_string()),
             route: KubernetesRouteProfile::Ingress(KubernetesIngressRouteProfile {
                 ingress_class_name: "alb".to_string(),
                 provider: Some(KubernetesRouteProviderOptions::AwsAlb {
@@ -1452,11 +1539,151 @@ mod tests {
     }
 
     #[test]
+    fn aws_alb_ingress_uses_declared_health_check_path() {
+        let mut target = endpoint_target();
+        target.health_check_path = Some("/ready".to_string());
+        let plan = EndpointPlan {
+            hostname: None,
+            public_url: None,
+            route: KubernetesRouteProfile::Ingress(KubernetesIngressRouteProfile {
+                ingress_class_name: "alb".to_string(),
+                provider: Some(KubernetesRouteProviderOptions::AwsAlb {
+                    scheme: "internet-facing".to_string(),
+                    target_type: "ip".to_string(),
+                    ip_address_type: None,
+                    subnet_ids: vec![],
+                }),
+                ..Default::default()
+            }),
+            certificate: EndpointCertificate::None,
+        };
+        let KubernetesRouteProfile::Ingress(profile) = &plan.route else {
+            panic!("expected ingress profile");
+        };
+
+        let ingress = build_ingress(&target, &plan, profile, "api-public", "api-ingress", None)
+            .expect("ingress");
+        let annotations = ingress
+            .metadata
+            .annotations
+            .expect("ALB health check annotations");
+
+        assert_eq!(
+            annotations.get("alb.ingress.kubernetes.io/healthcheck-path"),
+            Some(&"/ready".to_string())
+        );
+        assert_eq!(
+            annotations.get("alb.ingress.kubernetes.io/success-codes"),
+            Some(&"200".to_string())
+        );
+    }
+
+    #[test]
+    fn aws_alb_ingress_without_declared_health_check_does_not_invent_path() {
+        let target = endpoint_target();
+        let plan = EndpointPlan {
+            hostname: None,
+            public_url: None,
+            route: KubernetesRouteProfile::Ingress(KubernetesIngressRouteProfile {
+                ingress_class_name: "alb".to_string(),
+                provider: Some(KubernetesRouteProviderOptions::AwsAlb {
+                    scheme: "internet-facing".to_string(),
+                    target_type: "ip".to_string(),
+                    ip_address_type: None,
+                    subnet_ids: vec![],
+                }),
+                ..Default::default()
+            }),
+            certificate: EndpointCertificate::None,
+        };
+        let KubernetesRouteProfile::Ingress(profile) = &plan.route else {
+            panic!("expected ingress profile");
+        };
+
+        let ingress = build_ingress(&target, &plan, profile, "api-public", "api-ingress", None)
+            .expect("ingress");
+
+        assert_eq!(ingress.metadata.annotations, None);
+    }
+
+    #[test]
+    fn aws_alb_ingress_keeps_explicit_health_check_annotations() {
+        let mut target = endpoint_target();
+        target.health_check_path = Some("/ready".to_string());
+        let plan = EndpointPlan {
+            hostname: None,
+            public_url: None,
+            route: KubernetesRouteProfile::Ingress(KubernetesIngressRouteProfile {
+                ingress_class_name: "alb".to_string(),
+                provider: Some(KubernetesRouteProviderOptions::AwsAlb {
+                    scheme: "internet-facing".to_string(),
+                    target_type: "ip".to_string(),
+                    ip_address_type: None,
+                    subnet_ids: vec![],
+                }),
+                annotations: HashMap::from([
+                    (
+                        "alb.ingress.kubernetes.io/healthcheck-path".to_string(),
+                        "/custom".to_string(),
+                    ),
+                    (
+                        "alb.ingress.kubernetes.io/success-codes".to_string(),
+                        "200-399".to_string(),
+                    ),
+                ]),
+                ..Default::default()
+            }),
+            certificate: EndpointCertificate::None,
+        };
+        let KubernetesRouteProfile::Ingress(profile) = &plan.route else {
+            panic!("expected ingress profile");
+        };
+
+        let ingress = build_ingress(&target, &plan, profile, "api-public", "api-ingress", None)
+            .expect("ingress");
+        let annotations = ingress.metadata.annotations.expect("annotations");
+
+        assert_eq!(
+            annotations.get("alb.ingress.kubernetes.io/healthcheck-path"),
+            Some(&"/custom".to_string())
+        );
+        assert_eq!(
+            annotations.get("alb.ingress.kubernetes.io/success-codes"),
+            Some(&"200-399".to_string())
+        );
+    }
+
+    #[test]
+    fn ingress_without_hostname_omits_host_rule_and_tls() {
+        let target = endpoint_target();
+        let plan = EndpointPlan {
+            hostname: None,
+            public_url: None,
+            route: KubernetesRouteProfile::Ingress(KubernetesIngressRouteProfile {
+                ingress_class_name: "alb".to_string(),
+                ..Default::default()
+            }),
+            certificate: EndpointCertificate::None,
+        };
+        let KubernetesRouteProfile::Ingress(profile) = &plan.route else {
+            panic!("expected ingress profile");
+        };
+
+        let ingress = build_ingress(&target, &plan, profile, "api-public", "api-ingress", None)
+            .expect("ingress");
+        let spec = ingress.spec.expect("ingress spec");
+        let rule = spec.rules.expect("rules").into_iter().next().expect("rule");
+
+        assert_eq!(rule.host, None);
+        assert_eq!(spec.tls, None);
+    }
+
+    #[test]
     fn gateway_with_byo_tls_secret_uses_same_namespace_certificate_ref() {
         let target = endpoint_target();
         let plan = EndpointPlan {
-            hostname: "api.example.com".to_string(),
-            public_url: "https://api.example.com".to_string(),
+            hostname: Some("api.example.com".to_string()),
+            public_url: Some("https://api.example.com".to_string()),
             route: KubernetesRouteProfile::Gateway(KubernetesGatewayRouteProfile {
                 gateway_class_name: "shared-gateway".to_string(),
                 listener_port: 443,

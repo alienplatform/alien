@@ -10,19 +10,24 @@ const value: operations.DataAws1 = {
   assignedMachines: 644340,
   capacityGroup: "<value>",
   commandSupported: true,
-  daemonName: "<value>",
-  desiredMachines: 753830,
-  events: [],
-  healthyInstances: 896332,
-  horizonClusterId: "<id>",
-  horizonStatus: "<value>",
-  instances: [
+  daemonInstances: [
     {
       name: "<value>",
-      ready: false,
+      ready: true,
       replicaId: "<id>",
     },
   ],
+  daemonName: "<value>",
+  desiredMachines: 896332,
+  events: [
+    {
+      message: "<value>",
+      reason: "<value>",
+    },
+  ],
+  healthyInstances: 510224,
+  horizonClusterId: "<id>",
+  horizonStatus: "<value>",
   latestUpdateTimestamp: "<value>",
   status: {
     collectionIssues: [
@@ -50,13 +55,18 @@ const value: operations.DataGcp1 = {
   assignedMachines: 159021,
   capacityGroup: "<value>",
   commandSupported: false,
+  daemonInstances: [],
   daemonName: "<value>",
-  desiredMachines: 139194,
-  events: [],
-  healthyInstances: 504997,
+  desiredMachines: 144012,
+  events: [
+    {
+      message: "<value>",
+      reason: "<value>",
+    },
+  ],
+  healthyInstances: 314896,
   horizonClusterId: "<id>",
   horizonStatus: "<value>",
-  instances: [],
   latestUpdateTimestamp: "<value>",
   status: {
     collectionIssues: [
@@ -84,29 +94,35 @@ const value: operations.DataAzure1 = {
   assignedMachines: 3703,
   capacityGroup: "<value>",
   commandSupported: false,
+  daemonInstances: [
+    {
+      name: "<value>",
+      ready: true,
+      replicaId: "<id>",
+    },
+  ],
   daemonName: "<value>",
-  desiredMachines: 516924,
+  desiredMachines: 583805,
   events: [],
-  healthyInstances: 583805,
+  healthyInstances: 986297,
   horizonClusterId: "<id>",
   horizonStatus: "<value>",
-  instances: [],
   latestUpdateTimestamp: "<value>",
   status: {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "api-unavailable",
-        severity: "info",
+        reason: "not-installed",
+        severity: "warning",
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "unknown",
-    partial: true,
+    health: "unknown",
+    lifecycle: "running",
+    partial: false,
     stale: false,
   },
-  unavailableInstances: 602836,
+  unavailableInstances: 614597,
   backend: "azure",
 };
 ```
@@ -118,41 +134,18 @@ const value: operations.DataKubernetes3 = {
   commandSupported: false,
   events: [
     {
-      kind: "<value>",
       message: "<value>",
-      observedAt: new Date("2024-02-29T04:54:57.889Z"),
-      severity: "warning",
-    },
-  ],
-  instances: [
-    {
-      name: "<value>",
-      ownerReferences: [
-        {
-          controller: false,
-          kind: "<value>",
-          name: "<value>",
-          uid: "<id>",
-        },
-      ],
-      ready: true,
-      restartCount: 402283,
+      reason: "<value>",
     },
   ],
   name: "<value>",
   namespace: "<value>",
+  pods: [],
   replicas: {},
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "collection-failed",
-        severity: "warning",
-        source: "<value>",
-      },
-    ],
+    collectionIssues: [],
     health: "degraded",
-    lifecycle: "updating",
+    lifecycle: "deleted",
     partial: true,
     stale: true,
   },
@@ -170,8 +163,8 @@ const value: operations.DataLocal4 = {
     {
       kind: "<value>",
       message: "<value>",
-      observedAt: new Date("2025-03-14T01:07:50.346Z"),
-      severity: "error",
+      severity: "warning",
+      timestamp: new Date("2026-01-17T09:27:27.938Z"),
     },
   ],
   imagePathPresent: true,

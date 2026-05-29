@@ -7,20 +7,12 @@ import { QueueHeartbeatDataAwsSqs } from "@alienplatform/manager-api/models";
 
 let value: QueueHeartbeatDataAwsSqs = {
   approximateCounts: false,
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-02-23T02:52:34.144Z"),
-      severity: "info",
-    },
-  ],
   name: "<value>",
   status: {
     collectionIssues: [],
-    health: "unhealthy",
-    lifecycle: "updating",
-    partial: false,
+    health: "healthy",
+    lifecycle: "deleted",
+    partial: true,
     stale: false,
   },
   backend: "awsSqs",
@@ -38,7 +30,6 @@ let value: QueueHeartbeatDataAwsSqs = {
 | `contentBasedDeduplication`                                      | *boolean*                                                        | :heavy_minus_sign:                                               | N/A                                                              |
 | `deduplicationScope`                                             | *string*                                                         | :heavy_minus_sign:                                               | N/A                                                              |
 | `delaySeconds`                                                   | *number*                                                         | :heavy_minus_sign:                                               | N/A                                                              |
-| `events`                                                         | [models.HeartbeatEvent](../models/heartbeatevent.md)[]           | :heavy_check_mark:                                               | N/A                                                              |
 | `fifoQueue`                                                      | *boolean*                                                        | :heavy_minus_sign:                                               | N/A                                                              |
 | `fifoThroughputLimit`                                            | *string*                                                         | :heavy_minus_sign:                                               | N/A                                                              |
 | `kmsDataKeyReusePeriodSeconds`                                   | *number*                                                         | :heavy_minus_sign:                                               | N/A                                                              |

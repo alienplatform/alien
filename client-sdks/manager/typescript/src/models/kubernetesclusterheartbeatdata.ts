@@ -4,15 +4,15 @@
 
 import * as z from "zod/v4";
 import {
-  HeartbeatEvent,
-  HeartbeatEvent$Outbound,
-  HeartbeatEvent$outboundSchema,
-} from "./heartbeatevent.js";
-import {
   KubernetesClusterNodeStatus,
   KubernetesClusterNodeStatus$Outbound,
   KubernetesClusterNodeStatus$outboundSchema,
 } from "./kubernetesclusternodestatus.js";
+import {
+  KubernetesEventSnapshot,
+  KubernetesEventSnapshot$Outbound,
+  KubernetesEventSnapshot$outboundSchema,
+} from "./kuberneteseventsnapshot.js";
 import {
   MetricSample,
   MetricSample$Outbound,
@@ -31,7 +31,7 @@ import {
 
 export type KubernetesClusterHeartbeatData = {
   cpu?: MetricSample | null | undefined;
-  events: Array<HeartbeatEvent>;
+  events: Array<KubernetesEventSnapshot>;
   memory?: MetricSample | null | undefined;
   name: string;
   namespace?: string | null | undefined;
@@ -46,7 +46,7 @@ export type KubernetesClusterHeartbeatData = {
 /** @internal */
 export type KubernetesClusterHeartbeatData$Outbound = {
   cpu?: MetricSample$Outbound | null | undefined;
-  events: Array<HeartbeatEvent$Outbound>;
+  events: Array<KubernetesEventSnapshot$Outbound>;
   memory?: MetricSample$Outbound | null | undefined;
   name: string;
   namespace?: string | null | undefined;
@@ -64,7 +64,7 @@ export const KubernetesClusterHeartbeatData$outboundSchema: z.ZodType<
   KubernetesClusterHeartbeatData
 > = z.object({
   cpu: z.nullable(MetricSample$outboundSchema).optional(),
-  events: z.array(HeartbeatEvent$outboundSchema),
+  events: z.array(KubernetesEventSnapshot$outboundSchema),
   memory: z.nullable(MetricSample$outboundSchema).optional(),
   name: z.string(),
   namespace: z.nullable(z.string()).optional(),

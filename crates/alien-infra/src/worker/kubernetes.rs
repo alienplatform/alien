@@ -247,6 +247,10 @@ impl KubernetesWorkerController {
                 namespace,
                 labels,
                 &config.ingress,
+                config
+                    .readiness_probe
+                    .as_ref()
+                    .map(|probe| probe.path.as_str()),
             ),
             &mut self.public_endpoint,
         )
@@ -331,6 +335,10 @@ impl KubernetesWorkerController {
                     namespace,
                     labels,
                     &config.ingress,
+                    config
+                        .readiness_probe
+                        .as_ref()
+                        .map(|probe| probe.path.as_str()),
                 ),
                 &mut self.public_endpoint,
             )
@@ -540,6 +548,10 @@ impl KubernetesWorkerController {
                 namespace,
                 labels,
                 &config.ingress,
+                config
+                    .readiness_probe
+                    .as_ref()
+                    .map(|probe| probe.path.as_str()),
             ),
             &mut self.public_endpoint,
         )

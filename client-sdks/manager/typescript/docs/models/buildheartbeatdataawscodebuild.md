@@ -8,22 +8,21 @@ import { BuildHeartbeatDataAwsCodeBuild } from "@alienplatform/manager-api/model
 let value: BuildHeartbeatDataAwsCodeBuild = {
   encryptionKeyPresent: false,
   environmentVariableCount: 168577,
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-02-23T02:52:34.144Z"),
-      severity: "info",
-    },
-  ],
   projectName: "<value>",
-  serviceRolePresent: true,
+  serviceRolePresent: false,
   status: {
-    collectionIssues: [],
-    health: "unknown",
-    lifecycle: "stopped",
-    partial: true,
-    stale: false,
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "forbidden",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
+    health: "healthy",
+    lifecycle: "creating",
+    partial: false,
+    stale: true,
   },
   backend: "awsCodeBuild",
 };
@@ -43,7 +42,6 @@ let value: BuildHeartbeatDataAwsCodeBuild = {
 | `environmentImage`                                               | *string*                                                         | :heavy_minus_sign:                                               | N/A                                                              |
 | `environmentType`                                                | *string*                                                         | :heavy_minus_sign:                                               | N/A                                                              |
 | `environmentVariableCount`                                       | *number*                                                         | :heavy_check_mark:                                               | N/A                                                              |
-| `events`                                                         | [models.HeartbeatEvent](../models/heartbeatevent.md)[]           | :heavy_check_mark:                                               | N/A                                                              |
 | `imagePullCredentialsType`                                       | *string*                                                         | :heavy_minus_sign:                                               | N/A                                                              |
 | `lastModified`                                                   | *number*                                                         | :heavy_minus_sign:                                               | N/A                                                              |
 | `privilegedMode`                                                 | *boolean*                                                        | :heavy_minus_sign:                                               | N/A                                                              |

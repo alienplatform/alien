@@ -4,11 +4,6 @@
 
 import * as z from "zod/v4";
 import {
-  HeartbeatEvent,
-  HeartbeatEvent$Outbound,
-  HeartbeatEvent$outboundSchema,
-} from "./heartbeatevent.js";
-import {
   QueueHeartbeatStatus,
   QueueHeartbeatStatus$Outbound,
   QueueHeartbeatStatus$outboundSchema,
@@ -17,7 +12,6 @@ import {
 export type AzureServiceBusNamespaceHeartbeatData = {
   createdAt?: string | null | undefined;
   disableLocalAuth?: boolean | null | undefined;
-  events: Array<HeartbeatEvent>;
   location?: string | null | undefined;
   metricId?: string | null | undefined;
   minimumTlsVersion?: string | null | undefined;
@@ -42,7 +36,6 @@ export type AzureServiceBusNamespaceHeartbeatData = {
 export type AzureServiceBusNamespaceHeartbeatData$Outbound = {
   createdAt?: string | null | undefined;
   disableLocalAuth?: boolean | null | undefined;
-  events: Array<HeartbeatEvent$Outbound>;
   location?: string | null | undefined;
   metricId?: string | null | undefined;
   minimumTlsVersion?: string | null | undefined;
@@ -70,7 +63,6 @@ export const AzureServiceBusNamespaceHeartbeatData$outboundSchema: z.ZodType<
 > = z.object({
   createdAt: z.nullable(z.string()).optional(),
   disableLocalAuth: z.nullable(z.boolean()).optional(),
-  events: z.array(HeartbeatEvent$outboundSchema),
   location: z.nullable(z.string()).optional(),
   metricId: z.nullable(z.string()).optional(),
   minimumTlsVersion: z.nullable(z.string()).optional(),

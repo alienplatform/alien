@@ -7,7 +7,6 @@
 
 ```typescript
 const value: models.KvHeartbeatDataAwsDynamoDb = {
-  events: [],
   keySchema: [],
   name: "<value>",
   status: {
@@ -19,8 +18,8 @@ const value: models.KvHeartbeatDataAwsDynamoDb = {
         source: "<value>",
       },
     ],
-    health: "unknown",
-    lifecycle: "stopped",
+    health: "degraded",
+    lifecycle: "creating",
     partial: false,
     stale: false,
   },
@@ -34,14 +33,6 @@ const value: models.KvHeartbeatDataAwsDynamoDb = {
 const value: models.KvHeartbeatDataGcpFirestore = {
   cmekEnabled: true,
   databaseName: "<value>",
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-02-23T02:52:34.144Z"),
-      severity: "info",
-    },
-  ],
   sourceInfoPresent: false,
   status: {
     collectionIssues: [
@@ -52,8 +43,8 @@ const value: models.KvHeartbeatDataGcpFirestore = {
         source: "<value>",
       },
     ],
-    health: "unknown",
-    lifecycle: "stopped",
+    health: "degraded",
+    lifecycle: "creating",
     partial: false,
     stale: false,
   },
@@ -65,7 +56,6 @@ const value: models.KvHeartbeatDataGcpFirestore = {
 
 ```typescript
 const value: models.KvHeartbeatDataAzureTable = {
-  events: [],
   status: {
     collectionIssues: [
       {
@@ -75,13 +65,13 @@ const value: models.KvHeartbeatDataAzureTable = {
         source: "<value>",
       },
     ],
-    health: "unknown",
-    lifecycle: "stopped",
+    health: "degraded",
+    lifecycle: "creating",
     partial: false,
     stale: false,
   },
   storageAccountName: "<value>",
-  tableExists: false,
+  tableExists: true,
   tableName: "<value>",
   backend: "azureTable",
 };
@@ -92,10 +82,9 @@ const value: models.KvHeartbeatDataAzureTable = {
 ```typescript
 const value: models.KvHeartbeatDataLocal = {
   cloudMetadataSupported: true,
-  events: [],
   name: "<value>",
-  path: "/var/tmp",
-  pathExists: true,
+  path: "/etc",
+  pathExists: false,
   status: {
     collectionIssues: [
       {
@@ -105,8 +94,8 @@ const value: models.KvHeartbeatDataLocal = {
         source: "<value>",
       },
     ],
-    health: "unknown",
-    lifecycle: "stopped",
+    health: "degraded",
+    lifecycle: "creating",
     partial: false,
     stale: false,
   },

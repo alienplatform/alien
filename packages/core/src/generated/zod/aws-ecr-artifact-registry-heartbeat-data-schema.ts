@@ -6,13 +6,9 @@
 import * as z from "zod";
 import { ArtifactRegistryHeartbeatStatusSchema } from "./artifact-registry-heartbeat-status-schema.js";
 import { AwsEcrRepositoryHeartbeatDataSchema } from "./aws-ecr-repository-heartbeat-data-schema.js";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 
 export const AwsEcrArtifactRegistryHeartbeatDataSchema = z.object({
-    get "events"(){
-                return z.array(HeartbeatEventSchema)
-              },
-"pullRoleArn": z.string().nullish(),
+    "pullRoleArn": z.string().nullish(),
 "pushRoleArn": z.string().nullish(),
 "region": z.string(),
 "registryId": z.string(),

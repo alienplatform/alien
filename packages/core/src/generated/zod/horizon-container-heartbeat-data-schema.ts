@@ -4,8 +4,9 @@
 */
 
 import * as z from "zod";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 import { HorizonWorkloadSchedulingModeSchema } from "./horizon-workload-scheduling-mode-schema.js";
+import { ManagedRuntimeEventSnapshotSchema } from "./managed-runtime-event-snapshot-schema.js";
+import { ManagedRuntimeUnitStatusSchema } from "./managed-runtime-unit-status-schema.js";
 import { MetricSampleSchema } from "./metric-sample-schema.js";
 import { WorkloadHeartbeatStatusSchema } from "./workload-heartbeat-status-schema.js";
 import { WorkloadReplicaStatusSchema } from "./workload-replica-status-schema.js";
@@ -17,11 +18,14 @@ get "cpu"(){
                 return z.union([MetricSampleSchema, z.null()]).optional()
               },
 get "events"(){
-                return z.array(HeartbeatEventSchema)
+                return z.array(ManagedRuntimeEventSnapshotSchema)
               },
 "image": z.string().nullish(),
 get "memory"(){
                 return z.union([MetricSampleSchema, z.null()]).optional()
+              },
+get "replicaUnits"(){
+                return z.array(ManagedRuntimeUnitStatusSchema)
               },
 get "replicas"(){
                 return WorkloadReplicaStatusSchema

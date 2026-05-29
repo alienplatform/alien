@@ -12,30 +12,31 @@ let value: DataAzureManagedIdentity1 = {
     "<value 2>",
     "<value 3>",
   ],
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2026-07-02T14:37:18.556Z"),
-      severity: "error",
-    },
-  ],
   location: "<value>",
-  managedTagCount: 626517,
+  managedTagCount: 765674,
   name: "<value>",
   resourceGroup: "<value>",
   resourceId: "<id>",
-  roleAssignmentCount: 780094,
+  roleAssignmentCount: 833585,
   roleAssignmentIds: [
     "<value 1>",
+    "<value 2>",
+    "<value 3>",
   ],
   stackPermissionsApplied: false,
   status: {
-    collectionIssues: [],
-    health: "unhealthy",
-    lifecycle: "running",
-    partial: false,
-    stale: true,
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "not-installed",
+        severity: "warning",
+        source: "<value>",
+      },
+    ],
+    health: "healthy",
+    lifecycle: "stopped",
+    partial: true,
+    stale: false,
   },
   backend: "azureManagedIdentity",
 };
@@ -43,23 +44,22 @@ let value: DataAzureManagedIdentity1 = {
 
 ## Fields
 
-| Field                                                                            | Type                                                                             | Required                                                                         | Description                                                                      |
-| -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `clientId`                                                                       | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `customRoleDefinitionCount`                                                      | *number*                                                                         | :heavy_check_mark:                                                               | N/A                                                                              |
-| `customRoleDefinitionIds`                                                        | *string*[]                                                                       | :heavy_check_mark:                                                               | N/A                                                                              |
-| `events`                                                                         | [models.SyncReconcileRequestEvent38](../models/syncreconcilerequestevent38.md)[] | :heavy_check_mark:                                                               | N/A                                                                              |
-| `isolationScope`                                                                 | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `location`                                                                       | *string*                                                                         | :heavy_check_mark:                                                               | N/A                                                                              |
-| `managedTagCount`                                                                | *number*                                                                         | :heavy_check_mark:                                                               | N/A                                                                              |
-| `name`                                                                           | *string*                                                                         | :heavy_check_mark:                                                               | N/A                                                                              |
-| `principalId`                                                                    | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `resourceGroup`                                                                  | *string*                                                                         | :heavy_check_mark:                                                               | N/A                                                                              |
-| `resourceId`                                                                     | *string*                                                                         | :heavy_check_mark:                                                               | N/A                                                                              |
-| `roleAssignmentCount`                                                            | *number*                                                                         | :heavy_check_mark:                                                               | N/A                                                                              |
-| `roleAssignmentIds`                                                              | *string*[]                                                                       | :heavy_check_mark:                                                               | N/A                                                                              |
-| `stackPermissionsApplied`                                                        | *boolean*                                                                        | :heavy_check_mark:                                                               | N/A                                                                              |
-| `status`                                                                         | [models.HeartbeatStatus38](../models/heartbeatstatus38.md)                       | :heavy_check_mark:                                                               | N/A                                                                              |
-| `tenantId`                                                                       | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `type`                                                                           | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `backend`                                                                        | *"azureManagedIdentity"*                                                         | :heavy_check_mark:                                                               | N/A                                                                              |
+| Field                                                      | Type                                                       | Required                                                   | Description                                                |
+| ---------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- |
+| `clientId`                                                 | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
+| `customRoleDefinitionCount`                                | *number*                                                   | :heavy_check_mark:                                         | N/A                                                        |
+| `customRoleDefinitionIds`                                  | *string*[]                                                 | :heavy_check_mark:                                         | N/A                                                        |
+| `isolationScope`                                           | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
+| `location`                                                 | *string*                                                   | :heavy_check_mark:                                         | N/A                                                        |
+| `managedTagCount`                                          | *number*                                                   | :heavy_check_mark:                                         | N/A                                                        |
+| `name`                                                     | *string*                                                   | :heavy_check_mark:                                         | N/A                                                        |
+| `principalId`                                              | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
+| `resourceGroup`                                            | *string*                                                   | :heavy_check_mark:                                         | N/A                                                        |
+| `resourceId`                                               | *string*                                                   | :heavy_check_mark:                                         | N/A                                                        |
+| `roleAssignmentCount`                                      | *number*                                                   | :heavy_check_mark:                                         | N/A                                                        |
+| `roleAssignmentIds`                                        | *string*[]                                                 | :heavy_check_mark:                                         | N/A                                                        |
+| `stackPermissionsApplied`                                  | *boolean*                                                  | :heavy_check_mark:                                         | N/A                                                        |
+| `status`                                                   | [models.HeartbeatStatus38](../models/heartbeatstatus38.md) | :heavy_check_mark:                                         | N/A                                                        |
+| `tenantId`                                                 | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
+| `type`                                                     | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
+| `backend`                                                  | *"azureManagedIdentity"*                                   | :heavy_check_mark:                                         | N/A                                                        |

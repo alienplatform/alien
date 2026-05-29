@@ -6,7 +6,6 @@
 import { KvHeartbeatDataAwsDynamoDb } from "@alienplatform/manager-api/models";
 
 let value: KvHeartbeatDataAwsDynamoDb = {
-  events: [],
   keySchema: [],
   name: "<value>",
   status: {
@@ -18,8 +17,8 @@ let value: KvHeartbeatDataAwsDynamoDb = {
         source: "<value>",
       },
     ],
-    health: "unknown",
-    lifecycle: "stopped",
+    health: "degraded",
+    lifecycle: "creating",
     partial: false,
     stale: false,
   },
@@ -33,7 +32,6 @@ let value: KvHeartbeatDataAwsDynamoDb = {
 | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
 | `billingMode`                                                                    | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
 | `deletionProtectionEnabled`                                                      | *boolean*                                                                        | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `events`                                                                         | [models.HeartbeatEvent](../models/heartbeatevent.md)[]                           | :heavy_check_mark:                                                               | N/A                                                                              |
 | `globalSecondaryIndexCount`                                                      | *number*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
 | `itemCount`                                                                      | *number*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
 | `keySchema`                                                                      | [models.AwsDynamoDbKeySchemaElement](../models/awsdynamodbkeyschemaelement.md)[] | :heavy_check_mark:                                                               | N/A                                                                              |

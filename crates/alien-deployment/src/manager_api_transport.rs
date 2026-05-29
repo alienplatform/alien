@@ -274,7 +274,7 @@ mod tests {
                     cpu: None,
                     memory: None,
                     workload: None,
-                    instances: vec![],
+                    pods: vec![],
                     events: vec![],
                 },
             )),

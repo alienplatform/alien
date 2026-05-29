@@ -6,21 +6,13 @@
 import { RemoteStackManagementHeartbeatDataAwsIamRole } from "@alienplatform/manager-api/models";
 
 let value: RemoteStackManagementHeartbeatDataAwsIamRole = {
-  events: [],
   managementPermissionsApplied: true,
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "forbidden",
-        severity: "info",
-        source: "<value>",
-      },
-    ],
-    health: "healthy",
-    lifecycle: "creating",
+    collectionIssues: [],
+    health: "unhealthy",
+    lifecycle: "running",
     partial: true,
-    stale: false,
+    stale: true,
   },
   backend: "awsIamRole",
 };
@@ -30,7 +22,6 @@ let value: RemoteStackManagementHeartbeatDataAwsIamRole = {
 
 | Field                                                                                            | Type                                                                                             | Required                                                                                         | Description                                                                                      |
 | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ |
-| `events`                                                                                         | [models.HeartbeatEvent](../models/heartbeatevent.md)[]                                           | :heavy_check_mark:                                                                               | N/A                                                                                              |
 | `managementPermissionsApplied`                                                                   | *boolean*                                                                                        | :heavy_check_mark:                                                                               | N/A                                                                                              |
 | `roleArn`                                                                                        | *string*                                                                                         | :heavy_minus_sign:                                                                               | N/A                                                                                              |
 | `roleName`                                                                                       | *string*                                                                                         | :heavy_minus_sign:                                                                               | N/A                                                                                              |

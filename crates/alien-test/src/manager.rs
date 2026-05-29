@@ -603,12 +603,8 @@ impl TestManager {
                 std::env::set_var("AWS_ACCESS_KEY_ID", &mgmt.access_key_id);
                 std::env::set_var("AWS_SECRET_ACCESS_KEY", &mgmt.secret_access_key);
                 std::env::set_var("AWS_REGION", &mgmt.region);
-                if let Some(ref token) = mgmt.session_token {
-                    std::env::set_var("AWS_SESSION_TOKEN", token);
-                }
-                if let Some(ref account_id) = mgmt.account_id {
-                    std::env::set_var("AWS_ACCOUNT_ID", account_id);
-                }
+                Self::set_optional_env("AWS_SESSION_TOKEN", mgmt.session_token.as_deref());
+                Self::set_optional_env("AWS_ACCOUNT_ID", mgmt.account_id.as_deref());
             }
         }
 
@@ -619,12 +615,8 @@ impl TestManager {
                         std::env::set_var("AWS_ACCESS_KEY_ID", &mgmt.access_key_id);
                         std::env::set_var("AWS_SECRET_ACCESS_KEY", &mgmt.secret_access_key);
                         std::env::set_var("AWS_REGION", &mgmt.region);
-                        if let Some(ref token) = mgmt.session_token {
-                            std::env::set_var("AWS_SESSION_TOKEN", token);
-                        }
-                        if let Some(ref account_id) = mgmt.account_id {
-                            std::env::set_var("AWS_ACCOUNT_ID", account_id);
-                        }
+                        Self::set_optional_env("AWS_SESSION_TOKEN", mgmt.session_token.as_deref());
+                        Self::set_optional_env("AWS_ACCOUNT_ID", mgmt.account_id.as_deref());
                     }
                 }
                 Platform::Gcp => {
@@ -656,6 +648,13 @@ impl TestManager {
                 }
                 _ => {}
             }
+        }
+    }
+
+    fn set_optional_env(name: &str, value: Option<&str>) {
+        match value.filter(|v| !v.trim().is_empty()) {
+            Some(value) => std::env::set_var(name, value),
+            None => std::env::remove_var(name),
         }
     }
 }

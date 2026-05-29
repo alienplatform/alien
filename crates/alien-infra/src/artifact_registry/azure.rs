@@ -715,7 +715,6 @@ fn emit_azure_artifact_registry_heartbeat(
                     creation_date: properties
                         .and_then(|properties| properties.creation_date.clone()),
                     managed_tag_count,
-                    events: vec![],
                 },
             ),
         ),

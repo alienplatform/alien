@@ -561,7 +561,6 @@ fn emit_azure_storage_heartbeat(
                     .and_then(|feed| feed.retention_in_days)
                     .map(|days| u64::from(days.get())),
                 container_public_access,
-                events: vec![],
             },
         )),
         raw: vec![],

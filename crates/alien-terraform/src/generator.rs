@@ -241,6 +241,7 @@ pub fn generate_terraform_module(
             .is_some()
     });
     let include_kubernetes_provider = target.is_kubernetes() && has_kubernetes_cluster;
+    let include_azapi_provider = has_resource_type(&per_resource, "azapi_update_resource");
     let deployment_name_default = options
         .display_name
         .as_deref()
@@ -256,6 +257,7 @@ pub fn generate_terraform_module(
             options.registration.as_ref(),
             gcp_iam_propagation_barrier.is_some(),
             include_kubernetes_provider,
+            include_azapi_provider,
         ))?,
     );
     files.insert(
@@ -270,7 +272,11 @@ pub fn generate_terraform_module(
     );
     files.insert(
         "providers.tf".to_string(),
-        render_body(providers_body(target, include_kubernetes_provider))?,
+        render_body(providers_body(
+            target,
+            include_kubernetes_provider,
+            include_azapi_provider,
+        ))?,
     );
     files.insert(
         "resource_prefix.tf".to_string(),
@@ -507,6 +513,20 @@ fn resource_address(resource: &Block) -> Option<Expression> {
     Some(expr::traversal([provider_type, label]))
 }
 
+fn has_resource_type(per_resource: &IndexMap<String, TfFragment>, resource_type: &str) -> bool {
+    per_resource
+        .values()
+        .flat_map(|fragment| fragment.resource_blocks.iter())
+        .any(|resource| {
+            resource.identifier.as_str() == "resource"
+                && resource
+                    .labels
+                    .first()
+                    .map(|label| label.as_str() == resource_type)
+                    .unwrap_or(false)
+        })
+}
+
 fn resource_inherits_stack_resource_dependencies(resource: &Block) -> bool {
     !is_gcp_iam_support_resource(resource)
 }
@@ -642,6 +662,7 @@ fn versions_body(
     registration: Option<&TerraformRegistration>,
     include_time_provider: bool,
     include_kubernetes_provider: bool,
+    include_azapi_provider: bool,
 ) -> Body {
     let mut required: Vec<Structure> = vec![attr(
         "required_version",
@@ -666,6 +687,9 @@ fn versions_body(
             "azurerm",
             provider_decl_attr("hashicorp/azurerm", ">= 3.100"),
         ));
+        if include_azapi_provider {
+            provider_attrs.push(attr("azapi", provider_decl_attr("Azure/azapi", ">= 2.6")));
+        }
     }
     if include_time_provider {
         provider_attrs.push(attr("time", provider_decl_attr("hashicorp/time", ">= 0.9")));
@@ -1123,7 +1147,11 @@ fn variable_block(
     }
 }
 
-fn providers_body(target: TerraformTarget, include_kubernetes_provider: bool) -> Body {
+fn providers_body(
+    target: TerraformTarget,
+    include_kubernetes_provider: bool,
+    include_azapi_provider: bool,
+) -> Body {
     let mut structures: Vec<Structure> = Vec::new();
     match target.platform() {
         alien_core::Platform::Aws => {
@@ -1171,6 +1199,13 @@ fn providers_body(target: TerraformTarget, include_kubernetes_provider: bool) ->
                     Structure::Block(block("features", [])),
                 ]),
             }));
+            if include_azapi_provider {
+                structures.push(Structure::Block(Block {
+                    identifier: Identifier::sanitized("provider"),
+                    labels: vec![BlockLabel::String("azapi".to_string())],
+                    body: Body::default(),
+                }));
+            }
         }
         _ => {}
     }
@@ -1322,7 +1357,7 @@ fn locals_body(
             "deployment_kubernetes_settings",
             expr::raw(
                 r#"merge(try(jsondecode(var.stack_settings_json).kubernetes, {}), {
-  exposure = coalesce(try(jsondecode(var.stack_settings_json).kubernetes.exposure, null), local.kubernetes_exposure)
+  exposure = jsondecode(try(jsondecode(var.stack_settings_json).kubernetes.exposure, null) == null ? jsonencode(local.kubernetes_exposure) : jsonencode(jsondecode(var.stack_settings_json).kubernetes.exposure))
 })"#,
             ),
         ));
@@ -1835,6 +1870,7 @@ mod tests {
         let versions = render_body(versions_body(
             TerraformTarget::Aws,
             Some(&registration),
+            false,
             false,
             false,
         ))

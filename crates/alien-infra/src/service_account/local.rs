@@ -185,7 +185,6 @@ fn emit_local_service_account_heartbeat(
                 },
                 identity: identity.to_string(),
                 configured: true,
-                events: vec![],
             },
         )),
         raw: vec![],

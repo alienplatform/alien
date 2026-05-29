@@ -7,22 +7,21 @@ import { DataStorage } from "@alienplatform/platform-api/models/operations";
 
 let value: DataStorage = {
   data: {
-    events: [],
-    path: "/var/mail",
+    path: "/home",
     pathExists: false,
     status: {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "api-unavailable",
+          reason: "timed-out",
           severity: "warning",
           source: "<value>",
         },
       ],
-      health: "degraded",
-      lifecycle: "deleting",
-      partial: true,
-      stale: true,
+      health: "unhealthy",
+      lifecycle: "scaling",
+      partial: false,
+      stale: false,
     },
     backend: "local",
   },

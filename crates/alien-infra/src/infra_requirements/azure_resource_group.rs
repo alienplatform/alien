@@ -408,7 +408,6 @@ fn emit_azure_resource_group_heartbeat(
             location: Some(rg.location.clone()),
             provisioning_state,
             managed_tags: managed_tags(&rg.tags),
-            events: vec![],
         }),
         raw: vec![],
     });

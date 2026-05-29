@@ -471,7 +471,6 @@ fn emit_aws_sqs_queue_heartbeat(
             approximate_in_flight_messages,
             approximate_delayed_messages,
             approximate_counts,
-            events: vec![],
         })),
         raw: vec![],
     });

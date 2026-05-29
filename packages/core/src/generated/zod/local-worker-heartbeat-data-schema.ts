@@ -4,7 +4,8 @@
 */
 
 import * as z from "zod";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
+import { LocalRuntimeEventSnapshotSchema } from "./local-runtime-event-snapshot-schema.js";
+import { LocalRuntimeUnitStatusSchema } from "./local-runtime-unit-status-schema.js";
 import { MetricSampleSchema } from "./metric-sample-schema.js";
 import { WorkloadHeartbeatStatusSchema } from "./workload-heartbeat-status-schema.js";
 
@@ -14,13 +15,16 @@ get "cpu"(){
                 return z.union([MetricSampleSchema, z.null()]).optional()
               },
 get "events"(){
-                return z.array(HeartbeatEventSchema)
+                return z.array(LocalRuntimeEventSnapshotSchema)
               },
 "imagePathPresent": z.boolean(),
 get "memory"(){
                 return z.union([MetricSampleSchema, z.null()]).optional()
               },
 "pid": z.int().min(0).nullish(),
+get "process"(){
+                return z.union([LocalRuntimeUnitStatusSchema, z.null()]).optional()
+              },
 "readinessProbeOk": z.boolean().nullish(),
 get "status"(){
                 return WorkloadHeartbeatStatusSchema

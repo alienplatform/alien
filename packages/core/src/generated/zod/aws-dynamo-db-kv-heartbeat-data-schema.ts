@@ -5,15 +5,11 @@
 
 import * as z from "zod";
 import { AwsDynamoDbKeySchemaElementSchema } from "./aws-dynamo-db-key-schema-element-schema.js";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 import { KvHeartbeatStatusSchema } from "./kv-heartbeat-status-schema.js";
 
 export const AwsDynamoDbKvHeartbeatDataSchema = z.object({
     "billingMode": z.string().nullish(),
 "deletionProtectionEnabled": z.boolean().nullish(),
-get "events"(){
-                return z.array(HeartbeatEventSchema)
-              },
 "globalSecondaryIndexCount": z.int().min(0).nullish(),
 "itemCount": z.int().min(0).nullish(),
 get "keySchema"(){

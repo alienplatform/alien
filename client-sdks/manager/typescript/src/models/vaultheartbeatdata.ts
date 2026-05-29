@@ -4,18 +4,12 @@
 
 import * as z from "zod/v4";
 import {
-  HeartbeatEvent,
-  HeartbeatEvent$Outbound,
-  HeartbeatEvent$outboundSchema,
-} from "./heartbeatevent.js";
-import {
   VaultHeartbeatStatus,
   VaultHeartbeatStatus$Outbound,
   VaultHeartbeatStatus$outboundSchema,
 } from "./vaultheartbeatstatus.js";
 
 export type VaultHeartbeatDataLocal = {
-  events: Array<HeartbeatEvent>;
   isDirectory?: boolean | null | undefined;
   modifiedAt?: Date | null | undefined;
   path: string;
@@ -27,7 +21,6 @@ export type VaultHeartbeatDataLocal = {
 };
 
 export type VaultHeartbeatDataKubernetesSecret = {
-  events: Array<HeartbeatEvent>;
   namespace: string;
   prefix: string;
   secretMetadataListed: boolean;
@@ -37,7 +30,6 @@ export type VaultHeartbeatDataKubernetesSecret = {
 
 export type VaultHeartbeatDataAzureKeyVault = {
   accessPolicyCount: number;
-  events: Array<HeartbeatEvent>;
   location?: string | null | undefined;
   name: string;
   privateEndpointConnectionCount: number;
@@ -58,7 +50,6 @@ export type VaultHeartbeatDataAzureKeyVault = {
 };
 
 export type VaultHeartbeatDataGcpSecretManager = {
-  events: Array<HeartbeatEvent>;
   location: string;
   prefix: string;
   projectId: string;
@@ -69,7 +60,6 @@ export type VaultHeartbeatDataGcpSecretManager = {
 
 export type VaultHeartbeatDataAwsParameterStore = {
   accountId: string;
-  events: Array<HeartbeatEvent>;
   hasMoreParameters?: boolean | null | undefined;
   latestModifiedAt?: Date | null | undefined;
   parameterMetadataSampled: boolean;
@@ -94,7 +84,6 @@ export type VaultHeartbeatData =
 
 /** @internal */
 export type VaultHeartbeatDataLocal$Outbound = {
-  events: Array<HeartbeatEvent$Outbound>;
   isDirectory?: boolean | null | undefined;
   modifiedAt?: string | null | undefined;
   path: string;
@@ -110,7 +99,6 @@ export const VaultHeartbeatDataLocal$outboundSchema: z.ZodType<
   VaultHeartbeatDataLocal$Outbound,
   VaultHeartbeatDataLocal
 > = z.object({
-  events: z.array(HeartbeatEvent$outboundSchema),
   isDirectory: z.nullable(z.boolean()).optional(),
   modifiedAt: z.nullable(z.date().transform(v => v.toISOString())).optional(),
   path: z.string(),
@@ -131,7 +119,6 @@ export function vaultHeartbeatDataLocalToJSON(
 
 /** @internal */
 export type VaultHeartbeatDataKubernetesSecret$Outbound = {
-  events: Array<HeartbeatEvent$Outbound>;
   namespace: string;
   prefix: string;
   secretMetadataListed: boolean;
@@ -144,7 +131,6 @@ export const VaultHeartbeatDataKubernetesSecret$outboundSchema: z.ZodType<
   VaultHeartbeatDataKubernetesSecret$Outbound,
   VaultHeartbeatDataKubernetesSecret
 > = z.object({
-  events: z.array(HeartbeatEvent$outboundSchema),
   namespace: z.string(),
   prefix: z.string(),
   secretMetadataListed: z.boolean(),
@@ -165,7 +151,6 @@ export function vaultHeartbeatDataKubernetesSecretToJSON(
 /** @internal */
 export type VaultHeartbeatDataAzureKeyVault$Outbound = {
   accessPolicyCount: number;
-  events: Array<HeartbeatEvent$Outbound>;
   location?: string | null | undefined;
   name: string;
   privateEndpointConnectionCount: number;
@@ -191,7 +176,6 @@ export const VaultHeartbeatDataAzureKeyVault$outboundSchema: z.ZodType<
   VaultHeartbeatDataAzureKeyVault
 > = z.object({
   accessPolicyCount: z.int(),
-  events: z.array(HeartbeatEvent$outboundSchema),
   location: z.nullable(z.string()).optional(),
   name: z.string(),
   privateEndpointConnectionCount: z.int(),
@@ -223,7 +207,6 @@ export function vaultHeartbeatDataAzureKeyVaultToJSON(
 
 /** @internal */
 export type VaultHeartbeatDataGcpSecretManager$Outbound = {
-  events: Array<HeartbeatEvent$Outbound>;
   location: string;
   prefix: string;
   projectId: string;
@@ -237,7 +220,6 @@ export const VaultHeartbeatDataGcpSecretManager$outboundSchema: z.ZodType<
   VaultHeartbeatDataGcpSecretManager$Outbound,
   VaultHeartbeatDataGcpSecretManager
 > = z.object({
-  events: z.array(HeartbeatEvent$outboundSchema),
   location: z.string(),
   prefix: z.string(),
   projectId: z.string(),
@@ -259,7 +241,6 @@ export function vaultHeartbeatDataGcpSecretManagerToJSON(
 /** @internal */
 export type VaultHeartbeatDataAwsParameterStore$Outbound = {
   accountId: string;
-  events: Array<HeartbeatEvent$Outbound>;
   hasMoreParameters?: boolean | null | undefined;
   latestModifiedAt?: string | null | undefined;
   parameterMetadataSampled: boolean;
@@ -281,7 +262,6 @@ export const VaultHeartbeatDataAwsParameterStore$outboundSchema: z.ZodType<
   VaultHeartbeatDataAwsParameterStore
 > = z.object({
   accountId: z.string(),
-  events: z.array(HeartbeatEvent$outboundSchema),
   hasMoreParameters: z.nullable(z.boolean()).optional(),
   latestModifiedAt: z.nullable(z.date().transform(v => v.toISOString()))
     .optional(),

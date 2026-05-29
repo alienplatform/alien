@@ -7,23 +7,15 @@ import { ServiceAccountHeartbeatDataGcpServiceAccount } from "@alienplatform/man
 
 let value: ServiceAccountHeartbeatDataGcpServiceAccount = {
   email: "Kraig_Jast-Koss80@yahoo.com",
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-02-23T02:52:34.144Z"),
-      severity: "info",
-    },
-  ],
-  projectBindingCount: 541422,
+  projectBindingCount: 864516,
   projectRoles: [
     "<value 1>",
+    "<value 2>",
   ],
-  serviceAccountBindingCount: 635399,
+  serviceAccountBindingCount: 255611,
   serviceAccountRoles: [
     "<value 1>",
     "<value 2>",
-    "<value 3>",
   ],
   status: {
     collectionIssues: [
@@ -34,10 +26,10 @@ let value: ServiceAccountHeartbeatDataGcpServiceAccount = {
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "deleting",
-    partial: true,
-    stale: false,
+    health: "unhealthy",
+    lifecycle: "stopped",
+    partial: false,
+    stale: true,
   },
   backend: "gcpServiceAccount",
 };
@@ -52,7 +44,6 @@ let value: ServiceAccountHeartbeatDataGcpServiceAccount = {
 | `displayName`                                                                      | *string*                                                                           | :heavy_minus_sign:                                                                 | N/A                                                                                |
 | `email`                                                                            | *string*                                                                           | :heavy_check_mark:                                                                 | N/A                                                                                |
 | `etag`                                                                             | *string*                                                                           | :heavy_minus_sign:                                                                 | N/A                                                                                |
-| `events`                                                                           | [models.HeartbeatEvent](../models/heartbeatevent.md)[]                             | :heavy_check_mark:                                                                 | N/A                                                                                |
 | `name`                                                                             | *string*                                                                           | :heavy_minus_sign:                                                                 | N/A                                                                                |
 | `oauth2ClientId`                                                                   | *string*                                                                           | :heavy_minus_sign:                                                                 | N/A                                                                                |
 | `projectBindingCount`                                                              | *number*                                                                           | :heavy_check_mark:                                                                 | N/A                                                                                |

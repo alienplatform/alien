@@ -7,35 +7,18 @@ import { ResourceHeartbeatDataArtifactRegistry } from "@alienplatform/manager-ap
 
 let value: ResourceHeartbeatDataArtifactRegistry = {
   data: {
-    events: [],
     region: "<value>",
     registryId: "<id>",
-    registryUri: "https://orange-halt.biz/",
-    repositories: [
-      {
-        createdAt: 2948.54,
-        kmsKeyPresent: true,
-        registryId: "<id>",
-        repositoryArn: "<value>",
-        repositoryName: "<value>",
-        repositoryUri: "https://impolite-bran.name/",
-      },
-    ],
+    registryUri: "https://dead-minor.info/",
+    repositories: [],
     repositoriesTruncated: false,
-    repositoryCount: 16580,
+    repositoryCount: 294854,
     repositoryPrefix: "<value>",
     status: {
-      collectionIssues: [
-        {
-          message: "<value>",
-          reason: "forbidden",
-          severity: "info",
-          source: "<value>",
-        },
-      ],
-      health: "healthy",
-      lifecycle: "stopped",
-      partial: false,
+      collectionIssues: [],
+      health: "unknown",
+      lifecycle: "scaling",
+      partial: true,
       stale: false,
     },
     backend: "awsEcr",

@@ -119,37 +119,17 @@ impl TestDeployment {
                     {
                         for (resource_id, resource_state) in &stack_state.resources {
                             if let Some(ref outputs) = resource_state.outputs {
-                                let url = if let Some(f) =
-                                    outputs.downcast_ref::<alien_core::WorkerOutputs>()
-                                {
-                                    f.url.as_deref()
-                                } else if let Some(c) =
-                                    outputs.downcast_ref::<alien_core::ContainerOutputs>()
-                                {
-                                    c.url.as_deref()
-                                } else {
-                                    None
-                                };
-                                if let Some(url) = url {
-                                    self.url = Some(url.to_string());
+                                if let Some(url) = public_url_from_resource_outputs(outputs) {
                                     debug!(
                                         deployment = %self.id,
                                         resource = %resource_id,
                                         %url,
                                         "deployment URL discovered from resource outputs"
                                     );
+                                    self.url = Some(url);
                                     break;
                                 }
                             }
-                        }
-                    }
-                }
-                // Fallback: also try environment_info
-                if self.url.is_none() {
-                    if let Some(ref env_info) = resp.environment_info {
-                        if let Some(url) = env_info.get("url").and_then(|v| v.as_str()) {
-                            self.url = Some(url.to_string());
-                            debug!(deployment = %self.id, %url, "deployment URL from environment_info");
                         }
                     }
                 }
@@ -290,5 +270,61 @@ impl TestDeployment {
 
         debug!(deployment = %self.id, "deployment destroyed");
         Ok(())
+    }
+}
+
+fn public_url_from_resource_outputs(outputs: &alien_core::ResourceOutputs) -> Option<String> {
+    if let Some(worker) = outputs.downcast_ref::<alien_core::WorkerOutputs>() {
+        return worker.url.clone();
+    }
+    if let Some(container) = outputs.downcast_ref::<alien_core::ContainerOutputs>() {
+        return container.url.clone();
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resource_output_url_uses_explicit_container_url_first() {
+        let outputs = alien_core::ResourceOutputs::new(alien_core::ContainerOutputs {
+            name: "api".to_string(),
+            status: alien_core::ContainerStatus::Running,
+            current_replicas: 1,
+            desired_replicas: 1,
+            internal_dns: "api".to_string(),
+            url: Some("https://api.example.com".to_string()),
+            replicas: Vec::new(),
+            load_balancer_endpoint: Some(alien_core::LoadBalancerEndpoint {
+                dns_name: "k8s-api.example.elb.amazonaws.com".to_string(),
+                hosted_zone_id: None,
+            }),
+        });
+
+        assert_eq!(
+            public_url_from_resource_outputs(&outputs),
+            Some("https://api.example.com".to_string())
+        );
+    }
+
+    #[test]
+    fn resource_output_url_does_not_derive_from_load_balancer_endpoint() {
+        let outputs = alien_core::ResourceOutputs::new(alien_core::ContainerOutputs {
+            name: "api".to_string(),
+            status: alien_core::ContainerStatus::Running,
+            current_replicas: 1,
+            desired_replicas: 1,
+            internal_dns: "api".to_string(),
+            url: None,
+            replicas: Vec::new(),
+            load_balancer_endpoint: Some(alien_core::LoadBalancerEndpoint {
+                dns_name: "k8s-api.example.elb.amazonaws.com".to_string(),
+                hosted_zone_id: None,
+            }),
+        });
+
+        assert_eq!(public_url_from_resource_outputs(&outputs), None);
     }
 }

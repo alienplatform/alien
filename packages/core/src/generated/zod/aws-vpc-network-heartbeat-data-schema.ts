@@ -4,15 +4,11 @@
 */
 
 import * as z from "zod";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 import { NetworkHeartbeatStatusSchema } from "./network-heartbeat-status-schema.js";
 
 export const AwsVpcNetworkHeartbeatDataSchema = z.object({
     "availabilityZones": z.array(z.string()),
 "cidrBlock": z.string().nullish(),
-get "events"(){
-                return z.array(HeartbeatEventSchema)
-              },
 "internetGatewayId": z.string().nullish(),
 "isByoVpc": z.boolean(),
 "natGatewayId": z.string().nullish(),

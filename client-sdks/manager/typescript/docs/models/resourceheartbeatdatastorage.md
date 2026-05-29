@@ -7,22 +7,14 @@ import { ResourceHeartbeatDataStorage } from "@alienplatform/manager-api/models"
 
 let value: ResourceHeartbeatDataStorage = {
   data: {
-    events: [],
-    path: "/dev",
+    path: "/Library",
     pathExists: true,
     status: {
-      collectionIssues: [
-        {
-          message: "<value>",
-          reason: "forbidden",
-          severity: "info",
-          source: "<value>",
-        },
-      ],
+      collectionIssues: [],
       health: "degraded",
-      lifecycle: "updating",
+      lifecycle: "stopping",
       partial: true,
-      stale: false,
+      stale: true,
     },
     backend: "local",
   },

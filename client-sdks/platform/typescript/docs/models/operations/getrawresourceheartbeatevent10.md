@@ -8,8 +8,8 @@ import { GetRawResourceHeartbeatEvent10 } from "@alienplatform/platform-api/mode
 let value: GetRawResourceHeartbeatEvent10 = {
   kind: "<value>",
   message: "<value>",
-  observedAt: new Date("2024-05-23T04:22:11.574Z"),
-  severity: "warning",
+  severity: "info",
+  timestamp: new Date("2025-09-17T07:36:48.019Z"),
 };
 ```
 
@@ -19,6 +19,7 @@ let value: GetRawResourceHeartbeatEvent10 = {
 | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | `kind`                                                                                        | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
 | `message`                                                                                     | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
-| `observedAt`                                                                                  | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |
-| `severity`                                                                                    | [operations.EventSeverity10](../../models/operations/eventseverity10.md)                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
-| `source`                                                                                      | *string*                                                                                      | :heavy_minus_sign:                                                                            | N/A                                                                                           |
+| `raw`                                                                                         | *any*                                                                                         | :heavy_minus_sign:                                                                            | N/A                                                                                           |
+| `severity`                                                                                    | [operations.EventSeverity3](../../models/operations/eventseverity3.md)                        | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| `subject`                                                                                     | *operations.SubjectUnion3*                                                                    | :heavy_minus_sign:                                                                            | N/A                                                                                           |
+| `timestamp`                                                                                   | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |

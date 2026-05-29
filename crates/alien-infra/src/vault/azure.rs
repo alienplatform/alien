@@ -383,7 +383,6 @@ fn emit_azure_key_vault_heartbeat(
                     .private_endpoint_connections
                     .len() as u32,
                 secret_metadata_listed: false,
-                events: vec![],
             },
         )),
         raw: vec![],

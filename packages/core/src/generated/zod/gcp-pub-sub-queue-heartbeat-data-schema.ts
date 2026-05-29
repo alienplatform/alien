@@ -4,14 +4,10 @@
 */
 
 import * as z from "zod";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 import { QueueHeartbeatStatusSchema } from "./queue-heartbeat-status-schema.js";
 
 export const GcpPubSubQueueHeartbeatDataSchema = z.object({
     "endpoint": z.string().nullish(),
-get "events"(){
-                return z.array(HeartbeatEventSchema)
-              },
 "kmsKeyName": z.string().nullish(),
 "messageStorageAllowedPersistenceRegions": z.array(z.string()),
 "messageStorageEnforceInTransit": z.boolean().nullish(),

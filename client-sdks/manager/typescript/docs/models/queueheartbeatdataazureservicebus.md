@@ -6,21 +6,13 @@
 import { QueueHeartbeatDataAzureServiceBus } from "@alienplatform/manager-api/models";
 
 let value: QueueHeartbeatDataAzureServiceBus = {
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-02-23T02:52:34.144Z"),
-      severity: "info",
-    },
-  ],
   name: "<value>",
   namespaceName: "<value>",
   status: {
     collectionIssues: [],
-    health: "unhealthy",
-    lifecycle: "updating",
-    partial: false,
+    health: "healthy",
+    lifecycle: "deleted",
+    partial: true,
     stale: false,
   },
   backend: "azureServiceBus",
@@ -43,7 +35,6 @@ let value: QueueHeartbeatDataAzureServiceBus = {
 | `enableExpress`                                                  | *boolean*                                                        | :heavy_minus_sign:                                               | N/A                                                              |
 | `enablePartitioning`                                             | *boolean*                                                        | :heavy_minus_sign:                                               | N/A                                                              |
 | `endpoint`                                                       | *string*                                                         | :heavy_minus_sign:                                               | N/A                                                              |
-| `events`                                                         | [models.HeartbeatEvent](../models/heartbeatevent.md)[]           | :heavy_check_mark:                                               | N/A                                                              |
 | `forwardDeadLetteredMessagesTo`                                  | *string*                                                         | :heavy_minus_sign:                                               | N/A                                                              |
 | `forwardTo`                                                      | *string*                                                         | :heavy_minus_sign:                                               | N/A                                                              |
 | `lockDuration`                                                   | *string*                                                         | :heavy_minus_sign:                                               | N/A                                                              |

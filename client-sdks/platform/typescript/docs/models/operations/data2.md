@@ -6,12 +6,7 @@
 import { Data2 } from "@alienplatform/platform-api/models/operations";
 
 let value: Data2 = {
-  events: [],
-  managedTags: {
-    "key": "<value>",
-    "key1": "<value>",
-    "key2": "<value>",
-  },
+  managedTags: {},
   name: "<value>",
   status: {
     collectionIssues: [
@@ -23,7 +18,7 @@ let value: Data2 = {
       },
     ],
     health: "degraded",
-    lifecycle: "creating",
+    lifecycle: "deleting",
     partial: true,
     stale: true,
   },
@@ -32,12 +27,11 @@ let value: Data2 = {
 
 ## Fields
 
-| Field                                                                                                    | Type                                                                                                     | Required                                                                                                 | Description                                                                                              |
-| -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `events`                                                                                                 | [operations.GetRawResourceHeartbeatEvent56](../../models/operations/getrawresourceheartbeatevent56.md)[] | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
-| `location`                                                                                               | *string*                                                                                                 | :heavy_minus_sign:                                                                                       | N/A                                                                                                      |
-| `managedTags`                                                                                            | Record<string, *string*>                                                                                 | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
-| `name`                                                                                                   | *string*                                                                                                 | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
-| `provisioningState`                                                                                      | *string*                                                                                                 | :heavy_minus_sign:                                                                                       | N/A                                                                                                      |
-| `resourceId`                                                                                             | *string*                                                                                                 | :heavy_minus_sign:                                                                                       | N/A                                                                                                      |
-| `status`                                                                                                 | [operations.DataStatus56](../../models/operations/datastatus56.md)                                       | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
+| Field                                                              | Type                                                               | Required                                                           | Description                                                        |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| `location`                                                         | *string*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
+| `managedTags`                                                      | Record<string, *string*>                                           | :heavy_check_mark:                                                 | N/A                                                                |
+| `name`                                                             | *string*                                                           | :heavy_check_mark:                                                 | N/A                                                                |
+| `provisioningState`                                                | *string*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
+| `resourceId`                                                       | *string*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
+| `status`                                                           | [operations.DataStatus56](../../models/operations/datastatus56.md) | :heavy_check_mark:                                                 | N/A                                                                |

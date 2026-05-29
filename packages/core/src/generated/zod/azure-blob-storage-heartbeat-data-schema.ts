@@ -4,7 +4,6 @@
 */
 
 import * as z from "zod";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 import { StorageHeartbeatStatusSchema } from "./storage-heartbeat-status-schema.js";
 
 export const AzureBlobStorageHeartbeatDataSchema = z.object({
@@ -21,9 +20,6 @@ export const AzureBlobStorageHeartbeatDataSchema = z.object({
 "containerDeleteRetentionEnabled": z.boolean().nullish(),
 "containerPublicAccess": z.string().nullish(),
 "encryptionKeySource": z.string().nullish(),
-get "events"(){
-                return z.array(HeartbeatEventSchema)
-              },
 "fileEncryptionEnabled": z.boolean().nullish(),
 "location": z.string().nullish(),
 "name": z.string(),

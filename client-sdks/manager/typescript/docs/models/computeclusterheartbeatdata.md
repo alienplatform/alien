@@ -14,29 +14,21 @@ const value: models.ComputeClusterHeartbeatDataAws = {
       groupId: "<id>",
     },
   ],
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-02-23T02:52:34.144Z"),
-      severity: "info",
-    },
-  ],
   name: "<value>",
   nodes: {},
-  providerFleets: [],
+  providerFleets: [
+    {
+      currentMachines: 240908,
+      desiredMachines: 853061,
+      groupId: "<id>",
+      providerId: "<id>",
+    },
+  ],
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "forbidden",
-        severity: "info",
-        source: "<value>",
-      },
-    ],
-    health: "degraded",
-    lifecycle: "deleted",
-    partial: true,
+    collectionIssues: [],
+    health: "unhealthy",
+    lifecycle: "stopped",
+    partial: false,
     stale: true,
   },
   backend: "aws",
@@ -48,36 +40,21 @@ const value: models.ComputeClusterHeartbeatDataAws = {
 ```typescript
 const value: models.ComputeClusterHeartbeatDataGcp = {
   capacityGroups: [],
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-02-23T02:52:34.144Z"),
-      severity: "info",
-    },
-  ],
   name: "<value>",
   nodes: {},
   providerFleets: [
     {
-      currentMachines: 875017,
-      desiredMachines: 786839,
+      currentMachines: 240908,
+      desiredMachines: 853061,
       groupId: "<id>",
       providerId: "<id>",
     },
   ],
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "forbidden",
-        severity: "info",
-        source: "<value>",
-      },
-    ],
-    health: "degraded",
-    lifecycle: "deleted",
-    partial: true,
+    collectionIssues: [],
+    health: "unhealthy",
+    lifecycle: "stopped",
+    partial: false,
     stale: true,
   },
   backend: "gcp",
@@ -89,29 +66,21 @@ const value: models.ComputeClusterHeartbeatDataGcp = {
 ```typescript
 const value: models.ComputeClusterHeartbeatDataAzure = {
   capacityGroups: [],
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-02-23T02:52:34.144Z"),
-      severity: "info",
-    },
-  ],
   name: "<value>",
   nodes: {},
-  providerFleets: [],
+  providerFleets: [
+    {
+      currentMachines: 240908,
+      desiredMachines: 853061,
+      groupId: "<id>",
+      providerId: "<id>",
+    },
+  ],
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "forbidden",
-        severity: "info",
-        source: "<value>",
-      },
-    ],
-    health: "degraded",
-    lifecycle: "deleted",
-    partial: true,
+    collectionIssues: [],
+    health: "unhealthy",
+    lifecycle: "stopped",
+    partial: false,
     stale: true,
   },
   backend: "azure",
@@ -123,22 +92,14 @@ const value: models.ComputeClusterHeartbeatDataAzure = {
 ```typescript
 const value: models.ComputeClusterHeartbeatDataLocal = {
   dockerAvailable: true,
-  events: [],
   name: "<value>",
-  networkAvailable: false,
+  networkAvailable: true,
   nodes: {},
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "forbidden",
-        severity: "info",
-        source: "<value>",
-      },
-    ],
-    health: "degraded",
-    lifecycle: "deleted",
-    partial: true,
+    collectionIssues: [],
+    health: "unhealthy",
+    lifecycle: "stopped",
+    partial: false,
     stale: true,
   },
   backend: "local",

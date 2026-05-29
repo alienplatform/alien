@@ -4,7 +4,6 @@
 */
 
 import * as z from "zod";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 import { ServiceAccountHeartbeatStatusSchema } from "./service-account-heartbeat-status-schema.js";
 
 export const GcpServiceAccountHeartbeatDataSchema = z.object({
@@ -13,9 +12,6 @@ export const GcpServiceAccountHeartbeatDataSchema = z.object({
 "displayName": z.string().nullish(),
 "email": z.string(),
 "etag": z.string().nullish(),
-get "events"(){
-                return z.array(HeartbeatEventSchema)
-              },
 "name": z.string().nullish(),
 "oauth2ClientId": z.string().nullish(),
 "projectBindingCount": z.int().min(0),

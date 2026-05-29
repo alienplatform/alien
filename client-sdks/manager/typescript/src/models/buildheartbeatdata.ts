@@ -9,16 +9,16 @@ import {
   BuildHeartbeatStatus$outboundSchema,
 } from "./buildheartbeatstatus.js";
 import {
-  HeartbeatEvent,
-  HeartbeatEvent$Outbound,
-  HeartbeatEvent$outboundSchema,
-} from "./heartbeatevent.js";
+  KubernetesEventSnapshot,
+  KubernetesEventSnapshot$Outbound,
+  KubernetesEventSnapshot$outboundSchema,
+} from "./kuberneteseventsnapshot.js";
 
 export type BuildHeartbeatDataKubernetesJob = {
   active?: number | null | undefined;
   completionTime?: Date | null | undefined;
   conditionCount: number;
-  events: Array<HeartbeatEvent>;
+  events: Array<KubernetesEventSnapshot>;
   failed?: number | null | undefined;
   imageDigest?: string | null | undefined;
   jobName: string;
@@ -31,7 +31,6 @@ export type BuildHeartbeatDataKubernetesJob = {
 
 export type BuildHeartbeatDataAzureContainerApps = {
   environmentVariableCount: number;
-  events: Array<HeartbeatEvent>;
   managedEnvironmentId: string;
   managedIdentityId?: string | null | undefined;
   resourceGroupName: string;
@@ -43,7 +42,6 @@ export type BuildHeartbeatDataAzureContainerApps = {
 export type BuildHeartbeatDataGcpCloudBuild = {
   buildConfigId: string;
   environmentVariableCount: number;
-  events: Array<HeartbeatEvent>;
   location: string;
   projectId: string;
   serviceAccount?: string | null | undefined;
@@ -62,7 +60,6 @@ export type BuildHeartbeatDataAwsCodeBuild = {
   environmentImage?: string | null | undefined;
   environmentType?: string | null | undefined;
   environmentVariableCount: number;
-  events: Array<HeartbeatEvent>;
   imagePullCredentialsType?: string | null | undefined;
   lastModified?: number | null | undefined;
   privilegedMode?: boolean | null | undefined;
@@ -88,7 +85,7 @@ export type BuildHeartbeatDataKubernetesJob$Outbound = {
   active?: number | null | undefined;
   completionTime?: string | null | undefined;
   conditionCount: number;
-  events: Array<HeartbeatEvent$Outbound>;
+  events: Array<KubernetesEventSnapshot$Outbound>;
   failed?: number | null | undefined;
   imageDigest?: string | null | undefined;
   jobName: string;
@@ -108,7 +105,7 @@ export const BuildHeartbeatDataKubernetesJob$outboundSchema: z.ZodType<
   completionTime: z.nullable(z.date().transform(v => v.toISOString()))
     .optional(),
   conditionCount: z.int(),
-  events: z.array(HeartbeatEvent$outboundSchema),
+  events: z.array(KubernetesEventSnapshot$outboundSchema),
   failed: z.nullable(z.int()).optional(),
   imageDigest: z.nullable(z.string()).optional(),
   jobName: z.string(),
@@ -132,7 +129,6 @@ export function buildHeartbeatDataKubernetesJobToJSON(
 /** @internal */
 export type BuildHeartbeatDataAzureContainerApps$Outbound = {
   environmentVariableCount: number;
-  events: Array<HeartbeatEvent$Outbound>;
   managedEnvironmentId: string;
   managedIdentityId?: string | null | undefined;
   resourceGroupName: string;
@@ -147,7 +143,6 @@ export const BuildHeartbeatDataAzureContainerApps$outboundSchema: z.ZodType<
   BuildHeartbeatDataAzureContainerApps
 > = z.object({
   environmentVariableCount: z.int(),
-  events: z.array(HeartbeatEvent$outboundSchema),
   managedEnvironmentId: z.string(),
   managedIdentityId: z.nullable(z.string()).optional(),
   resourceGroupName: z.string(),
@@ -170,7 +165,6 @@ export function buildHeartbeatDataAzureContainerAppsToJSON(
 export type BuildHeartbeatDataGcpCloudBuild$Outbound = {
   buildConfigId: string;
   environmentVariableCount: number;
-  events: Array<HeartbeatEvent$Outbound>;
   location: string;
   projectId: string;
   serviceAccount?: string | null | undefined;
@@ -185,7 +179,6 @@ export const BuildHeartbeatDataGcpCloudBuild$outboundSchema: z.ZodType<
 > = z.object({
   buildConfigId: z.string(),
   environmentVariableCount: z.int(),
-  events: z.array(HeartbeatEvent$outboundSchema),
   location: z.string(),
   projectId: z.string(),
   serviceAccount: z.nullable(z.string()).optional(),
@@ -215,7 +208,6 @@ export type BuildHeartbeatDataAwsCodeBuild$Outbound = {
   environmentImage?: string | null | undefined;
   environmentType?: string | null | undefined;
   environmentVariableCount: number;
-  events: Array<HeartbeatEvent$Outbound>;
   imagePullCredentialsType?: string | null | undefined;
   lastModified?: number | null | undefined;
   privilegedMode?: boolean | null | undefined;
@@ -245,7 +237,6 @@ export const BuildHeartbeatDataAwsCodeBuild$outboundSchema: z.ZodType<
   environmentImage: z.nullable(z.string()).optional(),
   environmentType: z.nullable(z.string()).optional(),
   environmentVariableCount: z.int(),
-  events: z.array(HeartbeatEvent$outboundSchema),
   imagePullCredentialsType: z.nullable(z.string()).optional(),
   lastModified: z.nullable(z.number()).optional(),
   privilegedMode: z.nullable(z.boolean()).optional(),

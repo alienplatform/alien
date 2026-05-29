@@ -8,10 +8,8 @@ import { KubernetesClusterHeartbeatData } from "@alienplatform/manager-api/model
 let value: KubernetesClusterHeartbeatData = {
   events: [
     {
-      kind: "<value>",
       message: "<value>",
-      observedAt: new Date("2024-02-23T02:52:34.144Z"),
-      severity: "info",
+      reason: "<value>",
     },
   ],
   name: "<value>",
@@ -32,7 +30,7 @@ let value: KubernetesClusterHeartbeatData = {
 | Field                                                                            | Type                                                                             | Required                                                                         | Description                                                                      |
 | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
 | `cpu`                                                                            | [models.MetricSample](../models/metricsample.md)                                 | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `events`                                                                         | [models.HeartbeatEvent](../models/heartbeatevent.md)[]                           | :heavy_check_mark:                                                               | N/A                                                                              |
+| `events`                                                                         | [models.KubernetesEventSnapshot](../models/kuberneteseventsnapshot.md)[]         | :heavy_check_mark:                                                               | N/A                                                                              |
 | `memory`                                                                         | [models.MetricSample](../models/metricsample.md)                                 | :heavy_minus_sign:                                                               | N/A                                                                              |
 | `name`                                                                           | *string*                                                                         | :heavy_check_mark:                                                               | N/A                                                                              |
 | `namespace`                                                                      | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |

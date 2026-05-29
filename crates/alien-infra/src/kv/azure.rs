@@ -513,7 +513,6 @@ fn emit_azure_table_kv_heartbeat(
             storage_account_primary_status,
             table_exists: true,
             signed_identifier_count: u32::try_from(signed_identifier_count).ok(),
-            events: vec![],
         })),
         raw: vec![],
     });

@@ -13,14 +13,8 @@ import {
   AwsEcrRepositoryHeartbeatData$Outbound,
   AwsEcrRepositoryHeartbeatData$outboundSchema,
 } from "./awsecrrepositoryheartbeatdata.js";
-import {
-  HeartbeatEvent,
-  HeartbeatEvent$Outbound,
-  HeartbeatEvent$outboundSchema,
-} from "./heartbeatevent.js";
 
 export type ArtifactRegistryHeartbeatDataLocal = {
-  events: Array<HeartbeatEvent>;
   reachable: boolean;
   registryUrl: string;
   status: ArtifactRegistryHeartbeatStatus;
@@ -36,7 +30,6 @@ export type ArtifactRegistryHeartbeatDataAzureContainerRegistry = {
   encryptionKeyIdentifierPresent: boolean;
   encryptionKeyVaultUriPresent: boolean;
   encryptionStatus?: string | null | undefined;
-  events: Array<HeartbeatEvent>;
   ipRuleCount: number;
   location: string;
   loginServer?: string | null | undefined;
@@ -64,7 +57,6 @@ export type ArtifactRegistryHeartbeatDataGcpArtifactRegistry = {
   cleanupPolicyDryRun?: boolean | null | undefined;
   createTime?: string | null | undefined;
   description?: string | null | undefined;
-  events: Array<HeartbeatEvent>;
   format?: string | null | undefined;
   iamBindingCount: number;
   iamPolicyEtagPresent: boolean;
@@ -86,7 +78,6 @@ export type ArtifactRegistryHeartbeatDataGcpArtifactRegistry = {
 };
 
 export type ArtifactRegistryHeartbeatDataAwsEcr = {
-  events: Array<HeartbeatEvent>;
   pullRoleArn?: string | null | undefined;
   pushRoleArn?: string | null | undefined;
   region: string;
@@ -108,7 +99,6 @@ export type ArtifactRegistryHeartbeatData =
 
 /** @internal */
 export type ArtifactRegistryHeartbeatDataLocal$Outbound = {
-  events: Array<HeartbeatEvent$Outbound>;
   reachable: boolean;
   registryUrl: string;
   status: ArtifactRegistryHeartbeatStatus$Outbound;
@@ -120,7 +110,6 @@ export const ArtifactRegistryHeartbeatDataLocal$outboundSchema: z.ZodType<
   ArtifactRegistryHeartbeatDataLocal$Outbound,
   ArtifactRegistryHeartbeatDataLocal
 > = z.object({
-  events: z.array(HeartbeatEvent$outboundSchema),
   reachable: z.boolean(),
   registryUrl: z.string(),
   status: ArtifactRegistryHeartbeatStatus$outboundSchema,
@@ -147,7 +136,6 @@ export type ArtifactRegistryHeartbeatDataAzureContainerRegistry$Outbound = {
   encryptionKeyIdentifierPresent: boolean;
   encryptionKeyVaultUriPresent: boolean;
   encryptionStatus?: string | null | undefined;
-  events: Array<HeartbeatEvent$Outbound>;
   ipRuleCount: number;
   location: string;
   loginServer?: string | null | undefined;
@@ -184,7 +172,6 @@ export const ArtifactRegistryHeartbeatDataAzureContainerRegistry$outboundSchema:
     encryptionKeyIdentifierPresent: z.boolean(),
     encryptionKeyVaultUriPresent: z.boolean(),
     encryptionStatus: z.nullable(z.string()).optional(),
-    events: z.array(HeartbeatEvent$outboundSchema),
     ipRuleCount: z.int(),
     location: z.string(),
     loginServer: z.nullable(z.string()).optional(),
@@ -224,7 +211,6 @@ export type ArtifactRegistryHeartbeatDataGcpArtifactRegistry$Outbound = {
   cleanupPolicyDryRun?: boolean | null | undefined;
   createTime?: string | null | undefined;
   description?: string | null | undefined;
-  events: Array<HeartbeatEvent$Outbound>;
   format?: string | null | undefined;
   iamBindingCount: number;
   iamPolicyEtagPresent: boolean;
@@ -255,7 +241,6 @@ export const ArtifactRegistryHeartbeatDataGcpArtifactRegistry$outboundSchema:
     cleanupPolicyDryRun: z.nullable(z.boolean()).optional(),
     createTime: z.nullable(z.string()).optional(),
     description: z.nullable(z.string()).optional(),
-    events: z.array(HeartbeatEvent$outboundSchema),
     format: z.nullable(z.string()).optional(),
     iamBindingCount: z.int(),
     iamPolicyEtagPresent: z.boolean(),
@@ -289,7 +274,6 @@ export function artifactRegistryHeartbeatDataGcpArtifactRegistryToJSON(
 
 /** @internal */
 export type ArtifactRegistryHeartbeatDataAwsEcr$Outbound = {
-  events: Array<HeartbeatEvent$Outbound>;
   pullRoleArn?: string | null | undefined;
   pushRoleArn?: string | null | undefined;
   region: string;
@@ -308,7 +292,6 @@ export const ArtifactRegistryHeartbeatDataAwsEcr$outboundSchema: z.ZodType<
   ArtifactRegistryHeartbeatDataAwsEcr$Outbound,
   ArtifactRegistryHeartbeatDataAwsEcr
 > = z.object({
-  events: z.array(HeartbeatEvent$outboundSchema),
   pullRoleArn: z.nullable(z.string()).optional(),
   pushRoleArn: z.nullable(z.string()).optional(),
   region: z.string(),

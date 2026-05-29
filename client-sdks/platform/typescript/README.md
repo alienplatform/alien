@@ -249,9 +249,6 @@ run();
 * [getGcpOAuthProvider](docs/sdks/projects/README.md#getgcpoauthprovider) - Retrieve redacted project-level Google Cloud OAuth provider settings.
 * [updateGcpOAuthProvider](docs/sdks/projects/README.md#updategcpoauthprovider) - Update project-level Google Cloud OAuth provider settings.
 * [getDeploymentPortalDomain](docs/sdks/projects/README.md#getdeploymentportaldomain) - Get the deployment portal domain binding for a project.
-* [putDeploymentPortalDomain](docs/sdks/projects/README.md#putdeploymentportaldomain) - Attach or replace the deployment portal domain binding for a project.
-* [deleteDeploymentPortalDomain](docs/sdks/projects/README.md#deletedeploymentportaldomain) - Remove the deployment portal domain binding from a project.
-* [refreshDeploymentPortalDomain](docs/sdks/projects/README.md#refreshdeploymentportaldomain) - Refresh the deployment portal domain controller state for a project.
 * [createFromTemplate](docs/sdks/projects/README.md#createfromtemplate) - Create a project by forking alienplatform/alien into your namespace, then configuring GitHub Actions.
 * [getTemplateUrls](docs/sdks/projects/README.md#gettemplateurls) - Get template URLs for deploying setup stacks in this project.
 * [getActiveRelease](docs/sdks/projects/README.md#getactiverelease) - Get the active release for this project. Returns the latest release, or the pinned release if deploymentId is provided and that deployment has a pinned release.
@@ -388,15 +385,12 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`projectsCreate`](docs/sdks/projects/README.md#create) - Create a new project.
 - [`projectsCreateFromTemplate`](docs/sdks/projects/README.md#createfromtemplate) - Create a project by forking alienplatform/alien into your namespace, then configuring GitHub Actions.
 - [`projectsDelete`](docs/sdks/projects/README.md#delete) - Delete a project. The project must have no deployments.
-- [`projectsDeleteDeploymentPortalDomain`](docs/sdks/projects/README.md#deletedeploymentportaldomain) - Remove the deployment portal domain binding from a project.
 - [`projectsGet`](docs/sdks/projects/README.md#get) - Retrieve a project by ID or name.
 - [`projectsGetActiveRelease`](docs/sdks/projects/README.md#getactiverelease) - Get the active release for this project. Returns the latest release, or the pinned release if deploymentId is provided and that deployment has a pinned release.
 - [`projectsGetDeploymentPortalDomain`](docs/sdks/projects/README.md#getdeploymentportaldomain) - Get the deployment portal domain binding for a project.
 - [`projectsGetGcpOAuthProvider`](docs/sdks/projects/README.md#getgcpoauthprovider) - Retrieve redacted project-level Google Cloud OAuth provider settings.
 - [`projectsGetTemplateUrls`](docs/sdks/projects/README.md#gettemplateurls) - Get template URLs for deploying setup stacks in this project.
 - [`projectsList`](docs/sdks/projects/README.md#list) - Retrieve all projects.
-- [`projectsPutDeploymentPortalDomain`](docs/sdks/projects/README.md#putdeploymentportaldomain) - Attach or replace the deployment portal domain binding for a project.
-- [`projectsRefreshDeploymentPortalDomain`](docs/sdks/projects/README.md#refreshdeploymentportaldomain) - Refresh the deployment portal domain controller state for a project.
 - [`projectsUpdate`](docs/sdks/projects/README.md#update) - Update a project.
 - [`projectsUpdateGcpOAuthProvider`](docs/sdks/projects/README.md#updategcpoauthprovider) - Update project-level Google Cloud OAuth provider settings.
 - [`releasesCreate`](docs/sdks/releases/README.md#create) - Create a new release.

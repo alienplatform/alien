@@ -8,8 +8,7 @@
 ```typescript
 const value: models.DataStorage = {
   data: {
-    events: [],
-    path: "/var/mail",
+    path: "/home",
     pathExists: false,
     status: {
       collectionIssues: [
@@ -20,10 +19,10 @@ const value: models.DataStorage = {
           source: "<value>",
         },
       ],
-      health: "healthy",
+      health: "unhealthy",
       lifecycle: "stopping",
       partial: false,
-      stale: false,
+      stale: true,
     },
     backend: "local",
   },
@@ -41,8 +40,8 @@ const value: models.DataWorker = {
       {
         kind: "<value>",
         message: "<value>",
-        observedAt: new Date("2024-05-06T03:27:45.769Z"),
         severity: "info",
+        timestamp: new Date("2024-07-21T11:12:11.792Z"),
       },
     ],
     imagePathPresent: true,
@@ -75,8 +74,9 @@ const value: models.DataContainer = {
     attentionCount: 486054,
     containerId: "<id>",
     events: [],
+    replicaUnits: [],
     replicas: {},
-    schedulingMode: "replicated",
+    schedulingMode: "stateful",
     status: {
       collectionIssues: [
         {
@@ -86,9 +86,9 @@ const value: models.DataContainer = {
           source: "<value>",
         },
       ],
-      health: "unhealthy",
-      lifecycle: "running",
-      partial: true,
+      health: "healthy",
+      lifecycle: "creating",
+      partial: false,
       stale: false,
     },
     backend: "horizonPlatform",
@@ -105,26 +105,18 @@ const value: models.DataDaemon = {
     assignedMachines: 489905,
     capacityGroup: "<value>",
     commandSupported: true,
+    daemonInstances: [],
     daemonName: "<value>",
-    desiredMachines: 300440,
+    desiredMachines: 665477,
     events: [
       {
-        kind: "<value>",
         message: "<value>",
-        observedAt: new Date("2025-12-12T10:53:03.618Z"),
-        severity: "error",
+        reason: "<value>",
       },
     ],
-    healthyInstances: 431179,
+    healthyInstances: 921353,
     horizonClusterId: "<id>",
     horizonStatus: "<value>",
-    instances: [
-      {
-        name: "<value>",
-        ready: true,
-        replicaId: "<id>",
-      },
-    ],
     latestUpdateTimestamp: "<value>",
     status: {
       collectionIssues: [
@@ -140,7 +132,7 @@ const value: models.DataDaemon = {
       partial: false,
       stale: true,
     },
-    unavailableInstances: 833736,
+    unavailableInstances: 431179,
     backend: "gcp",
   },
   resourceType: "daemon",
@@ -153,16 +145,22 @@ const value: models.DataDaemon = {
 const value: models.DataComputeCluster = {
   data: {
     dockerAvailable: true,
-    events: [],
     name: "<value>",
     networkAvailable: true,
     nodes: {},
     status: {
-      collectionIssues: [],
-      health: "healthy",
+      collectionIssues: [
+        {
+          message: "<value>",
+          reason: "collection-failed",
+          severity: "info",
+          source: "<value>",
+        },
+      ],
+      health: "unknown",
       lifecycle: "stopped",
       partial: true,
-      stale: false,
+      stale: true,
     },
     backend: "local",
   },
@@ -177,10 +175,8 @@ const value: models.DataKubernetesCluster = {
   data: {
     events: [
       {
-        kind: "<value>",
         message: "<value>",
-        observedAt: new Date("2026-06-21T07:51:22.353Z"),
-        severity: "info",
+        reason: "<value>",
       },
     ],
     name: "<value>",
@@ -196,7 +192,7 @@ const value: models.DataKubernetesCluster = {
         },
       ],
       health: "unknown",
-      lifecycle: "stopped",
+      lifecycle: "stopping",
       partial: true,
       stale: false,
     },
@@ -210,33 +206,26 @@ const value: models.DataKubernetesCluster = {
 ```typescript
 const value: models.DataQueue = {
   data: {
-    events: [
-      {
-        kind: "<value>",
-        message: "<value>",
-        observedAt: new Date("2024-08-12T10:51:43.799Z"),
-        severity: "warning",
-      },
-    ],
     messageStorageAllowedPersistenceRegions: [
       "<value 1>",
+      "<value 2>",
     ],
     status: {
       collectionIssues: [],
       health: "healthy",
-      lifecycle: "updating",
+      lifecycle: "failed",
       partial: true,
-      stale: false,
+      stale: true,
     },
     subscriptionLabels: {
+      "key": "<value>",
+    },
+    subscriptionPushAttributes: {
       "key": "<value>",
       "key1": "<value>",
       "key2": "<value>",
     },
-    subscriptionPushAttributes: {},
-    topicLabels: {
-      "key": "<value>",
-    },
+    topicLabels: {},
     topicName: "<value>",
     backend: "gcpPubSub",
   },
@@ -249,14 +238,6 @@ const value: models.DataQueue = {
 ```typescript
 const value: models.DataKv = {
   data: {
-    events: [
-      {
-        kind: "<value>",
-        message: "<value>",
-        observedAt: new Date("2025-06-08T10:49:40.534Z"),
-        severity: "warning",
-      },
-    ],
     status: {
       collectionIssues: [
         {
@@ -266,13 +247,13 @@ const value: models.DataKv = {
           source: "<value>",
         },
       ],
-      health: "unknown",
-      lifecycle: "updating",
+      health: "healthy",
+      lifecycle: "scaling",
       partial: false,
-      stale: false,
+      stale: true,
     },
     storageAccountName: "<value>",
-    tableExists: true,
+    tableExists: false,
     tableName: "<value>",
     backend: "azureTable",
   },
@@ -286,15 +267,14 @@ const value: models.DataKv = {
 const value: models.DataVault = {
   data: {
     accountId: "<id>",
-    events: [],
     parameterMetadataSampled: true,
     prefix: "<value>",
     region: "<value>",
     status: {
       collectionIssues: [],
       health: "unknown",
-      lifecycle: "creating",
-      partial: false,
+      lifecycle: "unknown",
+      partial: true,
       stale: false,
     },
     backend: "awsParameterStore",
@@ -314,21 +294,29 @@ const value: models.DataServiceAccount = {
       "<value 2>",
       "<value 3>",
     ],
-    events: [],
     location: "<value>",
-    managedTagCount: 703891,
+    managedTagCount: 438151,
     name: "<value>",
     resourceGroup: "<value>",
     resourceId: "<id>",
-    roleAssignmentCount: 447985,
-    roleAssignmentIds: [],
+    roleAssignmentCount: 703891,
+    roleAssignmentIds: [
+      "<value 1>",
+    ],
     stackPermissionsApplied: true,
     status: {
-      collectionIssues: [],
-      health: "unhealthy",
-      lifecycle: "running",
-      partial: false,
-      stale: true,
+      collectionIssues: [
+        {
+          message: "<value>",
+          reason: "not-installed",
+          severity: "warning",
+          source: "<value>",
+        },
+      ],
+      health: "healthy",
+      lifecycle: "stopped",
+      partial: true,
+      stale: false,
     },
     backend: "azureManagedIdentity",
   },
@@ -341,21 +329,13 @@ const value: models.DataServiceAccount = {
 ```typescript
 const value: models.DataNetwork = {
   data: {
-    events: [],
-    isByoVnet: false,
+    isByoVnet: true,
     status: {
-      collectionIssues: [
-        {
-          message: "<value>",
-          reason: "forbidden",
-          severity: "warning",
-          source: "<value>",
-        },
-      ],
-      health: "unknown",
-      lifecycle: "deleting",
-      partial: false,
-      stale: false,
+      collectionIssues: [],
+      health: "unhealthy",
+      lifecycle: "unknown",
+      partial: true,
+      stale: true,
     },
     backend: "azureVnet",
   },
@@ -368,7 +348,6 @@ const value: models.DataNetwork = {
 ```typescript
 const value: models.DataRemoteStackManagement = {
   data: {
-    events: [],
     managementPermissionsApplied: true,
     status: {
       collectionIssues: [
@@ -380,9 +359,9 @@ const value: models.DataRemoteStackManagement = {
         },
       ],
       health: "degraded",
-      lifecycle: "unknown",
-      partial: false,
-      stale: true,
+      lifecycle: "stopping",
+      partial: true,
+      stale: false,
     },
     backend: "awsIamRole",
   },
@@ -395,20 +374,12 @@ const value: models.DataRemoteStackManagement = {
 ```typescript
 const value: models.DataArtifactRegistry = {
   data: {
-    events: [
-      {
-        kind: "<value>",
-        message: "<value>",
-        observedAt: new Date("2026-05-25T20:34:34.708Z"),
-        severity: "error",
-      },
-    ],
     reachable: false,
-    registryUrl: "https://international-consistency.net/",
+    registryUrl: "https://tedious-reach.com",
     status: {
       collectionIssues: [],
-      health: "degraded",
-      lifecycle: "failed",
+      health: "unknown",
+      lifecycle: "stopping",
       partial: false,
       stale: false,
     },
@@ -425,15 +396,21 @@ const value: models.DataBuild = {
   data: {
     encryptionKeyPresent: false,
     environmentVariableCount: 19119,
-    events: [],
     projectName: "<value>",
-    serviceRolePresent: false,
+    serviceRolePresent: true,
     status: {
-      collectionIssues: [],
-      health: "unhealthy",
-      lifecycle: "stopped",
-      partial: true,
-      stale: false,
+      collectionIssues: [
+        {
+          message: "<value>",
+          reason: "api-unavailable",
+          severity: "error",
+          source: "<value>",
+        },
+      ],
+      health: "degraded",
+      lifecycle: "unknown",
+      partial: false,
+      stale: true,
     },
     backend: "awsCodeBuild",
   },
@@ -447,14 +424,6 @@ const value: models.DataBuild = {
 const value: models.DataServiceActivation = {
   data: {
     enabled: true,
-    events: [
-      {
-        kind: "<value>",
-        message: "<value>",
-        observedAt: new Date("2025-06-11T19:58:11.111Z"),
-        severity: "error",
-      },
-    ],
     projectId: "<id>",
     serviceName: "<value>",
     status: {
@@ -466,9 +435,9 @@ const value: models.DataServiceActivation = {
           source: "<value>",
         },
       ],
-      health: "degraded",
-      lifecycle: "creating",
-      partial: true,
+      health: "healthy",
+      lifecycle: "deleted",
+      partial: false,
       stale: false,
     },
     backend: "gcpServiceUsage",
@@ -482,12 +451,7 @@ const value: models.DataServiceActivation = {
 ```typescript
 const value: models.DataAzureResourceGroup = {
   data: {
-    events: [],
-    managedTags: {
-      "key": "<value>",
-      "key1": "<value>",
-      "key2": "<value>",
-    },
+    managedTags: {},
     name: "<value>",
     status: {
       collectionIssues: [
@@ -499,9 +463,9 @@ const value: models.DataAzureResourceGroup = {
         },
       ],
       health: "unhealthy",
-      lifecycle: "updating",
-      partial: true,
-      stale: true,
+      lifecycle: "failed",
+      partial: false,
+      stale: false,
     },
   },
   resourceType: "azure_resource_group",
@@ -513,30 +477,15 @@ const value: models.DataAzureResourceGroup = {
 ```typescript
 const value: models.DataAzureStorageAccount = {
   data: {
-    events: [
-      {
-        kind: "<value>",
-        message: "<value>",
-        observedAt: new Date("2024-05-16T02:06:58.117Z"),
-        severity: "warning",
-      },
-    ],
     name: "<value>",
     primaryEndpoints: {},
     secondaryEndpoints: {},
     status: {
-      collectionIssues: [
-        {
-          message: "<value>",
-          reason: "api-unavailable",
-          severity: "info",
-          source: "<value>",
-        },
-      ],
-      health: "unknown",
-      lifecycle: "creating",
-      partial: false,
-      stale: true,
+      collectionIssues: [],
+      health: "unhealthy",
+      lifecycle: "unknown",
+      partial: true,
+      stale: false,
     },
   },
   resourceType: "azure_storage_account",
@@ -548,16 +497,15 @@ const value: models.DataAzureStorageAccount = {
 ```typescript
 const value: models.DataAzureContainerAppsEnvironment = {
   data: {
-    events: [],
     name: "<value>",
     status: {
       collectionIssues: [],
-      health: "healthy",
-      lifecycle: "updating",
+      health: "unknown",
+      lifecycle: "scaling",
       partial: true,
-      stale: false,
+      stale: true,
     },
-    workloadProfileCount: 388415,
+    workloadProfileCount: 415280,
     workloadProfiles: [],
   },
   resourceType: "azure_container_apps_environment",
@@ -569,22 +517,14 @@ const value: models.DataAzureContainerAppsEnvironment = {
 ```typescript
 const value: models.DataAzureServiceBusNamespace = {
   data: {
-    events: [],
     name: "<value>",
-    privateEndpointConnectionCount: 700227,
+    privateEndpointConnectionCount: 152029,
     status: {
-      collectionIssues: [
-        {
-          message: "<value>",
-          reason: "api-unavailable",
-          severity: "info",
-          source: "<value>",
-        },
-      ],
-      health: "unknown",
-      lifecycle: "running",
-      partial: false,
-      stale: true,
+      collectionIssues: [],
+      health: "degraded",
+      lifecycle: "creating",
+      partial: true,
+      stale: false,
     },
   },
   resourceType: "azure_service_bus_namespace",

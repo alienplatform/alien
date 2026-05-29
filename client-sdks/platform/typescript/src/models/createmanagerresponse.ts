@@ -3159,6 +3159,7 @@ export type SetupCloudformation = {
   launchUrl: string;
   templateUrl: string;
   stackName: string;
+  region: string;
   /**
    * User-customizable deployment settings specified at deploy time.
    *
@@ -8517,6 +8518,7 @@ export const SetupCloudformation$inboundSchema: z.ZodType<
   launchUrl: z.string(),
   templateUrl: z.string(),
   stackName: z.string(),
+  region: z.string(),
   stackSettings: z.lazy(() =>
     CreateManagerResponseStackSettings1$inboundSchema
   ),

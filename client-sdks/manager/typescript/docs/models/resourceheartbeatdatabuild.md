@@ -8,22 +8,21 @@ import { ResourceHeartbeatDataBuild } from "@alienplatform/manager-api/models";
 let value: ResourceHeartbeatDataBuild = {
   data: {
     environmentVariableCount: 816046,
-    events: [
-      {
-        kind: "<value>",
-        message: "<value>",
-        observedAt: new Date("2024-02-23T02:52:34.144Z"),
-        severity: "info",
-      },
-    ],
     managedEnvironmentId: "<id>",
     resourceGroupName: "<value>",
     status: {
-      collectionIssues: [],
-      health: "unknown",
-      lifecycle: "stopped",
-      partial: true,
-      stale: false,
+      collectionIssues: [
+        {
+          message: "<value>",
+          reason: "forbidden",
+          severity: "info",
+          source: "<value>",
+        },
+      ],
+      health: "healthy",
+      lifecycle: "creating",
+      partial: false,
+      stale: true,
     },
     backend: "azureContainerApps",
   },

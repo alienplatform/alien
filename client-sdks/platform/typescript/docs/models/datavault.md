@@ -8,15 +8,14 @@ import { DataVault } from "@alienplatform/platform-api/models";
 let value: DataVault = {
   data: {
     accountId: "<id>",
-    events: [],
     parameterMetadataSampled: true,
     prefix: "<value>",
     region: "<value>",
     status: {
       collectionIssues: [],
       health: "unknown",
-      lifecycle: "creating",
-      partial: false,
+      lifecycle: "unknown",
+      partial: true,
       stale: false,
     },
     backend: "awsParameterStore",

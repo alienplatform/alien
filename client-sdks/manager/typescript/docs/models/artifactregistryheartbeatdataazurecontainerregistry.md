@@ -11,37 +11,22 @@ let value: ArtifactRegistryHeartbeatDataAzureContainerRegistry = {
   dataEndpointHostNames: [],
   encryptionKeyIdentifierPresent: false,
   encryptionKeyVaultUriPresent: false,
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-02-23T02:52:34.144Z"),
-      severity: "info",
-    },
-  ],
-  ipRuleCount: 61353,
+  ipRuleCount: 615073,
   location: "<value>",
-  managedTagCount: 809501,
+  managedTagCount: 61353,
   name: "<value>",
   networkRuleBypassOptions: "<value>",
   policiesPresent: false,
-  policyCount: 211805,
-  privateEndpointConnectionCount: 509149,
+  policyCount: 966370,
+  privateEndpointConnectionCount: 211805,
   publicNetworkAccess: "<value>",
   resourceGroup: "<value>",
   skuName: "<value>",
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "forbidden",
-        severity: "info",
-        source: "<value>",
-      },
-    ],
-    health: "healthy",
-    lifecycle: "stopped",
-    partial: false,
+    collectionIssues: [],
+    health: "unknown",
+    lifecycle: "scaling",
+    partial: true,
     stale: false,
   },
   zoneRedundancy: "<value>",
@@ -61,7 +46,6 @@ let value: ArtifactRegistryHeartbeatDataAzureContainerRegistry = {
 | `encryptionKeyIdentifierPresent`                                                       | *boolean*                                                                              | :heavy_check_mark:                                                                     | N/A                                                                                    |
 | `encryptionKeyVaultUriPresent`                                                         | *boolean*                                                                              | :heavy_check_mark:                                                                     | N/A                                                                                    |
 | `encryptionStatus`                                                                     | *string*                                                                               | :heavy_minus_sign:                                                                     | N/A                                                                                    |
-| `events`                                                                               | [models.HeartbeatEvent](../models/heartbeatevent.md)[]                                 | :heavy_check_mark:                                                                     | N/A                                                                                    |
 | `ipRuleCount`                                                                          | *number*                                                                               | :heavy_check_mark:                                                                     | N/A                                                                                    |
 | `location`                                                                             | *string*                                                                               | :heavy_check_mark:                                                                     | N/A                                                                                    |
 | `loginServer`                                                                          | *string*                                                                               | :heavy_minus_sign:                                                                     | N/A                                                                                    |

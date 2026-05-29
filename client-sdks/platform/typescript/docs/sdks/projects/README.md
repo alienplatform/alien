@@ -12,9 +12,6 @@
 * [getGcpOAuthProvider](#getgcpoauthprovider) - Retrieve redacted project-level Google Cloud OAuth provider settings.
 * [updateGcpOAuthProvider](#updategcpoauthprovider) - Update project-level Google Cloud OAuth provider settings.
 * [getDeploymentPortalDomain](#getdeploymentportaldomain) - Get the deployment portal domain binding for a project.
-* [putDeploymentPortalDomain](#putdeploymentportaldomain) - Attach or replace the deployment portal domain binding for a project.
-* [deleteDeploymentPortalDomain](#deletedeploymentportaldomain) - Remove the deployment portal domain binding from a project.
-* [refreshDeploymentPortalDomain](#refreshdeploymentportaldomain) - Refresh the deployment portal domain controller state for a project.
 * [createFromTemplate](#createfromtemplate) - Create a project by forking alienplatform/alien into your namespace, then configuring GitHub Actions.
 * [getTemplateUrls](#gettemplateurls) - Get template URLs for deploying setup stacks in this project.
 * [getActiveRelease](#getactiverelease) - Get the active release for this project. Returns the latest release, or the pinned release if deploymentId is provided and that deployment has a pinned release.
@@ -354,10 +351,11 @@ async function run() {
   const result = await alien.projects.update({
     idOrName: "my-project",
     workspace: "my-workspace",
-    requestBody: {
+    updateProject: {
       gitRepository: null,
       domainId: "dom_469m0agk8luj4s16sakmmpdd",
       defaultManagers: null,
+      portalDomainId: "dom_469m0agk8luj4s16sakmmpdd",
     },
   });
 
@@ -385,10 +383,11 @@ async function run() {
   const res = await projectsUpdate(alien, {
     idOrName: "my-project",
     workspace: "my-workspace",
-    requestBody: {
+    updateProject: {
       gitRepository: null,
       domainId: "dom_469m0agk8luj4s16sakmmpdd",
       defaultManagers: null,
+      portalDomainId: "dom_469m0agk8luj4s16sakmmpdd",
     },
   });
   if (res.ok) {
@@ -646,243 +645,6 @@ run();
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `request`                                                                                                                                                                      | [operations.GetProjectDeploymentPortalDomainRequest](../../models/operations/getprojectdeploymentportaldomainrequest.md)                                                       | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
-| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
-| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
-| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
-
-### Response
-
-**Promise\<[models.DeploymentPortalDomainResponse](../../models/deploymentportaldomainresponse.md)\>**
-
-### Errors
-
-| Error Type               | Status Code              | Content Type             |
-| ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 404                      | application/json         |
-| errors.APIError          | 500                      | application/json         |
-| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
-
-## putDeploymentPortalDomain
-
-Attach or replace the deployment portal domain binding for a project.
-
-### Example Usage
-
-<!-- UsageSnippet language="typescript" operationID="putProjectDeploymentPortalDomain" method="put" path="/v1/projects/{idOrName}/deployment-portal-domain" -->
-```typescript
-import { Alien } from "@alienplatform/platform-api";
-
-const alien = new Alien({
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const result = await alien.projects.putDeploymentPortalDomain({
-    idOrName: "my-project",
-    workspace: "my-workspace",
-    requestBody: {
-      domainId: "dom_469m0agk8luj4s16sakmmpdd",
-    },
-  });
-
-  console.log(result);
-}
-
-run();
-```
-
-### Standalone function
-
-The standalone function version of this method:
-
-```typescript
-import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { projectsPutDeploymentPortalDomain } from "@alienplatform/platform-api/funcs/projectsPutDeploymentPortalDomain.js";
-
-// Use `AlienCore` for best tree-shaking performance.
-// You can create one instance of it to use across an application.
-const alien = new AlienCore({
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const res = await projectsPutDeploymentPortalDomain(alien, {
-    idOrName: "my-project",
-    workspace: "my-workspace",
-    requestBody: {
-      domainId: "dom_469m0agk8luj4s16sakmmpdd",
-    },
-  });
-  if (res.ok) {
-    const { value: result } = res;
-    console.log(result);
-  } else {
-    console.log("projectsPutDeploymentPortalDomain failed:", res.error);
-  }
-}
-
-run();
-```
-
-### Parameters
-
-| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.PutProjectDeploymentPortalDomainRequest](../../models/operations/putprojectdeploymentportaldomainrequest.md)                                                       | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
-| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
-| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
-| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
-
-### Response
-
-**Promise\<[models.DeploymentPortalDomainResponse](../../models/deploymentportaldomainresponse.md)\>**
-
-### Errors
-
-| Error Type               | Status Code              | Content Type             |
-| ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 400, 404                 | application/json         |
-| errors.APIError          | 500                      | application/json         |
-| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
-
-## deleteDeploymentPortalDomain
-
-Remove the deployment portal domain binding from a project.
-
-### Example Usage
-
-<!-- UsageSnippet language="typescript" operationID="deleteProjectDeploymentPortalDomain" method="delete" path="/v1/projects/{idOrName}/deployment-portal-domain" -->
-```typescript
-import { Alien } from "@alienplatform/platform-api";
-
-const alien = new Alien({
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const result = await alien.projects.deleteDeploymentPortalDomain({
-    idOrName: "my-project",
-    workspace: "my-workspace",
-  });
-
-  console.log(result);
-}
-
-run();
-```
-
-### Standalone function
-
-The standalone function version of this method:
-
-```typescript
-import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { projectsDeleteDeploymentPortalDomain } from "@alienplatform/platform-api/funcs/projectsDeleteDeploymentPortalDomain.js";
-
-// Use `AlienCore` for best tree-shaking performance.
-// You can create one instance of it to use across an application.
-const alien = new AlienCore({
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const res = await projectsDeleteDeploymentPortalDomain(alien, {
-    idOrName: "my-project",
-    workspace: "my-workspace",
-  });
-  if (res.ok) {
-    const { value: result } = res;
-    console.log(result);
-  } else {
-    console.log("projectsDeleteDeploymentPortalDomain failed:", res.error);
-  }
-}
-
-run();
-```
-
-### Parameters
-
-| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.DeleteProjectDeploymentPortalDomainRequest](../../models/operations/deleteprojectdeploymentportaldomainrequest.md)                                                 | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
-| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
-| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
-| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
-
-### Response
-
-**Promise\<[operations.DeleteProjectDeploymentPortalDomainResponse](../../models/operations/deleteprojectdeploymentportaldomainresponse.md)\>**
-
-### Errors
-
-| Error Type               | Status Code              | Content Type             |
-| ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 404                      | application/json         |
-| errors.APIError          | 500                      | application/json         |
-| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
-
-## refreshDeploymentPortalDomain
-
-Refresh the deployment portal domain controller state for a project.
-
-### Example Usage
-
-<!-- UsageSnippet language="typescript" operationID="refreshProjectDeploymentPortalDomain" method="post" path="/v1/projects/{idOrName}/deployment-portal-domain/refresh" -->
-```typescript
-import { Alien } from "@alienplatform/platform-api";
-
-const alien = new Alien({
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const result = await alien.projects.refreshDeploymentPortalDomain({
-    idOrName: "my-project",
-    workspace: "my-workspace",
-  });
-
-  console.log(result);
-}
-
-run();
-```
-
-### Standalone function
-
-The standalone function version of this method:
-
-```typescript
-import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { projectsRefreshDeploymentPortalDomain } from "@alienplatform/platform-api/funcs/projectsRefreshDeploymentPortalDomain.js";
-
-// Use `AlienCore` for best tree-shaking performance.
-// You can create one instance of it to use across an application.
-const alien = new AlienCore({
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const res = await projectsRefreshDeploymentPortalDomain(alien, {
-    idOrName: "my-project",
-    workspace: "my-workspace",
-  });
-  if (res.ok) {
-    const { value: result } = res;
-    console.log(result);
-  } else {
-    console.log("projectsRefreshDeploymentPortalDomain failed:", res.error);
-  }
-}
-
-run();
-```
-
-### Parameters
-
-| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.RefreshProjectDeploymentPortalDomainRequest](../../models/operations/refreshprojectdeploymentportaldomainrequest.md)                                               | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |

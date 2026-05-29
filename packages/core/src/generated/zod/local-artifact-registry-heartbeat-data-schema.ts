@@ -5,13 +5,9 @@
 
 import * as z from "zod";
 import { ArtifactRegistryHeartbeatStatusSchema } from "./artifact-registry-heartbeat-status-schema.js";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 
 export const LocalArtifactRegistryHeartbeatDataSchema = z.object({
-    get "events"(){
-                return z.array(HeartbeatEventSchema)
-              },
-"reachable": z.boolean(),
+    "reachable": z.boolean(),
 "registryUrl": z.string(),
 get "status"(){
                 return ArtifactRegistryHeartbeatStatusSchema

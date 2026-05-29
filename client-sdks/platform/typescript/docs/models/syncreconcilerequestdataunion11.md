@@ -7,8 +7,7 @@
 
 ```typescript
 const value: models.DataAwsIamRole2 = {
-  events: [],
-  managementPermissionsApplied: false,
+  managementPermissionsApplied: true,
   status: {
     collectionIssues: [
       {
@@ -19,9 +18,9 @@ const value: models.DataAwsIamRole2 = {
       },
     ],
     health: "degraded",
-    lifecycle: "unknown",
-    partial: false,
-    stale: true,
+    lifecycle: "stopping",
+    partial: true,
+    stale: false,
   },
   backend: "awsIamRole",
 };
@@ -31,15 +30,7 @@ const value: models.DataAwsIamRole2 = {
 
 ```typescript
 const value: models.DataGcpServiceAccount2 = {
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2026-09-28T13:47:01.596Z"),
-      severity: "error",
-    },
-  ],
-  impersonationGranted: true,
+  impersonationGranted: false,
   roleBound: false,
   status: {
     collectionIssues: [
@@ -50,9 +41,9 @@ const value: models.DataGcpServiceAccount2 = {
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "creating",
-    partial: true,
+    health: "healthy",
+    lifecycle: "deleted",
+    partial: false,
     stale: false,
   },
   backend: "gcpServiceAccount",
@@ -63,21 +54,17 @@ const value: models.DataGcpServiceAccount2 = {
 
 ```typescript
 const value: models.DataAzureManagedIdentity2 = {
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-06-15T03:37:32.834Z"),
-      severity: "info",
-    },
+  roleAssignmentIds: [
+    "<value 1>",
+    "<value 2>",
+    "<value 3>",
   ],
-  roleAssignmentIds: [],
   status: {
     collectionIssues: [],
-    health: "degraded",
-    lifecycle: "updating",
-    partial: false,
-    stale: true,
+    health: "healthy",
+    lifecycle: "creating",
+    partial: true,
+    stale: false,
   },
   backend: "azureManagedIdentity",
 };

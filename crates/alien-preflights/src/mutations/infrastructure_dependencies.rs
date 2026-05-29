@@ -323,6 +323,8 @@ impl InfrastructureDependenciesMutation {
                     | "azure_service_bus_namespace"
                     | "kubernetes-namespace"
                     | "kubernetes_namespace"
+                    | "kubernetes-cluster"
+                    | "kubernetes_cluster"
                     | "network"
                     | "service-activation"
                     | "service_activation"
@@ -344,7 +346,9 @@ mod tests {
     use alien_core::permissions::{ManagementPermissions, PermissionsConfig};
     use alien_core::{
         AzureResourceGroup, AzureStorageAccount, EnvironmentVariablesSnapshot, ExternalBindings,
-        Resource, ResourceEntry, ResourceLifecycle, StackSettings, Storage,
+        KubernetesCluster, KubernetesClusterOwnership, KubernetesClusterProvider,
+        KubernetesHeartbeatMode, Resource, ResourceEntry, ResourceLifecycle, StackSettings,
+        Storage,
     };
     use indexmap::IndexMap;
 
@@ -434,5 +438,57 @@ mod tests {
         let app_storage_deps = &result.resources.get("app-storage").unwrap().dependencies;
         assert!(app_storage_deps.contains(&resource_group));
         assert!(app_storage_deps.contains(&storage_account));
+    }
+
+    #[tokio::test]
+    async fn kubernetes_cluster_does_not_depend_on_remote_management() {
+        let stack = Stack::new("test-stack".to_string())
+            .add(
+                RemoteStackManagement::new("remote-stack-management".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                KubernetesCluster::new("kubernetes".to_string())
+                    .provider(KubernetesClusterProvider::Eks)
+                    .ownership(KubernetesClusterOwnership::Managed)
+                    .namespace("default".to_string())
+                    .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Storage::new("app-storage".to_string()).build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let stack_state = StackState::new(Platform::Kubernetes);
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+
+        let result = InfrastructureDependenciesMutation
+            .mutate(stack, &stack_state, &config)
+            .await
+            .unwrap();
+        let remote_management = ResourceRef::new(
+            RemoteStackManagement::RESOURCE_TYPE,
+            "remote-stack-management",
+        );
+
+        assert!(!result
+            .resources
+            .get("kubernetes")
+            .unwrap()
+            .dependencies
+            .contains(&remote_management));
+        assert!(result
+            .resources
+            .get("app-storage")
+            .unwrap()
+            .dependencies
+            .contains(&remote_management));
     }
 }

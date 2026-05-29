@@ -11,34 +11,22 @@ const value: models.DataAwsIamRole1 = {
   attachedPolicyCount: 410901,
   attachedPolicyNames: [],
   createDate: "<value>",
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-06-21T12:26:29.993Z"),
-      severity: "warning",
-    },
-  ],
-  inlinePolicyCount: 87215,
-  inlinePolicyNames: [
-    "<value 1>",
-    "<value 2>",
-    "<value 3>",
-  ],
-  managedTagCount: 456119,
-  path: "/media",
+  inlinePolicyCount: 846965,
+  inlinePolicyNames: [],
+  managedTagCount: 519428,
+  path: "/etc",
   roleArn: "<value>",
   roleId: "<id>",
   roleName: "<value>",
   stackPermissionsApplied: false,
   status: {
     collectionIssues: [],
-    health: "degraded",
-    lifecycle: "updating",
-    partial: false,
-    stale: true,
+    health: "healthy",
+    lifecycle: "deleting",
+    partial: true,
+    stale: false,
   },
-  tagCount: 813150,
+  tagCount: 250500,
   backend: "awsIamRole",
 };
 ```
@@ -48,31 +36,30 @@ const value: models.DataAwsIamRole1 = {
 ```typescript
 const value: models.DataGcpServiceAccount1 = {
   email: "Narciso53@hotmail.com",
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2025-11-02T07:18:24.714Z"),
-      severity: "error",
-    },
-  ],
-  projectBindingCount: 974149,
+  projectBindingCount: 780560,
   projectRoles: [
+    "<value 1>",
+    "<value 2>",
+  ],
+  serviceAccountBindingCount: 884958,
+  serviceAccountRoles: [
     "<value 1>",
     "<value 2>",
     "<value 3>",
   ],
-  serviceAccountBindingCount: 694359,
-  serviceAccountRoles: [
-    "<value 1>",
-    "<value 2>",
-  ],
   status: {
-    collectionIssues: [],
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "collection-failed",
+        severity: "error",
+        source: "<value>",
+      },
+    ],
     health: "degraded",
-    lifecycle: "failed",
+    lifecycle: "stopped",
     partial: true,
-    stale: true,
+    stale: false,
   },
   backend: "gcpServiceAccount",
 };
@@ -88,30 +75,31 @@ const value: models.DataAzureManagedIdentity1 = {
     "<value 2>",
     "<value 3>",
   ],
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2026-07-02T14:37:18.556Z"),
-      severity: "error",
-    },
-  ],
   location: "<value>",
-  managedTagCount: 626517,
+  managedTagCount: 765674,
   name: "<value>",
   resourceGroup: "<value>",
   resourceId: "<id>",
-  roleAssignmentCount: 780094,
+  roleAssignmentCount: 833585,
   roleAssignmentIds: [
     "<value 1>",
+    "<value 2>",
+    "<value 3>",
   ],
   stackPermissionsApplied: false,
   status: {
-    collectionIssues: [],
-    health: "unhealthy",
-    lifecycle: "running",
-    partial: false,
-    stale: true,
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "not-installed",
+        severity: "warning",
+        source: "<value>",
+      },
+    ],
+    health: "healthy",
+    lifecycle: "stopped",
+    partial: true,
+    stale: false,
   },
   backend: "azureManagedIdentity",
 };
@@ -122,14 +110,6 @@ const value: models.DataAzureManagedIdentity1 = {
 ```typescript
 const value: models.DataLocal9 = {
   configured: false,
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2025-12-06T21:51:19.391Z"),
-      severity: "error",
-    },
-  ],
   identity: "<value>",
   status: {
     collectionIssues: [
@@ -140,9 +120,9 @@ const value: models.DataLocal9 = {
         source: "<value>",
       },
     ],
-    health: "unknown",
-    lifecycle: "unknown",
-    partial: true,
+    health: "degraded",
+    lifecycle: "stopped",
+    partial: false,
     stale: true,
   },
   backend: "local",

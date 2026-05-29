@@ -7,13 +7,7 @@ import { ResourceHeartbeatDataKv } from "@alienplatform/manager-api/models";
 
 let value: ResourceHeartbeatDataKv = {
   data: {
-    events: [],
-    keySchema: [
-      {
-        attributeName: "<value>",
-        keyType: "<value>",
-      },
-    ],
+    keySchema: [],
     name: "<value>",
     status: {
       collectionIssues: [
@@ -24,8 +18,8 @@ let value: ResourceHeartbeatDataKv = {
           source: "<value>",
         },
       ],
-      health: "unknown",
-      lifecycle: "stopped",
+      health: "degraded",
+      lifecycle: "creating",
       partial: false,
       stale: false,
     },

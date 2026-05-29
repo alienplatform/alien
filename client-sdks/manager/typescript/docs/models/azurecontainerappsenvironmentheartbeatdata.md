@@ -6,7 +6,6 @@
 import { AzureContainerAppsEnvironmentHeartbeatData } from "@alienplatform/manager-api/models";
 
 let value: AzureContainerAppsEnvironmentHeartbeatData = {
-  events: [],
   name: "<value>",
   status: {
     collectionIssues: [
@@ -18,12 +17,17 @@ let value: AzureContainerAppsEnvironmentHeartbeatData = {
       },
     ],
     health: "unhealthy",
-    lifecycle: "stopping",
-    partial: false,
+    lifecycle: "creating",
+    partial: true,
     stale: false,
   },
-  workloadProfileCount: 797933,
-  workloadProfiles: [],
+  workloadProfileCount: 265852,
+  workloadProfiles: [
+    {
+      name: "<value>",
+      workloadProfileType: "<value>",
+    },
+  ],
 };
 ```
 
@@ -34,7 +38,6 @@ let value: AzureContainerAppsEnvironmentHeartbeatData = {
 | `customDomainVerificationId`                                                                                       | *string*                                                                                                           | :heavy_minus_sign:                                                                                                 | N/A                                                                                                                |
 | `defaultDomain`                                                                                                    | *string*                                                                                                           | :heavy_minus_sign:                                                                                                 | N/A                                                                                                                |
 | `eventStreamEndpoint`                                                                                              | *string*                                                                                                           | :heavy_minus_sign:                                                                                                 | N/A                                                                                                                |
-| `events`                                                                                                           | [models.HeartbeatEvent](../models/heartbeatevent.md)[]                                                             | :heavy_check_mark:                                                                                                 | N/A                                                                                                                |
 | `infrastructureResourceGroup`                                                                                      | *string*                                                                                                           | :heavy_minus_sign:                                                                                                 | N/A                                                                                                                |
 | `kind`                                                                                                             | *string*                                                                                                           | :heavy_minus_sign:                                                                                                 | N/A                                                                                                                |
 | `location`                                                                                                         | *string*                                                                                                           | :heavy_minus_sign:                                                                                                 | N/A                                                                                                                |

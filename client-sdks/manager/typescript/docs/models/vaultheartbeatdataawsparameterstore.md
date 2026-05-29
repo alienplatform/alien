@@ -7,8 +7,7 @@ import { VaultHeartbeatDataAwsParameterStore } from "@alienplatform/manager-api/
 
 let value: VaultHeartbeatDataAwsParameterStore = {
   accountId: "<id>",
-  events: [],
-  parameterMetadataSampled: false,
+  parameterMetadataSampled: true,
   prefix: "<value>",
   region: "<value>",
   status: {
@@ -20,8 +19,8 @@ let value: VaultHeartbeatDataAwsParameterStore = {
         source: "<value>",
       },
     ],
-    health: "healthy",
-    lifecycle: "updating",
+    health: "unhealthy",
+    lifecycle: "scaling",
     partial: true,
     stale: true,
   },
@@ -34,7 +33,6 @@ let value: VaultHeartbeatDataAwsParameterStore = {
 | Field                                                                                         | Type                                                                                          | Required                                                                                      | Description                                                                                   |
 | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | `accountId`                                                                                   | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
-| `events`                                                                                      | [models.HeartbeatEvent](../models/heartbeatevent.md)[]                                        | :heavy_check_mark:                                                                            | N/A                                                                                           |
 | `hasMoreParameters`                                                                           | *boolean*                                                                                     | :heavy_minus_sign:                                                                            | N/A                                                                                           |
 | `latestModifiedAt`                                                                            | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_minus_sign:                                                                            | N/A                                                                                           |
 | `parameterMetadataSampled`                                                                    | *boolean*                                                                                     | :heavy_check_mark:                                                                            | N/A                                                                                           |

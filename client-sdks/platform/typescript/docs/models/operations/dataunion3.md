@@ -10,8 +10,9 @@ const value: operations.DataHorizonPlatform = {
   attentionCount: 261747,
   containerId: "<id>",
   events: [],
+  replicaUnits: [],
   replicas: {},
-  schedulingMode: "stateful",
+  schedulingMode: "daemon",
   status: {
     collectionIssues: [
       {
@@ -21,9 +22,9 @@ const value: operations.DataHorizonPlatform = {
         source: "<value>",
       },
     ],
-    health: "unhealthy",
-    lifecycle: "running",
-    partial: true,
+    health: "healthy",
+    lifecycle: "creating",
+    partial: false,
     stale: false,
   },
   backend: "horizonPlatform",
@@ -35,9 +36,9 @@ const value: operations.DataHorizonPlatform = {
 ```typescript
 const value: operations.DataKubernetes2 = {
   events: [],
-  instances: [],
   name: "<value>",
   namespace: "<value>",
+  pods: [],
   replicas: {},
   status: {
     collectionIssues: [],

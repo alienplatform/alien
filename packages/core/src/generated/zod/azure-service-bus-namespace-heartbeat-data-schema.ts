@@ -4,15 +4,11 @@
 */
 
 import * as z from "zod";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 import { QueueHeartbeatStatusSchema } from "./queue-heartbeat-status-schema.js";
 
 export const AzureServiceBusNamespaceHeartbeatDataSchema = z.object({
     "createdAt": z.string().nullish(),
 "disableLocalAuth": z.boolean().nullish(),
-get "events"(){
-                return z.array(HeartbeatEventSchema)
-              },
 "location": z.string().nullish(),
 "metricId": z.string().nullish(),
 "minimumTlsVersion": z.string().nullish(),

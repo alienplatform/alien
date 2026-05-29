@@ -26,20 +26,13 @@ const value: operations.Available = {
         assignedMachines: 411840,
         capacityGroup: "<value>",
         commandSupported: true,
+        daemonInstances: [],
         daemonName: "<value>",
-        desiredMachines: 184409,
-        events: [
-          {
-            kind: "<value>",
-            message: "<value>",
-            observedAt: new Date("2025-12-12T10:53:03.618Z"),
-            severity: "error",
-          },
-        ],
-        healthyInstances: 167419,
+        desiredMachines: 639818,
+        events: [],
+        healthyInstances: 264082,
         horizonClusterId: "<id>",
         horizonStatus: "<value>",
-        instances: [],
         latestUpdateTimestamp: "<value>",
         status: {
           collectionIssues: [

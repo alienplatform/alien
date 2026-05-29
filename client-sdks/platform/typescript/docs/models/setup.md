@@ -12,6 +12,7 @@ const value: models.SetupCloudformation = {
   launchUrl: "https://flawless-offset.com/",
   templateUrl: "https://lavish-punctuation.name",
   stackName: "<value>",
+  region: "<value>",
   stackSettings: {},
 };
 ```

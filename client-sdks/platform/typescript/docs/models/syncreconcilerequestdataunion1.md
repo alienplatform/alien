@@ -8,23 +8,15 @@
 ```typescript
 const value: models.DataAwsS3 = {
   encryptionConfigPresent: true,
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-11-04T18:46:41.433Z"),
-      severity: "warning",
-    },
-  ],
-  lifecyclePresent: true,
+  lifecyclePresent: false,
   name: "<value>",
   publicAccessBlockPresent: true,
   status: {
     collectionIssues: [],
-    health: "unhealthy",
-    lifecycle: "failed",
-    partial: false,
-    stale: true,
+    health: "unknown",
+    lifecycle: "scaling",
+    partial: true,
+    stale: false,
   },
   backend: "awsS3",
 };
@@ -35,14 +27,6 @@ const value: models.DataAwsS3 = {
 ```typescript
 const value: models.DataGcpCloudStorage = {
   encryptionConfigPresent: false,
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2026-04-25T23:42:18.878Z"),
-      severity: "error",
-    },
-  ],
   lifecyclePresent: false,
   name: "<value>",
   status: {
@@ -50,11 +34,11 @@ const value: models.DataGcpCloudStorage = {
       {
         message: "<value>",
         reason: "timed-out",
-        severity: "info",
+        severity: "warning",
         source: "<value>",
       },
     ],
-    health: "unknown",
+    health: "degraded",
     lifecycle: "failed",
     partial: true,
     stale: true,
@@ -67,14 +51,6 @@ const value: models.DataGcpCloudStorage = {
 
 ```typescript
 const value: models.DataAzureBlob = {
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2025-01-01T04:44:50.232Z"),
-      severity: "info",
-    },
-  ],
   name: "<value>",
   status: {
     collectionIssues: [
@@ -86,7 +62,7 @@ const value: models.DataAzureBlob = {
       },
     ],
     health: "healthy",
-    lifecycle: "failed",
+    lifecycle: "unknown",
     partial: false,
     stale: true,
   },
@@ -98,15 +74,7 @@ const value: models.DataAzureBlob = {
 
 ```typescript
 const value: models.DataLocal1 = {
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2025-07-12T08:12:10.995Z"),
-      severity: "error",
-    },
-  ],
-  path: "/usr/share",
+  path: "/usr/lib",
   pathExists: false,
   status: {
     collectionIssues: [
@@ -117,10 +85,10 @@ const value: models.DataLocal1 = {
         source: "<value>",
       },
     ],
-    health: "healthy",
+    health: "unhealthy",
     lifecycle: "stopping",
     partial: false,
-    stale: false,
+    stale: true,
   },
   backend: "local",
 };

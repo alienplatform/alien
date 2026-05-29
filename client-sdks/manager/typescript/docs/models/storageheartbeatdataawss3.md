@@ -7,30 +7,15 @@ import { StorageHeartbeatDataAwsS3 } from "@alienplatform/manager-api/models";
 
 let value: StorageHeartbeatDataAwsS3 = {
   encryptionConfigPresent: true,
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-02-23T02:52:34.144Z"),
-      severity: "info",
-    },
-  ],
   lifecyclePresent: false,
   name: "<value>",
   publicAccessBlockPresent: false,
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "forbidden",
-        severity: "info",
-        source: "<value>",
-      },
-    ],
+    collectionIssues: [],
     health: "degraded",
-    lifecycle: "updating",
+    lifecycle: "stopping",
     partial: true,
-    stale: false,
+    stale: true,
   },
   backend: "awsS3",
 };
@@ -47,7 +32,6 @@ let value: StorageHeartbeatDataAwsS3 = {
 | `bucketPolicyPresent`                                                | *boolean*                                                            | :heavy_minus_sign:                                                   | N/A                                                                  |
 | `encryptionConfigPresent`                                            | *boolean*                                                            | :heavy_check_mark:                                                   | N/A                                                                  |
 | `encryptionEnabled`                                                  | *boolean*                                                            | :heavy_minus_sign:                                                   | N/A                                                                  |
-| `events`                                                             | [models.HeartbeatEvent](../models/heartbeatevent.md)[]               | :heavy_check_mark:                                                   | N/A                                                                  |
 | `ignorePublicAcls`                                                   | *boolean*                                                            | :heavy_minus_sign:                                                   | N/A                                                                  |
 | `lifecyclePresent`                                                   | *boolean*                                                            | :heavy_check_mark:                                                   | N/A                                                                  |
 | `lifecycleRuleCount`                                                 | *number*                                                             | :heavy_minus_sign:                                                   | N/A                                                                  |

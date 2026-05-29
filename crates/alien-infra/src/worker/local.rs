@@ -5,10 +5,10 @@ use tracing::{debug, error, info};
 use crate::core::{environment_variables::EnvironmentVariableBuilder, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
 use alien_core::{
-    HeartbeatBackend, LocalWorkerHeartbeatData, ObservedHealth, Platform, ProviderLifecycleState,
-    ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs as CoreResourceOutputs,
-    ResourceStatus, Worker, WorkerCode, WorkerHeartbeatData, WorkerOutputs,
-    WorkloadHeartbeatStatus,
+    HeartbeatBackend, LocalRuntimeUnitKind, LocalRuntimeUnitStatus, LocalWorkerHeartbeatData,
+    ObservedHealth, Platform, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData,
+    ResourceOutputs as CoreResourceOutputs, ResourceStatus, Worker, WorkerCode,
+    WorkerHeartbeatData, WorkerOutputs, WorkloadHeartbeatStatus,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_macros::controller;
@@ -426,6 +426,17 @@ fn emit_local_worker_heartbeat(
             trigger_count: config.triggers.len() as u32,
             cpu: None,
             memory: None,
+            process: extracted_image_path.map(|path| LocalRuntimeUnitStatus {
+                unit_id: config.id.clone(),
+                name: config.id.clone(),
+                kind: LocalRuntimeUnitKind::Process,
+                ready: path.exists(),
+                phase: Some("running".to_string()),
+                pid: None,
+                restart_count: None,
+                cpu: None,
+                memory: None,
+            }),
             events: vec![],
         })),
         raw: vec![],

@@ -272,7 +272,6 @@ fn emit_local_compute_cluster_heartbeat(
                 network_available: true,
                 tracked_containers: Some(runtime_status.tracked_containers),
                 running_containers: Some(runtime_status.running_containers),
-                events: vec![],
             },
         )),
         raw: vec![],

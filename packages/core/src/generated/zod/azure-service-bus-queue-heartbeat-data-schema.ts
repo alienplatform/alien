@@ -4,7 +4,6 @@
 */
 
 import * as z from "zod";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 import { QueueHeartbeatStatusSchema } from "./queue-heartbeat-status-schema.js";
 
 export const AzureServiceBusQueueHeartbeatDataSchema = z.object({
@@ -20,9 +19,6 @@ export const AzureServiceBusQueueHeartbeatDataSchema = z.object({
 "enableExpress": z.boolean().nullish(),
 "enablePartitioning": z.boolean().nullish(),
 "endpoint": z.string().nullish(),
-get "events"(){
-                return z.array(HeartbeatEventSchema)
-              },
 "forwardDeadLetteredMessagesTo": z.string().nullish(),
 "forwardTo": z.string().nullish(),
 "lockDuration": z.string().nullish(),

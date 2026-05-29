@@ -5,7 +5,6 @@
 
 import * as z from "zod";
 import { ComputeClusterHeartbeatStatusSchema } from "./compute-cluster-heartbeat-status-schema.js";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 import { ObservedCountsSchema } from "./observed-counts-schema.js";
 
 export const LocalComputeClusterHeartbeatDataSchema = z.object({
@@ -14,9 +13,6 @@ export const LocalComputeClusterHeartbeatDataSchema = z.object({
 "dockerAvailable": z.boolean(),
 "dockerOs": z.string().nullish(),
 "dockerVersion": z.string().nullish(),
-get "events"(){
-                return z.array(HeartbeatEventSchema)
-              },
 "hostIdentifier": z.string().nullish(),
 "name": z.string(),
 "networkAvailable": z.boolean(),

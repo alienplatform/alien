@@ -7,12 +7,11 @@ import { ResourceHeartbeatDataNetwork } from "@alienplatform/manager-api/models"
 
 let value: ResourceHeartbeatDataNetwork = {
   data: {
-    events: [],
     isByoVpc: true,
     status: {
       collectionIssues: [],
-      health: "degraded",
-      lifecycle: "scaling",
+      health: "healthy",
+      lifecycle: "stopped",
       partial: true,
       stale: true,
     },

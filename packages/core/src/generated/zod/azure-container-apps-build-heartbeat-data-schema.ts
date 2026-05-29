@@ -5,13 +5,9 @@
 
 import * as z from "zod";
 import { BuildHeartbeatStatusSchema } from "./build-heartbeat-status-schema.js";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 
 export const AzureContainerAppsBuildHeartbeatDataSchema = z.object({
     "environmentVariableCount": z.int().min(0),
-get "events"(){
-                return z.array(HeartbeatEventSchema)
-              },
 "managedEnvironmentId": z.string(),
 "managedIdentityId": z.string().nullish(),
 "resourceGroupName": z.string(),

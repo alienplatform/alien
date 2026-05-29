@@ -227,11 +227,13 @@ data "azurerm_kubernetes_cluster" "kubernetes_existing" {
 }
 
 resource "azurerm_kubernetes_cluster" "kubernetes" {
-  count               = var.kubernetes_cluster_mode == "create" ? 1 : 0
-  name                = "${local.resource_prefix}-k8s"
-  location            = var.azure_location
-  resource_group_name = var.azure_resource_group_name
-  dns_prefix          = "${local.resource_prefix}-k8s"
+  count                     = var.kubernetes_cluster_mode == "create" ? 1 : 0
+  name                      = "${local.resource_prefix}-k8s"
+  location                  = var.azure_location
+  resource_group_name       = var.azure_resource_group_name
+  dns_prefix                = "${local.resource_prefix}-k8s"
+  oidc_issuer_enabled       = true
+  workload_identity_enabled = true
 
   default_node_pool {
     name       = "default"
@@ -246,6 +248,11 @@ resource "azurerm_kubernetes_cluster" "kubernetes" {
   azure_active_directory_role_based_access_control {
     azure_rbac_enabled = true
     tenant_id          = var.azure_managing_tenant_id
+  }
+
+  network_profile {
+    network_plugin    = "azure"
+    load_balancer_sku = "standard"
   }
 
   sku_tier = "Standard"

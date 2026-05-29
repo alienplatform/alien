@@ -6,40 +6,25 @@
 import { DataAwsEcr } from "@alienplatform/platform-api/models";
 
 let value: DataAwsEcr = {
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2025-07-20T04:34:55.254Z"),
-      severity: "info",
-    },
-  ],
   region: "<value>",
   registryId: "<id>",
-  registryUri: "https://shiny-shadowbox.info/",
+  registryUri: "https://mindless-bench.com",
   repositories: [
     {
-      createdAt: 3232.31,
+      createdAt: 8040.15,
       kmsKeyPresent: true,
       registryId: "<id>",
       repositoryArn: "<value>",
       repositoryName: "<value>",
-      repositoryUri: "https://back-wear.com/",
+      repositoryUri: "https://glossy-disclosure.info",
     },
   ],
   repositoriesTruncated: true,
-  repositoryCount: 601812,
+  repositoryCount: 980949,
   repositoryPrefix: "<value>",
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "collection-failed",
-        severity: "error",
-        source: "<value>",
-      },
-    ],
-    health: "unhealthy",
+    collectionIssues: [],
+    health: "unknown",
     lifecycle: "stopped",
     partial: false,
     stale: false,
@@ -50,17 +35,16 @@ let value: DataAwsEcr = {
 
 ## Fields
 
-| Field                                                                            | Type                                                                             | Required                                                                         | Description                                                                      |
-| -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `events`                                                                         | [models.SyncReconcileRequestEvent46](../models/syncreconcilerequestevent46.md)[] | :heavy_check_mark:                                                               | N/A                                                                              |
-| `pullRoleArn`                                                                    | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `pushRoleArn`                                                                    | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `region`                                                                         | *string*                                                                         | :heavy_check_mark:                                                               | N/A                                                                              |
-| `registryId`                                                                     | *string*                                                                         | :heavy_check_mark:                                                               | N/A                                                                              |
-| `registryUri`                                                                    | *string*                                                                         | :heavy_check_mark:                                                               | N/A                                                                              |
-| `repositories`                                                                   | [models.Repository](../models/repository.md)[]                                   | :heavy_check_mark:                                                               | N/A                                                                              |
-| `repositoriesTruncated`                                                          | *boolean*                                                                        | :heavy_check_mark:                                                               | N/A                                                                              |
-| `repositoryCount`                                                                | *number*                                                                         | :heavy_check_mark:                                                               | N/A                                                                              |
-| `repositoryPrefix`                                                               | *string*                                                                         | :heavy_check_mark:                                                               | N/A                                                                              |
-| `status`                                                                         | [models.HeartbeatStatus46](../models/heartbeatstatus46.md)                       | :heavy_check_mark:                                                               | N/A                                                                              |
-| `backend`                                                                        | *"awsEcr"*                                                                       | :heavy_check_mark:                                                               | N/A                                                                              |
+| Field                                                      | Type                                                       | Required                                                   | Description                                                |
+| ---------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- |
+| `pullRoleArn`                                              | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
+| `pushRoleArn`                                              | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
+| `region`                                                   | *string*                                                   | :heavy_check_mark:                                         | N/A                                                        |
+| `registryId`                                               | *string*                                                   | :heavy_check_mark:                                         | N/A                                                        |
+| `registryUri`                                              | *string*                                                   | :heavy_check_mark:                                         | N/A                                                        |
+| `repositories`                                             | [models.Repository](../models/repository.md)[]             | :heavy_check_mark:                                         | N/A                                                        |
+| `repositoriesTruncated`                                    | *boolean*                                                  | :heavy_check_mark:                                         | N/A                                                        |
+| `repositoryCount`                                          | *number*                                                   | :heavy_check_mark:                                         | N/A                                                        |
+| `repositoryPrefix`                                         | *string*                                                   | :heavy_check_mark:                                         | N/A                                                        |
+| `status`                                                   | [models.HeartbeatStatus46](../models/heartbeatstatus46.md) | :heavy_check_mark:                                         | N/A                                                        |
+| `backend`                                                  | *"awsEcr"*                                                 | :heavy_check_mark:                                         | N/A                                                        |

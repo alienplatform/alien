@@ -7,25 +7,24 @@
 
 ```typescript
 const value: models.DataAwsLambda = {
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2025-07-19T03:10:06.736Z"),
-      severity: "warning",
-    },
-  ],
   functionName: "<value>",
   functionUrlCorsPresent: false,
-  layerCount: 965000,
+  layerCount: 515631,
   status: {
-    collectionIssues: [],
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "forbidden",
+        severity: "warning",
+        source: "<value>",
+      },
+    ],
     health: "unhealthy",
-    lifecycle: "scaling",
-    partial: false,
+    lifecycle: "failed",
+    partial: true,
     stale: false,
   },
-  triggerCount: 857435,
+  triggerCount: 414207,
   backend: "awsLambda",
 };
 ```
@@ -34,14 +33,6 @@ const value: models.DataAwsLambda = {
 
 ```typescript
 const value: models.DataGcpCloudRun = {
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-03-08T10:07:05.119Z"),
-      severity: "warning",
-    },
-  ],
   service: "<value>",
   status: {
     collectionIssues: [
@@ -53,13 +44,14 @@ const value: models.DataGcpCloudRun = {
       },
     ],
     health: "unknown",
-    lifecycle: "unknown",
+    lifecycle: "stopping",
     partial: false,
     stale: true,
   },
-  trafficCount: 335156,
+  trafficCount: 12255,
   urls: [
     "<value 1>",
+    "<value 2>",
   ],
   backend: "gcpCloudRun",
 };
@@ -70,19 +62,18 @@ const value: models.DataGcpCloudRun = {
 ```typescript
 const value: models.DataAzureContainerApps1 = {
   appName: "<value>",
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2026-05-02T10:27:21.624Z"),
-      severity: "warning",
-    },
-  ],
   status: {
-    collectionIssues: [],
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "collection-failed",
+        severity: "warning",
+        source: "<value>",
+      },
+    ],
     health: "healthy",
     lifecycle: "updating",
-    partial: false,
+    partial: true,
     stale: false,
   },
   backend: "azureContainerApps",
@@ -95,39 +86,23 @@ const value: models.DataAzureContainerApps1 = {
 const value: models.DataKubernetes1 = {
   events: [
     {
-      kind: "<value>",
       message: "<value>",
-      observedAt: new Date("2025-06-15T13:58:09.990Z"),
-      severity: "info",
-    },
-  ],
-  instances: [
-    {
-      name: "<value>",
-      ownerReferences: [
-        {
-          controller: false,
-          kind: "<value>",
-          name: "<value>",
-          uid: "<id>",
-        },
-      ],
-      ready: true,
-      restartCount: 303382,
+      reason: "<value>",
     },
   ],
   name: "<value>",
   namespace: "<value>",
+  pods: [],
   replicas: {},
   status: {
     collectionIssues: [],
-    health: "unknown",
-    lifecycle: "running",
-    partial: true,
+    health: "unhealthy",
+    lifecycle: "failed",
+    partial: false,
     stale: true,
   },
-  triggerCount: 638946,
-  workloadKind: "replicaSet",
+  triggerCount: 303382,
+  workloadKind: "daemonSet",
   backend: "kubernetes",
 };
 ```

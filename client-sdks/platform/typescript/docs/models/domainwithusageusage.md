@@ -11,6 +11,7 @@ let value: DomainWithUsageUsage = {
     {
       id: "<id>",
       projectId: "<id>",
+      projectName: "<value>",
       hostname: "prudent-duffel.net",
     },
   ],

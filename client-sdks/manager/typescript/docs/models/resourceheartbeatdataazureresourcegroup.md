@@ -7,29 +7,18 @@ import { ResourceHeartbeatDataAzureResourceGroup } from "@alienplatform/manager-
 
 let value: ResourceHeartbeatDataAzureResourceGroup = {
   data: {
-    events: [
-      {
-        kind: "<value>",
-        message: "<value>",
-        observedAt: new Date("2024-02-23T02:52:34.144Z"),
-        severity: "info",
-      },
-    ],
-    managedTags: {},
+    managedTags: {
+      "key": "<value>",
+      "key1": "<value>",
+      "key2": "<value>",
+    },
     name: "<value>",
     status: {
-      collectionIssues: [
-        {
-          message: "<value>",
-          reason: "forbidden",
-          severity: "info",
-          source: "<value>",
-        },
-      ],
-      health: "unknown",
-      lifecycle: "deleted",
-      partial: true,
-      stale: false,
+      collectionIssues: [],
+      health: "unhealthy",
+      lifecycle: "updating",
+      partial: false,
+      stale: true,
     },
   },
   resourceType: "azure_resource_group",

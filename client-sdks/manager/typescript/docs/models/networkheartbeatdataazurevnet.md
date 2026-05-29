@@ -6,12 +6,11 @@
 import { NetworkHeartbeatDataAzureVnet } from "@alienplatform/manager-api/models";
 
 let value: NetworkHeartbeatDataAzureVnet = {
-  events: [],
   isByoVnet: true,
   status: {
     collectionIssues: [],
-    health: "degraded",
-    lifecycle: "scaling",
+    health: "healthy",
+    lifecycle: "stopped",
     partial: true,
     stale: true,
   },
@@ -24,7 +23,6 @@ let value: NetworkHeartbeatDataAzureVnet = {
 | Field                                                                | Type                                                                 | Required                                                             | Description                                                          |
 | -------------------------------------------------------------------- | -------------------------------------------------------------------- | -------------------------------------------------------------------- | -------------------------------------------------------------------- |
 | `cidrBlock`                                                          | *string*                                                             | :heavy_minus_sign:                                                   | N/A                                                                  |
-| `events`                                                             | [models.HeartbeatEvent](../models/heartbeatevent.md)[]               | :heavy_check_mark:                                                   | N/A                                                                  |
 | `isByoVnet`                                                          | *boolean*                                                            | :heavy_check_mark:                                                   | N/A                                                                  |
 | `lastByoVnetVerificationErrorCode`                                   | *string*                                                             | :heavy_minus_sign:                                                   | N/A                                                                  |
 | `location`                                                           | *string*                                                             | :heavy_minus_sign:                                                   | N/A                                                                  |

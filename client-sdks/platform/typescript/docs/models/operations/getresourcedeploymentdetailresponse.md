@@ -28,9 +28,10 @@ let value: GetResourceDeploymentDetailResponse = {
     readyCount: 601933,
     observedAt: new Date("2026-03-21T07:30:12.263Z"),
   },
-  instances: [
+  runtimeUnits: [
     {
-      instanceId: "<id>",
+      unitId: "<id>",
+      unitKind: "<value>",
       name: "<value>",
       ready: false,
       phase: "<value>",
@@ -51,5 +52,5 @@ let value: GetResourceDeploymentDetailResponse = {
 | Field                                                                                                                | Type                                                                                                                 | Required                                                                                                             | Description                                                                                                          |
 | -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | `deployment`                                                                                                         | [operations.GetResourceDeploymentDetailDeployment](../../models/operations/getresourcedeploymentdetaildeployment.md) | :heavy_check_mark:                                                                                                   | N/A                                                                                                                  |
-| `instances`                                                                                                          | [operations.GetResourceDeploymentDetailInstance](../../models/operations/getresourcedeploymentdetailinstance.md)[]   | :heavy_check_mark:                                                                                                   | N/A                                                                                                                  |
+| `runtimeUnits`                                                                                                       | [operations.RuntimeUnit](../../models/operations/runtimeunit.md)[]                                                   | :heavy_check_mark:                                                                                                   | N/A                                                                                                                  |
 | `events`                                                                                                             | [operations.GetResourceDeploymentDetailEvent](../../models/operations/getresourcedeploymentdetailevent.md)[]         | :heavy_check_mark:                                                                                                   | N/A                                                                                                                  |

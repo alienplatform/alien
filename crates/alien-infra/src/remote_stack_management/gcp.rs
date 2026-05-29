@@ -679,7 +679,6 @@ fn emit_gcp_remote_stack_management_heartbeat(
                     service_account_unique_id: controller.service_account_unique_id.clone(),
                     role_bound: controller.role_bound,
                     impersonation_granted: controller.impersonation_granted,
-                    events: vec![],
                 },
             ),
         ),

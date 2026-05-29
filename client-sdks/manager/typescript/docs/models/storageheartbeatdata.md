@@ -8,30 +8,15 @@
 ```typescript
 const value: models.StorageHeartbeatDataAwsS3 = {
   encryptionConfigPresent: true,
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-02-23T02:52:34.144Z"),
-      severity: "info",
-    },
-  ],
   lifecyclePresent: false,
   name: "<value>",
   publicAccessBlockPresent: false,
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "forbidden",
-        severity: "info",
-        source: "<value>",
-      },
-    ],
+    collectionIssues: [],
     health: "degraded",
-    lifecycle: "updating",
+    lifecycle: "stopping",
     partial: true,
-    stale: false,
+    stale: true,
   },
   backend: "awsS3",
 };
@@ -42,29 +27,14 @@ const value: models.StorageHeartbeatDataAwsS3 = {
 ```typescript
 const value: models.StorageHeartbeatDataGcpCloudStorage = {
   encryptionConfigPresent: false,
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-02-23T02:52:34.144Z"),
-      severity: "info",
-    },
-  ],
-  lifecyclePresent: true,
+  lifecyclePresent: false,
   name: "<value>",
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "forbidden",
-        severity: "info",
-        source: "<value>",
-      },
-    ],
+    collectionIssues: [],
     health: "degraded",
-    lifecycle: "updating",
+    lifecycle: "stopping",
     partial: true,
-    stale: false,
+    stale: true,
   },
   backend: "gcpCloudStorage",
 };
@@ -74,21 +44,13 @@ const value: models.StorageHeartbeatDataGcpCloudStorage = {
 
 ```typescript
 const value: models.StorageHeartbeatDataAzureBlob = {
-  events: [],
   name: "<value>",
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "forbidden",
-        severity: "info",
-        source: "<value>",
-      },
-    ],
+    collectionIssues: [],
     health: "degraded",
-    lifecycle: "updating",
+    lifecycle: "stopping",
     partial: true,
-    stale: false,
+    stale: true,
   },
   backend: "azureBlob",
 };
@@ -98,29 +60,14 @@ const value: models.StorageHeartbeatDataAzureBlob = {
 
 ```typescript
 const value: models.StorageHeartbeatDataLocal = {
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-02-23T02:52:34.144Z"),
-      severity: "info",
-    },
-  ],
-  path: "/private/tmp",
+  path: "/usr/lib",
   pathExists: true,
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "forbidden",
-        severity: "info",
-        source: "<value>",
-      },
-    ],
+    collectionIssues: [],
     health: "degraded",
-    lifecycle: "updating",
+    lifecycle: "stopping",
     partial: true,
-    stale: false,
+    stale: true,
   },
   backend: "local",
 };

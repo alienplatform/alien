@@ -6,21 +6,13 @@
 import { StorageHeartbeatDataAzureBlob } from "@alienplatform/manager-api/models";
 
 let value: StorageHeartbeatDataAzureBlob = {
-  events: [],
   name: "<value>",
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "forbidden",
-        severity: "info",
-        source: "<value>",
-      },
-    ],
+    collectionIssues: [],
     health: "degraded",
-    lifecycle: "updating",
+    lifecycle: "stopping",
     partial: true,
-    stale: false,
+    stale: true,
   },
   backend: "azureBlob",
 };
@@ -43,7 +35,6 @@ let value: StorageHeartbeatDataAzureBlob = {
 | `containerDeleteRetentionEnabled`                                    | *boolean*                                                            | :heavy_minus_sign:                                                   | N/A                                                                  |
 | `containerPublicAccess`                                              | *string*                                                             | :heavy_minus_sign:                                                   | N/A                                                                  |
 | `encryptionKeySource`                                                | *string*                                                             | :heavy_minus_sign:                                                   | N/A                                                                  |
-| `events`                                                             | [models.HeartbeatEvent](../models/heartbeatevent.md)[]               | :heavy_check_mark:                                                   | N/A                                                                  |
 | `fileEncryptionEnabled`                                              | *boolean*                                                            | :heavy_minus_sign:                                                   | N/A                                                                  |
 | `location`                                                           | *string*                                                             | :heavy_minus_sign:                                                   | N/A                                                                  |
 | `name`                                                               | *string*                                                             | :heavy_check_mark:                                                   | N/A                                                                  |

@@ -250,7 +250,6 @@ fn emit_local_kv_heartbeat(ctx: &ResourceControllerContext<'_>, resource_id: &st
             path_exists,
             is_directory,
             cloud_metadata_supported: false,
-            events: vec![],
         })),
         raw: vec![],
     });

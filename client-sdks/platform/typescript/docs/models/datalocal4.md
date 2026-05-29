@@ -12,8 +12,8 @@ let value: DataLocal4 = {
     {
       kind: "<value>",
       message: "<value>",
-      observedAt: new Date("2025-03-14T01:07:50.346Z"),
-      severity: "error",
+      severity: "warning",
+      timestamp: new Date("2026-01-17T09:27:27.938Z"),
     },
   ],
   imagePathPresent: true,
@@ -34,8 +34,9 @@ let value: DataLocal4 = {
 | Field                                                                            | Type                                                                             | Required                                                                         | Description                                                                      |
 | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
 | `commandSupported`                                                               | *boolean*                                                                        | :heavy_check_mark:                                                               | N/A                                                                              |
+| `daemonInstance`                                                                 | *models.DaemonInstanceUnion*                                                     | :heavy_minus_sign:                                                               | N/A                                                                              |
 | `daemonName`                                                                     | *string*                                                                         | :heavy_check_mark:                                                               | N/A                                                                              |
-| `events`                                                                         | [models.SyncReconcileRequestEvent17](../models/syncreconcilerequestevent17.md)[] | :heavy_check_mark:                                                               | N/A                                                                              |
+| `events`                                                                         | [models.SyncReconcileRequestEvent10](../models/syncreconcilerequestevent10.md)[] | :heavy_check_mark:                                                               | N/A                                                                              |
 | `exitReason`                                                                     | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
 | `imagePathPresent`                                                               | *boolean*                                                                        | :heavy_check_mark:                                                               | N/A                                                                              |
 | `pid`                                                                            | *number*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |

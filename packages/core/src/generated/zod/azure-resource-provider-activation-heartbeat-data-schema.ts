@@ -4,14 +4,10 @@
 */
 
 import * as z from "zod";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 import { ServiceActivationHeartbeatStatusSchema } from "./service-activation-heartbeat-status-schema.js";
 
 export const AzureResourceProviderActivationHeartbeatDataSchema = z.object({
-    get "events"(){
-                return z.array(HeartbeatEventSchema)
-              },
-"namespace": z.string(),
+    "namespace": z.string(),
 "providerId": z.string().nullish(),
 "registered": z.boolean(),
 "registrationPolicy": z.string().nullish(),

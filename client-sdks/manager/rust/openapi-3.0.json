@@ -1557,8 +1557,7 @@
           "projectName",
           "environmentVariableCount",
           "serviceRolePresent",
-          "encryptionKeyPresent",
-          "events"
+          "encryptionKeyPresent"
         ],
         "properties": {
           "artifactsEncryptionDisabled": {
@@ -1601,12 +1600,6 @@
             "type": "integer",
             "format": "int32",
             "minimum": 0
-          },
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
           },
           "imagePullCredentialsType": {
             "type": "string",
@@ -1661,8 +1654,7 @@
           "nodes",
           "name",
           "capacityGroups",
-          "providerFleets",
-          "events"
+          "providerFleets"
         ],
         "properties": {
           "backendClusterId": {
@@ -1678,12 +1670,6 @@
           "cpu": {
             "$ref": "#/components/schemas/MetricSample",
             "nullable": true
-          },
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
           },
           "memory": {
             "$ref": "#/components/schemas/MetricSample",
@@ -1735,7 +1721,7 @@
           "unavailableInstances",
           "commandSupported",
           "latestUpdateTimestamp",
-          "instances",
+          "daemonInstances",
           "events"
         ],
         "properties": {
@@ -1750,6 +1736,12 @@
           "commandSupported": {
             "type": "boolean"
           },
+          "daemonInstances": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ManagedRuntimeUnitStatus"
+            }
+          },
           "daemonName": {
             "type": "string"
           },
@@ -1761,7 +1753,7 @@
           "events": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
+              "$ref": "#/components/schemas/ManagedRuntimeEventSnapshot"
             }
           },
           "healthyInstances": {
@@ -1782,12 +1774,6 @@
           "horizonStatusReason": {
             "type": "string",
             "nullable": true
-          },
-          "instances": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HorizonDaemonInstanceStatus"
-            }
           },
           "latestUpdateTimestamp": {
             "type": "string"
@@ -1822,8 +1808,7 @@
         "required": [
           "status",
           "name",
-          "keySchema",
-          "events"
+          "keySchema"
         ],
         "properties": {
           "billingMode": {
@@ -1833,12 +1818,6 @@
           "deletionProtectionEnabled": {
             "type": "boolean",
             "nullable": true
-          },
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
           },
           "globalSecondaryIndexCount": {
             "type": "integer",
@@ -1938,16 +1917,9 @@
           "repositoryPrefix",
           "repositoryCount",
           "repositoriesTruncated",
-          "repositories",
-          "events"
+          "repositories"
         ],
         "properties": {
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
-          },
           "pullRoleArn": {
             "type": "string",
             "nullable": true
@@ -2047,8 +2019,7 @@
           "attachedPolicyNames",
           "inlinePolicyCount",
           "inlinePolicyNames",
-          "stackPermissionsApplied",
-          "events"
+          "stackPermissionsApplied"
         ],
         "properties": {
           "assumeRolePolicyPresent": {
@@ -2071,12 +2042,6 @@
           "description": {
             "type": "string",
             "nullable": true
-          },
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
           },
           "inlinePolicyCount": {
             "type": "integer",
@@ -2147,19 +2112,12 @@
           "functionName",
           "layerCount",
           "functionUrlCorsPresent",
-          "triggerCount",
-          "events"
+          "triggerCount"
         ],
         "properties": {
           "codeSha256": {
             "type": "string",
             "nullable": true
-          },
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
           },
           "functionName": {
             "type": "string"
@@ -2260,18 +2218,11 @@
           "accountId",
           "region",
           "prefix",
-          "parameterMetadataSampled",
-          "events"
+          "parameterMetadataSampled"
         ],
         "properties": {
           "accountId": {
             "type": "string"
-          },
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
           },
           "hasMoreParameters": {
             "type": "boolean",
@@ -2336,16 +2287,9 @@
         "type": "object",
         "required": [
           "status",
-          "managementPermissionsApplied",
-          "events"
+          "managementPermissionsApplied"
         ],
         "properties": {
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
-          },
           "managementPermissionsApplied": {
             "type": "boolean"
           },
@@ -2369,8 +2313,7 @@
           "name",
           "lifecyclePresent",
           "encryptionConfigPresent",
-          "publicAccessBlockPresent",
-          "events"
+          "publicAccessBlockPresent"
         ],
         "properties": {
           "blockPublicAcls": {
@@ -2399,12 +2342,6 @@
           "encryptionEnabled": {
             "type": "boolean",
             "nullable": true
-          },
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
           },
           "ignorePublicAcls": {
             "type": "boolean",
@@ -2451,8 +2388,7 @@
         "required": [
           "status",
           "name",
-          "approximateCounts",
-          "events"
+          "approximateCounts"
         ],
         "properties": {
           "approximateCounts": {
@@ -2489,12 +2425,6 @@
             "format": "int32",
             "minimum": 0,
             "nullable": true
-          },
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
           },
           "fifoQueue": {
             "type": "boolean",
@@ -2582,8 +2512,7 @@
           "privateSubnetIds",
           "availabilityZones",
           "routeTableCount",
-          "isByoVpc",
-          "events"
+          "isByoVpc"
         ],
         "properties": {
           "availabilityZones": {
@@ -2595,12 +2524,6 @@
           "cidrBlock": {
             "type": "string",
             "nullable": true
-          },
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
           },
           "internetGatewayId": {
             "type": "string",
@@ -2651,8 +2574,7 @@
         "type": "object",
         "required": [
           "status",
-          "name",
-          "events"
+          "name"
         ],
         "properties": {
           "accessTier": {
@@ -2712,12 +2634,6 @@
           "encryptionKeySource": {
             "type": "string",
             "nullable": true
-          },
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
           },
           "fileEncryptionEnabled": {
             "type": "boolean",
@@ -2790,8 +2706,7 @@
           "nodes",
           "name",
           "capacityGroups",
-          "providerFleets",
-          "events"
+          "providerFleets"
         ],
         "properties": {
           "backendClusterId": {
@@ -2807,12 +2722,6 @@
           "cpu": {
             "$ref": "#/components/schemas/MetricSample",
             "nullable": true
-          },
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
           },
           "memory": {
             "$ref": "#/components/schemas/MetricSample",
@@ -2845,20 +2754,13 @@
           "status",
           "managedEnvironmentId",
           "resourceGroupName",
-          "environmentVariableCount",
-          "events"
+          "environmentVariableCount"
         ],
         "properties": {
           "environmentVariableCount": {
             "type": "integer",
             "format": "int32",
             "minimum": 0
-          },
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
           },
           "managedEnvironmentId": {
             "type": "string"
@@ -2885,8 +2787,7 @@
           "status",
           "name",
           "workloadProfileCount",
-          "workloadProfiles",
-          "events"
+          "workloadProfiles"
         ],
         "properties": {
           "customDomainVerificationId": {
@@ -2900,12 +2801,6 @@
           "eventStreamEndpoint": {
             "type": "string",
             "nullable": true
-          },
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
           },
           "infrastructureResourceGroup": {
             "type": "string",
@@ -3021,8 +2916,7 @@
         "type": "object",
         "required": [
           "status",
-          "appName",
-          "events"
+          "appName"
         ],
         "properties": {
           "appName": {
@@ -3036,12 +2930,6 @@
           "environmentName": {
             "type": "string",
             "nullable": true
-          },
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
           },
           "ingressFqdn": {
             "type": "string",
@@ -3098,8 +2986,7 @@
           "privateEndpointConnectionCount",
           "dataEndpointHostNames",
           "zoneRedundancy",
-          "managedTagCount",
-          "events"
+          "managedTagCount"
         ],
         "properties": {
           "adminUserEnabled": {
@@ -3131,12 +3018,6 @@
           "encryptionStatus": {
             "type": "string",
             "nullable": true
-          },
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
           },
           "ipRuleCount": {
             "type": "integer",
@@ -3236,7 +3117,7 @@
           "unavailableInstances",
           "commandSupported",
           "latestUpdateTimestamp",
-          "instances",
+          "daemonInstances",
           "events"
         ],
         "properties": {
@@ -3251,6 +3132,12 @@
           "commandSupported": {
             "type": "boolean"
           },
+          "daemonInstances": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ManagedRuntimeUnitStatus"
+            }
+          },
           "daemonName": {
             "type": "string"
           },
@@ -3262,7 +3149,7 @@
           "events": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
+              "$ref": "#/components/schemas/ManagedRuntimeEventSnapshot"
             }
           },
           "healthyInstances": {
@@ -3283,12 +3170,6 @@
           "horizonStatusReason": {
             "type": "string",
             "nullable": true
-          },
-          "instances": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HorizonDaemonInstanceStatus"
-            }
           },
           "latestUpdateTimestamp": {
             "type": "string"
@@ -3314,20 +3195,13 @@
           "publicNetworkAccess",
           "accessPolicyCount",
           "privateEndpointConnectionCount",
-          "secretMetadataListed",
-          "events"
+          "secretMetadataListed"
         ],
         "properties": {
           "accessPolicyCount": {
             "type": "integer",
             "format": "int32",
             "minimum": 0
-          },
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
           },
           "location": {
             "type": "string",
@@ -3403,8 +3277,7 @@
           "roleAssignmentIds",
           "customRoleDefinitionCount",
           "customRoleDefinitionIds",
-          "stackPermissionsApplied",
-          "events"
+          "stackPermissionsApplied"
         ],
         "properties": {
           "clientId": {
@@ -3420,12 +3293,6 @@
             "type": "array",
             "items": {
               "type": "string"
-            }
-          },
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
             }
           },
           "isolationScope": {
@@ -3507,16 +3374,9 @@
         "type": "object",
         "required": [
           "status",
-          "roleAssignmentIds",
-          "events"
+          "roleAssignmentIds"
         ],
         "properties": {
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
-          },
           "ficName": {
             "type": "string",
             "nullable": true
@@ -3557,16 +3417,9 @@
         "required": [
           "status",
           "name",
-          "managedTags",
-          "events"
+          "managedTags"
         ],
         "properties": {
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
-          },
           "location": {
             "type": "string",
             "nullable": true
@@ -3633,16 +3486,9 @@
           "status",
           "namespace",
           "resourceTypeCount",
-          "registered",
-          "events"
+          "registered"
         ],
         "properties": {
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
-          },
           "namespace": {
             "type": "string"
           },
@@ -3676,8 +3522,7 @@
         "required": [
           "status",
           "name",
-          "privateEndpointConnectionCount",
-          "events"
+          "privateEndpointConnectionCount"
         ],
         "properties": {
           "createdAt": {
@@ -3687,12 +3532,6 @@
           "disableLocalAuth": {
             "type": "boolean",
             "nullable": true
-          },
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
           },
           "location": {
             "type": "string",
@@ -3774,8 +3613,7 @@
         "required": [
           "status",
           "name",
-          "namespaceName",
-          "events"
+          "namespaceName"
         ],
         "properties": {
           "accessedAt": {
@@ -3829,12 +3667,6 @@
           "endpoint": {
             "type": "string",
             "nullable": true
-          },
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
           },
           "forwardDeadLetteredMessagesTo": {
             "type": "string",
@@ -3966,8 +3798,7 @@
           "status",
           "name",
           "primaryEndpoints",
-          "secondaryEndpoints",
-          "events"
+          "secondaryEndpoints"
         ],
         "properties": {
           "allowBlobPublicAccess": {
@@ -3981,12 +3812,6 @@
           "encryptionKeySource": {
             "type": "string",
             "nullable": true
-          },
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
           },
           "kind": {
             "type": "string",
@@ -4078,19 +3903,12 @@
           "status",
           "tableName",
           "storageAccountName",
-          "tableExists",
-          "events"
+          "tableExists"
         ],
         "properties": {
           "endpoint": {
             "type": "string",
             "nullable": true
-          },
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
           },
           "resourceGroup": {
             "type": "string",
@@ -4140,19 +3958,12 @@
         "type": "object",
         "required": [
           "status",
-          "isByoVnet",
-          "events"
+          "isByoVnet"
         ],
         "properties": {
           "cidrBlock": {
             "type": "string",
             "nullable": true
-          },
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
           },
           "isByoVnet": {
             "type": "boolean"
@@ -5407,8 +5218,7 @@
           "kmsKeyNamePresent",
           "iamPolicyEtagPresent",
           "iamBindingCount",
-          "iamRoles",
-          "events"
+          "iamRoles"
         ],
         "properties": {
           "cleanupPolicyCount": {
@@ -5427,12 +5237,6 @@
           "description": {
             "type": "string",
             "nullable": true
-          },
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
           },
           "format": {
             "type": "string",
@@ -5509,8 +5313,7 @@
           "projectId",
           "location",
           "buildConfigId",
-          "environmentVariableCount",
-          "events"
+          "environmentVariableCount"
         ],
         "properties": {
           "buildConfigId": {
@@ -5520,12 +5323,6 @@
             "type": "integer",
             "format": "int32",
             "minimum": 0
-          },
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
           },
           "location": {
             "type": "string"
@@ -5548,8 +5345,7 @@
           "status",
           "service",
           "urls",
-          "trafficCount",
-          "events"
+          "trafficCount"
         ],
         "properties": {
           "containerImage": {
@@ -5559,12 +5355,6 @@
           "cpuLimit": {
             "type": "string",
             "nullable": true
-          },
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
           },
           "generation": {
             "type": "integer",
@@ -5631,8 +5421,7 @@
           "status",
           "name",
           "lifecyclePresent",
-          "encryptionConfigPresent",
-          "events"
+          "encryptionConfigPresent"
         ],
         "properties": {
           "bucketId": {
@@ -5645,12 +5434,6 @@
           },
           "encryptionConfigPresent": {
             "type": "boolean"
-          },
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
           },
           "lifecyclePresent": {
             "type": "boolean"
@@ -5724,8 +5507,7 @@
           "nodes",
           "name",
           "capacityGroups",
-          "providerFleets",
-          "events"
+          "providerFleets"
         ],
         "properties": {
           "backendClusterId": {
@@ -5741,12 +5523,6 @@
           "cpu": {
             "$ref": "#/components/schemas/MetricSample",
             "nullable": true
-          },
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
           },
           "memory": {
             "$ref": "#/components/schemas/MetricSample",
@@ -5798,7 +5574,7 @@
           "unavailableInstances",
           "commandSupported",
           "latestUpdateTimestamp",
-          "instances",
+          "daemonInstances",
           "events"
         ],
         "properties": {
@@ -5813,6 +5589,12 @@
           "commandSupported": {
             "type": "boolean"
           },
+          "daemonInstances": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ManagedRuntimeUnitStatus"
+            }
+          },
           "daemonName": {
             "type": "string"
           },
@@ -5824,7 +5606,7 @@
           "events": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
+              "$ref": "#/components/schemas/ManagedRuntimeEventSnapshot"
             }
           },
           "healthyInstances": {
@@ -5846,12 +5628,6 @@
             "type": "string",
             "nullable": true
           },
-          "instances": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HorizonDaemonInstanceStatus"
-            }
-          },
           "latestUpdateTimestamp": {
             "type": "string"
           },
@@ -5871,8 +5647,7 @@
           "status",
           "databaseName",
           "cmekEnabled",
-          "sourceInfoPresent",
-          "events"
+          "sourceInfoPresent"
         ],
         "properties": {
           "appEngineIntegrationMode": {
@@ -5916,12 +5691,6 @@
           "endpoint": {
             "type": "string",
             "nullable": true
-          },
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
           },
           "locationId": {
             "type": "string",
@@ -5972,19 +5741,12 @@
           "topicLabels",
           "subscriptionLabels",
           "messageStorageAllowedPersistenceRegions",
-          "subscriptionPushAttributes",
-          "events"
+          "subscriptionPushAttributes"
         ],
         "properties": {
           "endpoint": {
             "type": "string",
             "nullable": true
-          },
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
           },
           "kmsKeyName": {
             "type": "string",
@@ -6135,16 +5897,9 @@
         "required": [
           "status",
           "roleBound",
-          "impersonationGranted",
-          "events"
+          "impersonationGranted"
         ],
         "properties": {
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
-          },
           "impersonationGranted": {
             "type": "boolean"
           },
@@ -6171,16 +5926,9 @@
           "projectId",
           "location",
           "prefix",
-          "secretMetadataListed",
-          "events"
+          "secretMetadataListed"
         ],
         "properties": {
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
-          },
           "location": {
             "type": "string"
           },
@@ -6206,8 +5954,7 @@
           "projectBindingCount",
           "projectRoles",
           "serviceAccountBindingCount",
-          "serviceAccountRoles",
-          "events"
+          "serviceAccountRoles"
         ],
         "properties": {
           "description": {
@@ -6228,12 +5975,6 @@
           "etag": {
             "type": "string",
             "nullable": true
-          },
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
           },
           "name": {
             "type": "string",
@@ -6284,18 +6025,11 @@
           "status",
           "projectId",
           "serviceName",
-          "enabled",
-          "events"
+          "enabled"
         ],
         "properties": {
           "enabled": {
             "type": "boolean"
-          },
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
           },
           "lastOperationName": {
             "type": "string",
@@ -6328,8 +6062,7 @@
         "type": "object",
         "required": [
           "status",
-          "isByoVpc",
-          "events"
+          "isByoVpc"
         ],
         "properties": {
           "cidrBlock": {
@@ -6339,12 +6072,6 @@
           "cloudNatName": {
             "type": "string",
             "nullable": true
-          },
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
           },
           "firewallName": {
             "type": "string",
@@ -6473,34 +6200,6 @@
           "timed-out"
         ]
       },
-      "HeartbeatEvent": {
-        "type": "object",
-        "required": [
-          "observedAt",
-          "kind",
-          "severity",
-          "message"
-        ],
-        "properties": {
-          "kind": {
-            "type": "string"
-          },
-          "message": {
-            "type": "string"
-          },
-          "observedAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "severity": {
-            "$ref": "#/components/schemas/HeartbeatIssueSeverity"
-          },
-          "source": {
-            "type": "string",
-            "nullable": true
-          }
-        }
-      },
       "HeartbeatIssueSeverity": {
         "type": "string",
         "enum": [
@@ -6525,6 +6224,7 @@
           "schedulingMode",
           "replicas",
           "attentionCount",
+          "replicaUnits",
           "events"
         ],
         "properties": {
@@ -6543,7 +6243,7 @@
           "events": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
+              "$ref": "#/components/schemas/ManagedRuntimeEventSnapshot"
             }
           },
           "image": {
@@ -6554,6 +6254,12 @@
             "$ref": "#/components/schemas/MetricSample",
             "nullable": true
           },
+          "replicaUnits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ManagedRuntimeUnitStatus"
+            }
+          },
           "replicas": {
             "$ref": "#/components/schemas/WorkloadReplicaStatus"
           },
@@ -6562,87 +6268,6 @@
           },
           "status": {
             "$ref": "#/components/schemas/WorkloadHeartbeatStatus"
-          }
-        }
-      },
-      "HorizonDaemonInstanceStatus": {
-        "type": "object",
-        "required": [
-          "replicaId",
-          "name",
-          "ready"
-        ],
-        "properties": {
-          "cpu": {
-            "$ref": "#/components/schemas/MetricSample",
-            "nullable": true
-          },
-          "ip": {
-            "type": "string",
-            "nullable": true
-          },
-          "machineId": {
-            "type": "string",
-            "nullable": true
-          },
-          "memory": {
-            "$ref": "#/components/schemas/MetricSample",
-            "nullable": true
-          },
-          "message": {
-            "type": "string",
-            "nullable": true
-          },
-          "metricsHealthy": {
-            "type": "boolean",
-            "nullable": true
-          },
-          "metricsLastUpdated": {
-            "type": "string",
-            "nullable": true
-          },
-          "metricsStatus": {
-            "type": "string",
-            "nullable": true
-          },
-          "name": {
-            "type": "string"
-          },
-          "nodeName": {
-            "type": "string",
-            "nullable": true
-          },
-          "phase": {
-            "type": "string",
-            "nullable": true
-          },
-          "ready": {
-            "type": "boolean"
-          },
-          "reason": {
-            "type": "string",
-            "nullable": true
-          },
-          "replicaId": {
-            "type": "string"
-          },
-          "restartCount": {
-            "type": "integer",
-            "format": "int32",
-            "minimum": 0,
-            "nullable": true
-          },
-          "status": {
-            "type": "string",
-            "nullable": true
-          },
-          "terminatedReason": {
-            "type": "string",
-            "nullable": true
-          },
-          "waitingReason": {
-            "type": "string",
-            "nullable": true
           }
         }
       },
@@ -6751,7 +6376,7 @@
           "events": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
+              "$ref": "#/components/schemas/KubernetesEventSnapshot"
             }
           },
           "failed": {
@@ -6946,7 +6571,7 @@
           "events": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
+              "$ref": "#/components/schemas/KubernetesEventSnapshot"
             }
           },
           "memory": {
@@ -7084,7 +6709,7 @@
           "name",
           "workloadKind",
           "replicas",
-          "instances",
+          "pods",
           "events"
         ],
         "properties": {
@@ -7095,13 +6720,7 @@
           "events": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
-          },
-          "instances": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/KubernetesPodInstanceStatus"
+              "$ref": "#/components/schemas/KubernetesEventSnapshot"
             }
           },
           "memory": {
@@ -7113,6 +6732,12 @@
           },
           "namespace": {
             "type": "string"
+          },
+          "pods": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KubernetesPodRuntimeUnitStatus"
+            }
           },
           "replicas": {
             "$ref": "#/components/schemas/WorkloadReplicaStatus"
@@ -7155,7 +6780,7 @@
           "name",
           "replicas",
           "commandSupported",
-          "instances",
+          "pods",
           "events"
         ],
         "properties": {
@@ -7169,13 +6794,7 @@
           "events": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
-          },
-          "instances": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/KubernetesPodInstanceStatus"
+              "$ref": "#/components/schemas/KubernetesEventSnapshot"
             }
           },
           "memory": {
@@ -7187,6 +6806,12 @@
           },
           "namespace": {
             "type": "string"
+          },
+          "pods": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KubernetesPodRuntimeUnitStatus"
+            }
           },
           "replicas": {
             "$ref": "#/components/schemas/WorkloadReplicaStatus"
@@ -7202,6 +6827,103 @@
           },
           "workload": {
             "$ref": "#/components/schemas/KubernetesWorkloadStatus",
+            "nullable": true
+          }
+        }
+      },
+      "KubernetesEventInvolvedObject": {
+        "type": "object",
+        "properties": {
+          "apiVersion": {
+            "type": "string",
+            "nullable": true
+          },
+          "fieldPath": {
+            "type": "string",
+            "nullable": true
+          },
+          "kind": {
+            "type": "string",
+            "nullable": true
+          },
+          "name": {
+            "type": "string",
+            "nullable": true
+          },
+          "namespace": {
+            "type": "string",
+            "nullable": true
+          },
+          "resourceVersion": {
+            "type": "string",
+            "nullable": true
+          },
+          "uid": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "KubernetesEventSnapshot": {
+        "type": "object",
+        "required": [
+          "reason",
+          "message"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "eventTime": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "firstTimestamp": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "involvedObject": {
+            "$ref": "#/components/schemas/KubernetesEventInvolvedObject",
+            "nullable": true
+          },
+          "lastTimestamp": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "message": {
+            "type": "string"
+          },
+          "raw": {
+            "$ref": "#/components/schemas/Value",
+            "nullable": true
+          },
+          "reason": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/KubernetesEventSource",
+            "nullable": true
+          },
+          "type": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "KubernetesEventSource": {
+        "type": "object",
+        "properties": {
+          "component": {
+            "type": "string",
+            "nullable": true
+          },
+          "host": {
+            "type": "string",
             "nullable": true
           }
         }
@@ -7440,7 +7162,7 @@
           }
         }
       },
-      "KubernetesPodInstanceStatus": {
+      "KubernetesPodRuntimeUnitStatus": {
         "type": "object",
         "required": [
           "name",
@@ -7649,16 +7371,9 @@
           "status",
           "namespace",
           "prefix",
-          "secretMetadataListed",
-          "events"
+          "secretMetadataListed"
         ],
         "properties": {
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
-          },
           "namespace": {
             "type": "string"
           },
@@ -7715,7 +7430,7 @@
           "name",
           "workloadKind",
           "replicas",
-          "instances",
+          "pods",
           "triggerCount",
           "events"
         ],
@@ -7727,13 +7442,7 @@
           "events": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
-          },
-          "instances": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/KubernetesPodInstanceStatus"
+              "$ref": "#/components/schemas/KubernetesEventSnapshot"
             }
           },
           "memory": {
@@ -7745,6 +7454,12 @@
           },
           "namespace": {
             "type": "string"
+          },
+          "pods": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KubernetesPodRuntimeUnitStatus"
+            }
           },
           "replicas": {
             "$ref": "#/components/schemas/WorkloadReplicaStatus"
@@ -8101,16 +7816,9 @@
         "required": [
           "status",
           "registryUrl",
-          "reachable",
-          "events"
+          "reachable"
         ],
         "properties": {
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
-          },
           "reachable": {
             "type": "boolean"
           },
@@ -8129,8 +7837,7 @@
           "nodes",
           "name",
           "dockerAvailable",
-          "networkAvailable",
-          "events"
+          "networkAvailable"
         ],
         "properties": {
           "dockerApiVersion": {
@@ -8151,12 +7858,6 @@
           "dockerVersion": {
             "type": "string",
             "nullable": true
-          },
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
           },
           "hostIdentifier": {
             "type": "string",
@@ -8211,6 +7912,10 @@
             "type": "string",
             "nullable": true
           },
+          "containerUnit": {
+            "$ref": "#/components/schemas/LocalRuntimeUnitStatus",
+            "nullable": true
+          },
           "cpu": {
             "$ref": "#/components/schemas/MetricSample",
             "nullable": true
@@ -8218,7 +7923,7 @@
           "events": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
+              "$ref": "#/components/schemas/LocalRuntimeEventSnapshot"
             }
           },
           "image": {
@@ -8274,13 +7979,17 @@
           "commandSupported": {
             "type": "boolean"
           },
+          "daemonInstance": {
+            "$ref": "#/components/schemas/LocalRuntimeUnitStatus",
+            "nullable": true
+          },
           "daemonName": {
             "type": "string"
           },
           "events": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
+              "$ref": "#/components/schemas/LocalRuntimeEventSnapshot"
             }
           },
           "exitReason": {
@@ -8317,18 +8026,11 @@
           "name",
           "path",
           "pathExists",
-          "cloudMetadataSupported",
-          "events"
+          "cloudMetadataSupported"
         ],
         "properties": {
           "cloudMetadataSupported": {
             "type": "boolean"
-          },
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
           },
           "isDirectory": {
             "type": "boolean",
@@ -8361,16 +8063,9 @@
         "type": "object",
         "required": [
           "status",
-          "name",
-          "events"
+          "name"
         ],
         "properties": {
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
-          },
           "name": {
             "type": "string"
           },
@@ -8387,23 +8082,122 @@
           }
         }
       },
+      "LocalRuntimeEventSnapshot": {
+        "type": "object",
+        "required": [
+          "timestamp",
+          "severity",
+          "kind",
+          "message"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "raw": {
+            "$ref": "#/components/schemas/Value",
+            "nullable": true
+          },
+          "severity": {
+            "$ref": "#/components/schemas/HeartbeatIssueSeverity"
+          },
+          "subject": {
+            "$ref": "#/components/schemas/LocalRuntimeEventSubject",
+            "nullable": true
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "LocalRuntimeEventSubject": {
+        "type": "object",
+        "required": [
+          "kind"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "nullable": true
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "LocalRuntimeUnitKind": {
+        "type": "string",
+        "enum": [
+          "container",
+          "process",
+          "daemon"
+        ]
+      },
+      "LocalRuntimeUnitStatus": {
+        "type": "object",
+        "required": [
+          "unitId",
+          "name",
+          "kind",
+          "ready"
+        ],
+        "properties": {
+          "cpu": {
+            "$ref": "#/components/schemas/MetricSample",
+            "nullable": true
+          },
+          "kind": {
+            "$ref": "#/components/schemas/LocalRuntimeUnitKind"
+          },
+          "memory": {
+            "$ref": "#/components/schemas/MetricSample",
+            "nullable": true
+          },
+          "name": {
+            "type": "string"
+          },
+          "phase": {
+            "type": "string",
+            "nullable": true
+          },
+          "pid": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0,
+            "nullable": true
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "restartCount": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0,
+            "nullable": true
+          },
+          "unitId": {
+            "type": "string"
+          }
+        }
+      },
       "LocalServiceAccountHeartbeatData": {
         "type": "object",
         "required": [
           "status",
           "identity",
-          "configured",
-          "events"
+          "configured"
         ],
         "properties": {
           "configured": {
             "type": "boolean"
-          },
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
           },
           "identity": {
             "type": "string"
@@ -8418,16 +8212,9 @@
         "required": [
           "status",
           "path",
-          "pathExists",
-          "events"
+          "pathExists"
         ],
         "properties": {
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
-          },
           "isDirectory": {
             "type": "boolean",
             "nullable": true
@@ -8458,16 +8245,9 @@
           "status",
           "path",
           "pathExists",
-          "secretMetadataListed",
-          "events"
+          "secretMetadataListed"
         ],
         "properties": {
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
-            }
-          },
           "isDirectory": {
             "type": "boolean",
             "nullable": true
@@ -8515,7 +8295,7 @@
           "events": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/HeartbeatEvent"
+              "$ref": "#/components/schemas/LocalRuntimeEventSnapshot"
             }
           },
           "imagePathPresent": {
@@ -8531,6 +8311,10 @@
             "minimum": 0,
             "nullable": true
           },
+          "process": {
+            "$ref": "#/components/schemas/LocalRuntimeUnitStatus",
+            "nullable": true
+          },
           "readinessProbeOk": {
             "type": "boolean",
             "nullable": true
@@ -8542,6 +8326,188 @@
             "type": "integer",
             "format": "int32",
             "minimum": 0
+          }
+        }
+      },
+      "ManagedRuntimeEventInvolvedObject": {
+        "type": "object",
+        "properties": {
+          "details": {
+            "$ref": "#/components/schemas/Value",
+            "nullable": true
+          },
+          "id": {
+            "type": "string",
+            "nullable": true
+          },
+          "kind": {
+            "type": "string",
+            "nullable": true
+          },
+          "machineId": {
+            "type": "string",
+            "nullable": true
+          },
+          "name": {
+            "type": "string",
+            "nullable": true
+          },
+          "replicaId": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "ManagedRuntimeEventSnapshot": {
+        "type": "object",
+        "required": [
+          "reason",
+          "message"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "details": {
+            "$ref": "#/components/schemas/Value",
+            "nullable": true
+          },
+          "eventId": {
+            "type": "string",
+            "nullable": true
+          },
+          "eventTime": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "firstTimestamp": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "involvedObject": {
+            "$ref": "#/components/schemas/ManagedRuntimeEventInvolvedObject",
+            "nullable": true
+          },
+          "lastTimestamp": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "message": {
+            "type": "string"
+          },
+          "raw": {
+            "$ref": "#/components/schemas/Value",
+            "nullable": true
+          },
+          "reason": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ManagedRuntimeEventSource",
+            "nullable": true
+          },
+          "type": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "ManagedRuntimeEventSource": {
+        "type": "object",
+        "properties": {
+          "component": {
+            "type": "string",
+            "nullable": true
+          },
+          "host": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "ManagedRuntimeUnitStatus": {
+        "type": "object",
+        "required": [
+          "replicaId",
+          "name",
+          "ready"
+        ],
+        "properties": {
+          "cpu": {
+            "$ref": "#/components/schemas/MetricSample",
+            "nullable": true
+          },
+          "ip": {
+            "type": "string",
+            "nullable": true
+          },
+          "machineId": {
+            "type": "string",
+            "nullable": true
+          },
+          "memory": {
+            "$ref": "#/components/schemas/MetricSample",
+            "nullable": true
+          },
+          "message": {
+            "type": "string",
+            "nullable": true
+          },
+          "metricsHealthy": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "metricsLastUpdated": {
+            "type": "string",
+            "nullable": true
+          },
+          "metricsStatus": {
+            "type": "string",
+            "nullable": true
+          },
+          "name": {
+            "type": "string"
+          },
+          "nodeName": {
+            "type": "string",
+            "nullable": true
+          },
+          "phase": {
+            "type": "string",
+            "nullable": true
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true
+          },
+          "replicaId": {
+            "type": "string"
+          },
+          "restartCount": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0,
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "nullable": true
+          },
+          "terminatedReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "waitingReason": {
+            "type": "string",
+            "nullable": true
           }
         }
       },
@@ -10649,6 +10615,7 @@
           }
         }
       },
+      "Value": {},
       "VaultHeartbeatData": {
         "oneOf": [
           {

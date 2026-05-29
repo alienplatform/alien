@@ -6,15 +6,7 @@
 import { DataLocal1 } from "@alienplatform/platform-api/models";
 
 let value: DataLocal1 = {
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2025-07-12T08:12:10.995Z"),
-      severity: "error",
-    },
-  ],
-  path: "/usr/share",
+  path: "/usr/lib",
   pathExists: false,
   status: {
     collectionIssues: [
@@ -25,10 +17,10 @@ let value: DataLocal1 = {
         source: "<value>",
       },
     ],
-    health: "healthy",
+    health: "unhealthy",
     lifecycle: "stopping",
     partial: false,
-    stale: false,
+    stale: true,
   },
   backend: "local",
 };
@@ -38,7 +30,6 @@ let value: DataLocal1 = {
 
 | Field                                                                                         | Type                                                                                          | Required                                                                                      | Description                                                                                   |
 | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `events`                                                                                      | [models.SyncReconcileRequestEvent4](../models/syncreconcilerequestevent4.md)[]                | :heavy_check_mark:                                                                            | N/A                                                                                           |
 | `isDirectory`                                                                                 | *boolean*                                                                                     | :heavy_minus_sign:                                                                            | N/A                                                                                           |
 | `modifiedAt`                                                                                  | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_minus_sign:                                                                            | N/A                                                                                           |
 | `path`                                                                                        | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |

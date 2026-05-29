@@ -7,12 +7,7 @@ import { DataAzureResourceGroup } from "@alienplatform/platform-api/models/opera
 
 let value: DataAzureResourceGroup = {
   data: {
-    events: [],
-    managedTags: {
-      "key": "<value>",
-      "key1": "<value>",
-      "key2": "<value>",
-    },
+    managedTags: {},
     name: "<value>",
     status: {
       collectionIssues: [
@@ -24,7 +19,7 @@ let value: DataAzureResourceGroup = {
         },
       ],
       health: "degraded",
-      lifecycle: "creating",
+      lifecycle: "deleting",
       partial: true,
       stale: true,
     },

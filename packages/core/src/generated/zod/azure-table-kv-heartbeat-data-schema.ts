@@ -4,14 +4,10 @@
 */
 
 import * as z from "zod";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 import { KvHeartbeatStatusSchema } from "./kv-heartbeat-status-schema.js";
 
 export const AzureTableKvHeartbeatDataSchema = z.object({
     "endpoint": z.string().nullish(),
-get "events"(){
-                return z.array(HeartbeatEventSchema)
-              },
 "resourceGroup": z.string().nullish(),
 "signedIdentifierCount": z.int().min(0).nullish(),
 get "status"(){

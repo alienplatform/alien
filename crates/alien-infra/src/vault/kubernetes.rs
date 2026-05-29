@@ -225,7 +225,6 @@ fn emit_kubernetes_secret_vault_heartbeat(
                 namespace: namespace.to_string(),
                 prefix: prefix.to_string(),
                 secret_metadata_listed: false,
-                events: vec![],
             },
         )),
         raw: vec![],

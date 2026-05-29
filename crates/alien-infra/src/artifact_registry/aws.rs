@@ -1351,7 +1351,6 @@ fn emit_aws_artifact_registry_heartbeat(
                 repository_count,
                 repositories_truncated,
                 repositories: repository_data,
-                events: vec![],
             },
         )),
         raw: vec![],

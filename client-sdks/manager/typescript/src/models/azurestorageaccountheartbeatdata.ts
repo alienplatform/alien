@@ -9,11 +9,6 @@ import {
   AzureStorageAccountEndpoints$outboundSchema,
 } from "./azurestorageaccountendpoints.js";
 import {
-  HeartbeatEvent,
-  HeartbeatEvent$Outbound,
-  HeartbeatEvent$outboundSchema,
-} from "./heartbeatevent.js";
-import {
   StorageHeartbeatStatus,
   StorageHeartbeatStatus$Outbound,
   StorageHeartbeatStatus$outboundSchema,
@@ -23,7 +18,6 @@ export type AzureStorageAccountHeartbeatData = {
   allowBlobPublicAccess?: boolean | null | undefined;
   allowSharedKeyAccess?: boolean | null | undefined;
   encryptionKeySource?: string | null | undefined;
-  events: Array<HeartbeatEvent>;
   kind?: string | null | undefined;
   location?: string | null | undefined;
   minimumTlsVersion?: string | null | undefined;
@@ -51,7 +45,6 @@ export type AzureStorageAccountHeartbeatData$Outbound = {
   allowBlobPublicAccess?: boolean | null | undefined;
   allowSharedKeyAccess?: boolean | null | undefined;
   encryptionKeySource?: string | null | undefined;
-  events: Array<HeartbeatEvent$Outbound>;
   kind?: string | null | undefined;
   location?: string | null | undefined;
   minimumTlsVersion?: string | null | undefined;
@@ -82,7 +75,6 @@ export const AzureStorageAccountHeartbeatData$outboundSchema: z.ZodType<
   allowBlobPublicAccess: z.nullable(z.boolean()).optional(),
   allowSharedKeyAccess: z.nullable(z.boolean()).optional(),
   encryptionKeySource: z.nullable(z.string()).optional(),
-  events: z.array(HeartbeatEvent$outboundSchema),
   kind: z.nullable(z.string()).optional(),
   location: z.nullable(z.string()).optional(),
   minimumTlsVersion: z.nullable(z.string()).optional(),

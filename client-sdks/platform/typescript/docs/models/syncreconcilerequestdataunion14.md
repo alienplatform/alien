@@ -8,14 +8,6 @@
 ```typescript
 const value: models.DataGcpServiceUsage = {
   enabled: true,
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2025-06-11T19:58:11.111Z"),
-      severity: "error",
-    },
-  ],
   projectId: "<id>",
   serviceName: "<value>",
   status: {
@@ -27,9 +19,9 @@ const value: models.DataGcpServiceUsage = {
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "creating",
-    partial: true,
+    health: "healthy",
+    lifecycle: "deleted",
+    partial: false,
     stale: false,
   },
   backend: "gcpServiceUsage",
@@ -40,21 +32,13 @@ const value: models.DataGcpServiceUsage = {
 
 ```typescript
 const value: models.DataAzureResourceProvider = {
-  events: [],
   namespace: "<value>",
-  registered: false,
-  resourceTypeCount: 249113,
+  registered: true,
+  resourceTypeCount: 563831,
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "collection-failed",
-        severity: "info",
-        source: "<value>",
-      },
-    ],
-    health: "healthy",
-    lifecycle: "creating",
+    collectionIssues: [],
+    health: "degraded",
+    lifecycle: "scaling",
     partial: true,
     stale: true,
   },
