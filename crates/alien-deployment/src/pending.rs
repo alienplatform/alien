@@ -97,6 +97,7 @@ pub async fn handle_pending(
         error: None,
         suggested_delay_ms: None,
         update_heartbeat: false,
+        heartbeats: vec![],
     })
 }
 

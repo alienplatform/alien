@@ -52,7 +52,10 @@ pub fn generate_helm_chart(stack: &Stack, options: HelmOptions<'_>) -> Result<He
 
     let mut files = IndexMap::new();
     files.insert("Chart.yaml".to_string(), chart_yaml(&chart_name, stack));
-    files.insert("values.yaml".to_string(), values_yaml(&analysis));
+    files.insert(
+        "values.yaml".to_string(),
+        values_yaml(&analysis, &options.stack_settings)?,
+    );
     files.insert("values.schema.json".to_string(), values_schema_json());
     files.insert("templates/_helpers.tpl".to_string(), helpers_tpl());
     files.insert(
@@ -61,13 +64,17 @@ pub fn generate_helm_chart(stack: &Stack, options: HelmOptions<'_>) -> Result<He
     );
     files.insert("templates/role.yaml".to_string(), role_tpl());
     files.insert("templates/rolebinding.yaml".to_string(), rolebinding_tpl());
+    files.insert("templates/clusterrole.yaml".to_string(), clusterrole_tpl());
+    files.insert(
+        "templates/clusterrolebinding.yaml".to_string(),
+        clusterrolebinding_tpl(),
+    );
     files.insert("templates/secret.yaml".to_string(), secret_tpl());
     files.insert("templates/configmap.yaml".to_string(), configmap_tpl());
     files.insert("templates/deployment.yaml".to_string(), deployment_tpl());
     files.insert("templates/pvc.yaml".to_string(), pvc_tpl());
     files.insert("templates/service.yaml".to_string(), service_tpl());
     files.insert("templates/app-service.yaml".to_string(), app_service_tpl());
-    files.insert("templates/app-ingress.yaml".to_string(), app_ingress_tpl());
     files.insert(
         "templates/poddisruptionbudget.yaml".to_string(),
         poddisruptionbudget_tpl(),
@@ -255,7 +262,7 @@ fn chart_yaml(chart_name: &str, stack: &Stack) -> String {
     )
 }
 
-fn values_yaml(analysis: &ChartAnalysis) -> String {
+fn values_yaml(analysis: &ChartAnalysis, stack_settings: &StackSettings) -> Result<String> {
     let mut yaml = String::new();
     yaml.push_str(
         r#"management:
@@ -356,11 +363,17 @@ runtime:
     egress:
       enabled: true
 
+heartbeat:
+  collection:
+    nodes:
+      enabled: true
+
 "#,
     );
 
     append_service_accounts(&mut yaml, analysis);
-    yaml.push_str("\nstackSettings: null\n\ninfrastructure: null\n\nbasePlatform: null\nserviceAccountPrefix: \"\"\nmanagerServiceAccount:\n  annotations: {}\n  labels: {}\n");
+    append_stack_settings(&mut yaml, stack_settings)?;
+    yaml.push_str("\ninfrastructure: null\n\nbasePlatform: null\nserviceAccountPrefix: \"\"\nmanagerServiceAccount:\n  annotations: {}\n  labels: {}\n");
     append_services(&mut yaml, analysis);
     yaml.push_str("\npublicUrls: {}\n");
 
@@ -373,7 +386,38 @@ ephemeralStorage:
   nodeSelector: {}
 "#,
     );
-    yaml
+    Ok(yaml)
+}
+
+fn append_stack_settings(yaml: &mut String, stack_settings: &StackSettings) -> Result<()> {
+    if stack_settings == &StackSettings::default() {
+        yaml.push_str("\nstackSettings: null\n");
+        return Ok(());
+    }
+
+    let serialized = serde_yaml::to_string(stack_settings)
+        .into_alien_error()
+        .context(ErrorData::JsonSerializationFailed {
+            reason: "failed to serialize stack settings into chart values".to_string(),
+        })?;
+    let serialized = serialized
+        .strip_prefix("---\n")
+        .unwrap_or(&serialized)
+        .trim_end();
+
+    if serialized == "{}" || serialized.is_empty() {
+        yaml.push_str("\nstackSettings: null\n");
+        return Ok(());
+    }
+
+    yaml.push_str("\nstackSettings:\n");
+    for line in serialized.lines() {
+        yaml.push_str("  ");
+        yaml.push_str(line);
+        yaml.push('\n');
+    }
+
+    Ok(())
 }
 
 fn append_service_accounts(yaml: &mut String, analysis: &ChartAnalysis) {
@@ -421,7 +465,7 @@ fn append_services(yaml: &mut String, analysis: &ChartAnalysis) {
     } else {
         for service in &analysis.services {
             yaml.push_str(&format!(
-                "  {}:\n    type: clusterIp\n    port: 80\n    targetPort: {}\n    component: {}\n    host: \"\"\n    publicUrl: \"\"\n    tls:\n      enabled: false\n      secretName: \"\"\n    ingress:\n      className: \"\"\n      hostless: false\n      annotations: {{}}\n",
+                "  {}:\n    type: clusterIp\n    port: 80\n    targetPort: {}\n    component: {}\n",
                 yaml_key(&service.id),
                 service.target_port,
                 yaml_string(&service.component)
@@ -629,6 +673,25 @@ fn values_schema_json() -> String {
     },
     "infrastructure": { "type": ["object", "null"] },
     "basePlatform": { "type": ["string", "null"], "enum": ["aws", "gcp", "azure", null] },
+    "heartbeat": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "collection": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "nodes": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" }
+              }
+            }
+          }
+        }
+      }
+    },
     "serviceAccountPrefix": { "type": "string" },
     "services": {
       "type": "object",
@@ -639,26 +702,7 @@ fn values_schema_json() -> String {
           "type": { "type": "string", "enum": ["clusterIp", "loadBalancer"] },
           "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
           "targetPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
-          "component": { "type": "string" },
-          "host": { "type": "string" },
-          "publicUrl": { "type": "string" },
-          "tls": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "enabled": { "type": "boolean" },
-              "secretName": { "type": "string" }
-            }
-          },
-          "ingress": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "className": { "type": "string" },
-              "hostless": { "type": "boolean" },
-              "annotations": { "type": "object", "additionalProperties": { "type": "string" } }
-            }
-          }
+          "component": { "type": "string" }
         }
       }
     },
@@ -765,6 +809,10 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- define "alien.encryptionSecretKey" -}}
 {{- default "encryption-key" .Values.runtime.encryption.existingSecret.key -}}
 {{- end -}}
+
+{{- define "alien.heartbeatNodeClusterRoleName" -}}
+{{- printf "%s-heartbeat-nodes" (include "alien.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
 "#
     .to_string()
 }
@@ -805,7 +853,12 @@ metadata:
 }
 
 fn role_tpl() -> String {
-    r#"apiVersion: rbac.authorization.k8s.io/v1
+    r#"{{- $stackSettings := default dict .Values.stackSettings -}}
+{{- $exposure := dig "kubernetes" "exposure" dict $stackSettings -}}
+{{- $exposureMode := dig "mode" "" $exposure -}}
+{{- $route := dig "route" dict $exposure -}}
+{{- $routeApi := dig "routeApi" "" $route -}}
+apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: {{ include "alien.fullname" . }}
@@ -815,15 +868,31 @@ rules:
   - apiGroups: [""]
     resources: ["configmaps", "secrets", "services", "pods", "pods/log", "persistentvolumeclaims"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
   - apiGroups: ["apps"]
-    resources: ["deployments", "statefulsets"]
+    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
   - apiGroups: ["batch"]
     resources: ["jobs"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["networking.k8s.io"]
-    resources: ["ingresses", "networkpolicies"]
+    resources: ["networkpolicies"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  {{- if and (ne $exposureMode "disabled") (eq $routeApi "ingress") }}
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  {{- end }}
+  {{- if and (ne $exposureMode "disabled") (eq $routeApi "gateway") }}
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["gateways", "httproutes"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  {{- end }}
 "#
     .to_string()
 }
@@ -842,6 +911,49 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: {{ include "alien.fullname" . }}
+"#
+    .to_string()
+}
+
+fn clusterrole_tpl() -> String {
+    r#"{{- $nodeCollectionEnabled := dig "collection" "nodes" "enabled" true (default dict .Values.heartbeat) -}}
+{{- if $nodeCollectionEnabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "alien.heartbeatNodeClusterRoleName" . }}
+  labels:
+    {{- include "alien.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+{{- end }}
+"#
+    .to_string()
+}
+
+fn clusterrolebinding_tpl() -> String {
+    r#"{{- $nodeCollectionEnabled := dig "collection" "nodes" "enabled" true (default dict .Values.heartbeat) -}}
+{{- if $nodeCollectionEnabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "alien.heartbeatNodeClusterRoleName" . }}
+  labels:
+    {{- include "alien.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "alien.managerServiceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "alien.heartbeatNodeClusterRoleName" . }}
+{{- end }}
 "#
     .to_string()
 }
@@ -874,18 +986,6 @@ stringData:
 
 fn configmap_tpl() -> String {
     r#"{{- $defaultStackSettings := dict "deploymentModel" "pull" "updates" .Values.management.updates "telemetry" .Values.management.telemetry "heartbeats" .Values.management.healthChecks -}}
-{{- $publicUrls := dict -}}
-{{- range $id, $service := .Values.services -}}
-{{- if $service.publicUrl -}}
-{{- $_ := set $publicUrls $id $service.publicUrl -}}
-{{- else if $service.host -}}
-{{- if and $service.tls.enabled $service.tls.secretName -}}
-{{- $_ := set $publicUrls $id (printf "https://%s" $service.host) -}}
-{{- else -}}
-{{- $_ := set $publicUrls $id (printf "http://%s" $service.host) -}}
-{{- end -}}
-{{- end -}}
-{{- end -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -897,7 +997,7 @@ data:
 {{ .Files.Get "files/stack.json" | indent 4 }}
   stack-settings.json: {{ toJson (default $defaultStackSettings .Values.stackSettings) | quote }}
   services.json: {{ toJson .Values.services | quote }}
-  public-urls.json: {{ toJson (default $publicUrls .Values.publicUrls) | quote }}
+  public-urls.json: {{ toJson (default dict .Values.publicUrls) | quote }}
 "#
     .to_string()
 }
@@ -1212,50 +1312,6 @@ spec:
     .to_string()
 }
 
-fn app_ingress_tpl() -> String {
-    r#"{{- range $id, $service := .Values.services }}
-{{- if or $service.host $service.ingress.hostless }}
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: {{ include "alien.resourceName" (dict "root" $ "name" $id) }}
-  labels:
-    {{- include "alien.labels" $ | nindent 4 }}
-    alien.dev/resource-id: {{ $id | quote }}
-  {{- with $service.ingress.annotations }}
-  annotations:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
-spec:
-  {{- if $service.ingress.className }}
-  ingressClassName: {{ $service.ingress.className | quote }}
-  {{- end }}
-  {{- if and $service.tls.enabled $service.tls.secretName }}
-  tls:
-    - hosts:
-        - {{ $service.host | quote }}
-      secretName: {{ $service.tls.secretName | quote }}
-  {{- end }}
-  rules:
-    - {{- if $service.host }}
-      host: {{ $service.host | quote }}
-      {{- end }}
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ include "alien.resourceName" (dict "root" $ "name" $id) }}
-                port:
-                  number: {{ default 80 $service.port }}
----
-{{- end }}
-{{- end }}
-"#
-    .to_string()
-}
-
 fn eks_values_example(analysis: &ChartAnalysis) -> String {
     cloud_identity_example(
         analysis,
@@ -1357,7 +1413,7 @@ stackSettings:
 
 fn readme_md(chart_name: &str, stack: &Stack) -> String {
     format!(
-        "# {chart_name}\n\nInstall this chart into an existing Kubernetes cluster:\n\n```bash\nhelm install {chart_name} ./{} --namespace production --create-namespace --values values.yaml\n```\n\nThe generated `values.yaml` contains placeholders for management, service-account identity annotations, agent-local infrastructure bindings, and public service exposure. See `examples/<target>.yaml` for ready-to-use values matching EKS / GKE / AKS / on-prem.\n",
+        "# {chart_name}\n\nInstall this chart into an existing Kubernetes cluster:\n\n```bash\nhelm install {chart_name} ./{} --namespace production --create-namespace --values values.yaml\n```\n\nThe generated `values.yaml` contains placeholders for management, service-account identity annotations, agent-local infrastructure bindings, and the Kubernetes exposure profile. The chart no longer renders per-app public `Ingress` objects from `services.*.host` or hostless ingress values; public endpoints are runtime-owned through `stackSettings.kubernetes.exposure`.\n\nSee `examples/<target>.yaml` for ready-to-use values matching EKS / GKE / AKS / on-prem.\n",
         stack.id()
     )
 }

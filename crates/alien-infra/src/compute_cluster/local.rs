@@ -10,10 +10,17 @@ use tracing::{debug, info};
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_core::{
-    ComputeCluster, ComputeClusterOutputs, ResourceOutputs as CoreResourceOutputs, ResourceStatus,
+    ComputeCluster, ComputeClusterHeartbeatData, ComputeClusterHeartbeatStatus,
+    ComputeClusterOutputs, HeartbeatBackend, LocalComputeClusterHeartbeatData, ObservedCounts,
+    ObservedHealth, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData,
+    ResourceOutputs as CoreResourceOutputs, ResourceStatus,
 };
 use alien_error::{AlienError, Context};
+use alien_local::LocalRuntimeStatus;
 use alien_macros::controller;
+use chrono::Utc;
+
+const LOCAL_NETWORK_NAME: &str = "alien-network";
 
 /// Local ComputeCluster controller.
 ///
@@ -108,6 +115,15 @@ impl LocalComputeClusterController {
                 message: "Docker network health check failed".to_string(),
                 resource_id: Some(config.id.clone()),
             })?;
+        let runtime_status =
+            container_mgr
+                .runtime_status()
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Docker runtime status check failed".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?;
+        emit_local_compute_cluster_heartbeat(ctx, &config.id, runtime_status);
 
         debug!(cluster_id = %config.id, "Container cluster health check passed");
 
@@ -212,4 +228,53 @@ impl LocalComputeClusterController {
             })
         })
     }
+}
+
+fn emit_local_compute_cluster_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    runtime_status: LocalRuntimeStatus,
+) {
+    let host_identifier = std::env::var("HOSTNAME")
+        .or_else(|_| std::env::var("COMPUTERNAME"))
+        .ok();
+
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: ComputeCluster::RESOURCE_TYPE,
+        controller_platform: alien_core::Platform::Local,
+        backend: HeartbeatBackend::Local,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::ComputeCluster(ComputeClusterHeartbeatData::Local(
+            LocalComputeClusterHeartbeatData {
+                status: ComputeClusterHeartbeatStatus {
+                    health: ObservedHealth::Healthy,
+                    lifecycle: ProviderLifecycleState::Running,
+                    message: None,
+                    stale: false,
+                    partial: false,
+                    collection_issues: vec![],
+                },
+                nodes: ObservedCounts {
+                    desired: Some(1),
+                    current: Some(1),
+                    ready: Some(1),
+                },
+                name: resource_id.to_string(),
+                host_identifier,
+                docker_available: true,
+                docker_version: runtime_status.docker_version,
+                docker_api_version: runtime_status.docker_api_version,
+                docker_os: runtime_status.docker_os,
+                docker_arch: runtime_status.docker_arch,
+                network_name: Some(LOCAL_NETWORK_NAME.to_string()),
+                network_available: true,
+                tracked_containers: Some(runtime_status.tracked_containers),
+                running_containers: Some(runtime_status.running_containers),
+                events: vec![],
+            },
+        )),
+        raw: vec![],
+    });
 }

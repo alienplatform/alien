@@ -6,18 +6,15 @@ use crate::{
         RegistryAuthMethod, RepositoryResponse,
     },
 };
-use alien_core::bindings::{ArtifactRegistryBinding, GarArtifactRegistryBinding};
-use alien_error::{AlienError, Context, ContextError, IntoAlienError};
+use alien_core::bindings::ArtifactRegistryBinding;
+use alien_error::{AlienError, Context};
 use alien_gcp_clients::iam::IamPolicy;
 use alien_gcp_clients::{
-    artifactregistry::{ArtifactRegistryApi, ArtifactRegistryClient, Repository, RepositoryFormat},
-    iam::{GenerateAccessTokenRequest, IamApi, IamClient},
+    artifactregistry::{ArtifactRegistryApi, ArtifactRegistryClient},
     GcpClientConfig, GcpClientConfigExt as _,
 };
 use async_trait::async_trait;
 use chrono;
-use serde_json::{json, Value};
-use std::collections::HashMap;
 use tracing::{debug, info, warn};
 
 /// GCP Artifact Registry implementation of the ArtifactRegistry binding.
@@ -519,8 +516,8 @@ impl ArtifactRegistry for GarArtifactRegistry {
 
         // Parse repo_id to extract project and location info if it's in full format
         // Just use the configured project/location from this client since they come from the binding
-        let project_id = &self.project_id;
-        let location = &self.location;
+        let _project_id = &self.project_id;
+        let _location = &self.location;
 
         // Get the service account email from stored fields
         let service_account_email = match permissions {

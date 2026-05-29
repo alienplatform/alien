@@ -4,6 +4,10 @@ use tracing::{debug, info};
 
 use crate::core::{EnvironmentVariableBuilder, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
+use crate::kubernetes_workload_heartbeat::{
+    emit_kubernetes_workload_heartbeat, label_selector, KubernetesWorkload,
+    KubernetesWorkloadDataKind, KubernetesWorkloadHeartbeatInput,
+};
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     kubernetes_resource_name, kubernetes_service_account_name, Daemon, DaemonCode, DaemonOutputs,
@@ -11,7 +15,7 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
-use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec};
+use k8s_openapi::api::apps::v1::{DaemonSet, DaemonSetSpec};
 use k8s_openapi::api::core::v1::{
     Container, EnvVar, LocalObjectReference, PodSpec, PodTemplateSpec, Secret,
 };
@@ -19,8 +23,8 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
 
 #[controller]
 pub struct KubernetesDaemonController {
-    /// The name of the created Kubernetes Deployment.
-    pub(crate) deployment_name: Option<String>,
+    /// The name of the created Kubernetes DaemonSet.
+    pub(crate) daemon_set_name: Option<String>,
     /// The namespace where resources are deployed.
     pub(crate) namespace: Option<String>,
 }
@@ -37,7 +41,7 @@ impl KubernetesDaemonController {
         let kubernetes_config = ctx.get_kubernetes_config()?;
         let config = ctx.desired_resource_config::<Daemon>()?;
 
-        let deployment_name = kubernetes_resource_name(&ctx.resource_prefix, &config.id);
+        let daemon_set_name = kubernetes_resource_name(&ctx.resource_prefix, &config.id);
         let namespace = self.get_kubernetes_namespace(ctx)?;
         let service_account_name =
             kubernetes_service_account_name(&ctx.resource_prefix, config.get_permissions());
@@ -61,7 +65,7 @@ impl KubernetesDaemonController {
                         resource_id: Some(config.id.clone()),
                     })
                 })?;
-            let secret_name = format!("{}-registry", deployment_name);
+            let secret_name = format!("{}-registry", daemon_set_name);
             let secrets_client = ctx
                 .service_provider
                 .get_kubernetes_secrets_client(kubernetes_config)
@@ -79,14 +83,14 @@ impl KubernetesDaemonController {
             None
         };
 
-        let deployment_client = ctx
+        let workload_client = ctx
             .service_provider
             .get_kubernetes_deployment_client(kubernetes_config)
             .await?;
-        let deployment = self
-            .build_deployment(
+        let daemonset = self
+            .build_daemonset(
                 config,
-                &deployment_name,
+                &daemon_set_name,
                 &namespace,
                 &service_account_name,
                 image_pull_secret_name.as_deref(),
@@ -94,35 +98,35 @@ impl KubernetesDaemonController {
             )
             .await?;
 
-        deployment_client
-            .create_deployment(&namespace, &deployment)
+        workload_client
+            .create_daemonset(&namespace, &daemonset)
             .await
             .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to create daemon deployment '{}'.", deployment_name),
+                message: format!("Failed to create daemonset '{}'.", daemon_set_name),
                 resource_id: Some(config.id.clone()),
             })?;
 
-        self.deployment_name = Some(deployment_name.clone());
+        self.daemon_set_name = Some(daemon_set_name.clone());
         self.namespace = Some(namespace.clone());
 
-        info!(deployment_name=%deployment_name, namespace=%namespace, "Daemon deployment creation initiated");
+        info!(daemon_set_name=%daemon_set_name, namespace=%namespace, "DaemonSet creation initiated");
 
         Ok(HandlerAction::Continue {
-            state: WaitingForDeployment,
+            state: WaitingForDaemonSet,
             suggested_delay: Some(Duration::from_secs(5)),
         })
     }
 
     #[handler(
-        state = WaitingForDeployment,
+        state = WaitingForDaemonSet,
         on_failure = CreateFailed,
         status = ResourceStatus::Provisioning,
     )]
-    async fn waiting_for_deployment(
+    async fn waiting_for_daemonset(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        if self.deployment_ready(ctx).await? {
+        if self.daemonset_ready(ctx).await? {
             return Ok(HandlerAction::Continue {
                 state: Ready,
                 suggested_delay: Some(Duration::from_secs(30)),
@@ -141,12 +145,45 @@ impl KubernetesDaemonController {
         status = ResourceStatus::Running,
     )]
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
-        if !self.deployment_ready(ctx).await? {
+        if !self.daemonset_ready(ctx).await? {
             let config = ctx.desired_resource_config::<Daemon>()?;
             return Err(AlienError::new(ErrorData::ResourceDrift {
                 resource_id: config.id.clone(),
-                message: "Daemon deployment is not fully ready".to_string(),
+                message: "Daemon daemonset is not fully ready".to_string(),
             }));
+        }
+
+        let kubernetes_config = ctx.get_kubernetes_config()?;
+        let config = ctx.desired_resource_config::<Daemon>()?;
+        if let (Some(daemon_set_name), Some(namespace)) = (&self.daemon_set_name, &self.namespace) {
+            let workload_client = ctx
+                .service_provider
+                .get_kubernetes_deployment_client(kubernetes_config)
+                .await?;
+            let daemonset = workload_client
+                .get_daemonset(namespace, daemon_set_name)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to get daemonset '{}'", daemon_set_name),
+                    resource_id: Some(config.id.clone()),
+                })?;
+            let labels = self.build_labels(daemon_set_name);
+            emit_kubernetes_workload_heartbeat(
+                ctx,
+                KubernetesWorkloadHeartbeatInput {
+                    deployment_id: None,
+                    resource_id: config.id.clone(),
+                    resource_type: Daemon::RESOURCE_TYPE,
+                    data_kind: KubernetesWorkloadDataKind::Daemon,
+                    command_supported: config.commands_enabled,
+                    namespace: namespace.clone(),
+                    workload_name: daemon_set_name.clone(),
+                    workload_kind: alien_core::KubernetesWorkloadKind::DaemonSet,
+                    workload: KubernetesWorkload::DaemonSet(daemonset),
+                    label_selector: label_selector(&labels)?,
+                },
+            )
+            .await?;
         }
 
         Ok(HandlerAction::Continue {
@@ -164,10 +201,10 @@ impl KubernetesDaemonController {
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let kubernetes_config = ctx.get_kubernetes_config()?;
         let config = ctx.desired_resource_config::<Daemon>()?;
-        let deployment_name = self.deployment_name.as_ref().ok_or_else(|| {
+        let daemon_set_name = self.daemon_set_name.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceControllerConfigError {
                 resource_id: config.id.clone(),
-                message: "Deployment name not set in state".to_string(),
+                message: "DaemonSet name not set in state".to_string(),
             })
         })?;
         let namespace = self.namespace.as_ref().ok_or_else(|| {
@@ -177,17 +214,17 @@ impl KubernetesDaemonController {
             })
         })?;
 
-        let deployment_client = ctx
+        let workload_client = ctx
             .service_provider
             .get_kubernetes_deployment_client(kubernetes_config)
             .await?;
-        let existing = deployment_client
-            .get_deployment(namespace, deployment_name)
+        let existing = workload_client
+            .get_daemonset(namespace, daemon_set_name)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: format!(
-                    "Failed to get deployment '{}' before update",
-                    deployment_name
+                    "Failed to get daemonset '{}' before update",
+                    daemon_set_name
                 ),
                 resource_id: Some(config.id.clone()),
             })?;
@@ -202,28 +239,28 @@ impl KubernetesDaemonController {
                     resource_id: Some(config.id.clone()),
                 }));
             }
-            Some(format!("{}-registry", deployment_name))
+            Some(format!("{}-registry", daemon_set_name))
         } else {
             None
         };
 
-        let mut new_deployment = self
-            .build_deployment(
+        let mut new_daemonset = self
+            .build_daemonset(
                 config,
-                deployment_name,
+                daemon_set_name,
                 namespace,
                 &service_account_name,
                 image_pull_secret_name.as_deref(),
                 ctx,
             )
             .await?;
-        new_deployment.metadata.resource_version = resource_version;
+        new_daemonset.metadata.resource_version = resource_version;
 
-        deployment_client
-            .update_deployment(namespace, deployment_name, &new_deployment)
+        workload_client
+            .update_daemonset(namespace, daemon_set_name, &new_daemonset)
             .await
             .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to update daemon deployment '{}'.", deployment_name),
+                message: format!("Failed to update daemonset '{}'.", daemon_set_name),
                 resource_id: Some(config.id.clone()),
             })?;
 
@@ -242,7 +279,7 @@ impl KubernetesDaemonController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        if self.deployment_ready(ctx).await? {
+        if self.daemonset_ready(ctx).await? {
             return Ok(HandlerAction::Continue {
                 state: Ready,
                 suggested_delay: Some(Duration::from_secs(30)),
@@ -271,13 +308,13 @@ impl KubernetesDaemonController {
             })
         })?;
 
-        if let Some(deployment_name) = &self.deployment_name {
-            let deployment_client = ctx
+        if let Some(daemon_set_name) = &self.daemon_set_name {
+            let workload_client = ctx
                 .service_provider
                 .get_kubernetes_deployment_client(kubernetes_config)
                 .await?;
-            match deployment_client
-                .delete_deployment(namespace, deployment_name)
+            match workload_client
+                .delete_daemonset(namespace, daemon_set_name)
                 .await
             {
                 Ok(_) => {}
@@ -287,7 +324,7 @@ impl KubernetesDaemonController {
                         Some(CloudClientErrorData::RemoteResourceNotFound { .. })
                     ) =>
                 {
-                    self.deployment_name = None;
+                    self.daemon_set_name = None;
                     self.namespace = None;
                     return Ok(HandlerAction::Continue {
                         state: Deleted,
@@ -296,7 +333,7 @@ impl KubernetesDaemonController {
                 }
                 Err(e) => {
                     return Err(e.context(ErrorData::CloudPlatformError {
-                        message: format!("Failed to delete deployment '{}'.", deployment_name),
+                        message: format!("Failed to delete daemonset '{}'.", daemon_set_name),
                         resource_id: Some(config.id.clone()),
                     }));
                 }
@@ -327,17 +364,17 @@ impl KubernetesDaemonController {
             })
         })?;
 
-        if let Some(deployment_name) = &self.deployment_name {
-            let deployment_client = ctx
+        if let Some(daemon_set_name) = &self.daemon_set_name {
+            let workload_client = ctx
                 .service_provider
                 .get_kubernetes_deployment_client(kubernetes_config)
                 .await?;
-            match deployment_client
-                .get_deployment(namespace, deployment_name)
+            match workload_client
+                .get_daemonset(namespace, daemon_set_name)
                 .await
             {
                 Ok(_) => {
-                    debug!(deployment_name=%deployment_name, "Daemon deployment still exists");
+                    debug!(daemon_set_name=%daemon_set_name, "Daemon daemonset still exists");
                 }
                 Err(e)
                     if matches!(
@@ -345,7 +382,7 @@ impl KubernetesDaemonController {
                         Some(CloudClientErrorData::RemoteResourceNotFound { .. })
                     ) =>
                 {
-                    self.deployment_name = None;
+                    self.daemon_set_name = None;
                     self.namespace = None;
                     return Ok(HandlerAction::Continue {
                         state: Deleted,
@@ -354,7 +391,7 @@ impl KubernetesDaemonController {
                 }
                 Err(e) => {
                     return Err(e.context(ErrorData::CloudPlatformError {
-                        message: format!("Failed to get deployment '{}'.", deployment_name),
+                        message: format!("Failed to get daemonset '{}'.", daemon_set_name),
                         resource_id: Some(config.id.clone()),
                     }));
                 }
@@ -380,9 +417,9 @@ impl KubernetesDaemonController {
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
 
     fn build_outputs(&self) -> Option<ResourceOutputs> {
-        self.deployment_name.as_ref().map(|deployment_name| {
+        self.daemon_set_name.as_ref().map(|daemon_set_name| {
             ResourceOutputs::new(DaemonOutputs {
-                daemon_name: deployment_name.clone(),
+                daemon_name: daemon_set_name.clone(),
                 running: true,
             })
         })
@@ -390,13 +427,13 @@ impl KubernetesDaemonController {
 }
 
 impl KubernetesDaemonController {
-    async fn deployment_ready(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+    async fn daemonset_ready(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
         let kubernetes_config = ctx.get_kubernetes_config()?;
         let config = ctx.desired_resource_config::<Daemon>()?;
-        let deployment_name = self.deployment_name.as_ref().ok_or_else(|| {
+        let daemon_set_name = self.daemon_set_name.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceControllerConfigError {
                 resource_id: config.id.clone(),
-                message: "Deployment name not set in state".to_string(),
+                message: "DaemonSet name not set in state".to_string(),
             })
         })?;
         let namespace = self.namespace.as_ref().ok_or_else(|| {
@@ -406,21 +443,18 @@ impl KubernetesDaemonController {
             })
         })?;
 
-        let deployment_client = ctx
+        let workload_client = ctx
             .service_provider
             .get_kubernetes_deployment_client(kubernetes_config)
             .await?;
-        match deployment_client
-            .get_deployment(namespace, deployment_name)
+        match workload_client
+            .get_daemonset(namespace, daemon_set_name)
             .await
         {
-            Ok(deployment) => {
-                if let Some(status) = &deployment.status {
-                    if let (Some(ready_replicas), Some(replicas)) =
-                        (status.ready_replicas, status.replicas)
-                    {
-                        return Ok(ready_replicas >= replicas && replicas > 0);
-                    }
+            Ok(daemonset) => {
+                if let Some(status) = &daemonset.status {
+                    return Ok(status.number_ready >= status.desired_number_scheduled
+                        && status.desired_number_scheduled > 0);
                 }
                 Ok(false)
             }
@@ -433,22 +467,22 @@ impl KubernetesDaemonController {
                 Ok(false)
             }
             Err(e) => Err(e.context(ErrorData::CloudPlatformError {
-                message: format!("Failed to get deployment '{}'.", deployment_name),
+                message: format!("Failed to get daemonset '{}'.", daemon_set_name),
                 resource_id: Some(config.id.clone()),
             })),
         }
     }
 
-    async fn build_deployment(
+    async fn build_daemonset(
         &self,
         config: &Daemon,
-        deployment_name: &str,
+        daemon_set_name: &str,
         namespace: &str,
         service_account_name: &str,
         image_pull_secret_name: Option<&str>,
         ctx: &ResourceControllerContext<'_>,
-    ) -> Result<Deployment> {
-        let labels = self.build_labels(deployment_name);
+    ) -> Result<DaemonSet> {
+        let labels = self.build_labels(daemon_set_name);
         let image = match &config.code {
             DaemonCode::Image { image } => image.clone(),
             DaemonCode::Source { .. } => {
@@ -459,11 +493,15 @@ impl KubernetesDaemonController {
             }
         };
 
-        let env_builder = EnvironmentVariableBuilder::try_new(&config.environment)?
+        let mut env_builder = EnvironmentVariableBuilder::try_new(&config.environment)?
             .add_standard_alien_env_vars(ctx)?
-            .add_passthrough_transport_env_vars()
             .add_linked_resources(&config.links, ctx, &config.id)
             .await?;
+
+        if config.commands_enabled {
+            env_builder = env_builder.add_passthrough_transport_env_vars();
+        }
+
         let (env_map, bindings) = env_builder.build_with_bindings();
 
         let mut env_vars = Vec::new();
@@ -530,15 +568,14 @@ impl KubernetesDaemonController {
             ..Default::default()
         };
 
-        Ok(Deployment {
+        Ok(DaemonSet {
             metadata: ObjectMeta {
-                name: Some(deployment_name.to_string()),
+                name: Some(daemon_set_name.to_string()),
                 namespace: Some(namespace.to_string()),
                 labels: Some(labels.clone()),
                 ..Default::default()
             },
-            spec: Some(DeploymentSpec {
-                replicas: Some(1),
+            spec: Some(DaemonSetSpec {
                 selector: LabelSelector {
                     match_labels: Some(labels.clone()),
                     ..Default::default()
@@ -556,9 +593,9 @@ impl KubernetesDaemonController {
         })
     }
 
-    fn build_labels(&self, deployment_name: &str) -> BTreeMap<String, String> {
+    fn build_labels(&self, daemon_set_name: &str) -> BTreeMap<String, String> {
         let mut labels = BTreeMap::new();
-        labels.insert("app".to_string(), deployment_name.to_string());
+        labels.insert("app".to_string(), daemon_set_name.to_string());
         labels.insert("managed-by".to_string(), "alien".to_string());
         labels.insert("component".to_string(), "daemon".to_string());
         labels

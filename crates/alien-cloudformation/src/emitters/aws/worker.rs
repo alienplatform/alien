@@ -62,7 +62,7 @@ impl CfEmitter for AwsWorkerEmitter {
             &function.permissions,
             &format!("{logical_id}Role"),
             "lambda.amazonaws.com",
-            lambda_fallback_policy(ctx, function)?,
+            lambda_fallback_policy(),
         )?;
 
         let log_group_id = format!("{logical_id}LogGroup");
@@ -314,8 +314,8 @@ fn render_linked_binding(
     }
 }
 
-fn lambda_fallback_policy(ctx: &EmitContext<'_>, function: &Worker) -> Result<CfExpression> {
-    let mut statements = vec![CfExpression::object([
+fn lambda_fallback_policy() -> CfExpression {
+    let statements = vec![CfExpression::object([
         ("Sid", CfExpression::from("WriteLogs")),
         ("Effect", CfExpression::from("Allow")),
         (
@@ -329,10 +329,10 @@ fn lambda_fallback_policy(ctx: &EmitContext<'_>, function: &Worker) -> Result<Cf
         ("Resource", CfExpression::from("*")),
     ])];
 
-    Ok(CfExpression::object([
+    CfExpression::object([
         ("Version", CfExpression::from("2012-10-17")),
         ("Statement", CfExpression::list(statements)),
-    ]))
+    ])
 }
 
 fn lambda_vpc_config(ctx: &EmitContext<'_>) -> Option<CfExpression> {

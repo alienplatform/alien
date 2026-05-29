@@ -8,6 +8,7 @@ mod worker;
 pub use worker::*;
 
 mod daemon;
+#[cfg(any(feature = "kubernetes", feature = "local"))]
 pub use daemon::*;
 
 mod storage;
@@ -35,18 +36,34 @@ mod network;
 pub use network::*;
 
 mod compute_cluster;
+#[cfg(feature = "local")]
 pub use compute_cluster::*;
 
 mod kubernetes_cluster;
 
+#[cfg(feature = "kubernetes")]
+mod kubernetes_cluster_heartbeat;
+#[cfg(feature = "kubernetes")]
+mod kubernetes_public_endpoint;
+#[cfg(feature = "kubernetes")]
+mod kubernetes_workload_heartbeat;
+
 mod container;
+#[cfg(any(feature = "kubernetes", feature = "local"))]
 pub use container::*;
 
 mod kv;
-pub use kv::*;
+#[cfg(feature = "aws")]
+pub use kv::AwsKvImporter;
+#[cfg(feature = "local")]
+pub use kv::LocalKvController;
+pub use kv::{AwsKvController, AzureKvController, AzureKvImporter, GcpKvController, GcpKvImporter};
 
 mod service_activation;
-pub use service_activation::*;
+pub use service_activation::{
+    AzureServiceActivationController, AzureServiceActivationImporter,
+    GcpServiceActivationController, GcpServiceActivationImporter,
+};
 
 mod queue;
 

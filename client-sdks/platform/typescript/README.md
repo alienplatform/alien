@@ -170,19 +170,6 @@ run();
 * [get](docs/sdks/commands/README.md#get) - Retrieve a command by ID.
 * [update](docs/sdks/commands/README.md#update) - Update command state. Called by manager when command is dispatched or completes.
 
-### [Containers](docs/sdks/containers/README.md)
-
-* [getOverview](docs/sdks/containers/README.md#getoverview) - Per-project view of all container definitions across the project's deployments, with aggregate health stats, machine health breakdown, and HTTP performance metrics.
-* [getAttention](docs/sdks/containers/README.md#getattention) - Returns deployments in the project that need attention: crash loops, scheduling failures, unhealthy machines.
-* [getDeployments](docs/sdks/containers/README.md#getdeployments) - Per-deployment breakdown for a container: status, replicas, metrics, and HTTP performance across all of the project's deployments running this container.
-* [getMachines](docs/sdks/containers/README.md#getmachines) - Per-project machine health: per-deployment machine counts by status, capacity group utilization, and scaling recommendations.
-* [getDeploymentCluster](docs/sdks/containers/README.md#getdeploymentcluster) - Container cluster overview for a specific deployment: machine count, container count, and capacity.
-* [listDeploymentContainers](docs/sdks/containers/README.md#listdeploymentcontainers) - List all containers running in a specific deployment.
-* [getDeploymentContainer](docs/sdks/containers/README.md#getdeploymentcontainer) - Get detailed status, configuration, and replica metrics for a specific container in a deployment.
-* [listDeploymentMachines](docs/sdks/containers/README.md#listdeploymentmachines) - List all compute machines in a deployment's container cluster.
-* [listDeploymentEvents](docs/sdks/containers/README.md#listdeploymentevents) - List orchestration events for a deployment's container cluster.
-* [listDeploymentContainerInstanceEvents](docs/sdks/containers/README.md#listdeploymentcontainerinstanceevents) - List orchestration events for a specific container in a deployment.
-
 ### [Deployment](docs/sdks/deployment/README.md)
 
 * [getInfo](docs/sdks/deployment/README.md#getinfo) - Get deployment information for the deployment portal. Accepts both deployment-scoped and deployment-group-scoped API keys. Returns project information, package status/outputs, and either deployment or deployment group details depending on the token type. Poll this endpoint to check if packages are ready.
@@ -221,6 +208,7 @@ run();
 * [create](docs/sdks/domains/README.md#create) - Create a workspace domain.
 * [get](docs/sdks/domains/README.md#get) - Get domain by ID.
 * [delete](docs/sdks/domains/README.md#delete) - Delete a workspace domain.
+* [refresh](docs/sdks/domains/README.md#refresh) - Refresh workspace domain verification.
 
 ### [Events](docs/sdks/events/README.md)
 
@@ -231,6 +219,8 @@ run();
 
 * [list](docs/sdks/managers/README.md#list) - Retrieve all managers.
 * [create](docs/sdks/managers/README.md#create) - Create a new manager.
+* [retrySetup](docs/sdks/managers/README.md#retrysetup) - Revoke previous private-manager setup tokens and issue a fresh setup token/config.
+* [cancelSetup](docs/sdks/managers/README.md#cancelsetup) - Cancel pending private-manager setup, revoke setup/runtime tokens, and remove the undeployed manager record.
 * [get](docs/sdks/managers/README.md#get) - Retrieve a manager by ID.
 * [delete](docs/sdks/managers/README.md#delete) - Delete a manager by ID.
 * [getManagementConfig](docs/sdks/managers/README.md#getmanagementconfig) - Get the management configuration for a manager.
@@ -258,6 +248,10 @@ run();
 * [update](docs/sdks/projects/README.md#update) - Update a project.
 * [getGcpOAuthProvider](docs/sdks/projects/README.md#getgcpoauthprovider) - Retrieve redacted project-level Google Cloud OAuth provider settings.
 * [updateGcpOAuthProvider](docs/sdks/projects/README.md#updategcpoauthprovider) - Update project-level Google Cloud OAuth provider settings.
+* [getDeploymentPortalDomain](docs/sdks/projects/README.md#getdeploymentportaldomain) - Get the deployment portal domain binding for a project.
+* [putDeploymentPortalDomain](docs/sdks/projects/README.md#putdeploymentportaldomain) - Attach or replace the deployment portal domain binding for a project.
+* [deleteDeploymentPortalDomain](docs/sdks/projects/README.md#deletedeploymentportaldomain) - Remove the deployment portal domain binding from a project.
+* [refreshDeploymentPortalDomain](docs/sdks/projects/README.md#refreshdeploymentportaldomain) - Refresh the deployment portal domain controller state for a project.
 * [createFromTemplate](docs/sdks/projects/README.md#createfromtemplate) - Create a project by forking alienplatform/alien into your namespace, then configuring GitHub Actions.
 * [getTemplateUrls](docs/sdks/projects/README.md#gettemplateurls) - Get template URLs for deploying setup stacks in this project.
 * [getActiveRelease](docs/sdks/projects/README.md#getactiverelease) - Get the active release for this project. Returns the latest release, or the pinned release if deploymentId is provided and that deployment has a pinned release.
@@ -273,6 +267,13 @@ run();
 ### [Resolve](docs/sdks/resolve/README.md)
 
 * [resolve](docs/sdks/resolve/README.md#resolve) - Resolve manager for a project and platform
+
+### [Resources](docs/sdks/resources/README.md)
+
+* [listOverview](docs/sdks/resources/README.md#listoverview)
+* [listDeployments](docs/sdks/resources/README.md#listdeployments)
+* [getDeploymentDetail](docs/sdks/resources/README.md#getdeploymentdetail)
+* [getRawHeartbeat](docs/sdks/resources/README.md#getrawheartbeat)
 
 ### [Sync](docs/sdks/sync/README.md)
 
@@ -336,16 +337,6 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`commandsListDeployments`](docs/sdks/commands/README.md#listdeployments) - List distinct deployments that have commands, including deployment group info. Use for filter dropdowns in the dashboard.
 - [`commandsListNames`](docs/sdks/commands/README.md#listnames) - List distinct command names. Use for filter dropdowns in the dashboard.
 - [`commandsUpdate`](docs/sdks/commands/README.md#update) - Update command state. Called by manager when command is dispatched or completes.
-- [`containersGetAttention`](docs/sdks/containers/README.md#getattention) - Returns deployments in the project that need attention: crash loops, scheduling failures, unhealthy machines.
-- [`containersGetDeploymentCluster`](docs/sdks/containers/README.md#getdeploymentcluster) - Container cluster overview for a specific deployment: machine count, container count, and capacity.
-- [`containersGetDeploymentContainer`](docs/sdks/containers/README.md#getdeploymentcontainer) - Get detailed status, configuration, and replica metrics for a specific container in a deployment.
-- [`containersGetDeployments`](docs/sdks/containers/README.md#getdeployments) - Per-deployment breakdown for a container: status, replicas, metrics, and HTTP performance across all of the project's deployments running this container.
-- [`containersGetMachines`](docs/sdks/containers/README.md#getmachines) - Per-project machine health: per-deployment machine counts by status, capacity group utilization, and scaling recommendations.
-- [`containersGetOverview`](docs/sdks/containers/README.md#getoverview) - Per-project view of all container definitions across the project's deployments, with aggregate health stats, machine health breakdown, and HTTP performance metrics.
-- [`containersListDeploymentContainerInstanceEvents`](docs/sdks/containers/README.md#listdeploymentcontainerinstanceevents) - List orchestration events for a specific container in a deployment.
-- [`containersListDeploymentContainers`](docs/sdks/containers/README.md#listdeploymentcontainers) - List all containers running in a specific deployment.
-- [`containersListDeploymentEvents`](docs/sdks/containers/README.md#listdeploymentevents) - List orchestration events for a deployment's container cluster.
-- [`containersListDeploymentMachines`](docs/sdks/containers/README.md#listdeploymentmachines) - List all compute machines in a deployment's container cluster.
 - [`deploymentGetInfo`](docs/sdks/deployment/README.md#getinfo) - Get deployment information for the deployment portal. Accepts both deployment-scoped and deployment-group-scoped API keys. Returns project information, package status/outputs, and either deployment or deployment group details depending on the token type. Poll this endpoint to check if packages are ready.
 - [`deploymentGroupsCreateDeploymentGroup`](docs/sdks/deploymentgroups/README.md#createdeploymentgroup) - Create a new deployment group
 - [`deploymentGroupsCreateDeploymentGroupToken`](docs/sdks/deploymentgroups/README.md#createdeploymentgrouptoken) - Create deployment group token
@@ -373,8 +364,10 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`domainsDelete`](docs/sdks/domains/README.md#delete) - Delete a workspace domain.
 - [`domainsGet`](docs/sdks/domains/README.md#get) - Get domain by ID.
 - [`domainsList`](docs/sdks/domains/README.md#list) - List system domains and workspace domains.
+- [`domainsRefresh`](docs/sdks/domains/README.md#refresh) - Refresh workspace domain verification.
 - [`eventsGet`](docs/sdks/events/README.md#get) - Retrieve an event by ID.
 - [`eventsList`](docs/sdks/events/README.md#list) - Retrieve all events.
+- [`managersCancelSetup`](docs/sdks/managers/README.md#cancelsetup) - Cancel pending private-manager setup, revoke setup/runtime tokens, and remove the undeployed manager record.
 - [`managersCreate`](docs/sdks/managers/README.md#create) - Create a new manager.
 - [`managersDelete`](docs/sdks/managers/README.md#delete) - Delete a manager by ID.
 - [`managersGenerateManagerToken`](docs/sdks/managers/README.md#generatemanagertoken) - Generate a short-lived JWT for direct browser → manager communication. Used for fetching command payloads and querying logs without routing sensitive data through the platform API.
@@ -386,6 +379,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`managersProvision`](docs/sdks/managers/README.md#provision) - Enqueue provisioning for a manager by ID.
 - [`managersReportHeartbeat`](docs/sdks/managers/README.md#reportheartbeat) - Report Manager health status and metrics.
 - [`managersResolveGcpOAuthProvider`](docs/sdks/managers/README.md#resolvegcpoauthprovider) - Resolve decrypted project-level Google Cloud OAuth provider settings for a manager-side deployment bootstrap.
+- [`managersRetrySetup`](docs/sdks/managers/README.md#retrysetup) - Revoke previous private-manager setup tokens and issue a fresh setup token/config.
 - [`managersUpdate`](docs/sdks/managers/README.md#update) - Update a manager to a specific release ID or active release.
 - [`packagesCancel`](docs/sdks/packages/README.md#cancel) - Cancel a pending or building package.
 - [`packagesGet`](docs/sdks/packages/README.md#get) - Get details of a specific package.
@@ -394,11 +388,15 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`projectsCreate`](docs/sdks/projects/README.md#create) - Create a new project.
 - [`projectsCreateFromTemplate`](docs/sdks/projects/README.md#createfromtemplate) - Create a project by forking alienplatform/alien into your namespace, then configuring GitHub Actions.
 - [`projectsDelete`](docs/sdks/projects/README.md#delete) - Delete a project. The project must have no deployments.
+- [`projectsDeleteDeploymentPortalDomain`](docs/sdks/projects/README.md#deletedeploymentportaldomain) - Remove the deployment portal domain binding from a project.
 - [`projectsGet`](docs/sdks/projects/README.md#get) - Retrieve a project by ID or name.
 - [`projectsGetActiveRelease`](docs/sdks/projects/README.md#getactiverelease) - Get the active release for this project. Returns the latest release, or the pinned release if deploymentId is provided and that deployment has a pinned release.
+- [`projectsGetDeploymentPortalDomain`](docs/sdks/projects/README.md#getdeploymentportaldomain) - Get the deployment portal domain binding for a project.
 - [`projectsGetGcpOAuthProvider`](docs/sdks/projects/README.md#getgcpoauthprovider) - Retrieve redacted project-level Google Cloud OAuth provider settings.
 - [`projectsGetTemplateUrls`](docs/sdks/projects/README.md#gettemplateurls) - Get template URLs for deploying setup stacks in this project.
 - [`projectsList`](docs/sdks/projects/README.md#list) - Retrieve all projects.
+- [`projectsPutDeploymentPortalDomain`](docs/sdks/projects/README.md#putdeploymentportaldomain) - Attach or replace the deployment portal domain binding for a project.
+- [`projectsRefreshDeploymentPortalDomain`](docs/sdks/projects/README.md#refreshdeploymentportaldomain) - Refresh the deployment portal domain controller state for a project.
 - [`projectsUpdate`](docs/sdks/projects/README.md#update) - Update a project.
 - [`projectsUpdateGcpOAuthProvider`](docs/sdks/projects/README.md#updategcpoauthprovider) - Update project-level Google Cloud OAuth provider settings.
 - [`releasesCreate`](docs/sdks/releases/README.md#create) - Create a new release.
@@ -407,6 +405,10 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`releasesListAuthors`](docs/sdks/releases/README.md#listauthors) - List distinct commit authors across releases. Used for filter dropdowns.
 - [`releasesListBranches`](docs/sdks/releases/README.md#listbranches) - List distinct git branches across releases. Used for filter dropdowns.
 - [`resolveResolve`](docs/sdks/resolve/README.md#resolve) - Resolve manager for a project and platform
+- [`resourcesGetDeploymentDetail`](docs/sdks/resources/README.md#getdeploymentdetail)
+- [`resourcesGetRawHeartbeat`](docs/sdks/resources/README.md#getrawheartbeat)
+- [`resourcesListDeployments`](docs/sdks/resources/README.md#listdeployments)
+- [`resourcesListOverview`](docs/sdks/resources/README.md#listoverview)
 - [`syncAcquire`](docs/sdks/sync/README.md#acquire) - Acquire a batch of deployments for processing. Used by Manager to atomically lock deployments matching filters. Each deployment in the batch must be released after processing.
 - [`syncList`](docs/sdks/sync/README.md#list) - List full deployment records for manager operational loops. This endpoint is intentionally separate from the public deployments list, which returns lightweight UI rows.
 - [`syncReconcile`](docs/sdks/sync/README.md#reconcile) - Reconcile deployment state. Push model (with session) verifies lock ownership. Pull model (no session) verifies the deployment is unlocked. Accepts full DeploymentState after step() execution.

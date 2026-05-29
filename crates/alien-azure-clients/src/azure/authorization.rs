@@ -6,7 +6,6 @@ use crate::azure::AzureClientConfig;
 use alien_client_core::{ErrorData, Result};
 
 use alien_error::{Context, IntoAlienError};
-use async_trait::async_trait;
 use reqwest::{Client, Method, StatusCode};
 use serde::Deserialize;
 

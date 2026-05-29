@@ -4,7 +4,7 @@ use crate::{
     presigned::{LocalOperation, PresignedOperation, PresignedRequest, PresignedRequestBackend},
     traits::{Binding, Storage},
 };
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::{Context, IntoAlienError};
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::Utc;
@@ -19,7 +19,7 @@ use object_store::{
     ListResult,
     ObjectMeta,
     ObjectStore,
-    PutMultipartOpts,
+    PutMultipartOptions,
     PutOptions,
     PutPayload,
     PutResult,
@@ -273,7 +273,7 @@ impl ObjectStore for LocalStorage {
     async fn put_multipart_opts(
         &self,
         location: &Path,
-        opts: PutMultipartOpts,
+        opts: PutMultipartOptions,
     ) -> ObjectStoreResult<Box<dyn object_store::MultipartUpload>> {
         let dst = prefixed_path(&self.base_dir, location);
         self.inner.put_multipart_opts(&dst, opts).await

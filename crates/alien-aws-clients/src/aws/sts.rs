@@ -5,7 +5,6 @@ use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsSignConfig};
 use crate::aws::{AwsClientConfig, AwsCredentials};
 use alien_client_core::{ErrorData, Result};
 use alien_error::ContextError;
-use async_trait::async_trait;
 use bon::Builder;
 use form_urlencoded;
 
@@ -229,7 +228,7 @@ impl StsClient {
                     message: error_message,
                 },
                 _ => ErrorData::HttpResponseError {
-                    message: format!("STS operation failed: {}", error_message),
+                    message: format!("STS {operation} failed: {error_message}"),
                     url: "sts.amazonaws.com".into(),
                     http_status: status.as_u16(),
                     http_response_text: Some(error_body.into()),

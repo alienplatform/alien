@@ -2,7 +2,7 @@ use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsSignConfig};
 use crate::aws::credential_provider::AwsCredentialProvider;
 use alien_client_core::{ErrorData, Result};
 
-use alien_error::{AlienError, ContextError};
+use alien_error::ContextError;
 use bon::Builder;
 use form_urlencoded;
 use quick_xml;
@@ -10,7 +10,6 @@ use reqwest::{Client, StatusCode};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-use async_trait::async_trait;
 #[cfg(feature = "test-utils")]
 use mockall::automock;
 
@@ -214,7 +213,7 @@ impl CloudFormationClient {
                 | StatusCode::BAD_GATEWAY
                 | StatusCode::GATEWAY_TIMEOUT => ErrorData::RemoteServiceUnavailable { message },
                 _ => ErrorData::HttpResponseError {
-                    message: format!("CloudFormation operation failed: {}", message),
+                    message: format!("CloudFormation {operation} failed: {message}"),
                     url: format!("cloudformation.amazonaws.com"),
                     http_status: status.as_u16(),
                     http_request_text: request_body.map(|s| s.to_string()),

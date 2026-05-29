@@ -23,7 +23,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     core::{
-        state_utils::StackResourceStateExt, DefaultPlatformServiceProvider,
+        state_utils::StackResourceStateExt, DefaultPlatformServiceProvider, HeartbeatCollector,
         PlatformServiceProvider, ResourceControllerContext, ResourceControllerStepResult,
         ResourceRegistry,
     },
@@ -31,8 +31,8 @@ use crate::{
 };
 use alien_core::ClientConfig;
 use alien_core::{
-    alien_event, AlienEvent, Platform, Resource, ResourceLifecycle, ResourceRef, ResourceStatus,
-    Stack, StackResourceState, StackState,
+    alien_event, AlienEvent, Platform, Resource, ResourceHeartbeat, ResourceLifecycle, ResourceRef,
+    ResourceStatus, Stack, StackResourceState, StackState,
 };
 
 /// Represents the outcome of a planning phase, identifying necessary changes.
@@ -59,6 +59,9 @@ pub struct StepResult {
     /// This is the minimum delay suggested by any resource processed in this step,
     /// so we poll again as soon as the fastest resource is ready.
     pub suggested_delay_ms: Option<u64>,
+    /// Typed heartbeats emitted while executing this stack step.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub heartbeats: Vec<ResourceHeartbeat>,
 }
 
 /// Result of run_until_synced that includes the final state even on failure
@@ -114,10 +117,6 @@ pub struct StackExecutor {
     node_index_to_id: HashMap<NodeIndex, String>,
     lifecycle_filter: Option<HashSet<ResourceLifecycle>>,
     step_running_resources: bool,
-    /// Resource IDs that were excluded by the lifecycle filter but ARE in the
-    /// desired stack. These must not be removed from state — other in-scope
-    /// resources may depend on them.
-    filtered_out_ids: HashSet<String>,
     desired_stack: Stack,
 
     // --- Stored from config for use during step() ---
@@ -418,7 +417,6 @@ impl StackExecutor {
             node_index_to_id: node_to_id,
             lifecycle_filter: filter_set,
             step_running_resources,
-            filtered_out_ids,
             desired_stack: stack.clone(),
             client_config,
             resource_registry,
@@ -1298,6 +1296,7 @@ impl StackExecutor {
         }
 
         // Process each ready resource by stepping its state machine
+        let heartbeat_collector = HeartbeatCollector::default();
         for resource_id in ready_resource_ids {
             // Get current resource state (may be updated during initialization)
             let mut current_resource_state = next_state
@@ -1399,6 +1398,7 @@ impl StackExecutor {
                 desired_stack: &self.desired_stack,
                 service_provider: &self.service_provider,
                 deployment_config: &self.deployment_config,
+                heartbeat_collector: heartbeat_collector.clone(),
             };
 
             // Use the *original* current_resource_state (before potential initialization changes below)
@@ -1586,6 +1586,7 @@ impl StackExecutor {
         let step_result = StepResult {
             next_state: next_state.clone(),
             suggested_delay_ms: min_delay.map(|d| d.as_millis() as u64),
+            heartbeats: heartbeat_collector.drain(),
         };
 
         // Update the event with final results

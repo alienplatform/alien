@@ -4,7 +4,6 @@
 pub mod allowed_user_resources;
 pub mod capacity_group_profile;
 pub mod container_lifecycle;
-pub mod daemon_platform;
 pub mod external_bindings_required;
 pub mod frozen_resource_lifecycle;
 pub mod live_provision_permissions;
@@ -25,7 +24,6 @@ pub mod worker_memory;
 pub use allowed_user_resources::AllowedUserResourcesCheck;
 pub use capacity_group_profile::CapacityGroupProfileCheck;
 pub use container_lifecycle::ContainerLifecycleCheck;
-pub use daemon_platform::DaemonPlatformCheck;
 pub use external_bindings_required::ExternalBindingsRequiredCheck;
 pub use frozen_resource_lifecycle::FrozenResourceLifecycleCheck;
 pub use live_provision_permissions::LiveProvisionPermissionsCheck;

@@ -134,7 +134,13 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
         .create_deployment_group_token()
         .id(&dg_id_param)
         .workspace(&token_workspace_param)
-        .body(alien_platform_api::types::CreateDeploymentGroupTokenRequest { description: None })
+        .body(
+            alien_platform_api::types::CreateDeploymentGroupTokenRequest {
+                description: None,
+                expires_at: None,
+                deployment_setup_config: platform_onboard_deployment_setup_config(),
+            },
+        )
         .send()
         .await
         .into_sdk_error()
@@ -176,6 +182,54 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
     );
 
     Ok(())
+}
+
+#[cfg(feature = "platform")]
+fn platform_onboard_deployment_setup_config() -> alien_platform_api::types::DeploymentSetupConfig {
+    use alien_platform_api::types;
+
+    types::DeploymentSetupConfig {
+        metadata: types::DeploymentSetupMetadata(serde_json::Map::new()),
+        policy: types::DeploymentSetupPolicy {
+            allowed_platforms: vec![
+                types::DeploymentSetupPolicyAllowedPlatformsItem::Aws,
+                types::DeploymentSetupPolicyAllowedPlatformsItem::Gcp,
+                types::DeploymentSetupPolicyAllowedPlatformsItem::Azure,
+                types::DeploymentSetupPolicyAllowedPlatformsItem::Kubernetes,
+                types::DeploymentSetupPolicyAllowedPlatformsItem::Local,
+            ],
+            allowed_setup_methods: vec![types::DeploymentSetupMethod::Cli],
+            deployment_name: None,
+            release: None,
+            stack_settings: Some(types::DeploymentSetupStackSettingsPolicy {
+                allow_custom_registry: None,
+                allow_external_bindings: None,
+                allowed_deployment_models: vec![
+                    types::DeploymentSetupStackSettingsPolicyAllowedDeploymentModelsItem::Push,
+                    types::DeploymentSetupStackSettingsPolicyAllowedDeploymentModelsItem::Pull,
+                ],
+                allowed_heartbeats_modes: vec![
+                    types::DeploymentSetupStackSettingsPolicyAllowedHeartbeatsModesItem::On,
+                    types::DeploymentSetupStackSettingsPolicyAllowedHeartbeatsModesItem::Off,
+                ],
+                allowed_network_modes: vec![
+                    types::DeploymentSetupStackSettingsPolicyAllowedNetworkModesItem::None,
+                    types::DeploymentSetupStackSettingsPolicyAllowedNetworkModesItem::Create,
+                    types::DeploymentSetupStackSettingsPolicyAllowedNetworkModesItem::Default,
+                    types::DeploymentSetupStackSettingsPolicyAllowedNetworkModesItem::Byo,
+                ],
+                allowed_telemetry_modes: vec![
+                    types::DeploymentSetupStackSettingsPolicyAllowedTelemetryModesItem::Off,
+                    types::DeploymentSetupStackSettingsPolicyAllowedTelemetryModesItem::Auto,
+                ],
+                allowed_updates_modes: vec![
+                    types::DeploymentSetupStackSettingsPolicyAllowedUpdatesModesItem::Auto,
+                ],
+                defaults: None,
+            }),
+        },
+        environment_variables: Vec::new(),
+    }
 }
 
 /// Standalone/Dev mode: use manager API, show CLI command.

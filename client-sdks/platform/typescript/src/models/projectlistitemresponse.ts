@@ -197,6 +197,24 @@ export type ProjectListItemResponsePackagesConfig = {
   terraform?: ProjectListItemResponseTerraform | null | undefined;
 };
 
+/**
+ * Project default private managers for new push deployments.
+ */
+export type ProjectListItemResponseDefaultManagers = {
+  /**
+   * Unique identifier for a default private manager.
+   */
+  aws?: string | null | undefined;
+  /**
+   * Unique identifier for a default private manager.
+   */
+  gcp?: string | null | undefined;
+  /**
+   * Unique identifier for a default private manager.
+   */
+  azure?: string | null | undefined;
+};
+
 export type ProjectListItemResponse = {
   /**
    * Unique identifier for the project.
@@ -229,6 +247,10 @@ export type ProjectListItemResponse = {
    * Selected domain for this project (null = default system domain)
    */
   domainId?: string | null | undefined;
+  /**
+   * Project default private managers for new push deployments.
+   */
+  defaultManagers?: ProjectListItemResponseDefaultManagers | null | undefined;
   createdAt: Date;
   /**
    * Unique identifier for the workspace.
@@ -424,6 +446,27 @@ export function projectListItemResponsePackagesConfigFromJSON(
 }
 
 /** @internal */
+export const ProjectListItemResponseDefaultManagers$inboundSchema: z.ZodType<
+  ProjectListItemResponseDefaultManagers,
+  unknown
+> = z.object({
+  aws: z.nullable(z.string()).optional(),
+  gcp: z.nullable(z.string()).optional(),
+  azure: z.nullable(z.string()).optional(),
+});
+
+export function projectListItemResponseDefaultManagersFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectListItemResponseDefaultManagers, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ProjectListItemResponseDefaultManagers$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectListItemResponseDefaultManagers' from JSON`,
+  );
+}
+
+/** @internal */
 export const ProjectListItemResponse$inboundSchema: z.ZodType<
   ProjectListItemResponse,
   unknown
@@ -443,6 +486,9 @@ export const ProjectListItemResponse$inboundSchema: z.ZodType<
     z.lazy(() => ProjectListItemResponsePackagesConfig$inboundSchema),
   ).optional(),
   domainId: z.nullable(z.string()).optional(),
+  defaultManagers: z.nullable(
+    z.lazy(() => ProjectListItemResponseDefaultManagers$inboundSchema),
+  ).optional(),
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   workspaceId: z.string(),
   deploymentCount: z.number().optional(),

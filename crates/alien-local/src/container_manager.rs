@@ -173,6 +173,17 @@ pub struct ContainerInfo {
     pub internal_dns: String,
 }
 
+/// Cheap Docker runtime status for local controller heartbeats.
+#[derive(Debug, Clone)]
+pub struct LocalRuntimeStatus {
+    pub docker_version: Option<String>,
+    pub docker_api_version: Option<String>,
+    pub docker_os: Option<String>,
+    pub docker_arch: Option<String>,
+    pub tracked_containers: u32,
+    pub running_containers: u32,
+}
+
 /// Manager for local containers using Docker.
 ///
 /// Uses the bollard crate to interact with the Docker daemon.
@@ -279,6 +290,37 @@ impl LocalContainerManager {
 
         info!("✓ Docker network '{}' created", NETWORK_NAME);
         Ok(())
+    }
+
+    /// Reads cheap Docker runtime metadata without inspecting logs or host files.
+    pub async fn runtime_status(&self) -> Result<LocalRuntimeStatus> {
+        let version = self.docker.version().await.into_alien_error().context(
+            ErrorData::DockerConnectionFailed {
+                reason: "Failed to query Docker daemon version".to_string(),
+            },
+        )?;
+
+        let tracked_container_ids: Vec<String> = {
+            let containers = self.containers.read().await;
+            containers.keys().cloned().collect()
+        };
+        let tracked_containers = tracked_container_ids.len() as u32;
+        let mut running_containers = 0u32;
+
+        for container_id in tracked_container_ids {
+            if self.is_running(&container_id).await {
+                running_containers += 1;
+            }
+        }
+
+        Ok(LocalRuntimeStatus {
+            docker_version: version.version,
+            docker_api_version: version.api_version,
+            docker_os: version.os,
+            docker_arch: version.arch,
+            tracked_containers,
+            running_containers,
+        })
     }
 
     /// Resolves an image reference, loading from OCI tarball if it's a local path.

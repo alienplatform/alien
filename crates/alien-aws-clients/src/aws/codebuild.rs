@@ -1,17 +1,13 @@
 use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsSignConfig};
 use crate::aws::credential_provider::AwsCredentialProvider;
 use alien_client_core::{ErrorData, Result};
-
-use alien_error::{AlienError, Context, ContextError, IntoAlienError};
+use alien_error::{Context, ContextError, IntoAlienError};
 use bon::Builder;
-use form_urlencoded;
-use reqwest::{Client, Method, StatusCode};
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
-
-use async_trait::async_trait;
 #[cfg(feature = "test-utils")]
 use mockall::automock;
+use reqwest::{Client, StatusCode};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 #[cfg_attr(feature = "test-utils", automock)]
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]

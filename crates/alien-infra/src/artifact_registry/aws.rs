@@ -8,14 +8,18 @@ use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_aws_clients::iam::{CreateRoleRequest, CreateRoleTag, IamApi};
 use alien_core::{
-    standard_resource_tags, ArtifactRegistry, ArtifactRegistryOutputs, ResourceOutputs,
+    standard_resource_tags, ArtifactRegistry, ArtifactRegistryHeartbeatData,
+    ArtifactRegistryHeartbeatStatus, ArtifactRegistryOutputs, AwsEcrArtifactRegistryHeartbeatData,
+    AwsEcrRepositoryHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
+    ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
     ResourceStatus,
 };
 
 use alien_aws_clients::aws::ecr::{
-    PutReplicationConfigurationRequest, ReplicationConfiguration, ReplicationDestination,
-    ReplicationRule,
+    DescribeRepositoriesRequest, PutReplicationConfigurationRequest, ReplicationConfiguration,
+    ReplicationDestination, ReplicationRule, Repository,
 };
+use chrono::Utc;
 
 fn role_name_from_arn(arn: &str) -> Option<&str> {
     arn.rsplit_once(':')?
@@ -817,6 +821,42 @@ impl AwsArtifactRegistryController {
             }
 
             debug!(account_id=%stored_account_id, region=%stored_region, "AWS ECR registry heartbeat check passed");
+
+            let ecr_client = ctx.service_provider.get_aws_ecr_client(aws_cfg).await?;
+            let repository_prefix = self
+                .repository_prefix
+                .clone()
+                .unwrap_or_else(|| format!("{}-{}", ctx.resource_prefix, config.id));
+            let repositories_response = ecr_client
+                .describe_repositories(DescribeRepositoriesRequest {
+                    registry_id: Some(stored_account_id.clone()),
+                    repository_names: None,
+                    next_token: None,
+                    max_results: Some(100),
+                })
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to describe ECR repositories during heartbeat check"
+                        .to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?;
+            let repositories = repositories_response
+                .repositories
+                .into_iter()
+                .filter(|repository| repository.repository_name.starts_with(&repository_prefix))
+                .collect::<Vec<_>>();
+
+            emit_aws_artifact_registry_heartbeat(
+                ctx,
+                &config.id,
+                stored_account_id,
+                stored_region,
+                &repository_prefix,
+                self.pull_role_arn.clone(),
+                self.push_role_arn.clone(),
+                repositories_response.next_token.is_some(),
+                repositories,
+            );
         }
 
         Ok(HandlerAction::Continue {
@@ -1244,6 +1284,78 @@ impl AwsArtifactRegistryController {
             _internal_stay_count: None,
         }
     }
+}
+
+fn emit_aws_artifact_registry_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    registry_id: &str,
+    region: &str,
+    repository_prefix: &str,
+    pull_role_arn: Option<String>,
+    push_role_arn: Option<String>,
+    repositories_truncated: bool,
+    repositories: Vec<Repository>,
+) {
+    let repository_data = repositories
+        .into_iter()
+        .map(|repository| AwsEcrRepositoryHeartbeatData {
+            repository_arn: repository.repository_arn,
+            registry_id: repository.registry_id,
+            repository_name: repository.repository_name,
+            repository_uri: repository.repository_uri,
+            created_at: repository.created_at,
+            image_tag_mutability: repository.image_tag_mutability,
+            scan_on_push: repository
+                .image_scanning_configuration
+                .and_then(|config| config.scan_on_push),
+            encryption_type: repository
+                .encryption_configuration
+                .as_ref()
+                .map(|config| config.encryption_type.clone()),
+            kms_key_present: repository
+                .encryption_configuration
+                .as_ref()
+                .and_then(|config| config.kms_key.as_ref())
+                .is_some(),
+        })
+        .collect::<Vec<_>>();
+    let repository_count = repository_data.len() as u32;
+
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: ArtifactRegistry::RESOURCE_TYPE,
+        controller_platform: Platform::Aws,
+        backend: HeartbeatBackend::Aws,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::ArtifactRegistry(ArtifactRegistryHeartbeatData::AwsEcr(
+            AwsEcrArtifactRegistryHeartbeatData {
+                status: ArtifactRegistryHeartbeatStatus {
+                    health: ObservedHealth::Healthy,
+                    lifecycle: ProviderLifecycleState::Running,
+                    message: Some(format!(
+                        "AWS ECR registry '{}' in '{}' is reachable",
+                        registry_id, region
+                    )),
+                    stale: false,
+                    partial: repositories_truncated,
+                    collection_issues: vec![],
+                },
+                registry_id: registry_id.to_string(),
+                region: region.to_string(),
+                registry_uri: format!("{registry_id}.dkr.ecr.{region}.amazonaws.com"),
+                repository_prefix: repository_prefix.to_string(),
+                pull_role_arn,
+                push_role_arn,
+                repository_count,
+                repositories_truncated,
+                repositories: repository_data,
+                events: vec![],
+            },
+        )),
+        raw: vec![],
+    });
 }
 
 #[cfg(test)]

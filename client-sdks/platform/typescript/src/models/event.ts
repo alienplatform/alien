@@ -1099,7 +1099,7 @@ export type DataLoadingConfiguration = {
   type: "LoadingConfiguration";
 };
 
-export type Data =
+export type EventDataUnion =
   | DataLoadingConfiguration
   | DataFinished
   | DataBuildingStack
@@ -2581,59 +2581,60 @@ export function dataLoadingConfigurationFromJSON(
 }
 
 /** @internal */
-export const Data$inboundSchema: z.ZodType<Data, unknown> = z.union([
-  z.lazy(() => DataLoadingConfiguration$inboundSchema),
-  z.lazy(() => DataFinished$inboundSchema),
-  z.lazy(() => DataBuildingStack$inboundSchema),
-  z.lazy(() => DataRunningPreflights$inboundSchema),
-  z.lazy(() => DataDownloadingAlienRuntime$inboundSchema),
-  z.lazy(() => DataBuildingResource$inboundSchema),
-  z.lazy(() => DataBuildingImage$inboundSchema),
-  z.lazy(() => DataPushingImage$inboundSchema),
-  z.lazy(() => DataPushingStack$inboundSchema),
-  z.lazy(() => DataPushingResource$inboundSchema),
-  z.lazy(() => DataCreatingRelease$inboundSchema),
-  z.lazy(() => DataCompilingCode$inboundSchema),
-  z.lazy(() => DataStackStep$inboundSchema),
-  z.lazy(() => DataGeneratingCloudFormationTemplate$inboundSchema),
-  z.lazy(() => DataGeneratingTemplate$inboundSchema),
-  z.lazy(() => DataProvisioningAgent$inboundSchema),
-  z.lazy(() => DataUpdatingAgent$inboundSchema),
-  z.lazy(() => DataDeletingAgent$inboundSchema),
-  z.lazy(() => DataDebuggingAgent$inboundSchema),
-  z.lazy(() => DataPreparingEnvironment$inboundSchema),
-  z.lazy(() => DataDeployingStack$inboundSchema),
-  z.lazy(() => DataRunningTestWorker$inboundSchema),
-  z.lazy(() => DataCleaningUpStack$inboundSchema),
-  z.lazy(() => DataCleaningUpEnvironment$inboundSchema),
-  z.lazy(() => DataSettingUpPlatformContext$inboundSchema),
-  z.lazy(() => DataEnsuringDockerRepository$inboundSchema),
-  z.lazy(() => DataDeployingCloudFormationStack$inboundSchema),
-  z.lazy(() => DataAssumingRole$inboundSchema),
-  z.lazy(() => DataImportingStackStateFromCloudFormation$inboundSchema),
-  z.lazy(() => DataDeletingCloudFormationStack$inboundSchema),
-  z.lazy(() => DataEmptyingBuckets$inboundSchema),
-  z.lazy(() => DataDeploymentCreated$inboundSchema),
-  z.lazy(() => DataDeploymentReleased$inboundSchema),
-  z.lazy(() => DataDeploymentFailed$inboundSchema),
-  z.lazy(() => DataDeploymentDegraded$inboundSchema),
-  z.lazy(() => DataDeploymentRecovered$inboundSchema),
-  z.lazy(() => DataDeploymentDeleted$inboundSchema),
-  z.lazy(() => DataDeploymentRetryRequested$inboundSchema),
-  z.lazy(() => DataDeploymentRedeployRequested$inboundSchema),
-  z.lazy(() => DataDeploymentReleasePinned$inboundSchema),
-  z.lazy(() => DataDeploymentReleaseUnpinned$inboundSchema),
-  z.lazy(() => DataDeploymentEnvironmentUpdated$inboundSchema),
-  z.lazy(() => DataDeploymentDeletionRequested$inboundSchema),
-]);
+export const EventDataUnion$inboundSchema: z.ZodType<EventDataUnion, unknown> =
+  z.union([
+    z.lazy(() => DataLoadingConfiguration$inboundSchema),
+    z.lazy(() => DataFinished$inboundSchema),
+    z.lazy(() => DataBuildingStack$inboundSchema),
+    z.lazy(() => DataRunningPreflights$inboundSchema),
+    z.lazy(() => DataDownloadingAlienRuntime$inboundSchema),
+    z.lazy(() => DataBuildingResource$inboundSchema),
+    z.lazy(() => DataBuildingImage$inboundSchema),
+    z.lazy(() => DataPushingImage$inboundSchema),
+    z.lazy(() => DataPushingStack$inboundSchema),
+    z.lazy(() => DataPushingResource$inboundSchema),
+    z.lazy(() => DataCreatingRelease$inboundSchema),
+    z.lazy(() => DataCompilingCode$inboundSchema),
+    z.lazy(() => DataStackStep$inboundSchema),
+    z.lazy(() => DataGeneratingCloudFormationTemplate$inboundSchema),
+    z.lazy(() => DataGeneratingTemplate$inboundSchema),
+    z.lazy(() => DataProvisioningAgent$inboundSchema),
+    z.lazy(() => DataUpdatingAgent$inboundSchema),
+    z.lazy(() => DataDeletingAgent$inboundSchema),
+    z.lazy(() => DataDebuggingAgent$inboundSchema),
+    z.lazy(() => DataPreparingEnvironment$inboundSchema),
+    z.lazy(() => DataDeployingStack$inboundSchema),
+    z.lazy(() => DataRunningTestWorker$inboundSchema),
+    z.lazy(() => DataCleaningUpStack$inboundSchema),
+    z.lazy(() => DataCleaningUpEnvironment$inboundSchema),
+    z.lazy(() => DataSettingUpPlatformContext$inboundSchema),
+    z.lazy(() => DataEnsuringDockerRepository$inboundSchema),
+    z.lazy(() => DataDeployingCloudFormationStack$inboundSchema),
+    z.lazy(() => DataAssumingRole$inboundSchema),
+    z.lazy(() => DataImportingStackStateFromCloudFormation$inboundSchema),
+    z.lazy(() => DataDeletingCloudFormationStack$inboundSchema),
+    z.lazy(() => DataEmptyingBuckets$inboundSchema),
+    z.lazy(() => DataDeploymentCreated$inboundSchema),
+    z.lazy(() => DataDeploymentReleased$inboundSchema),
+    z.lazy(() => DataDeploymentFailed$inboundSchema),
+    z.lazy(() => DataDeploymentDegraded$inboundSchema),
+    z.lazy(() => DataDeploymentRecovered$inboundSchema),
+    z.lazy(() => DataDeploymentDeleted$inboundSchema),
+    z.lazy(() => DataDeploymentRetryRequested$inboundSchema),
+    z.lazy(() => DataDeploymentRedeployRequested$inboundSchema),
+    z.lazy(() => DataDeploymentReleasePinned$inboundSchema),
+    z.lazy(() => DataDeploymentReleaseUnpinned$inboundSchema),
+    z.lazy(() => DataDeploymentEnvironmentUpdated$inboundSchema),
+    z.lazy(() => DataDeploymentDeletionRequested$inboundSchema),
+  ]);
 
-export function dataFromJSON(
+export function eventDataUnionFromJSON(
   jsonString: string,
-): SafeParseResult<Data, SDKValidationError> {
+): SafeParseResult<EventDataUnion, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Data$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Data' from JSON`,
+    (x) => EventDataUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'EventDataUnion' from JSON`,
   );
 }
 

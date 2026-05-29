@@ -16,7 +16,7 @@ import { ManagerStatus, ManagerStatus$inboundSchema } from "./managerstatus.js";
 /**
  * Represents the target cloud platform.
  */
-export const ManagerTarget = {
+export const TargetEnum = {
   Aws: "aws",
   Gcp: "gcp",
   Azure: "azure",
@@ -27,7 +27,39 @@ export const ManagerTarget = {
 /**
  * Represents the target cloud platform.
  */
-export type ManagerTarget = ClosedEnum<typeof ManagerTarget>;
+export type TargetEnum = ClosedEnum<typeof TargetEnum>;
+
+/**
+ * Cloud where this private manager is deployed
+ */
+export const CloudEnum = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Cloud where this private manager is deployed
+ */
+export type CloudEnum = ClosedEnum<typeof CloudEnum>;
+
+/**
+ * Private manager setup lifecycle status
+ */
+export const ManagerSetupStatus = {
+  Pending: "pending",
+  Provisioning: "provisioning",
+  Active: "active",
+  Failed: "failed",
+  Deleting: "deleting",
+  Deleted: "deleted",
+} as const;
+/**
+ * Private manager setup lifecycle status
+ */
+export type ManagerSetupStatus = ClosedEnum<typeof ManagerSetupStatus>;
 
 /**
  * Runtime metrics (self-reported via heartbeat)
@@ -63,7 +95,19 @@ export type Manager = {
   /**
    * Platforms this manager can handle
    */
-  targets: Array<ManagerTarget>;
+  targets: Array<TargetEnum>;
+  /**
+   * Cloud where this private manager is deployed
+   */
+  cloud?: CloudEnum | null | undefined;
+  /**
+   * Cloud region selected for this private manager
+   */
+  region?: string | null | undefined;
+  /**
+   * Private manager setup lifecycle status
+   */
+  setupStatus?: ManagerSetupStatus | null | undefined;
   /**
    * Manager URL (self-reported via heartbeat). DeepStore endpoints are exposed through this URL (e.g., {url}/v1/logs)
    */
@@ -105,14 +149,29 @@ export type Manager = {
    */
   managedDeploymentCount: number;
   /**
+   * Number of projects that select this manager as a default manager
+   */
+  defaultProjectCount: number;
+  /**
    * Timestamp when the manager was created
    */
   createdAt: Date;
 };
 
 /** @internal */
-export const ManagerTarget$inboundSchema: z.ZodEnum<typeof ManagerTarget> = z
-  .enum(ManagerTarget);
+export const TargetEnum$inboundSchema: z.ZodEnum<typeof TargetEnum> = z.enum(
+  TargetEnum,
+);
+
+/** @internal */
+export const CloudEnum$inboundSchema: z.ZodEnum<typeof CloudEnum> = z.enum(
+  CloudEnum,
+);
+
+/** @internal */
+export const ManagerSetupStatus$inboundSchema: z.ZodEnum<
+  typeof ManagerSetupStatus
+> = z.enum(ManagerSetupStatus);
 
 /** @internal */
 export const ManagerMetrics$inboundSchema: z.ZodType<ManagerMetrics, unknown> =
@@ -137,7 +196,10 @@ export function managerMetricsFromJSON(
 export const Manager$inboundSchema: z.ZodType<Manager, unknown> = z.object({
   id: z.string(),
   name: z.string(),
-  targets: z.array(ManagerTarget$inboundSchema),
+  targets: z.array(TargetEnum$inboundSchema),
+  cloud: z.nullable(CloudEnum$inboundSchema).optional(),
+  region: z.nullable(z.string()).optional(),
+  setupStatus: z.nullable(ManagerSetupStatus$inboundSchema).optional(),
   url: z.nullable(z.string()).optional(),
   managementConfigs: ManagerManagementConfigs$inboundSchema,
   isSystem: z.boolean(),
@@ -150,6 +212,7 @@ export const Manager$inboundSchema: z.ZodType<Manager, unknown> = z.object({
   ).optional(),
   logsDatabaseId: z.nullable(z.string()).optional(),
   managedDeploymentCount: z.int(),
+  defaultProjectCount: z.int(),
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
 });
 

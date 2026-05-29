@@ -7,12 +7,18 @@ use std::collections::HashMap;
 pub use alien_core::KubernetesClientConfig;
 
 pub mod deployments;
+pub mod events;
 pub mod jobs;
 pub mod kubernetes_client;
 pub mod kubernetes_request_utils;
+pub mod metrics;
+pub mod nodes;
+pub mod optional;
 pub mod pods;
+pub mod routes;
 pub mod secrets;
 pub mod services;
+pub mod version;
 
 /// Resolved Kubernetes configuration for making API calls
 #[derive(Debug, Clone)]

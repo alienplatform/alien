@@ -1,10 +1,7 @@
 use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsRequestSigner, AwsSignConfig};
 use crate::aws::credential_provider::AwsCredentialProvider;
-use alien_client_core::RequestBuilderExt;
-use alien_client_core::{ErrorData, Result};
-
+use alien_client_core::{ErrorData, RequestBuilderExt, Result};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
-use async_trait::async_trait;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use bon::Builder;
 use form_urlencoded;
@@ -28,6 +25,15 @@ pub trait S3Api: Send + Sync + std::fmt::Debug {
     ) -> Result<()>;
     async fn head_bucket(&self, bucket: &str) -> Result<()>;
     async fn get_bucket_versioning(&self, bucket: &str) -> Result<GetBucketVersioningOutput>;
+    async fn get_bucket_lifecycle_configuration(
+        &self,
+        bucket: &str,
+    ) -> Result<LifecycleConfiguration>;
+    async fn get_bucket_encryption(&self, bucket: &str) -> Result<GetBucketEncryptionOutput>;
+    async fn get_public_access_block(&self, bucket: &str)
+        -> Result<PublicAccessBlockConfiguration>;
+    async fn get_bucket_policy(&self, bucket: &str) -> Result<GetBucketPolicyOutput>;
+    async fn get_bucket_acl(&self, bucket: &str) -> Result<GetBucketAclOutput>;
     async fn put_bucket_versioning(&self, bucket: &str, status: VersioningStatus) -> Result<()>;
     async fn put_public_access_block(
         &self,
@@ -147,14 +153,6 @@ impl S3Client {
         xml
     }
 
-    fn get_base_url(&self) -> String {
-        if let Some(override_url) = self.credentials.get_service_endpoint_option("s3") {
-            override_url.to_string()
-        } else {
-            format!("https://s3.{}.amazonaws.com", self.credentials.region())
-        }
-    }
-
     fn host(&self, bucket: &str) -> String {
         if let Some(override_url) = self.credentials.get_service_endpoint_option("s3") {
             // For override URLs, we use the bucket as a path component instead of subdomain
@@ -225,29 +223,55 @@ impl S3Client {
         Self::map_result(result, operation, resource, Some(body_clone.as_str()))
     }
 
-    async fn request_json<T: DeserializeOwned + Send + 'static>(
+    async fn request_text(
         &self,
         method: Method,
         url: String,
         host_header: String,
-        body: String,
         operation: &str,
         resource: &str,
-    ) -> Result<T> {
+    ) -> Result<String> {
         self.credentials.ensure_fresh().await?;
-        let body_clone = body.clone();
         let builder = self
             .client
             .request(method, &url)
             .host(&host_header)
-            .content_type_json()
-            .content_sha256(&body)
-            .body(body);
+            .content_sha256("");
 
-        let result =
-            crate::aws::aws_request_utils::sign_send_json(builder, &self.sign_config()).await;
+        let response = builder
+            .sign_aws_request(&self.sign_config())?
+            .with_retry()
+            .send_raw()
+            .await
+            .context(ErrorData::HttpRequestFailed {
+                message: format!("{} request failed for '{}'", operation, resource),
+            })?;
 
-        Self::map_result(result, operation, resource, Some(body_clone.as_str()))
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            if let Some(mapped) = Self::map_s3_error(status, &body, operation, resource, None) {
+                return Err(AlienError::new(ErrorData::HttpResponseError {
+                    message: format!("{} failed: {}", operation, body),
+                    url,
+                    http_status: status.as_u16(),
+                    http_request_text: None,
+                    http_response_text: Some(body),
+                })
+                .context(mapped));
+            }
+
+            return Err(AlienError::new(ErrorData::HttpResponseError {
+                message: format!("{} failed with status: {}", operation, status),
+                url,
+                http_status: status.as_u16(),
+                http_request_text: None,
+                http_response_text: Some(body),
+            }));
+        }
+
+        Ok(body)
     }
 
     fn map_result<T>(
@@ -519,6 +543,78 @@ impl S3Api for S3Client {
             host,
             String::new(),
             "GetBucketVersioning",
+            bucket,
+        )
+        .await
+    }
+
+    async fn get_bucket_lifecycle_configuration(
+        &self,
+        bucket: &str,
+    ) -> Result<LifecycleConfiguration> {
+        let host = self.host(bucket);
+        self.request_xml(
+            Method::GET,
+            self.url(bucket, "?lifecycle"),
+            host,
+            String::new(),
+            "GetBucketLifecycleConfiguration",
+            bucket,
+        )
+        .await
+    }
+
+    async fn get_bucket_encryption(&self, bucket: &str) -> Result<GetBucketEncryptionOutput> {
+        let host = self.host(bucket);
+        self.request_xml(
+            Method::GET,
+            self.url(bucket, "?encryption"),
+            host,
+            String::new(),
+            "GetBucketEncryption",
+            bucket,
+        )
+        .await
+    }
+
+    async fn get_public_access_block(
+        &self,
+        bucket: &str,
+    ) -> Result<PublicAccessBlockConfiguration> {
+        let host = self.host(bucket);
+        self.request_xml(
+            Method::GET,
+            self.url(bucket, "?publicAccessBlock"),
+            host,
+            String::new(),
+            "GetPublicAccessBlock",
+            bucket,
+        )
+        .await
+    }
+
+    async fn get_bucket_policy(&self, bucket: &str) -> Result<GetBucketPolicyOutput> {
+        let host = self.host(bucket);
+        let policy = self
+            .request_text(
+                Method::GET,
+                self.url(bucket, "?policy"),
+                host,
+                "GetBucketPolicy",
+                bucket,
+            )
+            .await?;
+        Ok(GetBucketPolicyOutput { policy })
+    }
+
+    async fn get_bucket_acl(&self, bucket: &str) -> Result<GetBucketAclOutput> {
+        let host = self.host(bucket);
+        self.request_xml(
+            Method::GET,
+            self.url(bucket, "?acl"),
+            host,
+            String::new(),
+            "GetBucketAcl",
             bucket,
         )
         .await
@@ -1321,15 +1417,13 @@ impl S3Api for S3Client {
 struct S3ErrorResponse {
     pub code: String,
     pub message: String,
-    pub resource: Option<String>,
-    pub request_id: Option<String>,
 }
 
 // -------------------------------------------------------------------------
 // Public data types copied from legacy implementation (unchanged)
 // -------------------------------------------------------------------------
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum VersioningStatus {
     Enabled,
@@ -1343,7 +1437,7 @@ struct VersioningConfiguration {
     status: Option<VersioningStatus>,
 }
 
-#[derive(Debug, Serialize, Default, Builder)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, Builder)]
 #[serde(rename_all = "PascalCase")]
 pub struct PublicAccessBlockConfiguration {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1356,14 +1450,14 @@ pub struct PublicAccessBlockConfiguration {
     pub restrict_public_buckets: Option<bool>,
 }
 
-#[derive(Debug, Serialize, Builder)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Builder)]
 #[serde(rename_all = "PascalCase")]
 pub struct LifecycleConfiguration {
     #[serde(rename = "Rule", default, skip_serializing_if = "Vec::is_empty")]
     pub rules: Vec<LifecycleRule>,
 }
 
-#[derive(Debug, Serialize, Builder)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Builder)]
 #[serde(rename_all = "PascalCase")]
 pub struct LifecycleRule {
     #[serde(rename = "ID", skip_serializing_if = "Option::is_none")]
@@ -1374,21 +1468,21 @@ pub struct LifecycleRule {
     pub expiration: Option<LifecycleExpiration>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum LifecycleRuleStatus {
     Enabled,
     Disabled,
 }
 
-#[derive(Debug, Serialize, Builder)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Builder)]
 #[serde(rename_all = "PascalCase")]
 pub struct LifecycleRuleFilter {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prefix: Option<String>,
 }
 
-#[derive(Debug, Serialize, Builder)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Builder)]
 #[serde(rename_all = "PascalCase")]
 pub struct LifecycleExpiration {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1517,6 +1611,62 @@ pub struct GetBucketVersioningOutput {
 pub enum MfaDeleteStatus {
     Enabled,
     Disabled,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct GetBucketEncryptionOutput {
+    #[serde(rename = "Rule", default)]
+    pub rules: Vec<ServerSideEncryptionRule>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ServerSideEncryptionRule {
+    pub apply_server_side_encryption_by_default: Option<ServerSideEncryptionByDefault>,
+    pub bucket_key_enabled: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ServerSideEncryptionByDefault {
+    #[serde(rename = "SSEAlgorithm")]
+    pub sse_algorithm: Option<String>,
+    #[serde(rename = "KMSMasterKeyID")]
+    pub kms_master_key_id: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct GetBucketPolicyOutput {
+    pub policy: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct GetBucketAclOutput {
+    pub owner: Option<BucketOwner>,
+    #[serde(default)]
+    pub access_control_list: AccessControlList,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct BucketOwner {
+    pub id: Option<String>,
+    pub display_name: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct AccessControlList {
+    #[serde(rename = "Grant", default)]
+    pub grants: Vec<AclGrant>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct AclGrant {
+    pub permission: Option<String>,
 }
 
 // -------------------------------------------------------------------------

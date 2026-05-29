@@ -5,10 +5,14 @@ use tracing::{debug, error, info};
 use crate::core::{environment_variables::EnvironmentVariableBuilder, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
 use alien_core::{
-    ResourceOutputs as CoreResourceOutputs, ResourceStatus, Worker, WorkerCode, WorkerOutputs,
+    HeartbeatBackend, LocalWorkerHeartbeatData, ObservedHealth, Platform, ProviderLifecycleState,
+    ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs as CoreResourceOutputs,
+    ResourceStatus, Worker, WorkerCode, WorkerHeartbeatData, WorkerOutputs,
+    WorkloadHeartbeatStatus,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_macros::controller;
+use chrono::Utc;
 
 /// Shared trigger service shutdown handle. The controller is Clone+Serialize
 /// (required by the macro), so we can't store JoinHandle/broadcast::Sender directly.
@@ -250,6 +254,8 @@ impl LocalWorkerController {
             self.worker_url = Some(current_url);
         }
 
+        emit_local_worker_heartbeat(ctx, &config, self.extracted_image_path.as_ref());
+
         debug!(worker_id=%config.id, "Worker health check passed");
 
         Ok(HandlerAction::Continue {
@@ -388,4 +394,40 @@ impl LocalWorkerController {
             Ok(None)
         }
     }
+}
+
+fn emit_local_worker_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    config: &Worker,
+    extracted_image_path: Option<&PathBuf>,
+) {
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: config.id.clone(),
+        resource_type: Worker::RESOURCE_TYPE,
+        controller_platform: Platform::Local,
+        backend: HeartbeatBackend::Local,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::Worker(WorkerHeartbeatData::Local(LocalWorkerHeartbeatData {
+            status: WorkloadHeartbeatStatus {
+                health: ObservedHealth::Healthy,
+                lifecycle: ProviderLifecycleState::Running,
+                message: Some(format!("Local worker '{}' is running", config.id)),
+                stale: false,
+                partial: false,
+                collection_issues: vec![],
+            },
+            pid: None,
+            command_supported: true,
+            image_path_present: extracted_image_path
+                .map(|path| path.exists())
+                .unwrap_or(false),
+            readiness_probe_ok: None,
+            trigger_count: config.triggers.len() as u32,
+            cpu: None,
+            memory: None,
+            events: vec![],
+        })),
+        raw: vec![],
+    });
 }

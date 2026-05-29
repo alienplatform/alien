@@ -5,25 +5,17 @@ use crate::{
         CrossAccountAccess, CrossAccountPermissions, RegistryAuthMethod, RepositoryResponse,
     },
 };
-use alien_azure_clients::long_running_operation::LongRunningOperationClient;
-use alien_azure_clients::{
-    containerregistry::{AzureContainerRegistryClient, ContainerRegistryApi},
-    AzureClientConfig, AzureTokenCache,
-};
+use alien_azure_clients::{AzureClientConfig, AzureTokenCache};
 use alien_core::bindings::ArtifactRegistryBinding;
 use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
-use tracing::{info, warn};
+use tracing::info;
 
 /// Azure Container Registry implementation of the ArtifactRegistry binding.
 #[derive(Debug)]
 pub struct AcrArtifactRegistry {
-    acr_client: AzureContainerRegistryClient,
-    lro_client: LongRunningOperationClient,
-    binding_name: String,
     registry_name: String,
     registry_endpoint: String,
-    resource_group_name: String,
     repository_prefix: String,
     /// Azure credentials for direct registry access (AAD token exchange).
     azure_token_cache: AzureTokenCache,
@@ -65,7 +57,7 @@ impl AcrArtifactRegistry {
                 reason: "Failed to extract registry_name from binding".to_string(),
             })?;
 
-        let resource_group_name = config
+        config
             .resource_group_name
             .into_value(&binding_name, "resource_group_name")
             .context(ErrorData::BindingConfigInvalid {
@@ -76,11 +68,7 @@ impl AcrArtifactRegistry {
         // Derive registry endpoint from registry name
         let registry_endpoint = format!("{}.azurecr.io", registry_name);
         let client = crate::http_client::create_http_client();
-        let token_cache_1 = AzureTokenCache::new(azure_config.clone());
-        let token_cache_2 = AzureTokenCache::new(azure_config.clone());
-        let token_cache_3 = AzureTokenCache::new(azure_config.clone());
-        let acr_client = AzureContainerRegistryClient::new(client.clone(), token_cache_1);
-        let lro_client = LongRunningOperationClient::new(client.clone(), token_cache_2);
+        let azure_token_cache = AzureTokenCache::new(azure_config.clone());
 
         let repository_prefix = match config.repository_prefix {
             Some(bv) => bv
@@ -90,56 +78,12 @@ impl AcrArtifactRegistry {
         };
 
         Ok(Self {
-            acr_client,
-            lro_client,
-            binding_name,
             registry_name,
             registry_endpoint,
-            resource_group_name,
             repository_prefix,
-            azure_token_cache: token_cache_3,
+            azure_token_cache,
             http_client: client,
         })
-    }
-
-    /// Creates a valid Azure resource name from a repository name.
-    /// Azure resource names must:
-    /// - Be less than 50 characters
-    /// - Start with a letter
-    /// - Only contain alphanumeric characters and hyphens
-    fn make_azure_resource_name(&self, repo_name: &str, suffix: &str) -> String {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
-        let max_length = 49;
-        let combined = format!("{}-{}", repo_name, suffix);
-
-        // Azure ACR resource names must: start with a letter, contain only
-        // alphanumeric + single hyphens, no underscores, no consecutive hyphens,
-        // length 5-50.
-        let is_valid = combined.len() >= 5
-            && combined.len() <= max_length
-            && combined
-                .chars()
-                .next()
-                .map_or(false, |c| c.is_ascii_alphabetic())
-            && combined
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-')
-            && !combined.contains("--");
-
-        if is_valid {
-            combined
-        } else {
-            // Create a hash-based name that fits within Azure's constraints
-            let mut hasher = DefaultHasher::new();
-            repo_name.hash(&mut hasher);
-            suffix.hash(&mut hasher);
-            let hash = hasher.finish();
-
-            // Create a name that starts with a letter and includes the hash
-            format!("r{:x}-{}", hash, suffix)
-        }
     }
 }
 

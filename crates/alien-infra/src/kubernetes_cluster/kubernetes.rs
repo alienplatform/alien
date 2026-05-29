@@ -3,6 +3,10 @@ use tracing::{debug, info};
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
+#[cfg(feature = "kubernetes")]
+use crate::kubernetes_cluster_heartbeat::{
+    emit_kubernetes_cluster_heartbeat, KubernetesClusterHeartbeatInput,
+};
 use alien_azure_clients::long_running_operation::LongRunningOperation as AzureLongRunningOperation;
 use alien_core::{
     KubernetesCluster, KubernetesClusterOutputs, KubernetesClusterOwnership,
@@ -98,6 +102,23 @@ impl KubernetesClusterController {
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         if ctx.platform == Platform::Kubernetes {
             record_cluster_status(self, ctx, "Refreshing").await?;
+            #[cfg(feature = "kubernetes")]
+            {
+                let config = ctx.desired_resource_config::<KubernetesCluster>()?;
+                emit_kubernetes_cluster_heartbeat(
+                    ctx,
+                    KubernetesClusterHeartbeatInput {
+                        config,
+                        cluster_name: self.cluster_name.as_deref(),
+                        api_reachable: self.kubernetes_api_reachable.unwrap_or(false),
+                        namespace_ready: self.namespace_ready.unwrap_or(false),
+                        rbac_ready: self.rbac_ready.unwrap_or(false),
+                        agent_ready: self.agent_ready.unwrap_or(false),
+                        status_message: self.status_message.clone(),
+                    },
+                )
+                .await?;
+            }
         } else {
             debug!("Skipping KubernetesCluster runtime refresh outside Kubernetes agent");
         }

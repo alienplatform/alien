@@ -1,24 +1,24 @@
 use alien_error::{AlienError, Context, ContextError, IntoAlienError, IntoAlienErrorDirect};
-use alien_macros::{controller, flow_entry, handler, terminal_state};
-use async_trait::async_trait;
-use std::any::Any;
+use alien_macros::controller;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use tracing::{debug, info, warn};
 
-use crate::core::{ResourceController, ResourceControllerContext, ResourceControllerStepResult};
+use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use alien_azure_clients::containerregistry::ContainerRegistryApi;
 use alien_azure_clients::long_running_operation::OperationResult;
 use alien_azure_clients::models::containerregistry::{
-    PrivateEndpointConnection, Registry, RegistryProperties,
-    RegistryPropertiesNetworkRuleBypassOptions, RegistryPropertiesPublicNetworkAccess,
-    RegistryPropertiesZoneRedundancy, Sku, SkuName,
+    Registry, RegistryProperties, RegistryPropertiesNetworkRuleBypassOptions,
+    RegistryPropertiesPublicNetworkAccess, RegistryPropertiesZoneRedundancy, Sku, SkuName,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    ArtifactRegistry, ArtifactRegistryOutputs, Resource, ResourceOutputs, ResourceStatus,
+    ArtifactRegistry, ArtifactRegistryHeartbeatData, ArtifactRegistryHeartbeatStatus,
+    ArtifactRegistryOutputs, AzureContainerRegistryHeartbeatData, HeartbeatBackend, ObservedHealth,
+    Platform, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
+    ResourceStatus,
 };
+use chrono::Utc;
 
 /// Azure Artifact Registry controller.
 ///
@@ -432,11 +432,13 @@ impl AzureArtifactRegistryController {
             {
                 Ok(registry) => {
                     // Check if the login server has changed (indicates drift)
-                    if let Some(current_login_server) =
-                        registry.properties.and_then(|p| p.login_server)
+                    if let Some(current_login_server) = registry
+                        .properties
+                        .as_ref()
+                        .and_then(|properties| properties.login_server.as_ref())
                     {
                         if let Some(stored_login_server) = &self.login_server {
-                            if current_login_server != *stored_login_server {
+                            if current_login_server != stored_login_server {
                                 return Err(AlienError::new(ErrorData::ResourceDrift {
                                     resource_id: config.id.clone(),
                                     message: format!("Azure Container Registry login server changed from {} to {}", stored_login_server, current_login_server),
@@ -445,9 +447,17 @@ impl AzureArtifactRegistryController {
                         }
                         // Update stored login server if it wasn't set
                         if self.login_server.is_none() {
-                            self.login_server = Some(current_login_server);
+                            self.login_server = Some(current_login_server.clone());
                         }
                     }
+
+                    emit_azure_artifact_registry_heartbeat(
+                        ctx,
+                        &config.id,
+                        resource_group_name,
+                        registry_name,
+                        &registry,
+                    );
 
                     debug!(registry_name=%registry_name, resource_group=%resource_group_name, "Azure Container Registry heartbeat check passed");
                 }
@@ -515,7 +525,7 @@ impl AzureArtifactRegistryController {
     }
 
     fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
-        use alien_core::bindings::{ArtifactRegistryBinding, BindingValue};
+        use alien_core::bindings::ArtifactRegistryBinding;
 
         if let (Some(registry_name), Some(resource_group_name)) =
             (&self.registry_name, &self.resource_group_name)
@@ -593,6 +603,124 @@ impl AzureArtifactRegistryController {
             _internal_stay_count: None,
         }
     }
+}
+
+fn emit_azure_artifact_registry_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    resource_group_name: &str,
+    registry_name: &str,
+    registry: &Registry,
+) {
+    let properties = registry.properties.as_ref();
+    let network_rule_set = properties.and_then(|properties| properties.network_rule_set.as_ref());
+    let encryption = properties.and_then(|properties| properties.encryption.as_ref());
+    let key_vault_properties =
+        encryption.and_then(|encryption| encryption.key_vault_properties.as_ref());
+    let policies = properties.and_then(|properties| properties.policies.as_ref());
+    let policy_count = policies
+        .map(|policies| {
+            [
+                policies.azure_ad_authentication_as_arm_policy.is_some(),
+                policies.export_policy.is_some(),
+                policies.quarantine_policy.is_some(),
+                policies.retention_policy.is_some(),
+                policies.trust_policy.is_some(),
+            ]
+            .into_iter()
+            .filter(|present| *present)
+            .count() as u32
+        })
+        .unwrap_or(0);
+    let managed_tag_count = registry
+        .tags
+        .keys()
+        .filter(|key| key.starts_with("alien"))
+        .count() as u32;
+
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: ArtifactRegistry::RESOURCE_TYPE,
+        controller_platform: Platform::Azure,
+        backend: HeartbeatBackend::Azure,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::ArtifactRegistry(
+            ArtifactRegistryHeartbeatData::AzureContainerRegistry(
+                AzureContainerRegistryHeartbeatData {
+                    status: ArtifactRegistryHeartbeatStatus {
+                        health: ObservedHealth::Healthy,
+                        lifecycle: ProviderLifecycleState::Running,
+                        message: Some(format!(
+                            "Azure Container Registry '{}' is reachable",
+                            registry_name
+                        )),
+                        stale: false,
+                        partial: false,
+                        collection_issues: vec![],
+                    },
+                    name: registry
+                        .name
+                        .clone()
+                        .unwrap_or_else(|| registry_name.to_string()),
+                    resource_id: registry.id.clone(),
+                    resource_group: resource_group_name.to_string(),
+                    location: registry.location.clone(),
+                    type_: registry.type_.clone(),
+                    login_server: properties.and_then(|properties| properties.login_server.clone()),
+                    sku_name: registry.sku.name.to_string(),
+                    sku_tier: registry.sku.tier.as_ref().map(ToString::to_string),
+                    provisioning_state: properties
+                        .and_then(|properties| properties.provisioning_state.as_ref())
+                        .map(ToString::to_string),
+                    admin_user_enabled: properties
+                        .map(|properties| properties.admin_user_enabled)
+                        .unwrap_or(false),
+                    anonymous_pull_enabled: properties
+                        .map(|properties| properties.anonymous_pull_enabled)
+                        .unwrap_or(false),
+                    public_network_access: properties
+                        .map(|properties| properties.public_network_access.to_string())
+                        .unwrap_or_else(|| "Unknown".to_string()),
+                    network_rule_bypass_options: properties
+                        .map(|properties| properties.network_rule_bypass_options.to_string())
+                        .unwrap_or_else(|| "Unknown".to_string()),
+                    network_rule_default_action: network_rule_set
+                        .map(|rules| rules.default_action.to_string()),
+                    ip_rule_count: network_rule_set
+                        .map(|rules| rules.ip_rules.len() as u32)
+                        .unwrap_or(0),
+                    encryption_status: encryption
+                        .and_then(|encryption| encryption.status.as_ref())
+                        .map(ToString::to_string),
+                    encryption_key_vault_uri_present: key_vault_properties
+                        .and_then(|properties| properties.key_identifier.as_ref())
+                        .is_some(),
+                    encryption_key_identifier_present: key_vault_properties
+                        .and_then(|properties| properties.versioned_key_identifier.as_ref())
+                        .is_some(),
+                    policies_present: policies.is_some(),
+                    policy_count,
+                    private_endpoint_connection_count: properties
+                        .map(|properties| properties.private_endpoint_connections.len() as u32)
+                        .unwrap_or(0),
+                    data_endpoint_enabled: properties
+                        .and_then(|properties| properties.data_endpoint_enabled),
+                    data_endpoint_host_names: properties
+                        .map(|properties| properties.data_endpoint_host_names.clone())
+                        .unwrap_or_default(),
+                    zone_redundancy: properties
+                        .map(|properties| properties.zone_redundancy.to_string())
+                        .unwrap_or_else(|| "Unknown".to_string()),
+                    creation_date: properties
+                        .and_then(|properties| properties.creation_date.clone()),
+                    managed_tag_count,
+                    events: vec![],
+                },
+            ),
+        ),
+        raw: vec![],
+    });
 }
 
 #[cfg(test)]

@@ -3,10 +3,15 @@ use tracing::{debug, info};
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use alien_aws_clients::sqs::SetQueueAttributesRequest;
-use alien_core::{standard_resource_tags, Queue, QueueOutputs, ResourceOutputs, ResourceStatus};
+use alien_aws_clients::sqs::{GetQueueAttributesResponse, SetQueueAttributesRequest};
+use alien_core::{
+    standard_resource_tags, AwsSqsQueueHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
+    ProviderLifecycleState, Queue, QueueHeartbeatData, QueueHeartbeatStatus, QueueOutputs,
+    ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs, ResourceStatus,
+};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
-use alien_macros::{controller, flow_entry, handler, terminal_state};
+use alien_macros::controller;
+use chrono::Utc;
 
 /// Generates the full, prefixed AWS queue name.
 fn get_aws_queue_name(prefix: &str, name: &str) -> String {
@@ -199,10 +204,12 @@ impl AwsQueueController {
             }
         };
 
-        let _ = client
+        let attributes = client
             .get_queue_attributes(
                 queue_url,
-                alien_aws_clients::sqs::GetQueueAttributesRequest::builder().build(),
+                alien_aws_clients::sqs::GetQueueAttributesRequest::builder()
+                    .attribute_names(vec!["All".to_string()])
+                    .build(),
             )
             .await
             .context(ErrorData::CloudPlatformError {
@@ -212,6 +219,14 @@ impl AwsQueueController {
                 ),
                 resource_id: Some(config.id.clone()),
             })?;
+
+        emit_aws_sqs_queue_heartbeat(
+            ctx,
+            &config.id,
+            self.queue_name.as_deref(),
+            queue_url,
+            attributes,
+        );
 
         Ok(HandlerAction::Continue {
             state: Ready,
@@ -377,6 +392,119 @@ impl AwsQueueController {
 
         Ok(visibility_timeout)
     }
+}
+
+fn emit_aws_sqs_queue_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    queue_name: Option<&str>,
+    queue_url: &str,
+    response: GetQueueAttributesResponse,
+) {
+    let attributes = response
+        .get_queue_attributes_result
+        .attributes
+        .into_iter()
+        .map(|attribute| (attribute.name, attribute.value))
+        .collect::<std::collections::HashMap<_, _>>();
+
+    let approximate_visible_messages = parse_u64_attr(&attributes, "ApproximateNumberOfMessages");
+    let approximate_in_flight_messages =
+        parse_u64_attr(&attributes, "ApproximateNumberOfMessagesNotVisible");
+    let approximate_delayed_messages =
+        parse_u64_attr(&attributes, "ApproximateNumberOfMessagesDelayed");
+    let approximate_counts = approximate_visible_messages.is_some()
+        || approximate_in_flight_messages.is_some()
+        || approximate_delayed_messages.is_some();
+    let queue_arn = attributes.get("QueueArn").cloned();
+    let redrive_policy = attributes.get("RedrivePolicy").cloned();
+    let sqs_managed_sse_enabled = parse_bool_attr(&attributes, "SqsManagedSseEnabled");
+    let kms_master_key_id = attributes.get("KmsMasterKeyId").cloned();
+    let sse_enabled = sqs_managed_sse_enabled
+        .or_else(|| kms_master_key_id.as_ref().map(|value| !value.is_empty()));
+
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: Queue::RESOURCE_TYPE,
+        controller_platform: Platform::Aws,
+        backend: HeartbeatBackend::Aws,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::Queue(QueueHeartbeatData::AwsSqs(AwsSqsQueueHeartbeatData {
+            status: QueueHeartbeatStatus {
+                health: ObservedHealth::Healthy,
+                lifecycle: ProviderLifecycleState::Running,
+                message: queue_name
+                    .map(|name| format!("SQS queue '{}' attributes are reachable", name)),
+                stale: false,
+                partial: false,
+                collection_issues: vec![],
+            },
+            name: queue_name
+                .map(ToString::to_string)
+                .unwrap_or_else(|| resource_id.to_string()),
+            region: region_from_queue_arn(queue_arn.as_deref()),
+            queue_url: Some(queue_url.to_string()),
+            queue_arn,
+            visibility_timeout_seconds: parse_u32_attr(&attributes, "VisibilityTimeout"),
+            message_retention_period_seconds: parse_u32_attr(&attributes, "MessageRetentionPeriod"),
+            delay_seconds: parse_u32_attr(&attributes, "DelaySeconds"),
+            receive_message_wait_time_seconds: parse_u32_attr(
+                &attributes,
+                "ReceiveMessageWaitTimeSeconds",
+            ),
+            maximum_message_size: parse_u32_attr(&attributes, "MaximumMessageSize"),
+            redrive_policy,
+            redrive_allow_policy: attributes.get("RedriveAllowPolicy").cloned(),
+            fifo_queue: parse_bool_attr(&attributes, "FifoQueue"),
+            content_based_deduplication: parse_bool_attr(&attributes, "ContentBasedDeduplication"),
+            deduplication_scope: attributes.get("DeduplicationScope").cloned(),
+            fifo_throughput_limit: attributes.get("FifoThroughputLimit").cloned(),
+            sse_enabled,
+            kms_master_key_id,
+            kms_data_key_reuse_period_seconds: parse_u32_attr(
+                &attributes,
+                "KmsDataKeyReusePeriodSeconds",
+            ),
+            sqs_managed_sse_enabled,
+            approximate_visible_messages,
+            approximate_in_flight_messages,
+            approximate_delayed_messages,
+            approximate_counts,
+            events: vec![],
+        })),
+        raw: vec![],
+    });
+}
+
+fn parse_u64_attr(
+    attributes: &std::collections::HashMap<String, String>,
+    key: &str,
+) -> Option<u64> {
+    attributes.get(key).and_then(|value| value.parse().ok())
+}
+
+fn parse_u32_attr(
+    attributes: &std::collections::HashMap<String, String>,
+    key: &str,
+) -> Option<u32> {
+    attributes.get(key).and_then(|value| value.parse().ok())
+}
+
+fn parse_bool_attr(
+    attributes: &std::collections::HashMap<String, String>,
+    key: &str,
+) -> Option<bool> {
+    attributes
+        .get(key)
+        .and_then(|value| value.parse::<bool>().ok())
+}
+
+fn region_from_queue_arn(queue_arn: Option<&str>) -> Option<String> {
+    queue_arn
+        .and_then(|arn| arn.split(':').nth(3))
+        .filter(|region| !region.is_empty())
+        .map(ToString::to_string)
 }
 
 #[cfg(test)]

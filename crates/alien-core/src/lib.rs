@@ -64,6 +64,9 @@ pub use deployment::*;
 mod dev_status;
 pub use dev_status::*;
 
+mod heartbeat;
+pub use heartbeat::*;
+
 pub mod presigned;
 pub use presigned::*;
 
@@ -83,9 +86,3 @@ pub use import::*;
 pub use alien_macros::alien_event;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-
-/// No-op kept for backward compatibility. Previously required for typetag/inventory
-/// WASM constructor initialization, but no longer needed since typetag was removed.
-pub fn init_wasm_constructors() {
-    // No-op: typetag/inventory dependency has been removed
-}

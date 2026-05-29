@@ -20,18 +20,22 @@ use alien_aws_clients::eventbridge::{
     EventBridgeTag, EventBridgeTarget, PutRuleRequest, PutTargetsRequest,
 };
 use alien_aws_clients::lambda::{
-    AddPermissionRequest, CreateFunctionRequest, Environment, FunctionCode,
+    AddPermissionRequest, CreateFunctionRequest, Environment, FunctionCode, FunctionConfiguration,
     ListEventSourceMappingsRequest, UpdateFunctionCodeRequest, UpdateFunctionConfigurationRequest,
     VpcConfig,
 };
 use alien_aws_clients::s3::{LambdaFunctionConfiguration, NotificationConfiguration};
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    standard_resource_tags, CertificateStatus, DnsRecordStatus, Ingress, Network, NetworkSettings,
-    ResourceDefinition, ResourceOutputs, ResourceRef, ResourceStatus, Worker, WorkerOutputs,
+    standard_resource_tags, AwsLambdaWorkerHeartbeatData, CertificateStatus, DnsRecordStatus,
+    HeartbeatBackend, Ingress, Network, NetworkSettings, ObservedHealth, Platform,
+    ProviderLifecycleState, ResourceDefinition, ResourceHeartbeat, ResourceHeartbeatData,
+    ResourceOutputs, ResourceRef, ResourceStatus, Worker, WorkerHeartbeatData, WorkerOutputs,
+    WorkloadHeartbeatStatus,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
+use chrono::Utc;
 
 /// Generates the full, prefixed AWS resource name.
 fn get_aws_worker_name(prefix: &str, name: &str) -> String {
@@ -237,6 +241,58 @@ struct DomainInfo {
     certificate_id: Option<String>,
     certificate_arn: Option<String>,
     uses_custom_domain: bool,
+}
+
+fn emit_aws_lambda_worker_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    worker_config: &Worker,
+    aws_worker_name: &str,
+    function_info: &FunctionConfiguration,
+) {
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: worker_config.id.clone(),
+        resource_type: Worker::RESOURCE_TYPE,
+        controller_platform: Platform::Aws,
+        backend: HeartbeatBackend::Aws,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::Worker(WorkerHeartbeatData::AwsLambda(
+            AwsLambdaWorkerHeartbeatData {
+                status: WorkloadHeartbeatStatus {
+                    health: ObservedHealth::Healthy,
+                    lifecycle: ProviderLifecycleState::Running,
+                    message: Some(format!("AWS Lambda function '{aws_worker_name}' is active")),
+                    stale: false,
+                    partial: false,
+                    collection_issues: vec![],
+                },
+                function_name: function_info
+                    .function_name
+                    .clone()
+                    .unwrap_or_else(|| aws_worker_name.to_string()),
+                runtime: None,
+                package_type: None,
+                memory_size_mb: None,
+                timeout_seconds: None,
+                version: None,
+                revision_id: None,
+                last_modified: None,
+                state: function_info.state.clone(),
+                state_reason: None,
+                state_reason_code: None,
+                last_update_status: function_info.last_update_status.clone(),
+                last_update_status_reason: None,
+                last_update_status_reason_code: None,
+                code_sha256: None,
+                layer_count: 0,
+                function_url_auth_type: None,
+                function_url_cors_present: false,
+                trigger_count: worker_config.triggers.len() as u32,
+                events: vec![],
+            },
+        )),
+        raw: vec![],
+    });
 }
 
 #[controller]
@@ -1666,6 +1722,8 @@ impl AwsWorkerController {
             }
         }
 
+        emit_aws_lambda_worker_heartbeat(ctx, &worker_config, &aws_worker_name, &function_info);
+
         debug!(name = %worker_config.id, "Heartbeat check passed");
         Ok(HandlerAction::Continue {
             state: Ready,
@@ -2474,7 +2532,10 @@ impl AwsWorkerController {
         on_failure = DeleteFailed,
         status = ResourceStatus::Deleting,
     )]
-    async fn delete_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+    async fn delete_start(
+        &mut self,
+        _ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
         self.url = None;
         Ok(HandlerAction::Continue {
             state: DeletingApiGateway,

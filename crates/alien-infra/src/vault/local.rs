@@ -3,9 +3,15 @@ use tracing::{debug, info};
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use alien_core::{ResourceOutputs, ResourceStatus, Vault, VaultOutputs};
+use alien_core::{
+    HeartbeatBackend, HeartbeatCollectionIssue, HeartbeatCollectionIssueReason,
+    HeartbeatIssueSeverity, LocalVaultHeartbeatData, ObservedHealth, Platform,
+    ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
+    ResourceStatus, Vault, VaultHeartbeatData, VaultHeartbeatStatus, VaultOutputs,
+};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_macros::controller;
+use chrono::{DateTime, Utc};
 
 #[controller]
 pub struct LocalVaultController {
@@ -84,6 +90,10 @@ impl LocalVaultController {
                 message: format!("Vault health check failed for '{}'", config.id),
                 resource_id: Some(config.id.clone()),
             })?;
+
+        if let Some(vault_path) = &self.vault_path {
+            emit_local_vault_heartbeat(ctx, &config.id, vault_path);
+        }
 
         debug!(vault_id=%config.id, "Vault health check passed");
 
@@ -199,6 +209,66 @@ impl LocalVaultController {
             Ok(None)
         }
     }
+}
+
+fn emit_local_vault_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    vault_path: &str,
+) {
+    let metadata = std::fs::metadata(vault_path).ok();
+    let path_exists = metadata.is_some();
+    let is_directory = metadata.as_ref().map(|metadata| metadata.is_dir());
+    let readonly = metadata
+        .as_ref()
+        .map(|metadata| metadata.permissions().readonly());
+    let modified_at = metadata
+        .and_then(|metadata| metadata.modified().ok())
+        .map(DateTime::<Utc>::from);
+    let path_message = if path_exists {
+        "Local vault backing path is reachable"
+    } else {
+        "Local vault manager is healthy, but backing path metadata is not reachable"
+    };
+
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: Vault::RESOURCE_TYPE,
+        controller_platform: Platform::Local,
+        backend: HeartbeatBackend::Local,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::Vault(VaultHeartbeatData::Local(LocalVaultHeartbeatData {
+            status: VaultHeartbeatStatus {
+                health: ObservedHealth::Healthy,
+                lifecycle: ProviderLifecycleState::Running,
+                message: Some(path_message.to_string()),
+                stale: false,
+                partial: !path_exists,
+                collection_issues: if path_exists {
+                    vec![]
+                } else {
+                    vec![HeartbeatCollectionIssue {
+                        source: "path-metadata".to_string(),
+                        reason: HeartbeatCollectionIssueReason::CollectionFailed,
+                        severity: HeartbeatIssueSeverity::Warning,
+                        message: format!(
+                            "Failed to read metadata for local vault backing path '{}'",
+                            vault_path
+                        ),
+                    }]
+                },
+            },
+            path: vault_path.to_string(),
+            path_exists,
+            is_directory,
+            readonly,
+            modified_at,
+            secret_metadata_listed: false,
+            events: vec![],
+        })),
+        raw: vec![],
+    });
 }
 
 impl LocalVaultController {

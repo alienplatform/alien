@@ -66,6 +66,7 @@ pub use artifact_registry_manager::LocalArtifactRegistryManager;
 
 pub use container_manager::{
     BindMount, ContainerConfig, ContainerInfo, ContainerMetadata, LocalContainerManager,
+    LocalRuntimeStatus,
 };
 pub use error::{ErrorData, Result};
 pub use kv_manager::LocalKvManager;

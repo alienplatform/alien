@@ -1,26 +1,25 @@
-use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
-use std::any::Any;
 use std::collections::HashMap;
-use std::fmt::Debug;
 use std::time::Duration;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 use crate::azure_utils::{azure_storage_account_resource_id, get_resource_group_name};
-use crate::core::{ResourceController, ResourceControllerContext, ResourceControllerStepResult};
+use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_azure_clients::models::storage::{
-    StorageAccount, StorageAccountCreateParameters, StorageAccountPropertiesProvisioningState,
+    Endpoints, StorageAccount, StorageAccountCreateParameters,
+    StorageAccountPropertiesProvisioningState,
 };
-use alien_azure_clients::storage_accounts::{AzureStorageAccountsClient, StorageAccountsApi};
 use alien_azure_clients::AzureClientConfig;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    AzureStorageAccount, AzureStorageAccountOutputs, Resource, ResourceDefinition, ResourceOutputs,
-    ResourceStatus,
+    AzureStorageAccount, AzureStorageAccountEndpoints, AzureStorageAccountHeartbeatData,
+    AzureStorageAccountOutputs, HeartbeatBackend, ObservedHealth, Platform, ProviderLifecycleState,
+    ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs, ResourceStatus,
+    StorageHeartbeatStatus,
 };
 use alien_error::{AlienError, Context, ContextError};
-use alien_macros::{controller, flow_entry, handler, terminal_state};
+use alien_macros::controller;
+use chrono::Utc;
 
 #[controller]
 pub struct AzureStorageAccountController {
@@ -248,7 +247,14 @@ impl AzureStorageAccountController {
                     resource_id: Some(config.id.clone()),
                 })?;
 
-            if let Some(properties) = storage_account.properties {
+            emit_azure_storage_account_heartbeat(
+                ctx,
+                &config.id,
+                &resource_group_name,
+                &storage_account,
+            );
+
+            if let Some(properties) = &storage_account.properties {
                 if properties.provisioning_state
                     != Some(StorageAccountPropertiesProvisioningState::Succeeded)
                 {
@@ -437,6 +443,115 @@ impl AzureStorageAccountController {
 
 fn azure_storage_endpoint(account_name: &str, service: &str) -> String {
     format!("https://{account_name}.{service}.core.windows.net/")
+}
+
+fn emit_azure_storage_account_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    resource_group_name: &str,
+    account: &StorageAccount,
+) {
+    let properties = account.properties.as_ref();
+    let provisioning_state = properties.and_then(|p| p.provisioning_state.as_ref());
+    let (health, lifecycle) = match provisioning_state {
+        Some(StorageAccountPropertiesProvisioningState::Succeeded) => {
+            (ObservedHealth::Healthy, ProviderLifecycleState::Running)
+        }
+        Some(_) => (ObservedHealth::Unhealthy, ProviderLifecycleState::Failed),
+        None => (ObservedHealth::Unknown, ProviderLifecycleState::Unknown),
+    };
+    let name = account
+        .name
+        .clone()
+        .unwrap_or_else(|| resource_id.to_string());
+
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: AzureStorageAccount::RESOURCE_TYPE,
+        controller_platform: Platform::Azure,
+        backend: HeartbeatBackend::Azure,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::AzureStorageAccount(AzureStorageAccountHeartbeatData {
+            status: StorageHeartbeatStatus {
+                health,
+                lifecycle,
+                message: Some(format!(
+                    "Azure storage account '{}' provisioning state is {}",
+                    name,
+                    provisioning_state
+                        .map(ToString::to_string)
+                        .as_deref()
+                        .unwrap_or("unknown")
+                )),
+                stale: false,
+                partial: false,
+                collection_issues: vec![],
+            },
+            name,
+            resource_id: account.id.clone(),
+            resource_group: Some(resource_group_name.to_string()),
+            location: Some(account.location.clone()),
+            kind: account.kind.as_ref().map(ToString::to_string),
+            sku_name: account.sku.as_ref().map(|sku| sku.name.to_string()),
+            sku_tier: account
+                .sku
+                .as_ref()
+                .and_then(|sku| sku.tier.as_ref().map(ToString::to_string)),
+            provisioning_state: provisioning_state.map(ToString::to_string),
+            primary_endpoints: storage_account_endpoints(
+                properties.and_then(|p| p.primary_endpoints.as_ref()),
+            ),
+            secondary_endpoints: storage_account_endpoints(
+                properties.and_then(|p| p.secondary_endpoints.as_ref()),
+            ),
+            public_network_access: properties
+                .and_then(|p| p.public_network_access.as_ref())
+                .map(ToString::to_string),
+            allow_blob_public_access: properties.and_then(|p| p.allow_blob_public_access),
+            allow_shared_key_access: properties.and_then(|p| p.allow_shared_key_access),
+            minimum_tls_version: properties
+                .and_then(|p| p.minimum_tls_version.as_ref())
+                .map(ToString::to_string),
+            supports_https_traffic_only: properties.and_then(|p| p.supports_https_traffic_only),
+            encryption_key_source: properties
+                .and_then(|p| p.encryption.as_ref())
+                .map(|encryption| encryption.key_source.to_string()),
+            require_infrastructure_encryption: properties
+                .and_then(|p| p.encryption.as_ref())
+                .and_then(|encryption| encryption.require_infrastructure_encryption),
+            network_default_action: properties
+                .and_then(|p| p.network_acls.as_ref())
+                .map(|rules| rules.default_action.to_string()),
+            network_bypass: properties
+                .and_then(|p| p.network_acls.as_ref())
+                .map(|rules| rules.bypass.to_string()),
+            network_ip_rule_count: properties
+                .and_then(|p| p.network_acls.as_ref())
+                .map(|rules| rules.ip_rules.len() as u32),
+            network_virtual_network_rule_count: properties
+                .and_then(|p| p.network_acls.as_ref())
+                .map(|rules| rules.virtual_network_rules.len() as u32),
+            network_resource_access_rule_count: properties
+                .and_then(|p| p.network_acls.as_ref())
+                .map(|rules| rules.resource_access_rules.len() as u32),
+            events: vec![],
+        }),
+        raw: vec![],
+    });
+}
+
+fn storage_account_endpoints(endpoints: Option<&Endpoints>) -> AzureStorageAccountEndpoints {
+    endpoints
+        .map(|endpoints| AzureStorageAccountEndpoints {
+            blob: endpoints.blob.clone(),
+            dfs: endpoints.dfs.clone(),
+            file: endpoints.file.clone(),
+            queue: endpoints.queue.clone(),
+            table: endpoints.table.clone(),
+            web: endpoints.web.clone(),
+        })
+        .unwrap_or_default()
 }
 
 // Separate impl block for helper methods

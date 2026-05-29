@@ -5,6 +5,7 @@
 import * as z from "zod/v4";
 import { remap as remap$ } from "../../lib/primitives.js";
 import { ClosedEnum } from "../../types/enums.js";
+import * as models from "../index.js";
 
 export const PrepareDeploymentStackPlatform = {
   Aws: "aws",
@@ -46,12 +47,36 @@ export type PrepareDeploymentStackGcp = {
 export type Gcp = PrepareDeploymentStackGcp | any;
 
 /**
+ * Namespace-scoped Kubernetes TLS Secret reference.
+ */
+export type TlsSecretRef = {
+  /**
+   * Secret namespace. Defaults to the release namespace when omitted.
+   */
+  namespace?: string | null | undefined;
+  /**
+   * Secret name.
+   */
+  secretName: string;
+};
+
+export type DomainsKubernetes = {
+  /**
+   * Namespace-scoped Kubernetes TLS Secret reference.
+   */
+  tlsSecretRef: TlsSecretRef;
+};
+
+export type DomainsKubernetesUnion = DomainsKubernetes | any;
+
+/**
  * Platform-specific certificate references for custom domains.
  */
-export type Certificate = {
+export type DomainsCertificate = {
   aws?: PrepareDeploymentStackAws | any | null | undefined;
   azure?: PrepareDeploymentStackAzure | any | null | undefined;
   gcp?: PrepareDeploymentStackGcp | any | null | undefined;
+  kubernetes?: DomainsKubernetes | any | null | undefined;
 };
 
 /**
@@ -61,7 +86,7 @@ export type CustomDomains = {
   /**
    * Platform-specific certificate references for custom domains.
    */
-  certificate: Certificate;
+  certificate: DomainsCertificate;
   /**
    * Fully qualified domain name to use.
    */
@@ -106,6 +131,665 @@ export const Heartbeats = {
  * How heartbeat health checks are handled.
  */
 export type Heartbeats = ClosedEnum<typeof Heartbeats>;
+
+/**
+ * Optional provider-specific identity for a cloud-backed Kubernetes cluster.
+ */
+export type Cloud = {
+  accountId?: string | null | undefined;
+  clusterId?: string | null | undefined;
+  clusterName?: string | null | undefined;
+  projectId?: string | null | undefined;
+  region?: string | null | undefined;
+  resourceGroup?: string | null | undefined;
+  subscriptionId?: string | null | undefined;
+};
+
+export type CloudUnion = Cloud | any;
+
+/**
+ * Ownership model for the Kubernetes cluster.
+ */
+export const Ownership = {
+  Managed: "managed",
+  Existing: "existing",
+  External: "external",
+} as const;
+/**
+ * Ownership model for the Kubernetes cluster.
+ */
+export type Ownership = ClosedEnum<typeof Ownership>;
+
+/**
+ * Kubernetes cluster setup settings.
+ */
+export type Cluster = {
+  cloud?: Cloud | any | null | undefined;
+  /**
+   * Namespace where the Alien chart and application resources run.
+   */
+  namespace?: string | null | undefined;
+  /**
+   * Ownership model for the Kubernetes cluster.
+   */
+  ownership: Ownership;
+};
+
+export type ClusterUnion = Cluster | any;
+
+export type CertificateNone2 = {
+  mode: "none";
+};
+
+export type CertificateManagedTLSSecret2 = {
+  mode: "managedTlsSecret";
+  /**
+   * Secret name template. Runtime may substitute resource/deployment tokens.
+   */
+  secretNameTemplate: string;
+};
+
+export type CertificateAwsAcmArn2 = {
+  /**
+   * Existing ACM certificate ARN.
+   */
+  certificateArn: string;
+  mode: "awsAcmArn";
+};
+
+export type CertificateManagedAcmImport2 = {
+  mode: "managedAcmImport";
+  /**
+   * ACM region. Defaults to the deployment region when omitted.
+   */
+  region?: string | null | undefined;
+  /**
+   * Tags applied to runtime-imported ACM certificates.
+   */
+  tags?: { [k: string]: string } | undefined;
+};
+
+/**
+ * Namespace-scoped Kubernetes TLS Secret reference.
+ */
+export type CertificateTLSSecretRef2 = {
+  /**
+   * Secret namespace. Defaults to the release namespace when omitted.
+   */
+  namespace?: string | null | undefined;
+  /**
+   * Secret name.
+   */
+  secretName: string;
+  mode: "tlsSecretRef";
+};
+
+/**
+ * Certificate publication or reference mode for Kubernetes public endpoints.
+ */
+export type CertificateUnion2 =
+  | CertificateTLSSecretRef2
+  | CertificateManagedAcmImport2
+  | CertificateAwsAcmArn2
+  | CertificateManagedTLSSecret2
+  | CertificateNone2;
+
+export const ModeCustom = {
+  Custom: "custom",
+} as const;
+export type ModeCustom = ClosedEnum<typeof ModeCustom>;
+
+export const ProviderAzureApplicationGatewayForContainersEnum4 = {
+  AzureApplicationGatewayForContainers: "azureApplicationGatewayForContainers",
+} as const;
+export type ProviderAzureApplicationGatewayForContainersEnum4 = ClosedEnum<
+  typeof ProviderAzureApplicationGatewayForContainersEnum4
+>;
+
+export type ProviderAzureApplicationGatewayForContainers4 = {
+  /**
+   * Optional ALB name when using BYO Application Gateway resources.
+   */
+  albName?: string | null | undefined;
+  /**
+   * Optional ALB namespace when using BYO Application Gateway resources.
+   */
+  albNamespace?: string | null | undefined;
+  /**
+   * Public or internal frontend exposure.
+   */
+  frontend: string;
+  provider: ProviderAzureApplicationGatewayForContainersEnum4;
+};
+
+export const ProviderGkeGatewayEnum4 = {
+  GkeGateway: "gkeGateway",
+} as const;
+export type ProviderGkeGatewayEnum4 = ClosedEnum<
+  typeof ProviderGkeGatewayEnum4
+>;
+
+export type ProviderGkeGateway4 = {
+  provider: ProviderGkeGatewayEnum4;
+  /**
+   * Optional static address name for the Gateway frontend.
+   */
+  staticAddressName?: string | null | undefined;
+};
+
+export const ProviderAwsAlbEnum4 = {
+  AwsAlb: "awsAlb",
+} as const;
+export type ProviderAwsAlbEnum4 = ClosedEnum<typeof ProviderAwsAlbEnum4>;
+
+export type ProviderAwsAlb4 = {
+  /**
+   * Optional ALB IP address type, such as `dualstack`.
+   */
+  ipAddressType?: string | null | undefined;
+  provider: ProviderAwsAlbEnum4;
+  /**
+   * Internet-facing or internal ALB scheme.
+   */
+  scheme: string;
+  /**
+   * Explicit subnet IDs when the profile cannot rely on controller discovery.
+   */
+  subnetIds?: Array<string> | undefined;
+  /**
+   * ALB target type, usually `ip`.
+   */
+  targetType: string;
+};
+
+export type ProviderUnion4 =
+  | ProviderAwsAlb4
+  | ProviderAzureApplicationGatewayForContainers4
+  | ProviderGkeGateway4
+  | any;
+
+/**
+ * Shared Gateway API route profile values.
+ */
+export type RouteGateway2 = {
+  /**
+   * Annotations applied to route objects.
+   */
+  annotations?: { [k: string]: string } | undefined;
+  /**
+   * Route controller identifier, for example a cloud Gateway controller.
+   */
+  controller?: string | null | undefined;
+  /**
+   * GatewayClass selected for generated Gateways.
+   */
+  gatewayClassName: string;
+  /**
+   * Labels applied to route objects.
+   */
+  labels?: { [k: string]: string } | undefined;
+  /**
+   * Listener port, usually 443.
+   */
+  listenerPort: number;
+  provider?:
+    | ProviderAwsAlb4
+    | ProviderAzureApplicationGatewayForContainers4
+    | ProviderGkeGateway4
+    | any
+    | null
+    | undefined;
+  routeApi: "gateway";
+};
+
+export const ProviderAzureApplicationGatewayForContainersEnum3 = {
+  AzureApplicationGatewayForContainers: "azureApplicationGatewayForContainers",
+} as const;
+export type ProviderAzureApplicationGatewayForContainersEnum3 = ClosedEnum<
+  typeof ProviderAzureApplicationGatewayForContainersEnum3
+>;
+
+export type ProviderAzureApplicationGatewayForContainers3 = {
+  /**
+   * Optional ALB name when using BYO Application Gateway resources.
+   */
+  albName?: string | null | undefined;
+  /**
+   * Optional ALB namespace when using BYO Application Gateway resources.
+   */
+  albNamespace?: string | null | undefined;
+  /**
+   * Public or internal frontend exposure.
+   */
+  frontend: string;
+  provider: ProviderAzureApplicationGatewayForContainersEnum3;
+};
+
+export const ProviderGkeGatewayEnum3 = {
+  GkeGateway: "gkeGateway",
+} as const;
+export type ProviderGkeGatewayEnum3 = ClosedEnum<
+  typeof ProviderGkeGatewayEnum3
+>;
+
+export type ProviderGkeGateway3 = {
+  provider: ProviderGkeGatewayEnum3;
+  /**
+   * Optional static address name for the Gateway frontend.
+   */
+  staticAddressName?: string | null | undefined;
+};
+
+export const ProviderAwsAlbEnum3 = {
+  AwsAlb: "awsAlb",
+} as const;
+export type ProviderAwsAlbEnum3 = ClosedEnum<typeof ProviderAwsAlbEnum3>;
+
+export type ProviderAwsAlb3 = {
+  /**
+   * Optional ALB IP address type, such as `dualstack`.
+   */
+  ipAddressType?: string | null | undefined;
+  provider: ProviderAwsAlbEnum3;
+  /**
+   * Internet-facing or internal ALB scheme.
+   */
+  scheme: string;
+  /**
+   * Explicit subnet IDs when the profile cannot rely on controller discovery.
+   */
+  subnetIds?: Array<string> | undefined;
+  /**
+   * ALB target type, usually `ip`.
+   */
+  targetType: string;
+};
+
+export type ProviderUnion3 =
+  | ProviderAwsAlb3
+  | ProviderAzureApplicationGatewayForContainers3
+  | ProviderGkeGateway3
+  | any;
+
+/**
+ * Shared Ingress route profile values.
+ */
+export type RouteIngress2 = {
+  /**
+   * Annotations applied to route objects.
+   */
+  annotations?: { [k: string]: string } | undefined;
+  /**
+   * Route controller identifier, for example `eks.amazonaws.com/alb`.
+   */
+  controller?: string | null | undefined;
+  /**
+   * `spec.ingressClassName` for generated Ingresses.
+   */
+  ingressClassName: string;
+  /**
+   * Labels applied to route objects.
+   */
+  labels?: { [k: string]: string } | undefined;
+  provider?:
+    | ProviderAwsAlb3
+    | ProviderAzureApplicationGatewayForContainers3
+    | ProviderGkeGateway3
+    | any
+    | null
+    | undefined;
+  routeApi: "ingress";
+};
+
+/**
+ * Kubernetes route API selected for public endpoints.
+ */
+export type RouteUnion2 = RouteIngress2 | RouteGateway2;
+
+export type ExposureCustom = {
+  /**
+   * Certificate publication or reference mode for Kubernetes public endpoints.
+   */
+  certificate:
+    | CertificateTLSSecretRef2
+    | CertificateManagedAcmImport2
+    | CertificateAwsAcmArn2
+    | CertificateManagedTLSSecret2
+    | CertificateNone2;
+  /**
+   * Hostname routed by the Kubernetes public endpoint.
+   */
+  domain: string;
+  mode: ModeCustom;
+  /**
+   * Kubernetes route API selected for public endpoints.
+   */
+  route: RouteIngress2 | RouteGateway2;
+};
+
+export type CertificateNone1 = {
+  mode: "none";
+};
+
+export type CertificateManagedTLSSecret1 = {
+  mode: "managedTlsSecret";
+  /**
+   * Secret name template. Runtime may substitute resource/deployment tokens.
+   */
+  secretNameTemplate: string;
+};
+
+export type CertificateAwsAcmArn1 = {
+  /**
+   * Existing ACM certificate ARN.
+   */
+  certificateArn: string;
+  mode: "awsAcmArn";
+};
+
+export type CertificateManagedAcmImport1 = {
+  mode: "managedAcmImport";
+  /**
+   * ACM region. Defaults to the deployment region when omitted.
+   */
+  region?: string | null | undefined;
+  /**
+   * Tags applied to runtime-imported ACM certificates.
+   */
+  tags?: { [k: string]: string } | undefined;
+};
+
+/**
+ * Namespace-scoped Kubernetes TLS Secret reference.
+ */
+export type CertificateTLSSecretRef1 = {
+  /**
+   * Secret namespace. Defaults to the release namespace when omitted.
+   */
+  namespace?: string | null | undefined;
+  /**
+   * Secret name.
+   */
+  secretName: string;
+  mode: "tlsSecretRef";
+};
+
+/**
+ * Certificate publication or reference mode for Kubernetes public endpoints.
+ */
+export type CertificateUnion1 =
+  | CertificateTLSSecretRef1
+  | CertificateManagedAcmImport1
+  | CertificateAwsAcmArn1
+  | CertificateManagedTLSSecret1
+  | CertificateNone1;
+
+export const ModeGenerated = {
+  Generated: "generated",
+} as const;
+export type ModeGenerated = ClosedEnum<typeof ModeGenerated>;
+
+export const ProviderAzureApplicationGatewayForContainersEnum2 = {
+  AzureApplicationGatewayForContainers: "azureApplicationGatewayForContainers",
+} as const;
+export type ProviderAzureApplicationGatewayForContainersEnum2 = ClosedEnum<
+  typeof ProviderAzureApplicationGatewayForContainersEnum2
+>;
+
+export type ProviderAzureApplicationGatewayForContainers2 = {
+  /**
+   * Optional ALB name when using BYO Application Gateway resources.
+   */
+  albName?: string | null | undefined;
+  /**
+   * Optional ALB namespace when using BYO Application Gateway resources.
+   */
+  albNamespace?: string | null | undefined;
+  /**
+   * Public or internal frontend exposure.
+   */
+  frontend: string;
+  provider: ProviderAzureApplicationGatewayForContainersEnum2;
+};
+
+export const ProviderGkeGatewayEnum2 = {
+  GkeGateway: "gkeGateway",
+} as const;
+export type ProviderGkeGatewayEnum2 = ClosedEnum<
+  typeof ProviderGkeGatewayEnum2
+>;
+
+export type ProviderGkeGateway2 = {
+  provider: ProviderGkeGatewayEnum2;
+  /**
+   * Optional static address name for the Gateway frontend.
+   */
+  staticAddressName?: string | null | undefined;
+};
+
+export const ProviderAwsAlbEnum2 = {
+  AwsAlb: "awsAlb",
+} as const;
+export type ProviderAwsAlbEnum2 = ClosedEnum<typeof ProviderAwsAlbEnum2>;
+
+export type ProviderAwsAlb2 = {
+  /**
+   * Optional ALB IP address type, such as `dualstack`.
+   */
+  ipAddressType?: string | null | undefined;
+  provider: ProviderAwsAlbEnum2;
+  /**
+   * Internet-facing or internal ALB scheme.
+   */
+  scheme: string;
+  /**
+   * Explicit subnet IDs when the profile cannot rely on controller discovery.
+   */
+  subnetIds?: Array<string> | undefined;
+  /**
+   * ALB target type, usually `ip`.
+   */
+  targetType: string;
+};
+
+export type ProviderUnion2 =
+  | ProviderAwsAlb2
+  | ProviderAzureApplicationGatewayForContainers2
+  | ProviderGkeGateway2
+  | any;
+
+/**
+ * Shared Gateway API route profile values.
+ */
+export type RouteGateway1 = {
+  /**
+   * Annotations applied to route objects.
+   */
+  annotations?: { [k: string]: string } | undefined;
+  /**
+   * Route controller identifier, for example a cloud Gateway controller.
+   */
+  controller?: string | null | undefined;
+  /**
+   * GatewayClass selected for generated Gateways.
+   */
+  gatewayClassName: string;
+  /**
+   * Labels applied to route objects.
+   */
+  labels?: { [k: string]: string } | undefined;
+  /**
+   * Listener port, usually 443.
+   */
+  listenerPort: number;
+  provider?:
+    | ProviderAwsAlb2
+    | ProviderAzureApplicationGatewayForContainers2
+    | ProviderGkeGateway2
+    | any
+    | null
+    | undefined;
+  routeApi: "gateway";
+};
+
+export const ProviderAzureApplicationGatewayForContainersEnum1 = {
+  AzureApplicationGatewayForContainers: "azureApplicationGatewayForContainers",
+} as const;
+export type ProviderAzureApplicationGatewayForContainersEnum1 = ClosedEnum<
+  typeof ProviderAzureApplicationGatewayForContainersEnum1
+>;
+
+export type ProviderAzureApplicationGatewayForContainers1 = {
+  /**
+   * Optional ALB name when using BYO Application Gateway resources.
+   */
+  albName?: string | null | undefined;
+  /**
+   * Optional ALB namespace when using BYO Application Gateway resources.
+   */
+  albNamespace?: string | null | undefined;
+  /**
+   * Public or internal frontend exposure.
+   */
+  frontend: string;
+  provider: ProviderAzureApplicationGatewayForContainersEnum1;
+};
+
+export const ProviderGkeGatewayEnum1 = {
+  GkeGateway: "gkeGateway",
+} as const;
+export type ProviderGkeGatewayEnum1 = ClosedEnum<
+  typeof ProviderGkeGatewayEnum1
+>;
+
+export type ProviderGkeGateway1 = {
+  provider: ProviderGkeGatewayEnum1;
+  /**
+   * Optional static address name for the Gateway frontend.
+   */
+  staticAddressName?: string | null | undefined;
+};
+
+export const ProviderAwsAlbEnum1 = {
+  AwsAlb: "awsAlb",
+} as const;
+export type ProviderAwsAlbEnum1 = ClosedEnum<typeof ProviderAwsAlbEnum1>;
+
+export type ProviderAwsAlb1 = {
+  /**
+   * Optional ALB IP address type, such as `dualstack`.
+   */
+  ipAddressType?: string | null | undefined;
+  provider: ProviderAwsAlbEnum1;
+  /**
+   * Internet-facing or internal ALB scheme.
+   */
+  scheme: string;
+  /**
+   * Explicit subnet IDs when the profile cannot rely on controller discovery.
+   */
+  subnetIds?: Array<string> | undefined;
+  /**
+   * ALB target type, usually `ip`.
+   */
+  targetType: string;
+};
+
+export type ProviderUnion1 =
+  | ProviderAwsAlb1
+  | ProviderAzureApplicationGatewayForContainers1
+  | ProviderGkeGateway1
+  | any;
+
+/**
+ * Shared Ingress route profile values.
+ */
+export type RouteIngress1 = {
+  /**
+   * Annotations applied to route objects.
+   */
+  annotations?: { [k: string]: string } | undefined;
+  /**
+   * Route controller identifier, for example `eks.amazonaws.com/alb`.
+   */
+  controller?: string | null | undefined;
+  /**
+   * `spec.ingressClassName` for generated Ingresses.
+   */
+  ingressClassName: string;
+  /**
+   * Labels applied to route objects.
+   */
+  labels?: { [k: string]: string } | undefined;
+  provider?:
+    | ProviderAwsAlb1
+    | ProviderAzureApplicationGatewayForContainers1
+    | ProviderGkeGateway1
+    | any
+    | null
+    | undefined;
+  routeApi: "ingress";
+};
+
+/**
+ * Kubernetes route API selected for public endpoints.
+ */
+export type RouteUnion1 = RouteIngress1 | RouteGateway1;
+
+export type ExposureGenerated = {
+  /**
+   * Certificate publication or reference mode for Kubernetes public endpoints.
+   */
+  certificate:
+    | CertificateTLSSecretRef1
+    | CertificateManagedAcmImport1
+    | CertificateAwsAcmArn1
+    | CertificateManagedTLSSecret1
+    | CertificateNone1;
+  mode: ModeGenerated;
+  /**
+   * Kubernetes route API selected for public endpoints.
+   */
+  route: RouteIngress1 | RouteGateway1;
+};
+
+export const ModeDisabled = {
+  Disabled: "disabled",
+} as const;
+export type ModeDisabled = ClosedEnum<typeof ModeDisabled>;
+
+export type ExposureDisabled = {
+  mode: ModeDisabled;
+};
+
+export type Exposure =
+  | ExposureCustom
+  | ExposureGenerated
+  | ExposureDisabled
+  | any;
+
+/**
+ * Kubernetes runtime substrate configuration.
+ *
+ * @remarks
+ *
+ * This controls how setup chooses the cluster backing `Platform::Kubernetes`
+ * deployments. When omitted, cloud-backed Kubernetes deployments default to a
+ * managed cluster and generic/on-prem Kubernetes defaults to an external
+ * cluster.
+ */
+export type PrepareDeploymentStackKubernetes = {
+  cluster?: Cluster | any | null | undefined;
+  exposure?:
+    | ExposureCustom
+    | ExposureGenerated
+    | ExposureDisabled
+    | any
+    | null
+    | undefined;
+};
+
+export type Kubernetes = PrepareDeploymentStackKubernetes | any;
 
 export const TypeByoVnetAzure = {
   ByoVnetAzure: "byo-vnet-azure",
@@ -267,6 +951,7 @@ export type StackSettings = {
    * How heartbeat health checks are handled.
    */
   heartbeats?: Heartbeats | undefined;
+  kubernetes?: PrepareDeploymentStackKubernetes | any | null | undefined;
   network?:
     | NetworkByoVpcAws
     | NetworkByoVpcGcp
@@ -288,6 +973,7 @@ export type StackSettings = {
 
 export type PrepareDeploymentStackRequestBody = {
   platform: PrepareDeploymentStackPlatform;
+  setupMethod: models.DeploymentSetupMethod;
   /**
    * User-customizable deployment settings specified at deploy time.
    *
@@ -425,16 +1111,74 @@ export function gcpToJSON(gcp: Gcp): string {
 }
 
 /** @internal */
-export type Certificate$Outbound = {
-  aws?: PrepareDeploymentStackAws$Outbound | any | null | undefined;
-  azure?: PrepareDeploymentStackAzure$Outbound | any | null | undefined;
-  gcp?: PrepareDeploymentStackGcp$Outbound | any | null | undefined;
+export type TlsSecretRef$Outbound = {
+  namespace?: string | null | undefined;
+  secretName: string;
 };
 
 /** @internal */
-export const Certificate$outboundSchema: z.ZodType<
-  Certificate$Outbound,
-  Certificate
+export const TlsSecretRef$outboundSchema: z.ZodType<
+  TlsSecretRef$Outbound,
+  TlsSecretRef
+> = z.object({
+  namespace: z.nullable(z.string()).optional(),
+  secretName: z.string(),
+});
+
+export function tlsSecretRefToJSON(tlsSecretRef: TlsSecretRef): string {
+  return JSON.stringify(TlsSecretRef$outboundSchema.parse(tlsSecretRef));
+}
+
+/** @internal */
+export type DomainsKubernetes$Outbound = {
+  tlsSecretRef: TlsSecretRef$Outbound;
+};
+
+/** @internal */
+export const DomainsKubernetes$outboundSchema: z.ZodType<
+  DomainsKubernetes$Outbound,
+  DomainsKubernetes
+> = z.object({
+  tlsSecretRef: z.lazy(() => TlsSecretRef$outboundSchema),
+});
+
+export function domainsKubernetesToJSON(
+  domainsKubernetes: DomainsKubernetes,
+): string {
+  return JSON.stringify(
+    DomainsKubernetes$outboundSchema.parse(domainsKubernetes),
+  );
+}
+
+/** @internal */
+export type DomainsKubernetesUnion$Outbound = DomainsKubernetes$Outbound | any;
+
+/** @internal */
+export const DomainsKubernetesUnion$outboundSchema: z.ZodType<
+  DomainsKubernetesUnion$Outbound,
+  DomainsKubernetesUnion
+> = z.union([z.lazy(() => DomainsKubernetes$outboundSchema), z.any()]);
+
+export function domainsKubernetesUnionToJSON(
+  domainsKubernetesUnion: DomainsKubernetesUnion,
+): string {
+  return JSON.stringify(
+    DomainsKubernetesUnion$outboundSchema.parse(domainsKubernetesUnion),
+  );
+}
+
+/** @internal */
+export type DomainsCertificate$Outbound = {
+  aws?: PrepareDeploymentStackAws$Outbound | any | null | undefined;
+  azure?: PrepareDeploymentStackAzure$Outbound | any | null | undefined;
+  gcp?: PrepareDeploymentStackGcp$Outbound | any | null | undefined;
+  kubernetes?: DomainsKubernetes$Outbound | any | null | undefined;
+};
+
+/** @internal */
+export const DomainsCertificate$outboundSchema: z.ZodType<
+  DomainsCertificate$Outbound,
+  DomainsCertificate
 > = z.object({
   aws: z.nullable(
     z.union([z.lazy(() => PrepareDeploymentStackAws$outboundSchema), z.any()]),
@@ -448,15 +1192,22 @@ export const Certificate$outboundSchema: z.ZodType<
   gcp: z.nullable(
     z.union([z.lazy(() => PrepareDeploymentStackGcp$outboundSchema), z.any()]),
   ).optional(),
+  kubernetes: z.nullable(
+    z.union([z.lazy(() => DomainsKubernetes$outboundSchema), z.any()]),
+  ).optional(),
 });
 
-export function certificateToJSON(certificate: Certificate): string {
-  return JSON.stringify(Certificate$outboundSchema.parse(certificate));
+export function domainsCertificateToJSON(
+  domainsCertificate: DomainsCertificate,
+): string {
+  return JSON.stringify(
+    DomainsCertificate$outboundSchema.parse(domainsCertificate),
+  );
 }
 
 /** @internal */
 export type CustomDomains$Outbound = {
-  certificate: Certificate$Outbound;
+  certificate: DomainsCertificate$Outbound;
   domain: string;
 };
 
@@ -465,7 +1216,7 @@ export const CustomDomains$outboundSchema: z.ZodType<
   CustomDomains$Outbound,
   CustomDomains
 > = z.object({
-  certificate: z.lazy(() => Certificate$outboundSchema),
+  certificate: z.lazy(() => DomainsCertificate$outboundSchema),
   domain: z.string(),
 });
 
@@ -524,6 +1275,1252 @@ export function externalBindingsToJSON(
 export const Heartbeats$outboundSchema: z.ZodEnum<typeof Heartbeats> = z.enum(
   Heartbeats,
 );
+
+/** @internal */
+export type Cloud$Outbound = {
+  accountId?: string | null | undefined;
+  clusterId?: string | null | undefined;
+  clusterName?: string | null | undefined;
+  projectId?: string | null | undefined;
+  region?: string | null | undefined;
+  resourceGroup?: string | null | undefined;
+  subscriptionId?: string | null | undefined;
+};
+
+/** @internal */
+export const Cloud$outboundSchema: z.ZodType<Cloud$Outbound, Cloud> = z.object({
+  accountId: z.nullable(z.string()).optional(),
+  clusterId: z.nullable(z.string()).optional(),
+  clusterName: z.nullable(z.string()).optional(),
+  projectId: z.nullable(z.string()).optional(),
+  region: z.nullable(z.string()).optional(),
+  resourceGroup: z.nullable(z.string()).optional(),
+  subscriptionId: z.nullable(z.string()).optional(),
+});
+
+export function cloudToJSON(cloud: Cloud): string {
+  return JSON.stringify(Cloud$outboundSchema.parse(cloud));
+}
+
+/** @internal */
+export type CloudUnion$Outbound = Cloud$Outbound | any;
+
+/** @internal */
+export const CloudUnion$outboundSchema: z.ZodType<
+  CloudUnion$Outbound,
+  CloudUnion
+> = z.union([z.lazy(() => Cloud$outboundSchema), z.any()]);
+
+export function cloudUnionToJSON(cloudUnion: CloudUnion): string {
+  return JSON.stringify(CloudUnion$outboundSchema.parse(cloudUnion));
+}
+
+/** @internal */
+export const Ownership$outboundSchema: z.ZodEnum<typeof Ownership> = z.enum(
+  Ownership,
+);
+
+/** @internal */
+export type Cluster$Outbound = {
+  cloud?: Cloud$Outbound | any | null | undefined;
+  namespace?: string | null | undefined;
+  ownership: string;
+};
+
+/** @internal */
+export const Cluster$outboundSchema: z.ZodType<Cluster$Outbound, Cluster> = z
+  .object({
+    cloud: z.nullable(z.union([z.lazy(() => Cloud$outboundSchema), z.any()]))
+      .optional(),
+    namespace: z.nullable(z.string()).optional(),
+    ownership: Ownership$outboundSchema,
+  });
+
+export function clusterToJSON(cluster: Cluster): string {
+  return JSON.stringify(Cluster$outboundSchema.parse(cluster));
+}
+
+/** @internal */
+export type ClusterUnion$Outbound = Cluster$Outbound | any;
+
+/** @internal */
+export const ClusterUnion$outboundSchema: z.ZodType<
+  ClusterUnion$Outbound,
+  ClusterUnion
+> = z.union([z.lazy(() => Cluster$outboundSchema), z.any()]);
+
+export function clusterUnionToJSON(clusterUnion: ClusterUnion): string {
+  return JSON.stringify(ClusterUnion$outboundSchema.parse(clusterUnion));
+}
+
+/** @internal */
+export type CertificateNone2$Outbound = {
+  mode: "none";
+};
+
+/** @internal */
+export const CertificateNone2$outboundSchema: z.ZodType<
+  CertificateNone2$Outbound,
+  CertificateNone2
+> = z.object({
+  mode: z.literal("none"),
+});
+
+export function certificateNone2ToJSON(
+  certificateNone2: CertificateNone2,
+): string {
+  return JSON.stringify(
+    CertificateNone2$outboundSchema.parse(certificateNone2),
+  );
+}
+
+/** @internal */
+export type CertificateManagedTLSSecret2$Outbound = {
+  mode: "managedTlsSecret";
+  secretNameTemplate: string;
+};
+
+/** @internal */
+export const CertificateManagedTLSSecret2$outboundSchema: z.ZodType<
+  CertificateManagedTLSSecret2$Outbound,
+  CertificateManagedTLSSecret2
+> = z.object({
+  mode: z.literal("managedTlsSecret"),
+  secretNameTemplate: z.string(),
+});
+
+export function certificateManagedTLSSecret2ToJSON(
+  certificateManagedTLSSecret2: CertificateManagedTLSSecret2,
+): string {
+  return JSON.stringify(
+    CertificateManagedTLSSecret2$outboundSchema.parse(
+      certificateManagedTLSSecret2,
+    ),
+  );
+}
+
+/** @internal */
+export type CertificateAwsAcmArn2$Outbound = {
+  certificateArn: string;
+  mode: "awsAcmArn";
+};
+
+/** @internal */
+export const CertificateAwsAcmArn2$outboundSchema: z.ZodType<
+  CertificateAwsAcmArn2$Outbound,
+  CertificateAwsAcmArn2
+> = z.object({
+  certificateArn: z.string(),
+  mode: z.literal("awsAcmArn"),
+});
+
+export function certificateAwsAcmArn2ToJSON(
+  certificateAwsAcmArn2: CertificateAwsAcmArn2,
+): string {
+  return JSON.stringify(
+    CertificateAwsAcmArn2$outboundSchema.parse(certificateAwsAcmArn2),
+  );
+}
+
+/** @internal */
+export type CertificateManagedAcmImport2$Outbound = {
+  mode: "managedAcmImport";
+  region?: string | null | undefined;
+  tags?: { [k: string]: string } | undefined;
+};
+
+/** @internal */
+export const CertificateManagedAcmImport2$outboundSchema: z.ZodType<
+  CertificateManagedAcmImport2$Outbound,
+  CertificateManagedAcmImport2
+> = z.object({
+  mode: z.literal("managedAcmImport"),
+  region: z.nullable(z.string()).optional(),
+  tags: z.record(z.string(), z.string()).optional(),
+});
+
+export function certificateManagedAcmImport2ToJSON(
+  certificateManagedAcmImport2: CertificateManagedAcmImport2,
+): string {
+  return JSON.stringify(
+    CertificateManagedAcmImport2$outboundSchema.parse(
+      certificateManagedAcmImport2,
+    ),
+  );
+}
+
+/** @internal */
+export type CertificateTLSSecretRef2$Outbound = {
+  namespace?: string | null | undefined;
+  secretName: string;
+  mode: "tlsSecretRef";
+};
+
+/** @internal */
+export const CertificateTLSSecretRef2$outboundSchema: z.ZodType<
+  CertificateTLSSecretRef2$Outbound,
+  CertificateTLSSecretRef2
+> = z.object({
+  namespace: z.nullable(z.string()).optional(),
+  secretName: z.string(),
+  mode: z.literal("tlsSecretRef"),
+});
+
+export function certificateTLSSecretRef2ToJSON(
+  certificateTLSSecretRef2: CertificateTLSSecretRef2,
+): string {
+  return JSON.stringify(
+    CertificateTLSSecretRef2$outboundSchema.parse(certificateTLSSecretRef2),
+  );
+}
+
+/** @internal */
+export type CertificateUnion2$Outbound =
+  | CertificateTLSSecretRef2$Outbound
+  | CertificateManagedAcmImport2$Outbound
+  | CertificateAwsAcmArn2$Outbound
+  | CertificateManagedTLSSecret2$Outbound
+  | CertificateNone2$Outbound;
+
+/** @internal */
+export const CertificateUnion2$outboundSchema: z.ZodType<
+  CertificateUnion2$Outbound,
+  CertificateUnion2
+> = z.union([
+  z.lazy(() => CertificateTLSSecretRef2$outboundSchema),
+  z.lazy(() => CertificateManagedAcmImport2$outboundSchema),
+  z.lazy(() => CertificateAwsAcmArn2$outboundSchema),
+  z.lazy(() => CertificateManagedTLSSecret2$outboundSchema),
+  z.lazy(() => CertificateNone2$outboundSchema),
+]);
+
+export function certificateUnion2ToJSON(
+  certificateUnion2: CertificateUnion2,
+): string {
+  return JSON.stringify(
+    CertificateUnion2$outboundSchema.parse(certificateUnion2),
+  );
+}
+
+/** @internal */
+export const ModeCustom$outboundSchema: z.ZodEnum<typeof ModeCustom> = z.enum(
+  ModeCustom,
+);
+
+/** @internal */
+export const ProviderAzureApplicationGatewayForContainersEnum4$outboundSchema:
+  z.ZodEnum<typeof ProviderAzureApplicationGatewayForContainersEnum4> = z.enum(
+    ProviderAzureApplicationGatewayForContainersEnum4,
+  );
+
+/** @internal */
+export type ProviderAzureApplicationGatewayForContainers4$Outbound = {
+  albName?: string | null | undefined;
+  albNamespace?: string | null | undefined;
+  frontend: string;
+  provider: string;
+};
+
+/** @internal */
+export const ProviderAzureApplicationGatewayForContainers4$outboundSchema:
+  z.ZodType<
+    ProviderAzureApplicationGatewayForContainers4$Outbound,
+    ProviderAzureApplicationGatewayForContainers4
+  > = z.object({
+    albName: z.nullable(z.string()).optional(),
+    albNamespace: z.nullable(z.string()).optional(),
+    frontend: z.string(),
+    provider: ProviderAzureApplicationGatewayForContainersEnum4$outboundSchema,
+  });
+
+export function providerAzureApplicationGatewayForContainers4ToJSON(
+  providerAzureApplicationGatewayForContainers4:
+    ProviderAzureApplicationGatewayForContainers4,
+): string {
+  return JSON.stringify(
+    ProviderAzureApplicationGatewayForContainers4$outboundSchema.parse(
+      providerAzureApplicationGatewayForContainers4,
+    ),
+  );
+}
+
+/** @internal */
+export const ProviderGkeGatewayEnum4$outboundSchema: z.ZodEnum<
+  typeof ProviderGkeGatewayEnum4
+> = z.enum(ProviderGkeGatewayEnum4);
+
+/** @internal */
+export type ProviderGkeGateway4$Outbound = {
+  provider: string;
+  staticAddressName?: string | null | undefined;
+};
+
+/** @internal */
+export const ProviderGkeGateway4$outboundSchema: z.ZodType<
+  ProviderGkeGateway4$Outbound,
+  ProviderGkeGateway4
+> = z.object({
+  provider: ProviderGkeGatewayEnum4$outboundSchema,
+  staticAddressName: z.nullable(z.string()).optional(),
+});
+
+export function providerGkeGateway4ToJSON(
+  providerGkeGateway4: ProviderGkeGateway4,
+): string {
+  return JSON.stringify(
+    ProviderGkeGateway4$outboundSchema.parse(providerGkeGateway4),
+  );
+}
+
+/** @internal */
+export const ProviderAwsAlbEnum4$outboundSchema: z.ZodEnum<
+  typeof ProviderAwsAlbEnum4
+> = z.enum(ProviderAwsAlbEnum4);
+
+/** @internal */
+export type ProviderAwsAlb4$Outbound = {
+  ipAddressType?: string | null | undefined;
+  provider: string;
+  scheme: string;
+  subnetIds?: Array<string> | undefined;
+  targetType: string;
+};
+
+/** @internal */
+export const ProviderAwsAlb4$outboundSchema: z.ZodType<
+  ProviderAwsAlb4$Outbound,
+  ProviderAwsAlb4
+> = z.object({
+  ipAddressType: z.nullable(z.string()).optional(),
+  provider: ProviderAwsAlbEnum4$outboundSchema,
+  scheme: z.string(),
+  subnetIds: z.array(z.string()).optional(),
+  targetType: z.string(),
+});
+
+export function providerAwsAlb4ToJSON(
+  providerAwsAlb4: ProviderAwsAlb4,
+): string {
+  return JSON.stringify(ProviderAwsAlb4$outboundSchema.parse(providerAwsAlb4));
+}
+
+/** @internal */
+export type ProviderUnion4$Outbound =
+  | ProviderAwsAlb4$Outbound
+  | ProviderAzureApplicationGatewayForContainers4$Outbound
+  | ProviderGkeGateway4$Outbound
+  | any;
+
+/** @internal */
+export const ProviderUnion4$outboundSchema: z.ZodType<
+  ProviderUnion4$Outbound,
+  ProviderUnion4
+> = z.union([
+  z.lazy(() => ProviderAwsAlb4$outboundSchema),
+  z.lazy(() => ProviderAzureApplicationGatewayForContainers4$outboundSchema),
+  z.lazy(() => ProviderGkeGateway4$outboundSchema),
+  z.any(),
+]);
+
+export function providerUnion4ToJSON(providerUnion4: ProviderUnion4): string {
+  return JSON.stringify(ProviderUnion4$outboundSchema.parse(providerUnion4));
+}
+
+/** @internal */
+export type RouteGateway2$Outbound = {
+  annotations?: { [k: string]: string } | undefined;
+  controller?: string | null | undefined;
+  gatewayClassName: string;
+  labels?: { [k: string]: string } | undefined;
+  listenerPort: number;
+  provider?:
+    | ProviderAwsAlb4$Outbound
+    | ProviderAzureApplicationGatewayForContainers4$Outbound
+    | ProviderGkeGateway4$Outbound
+    | any
+    | null
+    | undefined;
+  routeApi: "gateway";
+};
+
+/** @internal */
+export const RouteGateway2$outboundSchema: z.ZodType<
+  RouteGateway2$Outbound,
+  RouteGateway2
+> = z.object({
+  annotations: z.record(z.string(), z.string()).optional(),
+  controller: z.nullable(z.string()).optional(),
+  gatewayClassName: z.string(),
+  labels: z.record(z.string(), z.string()).optional(),
+  listenerPort: z.int(),
+  provider: z.nullable(
+    z.union([
+      z.lazy(() => ProviderAwsAlb4$outboundSchema),
+      z.lazy(() =>
+        ProviderAzureApplicationGatewayForContainers4$outboundSchema
+      ),
+      z.lazy(() => ProviderGkeGateway4$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  routeApi: z.literal("gateway"),
+});
+
+export function routeGateway2ToJSON(routeGateway2: RouteGateway2): string {
+  return JSON.stringify(RouteGateway2$outboundSchema.parse(routeGateway2));
+}
+
+/** @internal */
+export const ProviderAzureApplicationGatewayForContainersEnum3$outboundSchema:
+  z.ZodEnum<typeof ProviderAzureApplicationGatewayForContainersEnum3> = z.enum(
+    ProviderAzureApplicationGatewayForContainersEnum3,
+  );
+
+/** @internal */
+export type ProviderAzureApplicationGatewayForContainers3$Outbound = {
+  albName?: string | null | undefined;
+  albNamespace?: string | null | undefined;
+  frontend: string;
+  provider: string;
+};
+
+/** @internal */
+export const ProviderAzureApplicationGatewayForContainers3$outboundSchema:
+  z.ZodType<
+    ProviderAzureApplicationGatewayForContainers3$Outbound,
+    ProviderAzureApplicationGatewayForContainers3
+  > = z.object({
+    albName: z.nullable(z.string()).optional(),
+    albNamespace: z.nullable(z.string()).optional(),
+    frontend: z.string(),
+    provider: ProviderAzureApplicationGatewayForContainersEnum3$outboundSchema,
+  });
+
+export function providerAzureApplicationGatewayForContainers3ToJSON(
+  providerAzureApplicationGatewayForContainers3:
+    ProviderAzureApplicationGatewayForContainers3,
+): string {
+  return JSON.stringify(
+    ProviderAzureApplicationGatewayForContainers3$outboundSchema.parse(
+      providerAzureApplicationGatewayForContainers3,
+    ),
+  );
+}
+
+/** @internal */
+export const ProviderGkeGatewayEnum3$outboundSchema: z.ZodEnum<
+  typeof ProviderGkeGatewayEnum3
+> = z.enum(ProviderGkeGatewayEnum3);
+
+/** @internal */
+export type ProviderGkeGateway3$Outbound = {
+  provider: string;
+  staticAddressName?: string | null | undefined;
+};
+
+/** @internal */
+export const ProviderGkeGateway3$outboundSchema: z.ZodType<
+  ProviderGkeGateway3$Outbound,
+  ProviderGkeGateway3
+> = z.object({
+  provider: ProviderGkeGatewayEnum3$outboundSchema,
+  staticAddressName: z.nullable(z.string()).optional(),
+});
+
+export function providerGkeGateway3ToJSON(
+  providerGkeGateway3: ProviderGkeGateway3,
+): string {
+  return JSON.stringify(
+    ProviderGkeGateway3$outboundSchema.parse(providerGkeGateway3),
+  );
+}
+
+/** @internal */
+export const ProviderAwsAlbEnum3$outboundSchema: z.ZodEnum<
+  typeof ProviderAwsAlbEnum3
+> = z.enum(ProviderAwsAlbEnum3);
+
+/** @internal */
+export type ProviderAwsAlb3$Outbound = {
+  ipAddressType?: string | null | undefined;
+  provider: string;
+  scheme: string;
+  subnetIds?: Array<string> | undefined;
+  targetType: string;
+};
+
+/** @internal */
+export const ProviderAwsAlb3$outboundSchema: z.ZodType<
+  ProviderAwsAlb3$Outbound,
+  ProviderAwsAlb3
+> = z.object({
+  ipAddressType: z.nullable(z.string()).optional(),
+  provider: ProviderAwsAlbEnum3$outboundSchema,
+  scheme: z.string(),
+  subnetIds: z.array(z.string()).optional(),
+  targetType: z.string(),
+});
+
+export function providerAwsAlb3ToJSON(
+  providerAwsAlb3: ProviderAwsAlb3,
+): string {
+  return JSON.stringify(ProviderAwsAlb3$outboundSchema.parse(providerAwsAlb3));
+}
+
+/** @internal */
+export type ProviderUnion3$Outbound =
+  | ProviderAwsAlb3$Outbound
+  | ProviderAzureApplicationGatewayForContainers3$Outbound
+  | ProviderGkeGateway3$Outbound
+  | any;
+
+/** @internal */
+export const ProviderUnion3$outboundSchema: z.ZodType<
+  ProviderUnion3$Outbound,
+  ProviderUnion3
+> = z.union([
+  z.lazy(() => ProviderAwsAlb3$outboundSchema),
+  z.lazy(() => ProviderAzureApplicationGatewayForContainers3$outboundSchema),
+  z.lazy(() => ProviderGkeGateway3$outboundSchema),
+  z.any(),
+]);
+
+export function providerUnion3ToJSON(providerUnion3: ProviderUnion3): string {
+  return JSON.stringify(ProviderUnion3$outboundSchema.parse(providerUnion3));
+}
+
+/** @internal */
+export type RouteIngress2$Outbound = {
+  annotations?: { [k: string]: string } | undefined;
+  controller?: string | null | undefined;
+  ingressClassName: string;
+  labels?: { [k: string]: string } | undefined;
+  provider?:
+    | ProviderAwsAlb3$Outbound
+    | ProviderAzureApplicationGatewayForContainers3$Outbound
+    | ProviderGkeGateway3$Outbound
+    | any
+    | null
+    | undefined;
+  routeApi: "ingress";
+};
+
+/** @internal */
+export const RouteIngress2$outboundSchema: z.ZodType<
+  RouteIngress2$Outbound,
+  RouteIngress2
+> = z.object({
+  annotations: z.record(z.string(), z.string()).optional(),
+  controller: z.nullable(z.string()).optional(),
+  ingressClassName: z.string(),
+  labels: z.record(z.string(), z.string()).optional(),
+  provider: z.nullable(
+    z.union([
+      z.lazy(() => ProviderAwsAlb3$outboundSchema),
+      z.lazy(() =>
+        ProviderAzureApplicationGatewayForContainers3$outboundSchema
+      ),
+      z.lazy(() => ProviderGkeGateway3$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  routeApi: z.literal("ingress"),
+});
+
+export function routeIngress2ToJSON(routeIngress2: RouteIngress2): string {
+  return JSON.stringify(RouteIngress2$outboundSchema.parse(routeIngress2));
+}
+
+/** @internal */
+export type RouteUnion2$Outbound =
+  | RouteIngress2$Outbound
+  | RouteGateway2$Outbound;
+
+/** @internal */
+export const RouteUnion2$outboundSchema: z.ZodType<
+  RouteUnion2$Outbound,
+  RouteUnion2
+> = z.union([
+  z.lazy(() => RouteIngress2$outboundSchema),
+  z.lazy(() => RouteGateway2$outboundSchema),
+]);
+
+export function routeUnion2ToJSON(routeUnion2: RouteUnion2): string {
+  return JSON.stringify(RouteUnion2$outboundSchema.parse(routeUnion2));
+}
+
+/** @internal */
+export type ExposureCustom$Outbound = {
+  certificate:
+    | CertificateTLSSecretRef2$Outbound
+    | CertificateManagedAcmImport2$Outbound
+    | CertificateAwsAcmArn2$Outbound
+    | CertificateManagedTLSSecret2$Outbound
+    | CertificateNone2$Outbound;
+  domain: string;
+  mode: string;
+  route: RouteIngress2$Outbound | RouteGateway2$Outbound;
+};
+
+/** @internal */
+export const ExposureCustom$outboundSchema: z.ZodType<
+  ExposureCustom$Outbound,
+  ExposureCustom
+> = z.object({
+  certificate: z.union([
+    z.lazy(() => CertificateTLSSecretRef2$outboundSchema),
+    z.lazy(() => CertificateManagedAcmImport2$outboundSchema),
+    z.lazy(() => CertificateAwsAcmArn2$outboundSchema),
+    z.lazy(() => CertificateManagedTLSSecret2$outboundSchema),
+    z.lazy(() => CertificateNone2$outboundSchema),
+  ]),
+  domain: z.string(),
+  mode: ModeCustom$outboundSchema,
+  route: z.union([
+    z.lazy(() => RouteIngress2$outboundSchema),
+    z.lazy(() => RouteGateway2$outboundSchema),
+  ]),
+});
+
+export function exposureCustomToJSON(exposureCustom: ExposureCustom): string {
+  return JSON.stringify(ExposureCustom$outboundSchema.parse(exposureCustom));
+}
+
+/** @internal */
+export type CertificateNone1$Outbound = {
+  mode: "none";
+};
+
+/** @internal */
+export const CertificateNone1$outboundSchema: z.ZodType<
+  CertificateNone1$Outbound,
+  CertificateNone1
+> = z.object({
+  mode: z.literal("none"),
+});
+
+export function certificateNone1ToJSON(
+  certificateNone1: CertificateNone1,
+): string {
+  return JSON.stringify(
+    CertificateNone1$outboundSchema.parse(certificateNone1),
+  );
+}
+
+/** @internal */
+export type CertificateManagedTLSSecret1$Outbound = {
+  mode: "managedTlsSecret";
+  secretNameTemplate: string;
+};
+
+/** @internal */
+export const CertificateManagedTLSSecret1$outboundSchema: z.ZodType<
+  CertificateManagedTLSSecret1$Outbound,
+  CertificateManagedTLSSecret1
+> = z.object({
+  mode: z.literal("managedTlsSecret"),
+  secretNameTemplate: z.string(),
+});
+
+export function certificateManagedTLSSecret1ToJSON(
+  certificateManagedTLSSecret1: CertificateManagedTLSSecret1,
+): string {
+  return JSON.stringify(
+    CertificateManagedTLSSecret1$outboundSchema.parse(
+      certificateManagedTLSSecret1,
+    ),
+  );
+}
+
+/** @internal */
+export type CertificateAwsAcmArn1$Outbound = {
+  certificateArn: string;
+  mode: "awsAcmArn";
+};
+
+/** @internal */
+export const CertificateAwsAcmArn1$outboundSchema: z.ZodType<
+  CertificateAwsAcmArn1$Outbound,
+  CertificateAwsAcmArn1
+> = z.object({
+  certificateArn: z.string(),
+  mode: z.literal("awsAcmArn"),
+});
+
+export function certificateAwsAcmArn1ToJSON(
+  certificateAwsAcmArn1: CertificateAwsAcmArn1,
+): string {
+  return JSON.stringify(
+    CertificateAwsAcmArn1$outboundSchema.parse(certificateAwsAcmArn1),
+  );
+}
+
+/** @internal */
+export type CertificateManagedAcmImport1$Outbound = {
+  mode: "managedAcmImport";
+  region?: string | null | undefined;
+  tags?: { [k: string]: string } | undefined;
+};
+
+/** @internal */
+export const CertificateManagedAcmImport1$outboundSchema: z.ZodType<
+  CertificateManagedAcmImport1$Outbound,
+  CertificateManagedAcmImport1
+> = z.object({
+  mode: z.literal("managedAcmImport"),
+  region: z.nullable(z.string()).optional(),
+  tags: z.record(z.string(), z.string()).optional(),
+});
+
+export function certificateManagedAcmImport1ToJSON(
+  certificateManagedAcmImport1: CertificateManagedAcmImport1,
+): string {
+  return JSON.stringify(
+    CertificateManagedAcmImport1$outboundSchema.parse(
+      certificateManagedAcmImport1,
+    ),
+  );
+}
+
+/** @internal */
+export type CertificateTLSSecretRef1$Outbound = {
+  namespace?: string | null | undefined;
+  secretName: string;
+  mode: "tlsSecretRef";
+};
+
+/** @internal */
+export const CertificateTLSSecretRef1$outboundSchema: z.ZodType<
+  CertificateTLSSecretRef1$Outbound,
+  CertificateTLSSecretRef1
+> = z.object({
+  namespace: z.nullable(z.string()).optional(),
+  secretName: z.string(),
+  mode: z.literal("tlsSecretRef"),
+});
+
+export function certificateTLSSecretRef1ToJSON(
+  certificateTLSSecretRef1: CertificateTLSSecretRef1,
+): string {
+  return JSON.stringify(
+    CertificateTLSSecretRef1$outboundSchema.parse(certificateTLSSecretRef1),
+  );
+}
+
+/** @internal */
+export type CertificateUnion1$Outbound =
+  | CertificateTLSSecretRef1$Outbound
+  | CertificateManagedAcmImport1$Outbound
+  | CertificateAwsAcmArn1$Outbound
+  | CertificateManagedTLSSecret1$Outbound
+  | CertificateNone1$Outbound;
+
+/** @internal */
+export const CertificateUnion1$outboundSchema: z.ZodType<
+  CertificateUnion1$Outbound,
+  CertificateUnion1
+> = z.union([
+  z.lazy(() => CertificateTLSSecretRef1$outboundSchema),
+  z.lazy(() => CertificateManagedAcmImport1$outboundSchema),
+  z.lazy(() => CertificateAwsAcmArn1$outboundSchema),
+  z.lazy(() => CertificateManagedTLSSecret1$outboundSchema),
+  z.lazy(() => CertificateNone1$outboundSchema),
+]);
+
+export function certificateUnion1ToJSON(
+  certificateUnion1: CertificateUnion1,
+): string {
+  return JSON.stringify(
+    CertificateUnion1$outboundSchema.parse(certificateUnion1),
+  );
+}
+
+/** @internal */
+export const ModeGenerated$outboundSchema: z.ZodEnum<typeof ModeGenerated> = z
+  .enum(ModeGenerated);
+
+/** @internal */
+export const ProviderAzureApplicationGatewayForContainersEnum2$outboundSchema:
+  z.ZodEnum<typeof ProviderAzureApplicationGatewayForContainersEnum2> = z.enum(
+    ProviderAzureApplicationGatewayForContainersEnum2,
+  );
+
+/** @internal */
+export type ProviderAzureApplicationGatewayForContainers2$Outbound = {
+  albName?: string | null | undefined;
+  albNamespace?: string | null | undefined;
+  frontend: string;
+  provider: string;
+};
+
+/** @internal */
+export const ProviderAzureApplicationGatewayForContainers2$outboundSchema:
+  z.ZodType<
+    ProviderAzureApplicationGatewayForContainers2$Outbound,
+    ProviderAzureApplicationGatewayForContainers2
+  > = z.object({
+    albName: z.nullable(z.string()).optional(),
+    albNamespace: z.nullable(z.string()).optional(),
+    frontend: z.string(),
+    provider: ProviderAzureApplicationGatewayForContainersEnum2$outboundSchema,
+  });
+
+export function providerAzureApplicationGatewayForContainers2ToJSON(
+  providerAzureApplicationGatewayForContainers2:
+    ProviderAzureApplicationGatewayForContainers2,
+): string {
+  return JSON.stringify(
+    ProviderAzureApplicationGatewayForContainers2$outboundSchema.parse(
+      providerAzureApplicationGatewayForContainers2,
+    ),
+  );
+}
+
+/** @internal */
+export const ProviderGkeGatewayEnum2$outboundSchema: z.ZodEnum<
+  typeof ProviderGkeGatewayEnum2
+> = z.enum(ProviderGkeGatewayEnum2);
+
+/** @internal */
+export type ProviderGkeGateway2$Outbound = {
+  provider: string;
+  staticAddressName?: string | null | undefined;
+};
+
+/** @internal */
+export const ProviderGkeGateway2$outboundSchema: z.ZodType<
+  ProviderGkeGateway2$Outbound,
+  ProviderGkeGateway2
+> = z.object({
+  provider: ProviderGkeGatewayEnum2$outboundSchema,
+  staticAddressName: z.nullable(z.string()).optional(),
+});
+
+export function providerGkeGateway2ToJSON(
+  providerGkeGateway2: ProviderGkeGateway2,
+): string {
+  return JSON.stringify(
+    ProviderGkeGateway2$outboundSchema.parse(providerGkeGateway2),
+  );
+}
+
+/** @internal */
+export const ProviderAwsAlbEnum2$outboundSchema: z.ZodEnum<
+  typeof ProviderAwsAlbEnum2
+> = z.enum(ProviderAwsAlbEnum2);
+
+/** @internal */
+export type ProviderAwsAlb2$Outbound = {
+  ipAddressType?: string | null | undefined;
+  provider: string;
+  scheme: string;
+  subnetIds?: Array<string> | undefined;
+  targetType: string;
+};
+
+/** @internal */
+export const ProviderAwsAlb2$outboundSchema: z.ZodType<
+  ProviderAwsAlb2$Outbound,
+  ProviderAwsAlb2
+> = z.object({
+  ipAddressType: z.nullable(z.string()).optional(),
+  provider: ProviderAwsAlbEnum2$outboundSchema,
+  scheme: z.string(),
+  subnetIds: z.array(z.string()).optional(),
+  targetType: z.string(),
+});
+
+export function providerAwsAlb2ToJSON(
+  providerAwsAlb2: ProviderAwsAlb2,
+): string {
+  return JSON.stringify(ProviderAwsAlb2$outboundSchema.parse(providerAwsAlb2));
+}
+
+/** @internal */
+export type ProviderUnion2$Outbound =
+  | ProviderAwsAlb2$Outbound
+  | ProviderAzureApplicationGatewayForContainers2$Outbound
+  | ProviderGkeGateway2$Outbound
+  | any;
+
+/** @internal */
+export const ProviderUnion2$outboundSchema: z.ZodType<
+  ProviderUnion2$Outbound,
+  ProviderUnion2
+> = z.union([
+  z.lazy(() => ProviderAwsAlb2$outboundSchema),
+  z.lazy(() => ProviderAzureApplicationGatewayForContainers2$outboundSchema),
+  z.lazy(() => ProviderGkeGateway2$outboundSchema),
+  z.any(),
+]);
+
+export function providerUnion2ToJSON(providerUnion2: ProviderUnion2): string {
+  return JSON.stringify(ProviderUnion2$outboundSchema.parse(providerUnion2));
+}
+
+/** @internal */
+export type RouteGateway1$Outbound = {
+  annotations?: { [k: string]: string } | undefined;
+  controller?: string | null | undefined;
+  gatewayClassName: string;
+  labels?: { [k: string]: string } | undefined;
+  listenerPort: number;
+  provider?:
+    | ProviderAwsAlb2$Outbound
+    | ProviderAzureApplicationGatewayForContainers2$Outbound
+    | ProviderGkeGateway2$Outbound
+    | any
+    | null
+    | undefined;
+  routeApi: "gateway";
+};
+
+/** @internal */
+export const RouteGateway1$outboundSchema: z.ZodType<
+  RouteGateway1$Outbound,
+  RouteGateway1
+> = z.object({
+  annotations: z.record(z.string(), z.string()).optional(),
+  controller: z.nullable(z.string()).optional(),
+  gatewayClassName: z.string(),
+  labels: z.record(z.string(), z.string()).optional(),
+  listenerPort: z.int(),
+  provider: z.nullable(
+    z.union([
+      z.lazy(() => ProviderAwsAlb2$outboundSchema),
+      z.lazy(() =>
+        ProviderAzureApplicationGatewayForContainers2$outboundSchema
+      ),
+      z.lazy(() => ProviderGkeGateway2$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  routeApi: z.literal("gateway"),
+});
+
+export function routeGateway1ToJSON(routeGateway1: RouteGateway1): string {
+  return JSON.stringify(RouteGateway1$outboundSchema.parse(routeGateway1));
+}
+
+/** @internal */
+export const ProviderAzureApplicationGatewayForContainersEnum1$outboundSchema:
+  z.ZodEnum<typeof ProviderAzureApplicationGatewayForContainersEnum1> = z.enum(
+    ProviderAzureApplicationGatewayForContainersEnum1,
+  );
+
+/** @internal */
+export type ProviderAzureApplicationGatewayForContainers1$Outbound = {
+  albName?: string | null | undefined;
+  albNamespace?: string | null | undefined;
+  frontend: string;
+  provider: string;
+};
+
+/** @internal */
+export const ProviderAzureApplicationGatewayForContainers1$outboundSchema:
+  z.ZodType<
+    ProviderAzureApplicationGatewayForContainers1$Outbound,
+    ProviderAzureApplicationGatewayForContainers1
+  > = z.object({
+    albName: z.nullable(z.string()).optional(),
+    albNamespace: z.nullable(z.string()).optional(),
+    frontend: z.string(),
+    provider: ProviderAzureApplicationGatewayForContainersEnum1$outboundSchema,
+  });
+
+export function providerAzureApplicationGatewayForContainers1ToJSON(
+  providerAzureApplicationGatewayForContainers1:
+    ProviderAzureApplicationGatewayForContainers1,
+): string {
+  return JSON.stringify(
+    ProviderAzureApplicationGatewayForContainers1$outboundSchema.parse(
+      providerAzureApplicationGatewayForContainers1,
+    ),
+  );
+}
+
+/** @internal */
+export const ProviderGkeGatewayEnum1$outboundSchema: z.ZodEnum<
+  typeof ProviderGkeGatewayEnum1
+> = z.enum(ProviderGkeGatewayEnum1);
+
+/** @internal */
+export type ProviderGkeGateway1$Outbound = {
+  provider: string;
+  staticAddressName?: string | null | undefined;
+};
+
+/** @internal */
+export const ProviderGkeGateway1$outboundSchema: z.ZodType<
+  ProviderGkeGateway1$Outbound,
+  ProviderGkeGateway1
+> = z.object({
+  provider: ProviderGkeGatewayEnum1$outboundSchema,
+  staticAddressName: z.nullable(z.string()).optional(),
+});
+
+export function providerGkeGateway1ToJSON(
+  providerGkeGateway1: ProviderGkeGateway1,
+): string {
+  return JSON.stringify(
+    ProviderGkeGateway1$outboundSchema.parse(providerGkeGateway1),
+  );
+}
+
+/** @internal */
+export const ProviderAwsAlbEnum1$outboundSchema: z.ZodEnum<
+  typeof ProviderAwsAlbEnum1
+> = z.enum(ProviderAwsAlbEnum1);
+
+/** @internal */
+export type ProviderAwsAlb1$Outbound = {
+  ipAddressType?: string | null | undefined;
+  provider: string;
+  scheme: string;
+  subnetIds?: Array<string> | undefined;
+  targetType: string;
+};
+
+/** @internal */
+export const ProviderAwsAlb1$outboundSchema: z.ZodType<
+  ProviderAwsAlb1$Outbound,
+  ProviderAwsAlb1
+> = z.object({
+  ipAddressType: z.nullable(z.string()).optional(),
+  provider: ProviderAwsAlbEnum1$outboundSchema,
+  scheme: z.string(),
+  subnetIds: z.array(z.string()).optional(),
+  targetType: z.string(),
+});
+
+export function providerAwsAlb1ToJSON(
+  providerAwsAlb1: ProviderAwsAlb1,
+): string {
+  return JSON.stringify(ProviderAwsAlb1$outboundSchema.parse(providerAwsAlb1));
+}
+
+/** @internal */
+export type ProviderUnion1$Outbound =
+  | ProviderAwsAlb1$Outbound
+  | ProviderAzureApplicationGatewayForContainers1$Outbound
+  | ProviderGkeGateway1$Outbound
+  | any;
+
+/** @internal */
+export const ProviderUnion1$outboundSchema: z.ZodType<
+  ProviderUnion1$Outbound,
+  ProviderUnion1
+> = z.union([
+  z.lazy(() => ProviderAwsAlb1$outboundSchema),
+  z.lazy(() => ProviderAzureApplicationGatewayForContainers1$outboundSchema),
+  z.lazy(() => ProviderGkeGateway1$outboundSchema),
+  z.any(),
+]);
+
+export function providerUnion1ToJSON(providerUnion1: ProviderUnion1): string {
+  return JSON.stringify(ProviderUnion1$outboundSchema.parse(providerUnion1));
+}
+
+/** @internal */
+export type RouteIngress1$Outbound = {
+  annotations?: { [k: string]: string } | undefined;
+  controller?: string | null | undefined;
+  ingressClassName: string;
+  labels?: { [k: string]: string } | undefined;
+  provider?:
+    | ProviderAwsAlb1$Outbound
+    | ProviderAzureApplicationGatewayForContainers1$Outbound
+    | ProviderGkeGateway1$Outbound
+    | any
+    | null
+    | undefined;
+  routeApi: "ingress";
+};
+
+/** @internal */
+export const RouteIngress1$outboundSchema: z.ZodType<
+  RouteIngress1$Outbound,
+  RouteIngress1
+> = z.object({
+  annotations: z.record(z.string(), z.string()).optional(),
+  controller: z.nullable(z.string()).optional(),
+  ingressClassName: z.string(),
+  labels: z.record(z.string(), z.string()).optional(),
+  provider: z.nullable(
+    z.union([
+      z.lazy(() => ProviderAwsAlb1$outboundSchema),
+      z.lazy(() =>
+        ProviderAzureApplicationGatewayForContainers1$outboundSchema
+      ),
+      z.lazy(() => ProviderGkeGateway1$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  routeApi: z.literal("ingress"),
+});
+
+export function routeIngress1ToJSON(routeIngress1: RouteIngress1): string {
+  return JSON.stringify(RouteIngress1$outboundSchema.parse(routeIngress1));
+}
+
+/** @internal */
+export type RouteUnion1$Outbound =
+  | RouteIngress1$Outbound
+  | RouteGateway1$Outbound;
+
+/** @internal */
+export const RouteUnion1$outboundSchema: z.ZodType<
+  RouteUnion1$Outbound,
+  RouteUnion1
+> = z.union([
+  z.lazy(() => RouteIngress1$outboundSchema),
+  z.lazy(() => RouteGateway1$outboundSchema),
+]);
+
+export function routeUnion1ToJSON(routeUnion1: RouteUnion1): string {
+  return JSON.stringify(RouteUnion1$outboundSchema.parse(routeUnion1));
+}
+
+/** @internal */
+export type ExposureGenerated$Outbound = {
+  certificate:
+    | CertificateTLSSecretRef1$Outbound
+    | CertificateManagedAcmImport1$Outbound
+    | CertificateAwsAcmArn1$Outbound
+    | CertificateManagedTLSSecret1$Outbound
+    | CertificateNone1$Outbound;
+  mode: string;
+  route: RouteIngress1$Outbound | RouteGateway1$Outbound;
+};
+
+/** @internal */
+export const ExposureGenerated$outboundSchema: z.ZodType<
+  ExposureGenerated$Outbound,
+  ExposureGenerated
+> = z.object({
+  certificate: z.union([
+    z.lazy(() => CertificateTLSSecretRef1$outboundSchema),
+    z.lazy(() => CertificateManagedAcmImport1$outboundSchema),
+    z.lazy(() => CertificateAwsAcmArn1$outboundSchema),
+    z.lazy(() => CertificateManagedTLSSecret1$outboundSchema),
+    z.lazy(() => CertificateNone1$outboundSchema),
+  ]),
+  mode: ModeGenerated$outboundSchema,
+  route: z.union([
+    z.lazy(() => RouteIngress1$outboundSchema),
+    z.lazy(() => RouteGateway1$outboundSchema),
+  ]),
+});
+
+export function exposureGeneratedToJSON(
+  exposureGenerated: ExposureGenerated,
+): string {
+  return JSON.stringify(
+    ExposureGenerated$outboundSchema.parse(exposureGenerated),
+  );
+}
+
+/** @internal */
+export const ModeDisabled$outboundSchema: z.ZodEnum<typeof ModeDisabled> = z
+  .enum(ModeDisabled);
+
+/** @internal */
+export type ExposureDisabled$Outbound = {
+  mode: string;
+};
+
+/** @internal */
+export const ExposureDisabled$outboundSchema: z.ZodType<
+  ExposureDisabled$Outbound,
+  ExposureDisabled
+> = z.object({
+  mode: ModeDisabled$outboundSchema,
+});
+
+export function exposureDisabledToJSON(
+  exposureDisabled: ExposureDisabled,
+): string {
+  return JSON.stringify(
+    ExposureDisabled$outboundSchema.parse(exposureDisabled),
+  );
+}
+
+/** @internal */
+export type Exposure$Outbound =
+  | ExposureCustom$Outbound
+  | ExposureGenerated$Outbound
+  | ExposureDisabled$Outbound
+  | any;
+
+/** @internal */
+export const Exposure$outboundSchema: z.ZodType<Exposure$Outbound, Exposure> = z
+  .union([
+    z.lazy(() => ExposureCustom$outboundSchema),
+    z.lazy(() => ExposureGenerated$outboundSchema),
+    z.lazy(() => ExposureDisabled$outboundSchema),
+    z.any(),
+  ]);
+
+export function exposureToJSON(exposure: Exposure): string {
+  return JSON.stringify(Exposure$outboundSchema.parse(exposure));
+}
+
+/** @internal */
+export type PrepareDeploymentStackKubernetes$Outbound = {
+  cluster?: Cluster$Outbound | any | null | undefined;
+  exposure?:
+    | ExposureCustom$Outbound
+    | ExposureGenerated$Outbound
+    | ExposureDisabled$Outbound
+    | any
+    | null
+    | undefined;
+};
+
+/** @internal */
+export const PrepareDeploymentStackKubernetes$outboundSchema: z.ZodType<
+  PrepareDeploymentStackKubernetes$Outbound,
+  PrepareDeploymentStackKubernetes
+> = z.object({
+  cluster: z.nullable(z.union([z.lazy(() => Cluster$outboundSchema), z.any()]))
+    .optional(),
+  exposure: z.nullable(
+    z.union([
+      z.lazy(() => ExposureCustom$outboundSchema),
+      z.lazy(() => ExposureGenerated$outboundSchema),
+      z.lazy(() => ExposureDisabled$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+});
+
+export function prepareDeploymentStackKubernetesToJSON(
+  prepareDeploymentStackKubernetes: PrepareDeploymentStackKubernetes,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackKubernetes$outboundSchema.parse(
+      prepareDeploymentStackKubernetes,
+    ),
+  );
+}
+
+/** @internal */
+export type Kubernetes$Outbound =
+  | PrepareDeploymentStackKubernetes$Outbound
+  | any;
+
+/** @internal */
+export const Kubernetes$outboundSchema: z.ZodType<
+  Kubernetes$Outbound,
+  Kubernetes
+> = z.union([
+  z.lazy(() => PrepareDeploymentStackKubernetes$outboundSchema),
+  z.any(),
+]);
+
+export function kubernetesToJSON(kubernetes: Kubernetes): string {
+  return JSON.stringify(Kubernetes$outboundSchema.parse(kubernetes));
+}
 
 /** @internal */
 export const TypeByoVnetAzure$outboundSchema: z.ZodEnum<
@@ -734,6 +2731,11 @@ export type StackSettings$Outbound = {
   domains?: Domains$Outbound | any | null | undefined;
   externalBindings?: ExternalBindings$Outbound | null | undefined;
   heartbeats?: string | undefined;
+  kubernetes?:
+    | PrepareDeploymentStackKubernetes$Outbound
+    | any
+    | null
+    | undefined;
   network?:
     | NetworkByoVpcAws$Outbound
     | NetworkByoVpcGcp$Outbound
@@ -758,6 +2760,12 @@ export const StackSettings$outboundSchema: z.ZodType<
   externalBindings: z.nullable(z.lazy(() => ExternalBindings$outboundSchema))
     .optional(),
   heartbeats: Heartbeats$outboundSchema.optional(),
+  kubernetes: z.nullable(
+    z.union([
+      z.lazy(() => PrepareDeploymentStackKubernetes$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   network: z.nullable(
     z.union([
       z.lazy(() => NetworkByoVpcAws$outboundSchema),
@@ -779,6 +2787,7 @@ export function stackSettingsToJSON(stackSettings: StackSettings): string {
 /** @internal */
 export type PrepareDeploymentStackRequestBody$Outbound = {
   platform: string;
+  setupMethod: string;
   stackSettings: StackSettings$Outbound;
 };
 
@@ -788,6 +2797,7 @@ export const PrepareDeploymentStackRequestBody$outboundSchema: z.ZodType<
   PrepareDeploymentStackRequestBody
 > = z.object({
   platform: PrepareDeploymentStackPlatform$outboundSchema,
+  setupMethod: models.DeploymentSetupMethod$outboundSchema,
   stackSettings: z.lazy(() => StackSettings$outboundSchema),
 });
 

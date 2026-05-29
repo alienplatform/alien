@@ -277,6 +277,7 @@ mod tests {
                         namespace: Some("alien-runtime".to_string()),
                         cloud: None,
                     }),
+                    exposure: None,
                 }),
                 ..StackSettings::default()
             },

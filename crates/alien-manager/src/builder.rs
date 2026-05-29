@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use alien_error::AlienError;
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::auth::Authz;
 use crate::config::ManagerConfig;
@@ -733,15 +733,18 @@ async fn finalize(
     };
 
     // --- Router ---
-    let mut router = crate::routes::create_router_inner(app_state.clone(), router_options);
+    let mut router = crate::routes::create_router_inner(app_state.clone(), router_options)
+        .layer(crate::routes::cors_layer(&config));
     if let Some(platform) = platform_routes {
         router = router.merge(platform.with_state(app_state.clone()));
     }
     if let Some(extra) = extra_routes {
-        router = router.merge(extra.with_state(app_state));
+        router = router.merge(
+            extra
+                .with_state(app_state)
+                .layer(crate::routes::cors_layer(&config)),
+        );
     }
-    // Apply CORS after all routes are merged so it covers platform and extra routes too.
-    let router = router.layer(crate::routes::cors_layer(&config));
 
     info!(
         port = config.port,
@@ -755,7 +758,6 @@ async fn finalize(
         deployment_store,
         release_store,
         credential_resolver,
-        telemetry_backend,
         server_bindings,
         dev_status_tx,
         log_buffer,

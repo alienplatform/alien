@@ -1,6 +1,6 @@
 use crate::error::{ErrorData, Result};
 use crate::resource::{ResourceDefinition, ResourceOutputsDefinition, ResourceRef, ResourceType};
-use crate::resources::ToolchainConfig;
+use crate::resources::{ComputeCluster, ResourceSpec, ToolchainConfig};
 use alien_error::AlienError;
 use bon::Builder;
 use serde::{Deserialize, Serialize};
@@ -30,8 +30,26 @@ pub struct Daemon {
     pub id: String,
     #[builder(field)]
     pub links: Vec<ResourceRef>,
+    /// ComputeCluster resource ID that this daemon runs on for Horizon-backed
+    /// cloud platforms. Kubernetes and Local runtimes ignore this field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cluster: Option<String>,
     pub permissions: String,
     pub code: DaemonCode,
+    /// CPU resource requirements for each daemon instance.
+    #[builder(default = default_daemon_cpu())]
+    #[serde(default = "default_daemon_cpu")]
+    pub cpu: ResourceSpec,
+    /// Memory resource requirements for each daemon instance.
+    #[builder(default = default_daemon_memory())]
+    #[serde(default = "default_daemon_memory")]
+    pub memory: ResourceSpec,
+    /// Capacity group/pool to run on for backends that expose machine pools.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pool: Option<String>,
+    /// Command to override the image default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<Vec<String>>,
     #[builder(default)]
     #[serde(default)]
     pub environment: HashMap<String, String>,
@@ -51,6 +69,20 @@ impl Daemon {
 
 fn default_commands_enabled() -> bool {
     false
+}
+
+fn default_daemon_cpu() -> ResourceSpec {
+    ResourceSpec {
+        min: "0.1".to_string(),
+        desired: "0.1".to_string(),
+    }
+}
+
+fn default_daemon_memory() -> ResourceSpec {
+    ResourceSpec {
+        min: "128Mi".to_string(),
+        desired: "128Mi".to_string(),
+    }
 }
 
 impl<S: daemon_builder::State> DaemonBuilder<S> {
@@ -74,7 +106,14 @@ impl ResourceDefinition for Daemon {
     }
 
     fn get_dependencies(&self) -> Vec<ResourceRef> {
-        self.links.clone()
+        let mut dependencies = self.links.clone();
+        if let Some(cluster) = &self.cluster {
+            dependencies.push(ResourceRef::new(
+                ComputeCluster::RESOURCE_TYPE,
+                cluster.clone(),
+            ));
+        }
+        dependencies
     }
 
     fn get_permissions(&self) -> Option<&str> {

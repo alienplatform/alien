@@ -217,13 +217,6 @@ message StorageGetRequest {
     optional StorageGetOptions options = 3;
 }
 
-// A chunk of data from a storage object stream.
-message StorageChunkResponse {
-    // Bytes of the object chunk.
-    // Corresponds to Bytes from the object_store::GetResult stream.
-    bytes chunk_data = 1;
-}
-
 // New message for Get RPC stream
 message GetResponsePart {
   oneof part {

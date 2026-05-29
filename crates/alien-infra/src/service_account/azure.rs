@@ -13,9 +13,14 @@ use alien_azure_clients::models::authorization_role_definitions::{
 };
 use alien_azure_clients::models::managed_identity::Identity;
 use alien_client_core::ErrorData as CloudClientErrorData;
-use alien_core::{ResourceOutputs, ResourceStatus, ServiceAccount, ServiceAccountOutputs};
+use alien_core::{
+    AzureManagedIdentityServiceAccountHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
+    ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
+    ResourceStatus, ServiceAccount, ServiceAccountHeartbeatData, ServiceAccountHeartbeatStatus,
+    ServiceAccountOutputs,
+};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
-use alien_macros::{controller, flow_entry, handler, terminal_state};
+use alien_macros::controller;
 use alien_permissions::{
     generators::{
         dedupe_azure_role_bindings, AzureGrantPlan, AzureRoleDefinitionRef,
@@ -23,6 +28,7 @@ use alien_permissions::{
     },
     BindingTarget, PermissionContext,
 };
+use chrono::Utc;
 use std::collections::HashMap;
 
 /// Generates the Azure managed identity name.
@@ -619,6 +625,18 @@ impl AzureServiceAccountController {
                     }));
                 }
             }
+
+            emit_azure_service_account_heartbeat(
+                ctx,
+                &config.id,
+                &resource_group_name,
+                &identity_name,
+                identity_id,
+                &identity,
+                &self.role_assignment_ids,
+                &self.custom_role_definition_ids,
+                self.stack_permissions_applied,
+            );
         }
 
         Ok(HandlerAction::Continue {
@@ -1080,4 +1098,78 @@ impl AzureServiceAccountController {
             _internal_stay_count: None,
         }
     }
+}
+
+fn emit_azure_service_account_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    resource_group_name: &str,
+    identity_name: &str,
+    expected_identity_id: &str,
+    identity: &Identity,
+    role_assignment_ids: &[String],
+    custom_role_definition_ids: &[String],
+    stack_permissions_applied: bool,
+) {
+    let managed_tag_count = identity
+        .tags
+        .keys()
+        .filter(|key| key.starts_with("alien"))
+        .count() as u32;
+    let properties = identity.properties.as_ref();
+    let message = format!("Azure managed identity '{identity_name}' is reachable");
+
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: ServiceAccount::RESOURCE_TYPE,
+        controller_platform: Platform::Azure,
+        backend: HeartbeatBackend::Azure,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::ServiceAccount(
+            ServiceAccountHeartbeatData::AzureManagedIdentity(
+                AzureManagedIdentityServiceAccountHeartbeatData {
+                    status: ServiceAccountHeartbeatStatus {
+                        health: ObservedHealth::Healthy,
+                        lifecycle: ProviderLifecycleState::Running,
+                        message: Some(message),
+                        stale: false,
+                        partial: false,
+                        collection_issues: vec![],
+                    },
+                    name: identity
+                        .name
+                        .clone()
+                        .unwrap_or_else(|| identity_name.to_string()),
+                    resource_id: identity
+                        .id
+                        .clone()
+                        .unwrap_or_else(|| expected_identity_id.to_string()),
+                    resource_group: resource_group_name.to_string(),
+                    location: identity.location.clone(),
+                    type_: identity.type_.clone(),
+                    client_id: properties
+                        .and_then(|properties| properties.client_id.as_ref())
+                        .map(ToString::to_string),
+                    principal_id: properties
+                        .and_then(|properties| properties.principal_id.as_ref())
+                        .map(ToString::to_string),
+                    tenant_id: properties
+                        .and_then(|properties| properties.tenant_id.as_ref())
+                        .map(ToString::to_string),
+                    isolation_scope: properties
+                        .and_then(|properties| properties.isolation_scope.as_ref())
+                        .map(ToString::to_string),
+                    managed_tag_count,
+                    role_assignment_count: role_assignment_ids.len() as u32,
+                    role_assignment_ids: role_assignment_ids.to_vec(),
+                    custom_role_definition_count: custom_role_definition_ids.len() as u32,
+                    custom_role_definition_ids: custom_role_definition_ids.to_vec(),
+                    stack_permissions_applied,
+                    events: vec![],
+                },
+            ),
+        ),
+        raw: vec![],
+    });
 }

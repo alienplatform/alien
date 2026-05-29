@@ -187,6 +187,51 @@ fn provision_sets_do_not_grant_tag_removal() {
 }
 
 #[test]
+fn kubernetes_public_endpoint_acm_permissions_are_resource_scoped() {
+    let permission_set = get_permission_set("kubernetes-public-endpoint/management")
+        .expect("permission set must exist");
+    let aws_permissions = permission_set
+        .platforms
+        .aws
+        .as_ref()
+        .expect("permission set must have AWS permissions");
+
+    assert_eq!(aws_permissions.len(), 2);
+    for permission in aws_permissions {
+        assert!(
+            permission.binding.stack.is_none(),
+            "Kubernetes endpoint ACM permissions must be attached to concrete public resources"
+        );
+        let binding = permission
+            .binding
+            .resource
+            .as_ref()
+            .expect("resource binding required");
+        assert_eq!(
+            binding.resources,
+            ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"]
+        );
+
+        let actions = permission.grant.actions.as_ref().expect("actions required");
+        if actions
+            .iter()
+            .any(|action| action == "acm:DeleteCertificate")
+        {
+            assert!(has_condition_key(binding, "aws:ResourceTag/${stackTag}"));
+            assert!(has_condition_key(binding, "aws:ResourceTag/${resourceTag}"));
+            assert!(has_condition_key(
+                binding,
+                "aws:ResourceTag/${managedByTag}"
+            ));
+        } else {
+            assert!(has_condition_key(binding, "aws:RequestTag/${stackTag}"));
+            assert!(has_condition_key(binding, "aws:RequestTag/${resourceTag}"));
+            assert!(has_condition_key(binding, "aws:RequestTag/${managedByTag}"));
+        }
+    }
+}
+
+#[test]
 fn aws_resource_arns_are_stack_or_resource_scoped_unless_documented_external() {
     let mut failures = Vec::new();
 

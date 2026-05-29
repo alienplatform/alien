@@ -1,0 +1,17 @@
+# SyncListResponseAzureStackSettings
+
+## Example Usage
+
+```typescript
+import { SyncListResponseAzureStackSettings } from "@alienplatform/platform-api/models";
+
+let value: SyncListResponseAzureStackSettings = {
+  keyVaultCertificateId: "<id>",
+};
+```
+
+## Fields
+
+| Field                   | Type                    | Required                | Description             |
+| ----------------------- | ----------------------- | ----------------------- | ----------------------- |
+| `keyVaultCertificateId` | *string*                | :heavy_check_mark:      | N/A                     |

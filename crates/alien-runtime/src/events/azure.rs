@@ -2,7 +2,6 @@ use crate::error::{Error, ErrorData};
 use alien_core::{MessagePayload, QueueMessage, StorageEvent, StorageEventType, StorageEvents};
 use alien_error::{AlienError, Context, IntoAlienError};
 use base64::{engine::general_purpose, Engine};
-use chrono::{DateTime, Utc};
 use cloudevents::AttributesReader;
 use cloudevents::{event::ExtensionValue, Data, Event};
 use serde::{Deserialize, Serialize};

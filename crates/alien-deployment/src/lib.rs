@@ -240,6 +240,7 @@ pub async fn step(
                 error: None,
                 suggested_delay_ms: None,
                 update_heartbeat: false,
+                heartbeats: vec![],
             }
         }
         DeploymentStatus::Error => {
@@ -249,6 +250,7 @@ pub async fn step(
                 error: None,
                 suggested_delay_ms: None,
                 update_heartbeat: false,
+                heartbeats: vec![],
             }
         }
     };

@@ -1,8 +1,14 @@
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use alien_core::{Queue, QueueOutputs, ResourceOutputs, ResourceRef, ResourceStatus};
+use alien_azure_clients::models::queue::SbQueue;
+use alien_core::{
+    AzureServiceBusQueueHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
+    ProviderLifecycleState, Queue, QueueHeartbeatData, QueueHeartbeatStatus, QueueOutputs,
+    ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs, ResourceRef, ResourceStatus,
+};
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_macros::{controller, flow_entry, handler, terminal_state};
+use alien_macros::controller;
+use chrono::Utc;
 use std::time::Duration;
 use tracing::info;
 
@@ -166,13 +172,21 @@ impl AzureQueueController {
 
         let resource_group =
             crate::infra_requirements::azure_utils::get_resource_group_name(&ctx.state)?;
-        let _ = mgmt
+        let queue_properties = mgmt
             .get_queue(resource_group, namespace.clone(), queue.clone())
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to get Service Bus queue during heartbeat".to_string(),
                 resource_id: Some(q.id.clone()),
             })?;
+        emit_azure_service_bus_queue_heartbeat(
+            ctx,
+            &q.id,
+            namespace,
+            queue,
+            &crate::infra_requirements::azure_utils::get_resource_group_name(&ctx.state)?,
+            queue_properties,
+        );
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: Some(Duration::from_secs(30)),
@@ -265,6 +279,94 @@ impl AzureQueueController {
             Ok(None)
         }
     }
+}
+
+fn emit_azure_service_bus_queue_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    namespace_name: &str,
+    queue_name: &str,
+    resource_group: &str,
+    queue: SbQueue,
+) {
+    let properties = queue.properties.unwrap_or_default();
+    let count_details = properties.count_details.clone().unwrap_or_default();
+    let active_message_count = nonnegative_i64_to_u64(count_details.active_message_count);
+    let dead_letter_message_count = nonnegative_i64_to_u64(count_details.dead_letter_message_count);
+    let scheduled_message_count = nonnegative_i64_to_u64(count_details.scheduled_message_count);
+    let transfer_message_count = nonnegative_i64_to_u64(count_details.transfer_message_count);
+    let transfer_dead_letter_message_count =
+        nonnegative_i64_to_u64(count_details.transfer_dead_letter_message_count);
+    let name = queue.name.unwrap_or_else(|| queue_name.to_string());
+
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: Queue::RESOURCE_TYPE,
+        controller_platform: Platform::Azure,
+        backend: HeartbeatBackend::Azure,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::Queue(QueueHeartbeatData::AzureServiceBus(
+            AzureServiceBusQueueHeartbeatData {
+                status: QueueHeartbeatStatus {
+                    health: ObservedHealth::Healthy,
+                    lifecycle: ProviderLifecycleState::Running,
+                    message: Some(format!(
+                        "Azure Service Bus queue '{}' metadata is reachable",
+                        queue_name
+                    )),
+                    stale: false,
+                    partial: false,
+                    collection_issues: vec![],
+                },
+                name,
+                namespace_name: namespace_name.to_string(),
+                resource_group: Some(resource_group.to_string()),
+                resource_id: queue.id,
+                endpoint: Some(format!("{}/{}", namespace_name, queue_name)),
+                queue_status: properties.status.map(|status| status.to_string()),
+                lock_duration: properties.lock_duration,
+                max_delivery_count: nonnegative_i32_to_u32(properties.max_delivery_count),
+                requires_duplicate_detection: properties.requires_duplicate_detection,
+                duplicate_detection_history_time_window: properties
+                    .duplicate_detection_history_time_window,
+                requires_session: properties.requires_session,
+                dead_lettering_on_message_expiration: properties
+                    .dead_lettering_on_message_expiration,
+                forward_dead_lettered_messages_to: properties.forward_dead_lettered_messages_to,
+                forward_to: properties.forward_to,
+                default_message_time_to_live: properties.default_message_time_to_live,
+                auto_delete_on_idle: properties.auto_delete_on_idle,
+                enable_batched_operations: properties.enable_batched_operations,
+                enable_express: properties.enable_express,
+                enable_partitioning: properties.enable_partitioning,
+                max_message_size_in_kilobytes: nonnegative_i64_to_u64(
+                    properties.max_message_size_in_kilobytes,
+                ),
+                max_size_in_megabytes: nonnegative_i32_to_u32(properties.max_size_in_megabytes),
+                message_count: nonnegative_i64_to_u64(properties.message_count),
+                active_message_count,
+                dead_letter_message_count,
+                scheduled_message_count,
+                transfer_message_count,
+                transfer_dead_letter_message_count,
+                size_in_bytes: nonnegative_i64_to_u64(properties.size_in_bytes),
+                accessed_at: properties.accessed_at,
+                created_at: properties.created_at,
+                updated_at: properties.updated_at,
+                events: vec![],
+            },
+        )),
+        raw: vec![],
+    });
+}
+
+fn nonnegative_i64_to_u64(value: Option<i64>) -> Option<u64> {
+    value.and_then(|value| u64::try_from(value).ok())
+}
+
+fn nonnegative_i32_to_u32(value: Option<i32>) -> Option<u32> {
+    value.and_then(|value| u32::try_from(value).ok())
 }
 
 #[cfg(test)]

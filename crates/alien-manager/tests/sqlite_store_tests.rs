@@ -595,6 +595,7 @@ async fn reconcile_succeeds_under_other_session_lock() {
                 session: "agent-sync".to_string(),
                 state,
                 update_heartbeat: false,
+                heartbeats: vec![],
                 error: None,
                 suggested_delay_ms: None,
             },

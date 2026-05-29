@@ -1,9 +1,7 @@
 use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsSignConfig};
 use crate::aws::credential_provider::AwsCredentialProvider;
-use alien_client_core::RequestBuilderExt;
 use alien_client_core::{ErrorData, Result};
-use alien_error::{AlienError, Context, ContextError, IntoAlienError};
-use async_trait::async_trait;
+use alien_error::{Context, ContextError, IntoAlienError};
 use bon::Builder;
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
@@ -282,7 +280,7 @@ impl EcrClient {
                     message: error_message,
                 },
                 _ => ErrorData::HttpResponseError {
-                    message: format!("ECR operation failed: {}", error_message),
+                    message: format!("ECR {operation} failed: {error_message}"),
                     url: url.to_string(),
                     http_status: status.as_u16(),
                     http_response_text: Some(error_body.into()),

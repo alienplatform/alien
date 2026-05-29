@@ -13,12 +13,15 @@ use alien_azure_clients::models::container_apps::{
 use alien_azure_clients::AzureClientConfig;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    CertificateStatus, DnsRecordStatus, Ingress, RemoteStackManagement,
-    RemoteStackManagementOutputs, ResourceOutputs, ResourceRef, ResourceStatus, Worker,
-    WorkerOutputs, ENV_AZURE_CLIENT_ID,
+    AzureContainerAppsWorkerHeartbeatData, CertificateStatus, DnsRecordStatus, HeartbeatBackend,
+    Ingress, ObservedHealth, Platform, ProviderLifecycleState, RemoteStackManagement,
+    RemoteStackManagementOutputs, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
+    ResourceRef, ResourceStatus, Worker, WorkerHeartbeatData, WorkerOutputs,
+    WorkloadHeartbeatStatus, ENV_AZURE_CLIENT_ID,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use base64::Engine;
+use chrono::Utc;
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::{debug, error, info, warn};
@@ -179,6 +182,66 @@ struct DomainInfo {
 enum DaprComponentOperation {
     Completed,
     LongRunning(Duration),
+}
+
+fn emit_azure_container_apps_worker_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    worker_config: &Worker,
+    container_app_name: &str,
+    container_app: &ContainerApp,
+) {
+    let properties = container_app.properties.as_ref();
+    let template = properties.and_then(|properties| properties.template.as_ref());
+    let container = template.and_then(|template| template.containers.first());
+    let resources = container.and_then(|container| container.resources.as_ref());
+    let scale = template.and_then(|template| template.scale.as_ref());
+    let ingress = properties
+        .and_then(|properties| properties.configuration.as_ref())
+        .and_then(|configuration| configuration.ingress.as_ref());
+
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: worker_config.id.clone(),
+        resource_type: Worker::RESOURCE_TYPE,
+        controller_platform: Platform::Azure,
+        backend: HeartbeatBackend::Azure,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::Worker(WorkerHeartbeatData::AzureContainerApps(
+            AzureContainerAppsWorkerHeartbeatData {
+                status: WorkloadHeartbeatStatus {
+                    health: ObservedHealth::Healthy,
+                    lifecycle: ProviderLifecycleState::Running,
+                    message: Some(format!(
+                        "Azure Container App '{container_app_name}' is reachable"
+                    )),
+                    stale: false,
+                    partial: false,
+                    collection_issues: vec![],
+                },
+                app_name: container_app_name.to_string(),
+                revision: properties.and_then(|properties| properties.latest_revision_name.clone()),
+                environment_name: properties.and_then(|properties| {
+                    properties
+                        .managed_environment_id
+                        .clone()
+                        .or_else(|| properties.environment_id.clone())
+                }),
+                provisioning_state: properties
+                    .and_then(|properties| properties.provisioning_state.as_ref())
+                    .map(|state| format!("{state:?}")),
+                running_status: properties
+                    .and_then(|properties| properties.running_status.as_ref())
+                    .map(|status| format!("{status:?}")),
+                ingress_fqdn: ingress.and_then(|ingress| ingress.fqdn.clone()),
+                min_replicas: scale.and_then(|scale| scale.min_replicas),
+                max_replicas: scale.map(|scale| scale.max_replicas),
+                cpu: resources.and_then(|resources| resources.cpu),
+                memory: resources.and_then(|resources| resources.memory.clone()),
+                events: vec![],
+            },
+        )),
+        raw: vec![],
+    });
 }
 
 /// Converts PEM-encoded private key and certificate chain to PKCS#12 format for Azure Key Vault.
@@ -1948,6 +2011,13 @@ impl AzureWorkerController {
             }
         }
 
+        emit_azure_container_apps_worker_heartbeat(
+            ctx,
+            &func_cfg,
+            container_app_name,
+            &container_app,
+        );
+
         debug!(name = %func_cfg.id, "Heartbeat check passed");
         Ok(HandlerAction::Continue {
             state: Ready,
@@ -3511,7 +3581,7 @@ impl AzureWorkerController {
     async fn build_container_app(
         &self,
         func: &Worker,
-        environment_name: &str,
+        _environment_name: &str,
         container_app_name: &str,
         azure_cfg: &AzureClientConfig,
         ctx: &ResourceControllerContext<'_>,
@@ -3566,7 +3636,7 @@ impl AzureWorkerController {
         tags.insert("alien-worker-id".to_string(), func.id.clone());
         tags.insert("alien-stack".to_string(), ctx.resource_prefix.to_string());
 
-        let resource_group_name = get_resource_group_name(ctx.state)?;
+        let _resource_group_name = get_resource_group_name(ctx.state)?;
         let environment_id = azure_utils::get_container_apps_environment_resource_id(ctx.state)?;
 
         let ingress_cfg = if func.ingress == Ingress::Public {

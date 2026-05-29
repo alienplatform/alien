@@ -7,6 +7,7 @@ import * as z from "zod";
 import { AwsCustomCertificateConfigSchema } from "./aws-custom-certificate-config-schema.js";
 import { AzureCustomCertificateConfigSchema } from "./azure-custom-certificate-config-schema.js";
 import { GcpCustomCertificateConfigSchema } from "./gcp-custom-certificate-config-schema.js";
+import { KubernetesCustomCertificateConfigSchema } from "./kubernetes-custom-certificate-config-schema.js";
 
 /**
  * @description Platform-specific certificate references for custom domains.
@@ -20,6 +21,9 @@ get "azure"(){
               },
 get "gcp"(){
                 return z.union([GcpCustomCertificateConfigSchema, z.null()]).optional()
+              },
+get "kubernetes"(){
+                return z.union([KubernetesCustomCertificateConfigSchema, z.null()]).optional()
               }
     }).describe("Platform-specific certificate references for custom domains.")
 

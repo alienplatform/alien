@@ -5,10 +5,16 @@ use std::sync::OnceLock;
 
 use crate::core::ResourceController;
 use crate::error::{ErrorData, Result};
+#[cfg(feature = "local")]
+use alien_core::ComputeCluster;
+#[cfg(any(feature = "kubernetes", feature = "local"))]
+use alien_core::Container;
+#[cfg(any(feature = "kubernetes", feature = "local"))]
+use alien_core::Daemon;
 use alien_core::{
     ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup, AzureServiceBusNamespace,
-    AzureStorageAccount, Build, ComputeCluster, Container, Daemon, Kv, Network,
-    RemoteStackManagement, ServiceAccount, ServiceActivation, Storage, Vault, Worker,
+    AzureStorageAccount, Build, Kv, Network, RemoteStackManagement, ServiceAccount,
+    ServiceActivation, Storage, Vault, Worker,
 };
 use alien_core::{Platform, ResourceDefinition, ResourceType};
 use alien_error::AlienError;
@@ -108,7 +114,7 @@ impl ResourceRegistry {
     }
 
     /// Starts a resource registration builder
-    pub fn register<R>(&mut self, resource_type: ResourceType) -> ResourceRegistration<R>
+    pub fn register<R>(&mut self, resource_type: ResourceType) -> ResourceRegistration<'_, R>
     where
         R: ResourceDefinition + 'static,
     {
@@ -201,9 +207,7 @@ impl ResourceRegistry {
             >::new()),
         );
 
-        // Register Kubernetes Daemon controller. Daemons are long-running
-        // resident processes and are intentionally not registered for cloud
-        // platforms until native daemon support lands.
+        // Register Kubernetes Daemon controller.
         #[cfg(feature = "kubernetes")]
         registry.register_controller_factory(
             Daemon::RESOURCE_TYPE,

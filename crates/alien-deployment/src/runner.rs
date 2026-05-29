@@ -119,6 +119,7 @@ pub async fn run_step_loop(
         let step_error = step_result.error.as_ref();
         let update_heartbeat = step_result.update_heartbeat;
         let suggested_delay_ms = step_result.suggested_delay_ms;
+        let heartbeats = step_result.heartbeats.clone();
 
         if let Some(ref err) = step_result.error {
             warn!(
@@ -146,6 +147,7 @@ pub async fn run_step_loop(
                     step_error,
                     update_heartbeat,
                     suggested_delay_ms,
+                    heartbeats.clone(),
                 )
                 .await
             {
@@ -255,6 +257,7 @@ mod tests {
             _step_error: Option<&alien_error::AlienError>,
             _update_heartbeat: bool,
             _suggested_delay_ms: Option<u64>,
+            _heartbeats: Vec<alien_core::ResourceHeartbeat>,
         ) -> std::result::Result<StepReconcileResult, alien_error::AlienError> {
             self.checkpointed_statuses
                 .lock()

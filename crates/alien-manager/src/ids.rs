@@ -6,11 +6,6 @@ pub fn deployment_id() -> String {
     new_id(IdType::Deployment)
 }
 
-/// Generate a deployment group ID that matches the platform schema.
-pub fn deployment_group_id() -> String {
-    new_id(IdType::DeploymentGroup)
-}
-
 /// Generate a raw token value with the given prefix.
 /// Returns (raw_token, key_prefix, key_hash).
 pub fn generate_token(prefix: &str) -> (String, String, String) {

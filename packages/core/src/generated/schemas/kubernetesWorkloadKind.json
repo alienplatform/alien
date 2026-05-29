@@ -1,0 +1,1 @@
+{"type":"string","enum":["deployment","statefulSet","daemonSet","replicaSet","pod"],"x-readme-ref-name":"KubernetesWorkloadKind"}

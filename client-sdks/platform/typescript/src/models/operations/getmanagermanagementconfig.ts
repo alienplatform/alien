@@ -41,7 +41,7 @@ export type GetManagerManagementConfigRequest = {
   platform: GetManagerManagementConfigQueryParamPlatform;
 };
 
-export type Kubernetes = {
+export type GetManagerManagementConfigKubernetes = {
   platform: "kubernetes";
 };
 
@@ -98,7 +98,7 @@ export type GetManagerManagementConfigResponse =
   | GetManagerManagementConfigAws
   | GetManagerManagementConfigGcp
   | GetManagerManagementConfigAzure
-  | Kubernetes;
+  | GetManagerManagementConfigKubernetes;
 
 /** @internal */
 export const GetManagerManagementConfigQueryParamPlatform$outboundSchema:
@@ -134,18 +134,21 @@ export function getManagerManagementConfigRequestToJSON(
 }
 
 /** @internal */
-export const Kubernetes$inboundSchema: z.ZodType<Kubernetes, unknown> = z
-  .object({
-    platform: z.literal("kubernetes"),
-  });
+export const GetManagerManagementConfigKubernetes$inboundSchema: z.ZodType<
+  GetManagerManagementConfigKubernetes,
+  unknown
+> = z.object({
+  platform: z.literal("kubernetes"),
+});
 
-export function kubernetesFromJSON(
+export function getManagerManagementConfigKubernetesFromJSON(
   jsonString: string,
-): SafeParseResult<Kubernetes, SDKValidationError> {
+): SafeParseResult<GetManagerManagementConfigKubernetes, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Kubernetes$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Kubernetes' from JSON`,
+    (x) =>
+      GetManagerManagementConfigKubernetes$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetManagerManagementConfigKubernetes' from JSON`,
   );
 }
 
@@ -216,7 +219,7 @@ export const GetManagerManagementConfigResponse$inboundSchema: z.ZodType<
   z.lazy(() => GetManagerManagementConfigAws$inboundSchema),
   z.lazy(() => GetManagerManagementConfigGcp$inboundSchema),
   z.lazy(() => GetManagerManagementConfigAzure$inboundSchema),
-  z.lazy(() => Kubernetes$inboundSchema),
+  z.lazy(() => GetManagerManagementConfigKubernetes$inboundSchema),
 ]);
 
 export function getManagerManagementConfigResponseFromJSON(

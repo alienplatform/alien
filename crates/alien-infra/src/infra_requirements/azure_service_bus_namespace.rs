@@ -8,10 +8,14 @@ use crate::error::{ErrorData, Result};
 use alien_azure_clients::models::queue_namespace::*;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    AzureServiceBusNamespace, AzureServiceBusNamespaceOutputs, ResourceOutputs, ResourceStatus,
+    AzureServiceBusNamespace, AzureServiceBusNamespaceHeartbeatData,
+    AzureServiceBusNamespaceOutputs, HeartbeatBackend, ObservedHealth, Platform,
+    ProviderLifecycleState, QueueHeartbeatStatus, ResourceHeartbeat, ResourceHeartbeatData,
+    ResourceOutputs, ResourceStatus,
 };
 use alien_error::{AlienError, Context, ContextError};
-use alien_macros::{controller, flow_entry, handler, terminal_state};
+use alien_macros::controller;
+use chrono::Utc;
 
 #[controller]
 pub struct AzureServiceBusNamespaceController {
@@ -225,14 +229,21 @@ impl AzureServiceBusNamespaceController {
                 .get_azure_service_bus_management_client(azure_config)?;
 
             let namespace = client
-                .get_namespace(resource_group_name, namespace_name.clone())
+                .get_namespace(resource_group_name.clone(), namespace_name.clone())
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: format!("Failed to get Service Bus Namespace '{}'", namespace_name),
                     resource_id: Some(config.id.clone()),
                 })?;
 
-            if let Some(properties) = namespace.properties {
+            emit_azure_service_bus_namespace_heartbeat(
+                ctx,
+                &config.id,
+                &resource_group_name,
+                &namespace,
+            );
+
+            if let Some(properties) = &namespace.properties {
                 match properties.status.as_deref() {
                     Some("Active") => {
                         // Namespace is healthy
@@ -404,6 +415,79 @@ impl AzureServiceBusNamespaceController {
     }
 }
 
+fn emit_azure_service_bus_namespace_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    resource_group_name: &str,
+    namespace: &SbNamespace,
+) {
+    let properties = namespace.properties.as_ref();
+    let namespace_status = properties.and_then(|p| p.status.clone());
+    let (health, lifecycle) = match namespace_status.as_deref() {
+        Some("Active") => (ObservedHealth::Healthy, ProviderLifecycleState::Running),
+        Some(_) => (ObservedHealth::Unhealthy, ProviderLifecycleState::Failed),
+        None => (ObservedHealth::Unknown, ProviderLifecycleState::Unknown),
+    };
+    let name = namespace
+        .name
+        .clone()
+        .unwrap_or_else(|| resource_id.to_string());
+
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: AzureServiceBusNamespace::RESOURCE_TYPE,
+        controller_platform: Platform::Azure,
+        backend: HeartbeatBackend::Azure,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::AzureServiceBusNamespace(
+            AzureServiceBusNamespaceHeartbeatData {
+                status: QueueHeartbeatStatus {
+                    health,
+                    lifecycle,
+                    message: Some(format!(
+                        "Azure Service Bus namespace '{}' status is {}",
+                        name,
+                        namespace_status.as_deref().unwrap_or("unknown")
+                    )),
+                    stale: false,
+                    partial: false,
+                    collection_issues: vec![],
+                },
+                name,
+                resource_id: namespace.id.clone(),
+                resource_group: Some(resource_group_name.to_string()),
+                location: Some(namespace.location.clone()),
+                sku_name: namespace.sku.as_ref().map(|sku| sku.name.to_string()),
+                sku_tier: namespace
+                    .sku
+                    .as_ref()
+                    .and_then(|sku| sku.tier.as_ref().map(ToString::to_string)),
+                sku_capacity: namespace.sku.as_ref().and_then(|sku| sku.capacity),
+                namespace_status,
+                provisioning_state: properties.and_then(|p| p.provisioning_state.clone()),
+                service_bus_endpoint: properties.and_then(|p| p.service_bus_endpoint.clone()),
+                metric_id: properties.and_then(|p| p.metric_id.clone()),
+                public_network_access: properties.map(|p| p.public_network_access.to_string()),
+                disable_local_auth: properties.and_then(|p| p.disable_local_auth),
+                minimum_tls_version: properties
+                    .and_then(|p| p.minimum_tls_version.as_ref())
+                    .map(ToString::to_string),
+                premium_messaging_partitions: properties
+                    .and_then(|p| p.premium_messaging_partitions),
+                private_endpoint_connection_count: properties
+                    .map(|p| p.private_endpoint_connections.len() as u32)
+                    .unwrap_or(0),
+                zone_redundant: properties.and_then(|p| p.zone_redundant),
+                created_at: properties.and_then(|p| p.created_at.clone()),
+                updated_at: properties.and_then(|p| p.updated_at.clone()),
+                events: vec![],
+            },
+        ),
+        raw: vec![],
+    });
+}
+
 // Separate impl block for helper methods
 impl AzureServiceBusNamespaceController {
     // ─────────────── HELPER METHODS ────────────────────────────
@@ -449,8 +533,8 @@ impl AzureServiceBusNamespaceController {
 
     fn build_namespace_properties(
         &self,
-        azure_config: &AzureClientConfig,
-        ctx: &ResourceControllerContext,
+        _azure_config: &AzureClientConfig,
+        _ctx: &ResourceControllerContext,
     ) -> SbNamespaceProperties {
         SbNamespaceProperties {
             private_endpoint_connections: vec![],

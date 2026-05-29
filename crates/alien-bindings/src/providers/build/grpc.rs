@@ -9,9 +9,9 @@ use crate::{
     traits::Build,
 };
 use alien_core::{BuildConfig, BuildExecution, BuildStatus};
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::AlienError;
 use async_trait::async_trait;
-use tonic::{transport::Channel, Request, Status};
+use tonic::{transport::Channel, Request};
 
 /// gRPC implementation of the `Build` trait.
 ///

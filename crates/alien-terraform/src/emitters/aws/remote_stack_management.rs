@@ -79,11 +79,6 @@ impl TfEmitter for AwsRemoteStackManagementEmitter {
                 let Some(resource_entry) = ctx.stack.resources.get(resource_id) else {
                     continue;
                 };
-                let Some(kubernetes_cluster) =
-                    resource_entry.config.downcast_ref::<KubernetesCluster>()
-                else {
-                    continue;
-                };
                 let Some(permission_set) = permission_set_ref
                     .resolve(|name| alien_permissions::get_permission_set(name).cloned())
                 else {
@@ -92,10 +87,15 @@ impl TfEmitter for AwsRemoteStackManagementEmitter {
                 if permission_set.platforms.aws.is_none() {
                     continue;
                 }
+                let Some(resource_name) = resource_scoped_aws_resource_name(
+                    resource_id,
+                    resource_entry,
+                    &permission_set.id,
+                ) else {
+                    continue;
+                };
 
-                let resource_context = context
-                    .clone()
-                    .with_resource_name(kubernetes_cluster_name(kubernetes_cluster));
+                let resource_context = context.clone().with_resource_name(resource_name);
                 let policy = generator
                     .generate_policy(&permission_set, BindingTarget::Resource, &resource_context)
                     .context(ErrorData::GenericError {
@@ -209,6 +209,21 @@ fn resource_scoped_permission_refs(
                 .map(move |permission_set_ref| (resource_id.as_str(), permission_set_ref))
         })
         .collect()
+}
+
+fn resource_scoped_aws_resource_name(
+    resource_id: &str,
+    resource_entry: &alien_core::ResourceEntry,
+    permission_set_id: &str,
+) -> Option<String> {
+    if permission_set_id == "kubernetes-public-endpoint/management" {
+        return Some(resource_id.to_string());
+    }
+
+    resource_entry
+        .config
+        .downcast_ref::<KubernetesCluster>()
+        .map(kubernetes_cluster_name)
 }
 
 fn kubernetes_cluster_name(cluster: &KubernetesCluster) -> String {

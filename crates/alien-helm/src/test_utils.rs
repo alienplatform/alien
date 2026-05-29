@@ -109,6 +109,32 @@ pub fn helm_template_and_validate(files: &LinterFiles, values_yaml: Option<&str>
     })
 }
 
+/// Render a chart with `helm template` and return the rendered manifest.
+pub fn helm_template(files: &LinterFiles, values_yaml: Option<&str>) -> LinterRun {
+    run_when_enabled("helm template", || {
+        let dir = write_files_to_temp_dir(files)?;
+        let values_path = if let Some(values) = values_yaml {
+            let path = dir.path().join("test-values.yaml");
+            write_file(&path, values)?;
+            Some(path)
+        } else {
+            None
+        };
+
+        let mut args = vec![
+            OsStr::new("template").to_os_string(),
+            OsStr::new("test-release").to_os_string(),
+            dir.path().as_os_str().to_os_string(),
+        ];
+        if let Some(path) = &values_path {
+            args.push(OsStr::new("-f").to_os_string());
+            args.push(path.as_os_str().to_os_string());
+        }
+
+        run_command("helm", args.iter().map(|arg| arg.as_os_str()), None)
+    })
+}
+
 fn run_when_enabled<F>(tool: &str, run: F) -> LinterRun
 where
     F: FnOnce() -> Result<LinterRun, String>,

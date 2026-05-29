@@ -2,10 +2,8 @@ use std::fmt::Debug;
 
 use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsSignConfig};
 use crate::aws::credential_provider::AwsCredentialProvider;
-use alien_client_core::RequestBuilderExt;
 use alien_client_core::{ErrorData, Result};
-use alien_error::{AlienError, ContextError};
-use async_trait::async_trait;
+use alien_error::ContextError;
 use bon::Builder;
 use form_urlencoded;
 
@@ -334,7 +332,7 @@ impl IamClient {
                     message: error_message,
                 },
                 _ => ErrorData::HttpResponseError {
-                    message: format!("IAM operation failed: {}", error_message),
+                    message: format!("IAM {operation} failed: {error_message}"),
                     url: "iam.amazonaws.com".into(),
                     http_status: status.as_u16(),
                     http_response_text: Some(error_body.into()),

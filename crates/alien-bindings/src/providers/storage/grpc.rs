@@ -26,7 +26,7 @@ use futures::{stream::BoxStream, StreamExt};
 use object_store::{
     path::Path, Attributes as OsAttributes, Error as ObjectStoreError, GetOptions,
     GetRange as OsGetRange, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta,
-    PutMultipartOpts, PutOptions, PutPayload, PutResult,
+    PutMultipartOptions, PutOptions, PutPayload, PutResult,
 };
 use prost_types;
 use std::time::Duration;
@@ -385,7 +385,7 @@ impl object_store::ObjectStore for GrpcStorage {
     async fn put_multipart_opts(
         &self,
         location: &Path,
-        opts: PutMultipartOpts,
+        opts: PutMultipartOptions,
     ) -> object_store::Result<Box<dyn MultipartUpload>> {
         let mut client = self.client();
         let path_str = location.to_string();

@@ -4,6 +4,14 @@ use tracing::{debug, info};
 
 use crate::core::{EnvironmentVariableBuilder, ResourceController, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
+use crate::kubernetes_public_endpoint::{
+    container_public_endpoint_target, delete_kubernetes_public_endpoint,
+    reconcile_kubernetes_public_endpoint, KubernetesEndpointAction, KubernetesPublicEndpointState,
+};
+use crate::kubernetes_workload_heartbeat::{
+    emit_kubernetes_workload_heartbeat, label_selector, KubernetesWorkload,
+    KubernetesWorkloadDataKind, KubernetesWorkloadHeartbeatInput,
+};
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     kubernetes_resource_name, kubernetes_service_account_name, Container, ContainerCode,
@@ -143,10 +151,10 @@ pub struct KubernetesContainerController {
     pub(crate) namespace: Option<String>,
     /// The service name for the container (for binding construction)
     pub(crate) service_name: Option<String>,
-    /// The public URL if available (from Helm pre-computed map)
-    pub(crate) public_url: Option<String>,
     /// The container ID (for binding construction)
     pub(crate) container_id: Option<String>,
+    /// Public endpoint route/certificate state.
+    pub(crate) public_endpoint: KubernetesPublicEndpointState,
 }
 
 #[controller]
@@ -171,13 +179,6 @@ impl KubernetesContainerController {
         self.container_id = Some(config.id.clone());
         self.service_name = Some(container_name.clone());
         self.namespace = Some(namespace.clone());
-        self.public_url = ctx
-            .deployment_config
-            .public_urls
-            .as_ref()
-            .and_then(|urls| urls.get(&config.id))
-            .cloned();
-
         // Generate ServiceAccount name following Helm naming convention
         let service_account_name =
             kubernetes_service_account_name(&ctx.resource_prefix, config.get_permissions());
@@ -383,8 +384,8 @@ impl KubernetesContainerController {
                 info!(workload_name=%workload_name, namespace=%namespace, workload_type=%workload_type, "Container workload is ready");
 
                 return Ok(HandlerAction::Continue {
-                    state: Ready,
-                    suggested_delay: Some(Duration::from_secs(30)),
+                    state: ReconcilePublicEndpoint,
+                    suggested_delay: None,
                 });
             } else {
                 debug!(workload_name=%workload_name, ready=%ready_replicas, total=%replicas, "Container workload not yet ready");
@@ -395,6 +396,54 @@ impl KubernetesContainerController {
             max_times: 60, // 60 attempts * 5 seconds = 5 minutes max wait
             suggested_delay: Some(Duration::from_secs(5)),
         })
+    }
+
+    #[handler(
+        state = ReconcilePublicEndpoint,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn reconcile_public_endpoint(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<Container>()?;
+        let workload_name = self.workload_name.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: config.id.clone(),
+                message: "Workload name not set in state".to_string(),
+            })
+        })?;
+        let namespace = self.namespace.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: config.id.clone(),
+                message: "Namespace not set in state".to_string(),
+            })
+        })?;
+        let labels = self.build_labels(workload_name);
+        let action = reconcile_kubernetes_public_endpoint(
+            ctx,
+            container_public_endpoint_target(
+                &config.id,
+                workload_name,
+                namespace,
+                labels,
+                &config.ports,
+            )?,
+            &mut self.public_endpoint,
+        )
+        .await?;
+
+        match action {
+            KubernetesEndpointAction::Ready => Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: Some(Duration::from_secs(30)),
+            }),
+            KubernetesEndpointAction::Waiting { suggested_delay } => Ok(HandlerAction::Stay {
+                max_times: 60,
+                suggested_delay: Some(suggested_delay),
+            }),
+        }
     }
 
     // ─────────────── READY STATE ────────────────────────────────
@@ -414,7 +463,7 @@ impl KubernetesContainerController {
                 .get_kubernetes_deployment_client(kubernetes_config)
                 .await?;
 
-            let (ready_replicas, replicas) = if self.is_stateful {
+            let (ready_replicas, replicas, workload) = if self.is_stateful {
                 let statefulset = deployment_client
                     .get_statefulset(namespace, workload_name)
                     .await
@@ -423,10 +472,17 @@ impl KubernetesContainerController {
                         resource_id: Some(config.id.clone()),
                     })?;
 
-                if let Some(status) = statefulset.status {
-                    (status.ready_replicas, Some(status.replicas))
+                if let Some(status) = statefulset.status.clone() {
+                    (
+                        status.ready_replicas,
+                        Some(status.replicas),
+                        KubernetesWorkload::StatefulSet(StatefulSet {
+                            status: Some(status),
+                            ..statefulset
+                        }),
+                    )
                 } else {
-                    (None, None)
+                    (None, None, KubernetesWorkload::StatefulSet(statefulset))
                 }
             } else {
                 let deployment = deployment_client
@@ -437,10 +493,17 @@ impl KubernetesContainerController {
                         resource_id: Some(config.id.clone()),
                     })?;
 
-                if let Some(status) = deployment.status {
-                    (status.ready_replicas, status.replicas)
+                if let Some(status) = deployment.status.clone() {
+                    (
+                        status.ready_replicas,
+                        status.replicas,
+                        KubernetesWorkload::Deployment(Deployment {
+                            status: Some(status),
+                            ..deployment
+                        }),
+                    )
                 } else {
-                    (None, None)
+                    (None, None, KubernetesWorkload::Deployment(deployment))
                 }
             };
 
@@ -454,6 +517,47 @@ impl KubernetesContainerController {
                         ),
                     }));
                 }
+            }
+
+            let labels = self.build_labels(workload_name);
+            emit_kubernetes_workload_heartbeat(
+                ctx,
+                KubernetesWorkloadHeartbeatInput {
+                    deployment_id: None,
+                    resource_id: config.id.clone(),
+                    resource_type: Container::RESOURCE_TYPE,
+                    data_kind: KubernetesWorkloadDataKind::Container,
+                    command_supported: false,
+                    namespace: namespace.clone(),
+                    workload_name: workload_name.clone(),
+                    workload_kind: if self.is_stateful {
+                        alien_core::KubernetesWorkloadKind::StatefulSet
+                    } else {
+                        alien_core::KubernetesWorkloadKind::Deployment
+                    },
+                    workload,
+                    label_selector: label_selector(&labels)?,
+                },
+            )
+            .await?;
+
+            let action = reconcile_kubernetes_public_endpoint(
+                ctx,
+                container_public_endpoint_target(
+                    &config.id,
+                    workload_name,
+                    namespace,
+                    labels,
+                    &config.ports,
+                )?,
+                &mut self.public_endpoint,
+            )
+            .await?;
+            if let KubernetesEndpointAction::Waiting { suggested_delay } = action {
+                return Ok(HandlerAction::Stay {
+                    max_times: 60,
+                    suggested_delay: Some(suggested_delay),
+                });
             }
 
             debug!(workload_name=%workload_name, namespace=%namespace, "Container workload is healthy");
@@ -700,8 +804,8 @@ impl KubernetesContainerController {
                 };
                 info!(workload_name=%workload_name, workload_type=%workload_type, "Container workload rollout complete");
                 return Ok(HandlerAction::Continue {
-                    state: Ready,
-                    suggested_delay: Some(Duration::from_secs(30)),
+                    state: ReconcilePublicEndpointAfterUpdate,
+                    suggested_delay: None,
                 });
             } else {
                 debug!(workload_name=%workload_name, ready=%ready_replicas, total=%replicas, "Container workload rollout in progress");
@@ -712,6 +816,54 @@ impl KubernetesContainerController {
             max_times: 60,
             suggested_delay: Some(Duration::from_secs(5)),
         })
+    }
+
+    #[handler(
+        state = ReconcilePublicEndpointAfterUpdate,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn reconcile_public_endpoint_after_update(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<Container>()?;
+        let workload_name = self.workload_name.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: config.id.clone(),
+                message: "Workload name not set in state".to_string(),
+            })
+        })?;
+        let namespace = self.namespace.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: config.id.clone(),
+                message: "Namespace not set in state".to_string(),
+            })
+        })?;
+        let labels = self.build_labels(workload_name);
+        let action = reconcile_kubernetes_public_endpoint(
+            ctx,
+            container_public_endpoint_target(
+                &config.id,
+                workload_name,
+                namespace,
+                labels,
+                &config.ports,
+            )?,
+            &mut self.public_endpoint,
+        )
+        .await?;
+
+        match action {
+            KubernetesEndpointAction::Ready => Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: Some(Duration::from_secs(30)),
+            }),
+            KubernetesEndpointAction::Waiting { suggested_delay } => Ok(HandlerAction::Stay {
+                max_times: 60,
+                suggested_delay: Some(suggested_delay),
+            }),
+        }
     }
 
     // ─────────────── DELETE FLOW ──────────────────────────────
@@ -733,6 +885,9 @@ impl KubernetesContainerController {
         })?;
 
         info!(namespace=%namespace, "Initiating Kubernetes Container deletion");
+
+        delete_kubernetes_public_endpoint(ctx, &config.id, namespace, &mut self.public_endpoint)
+            .await?;
 
         // Delete Deployment or StatefulSet
         if let Some(workload_name) = &self.workload_name {
@@ -889,9 +1044,9 @@ impl KubernetesContainerController {
                 current_replicas: 0, // Will be updated by runtime
                 desired_replicas: 0, // Will be updated by runtime
                 internal_dns: format!("{}.svc.cluster.local", workload_name),
-                url: self.public_url.clone(),
+                url: self.public_endpoint.public_url.clone(),
                 replicas: Vec::new(), // Replica details tracked separately
-                load_balancer_endpoint: None, // Kubernetes uses Service, not direct LB endpoint
+                load_balancer_endpoint: self.public_endpoint.load_balancer_endpoint.clone(),
             }))
         } else {
             None
@@ -911,6 +1066,7 @@ impl KubernetesContainerController {
                 service_name: BindingValue::Value(service_name.clone()),
                 service_port: BindingValue::Value(80),
                 public_url: self
+                    .public_endpoint
                     .public_url
                     .as_ref()
                     .map(|url| BindingValue::Value(url.clone())),
@@ -935,18 +1091,24 @@ impl KubernetesContainerController {
 mod output_tests {
     use alien_core::ContainerOutputs;
 
-    use super::{KubernetesContainerController, KubernetesContainerState};
+    use super::{
+        KubernetesContainerController, KubernetesContainerState, KubernetesPublicEndpointState,
+    };
 
     #[test]
-    fn build_outputs_includes_helm_public_url() {
+    fn build_outputs_includes_public_endpoint_url() {
+        let public_endpoint = KubernetesPublicEndpointState {
+            public_url: Some("https://container.example.test".to_string()),
+            ..Default::default()
+        };
         let controller = KubernetesContainerController {
             state: KubernetesContainerState::Ready,
             workload_name: Some("test-container".to_string()),
             is_stateful: false,
             namespace: Some("test-namespace".to_string()),
             service_name: Some("test-container".to_string()),
-            public_url: Some("https://container.example.test".to_string()),
             container_id: Some("container".to_string()),
+            public_endpoint,
             _internal_stay_count: None,
         };
 
@@ -972,8 +1134,8 @@ impl KubernetesContainerController {
             is_stateful,
             namespace: Some(namespace.to_string()),
             service_name: Some(container_name.to_string()),
-            public_url: None,
             container_id: Some("test-container".to_string()),
+            public_endpoint: KubernetesPublicEndpointState::default(),
             _internal_stay_count: None,
         }
     }
@@ -1181,7 +1343,6 @@ impl KubernetesContainerController {
                         }),
                         ..Default::default()
                     }),
-                    storage_class_name: persistent_storage.storage_type.clone(),
                     ..Default::default()
                 }),
                 ..Default::default()

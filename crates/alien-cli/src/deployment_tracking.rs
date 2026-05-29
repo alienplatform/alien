@@ -386,13 +386,6 @@ mod debug_keyring {
                 .ok_or_else(|| DebugKeyringError("No entry found".to_string()))
         }
 
-        pub fn delete_password(&self) -> std::result::Result<(), DebugKeyringError> {
-            let mut store = self.load_store()?;
-            let key = format!("{}:{}", self.service, self.user);
-            store.remove(&key);
-            self.save_store(&store)
-        }
-
         fn keyring_path(&self) -> PathBuf {
             super::config_dir()
                 .unwrap_or_else(|| PathBuf::from("."))

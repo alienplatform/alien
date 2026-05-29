@@ -7,10 +7,8 @@ use crate::azure::models::storage::{
 use crate::azure::token_cache::AzureTokenCache;
 use alien_client_core::{ErrorData, Result};
 
-use alien_error::{AlienError, Context, IntoAlienError};
-use async_trait::async_trait;
-use reqwest::{Client, Method, StatusCode};
-use serde::Deserialize;
+use alien_error::{Context, IntoAlienError};
+use reqwest::{Client, Method};
 
 #[cfg(feature = "test-utils")]
 use mockall::automock;

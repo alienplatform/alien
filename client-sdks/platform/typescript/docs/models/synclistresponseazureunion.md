@@ -3,10 +3,10 @@
 
 ## Supported Types
 
-### `models.SyncListResponseDomainsAzure`
+### `models.SyncListResponseAzureStackSettings`
 
 ```typescript
-const value: models.SyncListResponseDomainsAzure = {
+const value: models.SyncListResponseAzureStackSettings = {
   keyVaultCertificateId: "<id>",
 };
 ```

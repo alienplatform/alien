@@ -7,7 +7,6 @@ import { ApiKeys } from "./apikeys.js";
 import { Auth } from "./auth.js";
 import { Billing } from "./billing.js";
 import { Commands } from "./commands.js";
-import { Containers } from "./containers.js";
 import { Deployment } from "./deployment.js";
 import { DeploymentGroups } from "./deploymentgroups.js";
 import { Deployments } from "./deployments.js";
@@ -18,6 +17,7 @@ import { Packages } from "./packages.js";
 import { Projects } from "./projects.js";
 import { Releases } from "./releases.js";
 import { Resolve } from "./resolve.js";
+import { Resources } from "./resources.js";
 import { Sync } from "./sync.js";
 import { User } from "./user.js";
 import { Workspaces } from "./workspaces.js";
@@ -98,9 +98,9 @@ export class Alien extends ClientSDK {
     return (this._sync ??= new Sync(this._options));
   }
 
-  private _containers?: Containers;
-  get containers(): Containers {
-    return (this._containers ??= new Containers(this._options));
+  private _resources?: Resources;
+  get resources(): Resources {
+    return (this._resources ??= new Resources(this._options));
   }
 
   private _resolve?: Resolve;

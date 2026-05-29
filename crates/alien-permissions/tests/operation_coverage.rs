@@ -4,8 +4,10 @@ struct OperationCoverage<'a> {
     permission_set_id: &'a str,
     aws_actions: &'a [&'a str],
     gcp_permissions: &'a [&'a str],
+    gcp_predefined_roles: &'a [&'a str],
     azure_actions: &'a [&'a str],
     azure_data_actions: &'a [&'a str],
+    azure_predefined_roles: &'a [&'a str],
 }
 
 #[test]
@@ -34,6 +36,7 @@ fn critical_e2e_provider_operations_are_declared() {
                 "run.services.update",
                 "iam.serviceAccounts.actAs",
             ],
+            gcp_predefined_roles: &[],
             azure_actions: &[
                 "Microsoft.App/containerApps/write",
                 "Microsoft.App/containerApps/delete",
@@ -42,18 +45,20 @@ fn critical_e2e_provider_operations_are_declared() {
                 "Microsoft.ManagedIdentity/userAssignedIdentities/assign/action",
             ],
             azure_data_actions: &[],
+            azure_predefined_roles: &[],
         },
         OperationCoverage {
             permission_set_id: "worker/heartbeat",
-            aws_actions: &[
-                "lambda:GetFunction",
-                "lambda:GetFunctionConfiguration",
-                "lambda:ListTags",
-                "ecr:GetAuthorizationToken",
+            aws_actions: &["lambda:GetFunctionConfiguration", "lambda:ListTags"],
+            gcp_permissions: &[],
+            gcp_predefined_roles: &[
+                "roles/run.viewer",
+                "roles/pubsub.viewer",
+                "roles/iam.serviceAccountViewer",
             ],
-            gcp_permissions: &["run.services.get"],
-            azure_actions: &["Microsoft.App/containerApps/read"],
+            azure_actions: &[],
             azure_data_actions: &[],
+            azure_predefined_roles: &["Reader"],
         },
         OperationCoverage {
             permission_set_id: "worker/execute",
@@ -65,9 +70,15 @@ fn critical_e2e_provider_operations_are_declared() {
                 "ec2:DescribeNetworkInterfaces",
                 "ec2:DeleteNetworkInterface",
             ],
-            gcp_permissions: &["run.services.get", "logging.logEntries.create"],
-            azure_actions: &["Microsoft.ContainerRegistry/registries/read"],
+            gcp_permissions: &[],
+            gcp_predefined_roles: &[
+                "roles/artifactregistry.reader",
+                "roles/logging.logWriter",
+                "roles/run.viewer",
+            ],
+            azure_actions: &[],
             azure_data_actions: &[],
+            azure_predefined_roles: &["AcrPull", "Reader"],
         },
         OperationCoverage {
             permission_set_id: "service-account/provision",
@@ -78,19 +89,40 @@ fn critical_e2e_provider_operations_are_declared() {
                 "iam:TagRole",
             ],
             gcp_permissions: &["iam.serviceAccounts.create", "iam.roles.create"],
+            gcp_predefined_roles: &[],
             azure_actions: &[
-                "Microsoft.ManagedIdentity/userAssignedIdentities/write",
                 "Microsoft.Authorization/roleDefinitions/write",
                 "Microsoft.Authorization/roleAssignments/write",
             ],
             azure_data_actions: &[],
+            azure_predefined_roles: &["Managed Identity Contributor"],
         },
         OperationCoverage {
             permission_set_id: "kubernetes-cluster/heartbeat",
             aws_actions: &["eks:DescribeCluster"],
             gcp_permissions: &["container.clusters.get", "container.clusters.list"],
+            gcp_predefined_roles: &[],
             azure_actions: &["Microsoft.ContainerService/managedClusters/read"],
             azure_data_actions: &[],
+            azure_predefined_roles: &[],
+        },
+        OperationCoverage {
+            permission_set_id: "storage/heartbeat",
+            aws_actions: &["s3:GetBucketLocation", "s3:GetEncryptionConfiguration"],
+            gcp_permissions: &["storage.buckets.get", "storage.hmacKeys.list"],
+            gcp_predefined_roles: &[],
+            azure_actions: &[],
+            azure_data_actions: &[],
+            azure_predefined_roles: &["Reader"],
+        },
+        OperationCoverage {
+            permission_set_id: "queue/heartbeat",
+            aws_actions: &["sqs:GetQueueAttributes", "sqs:ListQueueTags"],
+            gcp_permissions: &[],
+            gcp_predefined_roles: &["roles/pubsub.viewer"],
+            azure_actions: &[],
+            azure_data_actions: &[],
+            azure_predefined_roles: &["Reader"],
         },
         OperationCoverage {
             permission_set_id: "artifact-registry/provision",
@@ -104,22 +136,26 @@ fn critical_e2e_provider_operations_are_declared() {
                 "iam:DeleteRole",
             ],
             gcp_permissions: &["artifactregistry.repositories.create"],
+            gcp_predefined_roles: &[],
             azure_actions: &[
                 "Microsoft.ContainerRegistry/registries/write",
                 "Microsoft.ContainerRegistry/registries/read",
             ],
             azure_data_actions: &[],
+            azure_predefined_roles: &[],
         },
         OperationCoverage {
             permission_set_id: "vault/data-write",
             aws_actions: &["ssm:PutParameter", "ssm:DeleteParameter"],
-            gcp_permissions: &["secretmanager.versions.add", "secretmanager.secrets.delete"],
+            gcp_permissions: &["secretmanager.secrets.delete"],
+            gcp_predefined_roles: &["roles/secretmanager.secretVersionAdder"],
             azure_actions: &[],
             azure_data_actions: &[
                 "Microsoft.KeyVault/vaults/secrets/readMetadata/action",
                 "Microsoft.KeyVault/vaults/secrets/setSecret/action",
                 "Microsoft.KeyVault/vaults/secrets/delete",
             ],
+            azure_predefined_roles: &[],
         },
     ];
 
@@ -141,7 +177,22 @@ fn critical_e2e_provider_operations_are_declared() {
             .as_ref()
             .into_iter()
             .flatten()
-            .flat_map(|permission| permission.grant.permissions.as_deref().unwrap_or(&[]))
+            .flat_map(|permission| {
+                permission
+                    .grant
+                    .residual_permissions
+                    .as_deref()
+                    .or(permission.grant.permissions.as_deref())
+                    .unwrap_or(&[])
+            })
+            .collect::<Vec<_>>();
+        let gcp_predefined_roles = permission_set
+            .platforms
+            .gcp
+            .as_ref()
+            .into_iter()
+            .flatten()
+            .flat_map(|permission| permission.grant.predefined_roles.as_deref().unwrap_or(&[]))
             .collect::<Vec<_>>();
         let azure_actions = permission_set
             .platforms
@@ -158,6 +209,14 @@ fn critical_e2e_provider_operations_are_declared() {
             .into_iter()
             .flatten()
             .flat_map(|permission| permission.grant.data_actions.as_deref().unwrap_or(&[]))
+            .collect::<Vec<_>>();
+        let azure_predefined_roles = permission_set
+            .platforms
+            .azure
+            .as_ref()
+            .into_iter()
+            .flatten()
+            .flat_map(|permission| permission.grant.predefined_roles.as_deref().unwrap_or(&[]))
             .collect::<Vec<_>>();
 
         for action in case.aws_actions {
@@ -179,6 +238,14 @@ fn critical_e2e_provider_operations_are_declared() {
                 ));
             }
         }
+        for role in case.gcp_predefined_roles {
+            if !gcp_predefined_roles.iter().any(|existing| existing == role) {
+                failures.push(format!(
+                    "{} is missing GCP predefined role {}",
+                    case.permission_set_id, role
+                ));
+            }
+        }
         for action in case.azure_actions {
             if !azure_actions.iter().any(|existing| existing == action) {
                 failures.push(format!(
@@ -195,6 +262,17 @@ fn critical_e2e_provider_operations_are_declared() {
                 failures.push(format!(
                     "{} is missing Azure dataAction {}",
                     case.permission_set_id, data_action
+                ));
+            }
+        }
+        for role in case.azure_predefined_roles {
+            if !azure_predefined_roles
+                .iter()
+                .any(|existing| existing == role)
+            {
+                failures.push(format!(
+                    "{} is missing Azure predefined role {}",
+                    case.permission_set_id, role
                 ));
             }
         }

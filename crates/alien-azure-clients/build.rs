@@ -83,7 +83,9 @@ fn generate_azure_models() {
     for (src, output_file) in specs.iter() {
         println!("cargo:rerun-if-changed={}", src);
         let file = std::fs::File::open(src).unwrap();
-        let mut spec: openapiv3::OpenAPI = serde_json::from_reader(file).unwrap();
+        let mut spec_json: serde_json::Value = serde_json::from_reader(file).unwrap();
+        remove_zero_min_length(&mut spec_json);
+        let mut spec: openapiv3::OpenAPI = serde_json::from_value(spec_json).unwrap();
         spec.paths = Default::default();
 
         let mut generator = progenitor::Generator::default();
@@ -304,5 +306,24 @@ fn generate_azure_models() {
         let out_file = std::path::Path::new(&out_dir).join(file_name);
 
         std::fs::write(out_file, content).unwrap();
+    }
+}
+
+fn remove_zero_min_length(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(object) => {
+            if object.get("minLength").and_then(|value| value.as_u64()) == Some(0) {
+                object.remove("minLength");
+            }
+            for child in object.values_mut() {
+                remove_zero_min_length(child);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for child in items {
+                remove_zero_min_length(child);
+            }
+        }
+        _ => {}
     }
 }

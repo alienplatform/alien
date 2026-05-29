@@ -2,7 +2,14 @@
 
 use alien_client_core::{ErrorData, Result};
 use alien_core::{ClientConfig, ImpersonationConfig, Platform};
-use alien_error::{AlienError, Context};
+use alien_error::AlienError;
+#[cfg(any(
+    feature = "aws",
+    feature = "gcp",
+    feature = "azure",
+    feature = "kubernetes"
+))]
+use alien_error::Context;
 use async_trait::async_trait;
 use std::collections::HashMap;
 

@@ -60,6 +60,18 @@ export type ManagerDeployment = {
    */
   status: ManagerDeploymentStatus;
   /**
+   * Internal deployment ID
+   */
+  deploymentId: string;
+  /**
+   * Currently deployed private manager release
+   */
+  currentReleaseId?: string | null | undefined;
+  /**
+   * Target private manager release for an in-progress update
+   */
+  desiredReleaseId?: string | null | undefined;
+  /**
    * Latest provision / upgrade / delete error
    */
   error?: any | null | undefined;
@@ -105,6 +117,9 @@ export const ManagerDeployment$inboundSchema: z.ZodType<
 > = z.object({
   platform: z.string(),
   status: ManagerDeploymentStatus$inboundSchema,
+  deploymentId: z.string(),
+  currentReleaseId: z.nullable(z.string()).optional(),
+  desiredReleaseId: z.nullable(z.string()).optional(),
   error: z.nullable(z.any()).optional(),
   resources: z.record(
     z.string(),

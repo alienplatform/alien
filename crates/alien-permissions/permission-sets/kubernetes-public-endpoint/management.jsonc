@@ -1,0 +1,51 @@
+{
+  "id": "kubernetes-public-endpoint/management",
+  "description": "Allows Kubernetes public endpoint controllers to publish application-owned TLS certificates to ACM when the selected route profile requires it",
+  "platforms": {
+    "aws": [
+      {
+        "label": "import-kubernetes-endpoint-certificates",
+        "description": "Import TLS certificates for application-owned Kubernetes public endpoints.",
+        "grant": {
+          "actions": ["acm:ImportCertificate", "acm:AddTagsToCertificate"]
+        },
+        "binding": {
+          "resource": {
+            "resources": ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}",
+                "aws:RequestTag/${managedByTag}": "deployment"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "manage-kubernetes-endpoint-certificates",
+        "description": "Inspect, update, and delete TLS certificates owned by Kubernetes public endpoints.",
+        "grant": {
+          "actions": [
+            "acm:ImportCertificate",
+            "acm:AddTagsToCertificate",
+            "acm:DeleteCertificate",
+            "acm:DescribeCertificate"
+          ]
+        },
+        "binding": {
+          "resource": {
+            "resources": ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:ResourceTag/${managedByTag}": "deployment"
+              }
+            }
+          }
+        }
+      }
+    ]
+  }
+}

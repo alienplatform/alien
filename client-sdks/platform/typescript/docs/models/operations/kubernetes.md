@@ -1,17 +1,17 @@
 # Kubernetes
 
-## Example Usage
+
+## Supported Types
+
+### `operations.PrepareDeploymentStackKubernetes`
 
 ```typescript
-import { Kubernetes } from "@alienplatform/platform-api/models/operations";
-
-let value: Kubernetes = {
-  platform: "kubernetes",
-};
+const value: operations.PrepareDeploymentStackKubernetes = {};
 ```
 
-## Fields
+### `any`
 
-| Field              | Type               | Required           | Description        |
-| ------------------ | ------------------ | ------------------ | ------------------ |
-| `platform`         | *"kubernetes"*     | :heavy_check_mark: | N/A                |
+```typescript
+const value: any = "<value>";
+```
+

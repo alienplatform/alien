@@ -444,6 +444,7 @@ impl CloudProxyTest {
                     session: "cloud-proxy-test".to_string(),
                     state,
                     update_heartbeat: false,
+                    heartbeats: vec![],
                     error: None,
                     suggested_delay_ms: None,
                 },

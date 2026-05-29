@@ -176,10 +176,6 @@ pub struct KubernetesRuntimeConfig {
     pub kubeconfig: String,
     pub kube_context: Option<String>,
     pub namespace_prefix: String,
-    pub ingress_class: Option<String>,
-    pub ingress_annotations: std::collections::BTreeMap<String, String>,
-    pub public_host_suffix: Option<String>,
-    pub tls_secret_name: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -599,13 +595,6 @@ impl TestConfig {
                 .or_else(|| env_opt("ALIEN_TEST_K8S_KUBE_CONTEXT")),
             namespace_prefix: env_opt("ALIEN_TEST_K8S_NAMESPACE_PREFIX")
                 .unwrap_or_else(|| "alien-test".to_string()),
-            ingress_class: env_opt(&format!("ALIEN_TEST_{provider}_INGRESS_CLASS"))
-                .or_else(|| env_opt("ALIEN_TEST_K8S_INGRESS_CLASS")),
-            ingress_annotations: load_kubernetes_ingress_annotations(provider),
-            public_host_suffix: env_opt(&format!("ALIEN_TEST_{provider}_PUBLIC_HOST_SUFFIX"))
-                .or_else(|| env_opt("ALIEN_TEST_K8S_PUBLIC_HOST_SUFFIX")),
-            tls_secret_name: env_opt(&format!("ALIEN_TEST_{provider}_TLS_SECRET_NAME"))
-                .or_else(|| env_opt("ALIEN_TEST_K8S_TLS_SECRET_NAME")),
         })
     }
 
@@ -732,22 +721,6 @@ mod tests {
 
 fn env_opt(name: &str) -> Option<String> {
     env::var(name).ok().filter(|value| !value.trim().is_empty())
-}
-
-fn load_kubernetes_ingress_annotations(
-    provider: &str,
-) -> std::collections::BTreeMap<String, String> {
-    let Some(raw) = env_opt(&format!("ALIEN_TEST_{provider}_INGRESS_ANNOTATIONS"))
-        .or_else(|| env_opt("ALIEN_TEST_K8S_INGRESS_ANNOTATIONS"))
-    else {
-        return std::collections::BTreeMap::new();
-    };
-
-    serde_json::from_str(&raw).unwrap_or_else(|error| {
-        panic!(
-            "ALIEN_TEST_{provider}_INGRESS_ANNOTATIONS must be a JSON object of string annotations: {error}"
-        )
-    })
 }
 
 fn required_env(name: &str) -> anyhow::Result<String> {

@@ -12,7 +12,6 @@ use crate::azure::token_cache::AzureTokenCache;
 use alien_client_core::{ErrorData, Result};
 
 use alien_error::{Context, IntoAlienError};
-use async_trait::async_trait;
 use reqwest::{Client, Method};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

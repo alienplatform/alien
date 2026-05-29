@@ -5,6 +5,7 @@
 
 import * as z from "zod";
 import { KubernetesClusterSettingsSchema } from "./kubernetes-cluster-settings-schema.js";
+import { KubernetesExposureSettingsSchema } from "./kubernetes-exposure-settings-schema.js";
 
 /**
  * @description Kubernetes runtime substrate configuration.\n\nThis controls how setup chooses the cluster backing `Platform::Kubernetes`\ndeployments. When omitted, cloud-backed Kubernetes deployments default to a\nmanaged cluster and generic/on-prem Kubernetes defaults to an external\ncluster.
@@ -12,6 +13,9 @@ import { KubernetesClusterSettingsSchema } from "./kubernetes-cluster-settings-s
 export const KubernetesSettingsSchema = z.object({
     get "cluster"(){
                 return z.union([KubernetesClusterSettingsSchema, z.null()]).optional()
+              },
+get "exposure"(){
+                return z.union([KubernetesExposureSettingsSchema, z.null()]).optional()
               }
     }).describe("Kubernetes runtime substrate configuration.\n\nThis controls how setup chooses the cluster backing `Platform::Kubernetes`\ndeployments. When omitted, cloud-backed Kubernetes deployments default to a\nmanaged cluster and generic/on-prem Kubernetes defaults to an external\ncluster.")
 

@@ -2,18 +2,20 @@ use std::fmt::Debug;
 use tracing::info;
 
 use crate::azure_utils::get_resource_group_name;
-use crate::core::{ResourceController, ResourceControllerContext, ResourceControllerStepResult};
+use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use alien_azure_clients::tables::{
-    AzureTableManagementClient, AzureTableStorageClient, TableManagementApi, TableStorageApi,
-};
+use alien_azure_clients::azure::models::storage::StorageAccount;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    AzureStorageAccountOutputs, Kv, KvOutputs, Resource, ResourceDefinition, ResourceOutputs,
+    AzureStorageAccountOutputs, AzureTableKvHeartbeatData, HeartbeatBackend,
+    HeartbeatCollectionIssue, HeartbeatCollectionIssueReason, HeartbeatIssueSeverity, Kv,
+    KvHeartbeatData, KvHeartbeatStatus, KvOutputs, ObservedHealth, Platform,
+    ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
     ResourceStatus,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
-use alien_macros::{controller, flow_entry, handler, terminal_state};
+use alien_macros::controller;
+use chrono::Utc;
 
 /// Generates the Azure Table Storage table name
 fn get_azure_table_name(prefix: &str, name: &str) -> String {
@@ -191,18 +193,59 @@ impl AzureKvController {
         let management_client = ctx
             .service_provider
             .get_azure_table_management_client(azure_config)?;
+        let storage_outputs = self.storage_account_outputs.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                resource_id: Some(config.id.clone()),
+                message: "Storage account outputs not set in state".to_string(),
+            })
+        })?;
 
         // Heartbeat check: verify table still exists by trying to get ACL
         match management_client
             .get_table_acl(
                 &resource_group_name,
-                &self.storage_account_outputs.as_ref().unwrap().account_name,
+                &storage_outputs.account_name,
                 table_name,
             )
             .await
         {
-            Ok(_) => {
-                // Table exists and is accessible
+            Ok(signed_identifiers) => {
+                let storage_client = ctx
+                    .service_provider
+                    .get_azure_storage_accounts_client(azure_config)?;
+                let (storage_account, storage_account_issue) = match storage_client
+                    .get_storage_account_properties(
+                        &resource_group_name,
+                        &storage_outputs.account_name,
+                    )
+                    .await
+                {
+                    Ok(account) => (Some(account), None),
+                    Err(e) => (
+                        None,
+                        Some(HeartbeatCollectionIssue {
+                            source: "storage-account".to_string(),
+                            reason: HeartbeatCollectionIssueReason::CollectionFailed,
+                            severity: HeartbeatIssueSeverity::Warning,
+                            message: format!(
+                                "Failed to read Azure Storage account metadata for '{}': {}",
+                                storage_outputs.account_name, e
+                            ),
+                        }),
+                    ),
+                };
+
+                emit_azure_table_kv_heartbeat(
+                    ctx,
+                    &config.id,
+                    table_name,
+                    storage_outputs,
+                    &resource_group_name,
+                    signed_identifiers.len(),
+                    storage_account,
+                    storage_account_issue,
+                );
+
                 Ok(HandlerAction::Continue {
                     state: Ready,
                     suggested_delay: Some(std::time::Duration::from_secs(30)),
@@ -394,4 +437,84 @@ impl AzureKvController {
             _internal_stay_count: None,
         }
     }
+}
+
+fn emit_azure_table_kv_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    table_name: &str,
+    storage_outputs: &AzureStorageAccountOutputs,
+    resource_group_name: &str,
+    signed_identifier_count: usize,
+    storage_account: Option<StorageAccount>,
+    storage_account_issue: Option<HeartbeatCollectionIssue>,
+) {
+    let collection_issues = storage_account_issue.into_iter().collect::<Vec<_>>();
+    let partial = !collection_issues.is_empty();
+
+    let (
+        storage_account_resource_id,
+        storage_account_location,
+        storage_account_kind,
+        storage_account_provisioning_state,
+        storage_account_primary_status,
+    ) = storage_account
+        .map(|account| {
+            let properties = account.properties;
+            (
+                account.id,
+                Some(account.location),
+                account.kind.map(|kind| format!("{kind:?}")),
+                properties
+                    .as_ref()
+                    .and_then(|properties| properties.provisioning_state.as_ref())
+                    .map(|state| format!("{state:?}")),
+                properties
+                    .and_then(|properties| properties.status_of_primary)
+                    .map(|status| format!("{status:?}")),
+            )
+        })
+        .unwrap_or((None, None, None, None, None));
+
+    let health = if storage_account_primary_status
+        .as_deref()
+        .map(|status| status.to_ascii_lowercase().contains("unavailable"))
+        .unwrap_or(false)
+    {
+        ObservedHealth::Degraded
+    } else {
+        ObservedHealth::Healthy
+    };
+
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: Kv::RESOURCE_TYPE,
+        controller_platform: Platform::Azure,
+        backend: HeartbeatBackend::Azure,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::Kv(KvHeartbeatData::AzureTable(AzureTableKvHeartbeatData {
+            status: KvHeartbeatStatus {
+                health,
+                lifecycle: ProviderLifecycleState::Running,
+                message: Some("Azure Table exists and is reachable via management API".to_string()),
+                stale: false,
+                partial,
+                collection_issues,
+            },
+            table_name: table_name.to_string(),
+            storage_account_name: storage_outputs.account_name.clone(),
+            resource_group: Some(resource_group_name.to_string()),
+            endpoint: Some(storage_outputs.primary_table_endpoint.clone()),
+            storage_account_resource_id,
+            storage_account_location,
+            storage_account_kind,
+            storage_account_provisioning_state,
+            storage_account_primary_status,
+            table_exists: true,
+            signed_identifier_count: u32::try_from(signed_identifier_count).ok(),
+            events: vec![],
+        })),
+        raw: vec![],
+    });
 }

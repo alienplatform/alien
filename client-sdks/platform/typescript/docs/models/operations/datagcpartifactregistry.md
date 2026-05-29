@@ -1,0 +1,63 @@
+# DataGcpArtifactRegistry
+
+## Example Usage
+
+```typescript
+import { DataGcpArtifactRegistry } from "@alienplatform/platform-api/models/operations";
+
+let value: DataGcpArtifactRegistry = {
+  cleanupPolicyCount: 150101,
+  events: [],
+  iamBindingCount: 412960,
+  iamPolicyEtagPresent: true,
+  iamRoles: [],
+  kmsKeyNamePresent: false,
+  labelCount: 394471,
+  location: "<value>",
+  projectId: "<id>",
+  repositoryId: "<id>",
+  status: {
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "collection-failed",
+        severity: "warning",
+        source: "<value>",
+      },
+    ],
+    health: "degraded",
+    lifecycle: "running",
+    partial: true,
+    stale: false,
+  },
+  backend: "gcpArtifactRegistry",
+};
+```
+
+## Fields
+
+| Field                                                                                                    | Type                                                                                                     | Required                                                                                                 | Description                                                                                              |
+| -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `cleanupPolicyCount`                                                                                     | *number*                                                                                                 | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
+| `cleanupPolicyDryRun`                                                                                    | *boolean*                                                                                                | :heavy_minus_sign:                                                                                       | N/A                                                                                                      |
+| `createTime`                                                                                             | *string*                                                                                                 | :heavy_minus_sign:                                                                                       | N/A                                                                                                      |
+| `description`                                                                                            | *string*                                                                                                 | :heavy_minus_sign:                                                                                       | N/A                                                                                                      |
+| `events`                                                                                                 | [operations.GetRawResourceHeartbeatEvent47](../../models/operations/getrawresourceheartbeatevent47.md)[] | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
+| `format`                                                                                                 | *string*                                                                                                 | :heavy_minus_sign:                                                                                       | N/A                                                                                                      |
+| `iamBindingCount`                                                                                        | *number*                                                                                                 | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
+| `iamPolicyEtagPresent`                                                                                   | *boolean*                                                                                                | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
+| `iamRoles`                                                                                               | *string*[]                                                                                               | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
+| `kmsKeyNamePresent`                                                                                      | *boolean*                                                                                                | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
+| `labelCount`                                                                                             | *number*                                                                                                 | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
+| `location`                                                                                               | *string*                                                                                                 | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
+| `mode`                                                                                                   | *string*                                                                                                 | :heavy_minus_sign:                                                                                       | N/A                                                                                                      |
+| `name`                                                                                                   | *string*                                                                                                 | :heavy_minus_sign:                                                                                       | N/A                                                                                                      |
+| `projectId`                                                                                              | *string*                                                                                                 | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
+| `pullServiceAccountEmail`                                                                                | *string*                                                                                                 | :heavy_minus_sign:                                                                                       | N/A                                                                                                      |
+| `pushServiceAccountEmail`                                                                                | *string*                                                                                                 | :heavy_minus_sign:                                                                                       | N/A                                                                                                      |
+| `repositoryId`                                                                                           | *string*                                                                                                 | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
+| `satisfiesPzs`                                                                                           | *boolean*                                                                                                | :heavy_minus_sign:                                                                                       | N/A                                                                                                      |
+| `sizeBytes`                                                                                              | *string*                                                                                                 | :heavy_minus_sign:                                                                                       | N/A                                                                                                      |
+| `status`                                                                                                 | [operations.DataStatus47](../../models/operations/datastatus47.md)                                       | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
+| `updateTime`                                                                                             | *string*                                                                                                 | :heavy_minus_sign:                                                                                       | N/A                                                                                                      |
+| `backend`                                                                                                | *"gcpArtifactRegistry"*                                                                                  | :heavy_check_mark:                                                                                       | N/A                                                                                                      |

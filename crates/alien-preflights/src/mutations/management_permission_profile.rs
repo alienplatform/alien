@@ -2,8 +2,10 @@ use crate::error::Result;
 use crate::StackMutation;
 use alien_core::permissions::{ManagementPermissions, PermissionProfile, PermissionSetReference};
 use alien_core::{
-    ownership_policy_for_resource_type, DeploymentConfig, KubernetesCluster,
-    KubernetesHeartbeatMode, Platform, ResourceLifecycle, Stack, StackState, Worker,
+    ownership_policy_for_resource_type, Container, DeploymentConfig, ExposeProtocol, Ingress,
+    KubernetesCertificateMode, KubernetesCluster, KubernetesExposureSettings,
+    KubernetesHeartbeatMode, KubernetesIngressRouteProfile, KubernetesRouteProfile,
+    KubernetesRouteProviderOptions, Platform, ResourceLifecycle, Stack, StackState, Worker,
 };
 use alien_permissions::get_permission_set;
 use indexmap::IndexMap;
@@ -164,6 +166,16 @@ fn generate_auto_management_profile(
                 }
             }
         }
+
+        if platform == Platform::Kubernetes
+            && kubernetes_exposure_needs_acm_import(config)
+            && resource_needs_kubernetes_public_endpoint(resource_entry)
+        {
+            resource_permission_set_ids
+                .entry(resource_id.clone())
+                .or_default()
+                .insert("kubernetes-public-endpoint/management".to_string());
+        }
     }
 
     // Only create management permissions if there are resources that need management
@@ -215,6 +227,44 @@ fn generate_auto_management_profile(
     Ok(Some(PermissionProfile(management_permissions)))
 }
 
+fn kubernetes_exposure_needs_acm_import(config: &DeploymentConfig) -> bool {
+    let Some(KubernetesExposureSettings::Generated { route, certificate }) = config
+        .stack_settings
+        .kubernetes
+        .as_ref()
+        .and_then(|settings| settings.exposure.as_ref())
+    else {
+        return false;
+    };
+
+    matches!(
+        certificate,
+        KubernetesCertificateMode::ManagedAcmImport { .. }
+    ) && matches!(
+        route,
+        KubernetesRouteProfile::Ingress(KubernetesIngressRouteProfile {
+            provider: Some(KubernetesRouteProviderOptions::AwsAlb { .. }),
+            ..
+        })
+    )
+}
+
+fn resource_needs_kubernetes_public_endpoint(resource_entry: &alien_core::ResourceEntry) -> bool {
+    resource_entry
+        .config
+        .downcast_ref::<Worker>()
+        .is_some_and(|worker| worker.ingress == Ingress::Public)
+        || resource_entry
+            .config
+            .downcast_ref::<Container>()
+            .is_some_and(|container| {
+                container
+                    .ports
+                    .iter()
+                    .any(|port| port.expose == Some(ExposeProtocol::Http))
+            })
+}
+
 fn resource_needs_cloud_heartbeat_permission(
     resource_type: &str,
     resource_entry: &alien_core::ResourceEntry,
@@ -259,10 +309,12 @@ mod tests {
     use alien_core::permissions::{ManagementPermissions, PermissionsConfig};
     use alien_core::{
         ArtifactRegistry, CapacityGroup, ComputeCluster, Container, ContainerCode, DeploymentModel,
-        EnvironmentVariablesSnapshot, ExternalBindings, HeartbeatsMode, KubernetesCluster,
-        KubernetesClusterOwnership, KubernetesClusterProvider, KubernetesHeartbeatMode,
-        ResourceEntry, ResourceLifecycle, ResourceSpec, StackSettings, StackState, Storage,
-        TelemetryMode, Worker, WorkerCode,
+        EnvironmentVariablesSnapshot, ExternalBindings, HeartbeatsMode, Ingress,
+        KubernetesCertificateMode, KubernetesCluster, KubernetesClusterOwnership,
+        KubernetesClusterProvider, KubernetesExposureSettings, KubernetesHeartbeatMode,
+        KubernetesIngressRouteProfile, KubernetesRouteProfile, KubernetesRouteProviderOptions,
+        KubernetesSettings, ResourceEntry, ResourceLifecycle, ResourceSpec, StackSettings,
+        StackState, Storage, TelemetryMode, Worker, WorkerCode,
     };
 
     fn empty_env_snapshot() -> EnvironmentVariablesSnapshot {
@@ -271,6 +323,52 @@ mod tests {
             hash: String::new(),
             created_at: "2024-01-01T00:00:00Z".to_string(),
         }
+    }
+
+    fn kubernetes_generated_aws_alb_acm_settings() -> StackSettings {
+        StackSettings {
+            kubernetes: Some(KubernetesSettings {
+                cluster: None,
+                exposure: Some(KubernetesExposureSettings::Generated {
+                    route: aws_alb_route_profile(),
+                    certificate: KubernetesCertificateMode::ManagedAcmImport {
+                        region: None,
+                        tags: Default::default(),
+                    },
+                }),
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn kubernetes_custom_aws_alb_byo_acm_settings() -> StackSettings {
+        StackSettings {
+            kubernetes: Some(KubernetesSettings {
+                cluster: None,
+                exposure: Some(KubernetesExposureSettings::Custom {
+                    domain: "api.example.com".to_string(),
+                    route: aws_alb_route_profile(),
+                    certificate: KubernetesCertificateMode::AwsAcmArn {
+                        certificate_arn: "arn:aws:acm:us-east-1:123456789012:certificate/customer"
+                            .to_string(),
+                    },
+                }),
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn aws_alb_route_profile() -> KubernetesRouteProfile {
+        KubernetesRouteProfile::Ingress(KubernetesIngressRouteProfile {
+            ingress_class_name: "alb".to_string(),
+            provider: Some(KubernetesRouteProviderOptions::AwsAlb {
+                scheme: "internet-facing".to_string(),
+                target_type: "ip".to_string(),
+                ip_address_type: None,
+                subnet_ids: Vec::new(),
+            }),
+            ..Default::default()
+        })
     }
 
     #[tokio::test]
@@ -417,6 +515,83 @@ mod tests {
         assert!(
             result_stack.management().profile().is_none(),
             "API-only Kubernetes heartbeat should not author cloud IAM permissions"
+        );
+    }
+
+    #[tokio::test]
+    async fn kubernetes_generated_aws_alb_public_worker_gets_acm_permission() {
+        let worker = Worker::new("api".to_string())
+            .code(WorkerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .permissions("test".to_string())
+            .ingress(Ingress::Public)
+            .build();
+
+        let stack = Stack::new("test-stack".to_string())
+            .add(worker, ResourceLifecycle::Live)
+            .management(ManagementPermissions::Auto)
+            .build();
+        let stack_state = StackState::new(Platform::Kubernetes);
+        let config = DeploymentConfig::builder()
+            .stack_settings(kubernetes_generated_aws_alb_acm_settings())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+
+        let result_stack = ManagementPermissionProfileMutation
+            .mutate(stack, &stack_state, &config)
+            .await
+            .unwrap();
+
+        let ManagementPermissions::Extend(profile) = result_stack.management() else {
+            panic!("Expected Extend management permissions");
+        };
+        let permission_names: Vec<String> = profile
+            .0
+            .get("api")
+            .unwrap()
+            .iter()
+            .map(|perm_ref| perm_ref.id().to_string())
+            .collect();
+
+        assert!(permission_names.contains(&"kubernetes-public-endpoint/management".to_string()));
+    }
+
+    #[tokio::test]
+    async fn kubernetes_byo_acm_public_worker_gets_no_managed_acm_permission() {
+        let worker = Worker::new("api".to_string())
+            .code(WorkerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .permissions("test".to_string())
+            .ingress(Ingress::Public)
+            .build();
+
+        let stack = Stack::new("test-stack".to_string())
+            .add(worker, ResourceLifecycle::Live)
+            .management(ManagementPermissions::Auto)
+            .build();
+        let stack_state = StackState::new(Platform::Kubernetes);
+        let config = DeploymentConfig::builder()
+            .stack_settings(kubernetes_custom_aws_alb_byo_acm_settings())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+
+        let result_stack = ManagementPermissionProfileMutation
+            .mutate(stack, &stack_state, &config)
+            .await
+            .unwrap();
+
+        let ManagementPermissions::Extend(profile) = result_stack.management() else {
+            panic!("Expected Extend management permissions");
+        };
+        assert!(
+            !profile.0.contains_key("api"),
+            "BYO ACM should not add Kubernetes managed ACM permissions"
         );
     }
 

@@ -261,7 +261,6 @@ use alien_error::{AlienError, Context};
 use alien_gcp_clients::{GcpClientConfig, GcpClientConfigExt as _};
 use alien_preflights::runner::PreflightRunner;
 use indexmap::IndexMap;
-use serde_json;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -384,6 +383,7 @@ impl SingleControllerExecutor {
                 .manager_url("https://test-manager.alien.dev".to_string())
                 .deployment_token("test-deployment-token".to_string())
                 .build(),
+            heartbeat_collector: Default::default(),
         };
 
         let step_result = self.controller.step(&context).await?;

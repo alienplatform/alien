@@ -4,18 +4,21 @@ use tracing::info;
 use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
 use alien_core::{
-    permissions::PermissionSetReference, PermissionSet, ResourceOutputs, ResourceStatus,
-    ServiceAccount, ServiceAccountOutputs,
+    permissions::PermissionSetReference, GcpServiceAccountHeartbeatData, HeartbeatBackend,
+    ObservedHealth, PermissionSet, Platform, ProviderLifecycleState, ResourceHeartbeat,
+    ResourceHeartbeatData, ResourceOutputs, ResourceStatus, ServiceAccount,
+    ServiceAccountHeartbeatData, ServiceAccountHeartbeatStatus, ServiceAccountOutputs,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_gcp_clients::iam::{
     Binding, CreateServiceAccountRequest, IamPolicy, ServiceAccount as GcpServiceAccount,
 };
-use alien_macros::{controller, flow_entry, handler, terminal_state};
+use alien_macros::controller;
 use alien_permissions::{
     generators::{GcpBindingTargetScope, GcpRuntimePermissionsGenerator},
     BindingTarget, PermissionContext,
 };
+use chrono::Utc;
 
 /// Generates the GCP service account ID from the ServiceAccount name.
 fn get_gcp_service_account_id(prefix: &str, name: &str) -> String {
@@ -185,6 +188,41 @@ impl GcpServiceAccountController {
                     }));
                 }
             }
+
+            let service_account_policy = client
+                .get_service_account_iam_policy(service_account_email.clone())
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to get service account IAM policy during heartbeat check"
+                        .to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?;
+
+            let rm_client = ctx
+                .service_provider
+                .get_gcp_resource_manager_client(gcp_config)?;
+            let project_policy = rm_client
+                .get_project_iam_policy(
+                    gcp_config.project_id.clone(),
+                    Some(alien_gcp_clients::resource_manager::GetPolicyOptions {
+                        requested_policy_version: Some(3),
+                    }),
+                )
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to get project IAM policy during service account heartbeat"
+                        .to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?;
+
+            emit_gcp_service_account_heartbeat(
+                ctx,
+                &config.id,
+                service_account_email,
+                sa,
+                service_account_policy,
+                project_policy,
+            );
         }
 
         Ok(HandlerAction::Continue {
@@ -698,6 +736,87 @@ impl GcpServiceAccountController {
             _internal_stay_count: None,
         }
     }
+}
+
+fn emit_gcp_service_account_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    service_account_email: &str,
+    service_account: GcpServiceAccount,
+    service_account_policy: IamPolicy,
+    project_policy: IamPolicy,
+) {
+    let project_member = format!("serviceAccount:{service_account_email}");
+    let project_roles = project_policy
+        .bindings
+        .iter()
+        .filter(|binding| {
+            binding
+                .members
+                .iter()
+                .any(|member| member == &project_member)
+        })
+        .map(|binding| binding.role.clone())
+        .collect::<Vec<_>>();
+    let service_account_roles = service_account_policy
+        .bindings
+        .iter()
+        .map(|binding| binding.role.clone())
+        .collect::<Vec<_>>();
+    let disabled = service_account.disabled;
+    let health = if disabled == Some(true) {
+        ObservedHealth::Unhealthy
+    } else {
+        ObservedHealth::Healthy
+    };
+    let lifecycle = if disabled == Some(true) {
+        ProviderLifecycleState::Stopped
+    } else {
+        ProviderLifecycleState::Running
+    };
+    let message = if disabled == Some(true) {
+        format!("GCP service account '{service_account_email}' is disabled")
+    } else {
+        format!("GCP service account '{service_account_email}' is reachable")
+    };
+
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: ServiceAccount::RESOURCE_TYPE,
+        controller_platform: Platform::Gcp,
+        backend: HeartbeatBackend::Gcp,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::ServiceAccount(
+            ServiceAccountHeartbeatData::GcpServiceAccount(GcpServiceAccountHeartbeatData {
+                status: ServiceAccountHeartbeatStatus {
+                    health,
+                    lifecycle,
+                    message: Some(message),
+                    stale: false,
+                    partial: false,
+                    collection_issues: vec![],
+                },
+                name: service_account.name,
+                project_id: service_account.project_id,
+                unique_id: service_account.unique_id,
+                email: service_account
+                    .email
+                    .unwrap_or_else(|| service_account_email.to_string()),
+                display_name: service_account.display_name,
+                description: service_account.description,
+                oauth2_client_id: service_account.oauth2_client_id,
+                disabled,
+                etag: service_account.etag,
+                project_binding_count: project_roles.len() as u32,
+                project_roles,
+                service_account_binding_count: service_account_roles.len() as u32,
+                service_account_roles,
+                events: vec![],
+            }),
+        ),
+        raw: vec![],
+    });
 }
 
 #[cfg(test)]

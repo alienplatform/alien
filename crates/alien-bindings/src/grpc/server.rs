@@ -98,7 +98,7 @@ pub async fn run_grpc_server(
         );
     }
 
-    let wait_until_server = Arc::new(WaitUntilGrpcServer::new(provider.clone()));
+    let wait_until_server = Arc::new(WaitUntilGrpcServer::new());
     let wait_until_server_handle = wait_until_server.clone();
 
     let control_server = Arc::new(ControlGrpcServer::new());

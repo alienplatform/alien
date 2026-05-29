@@ -13,7 +13,7 @@ use alien_error::{AlienError, Context, IntoAlienError};
 use alien_platform_api::types::{
     CreateManagerWorkspace, DeleteManagerWorkspace, GetManagerWorkspace,
     ListManagerEventsWorkspace, ListManagersWorkspace, ManagerId, NewManagerRequest,
-    NewManagerRequestPlatform, NewManagerRequestTargetsItem,
+    NewManagerRequestRegion, PrivateManagerCloud,
 };
 use alien_platform_api::SdkResultExt as _;
 use clap::{Parser, Subcommand};
@@ -83,13 +83,13 @@ pub enum ManagerCmd {
         #[arg(long)]
         name: String,
 
-        /// Platform to deploy the manager on (aws, gcp, or azure)
+        /// Cloud to deploy the manager on (aws, gcp, or azure)
         #[arg(long)]
-        platform: String,
+        cloud: String,
 
-        /// Target platforms this manager can manage (comma-separated: aws,gcp,azure)
-        #[arg(long, value_delimiter = ',')]
-        targets: Vec<String>,
+        /// Cloud region for the manager
+        #[arg(long)]
+        region: String,
     },
     /// Show manager status and details
     Status {
@@ -139,18 +139,11 @@ pub async fn manager_task(args: ManagerArgs, ctx: ExecutionMode) -> Result<()> {
     match args.cmd {
         ManagerCmd::Deploy {
             name,
-            platform,
-            targets,
+            cloud,
+            region,
         } => {
-            deploy_manager_task(
-                &client,
-                &workspace_name,
-                &name,
-                &platform,
-                targets,
-                args.json,
-            )
-            .await?;
+            deploy_manager_task(&client, &workspace_name, &name, &cloud, &region, args.json)
+                .await?;
         }
         ManagerCmd::Status { id } => {
             status_manager_task(&client, &workspace_name, &id, args.json).await?;
@@ -169,33 +162,16 @@ pub async fn manager_task(args: ManagerArgs, ctx: ExecutionMode) -> Result<()> {
     Ok(())
 }
 
-fn parse_manager_platform(platform_str: &str) -> Result<NewManagerRequestPlatform> {
-    match platform_str {
-        "aws" => Ok(NewManagerRequestPlatform::Aws),
-        "gcp" => Ok(NewManagerRequestPlatform::Gcp),
-        "azure" => Ok(NewManagerRequestPlatform::Azure),
+fn parse_manager_cloud(cloud_str: &str) -> Result<PrivateManagerCloud> {
+    match cloud_str {
+        "aws" => Ok(PrivateManagerCloud::Aws),
+        "gcp" => Ok(PrivateManagerCloud::Gcp),
+        "azure" => Ok(PrivateManagerCloud::Azure),
         _ => Err(AlienError::new(ErrorData::ValidationError {
-            field: "platform".to_string(),
+            field: "cloud".to_string(),
             message: format!(
-                "Unknown platform: {}. Managers can be deployed on: aws, gcp, azure",
-                platform_str
-            ),
-        })),
-    }
-}
-
-fn parse_target_platform(target_str: &str) -> Result<NewManagerRequestTargetsItem> {
-    match target_str {
-        "aws" => Ok(NewManagerRequestTargetsItem::Aws),
-        "gcp" => Ok(NewManagerRequestTargetsItem::Gcp),
-        "azure" => Ok(NewManagerRequestTargetsItem::Azure),
-        "kubernetes" | "k8s" => Ok(NewManagerRequestTargetsItem::Kubernetes),
-        "local" => Ok(NewManagerRequestTargetsItem::Local),
-        _ => Err(AlienError::new(ErrorData::ValidationError {
-            field: "targets".to_string(),
-            message: format!(
-                "Unknown target platform: {}. Valid values: aws, gcp, azure",
-                target_str
+                "Unknown cloud: {}. Managers can be deployed on: aws, gcp, azure",
+                cloud_str
             ),
         })),
     }
@@ -205,29 +181,22 @@ async fn deploy_manager_task(
     client: &alien_platform_api::Client,
     workspace: &str,
     name: &str,
-    platform_str: &str,
-    target_strs: Vec<String>,
+    cloud_str: &str,
+    region_str: &str,
     json: bool,
 ) -> Result<()> {
-    let platform = parse_manager_platform(platform_str)?;
-
-    let targets: Vec<NewManagerRequestTargetsItem> = target_strs
-        .iter()
-        .map(|t| parse_target_platform(t))
-        .collect::<Result<Vec<_>>>()?;
-
-    if targets.is_empty() {
-        return Err(AlienError::new(ErrorData::ValidationError {
-            field: "targets".to_string(),
-            message: "At least one target platform is required (e.g. --targets aws,gcp)"
-                .to_string(),
-        }));
-    }
+    let cloud = parse_manager_cloud(cloud_str)?;
+    let region = NewManagerRequestRegion::try_from(region_str)
+        .into_alien_error()
+        .context(ErrorData::ValidationError {
+            field: "region".to_string(),
+            message: "manager region format is invalid".to_string(),
+        })?;
 
     let request = NewManagerRequest {
         name: name.to_string(),
-        platform,
-        targets,
+        cloud,
+        region,
         otlp_config: None,
     };
 
@@ -252,21 +221,17 @@ async fn deploy_manager_task(
 
     let manager = response.into_inner();
     let summary = ManagerSummary {
-        id: manager.id.as_str().to_string(),
-        name: manager.name.clone(),
-        status: manager.status.to_string(),
-        targets: manager
-            .targets
-            .iter()
-            .map(|target| target.to_string())
-            .collect(),
+        id: manager.manager_id.as_str().to_string(),
+        name: name.to_string(),
+        status: manager.setup_status.to_string(),
+        targets: vec![cloud.to_string()],
         managed_deployment_count: None,
         created_at: None,
         url: None,
         version: None,
         last_heartbeat_at: None,
         deployment_link: Some(manager.deployment_link.to_string()),
-        token: Some(manager.token.to_string()),
+        token: Some(manager.setup_token),
         is_system: None,
     };
 
@@ -277,7 +242,8 @@ async fn deploy_manager_task(
     println!("Manager created successfully!");
     println!("  ID: {}", summary.id);
     println!("  Name: {}", summary.name);
-    println!("  Platform: {}", platform_str);
+    println!("  Cloud: {}", cloud_str);
+    println!("  Region: {}", region_str);
     println!("  Targets: {}", summary.targets.join(", "));
     println!("  Status: {}", summary.status);
     println!();

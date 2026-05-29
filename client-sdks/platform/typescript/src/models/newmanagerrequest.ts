@@ -3,43 +3,10 @@
  */
 
 import * as z from "zod/v4";
-import { ClosedEnum } from "../types/enums.js";
-
-/**
- * Platform where the Manager will be deployed (must be aws, gcp, or azure)
- */
-export const NewManagerRequestPlatform = {
-  Aws: "aws",
-  Gcp: "gcp",
-  Azure: "azure",
-  Kubernetes: "kubernetes",
-  Local: "local",
-  Test: "test",
-} as const;
-/**
- * Platform where the Manager will be deployed (must be aws, gcp, or azure)
- */
-export type NewManagerRequestPlatform = ClosedEnum<
-  typeof NewManagerRequestPlatform
->;
-
-/**
- * Represents the target cloud platform.
- */
-export const NewManagerRequestTarget = {
-  Aws: "aws",
-  Gcp: "gcp",
-  Azure: "azure",
-  Kubernetes: "kubernetes",
-  Local: "local",
-  Test: "test",
-} as const;
-/**
- * Represents the target cloud platform.
- */
-export type NewManagerRequestTarget = ClosedEnum<
-  typeof NewManagerRequestTarget
->;
+import {
+  PrivateManagerCloud,
+  PrivateManagerCloud$outboundSchema,
+} from "./privatemanagercloud.js";
 
 /**
  * Optional external OTLP config for forwarding logs to Axiom, Datadog, etc. Falls back to built-in DeepStore when not set.
@@ -58,28 +25,18 @@ export type OtlpConfig = {
 export type NewManagerRequest = {
   name: string;
   /**
-   * Platform where the Manager will be deployed (must be aws, gcp, or azure)
+   * Cloud where the private manager will be deployed.
    */
-  platform: NewManagerRequestPlatform;
+  cloud: PrivateManagerCloud;
   /**
-   * Platforms this Manager can manage (can include local, kubernetes, etc.)
+   * Cloud region for the manager.
    */
-  targets: Array<NewManagerRequestTarget>;
+  region: string;
   /**
    * Optional external OTLP config for forwarding logs to Axiom, Datadog, etc. Falls back to built-in DeepStore when not set.
    */
   otlpConfig?: OtlpConfig | undefined;
 };
-
-/** @internal */
-export const NewManagerRequestPlatform$outboundSchema: z.ZodEnum<
-  typeof NewManagerRequestPlatform
-> = z.enum(NewManagerRequestPlatform);
-
-/** @internal */
-export const NewManagerRequestTarget$outboundSchema: z.ZodEnum<
-  typeof NewManagerRequestTarget
-> = z.enum(NewManagerRequestTarget);
 
 /** @internal */
 export type OtlpConfig$Outbound = {
@@ -103,8 +60,8 @@ export function otlpConfigToJSON(otlpConfig: OtlpConfig): string {
 /** @internal */
 export type NewManagerRequest$Outbound = {
   name: string;
-  platform: string;
-  targets: Array<string>;
+  cloud: string;
+  region: string;
   otlpConfig?: OtlpConfig$Outbound | undefined;
 };
 
@@ -114,8 +71,8 @@ export const NewManagerRequest$outboundSchema: z.ZodType<
   NewManagerRequest
 > = z.object({
   name: z.string(),
-  platform: NewManagerRequestPlatform$outboundSchema,
-  targets: z.array(NewManagerRequestTarget$outboundSchema),
+  cloud: PrivateManagerCloud$outboundSchema,
+  region: z.string(),
   otlpConfig: z.lazy(() => OtlpConfig$outboundSchema).optional(),
 });
 

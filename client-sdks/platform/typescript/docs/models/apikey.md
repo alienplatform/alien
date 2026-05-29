@@ -23,10 +23,26 @@ let value: APIKey = {
   expiresAt: new Date("2026-04-29T17:55:39.547Z"),
   lastUsedAt: new Date("2026-08-02T13:34:20.382Z"),
   revokedAt: new Date("2024-02-27T10:48:41.580Z"),
+  deploymentSetupConfig: {
+    metadata: {
+      "key": "<value>",
+    },
+    policy: {
+      allowedPlatforms: [],
+      allowedSetupMethods: [
+        "google-oauth",
+      ],
+      release: {
+        mode: "fixed",
+        releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+      },
+    },
+    environmentVariables: [],
+  },
   createdByUser: {
     id: "<id>",
-    email: "Estell68@gmail.com",
-    image: "https://loremflickr.com/3629/3834?lock=7022967937577458",
+    email: "Rhianna90@hotmail.com",
+    image: "https://picsum.photos/seed/UEmR2Mt/3119/3794",
   },
 };
 ```
@@ -50,4 +66,5 @@ let value: APIKey = {
 | `expiresAt`                                                                                   | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
 | `lastUsedAt`                                                                                  | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
 | `revokedAt`                                                                                   | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
+| `deploymentSetupConfig`                                                                       | [models.APIKeyDeploymentSetupConfig](../models/apikeydeploymentsetupconfig.md)                | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
 | `createdByUser`                                                                               | [models.CreatedByUser](../models/createdbyuser.md)                                            | :heavy_check_mark:                                                                            | User information associated with the API key                                                  |                                                                                               |
