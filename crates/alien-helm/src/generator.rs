@@ -367,7 +367,7 @@ runtime:
     );
 
     append_service_accounts(&mut yaml, analysis);
-    yaml.push_str("\nstackSettings: null\n\ninfrastructure: null\n\nbasePlatform: null\nserviceAccountPrefix: \"\"\nmanagerServiceAccount:\n  annotations: {}\n  labels: {}\n\n# Agent self-update (ALIEN-59). When the agent receives agent_target.helm\n# on /v1/sync it creates a short-lived Helm-runner Job that runs\n# `helm upgrade --atomic`. The Job runs as `alien-agent-upgrader`; we keep\n# the SA optional so charts that don't want self-update can disable it.\nupgrader:\n  enabled: true\n");
+    yaml.push_str("\nstackSettings: null\n\ninfrastructure: null\n\nbasePlatform: null\nserviceAccountPrefix: \"\"\nmanagerServiceAccount:\n  annotations: {}\n  labels: {}\n\n# Agent self-update. When the agent receives agent_target.helm on /v1/sync\n# it creates a short-lived Helm-runner Job that runs `helm upgrade --atomic`.\n# The Job runs as `alien-agent-upgrader`; we keep the SA optional so charts\n# that don't want self-update can disable it.\nupgrader:\n  enabled: true\n");
     append_services(&mut yaml, analysis);
     yaml.push_str("\npublicUrls: {}\n");
 

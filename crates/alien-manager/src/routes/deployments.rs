@@ -80,7 +80,7 @@ pub struct DeploymentResponse {
     pub error: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deployment_group: Option<DeploymentGroupMinimal>,
-    // ALIEN-59 agent self-update inventory — populated by the sync handler
+    // Agent self-update inventory — populated by the sync handler
     // on every agent /v1/sync. NULL until the agent has first reported.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_version: Option<String>,
@@ -228,7 +228,7 @@ fn record_to_response(
         updated_at: r.updated_at.map(|u| u.to_rfc3339()),
         error: r.error.clone(),
         deployment_group,
-        // ALIEN-59: surface the agent self-update inventory.
+        // Surface the agent self-update inventory.
         agent_version: r.agent_version.clone(),
         agent_os: r.agent_os.clone(),
         agent_arch: r.agent_arch.clone(),

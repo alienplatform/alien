@@ -860,7 +860,7 @@ async fn agent_sync(
             }
         },
         commands_url: Some(state.config.commands_base_url()),
-        // ALIEN-59: the manager is the single source of truth for the agent's
+        // The manager is the single source of truth for the agent's
         // self-update target. The OSS manager doesn't drive agent upgrades yet
         // (no signing key / fleet rollout policy), so this stays None — the
         // wire field exists so newer agents can act on it once enabled.

@@ -65,7 +65,7 @@ pub struct DeploymentRecord {
     pub created_at: DateTime<Utc>,
     pub updated_at: Option<DateTime<Utc>>,
     pub error: Option<serde_json::Value>,
-    // Agent self-update inventory (ALIEN-59), written by the sync handler.
+    // Agent self-update inventory, written by the sync handler.
     // All four are NULL until the agent has actually reported in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_version: Option<String>,

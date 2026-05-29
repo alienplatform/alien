@@ -63,7 +63,7 @@ impl SqliteDeploymentStore {
         Deployments::Error,
         Deployments::WorkspaceId,
         Deployments::ProjectId,
-        // ALIEN-59 agent self-update inventory:
+        // Agent self-update inventory:
         Deployments::AgentVersion,
         Deployments::AgentOs,
         Deployments::AgentArch,
@@ -136,7 +136,7 @@ impl SqliteDeploymentStore {
             project_id: p
                 .optional_string(26, "project_id")?
                 .unwrap_or_else(|| "default".to_string()),
-            // ALIEN-59: indices match DEPLOYMENT_COLUMNS order.
+            // Agent self-update inventory; indices match DEPLOYMENT_COLUMNS order.
             agent_version: p.optional_string(27, "agent_version")?,
             agent_os: p.optional_string(28, "agent_os")?,
             agent_arch: p.optional_string(29, "agent_arch")?,
@@ -289,7 +289,7 @@ impl DeploymentStore for SqliteDeploymentStore {
             created_at: now,
             updated_at: None,
             error: None,
-            // ALIEN-59 agent self-update inventory — NULL until the agent's first sync.
+            // Agent self-update inventory — NULL until the agent's first sync.
             agent_version: None,
             agent_os: None,
             agent_arch: None,
@@ -451,7 +451,7 @@ impl DeploymentStore for SqliteDeploymentStore {
             created_at: now,
             updated_at: None,
             error: None,
-            // ALIEN-59 agent self-update inventory — NULL until the agent's first sync.
+            // Agent self-update inventory — NULL until the agent's first sync.
             agent_version: None,
             agent_os: None,
             agent_arch: None,

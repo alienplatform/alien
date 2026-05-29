@@ -227,7 +227,7 @@ mod tests {
         assert!(serde_json::from_str::<SyncRequest>(json).is_err());
     }
 
-    // --- ALIEN-59 agent self-update wire format tests --------------------
+    // --- agent self-update wire format tests -----------------------------
 
     /// A new agent that fills in the self-update fields produces JSON the
     /// new manager can deserialize, with the expected camelCase + kebab-case
