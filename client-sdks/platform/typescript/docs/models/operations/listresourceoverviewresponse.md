@@ -1,23 +1,19 @@
 # ListResourceOverviewResponse
 
-Resource overview rows from latest heartbeat projections.
+Compute resource overview rows from latest heartbeats.
 
-
-## Supported Types
-
-### `operations.ResponseBody1`
+## Example Usage
 
 ```typescript
-const value: operations.ResponseBody1 = {
+import { ListResourceOverviewResponse } from "@alienplatform/platform-api/models/operations";
+
+let value: ListResourceOverviewResponse = {
   resources: [],
 };
 ```
 
-### `operations.ResponseBody2`
+## Fields
 
-```typescript
-const value: operations.ResponseBody2 = {
-  machines: [],
-};
-```
-
+| Field                                                        | Type                                                         | Required                                                     | Description                                                  |
+| ------------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------ |
+| `resources`                                                  | [operations.Resource](../../models/operations/resource.md)[] | :heavy_check_mark:                                           | N/A                                                          |

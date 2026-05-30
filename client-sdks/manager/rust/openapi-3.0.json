@@ -6283,7 +6283,7 @@
         "type": "string",
         "description": "Package source that produced an import request. Observability label\nonly — the manager does not branch on this value, and any new deployment\npathway can omit it without affecting import behavior.",
         "enum": [
-          "cloud-formation",
+          "cloudformation",
           "terraform",
           "helm"
         ]
@@ -10164,7 +10164,6 @@
           "setupFingerprint",
           "setupFingerprintVersion",
           "stackSettings",
-          "managementConfig",
           "resources"
         ],
         "properties": {
@@ -10183,7 +10182,8 @@
           },
           "managementConfig": {
             "$ref": "#/components/schemas/ManagementConfig",
-            "description": "Platform-derived management configuration."
+            "description": "Platform-derived management configuration, when this setup creates a\ncross-account/cross-tenant management identity.",
+            "nullable": true
           },
           "platform": {
             "$ref": "#/components/schemas/Platform",

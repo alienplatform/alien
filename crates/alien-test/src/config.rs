@@ -364,7 +364,8 @@ impl TestConfig {
             region,
             credentials_json: env::var("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY")
                 .ok()
-                .map(|s| s.trim().to_string()),
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
             management_identity_email: env::var("GOOGLE_MANAGEMENT_IDENTITY_EMAIL")
                 .ok()
                 .filter(|s| !s.is_empty()),
@@ -382,7 +383,8 @@ impl TestConfig {
             region,
             credentials_json: env::var("GOOGLE_TARGET_SERVICE_ACCOUNT_KEY")
                 .ok()
-                .map(|s| s.trim().to_string()),
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
             management_identity_email: None,
             management_identity_unique_id: None,
         })

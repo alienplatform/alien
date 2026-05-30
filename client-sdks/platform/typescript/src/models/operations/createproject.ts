@@ -24,7 +24,7 @@ export type CreateProjectTypeRequest = ClosedEnum<
 >;
 
 /**
- * The Git Repository that will be connected to the project. When this is defined, any pushes to the specified connected Git Repository will be automatically deployed
+ * Verified source repository connected to the project. Alien uses this for GitHub Actions setup and source-aware features; releases are still created explicitly by CI or `alien release`.
  */
 export type GitRepositoryRequest = {
   /**
@@ -151,7 +151,7 @@ export type CreateProjectRequestBody = {
    */
   name: string;
   /**
-   * The Git Repository that will be connected to the project. When this is defined, any pushes to the specified connected Git Repository will be automatically deployed
+   * Verified source repository connected to the project. Alien uses this for GitHub Actions setup and source-aware features; releases are still created explicitly by CI or `alien release`.
    */
   gitRepository?: GitRepositoryRequest | null | undefined;
   /**
@@ -186,7 +186,7 @@ export type CreateProjectTypeResponse = ClosedEnum<
 >;
 
 /**
- * The Git Repository that will be connected to the project. When this is defined, any pushes to the specified connected Git Repository will be automatically deployed
+ * Verified source repository connected to the project. Alien uses this for GitHub Actions setup and source-aware features; releases are still created explicitly by CI or `alien release`.
  */
 export type CreateProjectGitRepositoryResponse = {
   /**
@@ -361,6 +361,14 @@ export type CreateProjectDefaultManagers = {
    * Unique identifier for a default private manager.
    */
   azure?: string | null | undefined;
+  /**
+   * Unique identifier for a default private manager.
+   */
+  kubernetes?: string | null | undefined;
+  /**
+   * Unique identifier for a default private manager.
+   */
+  local?: string | null | undefined;
 };
 
 export type CreateProjectGithubSetup = {
@@ -387,7 +395,7 @@ export type CreateProjectResponse = {
    */
   name: string;
   /**
-   * The Git Repository that will be connected to the project. When this is defined, any pushes to the specified connected Git Repository will be automatically deployed
+   * Verified source repository connected to the project. Alien uses this for GitHub Actions setup and source-aware features; releases are still created explicitly by CI or `alien release`.
    */
   gitRepository?: CreateProjectGitRepositoryResponse | null | undefined;
   /**
@@ -419,6 +427,7 @@ export type CreateProjectResponse = {
    */
   workspaceId: string;
   githubSetup?: CreateProjectGithubSetup | undefined;
+  gitRepositoryWarning?: models.APIError | undefined;
 };
 
 /** @internal */
@@ -874,6 +883,8 @@ export const CreateProjectDefaultManagers$inboundSchema: z.ZodType<
   aws: z.nullable(z.string()).optional(),
   gcp: z.nullable(z.string()).optional(),
   azure: z.nullable(z.string()).optional(),
+  kubernetes: z.nullable(z.string()).optional(),
+  local: z.nullable(z.string()).optional(),
 });
 
 export function createProjectDefaultManagersFromJSON(
@@ -929,6 +940,7 @@ export const CreateProjectResponse$inboundSchema: z.ZodType<
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   workspaceId: z.string(),
   githubSetup: z.lazy(() => CreateProjectGithubSetup$inboundSchema).optional(),
+  gitRepositoryWarning: models.APIError$inboundSchema.optional(),
 });
 
 export function createProjectResponseFromJSON(

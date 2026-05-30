@@ -209,9 +209,9 @@ export const CloudformationStatus = {
 export type CloudformationStatus = ClosedEnum<typeof CloudformationStatus>;
 
 /**
- * Outputs from a CloudFormation package build
+ * Information about a single CloudFormation template package for one target.
  */
-export type CloudformationOutputs = {
+export type CloudformationTargets = {
   /**
    * AWS Console quick-launch URL
    */
@@ -229,9 +229,23 @@ export type CloudformationOutputs = {
    */
   stackPolicyUrl: string;
   /**
+   * CloudFormation target (aws, eks)
+   */
+  target: string;
+  /**
    * S3 URL to the CloudFormation template
    */
   templateUrl: string;
+};
+
+/**
+ * Outputs from a CloudFormation package build.
+ */
+export type CloudformationOutputs = {
+  /**
+   * Template artifacts by CloudFormation target.
+   */
+  targets: { [k: string]: CloudformationTargets };
 };
 
 export const DeploymentInfoMode = {
@@ -247,7 +261,7 @@ export type DeploymentInfoCloudformation = {
   status: CloudformationStatus;
   version?: string | undefined;
   /**
-   * Outputs from a CloudFormation package build
+   * Outputs from a CloudFormation package build.
    */
   outputs?: CloudformationOutputs | undefined;
   error?: any | null | undefined;
@@ -540,7 +554,7 @@ export type DeploymentInfoManagementConfigUnion =
   | DeploymentInfoManagementConfigAzure
   | DeploymentInfoManagementConfigKubernetes;
 
-export type Targets = {
+export type InstallContextTargets = {
   /**
    * Represents the target cloud platform.
    */
@@ -566,7 +580,7 @@ export type DeploymentInfoInstallContext = {
   /**
    * Deployment-session install context by Terraform/installer target
    */
-  targets: { [k: string]: Targets };
+  targets: { [k: string]: InstallContextTargets };
 };
 
 export type DeploymentInfo = {
@@ -824,15 +838,37 @@ export const CloudformationStatus$inboundSchema: z.ZodEnum<
 > = z.enum(CloudformationStatus);
 
 /** @internal */
-export const CloudformationOutputs$inboundSchema: z.ZodType<
-  CloudformationOutputs,
+export const CloudformationTargets$inboundSchema: z.ZodType<
+  CloudformationTargets,
   unknown
 > = z.object({
   launchStackUrl: z.string(),
   sha256: z.string(),
   size: z.int(),
   stackPolicyUrl: z.string(),
+  target: z.string(),
   templateUrl: z.string(),
+});
+
+export function cloudformationTargetsFromJSON(
+  jsonString: string,
+): SafeParseResult<CloudformationTargets, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CloudformationTargets$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CloudformationTargets' from JSON`,
+  );
+}
+
+/** @internal */
+export const CloudformationOutputs$inboundSchema: z.ZodType<
+  CloudformationOutputs,
+  unknown
+> = z.object({
+  targets: z.record(
+    z.string(),
+    z.lazy(() => CloudformationTargets$inboundSchema),
+  ),
 });
 
 export function cloudformationOutputsFromJSON(
@@ -1191,7 +1227,10 @@ export function deploymentInfoManagementConfigUnionFromJSON(
 }
 
 /** @internal */
-export const Targets$inboundSchema: z.ZodType<Targets, unknown> = z.object({
+export const InstallContextTargets$inboundSchema: z.ZodType<
+  InstallContextTargets,
+  unknown
+> = z.object({
   platform: TargetsPlatformEnum$inboundSchema,
   managerUrl: z.string(),
   managementConfig: z.union([
@@ -1203,13 +1242,13 @@ export const Targets$inboundSchema: z.ZodType<Targets, unknown> = z.object({
   awsManagingAccountId: z.string().optional(),
 });
 
-export function targetsFromJSON(
+export function installContextTargetsFromJSON(
   jsonString: string,
-): SafeParseResult<Targets, SDKValidationError> {
+): SafeParseResult<InstallContextTargets, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Targets$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Targets' from JSON`,
+    (x) => InstallContextTargets$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'InstallContextTargets' from JSON`,
   );
 }
 
@@ -1218,7 +1257,10 @@ export const DeploymentInfoInstallContext$inboundSchema: z.ZodType<
   DeploymentInfoInstallContext,
   unknown
 > = z.object({
-  targets: z.record(z.string(), z.lazy(() => Targets$inboundSchema)),
+  targets: z.record(
+    z.string(),
+    z.lazy(() => InstallContextTargets$inboundSchema),
+  ),
 });
 
 export function deploymentInfoInstallContextFromJSON(

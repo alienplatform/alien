@@ -41,6 +41,24 @@ export type CloudFormationCallbackRequestPlatformEnum = ClosedEnum<
 >;
 
 /**
+ * Base cloud platform for cloud-backed Kubernetes imports.
+ */
+export const CloudFormationCallbackRequestBasePlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Base cloud platform for cloud-backed Kubernetes imports.
+ */
+export type CloudFormationCallbackRequestBasePlatform = ClosedEnum<
+  typeof CloudFormationCallbackRequestBasePlatform
+>;
+
+/**
  * Deployment model: how updates are delivered to the remote environment.
  */
 export const CloudFormationCallbackRequestDeploymentModel = {
@@ -1164,6 +1182,10 @@ export type CloudFormationCallbackRequestSource = {
    */
   platform: CloudFormationCallbackRequestPlatformEnum;
   /**
+   * Base cloud platform for cloud-backed Kubernetes imports.
+   */
+  basePlatform?: CloudFormationCallbackRequestBasePlatform | undefined;
+  /**
    * Region or location reported by the setup artifact
    */
   region: string;
@@ -1223,6 +1245,12 @@ export const RequestType$outboundSchema: z.ZodEnum<typeof RequestType> = z.enum(
 export const CloudFormationCallbackRequestPlatformEnum$outboundSchema:
   z.ZodEnum<typeof CloudFormationCallbackRequestPlatformEnum> = z.enum(
     CloudFormationCallbackRequestPlatformEnum,
+  );
+
+/** @internal */
+export const CloudFormationCallbackRequestBasePlatform$outboundSchema:
+  z.ZodEnum<typeof CloudFormationCallbackRequestBasePlatform> = z.enum(
+    CloudFormationCallbackRequestBasePlatform,
   );
 
 /** @internal */
@@ -3714,6 +3742,7 @@ export type CloudFormationCallbackRequestSource$Outbound = {
   sourceKind?: string | undefined;
   releaseId?: string | undefined;
   platform: string;
+  basePlatform?: string | undefined;
   region: string;
   setupTarget: string;
   setupImportFormatVersion: number;
@@ -3738,6 +3767,8 @@ export const CloudFormationCallbackRequestSource$outboundSchema: z.ZodType<
   sourceKind: ImportSourceKind$outboundSchema.optional(),
   releaseId: z.string().optional(),
   platform: CloudFormationCallbackRequestPlatformEnum$outboundSchema,
+  basePlatform: CloudFormationCallbackRequestBasePlatform$outboundSchema
+    .optional(),
   region: z.string(),
   setupTarget: z.string(),
   setupImportFormatVersion: z.int(),

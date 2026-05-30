@@ -222,8 +222,6 @@ fn platform_onboard_deployment_setup_config(
                 types::DeploymentSetupMethod::Cli,
                 types::DeploymentSetupMethod::Manual,
             ],
-            deployment_name: None,
-            release: None,
             stack_settings: Some(types::DeploymentSetupStackSettingsPolicy {
                 allow_custom_registry: Some(true),
                 allow_external_bindings: Some(true),

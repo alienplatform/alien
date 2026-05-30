@@ -127,6 +127,7 @@ fn create_proxy_push_settings(
 
     PushSettings {
         repository: format!("{}/{}", registry_host, repo_name),
+        destination_label: Some(format!("{:?} test manager", platform)),
         options: PushOptions {
             auth: RegistryAuth::Basic("token".to_string(), manager.admin_token.clone()),
             protocol,

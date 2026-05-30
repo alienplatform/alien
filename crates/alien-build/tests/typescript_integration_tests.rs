@@ -410,6 +410,7 @@ async fn test_build_stack_with_source_code() {
     // Step 2: Push images to registry
     let push_settings = PushSettings {
         repository: format!("{}/test/build", local_registry_host),
+        destination_label: Some("local test registry".to_string()),
         options: PushOptions {
             auth: RegistryAuth::Anonymous,
             protocol: ClientProtocol::Http,

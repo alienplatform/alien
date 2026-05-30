@@ -12,10 +12,9 @@ pub const CURRENT_SETUP_IMPORT_FORMAT_VERSION: u32 = 1;
 /// pathway can omit it without affecting import behavior.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "lowercase")]
 pub enum ImportSourceKind {
     /// CloudFormation Custom Resource or Stack Outputs.
-    #[serde(alias = "cloudformation")]
     CloudFormation,
     /// Terraform provider resource.
     Terraform,
@@ -105,4 +104,18 @@ pub struct StackImportResponse {
     pub stack_settings: StackSettings,
     /// Fully populated imported stack state.
     pub stack_state: StackState,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ImportSourceKind;
+
+    #[test]
+    fn import_source_kind_serializes_cloudformation_without_separator() {
+        let value = serde_json::to_value(ImportSourceKind::CloudFormation).unwrap();
+        assert_eq!(value, "cloudformation");
+
+        let source: ImportSourceKind = serde_json::from_value(value).unwrap();
+        assert_eq!(source, ImportSourceKind::CloudFormation);
+    }
 }

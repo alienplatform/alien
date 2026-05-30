@@ -1303,6 +1303,9 @@ rules:
   - apiGroups: ["gateway.networking.k8s.io"]
     resources: ["gateways", "httproutes"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["networking.gke.io"]
+    resources: ["healthcheckpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   {{- end }}
 "#
     .to_string()

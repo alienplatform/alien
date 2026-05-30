@@ -20,7 +20,7 @@ export const StackImportRequestSchema = z.object({
 "deploymentGroupToken": z.string().describe("Deployment-group token authorizing the import."),
 "deploymentName": z.string().describe("User-chosen deployment name. Must be unique within the deployment\ngroup; the manager returns 409 on collision rather than silently\nresolving to an existing deployment. Each setup adapter picks\nthe natural source: CloudFormation defaults to the CFN stack name,\nHelm to `{namespace}/{release}`, Terraform requires an explicit\n`name` attribute on the `alien_deployment` resource."),
 get "managementConfig"(){
-                return ManagementConfigSchema.describe("Management configuration for different cloud platforms.\n\nPlatform-derived configuration for cross-account/cross-tenant access.\nThis is NOT user-specified - it's derived from the Manager's ServiceAccount.")
+                return z.union([ManagementConfigSchema, z.null()]).optional()
               },
 get "platform"(){
                 return PlatformSchema.describe("Represents the target cloud platform.")

@@ -179,6 +179,8 @@ async fn check_full_stack_microservices(ctx: &mut alien_test::TestContext) -> an
     expect_json(
         client
             .post(format!("{url}/api/issues/{issue_id}/process"))
+            .header(reqwest::header::CONTENT_LENGTH, "0")
+            .body(Vec::new())
             .send()
             .await?,
         "worker enqueue",

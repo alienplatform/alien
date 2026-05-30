@@ -6,7 +6,7 @@
 import { ListResourceDeploymentsRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: ListResourceDeploymentsRequest = {
-  area: "daemon",
+  area: "worker",
   resourceId: "<id>",
   workspace: "my-workspace",
   project: "my-project",

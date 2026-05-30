@@ -18,6 +18,10 @@ export type StackImportResponse = {
    */
   deploymentId: string;
   /**
+   * Deployment bearer token for the imported deployment, when available.
+   */
+  deploymentToken?: string | null | undefined;
+  /**
    * User-customizable deployment settings specified at deploy time.
    *
    * @remarks
@@ -42,6 +46,7 @@ export const StackImportResponse$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   deploymentId: z.string(),
+  deploymentToken: z.nullable(z.string()).optional(),
   stackSettings: StackSettings$inboundSchema,
   stackState: StackState$inboundSchema,
 });

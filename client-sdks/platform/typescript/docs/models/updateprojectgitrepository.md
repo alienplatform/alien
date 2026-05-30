@@ -1,6 +1,6 @@
 # UpdateProjectGitRepository
 
-The Git Repository that will be connected to the project. When this is defined, any pushes to the specified connected Git Repository will be automatically deployed
+Verified source repository connected to the project. Alien uses this for GitHub Actions setup and source-aware features; releases are still created explicitly by CI or `alien release`.
 
 ## Example Usage
 

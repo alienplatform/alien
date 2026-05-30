@@ -231,17 +231,10 @@ export type OutputsTerraform = {
   type: OutputsTypeTerraform;
 };
 
-export const OutputsTypeCloudformation = {
-  Cloudformation: "cloudformation",
-} as const;
-export type OutputsTypeCloudformation = ClosedEnum<
-  typeof OutputsTypeCloudformation
->;
-
 /**
- * Outputs from a CloudFormation package build
+ * Information about a single CloudFormation template package for one target.
  */
-export type OutputsCloudformation = {
+export type PackageTargets = {
   /**
    * AWS Console quick-launch URL
    */
@@ -259,9 +252,30 @@ export type OutputsCloudformation = {
    */
   stackPolicyUrl: string;
   /**
+   * CloudFormation target (aws, eks)
+   */
+  target: string;
+  /**
    * S3 URL to the CloudFormation template
    */
   templateUrl: string;
+};
+
+export const OutputsTypeCloudformation = {
+  Cloudformation: "cloudformation",
+} as const;
+export type OutputsTypeCloudformation = ClosedEnum<
+  typeof OutputsTypeCloudformation
+>;
+
+/**
+ * Outputs from a CloudFormation package build.
+ */
+export type OutputsCloudformation = {
+  /**
+   * Template artifacts by CloudFormation target.
+   */
+  targets: { [k: string]: PackageTargets };
   type: OutputsTypeCloudformation;
 };
 
@@ -343,11 +357,11 @@ export type OutputsCli = {
  * Package outputs (only when status is 'ready')
  */
 export type PackageOutputsUnion =
-  | OutputsCloudformation
   | OutputsAgentImage
   | OutputsHelm
   | OutputsTerraform
   | OutputsCli
+  | OutputsCloudformation
   | any;
 
 export type Package = {
@@ -400,11 +414,11 @@ export type Package = {
    * Package outputs (only when status is 'ready')
    */
   outputs?:
-    | OutputsCloudformation
     | OutputsAgentImage
     | OutputsHelm
     | OutputsTerraform
     | OutputsCli
+    | OutputsCloudformation
     | any
     | null
     | undefined;
@@ -656,6 +670,27 @@ export function outputsTerraformFromJSON(
 }
 
 /** @internal */
+export const PackageTargets$inboundSchema: z.ZodType<PackageTargets, unknown> =
+  z.object({
+    launchStackUrl: z.string(),
+    sha256: z.string(),
+    size: z.int(),
+    stackPolicyUrl: z.string(),
+    target: z.string(),
+    templateUrl: z.string(),
+  });
+
+export function packageTargetsFromJSON(
+  jsonString: string,
+): SafeParseResult<PackageTargets, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PackageTargets$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PackageTargets' from JSON`,
+  );
+}
+
+/** @internal */
 export const OutputsTypeCloudformation$inboundSchema: z.ZodEnum<
   typeof OutputsTypeCloudformation
 > = z.enum(OutputsTypeCloudformation);
@@ -665,11 +700,7 @@ export const OutputsCloudformation$inboundSchema: z.ZodType<
   OutputsCloudformation,
   unknown
 > = z.object({
-  launchStackUrl: z.string(),
-  sha256: z.string(),
-  size: z.int(),
-  stackPolicyUrl: z.string(),
-  templateUrl: z.string(),
+  targets: z.record(z.string(), z.lazy(() => PackageTargets$inboundSchema)),
   type: OutputsTypeCloudformation$inboundSchema,
 });
 
@@ -776,11 +807,11 @@ export const PackageOutputsUnion$inboundSchema: z.ZodType<
   PackageOutputsUnion,
   unknown
 > = z.union([
-  z.lazy(() => OutputsCloudformation$inboundSchema),
   z.lazy(() => OutputsAgentImage$inboundSchema),
   z.lazy(() => OutputsHelm$inboundSchema),
   z.lazy(() => OutputsTerraform$inboundSchema),
   z.lazy(() => OutputsCli$inboundSchema),
+  z.lazy(() => OutputsCloudformation$inboundSchema),
   z.any(),
 ]);
 
@@ -814,11 +845,11 @@ export const Package$inboundSchema: z.ZodType<Package, unknown> = z.object({
   ]),
   outputs: z.nullable(
     z.union([
-      z.lazy(() => OutputsCloudformation$inboundSchema),
       z.lazy(() => OutputsAgentImage$inboundSchema),
       z.lazy(() => OutputsHelm$inboundSchema),
       z.lazy(() => OutputsTerraform$inboundSchema),
       z.lazy(() => OutputsCli$inboundSchema),
+      z.lazy(() => OutputsCloudformation$inboundSchema),
       z.any(),
     ]),
   ).optional(),

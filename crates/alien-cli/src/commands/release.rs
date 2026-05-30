@@ -769,6 +769,7 @@ fn create_manual_push_settings(args: &ReleaseArgs, image_repo: &str) -> Result<P
 
     Ok(PushSettings {
         repository: image_repo.to_string(),
+        destination_label: Some(format!("custom registry {}", image_repo)),
         options: dockdash::PushOptions {
             auth,
             protocol,
@@ -873,6 +874,7 @@ async fn build_proxy_push_settings(
 
     Ok(PushSettings {
         repository,
+        destination_label: Some(manager_push_destination_label(manager)),
         options: dockdash::PushOptions {
             auth,
             protocol,
@@ -883,6 +885,20 @@ async fn build_proxy_push_settings(
             ..Default::default()
         },
     })
+}
+
+fn manager_push_destination_label(manager: &ManagerContext) -> String {
+    match (
+        manager.manager_name.as_deref(),
+        manager.manager_is_system,
+        manager.manager_cloud.as_deref(),
+    ) {
+        (Some(name), Some(true), _) => format!("{name} (Alien-hosted)"),
+        (Some(name), Some(false), Some(cloud)) => format!("{name} private manager ({cloud})"),
+        (Some(name), Some(false), None) => format!("{name} private manager"),
+        (Some(name), _, _) => name.to_string(),
+        (None, _, _) => manager.manager_url.clone(),
+    }
 }
 
 /// Translate registry URL for CLI access.

@@ -16,7 +16,7 @@ pub mod ui;
 pub mod test_utils;
 
 #[cfg(feature = "platform")]
-use crate::commands::manager::{manager_task, ManagerArgs};
+use crate::commands::manager::{managers_task, ManagersArgs};
 #[cfg(feature = "platform")]
 use crate::commands::platform::{
     link_task, login_task, logout_task, project_task, unlink_task, workspace_task, PlatformCommand,
@@ -100,7 +100,7 @@ impl Cli {
             #[cfg(feature = "platform")]
             Some(Commands::Platform(PlatformCommand::Projects(args))) => args.json,
             #[cfg(feature = "platform")]
-            Some(Commands::Manager(args)) => args.json,
+            Some(Commands::Managers(args)) => args.json,
             _ => false,
         }
     }
@@ -143,7 +143,7 @@ pub enum Commands {
 
     /// Manage private managers deployed to your cloud
     #[cfg(feature = "platform")]
-    Manager(ManagerArgs),
+    Managers(ManagersArgs),
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -1453,7 +1453,7 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
                 PlatformCommand::Unlink(args) => unlink_task(args).await?,
             },
             #[cfg(feature = "platform")]
-            Some(Commands::Manager(args)) => manager_task(args, ctx).await?,
+            Some(Commands::Managers(args)) => managers_task(args, ctx).await?,
         }
 
         Ok(())

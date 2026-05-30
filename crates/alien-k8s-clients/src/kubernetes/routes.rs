@@ -28,6 +28,20 @@ pub trait RouteApi: Send + Sync + std::fmt::Debug {
     async fn get_http_route(&self, namespace: &str, name: &str) -> Result<Value>;
     async fn update_http_route(&self, namespace: &str, name: &str, route: &Value) -> Result<Value>;
     async fn delete_http_route(&self, namespace: &str, name: &str) -> Result<()>;
+
+    async fn create_gke_health_check_policy(
+        &self,
+        namespace: &str,
+        policy: &Value,
+    ) -> Result<Value>;
+    async fn get_gke_health_check_policy(&self, namespace: &str, name: &str) -> Result<Value>;
+    async fn update_gke_health_check_policy(
+        &self,
+        namespace: &str,
+        name: &str,
+        policy: &Value,
+    ) -> Result<Value>;
+    async fn delete_gke_health_check_policy(&self, namespace: &str, name: &str) -> Result<()>;
 }
 
 impl KubernetesClient {
@@ -150,6 +164,35 @@ impl KubernetesClient {
             .await
     }
 
+    pub async fn create_gke_health_check_policy(
+        &self,
+        namespace: &str,
+        policy: &Value,
+    ) -> Result<Value> {
+        self.create_gke_networking_resource(namespace, "healthcheckpolicies", policy)
+            .await
+    }
+
+    pub async fn get_gke_health_check_policy(&self, namespace: &str, name: &str) -> Result<Value> {
+        self.get_gke_networking_resource(namespace, "healthcheckpolicies", name)
+            .await
+    }
+
+    pub async fn update_gke_health_check_policy(
+        &self,
+        namespace: &str,
+        name: &str,
+        policy: &Value,
+    ) -> Result<Value> {
+        self.update_gke_networking_resource(namespace, "healthcheckpolicies", name, policy)
+            .await
+    }
+
+    pub async fn delete_gke_health_check_policy(&self, namespace: &str, name: &str) -> Result<()> {
+        self.delete_gke_networking_resource(namespace, "healthcheckpolicies", name)
+            .await
+    }
+
     async fn create_gateway_api_resource(
         &self,
         namespace: &str,
@@ -235,6 +278,92 @@ impl KubernetesClient {
         let builder = self.client().request(Method::DELETE, &url);
         sign_send_no_response(builder, &self.auth_config()).await
     }
+
+    async fn create_gke_networking_resource(
+        &self,
+        namespace: &str,
+        plural: &str,
+        value: &Value,
+    ) -> Result<Value> {
+        let body = serde_json::to_string(value).into_alien_error().context(
+            ErrorData::SerializationError {
+                message: format!("Failed to serialize GKE networking resource '{}'", plural),
+            },
+        )?;
+        let url = format!(
+            "{}/apis/networking.gke.io/v1/namespaces/{}/{}",
+            self.get_base_url(),
+            urlencoding::encode(namespace),
+            plural
+        );
+        let builder = self
+            .client()
+            .request(Method::POST, &url)
+            .header("Content-Type", "application/json")
+            .body(body);
+        sign_send_json(builder, &self.auth_config()).await
+    }
+
+    async fn get_gke_networking_resource(
+        &self,
+        namespace: &str,
+        plural: &str,
+        name: &str,
+    ) -> Result<Value> {
+        let url = format!(
+            "{}/apis/networking.gke.io/v1/namespaces/{}/{}/{}",
+            self.get_base_url(),
+            urlencoding::encode(namespace),
+            plural,
+            urlencoding::encode(name)
+        );
+        let builder = self.client().request(Method::GET, &url);
+        sign_send_json(builder, &self.auth_config()).await
+    }
+
+    async fn update_gke_networking_resource(
+        &self,
+        namespace: &str,
+        plural: &str,
+        name: &str,
+        value: &Value,
+    ) -> Result<Value> {
+        let body = serde_json::to_string(value).into_alien_error().context(
+            ErrorData::SerializationError {
+                message: format!("Failed to serialize GKE networking resource '{}'", name),
+            },
+        )?;
+        let url = format!(
+            "{}/apis/networking.gke.io/v1/namespaces/{}/{}/{}",
+            self.get_base_url(),
+            urlencoding::encode(namespace),
+            plural,
+            urlencoding::encode(name)
+        );
+        let builder = self
+            .client()
+            .request(Method::PUT, &url)
+            .header("Content-Type", "application/json")
+            .body(body);
+        sign_send_json(builder, &self.auth_config()).await
+    }
+
+    async fn delete_gke_networking_resource(
+        &self,
+        namespace: &str,
+        plural: &str,
+        name: &str,
+    ) -> Result<()> {
+        let url = format!(
+            "{}/apis/networking.gke.io/v1/namespaces/{}/{}/{}",
+            self.get_base_url(),
+            urlencoding::encode(namespace),
+            plural,
+            urlencoding::encode(name)
+        );
+        let builder = self.client().request(Method::DELETE, &url);
+        sign_send_no_response(builder, &self.auth_config()).await
+    }
 }
 
 #[async_trait]
@@ -290,5 +419,31 @@ impl RouteApi for KubernetesClient {
 
     async fn delete_http_route(&self, namespace: &str, name: &str) -> Result<()> {
         self.delete_http_route(namespace, name).await
+    }
+
+    async fn create_gke_health_check_policy(
+        &self,
+        namespace: &str,
+        policy: &Value,
+    ) -> Result<Value> {
+        self.create_gke_health_check_policy(namespace, policy).await
+    }
+
+    async fn get_gke_health_check_policy(&self, namespace: &str, name: &str) -> Result<Value> {
+        self.get_gke_health_check_policy(namespace, name).await
+    }
+
+    async fn update_gke_health_check_policy(
+        &self,
+        namespace: &str,
+        name: &str,
+        policy: &Value,
+    ) -> Result<Value> {
+        self.update_gke_health_check_policy(namespace, name, policy)
+            .await
+    }
+
+    async fn delete_gke_health_check_policy(&self, namespace: &str, name: &str) -> Result<()> {
+        self.delete_gke_health_check_policy(namespace, name).await
     }
 }

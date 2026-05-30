@@ -32,10 +32,6 @@ async function run() {
   const result = await alienManager.stackImport.stackImport({
     deploymentGroupToken: "<value>",
     deploymentName: "<value>",
-    managementConfig: {
-      serviceAccountEmail: "<value>",
-      platform: "gcp",
-    },
     platform: "gcp",
     region: "<value>",
     resourcePrefix: "<value>",
@@ -72,10 +68,6 @@ async function run() {
   const res = await stackImportStackImport(alienManager, {
     deploymentGroupToken: "<value>",
     deploymentName: "<value>",
-    managementConfig: {
-      serviceAccountEmail: "<value>",
-      platform: "gcp",
-    },
     platform: "gcp",
     region: "<value>",
     resourcePrefix: "<value>",

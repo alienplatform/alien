@@ -411,6 +411,15 @@ fn format_message(label: &str, detail: Option<&str>) -> String {
     }
 }
 
+fn pad_display_width(value: String, width: usize) -> String {
+    let current_width = measure_text_width(&value);
+    if current_width >= width {
+        value
+    } else {
+        format!("{value}{}", " ".repeat(width - current_width))
+    }
+}
+
 /// Build a single display line for a step or resource row.
 fn build_row_line(state: RowState, label: &str, detail: Option<&str>) -> String {
     let prefix = match state {
@@ -453,8 +462,9 @@ fn build_resource_progress_line(
     label: &str,
     detail: Option<&str>,
     progress: &PushProgress,
+    message_width: usize,
 ) -> String {
-    let msg = format_message(label, detail);
+    let msg = pad_display_width(format_message(label, detail), message_width);
 
     // When totals are not yet known, show only the spinner + message
     // (no empty bar that looks stuck at 0%).
@@ -536,12 +546,23 @@ impl FixedStepsState {
             ));
         }
 
+        let progress_message_width = self
+            .resources
+            .values()
+            .filter(|resource| resource.progress.is_some())
+            .map(|resource| {
+                measure_text_width(&format_message(&resource.label, resource.detail.as_deref()))
+            })
+            .max()
+            .unwrap_or(0);
+
         for resource in self.resources.values() {
             if let Some(progress) = &resource.progress {
                 lines.push(build_resource_progress_line(
                     &resource.label,
                     resource.detail.as_deref(),
                     progress,
+                    progress_message_width,
                 ));
             } else {
                 lines.push(build_row_line(
@@ -939,6 +960,10 @@ struct CommandEventState {
 #[derive(Clone)]
 enum EventRole {
     Status,
+    PlatformScope {
+        platform: String,
+        destination: Option<String>,
+    },
     ResourceScope(String),
     ResourceChild(String),
 }
@@ -970,12 +995,23 @@ impl CommandEventHandler {
             lines.push(format!("{SPINNER_PLACEHOLDER} {msg}"));
         }
 
+        let progress_message_width = state
+            .resources
+            .values()
+            .filter(|resource| resource.progress.is_some())
+            .map(|resource| {
+                measure_text_width(&format_message(&resource.label, resource.detail.as_deref()))
+            })
+            .max()
+            .unwrap_or(0);
+
         for resource in state.resources.values() {
             if let Some(progress) = &resource.progress {
                 lines.push(build_resource_progress_line(
                     &resource.label,
                     resource.detail.as_deref(),
                     progress,
+                    progress_message_width,
                 ));
             } else {
                 lines.push(build_row_line(
@@ -1039,6 +1075,31 @@ impl CommandEventHandler {
                 state
                     .event_roles
                     .insert(id.to_string(), EventRole::ResourceScope(key));
+            }
+            AlienEvent::PushingStack {
+                platform,
+                destination,
+                ..
+            } => {
+                state
+                    .resources
+                    .retain(|key, _| !key.starts_with("release-build:"));
+                self.set_status(
+                    state,
+                    match destination {
+                        Some(destination) => {
+                            format!("Pushing {platform} images to {destination}")
+                        }
+                        None => format!("Pushing {platform} images"),
+                    },
+                );
+                state.event_roles.insert(
+                    id.to_string(),
+                    EventRole::PlatformScope {
+                        platform: platform.clone(),
+                        destination: destination.clone(),
+                    },
+                );
             }
             AlienEvent::CompilingCode { language, progress } => {
                 if let Some(resource_key) =
@@ -1125,7 +1186,13 @@ impl CommandEventHandler {
                 resource_type,
             } => {
                 self.clear_status(state);
-                let key = format!("push:{resource_type}:{resource_name}");
+                let (platform, destination) = parent_id
+                    .and_then(|parent| platform_scope_from_parent(state, parent))
+                    .unwrap_or((None, None));
+                let key = match platform.as_deref() {
+                    Some(platform) => format!("push:{platform}:{resource_type}:{resource_name}"),
+                    None => format!("push:{resource_type}:{resource_name}"),
+                };
                 let label = format!("{resource_type} {resource_name}");
                 let entry = state
                     .resources
@@ -1138,7 +1205,10 @@ impl CommandEventHandler {
                     });
                 entry.label = label;
                 entry.state = RowState::Active;
-                entry.detail = Some("preparing".to_string());
+                entry.detail = destination
+                    .as_ref()
+                    .map(|destination| format!("to {destination}"))
+                    .or_else(|| Some("preparing".to_string()));
                 state
                     .event_roles
                     .insert(id.to_string(), EventRole::ResourceScope(key));
@@ -1226,16 +1296,21 @@ impl EventHandler for CommandEventHandler {
             EventChange::StateChanged { id, new_state, .. } => {
                 let mut state = self.state.lock().expect("command event state poisoned");
                 match state.event_roles.get(&id).cloned() {
-                    Some(EventRole::Status) => match new_state {
-                        EventState::Success | EventState::Failed { .. } => {
-                            self.clear_status(&mut state);
+                    Some(EventRole::Status) | Some(EventRole::PlatformScope { .. }) => {
+                        match new_state {
+                            EventState::Success | EventState::Failed { .. } => {
+                                self.clear_status(&mut state);
+                            }
+                            _ => {}
                         }
-                        _ => {}
-                    },
+                    }
                     Some(EventRole::ResourceScope(resource_key)) => match new_state {
                         EventState::Success => {
-                            // Remove completed resources so they don't linger
-                            state.resources.shift_remove(&resource_key);
+                            if let Some(entry) = state.resources.get_mut(&resource_key) {
+                                entry.state = RowState::Complete;
+                                entry.detail = None;
+                                entry.progress = None;
+                            }
                         }
                         EventState::Failed { error } => {
                             if let Some(entry) = state.resources.get_mut(&resource_key) {
@@ -1260,6 +1335,19 @@ fn resource_key_from_parent_or_child(state: &CommandEventState, parent_id: &str)
     match state.event_roles.get(parent_id) {
         Some(EventRole::ResourceScope(resource_key))
         | Some(EventRole::ResourceChild(resource_key)) => Some(resource_key.clone()),
+        _ => None,
+    }
+}
+
+fn platform_scope_from_parent(
+    state: &CommandEventState,
+    parent_id: &str,
+) -> Option<(Option<String>, Option<String>)> {
+    match state.event_roles.get(parent_id) {
+        Some(EventRole::PlatformScope {
+            platform,
+            destination,
+        }) => Some((Some(platform.clone()), destination.clone())),
         _ => None,
     }
 }

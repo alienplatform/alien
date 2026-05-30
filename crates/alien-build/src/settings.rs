@@ -104,6 +104,8 @@ pub struct PushSettings {
     /// The repository (e.g., Docker Hub namespace or private registry URL)
     /// where the built function images will be pushed.
     pub repository: String,
+    /// Human-readable push destination for terminal progress.
+    pub destination_label: Option<String>,
     /// Push options (auth, protocol, etc.)
     pub options: PushOptions,
 }

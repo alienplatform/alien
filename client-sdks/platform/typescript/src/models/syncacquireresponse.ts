@@ -7905,8 +7905,9 @@ export type SyncAcquireResponseConfig = {
    *
    * @remarks
    *
-   * Only Lambda (ECR) and Cloud Run (GAR) require native registry URIs.
-   * All other platforms pull through the manager's proxy.
+   * Lambda (ECR) and Cloud Run (GAR) require native registry URIs. Other
+   * runtimes, including Azure Container Apps, pull through the manager's
+   * registry proxy.
    *
    * Derived by the manager from the artifact registry binding:
    * - ECR: `{account_id}.dkr.ecr.{region}.amazonaws.com/{repository_prefix}`

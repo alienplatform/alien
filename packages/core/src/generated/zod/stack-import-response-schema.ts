@@ -12,6 +12,7 @@ import { StackStateSchema } from "./stack-state-schema.js";
  */
 export const StackImportResponseSchema = z.object({
     "deploymentId": z.string().describe("Deployment created."),
+"deploymentToken": z.string().describe("Deployment bearer token for the imported deployment, when available.").nullish(),
 get "stackSettings"(){
                 return StackSettingsSchema.describe("User-customizable deployment settings specified at deploy time.\n\nThese settings are provided by the customer via CloudFormation parameters,\nTerraform attributes, CLI flags, or Helm values. They customize how the\ndeployment runs and what capabilities are enabled.\n\n**Key distinction**: StackSettings is user-customizable, while ManagementConfig\nis platform-derived (from the Manager's ServiceAccount).")
               },

@@ -34,10 +34,6 @@ let value: ListAPIKeysResponse = {
           allowedSetupMethods: [
             "google-oauth",
           ],
-          release: {
-            mode: "fixed",
-            releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
-          },
         },
         environmentVariables: [],
       },

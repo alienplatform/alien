@@ -12,7 +12,6 @@ export const ListResourceOverviewArea = {
   Container: "container",
   Worker: "worker",
   Daemon: "daemon",
-  Machine: "machine",
 } as const;
 export type ListResourceOverviewArea = ClosedEnum<
   typeof ListResourceOverviewArea
@@ -30,32 +29,6 @@ export type ListResourceOverviewRequest = {
   project: string;
   deploymentGroupId?: string | undefined;
   deploymentId?: string | undefined;
-};
-
-export type Machine = {
-  deploymentId: string;
-  deploymentName: string;
-  deploymentGroupId: string | null;
-  deploymentGroupName: string | null;
-  machineId: string;
-  name: string;
-  backend: string;
-  controllerPlatform: string;
-  ready: boolean;
-  roles: Array<string>;
-  labels: { [k: string]: string };
-  capacity?: any | null | undefined;
-  allocatable?: any | null | undefined;
-  usage?: any | null | undefined;
-  kubeletVersion: string | null;
-  containerRuntimeVersion: string | null;
-  observedAt: Date;
-  platformStale: boolean;
-  provider?: any | null | undefined;
-};
-
-export type ResponseBody2 = {
-  machines: Array<Machine>;
 };
 
 export type Resource = {
@@ -78,14 +51,12 @@ export type Resource = {
   lastObservedAt: Date;
 };
 
-export type ResponseBody1 = {
+/**
+ * Compute resource overview rows from latest heartbeats.
+ */
+export type ListResourceOverviewResponse = {
   resources: Array<Resource>;
 };
-
-/**
- * Resource overview rows from latest heartbeat projections.
- */
-export type ListResourceOverviewResponse = ResponseBody1 | ResponseBody2;
 
 /** @internal */
 export const ListResourceOverviewArea$outboundSchema: z.ZodEnum<
@@ -124,55 +95,6 @@ export function listResourceOverviewRequestToJSON(
 }
 
 /** @internal */
-export const Machine$inboundSchema: z.ZodType<Machine, unknown> = z.object({
-  deploymentId: z.string(),
-  deploymentName: z.string(),
-  deploymentGroupId: z.nullable(z.string()),
-  deploymentGroupName: z.nullable(z.string()),
-  machineId: z.string(),
-  name: z.string(),
-  backend: z.string(),
-  controllerPlatform: z.string(),
-  ready: z.boolean(),
-  roles: z.array(z.string()),
-  labels: z.record(z.string(), z.string()),
-  capacity: z.nullable(z.any()).optional(),
-  allocatable: z.nullable(z.any()).optional(),
-  usage: z.nullable(z.any()).optional(),
-  kubeletVersion: z.nullable(z.string()),
-  containerRuntimeVersion: z.nullable(z.string()),
-  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  platformStale: z.boolean(),
-  provider: z.nullable(z.any()).optional(),
-});
-
-export function machineFromJSON(
-  jsonString: string,
-): SafeParseResult<Machine, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => Machine$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Machine' from JSON`,
-  );
-}
-
-/** @internal */
-export const ResponseBody2$inboundSchema: z.ZodType<ResponseBody2, unknown> = z
-  .object({
-    machines: z.array(z.lazy(() => Machine$inboundSchema)),
-  });
-
-export function responseBody2FromJSON(
-  jsonString: string,
-): SafeParseResult<ResponseBody2, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => ResponseBody2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ResponseBody2' from JSON`,
-  );
-}
-
-/** @internal */
 export const Resource$inboundSchema: z.ZodType<Resource, unknown> = z.object({
   resourceType: z.string(),
   resourceId: z.string(),
@@ -204,29 +126,12 @@ export function resourceFromJSON(
 }
 
 /** @internal */
-export const ResponseBody1$inboundSchema: z.ZodType<ResponseBody1, unknown> = z
-  .object({
-    resources: z.array(z.lazy(() => Resource$inboundSchema)),
-  });
-
-export function responseBody1FromJSON(
-  jsonString: string,
-): SafeParseResult<ResponseBody1, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => ResponseBody1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ResponseBody1' from JSON`,
-  );
-}
-
-/** @internal */
 export const ListResourceOverviewResponse$inboundSchema: z.ZodType<
   ListResourceOverviewResponse,
   unknown
-> = z.union([
-  z.lazy(() => ResponseBody1$inboundSchema),
-  z.lazy(() => ResponseBody2$inboundSchema),
-]);
+> = z.object({
+  resources: z.array(z.lazy(() => Resource$inboundSchema)),
+});
 
 export function listResourceOverviewResponseFromJSON(
   jsonString: string,

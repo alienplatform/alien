@@ -13,7 +13,7 @@ import { ClosedEnum } from "../types/enums.js";
  * pathway can omit it without affecting import behavior.
  */
 export const ImportSourceKind = {
-  CloudFormation: "cloud-formation",
+  Cloudformation: "cloudformation",
   Terraform: "terraform",
   Helm: "helm",
 } as const;

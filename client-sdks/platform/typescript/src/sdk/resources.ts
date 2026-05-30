@@ -3,7 +3,6 @@
  */
 
 import { resourcesGetDeploymentDetail } from "../funcs/resourcesGetDeploymentDetail.js";
-import { resourcesGetRawHeartbeat } from "../funcs/resourcesGetRawHeartbeat.js";
 import { resourcesListDeployments } from "../funcs/resourcesListDeployments.js";
 import { resourcesListOverview } from "../funcs/resourcesListOverview.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
@@ -41,17 +40,6 @@ export class Resources extends ClientSDK {
     options?: RequestOptions,
   ): Promise<operations.GetResourceDeploymentDetailResponse> {
     return unwrapAsync(resourcesGetDeploymentDetail(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  async getRawHeartbeat(
-    request: operations.GetRawResourceHeartbeatRequest,
-    options?: RequestOptions,
-  ): Promise<operations.GetRawResourceHeartbeatResponse> {
-    return unwrapAsync(resourcesGetRawHeartbeat(
       this,
       request,
       options,

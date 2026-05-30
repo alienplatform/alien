@@ -7,9 +7,6 @@ import { safeParse } from "../lib/schemas.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
-/**
- * Error that occurred during context building
- */
 export type APIError = {
   /**
    * A unique identifier for the type of error.

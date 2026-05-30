@@ -44,15 +44,7 @@ export type StackImportRequest = {
    * `name` attribute on the `alien_deployment` resource.
    */
   deploymentName: string;
-  /**
-   * Management configuration for different cloud platforms.
-   *
-   * @remarks
-   *
-   * Platform-derived configuration for cross-account/cross-tenant access.
-   * This is NOT user-specified - it's derived from the Manager's ServiceAccount.
-   */
-  managementConfig: ManagementConfig;
+  managementConfig?: ManagementConfig | null | undefined;
   /**
    * Represents the target cloud platform.
    */
@@ -117,7 +109,7 @@ export type StackImportRequest$Outbound = {
   basePlatform?: string | null | undefined;
   deploymentGroupToken: string;
   deploymentName: string;
-  managementConfig: ManagementConfig$Outbound;
+  managementConfig?: ManagementConfig$Outbound | null | undefined;
   platform: string;
   region: string;
   releaseId?: string | null | undefined;
@@ -139,7 +131,7 @@ export const StackImportRequest$outboundSchema: z.ZodType<
   basePlatform: z.nullable(PlatformEnum$outboundSchema).optional(),
   deploymentGroupToken: z.string(),
   deploymentName: z.string(),
-  managementConfig: ManagementConfig$outboundSchema,
+  managementConfig: z.nullable(ManagementConfig$outboundSchema).optional(),
   platform: PlatformEnum$outboundSchema,
   region: z.string(),
   releaseId: z.nullable(z.string()).optional(),

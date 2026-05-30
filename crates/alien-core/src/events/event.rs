@@ -101,6 +101,9 @@ pub enum AlienEvent {
         stack: String,
         /// Target platform
         platform: String,
+        /// Human-readable destination for pushed images
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        destination: Option<String>,
     },
 
     /// Pushing resource images to registry

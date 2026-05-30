@@ -42,6 +42,11 @@ pub enum ProjectLinkStatus {
     Error(String),
 }
 
+pub struct ProjectSelection {
+    pub project: types::ProjectListItemResponse,
+    pub git_repository_warning: Option<types::ApiError>,
+}
+
 pub fn get_project_link_status<P: AsRef<Path>>(dir: P) -> ProjectLinkStatus {
     let project_file = dir.as_ref().join(ALIEN_DIR).join(PROJECT_FILE);
 
@@ -147,7 +152,7 @@ pub async fn choose_or_create_project(
     suggested_name: Option<&str>,
     dir: &Path,
     allow_prompt: bool,
-) -> Result<types::ProjectListItemResponse> {
+) -> Result<ProjectSelection> {
     let interaction = InteractionMode::new(false, allow_prompt && can_prompt());
     let client = http.sdk_client();
     let workspace_param = types::ListProjectsWorkspace::try_from(workspace)
@@ -188,14 +193,18 @@ pub async fn choose_or_create_project(
     if selected == "Create new project" {
         create_new_project(client, workspace, suggested_name, dir, true, true).await
     } else {
-        existing_projects
+        let project = existing_projects
             .into_iter()
             .find(|project| project.name.as_str() == selected)
             .ok_or_else(|| {
                 AlienError::new(ErrorData::ConfigurationError {
                     message: "Selected project was not found".to_string(),
                 })
-            })
+            })?;
+        Ok(ProjectSelection {
+            project,
+            git_repository_warning: None,
+        })
     }
 }
 
@@ -206,7 +215,7 @@ pub async fn create_new_project(
     dir: &Path,
     allow_prompt: bool,
     include_git_repository: bool,
-) -> Result<types::ProjectListItemResponse> {
+) -> Result<ProjectSelection> {
     let interaction = InteractionMode::new(false, allow_prompt && can_prompt());
     let project_name = match suggested_name {
         Some(name) if !interaction.is_machine() => prompt_text("Project name", Some(name))?,
@@ -271,77 +280,80 @@ pub async fn create_new_project(
         })?
         .into_inner();
 
-    Ok(types::ProjectListItemResponse {
-        id: types::ProjectListItemResponseId::try_from(response.id.as_str())
+    Ok(ProjectSelection {
+        project: types::ProjectListItemResponse {
+            id: types::ProjectListItemResponseId::try_from(response.id.as_str())
+                .into_alien_error()
+                .context(ErrorData::ValidationError {
+                    field: "project_id".to_string(),
+                    message: "Invalid project ID in response".to_string(),
+                })?,
+            name: types::ProjectListItemResponseName::try_from(response.name.as_str())
+                .into_alien_error()
+                .context(ErrorData::ValidationError {
+                    field: "project_name".to_string(),
+                    message: "Invalid project name in response".to_string(),
+                })?,
+            workspace_id: types::ProjectListItemResponseWorkspaceId::try_from(
+                response.workspace_id.as_str(),
+            )
             .into_alien_error()
             .context(ErrorData::ValidationError {
-                field: "project_id".to_string(),
-                message: "Invalid project ID in response".to_string(),
+                field: "workspace_id".to_string(),
+                message: "Invalid workspace ID in response".to_string(),
             })?,
-        name: types::ProjectListItemResponseName::try_from(response.name.as_str())
-            .into_alien_error()
-            .context(ErrorData::ValidationError {
-                field: "project_name".to_string(),
-                message: "Invalid project name in response".to_string(),
-            })?,
-        workspace_id: types::ProjectListItemResponseWorkspaceId::try_from(
-            response.workspace_id.as_str(),
-        )
-        .into_alien_error()
-        .context(ErrorData::ValidationError {
-            field: "workspace_id".to_string(),
-            message: "Invalid workspace ID in response".to_string(),
-        })?,
-        domain_id: response
-            .domain_id
-            .map(|domain_id| {
-                types::ProjectListItemResponseDomainId::try_from(domain_id.as_str())
-                    .into_alien_error()
-                    .context(ErrorData::ValidationError {
-                        field: "domain_id".to_string(),
-                        message: "Invalid domain ID in response".to_string(),
-                    })
-            })
-            .transpose()?,
-        created_at: response.created_at,
-        root_directory: response
-            .root_directory
-            .map(|root_directory| {
-                types::ProjectListItemResponseRootDirectory::try_from(root_directory.as_str())
-                    .into_alien_error()
-                    .context(ErrorData::ValidationError {
-                        field: "root_directory".to_string(),
-                        message: "Invalid root directory in response".to_string(),
-                    })
-            })
-            .transpose()?,
-        git_repository: response
-            .git_repository
-            .map(
-                |git_repository| -> Result<types::ProjectListItemResponseGitRepository> {
-                    Ok(types::ProjectListItemResponseGitRepository {
-                        repo: types::ProjectListItemResponseGitRepositoryRepo::try_from(
-                            git_repository.repo.as_str(),
-                        )
+            domain_id: response
+                .domain_id
+                .map(|domain_id| {
+                    types::ProjectListItemResponseDomainId::try_from(domain_id.as_str())
                         .into_alien_error()
                         .context(ErrorData::ValidationError {
-                            field: "git_repository_repo".to_string(),
-                            message: "Invalid git repository in response".to_string(),
-                        })?,
-                        type_: match git_repository.type_ {
-                            types::CreateProjectResponseGitRepositoryType::Github => {
-                                types::ProjectListItemResponseGitRepositoryType::Github
-                            }
-                        },
-                    })
-                },
-            )
-            .transpose()?,
-        deployment_portal_appearance: None,
-        packages_config: None,
-        default_managers: None,
-        deployment_count: Some(0.0),
-        latest_release: None.into(),
+                            field: "domain_id".to_string(),
+                            message: "Invalid domain ID in response".to_string(),
+                        })
+                })
+                .transpose()?,
+            created_at: response.created_at,
+            root_directory: response
+                .root_directory
+                .map(|root_directory| {
+                    types::ProjectListItemResponseRootDirectory::try_from(root_directory.as_str())
+                        .into_alien_error()
+                        .context(ErrorData::ValidationError {
+                            field: "root_directory".to_string(),
+                            message: "Invalid root directory in response".to_string(),
+                        })
+                })
+                .transpose()?,
+            git_repository: response
+                .git_repository
+                .map(
+                    |git_repository| -> Result<types::ProjectListItemResponseGitRepository> {
+                        Ok(types::ProjectListItemResponseGitRepository {
+                            repo: types::ProjectListItemResponseGitRepositoryRepo::try_from(
+                                git_repository.repo.as_str(),
+                            )
+                            .into_alien_error()
+                            .context(ErrorData::ValidationError {
+                                field: "git_repository_repo".to_string(),
+                                message: "Invalid git repository in response".to_string(),
+                            })?,
+                            type_: match git_repository.type_ {
+                                types::CreateProjectResponseGitRepositoryType::Github => {
+                                    types::ProjectListItemResponseGitRepositoryType::Github
+                                }
+                            },
+                        })
+                    },
+                )
+                .transpose()?,
+            deployment_portal_appearance: None,
+            packages_config: None,
+            default_managers: None,
+            deployment_count: Some(0.0),
+            latest_release: None.into(),
+        },
+        git_repository_warning: response.git_repository_warning,
     })
 }
 
@@ -375,7 +387,7 @@ pub async fn ensure_project_linked<P: AsRef<Path>>(
                 return Err(AlienError::new(ErrorData::UserCancelled));
             }
 
-            let project = choose_or_create_project(
+            let selection = choose_or_create_project(
                 http,
                 workspace,
                 Some(&suggest_project_name(dir)),
@@ -383,6 +395,7 @@ pub async fn ensure_project_linked<P: AsRef<Path>>(
                 true,
             )
             .await?;
+            let project = selection.project;
 
             let link = ProjectLink::new(
                 workspace.to_string(),

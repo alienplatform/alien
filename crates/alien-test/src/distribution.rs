@@ -48,6 +48,7 @@ use crate::{
 
 const DEFAULT_DEPLOYMENT_RUNNING_TIMEOUT: Duration = Duration::from_secs(600);
 const AZURE_DEPLOYMENT_RUNNING_TIMEOUT: Duration = Duration::from_secs(1_800);
+const KUBERNETES_DEPLOYMENT_RUNNING_TIMEOUT: Duration = Duration::from_secs(1_800);
 
 /// Artifact cleanup that sits outside the manager's normal destroy flow.
 pub enum DistributionArtifactCleanup {
@@ -606,7 +607,9 @@ fn missing_distribution_flow_config(
         DistributionFlow::TerraformAksHelmPull => {
             if !config.has_platform(Platform::Azure) {
                 Some("Azure management and target credentials are required")
-            } else if !has_azure_management_oidc(config) {
+            } else if !has_azure_management_oidc(config)
+                && !has_local_aks_management_metadata(config)
+            {
                 Some(
                     "AZURE_MANAGEMENT_OIDC_ISSUER, AZURE_MANAGEMENT_OIDC_SUBJECT, and AZURE_FEDERATED_TOKEN_FILE are required",
                 )
@@ -634,14 +637,22 @@ fn missing_distribution_flow_config(
 }
 
 fn has_azure_management_oidc(config: &TestConfig) -> bool {
-    config
-        .azure_mgmt
-        .as_ref()
-        .is_some_and(|mgmt| mgmt.oidc_issuer.is_some() && mgmt.oidc_subject.is_some())
+    has_azure_management_oidc_metadata(config)
         && std::env::var("AZURE_FEDERATED_TOKEN_FILE")
             .ok()
             .filter(|value| !value.is_empty())
             .is_some()
+}
+
+fn has_azure_management_oidc_metadata(config: &TestConfig) -> bool {
+    config
+        .azure_mgmt
+        .as_ref()
+        .is_some_and(|mgmt| mgmt.oidc_issuer.is_some() && mgmt.oidc_subject.is_some())
+}
+
+fn has_local_aks_management_metadata(config: &TestConfig) -> bool {
+    is_local_azure_direct_target_mode() && has_azure_management_oidc_metadata(config)
 }
 
 fn is_local_azure_direct_target_mode() -> bool {
@@ -1657,8 +1668,15 @@ async fn apply_terraform_and_import(
         if target.cloud_platform() == Platform::Gcp {
             wait_for_gcp_management_permissions(&prepared.config, &outputs).await?;
         }
-        if target.cloud_platform() == Platform::Azure && has_remote_management {
+        if target.cloud_platform() == Platform::Azure
+            && has_remote_management
+            && has_azure_management_oidc(&prepared.config)
+        {
             wait_for_azure_management_permissions(&prepared.config, &outputs).await?;
+        } else if target.cloud_platform() == Platform::Azure && has_remote_management {
+            info!(
+                "Skipping Azure management OIDC permission probe; local AKS run will validate the same management identity through in-cluster workload identity"
+            );
         }
         let request = terraform_import_request_from_outputs(&outputs, &prepared.dg_token)?;
         let base_platform = request.base_platform;
@@ -2171,6 +2189,7 @@ async fn wait_and_finalize(ctx: &mut TestContext) -> anyhow::Result<()> {
 fn deployment_running_timeout(platform: Platform) -> Duration {
     match platform {
         Platform::Azure => AZURE_DEPLOYMENT_RUNNING_TIMEOUT,
+        Platform::Kubernetes => KUBERNETES_DEPLOYMENT_RUNNING_TIMEOUT,
         _ => DEFAULT_DEPLOYMENT_RUNNING_TIMEOUT,
     }
 }
@@ -3103,6 +3122,10 @@ fn gcp_env(config: &GcpConfig) -> anyhow::Result<Vec<(String, String)>> {
             "GOOGLE_APPLICATION_CREDENTIALS".to_string(),
             path.display().to_string(),
         ));
+    } else if let Ok(path) = std::env::var("GOOGLE_APPLICATION_CREDENTIALS") {
+        if !path.trim().is_empty() {
+            env.push(("GOOGLE_APPLICATION_CREDENTIALS".to_string(), path));
+        }
     }
     Ok(env)
 }
@@ -3270,9 +3293,13 @@ mod tests {
     }
 
     #[test]
-    fn azure_distribution_wait_budget_accounts_for_rbac_propagation() {
+    fn distribution_wait_budget_accounts_for_slow_cloud_control_planes() {
         assert_eq!(
             deployment_running_timeout(Platform::Azure),
+            Duration::from_secs(1_800)
+        );
+        assert_eq!(
+            deployment_running_timeout(Platform::Kubernetes),
             Duration::from_secs(1_800)
         );
         assert_eq!(

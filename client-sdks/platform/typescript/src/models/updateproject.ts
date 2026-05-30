@@ -29,7 +29,7 @@ export const UpdateProjectType = {
 export type UpdateProjectType = ClosedEnum<typeof UpdateProjectType>;
 
 /**
- * The Git Repository that will be connected to the project. When this is defined, any pushes to the specified connected Git Repository will be automatically deployed
+ * Verified source repository connected to the project. Alien uses this for GitHub Actions setup and source-aware features; releases are still created explicitly by CI or `alien release`.
  */
 export type UpdateProjectGitRepository = {
   /**
@@ -204,11 +204,19 @@ export type UpdateProjectDefaultManagers = {
    * Unique identifier for a default private manager.
    */
   azure?: string | null | undefined;
+  /**
+   * Unique identifier for a default private manager.
+   */
+  kubernetes?: string | null | undefined;
+  /**
+   * Unique identifier for a default private manager.
+   */
+  local?: string | null | undefined;
 };
 
 export type UpdateProject = {
   /**
-   * The Git Repository that will be connected to the project. When this is defined, any pushes to the specified connected Git Repository will be automatically deployed
+   * Verified source repository connected to the project. Alien uses this for GitHub Actions setup and source-aware features; releases are still created explicitly by CI or `alien release`.
    */
   gitRepository?: UpdateProjectGitRepository | null | undefined;
   /**
@@ -469,6 +477,8 @@ export type UpdateProjectDefaultManagers$Outbound = {
   aws?: string | null | undefined;
   gcp?: string | null | undefined;
   azure?: string | null | undefined;
+  kubernetes?: string | null | undefined;
+  local?: string | null | undefined;
 };
 
 /** @internal */
@@ -479,6 +489,8 @@ export const UpdateProjectDefaultManagers$outboundSchema: z.ZodType<
   aws: z.nullable(z.string()).optional(),
   gcp: z.nullable(z.string()).optional(),
   azure: z.nullable(z.string()).optional(),
+  kubernetes: z.nullable(z.string()).optional(),
+  local: z.nullable(z.string()).optional(),
 });
 
 export function updateProjectDefaultManagersToJSON(

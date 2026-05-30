@@ -1,9 +1,6 @@
-//! Platform-only commands for managing private managers.
-//!
-//! Private managers are alien-manager instances deployed to a user's cloud by
-//! the platform. These commands interact with the platform API to create,
-//! monitor, and destroy them.
+//! Platform-only commands for managing workspace private managers.
 
+use crate::auth::AuthHttp;
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::interaction::{ConfirmationMode, InteractionMode};
@@ -11,26 +8,198 @@ use crate::output::{print_json, prompt_confirm};
 use crate::ui::{make_table, print_table, status_cell};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_platform_api::types::{
-    CreateManagerWorkspace, DeleteManagerWorkspace, GetManagerWorkspace,
-    ListManagerEventsWorkspace, ListManagersWorkspace, ManagerId, NewManagerRequest,
-    NewManagerRequestRegion, PrivateManagerCloud,
+    DeleteManagerWorkspace, GetManagerWorkspace, ListManagerEventsWorkspace, ListManagersWorkspace,
+    ManagerId,
 };
 use alien_platform_api::SdkResultExt as _;
-use clap::{Parser, Subcommand};
-use serde::Serialize;
+use clap::{Parser, Subcommand, ValueEnum};
+use reqwest::{Method, Url};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 #[derive(Parser, Debug, Clone)]
 #[command(
-    about = "Manager commands",
-    long_about = "Manage private managers deployed to your cloud."
+    about = "Manage private managers",
+    long_about = "Manage private managers deployed to a workspace cloud account."
 )]
-pub struct ManagerArgs {
+pub struct ManagersArgs {
     /// Print machine-readable JSON
     #[arg(long, global = true)]
     pub json: bool,
 
     #[command(subcommand)]
-    pub cmd: ManagerCmd,
+    pub cmd: ManagersCmd,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum ManagersCmd {
+    /// Create a new private manager and return its setup action
+    Create {
+        /// Manager display name
+        #[arg(long, default_value = "alien-private-manager")]
+        name: String,
+
+        /// Cloud where the manager will run
+        #[arg(long)]
+        cloud: PrivateManagerCloudArg,
+
+        /// Cloud region for the manager
+        #[arg(long)]
+        region: String,
+
+        /// Setup method. Defaults by cloud: AWS cloudformation, GCP google-oauth, Azure terraform
+        #[arg(long)]
+        setup: Option<PrivateManagerSetupMethodArg>,
+
+        /// Write Terraform setup files to this directory
+        #[arg(long)]
+        output_dir: Option<PathBuf>,
+
+        /// Open the returned browser setup URL
+        #[arg(long)]
+        open: bool,
+    },
+    /// List private managers
+    List {
+        /// Filter by cloud
+        #[arg(long)]
+        cloud: Option<PrivateManagerCloudArg>,
+    },
+    /// Show manager status and details
+    Status {
+        /// Manager ID
+        id: String,
+
+        /// Poll until setup reaches a terminal state
+        #[arg(long)]
+        watch: bool,
+    },
+    /// Return a fresh setup action for a pending or failed manager
+    Setup {
+        /// Manager ID
+        id: String,
+
+        /// Write Terraform setup files to this directory
+        #[arg(long)]
+        output_dir: Option<PathBuf>,
+
+        /// Open the returned browser setup URL
+        #[arg(long)]
+        open: bool,
+    },
+    /// Cancel an incomplete private-manager setup
+    Cancel {
+        /// Manager ID
+        id: String,
+
+        /// Skip confirmation prompt
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Delete a private manager
+    Delete {
+        /// Manager ID
+        id: String,
+
+        /// Skip confirmation prompt
+        #[arg(long)]
+        yes: bool,
+    },
+    /// View manager deployment events
+    Events {
+        /// Manager ID
+        id: String,
+
+        /// Follow events
+        #[arg(long, short)]
+        follow: bool,
+    },
+    /// Manage project default private managers
+    Defaults {
+        #[command(subcommand)]
+        cmd: DefaultsCmd,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum DefaultsCmd {
+    /// Show default private managers for a project
+    Show {
+        /// Project ID or name. Defaults to --project or the linked project
+        #[arg(long)]
+        project: Option<String>,
+    },
+    /// Set the default private manager for a cloud
+    Set {
+        /// Project ID or name. Defaults to --project or the linked project
+        #[arg(long)]
+        project: Option<String>,
+
+        /// Cloud to configure
+        #[arg(long)]
+        cloud: PrivateManagerCloudArg,
+
+        /// Manager ID
+        #[arg(long)]
+        manager: String,
+    },
+    /// Clear default private managers
+    Clear {
+        /// Project ID or name. Defaults to --project or the linked project
+        #[arg(long)]
+        project: Option<String>,
+
+        /// Cloud to clear, or all
+        #[arg(long)]
+        cloud: DefaultsClearTarget,
+    },
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PrivateManagerSetupMethodArg {
+    Cloudformation,
+    GoogleOauth,
+    Terraform,
+}
+
+impl PrivateManagerSetupMethodArg {
+    fn as_api_str(self) -> &'static str {
+        match self {
+            Self::Cloudformation => "cloudformation",
+            Self::GoogleOauth => "google-oauth",
+            Self::Terraform => "terraform",
+        }
+    }
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PrivateManagerCloudArg {
+    Aws,
+    Gcp,
+    Azure,
+}
+
+impl PrivateManagerCloudArg {
+    fn as_api_str(self) -> &'static str {
+        match self {
+            Self::Aws => "aws",
+            Self::Gcp => "gcp",
+            Self::Azure => "azure",
+        }
+    }
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DefaultsClearTarget {
+    Aws,
+    Gcp,
+    Azure,
+    All,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -39,23 +208,41 @@ struct ManagerSummary {
     id: String,
     name: String,
     status: String,
+    setup_status: Option<String>,
+    cloud: Option<String>,
+    region: Option<String>,
     targets: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    managed_deployment_count: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    created_at: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    managed_deployment_count: u64,
+    default_project_count: u64,
+    created_at: String,
     url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     version: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     last_heartbeat_at: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    deployment_link: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    token: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    is_system: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ManagerSetupResponse {
+    manager_id: String,
+    setup_status: String,
+    setup_token: String,
+    setup_token_id: String,
+    deployment_link: String,
+    setup: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ManagerSetupOutput {
+    manager_id: String,
+    name: Option<String>,
+    cloud: Option<String>,
+    region: Option<String>,
+    setup_status: String,
+    setup_token_id: String,
+    deployment_link: String,
+    setup: serde_json::Value,
+    files_written: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -69,288 +256,218 @@ struct ManagerEventSummary {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DestroyManagerOutput {
-    destroyed: bool,
+struct ManagerMutationOutput {
     id: String,
-    name: String,
+    action: String,
+    completed: bool,
 }
 
-#[derive(Subcommand, Debug, Clone)]
-pub enum ManagerCmd {
-    /// Deploy a new private manager
-    Deploy {
-        /// Manager display name
-        #[arg(long)]
-        name: String,
-
-        /// Cloud to deploy the manager on (aws, gcp, or azure)
-        #[arg(long)]
-        cloud: String,
-
-        /// Cloud region for the manager
-        #[arg(long)]
-        region: String,
-    },
-    /// Show manager status and details
-    Status {
-        /// Manager ID (e.g. mgr_...)
-        id: String,
-    },
-    /// List managers
-    #[command(alias = "list")]
-    Ls,
-    /// View manager events
-    Events {
-        /// Manager ID (e.g. mgr_...)
-        id: String,
-
-        /// Follow events (poll every 3 seconds)
-        #[arg(long, short)]
-        follow: bool,
-    },
-    /// Destroy a manager
-    Destroy {
-        /// Manager ID (e.g. mgr_...)
-        id: String,
-
-        /// Skip confirmation prompt
-        #[arg(long)]
-        yes: bool,
-    },
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectDefaultsOutput {
+    project_id: String,
+    project_name: String,
+    default_managers: Option<ProjectDefaultManagersJson>,
 }
 
-pub async fn manager_task(args: ManagerArgs, ctx: ExecutionMode) -> Result<()> {
-    if let ManagerCmd::Events { follow: true, .. } = &args.cmd {
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectDefaultManagersJson {
+    aws: Option<String>,
+    gcp: Option<String>,
+    azure: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DefaultsMutationOutput {
+    project_id: String,
+    project_name: String,
+    default_managers: Option<ProjectDefaultManagersJson>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateManagerRequest<'a> {
+    name: &'a str,
+    cloud: &'a str,
+    region: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    setup_method: Option<&'a str>,
+}
+
+pub async fn managers_task(args: ManagersArgs, ctx: ExecutionMode) -> Result<()> {
+    if let ManagersCmd::Events { follow: true, .. } = &args.cmd {
         if args.json {
             return Err(AlienError::new(ErrorData::ValidationError {
                 field: "follow".to_string(),
-                message: "`alien manager events --json` does not support `--follow`; rerun without `--json` for streaming output".to_string(),
+                message:
+                    "`alien managers events --json` does not support `--follow`; rerun without `--json` for streaming output"
+                        .to_string(),
             }));
         }
     }
 
-    if let ManagerCmd::Destroy { yes, .. } = &args.cmd {
-        destroy_confirmation_mode(*yes, args.json)?;
+    match &args.cmd {
+        ManagersCmd::Cancel { yes, .. } => {
+            confirmation_mode(*yes, args.json, "cancel")?;
+        }
+        ManagersCmd::Delete { yes, .. } => {
+            confirmation_mode(*yes, args.json, "delete")?;
+        }
+        _ => {}
     }
 
-    let client = ctx.sdk_client().await?;
-    let workspace_name = ctx.resolve_workspace_with_bootstrap(!args.json).await?;
+    let auth = ctx.auth_http().await?;
+    let client = auth.sdk_client().clone();
+    let workspace = ctx.resolve_workspace_with_bootstrap(!args.json).await?;
 
     match args.cmd {
-        ManagerCmd::Deploy {
+        ManagersCmd::Create {
             name,
             cloud,
             region,
+            setup,
+            output_dir,
+            open,
         } => {
-            deploy_manager_task(&client, &workspace_name, &name, &cloud, &region, args.json)
-                .await?;
+            create_manager_task(
+                &auth,
+                &workspace,
+                &name,
+                cloud,
+                &region,
+                setup,
+                output_dir.as_deref(),
+                open,
+                ctx.no_browser(),
+                args.json,
+            )
+            .await?;
         }
-        ManagerCmd::Status { id } => {
-            status_manager_task(&client, &workspace_name, &id, args.json).await?;
+        ManagersCmd::List { cloud } => {
+            list_managers_task(&client, &workspace, cloud, args.json).await?;
         }
-        ManagerCmd::Ls => {
-            list_managers_task(&client, &workspace_name, args.json).await?;
+        ManagersCmd::Status { id, watch } => {
+            status_manager_task(&client, &workspace, &id, watch, args.json).await?;
         }
-        ManagerCmd::Events { id, follow } => {
-            events_manager_task(&client, &workspace_name, &id, follow, args.json).await?;
+        ManagersCmd::Setup {
+            id,
+            output_dir,
+            open,
+        } => {
+            setup_manager_task(
+                &auth,
+                &workspace,
+                &id,
+                output_dir.as_deref(),
+                open,
+                ctx.no_browser(),
+                args.json,
+            )
+            .await?;
         }
-        ManagerCmd::Destroy { id, yes } => {
-            destroy_manager_task(&client, &workspace_name, &id, yes, args.json).await?;
+        ManagersCmd::Cancel { id, yes } => {
+            cancel_manager_task(&auth, &workspace, &id, yes, args.json).await?;
+        }
+        ManagersCmd::Delete { id, yes } => {
+            delete_manager_task(&client, &workspace, &id, yes, args.json).await?;
+        }
+        ManagersCmd::Events { id, follow } => {
+            events_manager_task(&client, &workspace, &id, follow, args.json).await?;
+        }
+        ManagersCmd::Defaults { cmd } => {
+            defaults_task(&auth, &ctx, &workspace, cmd, args.json).await?;
         }
     }
 
     Ok(())
 }
 
-fn parse_manager_cloud(cloud_str: &str) -> Result<PrivateManagerCloud> {
-    match cloud_str {
-        "aws" => Ok(PrivateManagerCloud::Aws),
-        "gcp" => Ok(PrivateManagerCloud::Gcp),
-        "azure" => Ok(PrivateManagerCloud::Azure),
-        _ => Err(AlienError::new(ErrorData::ValidationError {
-            field: "cloud".to_string(),
-            message: format!(
-                "Unknown cloud: {}. Managers can be deployed on: aws, gcp, azure",
-                cloud_str
-            ),
-        })),
-    }
-}
-
-async fn deploy_manager_task(
-    client: &alien_platform_api::Client,
+async fn create_manager_task(
+    auth: &AuthHttp,
     workspace: &str,
     name: &str,
-    cloud_str: &str,
-    region_str: &str,
+    cloud: PrivateManagerCloudArg,
+    region: &str,
+    setup: Option<PrivateManagerSetupMethodArg>,
+    output_dir: Option<&Path>,
+    open_browser: bool,
+    no_browser: bool,
     json: bool,
 ) -> Result<()> {
-    let cloud = parse_manager_cloud(cloud_str)?;
-    let region = NewManagerRequestRegion::try_from(region_str)
-        .into_alien_error()
-        .context(ErrorData::ValidationError {
-            field: "region".to_string(),
-            message: "manager region format is invalid".to_string(),
-        })?;
+    validate_setup_side_effect_flags(open_browser, no_browser, json)?;
+    let effective_setup = setup.unwrap_or_else(|| default_setup_method_for_cloud(cloud));
+    if output_dir.is_some() && effective_setup != PrivateManagerSetupMethodArg::Terraform {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "output-dir".to_string(),
+            message: "--output-dir is only supported for terraform setup methods".to_string(),
+        }));
+    }
 
-    let request = NewManagerRequest {
-        name: name.to_string(),
-        cloud,
+    let body = CreateManagerRequest {
+        name,
+        cloud: cloud.as_api_str(),
         region,
-        otlp_config: None,
+        setup_method: setup.map(PrivateManagerSetupMethodArg::as_api_str),
+    };
+    let url = api_url(&auth.base_url, "/v1/managers", workspace, None)?;
+    let response: ManagerSetupResponse = send_json(auth, Method::POST, url, Some(&body)).await?;
+    let files_written = write_setup_files(output_dir, &response.setup)?;
+    maybe_open_setup(&response.setup, open_browser)?;
+
+    let output = ManagerSetupOutput {
+        manager_id: response.manager_id,
+        name: Some(name.to_string()),
+        cloud: Some(cloud.as_api_str().to_string()),
+        region: Some(region.to_string()),
+        setup_status: response.setup_status,
+        setup_token_id: response.setup_token_id,
+        deployment_link: response.deployment_link,
+        setup: response.setup,
+        files_written,
     };
 
-    let workspace_param = CreateManagerWorkspace::try_from(workspace)
-        .into_alien_error()
-        .context(ErrorData::ValidationError {
-            field: "workspace".to_string(),
-            message: "workspace name format is invalid".to_string(),
-        })?;
-
-    let response = client
-        .create_manager()
-        .workspace(&workspace_param)
-        .body(&request)
-        .send()
-        .await
-        .into_sdk_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: "creating manager".to_string(),
-            url: None,
-        })?;
-
-    let manager = response.into_inner();
-    let summary = ManagerSummary {
-        id: manager.manager_id.as_str().to_string(),
-        name: name.to_string(),
-        status: manager.setup_status.to_string(),
-        targets: vec![cloud.to_string()],
-        managed_deployment_count: None,
-        created_at: None,
-        url: None,
-        version: None,
-        last_heartbeat_at: None,
-        deployment_link: Some(manager.deployment_link.to_string()),
-        token: Some(manager.setup_token),
-        is_system: None,
-    };
-
-    if json {
-        return print_json(&summary);
-    }
-
-    println!("Manager created successfully!");
-    println!("  ID: {}", summary.id);
-    println!("  Name: {}", summary.name);
-    println!("  Cloud: {}", cloud_str);
-    println!("  Region: {}", region_str);
-    println!("  Targets: {}", summary.targets.join(", "));
-    println!("  Status: {}", summary.status);
-    println!();
-    if let Some(deployment_link) = &summary.deployment_link {
-        println!("  Deployment Link: {}", deployment_link);
-    }
-    if let Some(token) = &summary.token {
-        println!("  Token: {}", token);
-        println!();
-        println!("Next: alien deploy --token {} --name <deployment>", token);
-    }
-    println!();
-
-    Ok(())
+    render_setup_output(&output, json)
 }
 
-async fn status_manager_task(
-    client: &alien_platform_api::Client,
+async fn setup_manager_task(
+    auth: &AuthHttp,
     workspace: &str,
     manager_id: &str,
+    output_dir: Option<&Path>,
+    open_browser: bool,
+    no_browser: bool,
     json: bool,
 ) -> Result<()> {
-    let workspace_param = GetManagerWorkspace::try_from(workspace)
-        .into_alien_error()
-        .context(ErrorData::ValidationError {
-            field: "workspace".to_string(),
-            message: "workspace name format is invalid".to_string(),
-        })?;
+    validate_setup_side_effect_flags(open_browser, no_browser, json)?;
+    validate_manager_id(manager_id)?;
+    let path = format!("/v1/managers/{manager_id}/setup-token");
+    let url = api_url(&auth.base_url, &path, workspace, None)?;
+    let response: ManagerSetupResponse =
+        send_json::<(), _>(auth, Method::POST, url, None::<&()>).await?;
+    let files_written = write_setup_files(output_dir, &response.setup)?;
+    maybe_open_setup(&response.setup, open_browser)?;
 
-    let id_param =
-        ManagerId::try_from(manager_id)
-            .into_alien_error()
-            .context(ErrorData::ValidationError {
-                field: "id".to_string(),
-                message: "manager ID format is invalid (expected mgr_...)".to_string(),
-            })?;
-
-    let response = client
-        .get_manager()
-        .id(&id_param)
-        .workspace(&workspace_param)
-        .send()
-        .await
-        .into_sdk_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: "retrieving manager details".to_string(),
-            url: None,
-        })?;
-
-    let manager = response.into_inner();
-    let summary = ManagerSummary {
-        id: manager.id.as_str().to_string(),
-        name: manager.name.clone(),
-        status: manager.status.to_string(),
-        targets: manager
-            .targets
-            .iter()
-            .map(|target| target.to_string())
-            .collect(),
-        managed_deployment_count: Some(manager.managed_deployment_count as i64),
-        created_at: Some(manager.created_at.to_string()),
-        url: manager.url.as_ref().map(|value| value.to_string()),
-        version: manager.version.as_ref().map(|value| value.to_string()),
-        last_heartbeat_at: manager.last_heartbeat_at.map(|value| value.to_string()),
-        deployment_link: None,
-        token: None,
-        is_system: Some(manager.is_system),
+    let output = ManagerSetupOutput {
+        manager_id: response.manager_id,
+        name: None,
+        cloud: None,
+        region: None,
+        setup_status: response.setup_status,
+        setup_token_id: response.setup_token_id,
+        deployment_link: response.deployment_link,
+        setup: response.setup,
+        files_written,
     };
 
-    if json {
-        return print_json(&summary);
-    }
-
-    println!("Manager Details:");
-    println!("  ID: {}", summary.id);
-    println!("  Name: {}", summary.name);
-    println!("  Status: {}", summary.status);
-    println!("  Targets: {}", summary.targets.join(", "));
-    if let Some(is_system) = summary.is_system {
-        println!("  System: {}", is_system);
-    }
-    if let Some(managed_deployment_count) = summary.managed_deployment_count {
-        println!("  Deployments: {}", managed_deployment_count);
-    }
-
-    if let Some(url) = &summary.url {
-        println!("  URL: {}", url);
-    }
-
-    if let Some(version) = &summary.version {
-        println!("  Version: {}", version);
-    }
-
-    if let Some(last_heartbeat) = &summary.last_heartbeat_at {
-        println!("  Last Heartbeat: {}", last_heartbeat);
-    }
-
-    if let Some(created_at) = &summary.created_at {
-        println!("  Created: {}", created_at);
-    }
-
-    Ok(())
+    render_setup_output(&output, json)
 }
 
 async fn list_managers_task(
     client: &alien_platform_api::Client,
     workspace: &str,
+    cloud: Option<PrivateManagerCloudArg>,
     json: bool,
 ) -> Result<()> {
     let workspace_param = ListManagersWorkspace::try_from(workspace)
@@ -371,27 +488,31 @@ async fn list_managers_task(
             url: None,
         })?;
 
-    let managers = response.into_inner();
-    let summaries: Vec<ManagerSummary> = managers
-        .iter()
-        .map(|manager| ManagerSummary {
-            id: manager.id.as_str().to_string(),
-            name: manager.name.clone(),
-            status: manager.status.to_string(),
-            targets: manager
-                .targets
-                .iter()
-                .map(|target| target.to_string())
-                .collect(),
-            managed_deployment_count: Some(manager.managed_deployment_count as i64),
-            created_at: Some(manager.created_at.to_string()),
-            url: manager.url.as_ref().map(|value| value.to_string()),
-            version: manager.version.as_ref().map(|value| value.to_string()),
-            last_heartbeat_at: manager.last_heartbeat_at.map(|value| value.to_string()),
-            deployment_link: None,
-            token: None,
-            is_system: Some(manager.is_system),
+    let cloud_filter = cloud.map(|value| value.as_api_str().to_string());
+    let summaries: Vec<ManagerSummary> = response
+        .into_inner()
+        .into_iter()
+        .filter(|manager| !manager.is_system)
+        .filter(|manager| {
+            manager
+                .setup_status
+                .as_ref()
+                .map(|status| status.to_string() != "deleted")
+                .unwrap_or(true)
         })
+        .filter(|manager| {
+            cloud_filter
+                .as_ref()
+                .map(|cloud| {
+                    manager
+                        .cloud
+                        .as_ref()
+                        .map(|manager_cloud| manager_cloud.to_string() == *cloud)
+                        .unwrap_or(false)
+                })
+                .unwrap_or(true)
+        })
+        .map(manager_summary)
         .collect();
 
     if json {
@@ -399,45 +520,692 @@ async fn list_managers_task(
     }
 
     if summaries.is_empty() {
-        println!("(no managers)");
-    } else {
-        let mut table = make_table(&[
-            "Name",
-            "ID",
-            "Status",
-            "Targets",
-            "Deployments",
-            "Version",
-            "Last heartbeat",
-        ]);
-        for manager in &summaries {
-            table.add_row(vec![
-                manager.name.clone().into(),
-                manager.id.clone().into(),
-                status_cell(&manager.status),
-                manager.targets.join(", ").into(),
-                manager
-                    .managed_deployment_count
-                    .map(|count| count.to_string())
-                    .unwrap_or_else(|| "—".to_string())
-                    .into(),
-                manager
-                    .version
-                    .clone()
-                    .unwrap_or_else(|| "—".to_string())
-                    .into(),
-                manager
-                    .last_heartbeat_at
-                    .clone()
-                    .or_else(|| manager.created_at.clone())
-                    .unwrap_or_else(|| "—".to_string())
-                    .into(),
-            ]);
-        }
-        print_table(table);
+        println!("(no private managers)");
+        return Ok(());
     }
 
+    let mut table = make_table(&[
+        "Name",
+        "ID",
+        "Cloud",
+        "Region",
+        "Setup",
+        "Health",
+        "Deployments",
+        "Defaults",
+    ]);
+    for manager in &summaries {
+        table.add_row(vec![
+            manager.name.clone().into(),
+            manager.id.clone().into(),
+            manager
+                .cloud
+                .clone()
+                .unwrap_or_else(|| "-".to_string())
+                .into(),
+            manager
+                .region
+                .clone()
+                .unwrap_or_else(|| "-".to_string())
+                .into(),
+            manager
+                .setup_status
+                .clone()
+                .unwrap_or_else(|| "-".to_string())
+                .into(),
+            status_cell(&manager.status),
+            manager.managed_deployment_count.to_string().into(),
+            manager.default_project_count.to_string().into(),
+        ]);
+    }
+    print_table(table);
     Ok(())
+}
+
+async fn status_manager_task(
+    client: &alien_platform_api::Client,
+    workspace: &str,
+    manager_id: &str,
+    watch: bool,
+    json: bool,
+) -> Result<()> {
+    if watch && json {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "watch".to_string(),
+            message:
+                "`alien managers status --watch --json` is not supported; poll without --watch"
+                    .to_string(),
+        }));
+    }
+
+    loop {
+        let summary = get_manager_summary(client, workspace, manager_id).await?;
+        if !watch {
+            if json {
+                return print_json(&summary);
+            }
+            render_manager_status(&summary);
+            return Ok(());
+        }
+
+        render_manager_status(&summary);
+        if manager_setup_terminal(summary.setup_status.as_deref()) {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    }
+}
+
+async fn get_manager_summary(
+    client: &alien_platform_api::Client,
+    workspace: &str,
+    manager_id: &str,
+) -> Result<ManagerSummary> {
+    let workspace_param = GetManagerWorkspace::try_from(workspace)
+        .into_alien_error()
+        .context(ErrorData::ValidationError {
+            field: "workspace".to_string(),
+            message: "workspace name format is invalid".to_string(),
+        })?;
+    let id_param = validate_manager_id(manager_id)?;
+
+    let response = client
+        .get_manager()
+        .id(&id_param)
+        .workspace(&workspace_param)
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "retrieving manager details".to_string(),
+            url: None,
+        })?;
+
+    Ok(manager_summary(response.into_inner()))
+}
+
+fn render_manager_status(summary: &ManagerSummary) {
+    println!("Manager:");
+    println!("  ID: {}", summary.id);
+    println!("  Name: {}", summary.name);
+    println!("  Health: {}", summary.status);
+    if let Some(setup_status) = &summary.setup_status {
+        println!("  Setup: {}", setup_status);
+    }
+    if let Some(cloud) = &summary.cloud {
+        println!("  Cloud: {}", cloud);
+    }
+    if let Some(region) = &summary.region {
+        println!("  Region: {}", region);
+    }
+    println!("  Targets: {}", summary.targets.join(", "));
+    println!("  Deployments: {}", summary.managed_deployment_count);
+    println!("  Default Projects: {}", summary.default_project_count);
+    if let Some(url) = &summary.url {
+        println!("  URL: {}", url);
+    }
+    if let Some(version) = &summary.version {
+        println!("  Version: {}", version);
+    }
+    if let Some(last_heartbeat) = &summary.last_heartbeat_at {
+        println!("  Last Heartbeat: {}", last_heartbeat);
+    }
+    println!("  Created: {}", summary.created_at);
+}
+
+async fn cancel_manager_task(
+    auth: &AuthHttp,
+    workspace: &str,
+    manager_id: &str,
+    yes: bool,
+    json: bool,
+) -> Result<()> {
+    validate_manager_id(manager_id)?;
+    let mode = confirmation_mode(yes, json, "cancel")?;
+    if matches!(mode, ConfirmationMode::Prompt)
+        && !prompt_confirm("Cancel this incomplete manager setup?", false)?
+    {
+        println!("Cancel skipped.");
+        return Ok(());
+    }
+
+    let path = format!("/v1/managers/{manager_id}/cancel-setup");
+    let url = api_url(&auth.base_url, &path, workspace, None)?;
+    let _: serde_json::Value = send_json::<(), _>(auth, Method::POST, url, None::<&()>).await?;
+
+    if json {
+        return print_json(&ManagerMutationOutput {
+            id: manager_id.to_string(),
+            action: "cancel".to_string(),
+            completed: true,
+        });
+    }
+
+    println!("Manager setup canceled: {manager_id}");
+    Ok(())
+}
+
+async fn delete_manager_task(
+    client: &alien_platform_api::Client,
+    workspace: &str,
+    manager_id: &str,
+    yes: bool,
+    json: bool,
+) -> Result<()> {
+    let mode = confirmation_mode(yes, json, "delete")?;
+    let summary = get_manager_summary(client, workspace, manager_id).await?;
+
+    if !json {
+        println!("About to delete manager:");
+        println!("  ID: {}", summary.id);
+        println!("  Name: {}", summary.name);
+        println!(
+            "  Managed Deployments: {}",
+            summary.managed_deployment_count
+        );
+    }
+
+    if matches!(mode, ConfirmationMode::Prompt) && !prompt_confirm("Delete this manager?", false)? {
+        println!("Delete skipped.");
+        return Ok(());
+    }
+
+    let workspace_param = DeleteManagerWorkspace::try_from(workspace)
+        .into_alien_error()
+        .context(ErrorData::ValidationError {
+            field: "workspace".to_string(),
+            message: "workspace name format is invalid".to_string(),
+        })?;
+    let id_param = validate_manager_id(manager_id)?;
+
+    client
+        .delete_manager()
+        .id(id_param)
+        .workspace(&workspace_param)
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "deleting manager".to_string(),
+            url: None,
+        })?;
+
+    if json {
+        return print_json(&ManagerMutationOutput {
+            id: summary.id,
+            action: "delete".to_string(),
+            completed: true,
+        });
+    }
+
+    println!("Manager delete started: {}", summary.id);
+    Ok(())
+}
+
+async fn defaults_task(
+    auth: &AuthHttp,
+    ctx: &ExecutionMode,
+    workspace: &str,
+    cmd: DefaultsCmd,
+    json: bool,
+) -> Result<()> {
+    match cmd {
+        DefaultsCmd::Show { project } => {
+            let project = resolve_project_arg(ctx, project.as_deref(), !json).await?;
+            let output = get_project_defaults(auth, workspace, &project).await?;
+            render_defaults_output(&output, json)
+        }
+        DefaultsCmd::Set {
+            project,
+            cloud,
+            manager,
+        } => {
+            validate_manager_id(&manager)?;
+            let project = resolve_project_arg(ctx, project.as_deref(), !json).await?;
+            let mut output = get_project_defaults(auth, workspace, &project).await?;
+            let mut defaults = output.default_managers.unwrap_or_default();
+            set_default_manager(&mut defaults, cloud, Some(manager));
+            output = patch_project_defaults(auth, workspace, &project, Some(defaults)).await?;
+            render_defaults_mutation_output(&output, json)
+        }
+        DefaultsCmd::Clear { project, cloud } => {
+            let project = resolve_project_arg(ctx, project.as_deref(), !json).await?;
+            let mut output = get_project_defaults(auth, workspace, &project).await?;
+            let mut defaults = output.default_managers.unwrap_or_default();
+            match cloud {
+                DefaultsClearTarget::Aws => defaults.aws = None,
+                DefaultsClearTarget::Gcp => defaults.gcp = None,
+                DefaultsClearTarget::Azure => defaults.azure = None,
+                DefaultsClearTarget::All => {
+                    defaults = ProjectDefaultManagersJson::default();
+                }
+            }
+            let next =
+                if defaults.aws.is_none() && defaults.gcp.is_none() && defaults.azure.is_none() {
+                    None
+                } else {
+                    Some(defaults)
+                };
+            output = patch_project_defaults(auth, workspace, &project, next).await?;
+            render_defaults_mutation_output(&output, json)
+        }
+    }
+}
+
+async fn resolve_project_arg(
+    ctx: &ExecutionMode,
+    project: Option<&str>,
+    allow_prompt: bool,
+) -> Result<String> {
+    let (project_id, _) = ctx.resolve_project(project, allow_prompt).await?;
+    Ok(project_id)
+}
+
+async fn get_project_defaults(
+    auth: &AuthHttp,
+    workspace: &str,
+    project: &str,
+) -> Result<ProjectDefaultsOutput> {
+    let path = format!("/v1/projects/{}", urlencoding::encode(project));
+    let url = api_url(&auth.base_url, &path, workspace, None)?;
+    let value: serde_json::Value = send_json::<(), _>(auth, Method::GET, url, None::<&()>).await?;
+    project_defaults_from_value(value)
+}
+
+async fn patch_project_defaults(
+    auth: &AuthHttp,
+    workspace: &str,
+    project: &str,
+    defaults: Option<ProjectDefaultManagersJson>,
+) -> Result<ProjectDefaultsOutput> {
+    let path = format!("/v1/projects/{}", urlencoding::encode(project));
+    let url = api_url(&auth.base_url, &path, workspace, None)?;
+    let value: serde_json::Value = send_json(
+        auth,
+        Method::PATCH,
+        url,
+        Some(&json!({ "defaultManagers": defaults })),
+    )
+    .await?;
+    project_defaults_from_value(value)
+}
+
+fn project_defaults_from_value(value: serde_json::Value) -> Result<ProjectDefaultsOutput> {
+    let project_id = value
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::JsonError {
+                operation: "parse project".to_string(),
+                reason: "project response is missing id".to_string(),
+            })
+        })?
+        .to_string();
+    let project_name = value
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::JsonError {
+                operation: "parse project".to_string(),
+                reason: "project response is missing name".to_string(),
+            })
+        })?
+        .to_string();
+    let default_managers = value
+        .get("defaultManagers")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::JsonError {
+            operation: "parse project default managers".to_string(),
+            reason: "defaultManagers has an unexpected shape".to_string(),
+        })?;
+
+    Ok(ProjectDefaultsOutput {
+        project_id,
+        project_name,
+        default_managers,
+    })
+}
+
+fn render_defaults_output(output: &ProjectDefaultsOutput, json: bool) -> Result<()> {
+    if json {
+        return print_json(output);
+    }
+    println!("Project: {} ({})", output.project_name, output.project_id);
+    render_default_managers(output.default_managers.as_ref());
+    Ok(())
+}
+
+fn render_defaults_mutation_output(output: &ProjectDefaultsOutput, json: bool) -> Result<()> {
+    if json {
+        return print_json(&DefaultsMutationOutput {
+            project_id: output.project_id.clone(),
+            project_name: output.project_name.clone(),
+            default_managers: output.default_managers.clone(),
+        });
+    }
+    println!(
+        "Project defaults updated: {} ({})",
+        output.project_name, output.project_id
+    );
+    render_default_managers(output.default_managers.as_ref());
+    Ok(())
+}
+
+fn render_default_managers(defaults: Option<&ProjectDefaultManagersJson>) {
+    let empty = ProjectDefaultManagersJson::default();
+    let defaults = defaults.unwrap_or(&empty);
+    println!("  AWS: {}", defaults.aws.as_deref().unwrap_or("-"));
+    println!("  GCP: {}", defaults.gcp.as_deref().unwrap_or("-"));
+    println!("  Azure: {}", defaults.azure.as_deref().unwrap_or("-"));
+}
+
+fn set_default_manager(
+    defaults: &mut ProjectDefaultManagersJson,
+    cloud: PrivateManagerCloudArg,
+    manager_id: Option<String>,
+) {
+    match cloud {
+        PrivateManagerCloudArg::Aws => defaults.aws = manager_id,
+        PrivateManagerCloudArg::Gcp => defaults.gcp = manager_id,
+        PrivateManagerCloudArg::Azure => defaults.azure = manager_id,
+    }
+}
+
+fn render_setup_output(output: &ManagerSetupOutput, json: bool) -> Result<()> {
+    if json {
+        return print_json(output);
+    }
+
+    println!("Manager setup ready:");
+    println!("  ID: {}", output.manager_id);
+    if let Some(name) = &output.name {
+        println!("  Name: {}", name);
+    }
+    if let Some(cloud) = &output.cloud {
+        println!("  Cloud: {}", cloud);
+    }
+    if let Some(region) = &output.region {
+        println!("  Region: {}", region);
+    }
+    println!("  Setup: {}", output.setup_status);
+    println!("  Deployment Portal: {}", output.deployment_link);
+    render_setup_action(&output.setup);
+    if !output.files_written.is_empty() {
+        println!("  Files:");
+        for file in &output.files_written {
+            println!("    {}", file);
+        }
+    }
+    println!();
+    println!("Next: alien managers status {} --watch", output.manager_id);
+    Ok(())
+}
+
+fn render_setup_action(setup: &serde_json::Value) {
+    let method = setup
+        .get("method")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown");
+    println!("  Method: {}", method);
+    match method {
+        "cloudformation" => {
+            print_json_field(setup, "launchUrl", "  CloudFormation");
+            print_json_field(setup, "templateUrl", "  Template");
+            print_json_field(setup, "stackName", "  Stack");
+        }
+        "google-oauth" => {
+            print_json_field(setup, "deploymentPortalUrl", "  Google OAuth");
+            print_json_field(setup, "oauthStartUrl", "  OAuth API");
+        }
+        "terraform" => {
+            print_json_field(setup, "moduleSource", "  Terraform Module");
+            print_json_field(setup, "providerSource", "  Terraform Provider");
+            println!("  Terraform: use --output-dir to write main.tf and terraform.tfvars");
+        }
+        _ => {}
+    }
+}
+
+fn print_json_field(setup: &serde_json::Value, field: &str, label: &str) {
+    if let Some(value) = setup.get(field).and_then(serde_json::Value::as_str) {
+        println!("{label}: {value}");
+    }
+}
+
+fn write_setup_files(output_dir: Option<&Path>, setup: &serde_json::Value) -> Result<Vec<String>> {
+    let Some(output_dir) = output_dir else {
+        return Ok(Vec::new());
+    };
+    let method = setup
+        .get("method")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    if method != "terraform" {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "output-dir".to_string(),
+            message: "--output-dir is only supported for terraform setup methods".to_string(),
+        }));
+    }
+
+    fs::create_dir_all(output_dir)
+        .into_alien_error()
+        .context(ErrorData::FileOperationFailed {
+            operation: "create directory".to_string(),
+            file_path: output_dir.display().to_string(),
+            reason: "failed to create Terraform setup directory".to_string(),
+        })?;
+
+    let files = [
+        (
+            "main.tf",
+            setup.get("mainTf").and_then(serde_json::Value::as_str),
+        ),
+        (
+            "terraform.tfvars",
+            setup.get("tfvars").and_then(serde_json::Value::as_str),
+        ),
+    ];
+    let mut written = Vec::new();
+    for (name, content) in files {
+        let content = content.ok_or_else(|| {
+            AlienError::new(ErrorData::JsonError {
+                operation: "parse terraform setup".to_string(),
+                reason: format!("terraform setup is missing {name}"),
+            })
+        })?;
+        let path = output_dir.join(name);
+        fs::write(&path, content)
+            .into_alien_error()
+            .context(ErrorData::FileOperationFailed {
+                operation: "write".to_string(),
+                file_path: path.display().to_string(),
+                reason: "failed to write Terraform setup file".to_string(),
+            })?;
+        written.push(path.display().to_string());
+    }
+    Ok(written)
+}
+
+fn maybe_open_setup(setup: &serde_json::Value, open_browser: bool) -> Result<()> {
+    if !open_browser {
+        return Ok(());
+    }
+
+    let url = setup
+        .get("launchUrl")
+        .or_else(|| setup.get("deploymentPortalUrl"))
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::JsonError {
+                operation: "open setup URL".to_string(),
+                reason: "setup response does not include a browser URL".to_string(),
+            })
+        })?;
+
+    open::that(url)
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: format!("failed to open setup URL: {url}"),
+        })?;
+    Ok(())
+}
+
+fn validate_setup_side_effect_flags(
+    open_browser: bool,
+    no_browser: bool,
+    json: bool,
+) -> Result<()> {
+    if !open_browser {
+        return Ok(());
+    }
+    if json {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "open".to_string(),
+            message: "`--open` is not supported with `--json`".to_string(),
+        }));
+    }
+    if no_browser {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "open".to_string(),
+            message: "`--open` cannot be used with `--no-browser`".to_string(),
+        }));
+    }
+    Ok(())
+}
+
+fn default_setup_method_for_cloud(cloud: PrivateManagerCloudArg) -> PrivateManagerSetupMethodArg {
+    match cloud {
+        PrivateManagerCloudArg::Aws => PrivateManagerSetupMethodArg::Cloudformation,
+        PrivateManagerCloudArg::Gcp => PrivateManagerSetupMethodArg::GoogleOauth,
+        PrivateManagerCloudArg::Azure => PrivateManagerSetupMethodArg::Terraform,
+    }
+}
+
+fn manager_summary(manager: alien_platform_api::types::Manager) -> ManagerSummary {
+    ManagerSummary {
+        id: manager.id.as_str().to_string(),
+        name: manager.name,
+        status: manager.status.to_string(),
+        setup_status: manager.setup_status.map(|status| status.to_string()),
+        cloud: manager.cloud.map(|cloud| cloud.to_string()),
+        region: manager.region,
+        targets: manager
+            .targets
+            .into_iter()
+            .map(|target| target.to_string())
+            .collect(),
+        managed_deployment_count: manager.managed_deployment_count,
+        default_project_count: manager.default_project_count,
+        created_at: manager.created_at.to_string(),
+        url: manager.url,
+        version: manager.version,
+        last_heartbeat_at: manager.last_heartbeat_at.map(|value| value.to_string()),
+    }
+}
+
+fn manager_setup_terminal(setup_status: Option<&str>) -> bool {
+    matches!(
+        setup_status,
+        Some("active" | "failed" | "deleted" | "canceled" | "cancelled")
+    )
+}
+
+fn validate_manager_id(manager_id: &str) -> Result<ManagerId> {
+    ManagerId::try_from(manager_id)
+        .into_alien_error()
+        .context(ErrorData::ValidationError {
+            field: "id".to_string(),
+            message: "manager ID format is invalid (expected mgr_...)".to_string(),
+        })
+}
+
+fn confirmation_mode(action_yes: bool, json: bool, action: &str) -> Result<ConfirmationMode> {
+    InteractionMode::current(json).confirmation_mode(
+        action_yes,
+        &format!(
+            "`alien managers {action} --json` requires `--yes`; confirmation prompts are disabled in machine mode"
+        ),
+    )
+}
+
+fn api_url(
+    base_url: &str,
+    path: &str,
+    workspace: &str,
+    extra_query: Option<&[(&str, &str)]>,
+) -> Result<Url> {
+    let mut url =
+        Url::parse(base_url)
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "platform base URL is invalid".to_string(),
+            })?;
+    url.set_path(path);
+    {
+        let mut query = url.query_pairs_mut();
+        query.append_pair("workspace", workspace);
+        if let Some(extra_query) = extra_query {
+            for (key, value) in extra_query {
+                query.append_pair(key, value);
+            }
+        }
+    }
+    Ok(url)
+}
+
+async fn send_json<B, T>(auth: &AuthHttp, method: Method, url: Url, body: Option<&B>) -> Result<T>
+where
+    B: Serialize + ?Sized,
+    T: for<'de> Deserialize<'de>,
+{
+    let mut request = auth.reqwest_client().request(method, url.clone());
+    if let Some(body) = body {
+        request = request.json(body);
+    }
+    let response =
+        request
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: "sending platform API request".to_string(),
+                url: Some(url.to_string()),
+            })?;
+    let status = response.status();
+    let bytes = response
+        .bytes()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "reading platform API response".to_string(),
+            url: Some(url.to_string()),
+        })?;
+
+    if !status.is_success() {
+        let message = serde_json::from_slice::<serde_json::Value>(&bytes)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("message")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| String::from_utf8_lossy(&bytes).to_string());
+        return Err(AlienError::new(ErrorData::ApiRequestFailed {
+            message: format!("platform API returned {status}: {message}"),
+            url: Some(url.to_string()),
+        }));
+    }
+
+    serde_json::from_slice(&bytes)
+        .into_alien_error()
+        .context(ErrorData::JsonError {
+            operation: "parse platform API response".to_string(),
+            reason: "response JSON did not match the expected shape".to_string(),
+        })
 }
 
 /// Format an event's data as a human-readable summary.
@@ -458,27 +1226,23 @@ fn format_event_data(data: &alien_platform_api::types::EventData) -> String {
             resource_name,
             resource_type,
             ..
-        } => {
-            format!("Building {} '{}'", resource_type, resource_name)
-        }
+        } => format!("Building {} '{}'", resource_type, resource_name),
         EventData::BuildingImage { image } => format!("Building image: {}", image),
         EventData::PushingImage { image, .. } => format!("Pushing image: {}", image),
-        EventData::PushingStack { stack, platform } => {
+        EventData::PushingStack {
+            stack, platform, ..
+        } => {
             format!("Pushing stack: {} ({})", stack, platform)
         }
         EventData::PushingResource {
             resource_name,
             resource_type,
-        } => {
-            format!("Pushing {} '{}'", resource_type, resource_name)
-        }
+        } => format!("Pushing {} '{}'", resource_type, resource_name),
         EventData::CreatingRelease { .. } => "Creating release".to_string(),
-        // Fall back to debug format for any other variants
         other => format!("{:?}", other),
     }
 }
 
-/// Format an event's state as a human-readable string.
 fn format_event_state(state: &alien_platform_api::types::EventState) -> &'static str {
     use alien_platform_api::types::EventState;
 
@@ -503,18 +1267,9 @@ async fn events_manager_task(
             field: "workspace".to_string(),
             message: "workspace name format is invalid".to_string(),
         })?;
-
-    // Validate the manager ID format
-    let _id_validate =
-        ManagerId::try_from(manager_id)
-            .into_alien_error()
-            .context(ErrorData::ValidationError {
-                field: "id".to_string(),
-                message: "manager ID format is invalid (expected mgr_...)".to_string(),
-            })?;
+    validate_manager_id(manager_id)?;
 
     let mut last_event_id: Option<String> = None;
-
     loop {
         let response = client
             .list_manager_events()
@@ -532,7 +1287,7 @@ async fn events_manager_task(
         let events = &events_response.items;
         let new_events: Vec<_> = match &last_event_id {
             Some(seen_id) => {
-                let pos = events.iter().position(|e| *e.id == *seen_id);
+                let pos = events.iter().position(|event| *event.id == *seen_id);
                 match pos {
                     Some(idx) => events[idx + 1..].to_vec(),
                     None => events.to_vec(),
@@ -540,10 +1295,6 @@ async fn events_manager_task(
             }
             None => events.to_vec(),
         };
-
-        if events.is_empty() && last_event_id.is_none() && !json {
-            println!("(no events)");
-        }
 
         if json {
             let payload: Vec<ManagerEventSummary> = new_events
@@ -558,17 +1309,19 @@ async fn events_manager_task(
             return print_json(&payload);
         }
 
+        if events.is_empty() && last_event_id.is_none() {
+            println!("(no events)");
+        }
+
         for event in &new_events {
             let state = format_event_state(&event.state);
             let data = format_event_data(&event.data);
             let timestamp = event.created_at.format("%H:%M:%S");
-
             if state.is_empty() {
                 println!("[{}] {}", timestamp, data);
             } else {
                 println!("[{}] {} ({})", timestamp, data, state);
             }
-
             last_event_id = Some((*event.id).clone());
         }
 
@@ -576,125 +1329,10 @@ async fn events_manager_task(
             break;
         }
 
-        tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+        tokio::time::sleep(Duration::from_secs(3)).await;
     }
 
     Ok(())
-}
-
-async fn destroy_manager_task(
-    client: &alien_platform_api::Client,
-    workspace: &str,
-    manager_id: &str,
-    yes: bool,
-    json: bool,
-) -> Result<()> {
-    let confirmation_mode = destroy_confirmation_mode(yes, json)?;
-
-    // Get manager details first for confirmation
-    let workspace_param_get = GetManagerWorkspace::try_from(workspace)
-        .into_alien_error()
-        .context(ErrorData::ValidationError {
-            field: "workspace".to_string(),
-            message: "workspace name format is invalid".to_string(),
-        })?;
-
-    let id_param =
-        ManagerId::try_from(manager_id)
-            .into_alien_error()
-            .context(ErrorData::ValidationError {
-                field: "id".to_string(),
-                message: "manager ID format is invalid (expected mgr_...)".to_string(),
-            })?;
-
-    let response = client
-        .get_manager()
-        .id(&id_param)
-        .workspace(&workspace_param_get)
-        .send()
-        .await
-        .into_sdk_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: "retrieving manager details".to_string(),
-            url: None,
-        })?;
-
-    let manager = response.into_inner();
-
-    if !json {
-        println!("About to destroy manager:");
-        println!("  ID: {}", *manager.id);
-        println!("  Name: {}", manager.name);
-        println!("  Status: {}", manager.status);
-        println!("  Deployments: {}", manager.managed_deployment_count);
-
-        if manager.managed_deployment_count > 0 {
-            println!();
-            println!(
-                "  WARNING: This manager is currently managing {} deployment(s).",
-                manager.managed_deployment_count
-            );
-            println!("  Destroying it will leave those deployments unmanaged.");
-        }
-    }
-
-    // Confirm destruction
-    if matches!(confirmation_mode, ConfirmationMode::Prompt)
-        && !prompt_confirm("Destroy this manager?", false)?
-    {
-        println!("Destruction cancelled.");
-        return Ok(());
-    }
-
-    // Delete the manager
-    let workspace_param_delete = DeleteManagerWorkspace::try_from(workspace)
-        .into_alien_error()
-        .context(ErrorData::ValidationError {
-            field: "workspace".to_string(),
-            message: "workspace name format is invalid".to_string(),
-        })?;
-
-    let id_param_delete =
-        ManagerId::try_from(manager_id)
-            .into_alien_error()
-            .context(ErrorData::ValidationError {
-                field: "id".to_string(),
-                message: "manager ID format is invalid (expected mgr_...)".to_string(),
-            })?;
-
-    client
-        .delete_manager()
-        .id(id_param_delete)
-        .workspace(&workspace_param_delete)
-        .send()
-        .await
-        .into_sdk_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: "deleting manager".to_string(),
-            url: None,
-        })?;
-
-    if json {
-        return print_json(&DestroyManagerOutput {
-            destroyed: true,
-            id: manager.id.as_str().to_string(),
-            name: manager.name.clone(),
-        });
-    }
-
-    println!(
-        "Manager '{}' ({}) destruction initiated.",
-        manager.name, *manager.id
-    );
-
-    Ok(())
-}
-
-fn destroy_confirmation_mode(yes: bool, json: bool) -> Result<ConfirmationMode> {
-    InteractionMode::current(json).confirmation_mode(
-        yes,
-        "`alien manager destroy --json` requires `--yes`; confirmation prompts are disabled in machine mode",
-    )
 }
 
 #[cfg(test)]
@@ -702,46 +1340,65 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_manager_cloud_rejects_unknown_values() {
-        let err = parse_manager_cloud("local").unwrap_err();
-        assert!(err.to_string().contains("Managers can be deployed on"));
+    fn setup_terminal_statuses_are_terminal() {
+        assert!(manager_setup_terminal(Some("active")));
+        assert!(manager_setup_terminal(Some("failed")));
+        assert!(!manager_setup_terminal(Some("pending")));
     }
 
     #[test]
-    fn parse_manager_cloud_accepts_supported_clouds() {
+    fn default_manager_setter_updates_requested_cloud_only() {
+        let mut defaults = ProjectDefaultManagersJson {
+            aws: Some("mgr_aaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()),
+            gcp: None,
+            azure: None,
+        };
+
+        set_default_manager(
+            &mut defaults,
+            PrivateManagerCloudArg::Gcp,
+            Some("mgr_bbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string()),
+        );
+
         assert_eq!(
-            parse_manager_cloud("aws").unwrap(),
-            PrivateManagerCloud::Aws
+            defaults.aws.as_deref(),
+            Some("mgr_aaaaaaaaaaaaaaaaaaaaaaaaaaaa")
         );
         assert_eq!(
-            parse_manager_cloud("gcp").unwrap(),
-            PrivateManagerCloud::Gcp
-        );
-        assert_eq!(
-            parse_manager_cloud("azure").unwrap(),
-            PrivateManagerCloud::Azure
+            defaults.gcp.as_deref(),
+            Some("mgr_bbbbbbbbbbbbbbbbbbbbbbbbbbbb")
         );
     }
 
     #[test]
-    fn format_event_state_maps_variants() {
-        use alien_platform_api::types::EventState;
-
-        assert_eq!(format_event_state(&EventState::Started), "started");
+    fn cloud_and_setup_args_match_api_values() {
+        assert_eq!(PrivateManagerCloudArg::Aws.as_api_str(), "aws");
+        assert_eq!(PrivateManagerCloudArg::Gcp.as_api_str(), "gcp");
         assert_eq!(
-            format_event_state(&EventState::Failed { error: None }),
-            "FAILED"
+            PrivateManagerSetupMethodArg::GoogleOauth.as_api_str(),
+            "google-oauth"
         );
     }
 
     #[test]
-    fn destroy_confirmation_mode_requires_yes_in_machine_mode() {
-        let err = InteractionMode::new(true, false)
-            .confirmation_mode(
-                false,
-                "`alien manager destroy --json` requires `--yes`; confirmation prompts are disabled in machine mode",
-            )
-            .unwrap_err();
-        assert!(err.to_string().contains("requires `--yes`"));
+    fn open_is_rejected_in_machine_mode_before_api_calls() {
+        let err = validate_setup_side_effect_flags(true, false, true).unwrap_err();
+        assert!(err.to_string().contains("not supported with `--json`"));
+    }
+
+    #[test]
+    fn default_setup_method_matches_cloud_defaults() {
+        assert_eq!(
+            default_setup_method_for_cloud(PrivateManagerCloudArg::Aws),
+            PrivateManagerSetupMethodArg::Cloudformation
+        );
+        assert_eq!(
+            default_setup_method_for_cloud(PrivateManagerCloudArg::Gcp),
+            PrivateManagerSetupMethodArg::GoogleOauth
+        );
+        assert_eq!(
+            default_setup_method_for_cloud(PrivateManagerCloudArg::Azure),
+            PrivateManagerSetupMethodArg::Terraform
+        );
     }
 }
