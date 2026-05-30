@@ -5,7 +5,7 @@ use crate::{
 };
 use alien_core::{
     import::EmitContext, Container, ErrorData, ExposeProtocol, Ingress, KubernetesCluster,
-    KubernetesClusterOwnership, KubernetesClusterProvider, Result, Stack, Worker,
+    KubernetesClusterOwnership, KubernetesClusterProvider, Network, Result, Stack, Worker,
 };
 use alien_error::AlienError;
 use hcl::expr::Expression;
@@ -82,19 +82,16 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
       provider   = "awsAlb"
       scheme     = "internet-facing"
       targetType = "ip"
-      subnetIds  = var.kubernetes_cluster_mode == "create" ? aws_subnet.{label}_public[*].id : []
+      subnetIds  = {public_subnet_ids}
     }}
   }}
   certificate = {{
-    mode   = "managedAcmImport"
-    region = var.aws_region
-    tags = {{
-      "alien.dev/resource-prefix" = local.resource_prefix
-      "alien.dev/managed-by"      = "alien"
-    }}
+    mode = "none"
   }}
-}}"#
-                )),
+}}"#,
+                    public_subnet_ids = public_subnet_ids_expr(label),
+                ),
+            )
             )
             .with_data(data_block(
                 "aws_availability_zones",
@@ -102,7 +99,7 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                 [
                     attr(
                         "count",
-                        expr::raw("var.kubernetes_cluster_mode == \"create\" ? 1 : 0"),
+                        expr::raw("var.kubernetes_cluster_mode == \"create\" && var.network_mode == \"create-new\" ? 1 : 0"),
                     ),
                     attr("state", Expression::String("available".to_string())),
                 ],
@@ -127,9 +124,12 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                 [
                     attr(
                         "count",
-                        expr::raw("var.kubernetes_cluster_mode == \"create\" ? 1 : 0"),
+                        expr::raw("var.kubernetes_cluster_mode == \"create\" && var.network_mode == \"create-new\" ? 1 : 0"),
                     ),
-                    attr("cidr_block", Expression::String("10.251.0.0/16".to_string())),
+                    attr(
+                        "cidr_block",
+                        expr::raw("var.vpc_cidr == \"\" ? \"10.251.0.0/16\" : var.vpc_cidr"),
+                    ),
                     attr("enable_dns_hostnames", Expression::Bool(true)),
                     attr("enable_dns_support", Expression::Bool(true)),
                     attr("tags", name_tags(format!("${{local.resource_prefix}}-{label}"))),
@@ -141,7 +141,7 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                 [
                     attr(
                         "count",
-                        expr::raw("var.kubernetes_cluster_mode == \"create\" ? 1 : 0"),
+                        expr::raw("var.kubernetes_cluster_mode == \"create\" && var.network_mode == \"create-new\" ? 1 : 0"),
                     ),
                     attr("vpc_id", expr::raw(format!("aws_vpc.{label}[0].id"))),
                     attr("tags", name_tags(format!("${{local.resource_prefix}}-{label}"))),
@@ -153,7 +153,7 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                 [
                     attr(
                         "count",
-                        expr::raw("var.kubernetes_cluster_mode == \"create\" ? 2 : 0"),
+                        expr::raw("var.kubernetes_cluster_mode == \"create\" && var.network_mode == \"create-new\" ? var.availability_zones : 0"),
                     ),
                     attr("vpc_id", expr::raw(format!("aws_vpc.{label}[0].id"))),
                     attr(
@@ -178,7 +178,7 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                 [
                     attr(
                         "count",
-                        expr::raw("var.kubernetes_cluster_mode == \"create\" ? 2 : 0"),
+                        expr::raw("var.kubernetes_cluster_mode == \"create\" && var.network_mode == \"create-new\" ? var.availability_zones : 0"),
                     ),
                     attr("vpc_id", expr::raw(format!("aws_vpc.{label}[0].id"))),
                     attr(
@@ -202,7 +202,7 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                 [
                     attr(
                         "count",
-                        expr::raw("var.kubernetes_cluster_mode == \"create\" ? 1 : 0"),
+                        expr::raw("var.kubernetes_cluster_mode == \"create\" && var.network_mode == \"create-new\" ? 1 : 0"),
                     ),
                     attr("domain", Expression::String("vpc".to_string())),
                     attr("tags", name_tags(format!("${{local.resource_prefix}}-{label}-nat"))),
@@ -214,7 +214,7 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                 [
                     attr(
                         "count",
-                        expr::raw("var.kubernetes_cluster_mode == \"create\" ? 1 : 0"),
+                        expr::raw("var.kubernetes_cluster_mode == \"create\" && var.network_mode == \"create-new\" ? 1 : 0"),
                     ),
                     attr(
                         "allocation_id",
@@ -233,7 +233,7 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                 [
                     attr(
                         "count",
-                        expr::raw("var.kubernetes_cluster_mode == \"create\" ? 1 : 0"),
+                        expr::raw("var.kubernetes_cluster_mode == \"create\" && var.network_mode == \"create-new\" ? 1 : 0"),
                     ),
                     attr("vpc_id", expr::raw(format!("aws_vpc.{label}[0].id"))),
                     nested(block(
@@ -255,7 +255,7 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                 [
                     attr(
                         "count",
-                        expr::raw("var.kubernetes_cluster_mode == \"create\" ? 1 : 0"),
+                        expr::raw("var.kubernetes_cluster_mode == \"create\" && var.network_mode == \"create-new\" ? 1 : 0"),
                     ),
                     attr("vpc_id", expr::raw(format!("aws_vpc.{label}[0].id"))),
                     nested(block(
@@ -277,7 +277,7 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                 [
                     attr(
                         "count",
-                        expr::raw("var.kubernetes_cluster_mode == \"create\" ? 2 : 0"),
+                        expr::raw("var.kubernetes_cluster_mode == \"create\" && var.network_mode == \"create-new\" ? var.availability_zones : 0"),
                     ),
                     attr(
                         "subnet_id",
@@ -295,7 +295,7 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                 [
                     attr(
                         "count",
-                        expr::raw("var.kubernetes_cluster_mode == \"create\" ? 2 : 0"),
+                        expr::raw("var.kubernetes_cluster_mode == \"create\" && var.network_mode == \"create-new\" ? var.availability_zones : 0"),
                     ),
                     attr(
                         "subnet_id",
@@ -470,9 +470,7 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                         [
                             attr(
                                 "subnet_ids",
-                                expr::raw(format!(
-                                    "concat(aws_subnet.{label}_public[*].id, aws_subnet.{label}_private[*].id)"
-                                )),
+                                expr::raw(private_subnet_ids_expr(label)),
                             ),
                             attr("endpoint_public_access", Expression::Bool(true)),
                             attr("endpoint_private_access", Expression::Bool(true)),
@@ -540,7 +538,7 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                     attr("cluster_name", expr::raw(format!("aws_eks_cluster.{label}[0].name"))),
                     attr("node_group_name", expr::template(format!("${{local.resource_prefix}}-{label}"))),
                     attr("node_role_arn", expr::raw(format!("aws_iam_role.{label}_managed_node[0].arn"))),
-                    attr("subnet_ids", expr::raw(format!("aws_subnet.{label}_private[*].id"))),
+                    attr("subnet_ids", expr::raw(private_subnet_ids_expr(label))),
                     attr("ami_type", Expression::String("AL2023_ARM_64_STANDARD".to_string())),
                     attr("capacity_type", Expression::String("ON_DEMAND".to_string())),
                     attr("disk_size", Expression::Number(hcl::Number::from(20))),
@@ -800,6 +798,50 @@ fn stack_has_public_https_endpoint(stack: &Stack) -> bool {
 impl TfEmitter for GcpKubernetesClusterEmitter {
     fn emit(&self, ctx: &EmitContext<'_>) -> Result<TfFragment> {
         let label = required_label(ctx)?;
+        let mut cluster_body = vec![
+            attr(
+                "count",
+                expr::raw("var.kubernetes_cluster_mode == \"create\" ? 1 : 0"),
+            ),
+            attr("name", expr::template("${local.resource_prefix}-k8s")),
+            attr("location", expr::raw("var.gcp_region")),
+            attr("deletion_protection", Expression::Bool(false)),
+            attr("enable_autopilot", Expression::Bool(true)),
+        ];
+        if let Some(network_label) = default_network_label(ctx) {
+            cluster_body.push(attr(
+                "network",
+                expr::raw(gcp_network_self_link_expr(network_label)),
+            ));
+            cluster_body.push(attr(
+                "subnetwork",
+                expr::raw(gcp_subnetwork_self_link_expr(network_label)),
+            ));
+        }
+        cluster_body.extend([
+            nested(block("ip_allocation_policy", [])),
+            nested(block(
+                "workload_identity_config",
+                [attr(
+                    "workload_pool",
+                    expr::template("${var.gcp_project}.svc.id.goog"),
+                )],
+            )),
+            nested(block(
+                "gateway_api_config",
+                [attr(
+                    "channel",
+                    Expression::String("CHANNEL_STANDARD".to_string()),
+                )],
+            )),
+            nested(block(
+                "master_auth",
+                [nested(block(
+                    "client_certificate_config",
+                    [attr("issue_client_certificate", Expression::Bool(true))],
+                ))],
+            )),
+        ]);
         let fragment = TfFragment::default()
             .with_local(
                 format!("{label}_cluster_name"),
@@ -835,8 +877,11 @@ impl TfEmitter for GcpKubernetesClusterEmitter {
   users = [{{
     name = google_container_cluster.{label}[0].name
     user = {{
-      "client-certificate-data" = google_container_cluster.{label}[0].master_auth[0].client_certificate
-      "client-key-data"         = google_container_cluster.{label}[0].master_auth[0].client_key
+      exec = {{
+        apiVersion         = "client.authentication.k8s.io/v1beta1"
+        command            = "gke-gcloud-auth-plugin"
+        provideClusterInfo = true
+      }}
     }}
   }}]
 }}) : """#
@@ -851,7 +896,7 @@ impl TfEmitter for GcpKubernetesClusterEmitter {
     routeApi         = "gateway"
     controller       = "networking.gke.io/gateway"
     gatewayClassName = "gke-l7-global-external-managed"
-    listenerPort     = 443
+    listenerPort     = 80
     labels           = {}
     annotations      = {}
     provider = {
@@ -860,12 +905,16 @@ impl TfEmitter for GcpKubernetesClusterEmitter {
     }
   }
   certificate = {
-    mode               = "managedTlsSecret"
-    secretNameTemplate = "alien-{{ resourceId }}-tls"
+    mode = "none"
   }
 }"#,
                 ),
             )
+            .with_data(data_block(
+                "google_client_config",
+                "current",
+                [],
+            ))
             .with_data(data_block(
                 "google_container_cluster",
                 "target",
@@ -901,35 +950,7 @@ impl TfEmitter for GcpKubernetesClusterEmitter {
             .with_resource(resource_block(
                 "google_container_cluster",
                 label,
-                [
-                    attr(
-                        "count",
-                        expr::raw("var.kubernetes_cluster_mode == \"create\" ? 1 : 0"),
-                    ),
-                    attr("name", expr::template("${local.resource_prefix}-k8s")),
-                    attr("location", expr::raw("var.gcp_region")),
-                    attr("deletion_protection", Expression::Bool(false)),
-                    attr("enable_autopilot", Expression::Bool(true)),
-                    nested(block("ip_allocation_policy", [])),
-                    nested(block(
-                        "workload_identity_config",
-                        [attr(
-                            "workload_pool",
-                            expr::template("${var.gcp_project}.svc.id.goog"),
-                        )],
-                    )),
-                    nested(block(
-                        "gateway_api_config",
-                        [attr("channel", Expression::String("CHANNEL_STANDARD".to_string()))],
-                    )),
-                    nested(block(
-                        "master_auth",
-                        [nested(block(
-                            "client_certificate_config",
-                            [attr("issue_client_certificate", Expression::Bool(true))],
-                        ))],
-                    )),
-                ],
+                cluster_body,
             ));
         Ok(fragment)
     }
@@ -947,6 +968,17 @@ impl TfEmitter for GcpKubernetesClusterEmitter {
 impl TfEmitter for AzureKubernetesClusterEmitter {
     fn emit(&self, ctx: &EmitContext<'_>) -> Result<TfFragment> {
         let label = required_label(ctx)?;
+        let mut default_node_pool = vec![
+            attr("name", Expression::String("default".to_string())),
+            attr("node_count", Expression::Number(hcl::Number::from(3))),
+            attr("vm_size", Expression::String("Standard_D2s_v3".to_string())),
+        ];
+        if let Some(network_label) = default_network_label(ctx) {
+            default_node_pool.push(attr(
+                "vnet_subnet_id",
+                expr::raw(azure_private_subnet_id_expr(network_label)),
+            ));
+        }
         let mut fragment = TfFragment::default()
             .with_local(
                 format!("{label}_cluster_name"),
@@ -973,7 +1005,7 @@ impl TfEmitter for AzureKubernetesClusterEmitter {
     routeApi         = "gateway"
     controller       = "alb.networking.azure.io/alb-controller"
     gatewayClassName = "azure-alb-external"
-    listenerPort     = 443
+    listenerPort     = 80
     labels           = {}
     annotations      = {}
     provider = {
@@ -982,8 +1014,7 @@ impl TfEmitter for AzureKubernetesClusterEmitter {
     }
   }
   certificate = {
-    mode               = "managedTlsSecret"
-    secretNameTemplate = "alien-{{ resourceId }}-tls"
+    mode = "none"
   }
 }"#,
                 ),
@@ -1036,11 +1067,7 @@ impl TfEmitter for AzureKubernetesClusterEmitter {
                     attr("workload_identity_enabled", Expression::Bool(true)),
                     nested(block(
                         "default_node_pool",
-                        [
-                            attr("name", Expression::String("default".to_string())),
-                            attr("node_count", Expression::Number(hcl::Number::from(3))),
-                            attr("vm_size", Expression::String("Standard_D2s_v3".to_string())),
-                        ],
+                        default_node_pool,
                     )),
                     nested(block("identity", [attr("type", Expression::String("SystemAssigned".to_string()))])),
                     nested(block(
@@ -1205,4 +1232,39 @@ fn eks_subnet_tags(label: &str, kind: &str, role: &str) -> Expression {
   "kubernetes.io/role/{role}" = "1"
 }}"#
     ))
+}
+
+fn public_subnet_ids_expr(label: &str) -> String {
+    format!(
+        "var.kubernetes_cluster_mode == \"create\" ? (var.network_mode == \"create-new\" ? aws_subnet.{label}_public[*].id : var.network_mode == \"use-existing\" ? var.public_subnet_ids : []) : []"
+    )
+}
+
+fn private_subnet_ids_expr(label: &str) -> String {
+    format!(
+        "var.kubernetes_cluster_mode == \"create\" ? (var.network_mode == \"create-new\" ? aws_subnet.{label}_private[*].id : var.network_mode == \"use-existing\" ? var.private_subnet_ids : []) : []"
+    )
+}
+
+fn default_network_label<'a>(ctx: &EmitContext<'a>) -> Option<&'a str> {
+    ctx.stack.resources().find_map(|(resource_id, entry)| {
+        entry.config.downcast_ref::<Network>()?;
+        ctx.name_for(resource_id)
+    })
+}
+
+fn gcp_network_self_link_expr(label: &str) -> String {
+    format!(
+        "var.network_mode == \"create-new\" ? google_compute_network.{label}[0].self_link : var.network_mode == \"use-existing\" ? data.google_compute_network.{label}[0].self_link : null"
+    )
+}
+
+fn gcp_subnetwork_self_link_expr(label: &str) -> String {
+    format!(
+        "var.network_mode == \"create-new\" ? google_compute_subnetwork.{label}_workload[0].self_link : var.network_mode == \"use-existing\" ? data.google_compute_subnetwork.{label}_existing_subnet[0].self_link : null"
+    )
+}
+
+fn azure_private_subnet_id_expr(label: &str) -> String {
+    format!("azurerm_subnet.{label}_private.id")
 }

@@ -100,6 +100,9 @@ impl RuntimeEnvironmentRenderer for AwsWorkerEnvironmentRenderer<'_, '_> {
             RuntimeEnvironmentValue::AwsAccountId => Ok(Some(expr::raw(
                 "data.aws_caller_identity.current.account_id",
             ))),
+            RuntimeEnvironmentValue::AwsRegion => {
+                Ok(Some(expr::raw("data.aws_region.current.region")))
+            }
             RuntimeEnvironmentValue::CurrentWorkerBindingName => {
                 Ok(Some(Expression::String(self.worker_id.to_string())))
             }
@@ -145,6 +148,7 @@ impl RuntimeEnvironmentRenderer for GcpWorkerEnvironmentRenderer<'_, '_> {
             RuntimeEnvironmentValue::GcpProjectId => Ok(Some(expr::raw("var.gcp_project"))),
             RuntimeEnvironmentValue::GcpRegion => Ok(Some(expr::raw("var.gcp_region"))),
             RuntimeEnvironmentValue::AwsAccountId
+            | RuntimeEnvironmentValue::AwsRegion
             | RuntimeEnvironmentValue::AzureClientId
             | RuntimeEnvironmentValue::AzureRegion
             | RuntimeEnvironmentValue::AzureSubscriptionId
@@ -198,6 +202,7 @@ impl RuntimeEnvironmentRenderer for AzureWorkerEnvironmentRenderer<'_, '_> {
                 Ok(Some(Expression::String(self.worker_id.to_string())))
             }
             RuntimeEnvironmentValue::AwsAccountId
+            | RuntimeEnvironmentValue::AwsRegion
             | RuntimeEnvironmentValue::BasePlatform
             | RuntimeEnvironmentValue::CurrentContainerBindingName
             | RuntimeEnvironmentValue::GcpProjectId

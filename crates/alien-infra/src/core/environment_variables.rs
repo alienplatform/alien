@@ -2,6 +2,7 @@ use crate::core::{state_utils::StackResourceStateExt, ResourceControllerContext}
 use crate::error::{ErrorData, Result};
 use alien_core::{
     bindings::serialize_binding_as_env_var, container_runtime_environment_contract,
+    kubernetes_base_platform_runtime_environment_plan,
     passthrough_transport_runtime_environment_plan, render_runtime_environment_entries,
     render_runtime_environment_plan, standard_runtime_environment_plan,
     validate_prepared_runtime_environment_map, worker_runtime_environment_contract, ResourceRef,
@@ -42,6 +43,11 @@ impl RuntimeEnvironmentRenderer for ControllerRuntimeEnvironmentRenderer<'_, '_>
                 .get_aws_config()
                 .ok()
                 .map(|config| config.account_id.clone())),
+            RuntimeEnvironmentValue::AwsRegion => Ok(self
+                .ctx
+                .get_aws_config()
+                .ok()
+                .map(|config| config.region.clone())),
             RuntimeEnvironmentValue::AzureRegion => Ok(self
                 .ctx
                 .get_azure_config()
@@ -134,6 +140,7 @@ impl EnvironmentVariableBuilder {
         })? {
             self.env_vars.insert(name.to_string(), value);
         }
+        self.add_kubernetes_base_platform_env_vars(ctx, &renderer)?;
 
         Ok(self)
     }
@@ -158,6 +165,7 @@ impl EnvironmentVariableBuilder {
         })? {
             self.env_vars.insert(name, value);
         }
+        self.add_kubernetes_base_platform_env_vars(ctx, &renderer)?;
 
         Ok(self)
     }
@@ -182,8 +190,34 @@ impl EnvironmentVariableBuilder {
         })? {
             self.env_vars.insert(name, value);
         }
+        self.add_kubernetes_base_platform_env_vars(ctx, &renderer)?;
 
         Ok(self)
+    }
+
+    fn add_kubernetes_base_platform_env_vars(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+        renderer: &ControllerRuntimeEnvironmentRenderer<'_, '_>,
+    ) -> Result<()> {
+        if ctx.platform != alien_core::Platform::Kubernetes {
+            return Ok(());
+        }
+
+        for (name, value) in render_runtime_environment_entries(
+            kubernetes_base_platform_runtime_environment_plan(ctx.deployment_config.base_platform),
+            renderer,
+        )
+        .map_err(|error| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: error.to_string(),
+                resource_id: None,
+            })
+        })? {
+            self.env_vars.insert(name.to_string(), value);
+        }
+
+        Ok(())
     }
 
     /// Add environment variables for linked resources.

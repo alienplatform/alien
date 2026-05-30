@@ -294,6 +294,8 @@ impl InfrastructureDependenciesMutation {
                 | "enable-storage"
                 | "enable-keyvault"
                 | "enable-container-registry"
+                | "enable-container-service"
+                | "enable-network"
                 | "enable-cloud-run"
                 | "enable-cloud-build"
                 | "enable-cloud-storage"
@@ -303,6 +305,9 @@ impl InfrastructureDependenciesMutation {
                 | "enable-secret-manager"
                 | "enable-firestore"
                 | "enable-pubsub"
+                | "enable-container"
+                | "enable-compute-engine"
+                | "enable-iam-credentials"
                 | "remote-stack-management"
                 | "management"
         ) {

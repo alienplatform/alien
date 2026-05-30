@@ -1,6 +1,5 @@
 ---
 source: crates/alien-terraform/tests/generator/helpers.rs
-assertion_line: 56
 expression: buf
 ---
 === versions.tf ===
@@ -55,7 +54,7 @@ variable "manager_url" {
 variable "stack_settings_json" {
   type        = string
   description = "Optional JSON-encoded StackSettings override supplied by deployment installers."
-  default     = "{}"
+  default     = "{\"network\":{\"type\":\"create\",\"availability_zones\":2}}"
   sensitive   = true
 }
 
@@ -85,6 +84,42 @@ variable "gcp_manage_custom_roles" {
 variable "gcp_custom_role_prefix" {
   type        = string
   description = "Prefix used for GCP project custom role IDs when gcp_manage_custom_roles is false. Empty uses resource_prefix."
+  default     = ""
+}
+
+variable "network_mode" {
+  type        = string
+  description = "Choose whether this setup creates a new network, uses an existing network, or uses the default network. Values: create-new, use-existing, use-default."
+  default     = "create-new"
+}
+
+variable "network_cidr" {
+  type        = string
+  description = "CIDR for a newly-created network. Empty uses 10.44.0.0/16."
+  default     = ""
+}
+
+variable "availability_zones" {
+  type        = number
+  description = "Reserved for cross-cloud network-mode parity. GCP creates one regional subnet."
+  default     = 2
+}
+
+variable "network_name" {
+  type        = string
+  description = "Existing VPC network name. Required when network is use-existing."
+  default     = ""
+}
+
+variable "subnet_name" {
+  type        = string
+  description = "Existing subnet name. Required when network is use-existing."
+  default     = ""
+}
+
+variable "network_region" {
+  type        = string
+  description = "Existing subnet region. Empty uses gcp_region."
   default     = ""
 }
 
@@ -125,23 +160,19 @@ resource "random_id" "resource_prefix" {
 
 === locals.tf ===
 locals {
-  resource_prefix          = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
-  deployment_name          = var.name
-  gcp_custom_role_prefix   = substr(replace(lower(var.gcp_custom_role_prefix == "" ? local.resource_prefix : var.gcp_custom_role_prefix), "-", "_"), 0, 18)
-  deployment_platform      = "kubernetes"
-  deployment_base_platform = "gcp"
-  deployment_target        = "gke"
-  deployment_region        = var.gcp_region
-  deployment_management_config = {
-    platform            = "gcp"
-    projectId           = var.gcp_project
-    serviceAccountEmail = var.managing_service_account_email
-  }
+  resource_prefix              = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
+  deployment_name              = var.name
+  gcp_custom_role_prefix       = substr(replace(lower(var.gcp_custom_role_prefix == "" ? local.resource_prefix : var.gcp_custom_role_prefix), "-", "_"), 0, 18)
+  deployment_platform          = "kubernetes"
+  deployment_base_platform     = "gcp"
+  deployment_target            = "gke"
+  deployment_region            = var.gcp_region
+  deployment_management_config = null
   kubernetes_exposure = {
     mode = "disabled"
   }
   deployment_kubernetes_settings = merge(try(jsondecode(var.stack_settings_json).kubernetes, {}), { exposure = jsondecode(try(jsondecode(var.stack_settings_json).kubernetes.exposure, null) == null ? jsonencode(local.kubernetes_exposure) : jsonencode(jsondecode(var.stack_settings_json).kubernetes.exposure)) })
-  deployment_settings            = merge(jsondecode(var.stack_settings_json), { kubernetes = local.deployment_kubernetes_settings })
+  deployment_settings            = merge(jsondecode(var.stack_settings_json), { network = jsondecode(var.network_mode == "create-new" ? jsonencode({ type = "create", cidr = var.network_cidr == "" ? null : var.network_cidr, availabilityZones = var.availability_zones }) : var.network_mode == "use-existing" ? jsonencode({ type = "byo-vpc-gcp", networkName = var.network_name, subnetName = var.subnet_name, region = var.network_region == "" ? var.gcp_region : var.network_region }) : jsonencode({ type = "use-default" })), kubernetes = local.deployment_kubernetes_settings })
   deployment_resources = [
     {
       id   = "data"
@@ -178,26 +209,6 @@ locals {
   helm_manager_service_account = {
     annotations = {}
     labels      = {}
-  }
-  helm_values = {
-    serviceAccounts       = local.helm_service_accounts
-    managerServiceAccount = local.helm_manager_service_account
-    stackSettings         = local.deployment_settings
-    basePlatform          = local.deployment_base_platform
-    serviceAccountPrefix  = local.resource_prefix
-    heartbeat = {
-      collection = {
-        nodes = {
-          enabled = true
-        }
-      }
-    }
-    clusterBootstrap = {
-      metricsServer = {
-        enabled = var.kubernetes_cluster_mode == "create"
-        image   = "registry.k8s.io/metrics-server/metrics-server:v0.8.1"
-      }
-    }
   }
 }
 
@@ -390,12 +401,6 @@ output "kubernetes_kubeconfig" {
 output "kubernetes_kube_context" {
   value       = local.kubernetes_kube_context
   description = "Kube context for managed Kubernetes clusters created by this module."
-}
-
-output "helm_values" {
-  value       = jsonencode(local.helm_values)
-  description = "Helm values JSON for the manager-fetch Kubernetes install."
-  sensitive   = true
 }
 
 === README.md ===

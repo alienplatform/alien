@@ -10,13 +10,14 @@
 //!
 //! The overlay reads each `aws_iam_role` / `google_service_account` /
 //! `azurerm_user_assigned_identity` resource the cloud emitter produced
-//! and adds cloud-side trust plus the values Helm needs:
+//! and adds the cloud-side trust needed by imported service-account data:
 //!
 //! 1. The federated trust binding (IAM role-policy / IAM binding /
 //!    federated identity credential).
-//! 2. `helm_values` output data that carries service-account annotations
-//!    and labels for the generated chart. Terraform intentionally does not
-//!    create Kubernetes runtime objects; Helm owns those resources.
+//! 2. Shared locals that let the platform import service-account annotations
+//!    and labels, then render chart values from deployment state. Terraform
+//!    intentionally does not create Kubernetes runtime objects; Helm owns
+//!    those resources.
 
 use crate::{
     block::{attr, block, data_block, nested, resource_block},

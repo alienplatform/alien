@@ -19,6 +19,17 @@ pub mod secrets_vault;
 pub mod service_account;
 pub mod service_account_dependencies;
 
+use alien_core::{DeploymentConfig, Platform, StackState};
+
+pub(crate) fn runs_on_platform_or_base(
+    stack_state: &StackState,
+    config: &DeploymentConfig,
+    platform: Platform,
+) -> bool {
+    stack_state.platform == platform
+        || (stack_state.platform == Platform::Kubernetes && config.base_platform == Some(platform))
+}
+
 pub use azure_container_apps_environment::AzureContainerAppsEnvironmentMutation;
 pub use azure_memory_adjustment::AzureMemoryAdjustmentMutation;
 pub use azure_resource_group::AzureResourceGroupMutation;

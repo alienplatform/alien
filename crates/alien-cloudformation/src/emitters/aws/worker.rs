@@ -219,6 +219,7 @@ impl RuntimeEnvironmentRenderer for AwsWorkerEnvironmentRenderer<'_> {
                 Ok(Some(CfExpression::from(value.to_string())))
             }
             RuntimeEnvironmentValue::AwsAccountId => Ok(Some(CfExpression::ref_("AWS::AccountId"))),
+            RuntimeEnvironmentValue::AwsRegion => Ok(Some(CfExpression::ref_("AWS::Region"))),
             RuntimeEnvironmentValue::CurrentWorkerBindingName => {
                 Ok(Some(CfExpression::from(self.worker_id.to_string())))
             }

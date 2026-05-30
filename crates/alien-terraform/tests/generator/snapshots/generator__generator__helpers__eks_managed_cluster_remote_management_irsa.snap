@@ -54,7 +54,7 @@ variable "manager_url" {
 variable "stack_settings_json" {
   type        = string
   description = "Optional JSON-encoded StackSettings override supplied by deployment installers."
-  default     = "{\"deploymentModel\":\"pull\"}"
+  default     = "{\"network\":{\"type\":\"create\",\"availability_zones\":2},\"deploymentModel\":\"pull\"}"
   sensitive   = true
 }
 
@@ -74,6 +74,48 @@ variable "managing_account_id" {
   type        = string
   description = "Account ID hosting the manager. Referenced by resource-side IAM policies that scope cross-account image pulls. Empty disables those grants."
   default     = ""
+}
+
+variable "network_mode" {
+  type        = string
+  description = "Choose whether this setup creates a new network, uses an existing network, or uses the default network. Values: create-new, use-existing, use-default."
+  default     = "create-new"
+}
+
+variable "vpc_cidr" {
+  type        = string
+  description = "CIDR for a newly-created network. Empty uses 10.42.0.0/16."
+  default     = ""
+}
+
+variable "availability_zones" {
+  type        = number
+  description = "Number of availability zones to use when creating a new network."
+  default     = 2
+}
+
+variable "vpc_id" {
+  type        = string
+  description = "Existing VPC ID. Required when network is use-existing."
+  default     = ""
+}
+
+variable "public_subnet_ids" {
+  type        = list(string)
+  description = "Existing public subnet IDs. Required when network is use-existing."
+  default     = []
+}
+
+variable "private_subnet_ids" {
+  type        = list(string)
+  description = "Existing private subnet IDs. Required when network is use-existing."
+  default     = []
+}
+
+variable "security_group_ids" {
+  type        = list(string)
+  description = "Existing security group IDs. Required when network is use-existing."
+  default     = []
 }
 
 variable "kubernetes_cluster_mode" {
@@ -121,7 +163,7 @@ locals {
     managingRoleArn = var.managing_role_arn
   }
   deployment_kubernetes_settings = merge(try(jsondecode(var.stack_settings_json).kubernetes, {}), { exposure = jsondecode(try(jsondecode(var.stack_settings_json).kubernetes.exposure, null) == null ? jsonencode(local.kubernetes_exposure) : jsonencode(jsondecode(var.stack_settings_json).kubernetes.exposure)) })
-  deployment_settings            = merge(jsondecode(var.stack_settings_json), { kubernetes = local.deployment_kubernetes_settings })
+  deployment_settings            = merge(jsondecode(var.stack_settings_json), { network = jsondecode(var.network_mode == "create-new" ? jsonencode({ type = "create", cidr = var.vpc_cidr == "" ? null : var.vpc_cidr, availabilityZones = var.availability_zones }) : var.network_mode == "use-existing" ? jsonencode({ type = "byo-vpc-aws", vpcId = var.vpc_id, publicSubnetIds = var.public_subnet_ids, privateSubnetIds = var.private_subnet_ids, securityGroupIds = var.security_group_ids }) : jsonencode({ type = "use-default" })), kubernetes = local.deployment_kubernetes_settings })
   deployment_resources = [
     {
       id   = "kubernetes"
@@ -160,16 +202,11 @@ locals {
         provider   = "awsAlb"
         scheme     = "internet-facing"
         targetType = "ip"
-        subnetIds  = var.kubernetes_cluster_mode == "create" ? aws_subnet.kubernetes_public[*].id : []
+        subnetIds  = var.kubernetes_cluster_mode == "create" ? (var.network_mode == "create-new" ? aws_subnet.kubernetes_public[*].id : var.network_mode == "use-existing" ? var.public_subnet_ids : []) : []
       }
     }
     certificate = {
-      mode   = "managedAcmImport"
-      region = var.aws_region
-      tags = {
-        "alien.dev/resource-prefix" = local.resource_prefix
-        "alien.dev/managed-by"      = "alien"
-      }
+      mode = "none"
     }
   }
   eks_oidc_issuer_host_path = trimprefix(data.aws_eks_cluster.target.identity[0].oidc[0].issuer, "https://")
@@ -181,72 +218,11 @@ locals {
     }
     labels = {}
   }
-  helm_values = {
-    serviceAccounts       = local.helm_service_accounts
-    managerServiceAccount = local.helm_manager_service_account
-    stackSettings         = local.deployment_settings
-    basePlatform          = local.deployment_base_platform
-    serviceAccountPrefix  = local.resource_prefix
-    heartbeat = {
-      collection = {
-        nodes = {
-          enabled = true
-        }
-      }
-    }
-    clusterBootstrap = {
-      metricsServer = {
-        enabled = var.kubernetes_cluster_mode == "create"
-        image   = "registry.k8s.io/metrics-server/metrics-server:v0.8.1"
-      }
-      storageClass = {
-        default = {
-          enabled     = var.kubernetes_cluster_mode == "create"
-          name        = "gp3"
-          provisioner = "ebs.csi.aws.com"
-          parameters = {
-            type      = "gp3"
-            fsType    = "ext4"
-            encrypted = "true"
-          }
-        }
-      }
-      ingress = {
-        eksAutoMode = {
-          enabled    = var.kubernetes_cluster_mode == "create"
-          name       = "alb"
-          controller = "eks.amazonaws.com/alb"
-          scheme     = "internet-facing"
-          subnetIds  = var.kubernetes_cluster_mode == "create" ? aws_subnet.kubernetes_public[*].id : []
-        }
-      }
-      compute = {
-        eksAutoMode = {
-          arm64NodePool = {
-            enabled       = var.kubernetes_cluster_mode == "create"
-            name          = "general-purpose-arm64"
-            nodeClassName = "default"
-            capacityType  = "on-demand"
-            instanceCategories = [
-              "c",
-              "m",
-              "r"
-            ]
-            minInstanceGeneration = "5"
-            limits = {
-              cpu    = "1000"
-              memory = "1000Gi"
-            }
-          }
-        }
-      }
-    }
-  }
 }
 
 === kubernetes.tf ===
 data "aws_availability_zones" "kubernetes_available" {
-  count = var.kubernetes_cluster_mode == "create" ? 1 : 0
+  count = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? 1 : 0
   state = "available"
 }
 
@@ -291,8 +267,8 @@ resource "aws_iam_openid_connect_provider" "eks" {
 }
 
 resource "aws_vpc" "kubernetes" {
-  count                = var.kubernetes_cluster_mode == "create" ? 1 : 0
-  cidr_block           = "10.251.0.0/16"
+  count                = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? 1 : 0
+  cidr_block           = var.vpc_cidr == "" ? "10.251.0.0/16" : var.vpc_cidr
   enable_dns_hostnames = true
   enable_dns_support   = true
   tags = {
@@ -301,7 +277,7 @@ resource "aws_vpc" "kubernetes" {
 }
 
 resource "aws_internet_gateway" "kubernetes" {
-  count  = var.kubernetes_cluster_mode == "create" ? 1 : 0
+  count  = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? 1 : 0
   vpc_id = aws_vpc.kubernetes[0].id
   tags = {
     Name = "$${local.resource_prefix}-kubernetes"
@@ -309,7 +285,7 @@ resource "aws_internet_gateway" "kubernetes" {
 }
 
 resource "aws_subnet" "kubernetes_public" {
-  count                   = var.kubernetes_cluster_mode == "create" ? 2 : 0
+  count                   = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? var.availability_zones : 0
   vpc_id                  = aws_vpc.kubernetes[0].id
   cidr_block              = cidrsubnet(aws_vpc.kubernetes[0].cidr_block, 8, count.index)
   availability_zone       = data.aws_availability_zones.kubernetes_available[0].names[count.index]
@@ -322,7 +298,7 @@ resource "aws_subnet" "kubernetes_public" {
 }
 
 resource "aws_subnet" "kubernetes_private" {
-  count             = var.kubernetes_cluster_mode == "create" ? 2 : 0
+  count             = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? var.availability_zones : 0
   vpc_id            = aws_vpc.kubernetes[0].id
   cidr_block        = cidrsubnet(aws_vpc.kubernetes[0].cidr_block, 8, count.index + 10)
   availability_zone = data.aws_availability_zones.kubernetes_available[0].names[count.index]
@@ -334,7 +310,7 @@ resource "aws_subnet" "kubernetes_private" {
 }
 
 resource "aws_eip" "kubernetes_nat" {
-  count  = var.kubernetes_cluster_mode == "create" ? 1 : 0
+  count  = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? 1 : 0
   domain = "vpc"
   tags = {
     Name = "$${local.resource_prefix}-kubernetes-nat"
@@ -342,7 +318,7 @@ resource "aws_eip" "kubernetes_nat" {
 }
 
 resource "aws_nat_gateway" "kubernetes" {
-  count         = var.kubernetes_cluster_mode == "create" ? 1 : 0
+  count         = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? 1 : 0
   allocation_id = aws_eip.kubernetes_nat[0].id
   subnet_id     = aws_subnet.kubernetes_public[0].id
   tags = {
@@ -351,7 +327,7 @@ resource "aws_nat_gateway" "kubernetes" {
 }
 
 resource "aws_route_table" "kubernetes_public" {
-  count  = var.kubernetes_cluster_mode == "create" ? 1 : 0
+  count  = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? 1 : 0
   vpc_id = aws_vpc.kubernetes[0].id
 
   route {
@@ -365,7 +341,7 @@ resource "aws_route_table" "kubernetes_public" {
 }
 
 resource "aws_route_table" "kubernetes_private" {
-  count  = var.kubernetes_cluster_mode == "create" ? 1 : 0
+  count  = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? 1 : 0
   vpc_id = aws_vpc.kubernetes[0].id
 
   route {
@@ -379,13 +355,13 @@ resource "aws_route_table" "kubernetes_private" {
 }
 
 resource "aws_route_table_association" "kubernetes_public" {
-  count          = var.kubernetes_cluster_mode == "create" ? 2 : 0
+  count          = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? var.availability_zones : 0
   subnet_id      = aws_subnet.kubernetes_public[count.index].id
   route_table_id = aws_route_table.kubernetes_public[0].id
 }
 
 resource "aws_route_table_association" "kubernetes_private" {
-  count          = var.kubernetes_cluster_mode == "create" ? 2 : 0
+  count          = var.kubernetes_cluster_mode == "create" && var.network_mode == "create-new" ? var.availability_zones : 0
   subnet_id      = aws_subnet.kubernetes_private[count.index].id
   route_table_id = aws_route_table.kubernetes_private[0].id
 }
@@ -433,7 +409,7 @@ resource "aws_eks_cluster" "kubernetes" {
   bootstrap_self_managed_addons = false
 
   vpc_config {
-    subnet_ids              = concat(aws_subnet.kubernetes_public[*].id, aws_subnet.kubernetes_private[*].id)
+    subnet_ids              = var.kubernetes_cluster_mode == "create" ? (var.network_mode == "create-new" ? aws_subnet.kubernetes_private[*].id : var.network_mode == "use-existing" ? var.private_subnet_ids : []) : []
     endpoint_public_access  = true
     endpoint_private_access = true
   }
@@ -480,7 +456,7 @@ resource "aws_eks_node_group" "kubernetes" {
   cluster_name    = aws_eks_cluster.kubernetes[0].name
   node_group_name = "${local.resource_prefix}-kubernetes"
   node_role_arn   = aws_iam_role.kubernetes_managed_node[0].arn
-  subnet_ids      = aws_subnet.kubernetes_private[*].id
+  subnet_ids      = var.kubernetes_cluster_mode == "create" ? (var.network_mode == "create-new" ? aws_subnet.kubernetes_private[*].id : var.network_mode == "use-existing" ? var.private_subnet_ids : []) : []
   ami_type        = "AL2023_ARM_64_STANDARD"
   capacity_type   = "ON_DEMAND"
   disk_size       = 20
@@ -726,12 +702,6 @@ output "kubernetes_kubeconfig" {
 output "kubernetes_kube_context" {
   value       = local.kubernetes_kube_context
   description = "Kube context for managed Kubernetes clusters created by this module."
-}
-
-output "helm_values" {
-  value       = jsonencode(local.helm_values)
-  description = "Helm values JSON for the manager-fetch Kubernetes install."
-  sensitive   = true
 }
 
 === README.md ===

@@ -219,6 +219,11 @@ fn create_topology(label: &str, cidr: Option<String>, counted: bool) -> TfFragme
     let subnet_label = format!("{label}_workload");
     let router_label = format!("{label}_router");
     let nat_label = format!("{label}_nat");
+    let network_name = gcp_network_name(label, "");
+    let subnet_name = gcp_network_name(label, "-workload");
+    let router_name_attr = gcp_network_name(label, "-router");
+    let nat_name = gcp_network_name(label, "-nat");
+    let firewall_name = gcp_network_name(label, "-internal");
     let network_id = if counted {
         expr::raw(format!("google_compute_network.{label}[0].id"))
     } else {
@@ -236,10 +241,7 @@ fn create_topology(label: &str, cidr: Option<String>, counted: bool) -> TfFragme
         "google_compute_network",
         label,
         [
-            attr(
-                "name",
-                crate::emitters::gcp::helpers::resource_prefix_template(label),
-            ),
+            attr("name", network_name),
             attr("project", expr::raw("var.gcp_project")),
             attr("auto_create_subnetworks", Expression::Bool(false)),
             attr("routing_mode", Expression::String("REGIONAL".to_string())),
@@ -250,10 +252,7 @@ fn create_topology(label: &str, cidr: Option<String>, counted: bool) -> TfFragme
         "google_compute_subnetwork",
         &subnet_label,
         [
-            attr(
-                "name",
-                expr::template(format!("${{local.resource_prefix}}-{label}-workload")),
-            ),
+            attr("name", subnet_name),
             attr("project", expr::raw("var.gcp_project")),
             attr("region", expr::raw("var.gcp_region")),
             attr("ip_cidr_range", Expression::String(cidr_str.clone())),
@@ -266,10 +265,7 @@ fn create_topology(label: &str, cidr: Option<String>, counted: bool) -> TfFragme
         "google_compute_router",
         &router_label,
         [
-            attr(
-                "name",
-                expr::template(format!("${{local.resource_prefix}}-{label}-router")),
-            ),
+            attr("name", router_name_attr),
             attr("project", expr::raw("var.gcp_project")),
             attr("region", expr::raw("var.gcp_region")),
             attr("network", network_id.clone()),
@@ -280,10 +276,7 @@ fn create_topology(label: &str, cidr: Option<String>, counted: bool) -> TfFragme
         "google_compute_router_nat",
         &nat_label,
         [
-            attr(
-                "name",
-                expr::template(format!("${{local.resource_prefix}}-{label}-nat")),
-            ),
+            attr("name", nat_name),
             attr("project", expr::raw("var.gcp_project")),
             attr("region", expr::raw("var.gcp_region")),
             attr("router", router_name),
@@ -309,10 +302,7 @@ fn create_topology(label: &str, cidr: Option<String>, counted: bool) -> TfFragme
         "google_compute_firewall",
         &format!("{label}_internal"),
         [
-            attr(
-                "name",
-                expr::template(format!("${{local.resource_prefix}}-{label}-internal")),
-            ),
+            attr("name", firewall_name),
             attr("project", expr::raw("var.gcp_project")),
             attr("network", network_id),
             attr("direction", Expression::String("INGRESS".to_string())),
@@ -328,4 +318,11 @@ fn create_topology(label: &str, cidr: Option<String>, counted: bool) -> TfFragme
     ));
 
     fragment
+}
+
+fn gcp_network_name(label: &str, suffix: &str) -> Expression {
+    let segment = label.replace('_', "-");
+    expr::raw(format!(
+        "trim(substr(\"${{local.resource_prefix}}-{segment}{suffix}\", 0, 63), \"-\")"
+    ))
 }

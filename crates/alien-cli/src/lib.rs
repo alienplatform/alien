@@ -295,7 +295,7 @@ pub fn setup_tracing() {
     }
 }
 
-fn parse_env_and_secret_vars(
+pub(crate) fn parse_env_and_secret_vars(
     env_vars: &[String],
     secret_vars: &[String],
 ) -> Result<Vec<CliEnvVar>> {
@@ -309,7 +309,7 @@ fn parse_env_and_secret_vars(
     Ok(parsed)
 }
 
-fn parse_single_env_var(input: &str, is_secret: bool) -> Result<CliEnvVar> {
+pub(crate) fn parse_single_env_var(input: &str, is_secret: bool) -> Result<CliEnvVar> {
     let parts: Vec<&str> = input.splitn(2, '=').collect();
     if parts.len() != 2 {
         return Err(AlienError::new(ErrorData::ConfigurationError {
@@ -361,7 +361,9 @@ fn parse_single_env_var(input: &str, is_secret: bool) -> Result<CliEnvVar> {
     })
 }
 
-fn cli_env_vars_to_core(cli_vars: &[CliEnvVar]) -> Option<Vec<alien_core::EnvironmentVariable>> {
+pub(crate) fn cli_env_vars_to_core(
+    cli_vars: &[CliEnvVar],
+) -> Option<Vec<alien_core::EnvironmentVariable>> {
     if cli_vars.is_empty() {
         return None;
     }

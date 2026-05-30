@@ -32,6 +32,12 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 use k8s_openapi::ByteString;
 
+// Cold Kubernetes nodes can spend several minutes pulling application images,
+// especially when the registry endpoint is a remote proxy. Treat that as a
+// legitimate provisioning phase; terminal pull failures still surface through
+// workload heartbeats and events.
+const KUBERNETES_WORKLOAD_READY_MAX_POLLS: u32 = 360; // 360 * 5s = 30 minutes
+
 async fn create_registry_pull_secret(
     secrets_client: &std::sync::Arc<dyn alien_k8s_clients::SecretsApi>,
     namespace: &str,
@@ -416,7 +422,7 @@ impl KubernetesContainerController {
         }
 
         Ok(HandlerAction::Stay {
-            max_times: 60, // 60 attempts * 5 seconds = 5 minutes max wait
+            max_times: KUBERNETES_WORKLOAD_READY_MAX_POLLS,
             suggested_delay: Some(Duration::from_secs(5)),
         })
     }
@@ -847,7 +853,7 @@ impl KubernetesContainerController {
         }
 
         Ok(HandlerAction::Stay {
-            max_times: 60,
+            max_times: KUBERNETES_WORKLOAD_READY_MAX_POLLS,
             suggested_delay: Some(Duration::from_secs(5)),
         })
     }

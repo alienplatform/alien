@@ -317,7 +317,7 @@ pub async fn stack_import(
         setup_fingerprint: req.setup_fingerprint.clone(),
         setup_fingerprint_version: req.setup_fingerprint_version,
         deployment_token: Some(raw_token.clone()),
-        management_config: Some(req.management_config.clone()),
+        management_config: req.management_config.clone(),
     };
 
     let created = match state
@@ -536,7 +536,7 @@ async fn prepare_import_stack(
     let config = DeploymentConfig {
         deployment_name: Some(req.deployment_name.clone()),
         stack_settings: req.stack_settings.clone(),
-        management_config: Some(req.management_config.clone()),
+        management_config: req.management_config.clone(),
         environment_variables: EnvironmentVariablesSnapshot {
             variables: Vec::new(),
             hash: "empty".to_string(),
@@ -722,7 +722,7 @@ fn build_stack_state(
                     platform: import_platform,
                     region: &req.region,
                     stack_settings: &req.stack_settings,
-                    management_config: &req.management_config,
+                    management_config: req.management_config.as_ref(),
                     resource: entry,
                 },
             )

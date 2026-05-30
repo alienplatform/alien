@@ -68,8 +68,10 @@ pub struct StackImportRequest {
     pub setup_fingerprint_version: u32,
     /// Resolved stack settings supplied by the setup artifact.
     pub stack_settings: StackSettings,
-    /// Platform-derived management configuration.
-    pub management_config: ManagementConfig,
+    /// Platform-derived management configuration, when this setup creates a
+    /// cross-account/cross-tenant management identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub management_config: Option<ManagementConfig>,
     /// Imported resources with typed per-resource payloads.
     pub resources: Vec<ImportedResource>,
 }

@@ -270,6 +270,29 @@ pub fn private_subnet_ids_expr(ctx: &EmitContext<'_>) -> CfExpression {
     }
 }
 
+/// Public subnet IDs expression — uses created VPC subnets when this
+/// stack creates the VPC, existing subnet parameter otherwise.
+pub fn public_subnet_ids_expr(ctx: &EmitContext<'_>) -> CfExpression {
+    let Some((network_id, network)) = default_network(ctx) else {
+        return CfExpression::ref_(PARAM_PUBLIC_SUBNET_IDS);
+    };
+    match &network.settings {
+        NetworkSettings::Create { .. } => CfExpression::if_(
+            CONDITION_NETWORK_MODE_CREATE,
+            subnet_refs(network_id, "PublicSubnet"),
+            CfExpression::if_(
+                CONDITION_NETWORK_MODE_USE_EXISTING,
+                CfExpression::ref_(PARAM_PUBLIC_SUBNET_IDS),
+                CfExpression::no_value(),
+            ),
+        ),
+        NetworkSettings::UseDefault
+        | NetworkSettings::ByoVpcAws { .. }
+        | NetworkSettings::ByoVpcGcp { .. }
+        | NetworkSettings::ByoVnetAzure { .. } => CfExpression::ref_(PARAM_PUBLIC_SUBNET_IDS),
+    }
+}
+
 /// Security-group IDs expression: created security group ID or existing
 /// security group ID parameter.
 pub fn security_group_ids_expr(ctx: &EmitContext<'_>) -> CfExpression {

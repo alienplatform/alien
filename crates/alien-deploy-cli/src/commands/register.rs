@@ -398,7 +398,7 @@ fn build_import_request(
         setup_fingerprint,
         setup_fingerprint_version,
         stack_settings,
-        management_config,
+        management_config: Some(management_config),
         resources,
     })
 }

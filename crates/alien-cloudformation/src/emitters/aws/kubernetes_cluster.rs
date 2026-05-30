@@ -3,11 +3,15 @@
 use crate::{
     emitter::CfEmitter,
     emitters::aws::helpers::{
-        required_logical_id, resource_config, service_trust_policy, tag, tags,
+        default_network, private_subnet_ids_expr, required_logical_id, resource_config,
+        service_trust_policy, tag, tags, CONDITION_HAS_VPC_CIDR, PARAM_VPC_CIDR,
     },
     template::{CfExpression, CfResource},
 };
 use alien_core::{import::EmitContext, KubernetesCluster, Result};
+
+const CONDITION_NETWORK_MODE_CREATE: &str = "NetworkModeCreate";
+const CONDITION_NETWORK_MODE_USE_EXISTING: &str = "NetworkModeUseExisting";
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AwsKubernetesClusterEmitter;
@@ -49,59 +53,64 @@ fn eks_resources(ctx: &EmitContext<'_>, prefix: &str) -> Vec<CfResource> {
     let oidc_provider_id = resource_id(prefix, "OidcProvider");
     let ebs_csi_role_id = resource_id(prefix, "EbsCsiRole");
 
-    let mut resources = vec![
-        vpc(ctx, &vpc_id),
-        internet_gateway(ctx, &igw_id),
-        vpc_gateway_attachment(&gateway_attachment_id, &vpc_id, &igw_id),
-        public_subnet(ctx, prefix, 1, &vpc_id),
-        public_subnet(ctx, prefix, 2, &vpc_id),
-        private_subnet(ctx, prefix, 1, &vpc_id),
-        private_subnet(ctx, prefix, 2, &vpc_id),
-        nat_eip(ctx, &nat_eip_id),
-        nat_gateway(
-            ctx,
-            &nat_gateway_id,
-            &nat_eip_id,
-            &public_subnet_id(prefix, 1),
-        ),
-        route_table(ctx, &public_route_table_id, &vpc_id),
-        route_table(ctx, &private_route_table_id, &vpc_id),
-        default_route(
-            &resource_id(prefix, "PublicDefaultRoute"),
-            &public_route_table_id,
-            "GatewayId",
-            &igw_id,
-        ),
-        default_route(
-            &resource_id(prefix, "PrivateDefaultRoute"),
-            &private_route_table_id,
-            "NatGatewayId",
-            &nat_gateway_id,
-        ),
-        route_table_association(
-            &resource_id(prefix, "PublicRouteTableAssociation1"),
-            &public_subnet_id(prefix, 1),
-            &public_route_table_id,
-        ),
-        route_table_association(
-            &resource_id(prefix, "PublicRouteTableAssociation2"),
-            &public_subnet_id(prefix, 2),
-            &public_route_table_id,
-        ),
-        route_table_association(
-            &resource_id(prefix, "PrivateRouteTableAssociation1"),
-            &private_subnet_id(prefix, 1),
-            &private_route_table_id,
-        ),
-        route_table_association(
-            &resource_id(prefix, "PrivateRouteTableAssociation2"),
-            &private_subnet_id(prefix, 2),
-            &private_route_table_id,
-        ),
-        iam_role(
+    let mut resources = Vec::new();
+    if default_network(ctx).is_none() {
+        resources.extend([
+            vpc(ctx, &vpc_id),
+            internet_gateway(ctx, &igw_id),
+            vpc_gateway_attachment(&gateway_attachment_id, &vpc_id, &igw_id),
+            public_subnet(ctx, prefix, 1, &vpc_id),
+            public_subnet(ctx, prefix, 2, &vpc_id),
+            private_subnet(ctx, prefix, 1, &vpc_id),
+            private_subnet(ctx, prefix, 2, &vpc_id),
+            nat_eip(ctx, &nat_eip_id),
+            nat_gateway(
+                ctx,
+                &nat_gateway_id,
+                &nat_eip_id,
+                &public_subnet_id(prefix, 1),
+            ),
+            route_table(ctx, &public_route_table_id, &vpc_id),
+            route_table(ctx, &private_route_table_id, &vpc_id),
+            default_route(
+                &resource_id(prefix, "PublicDefaultRoute"),
+                &public_route_table_id,
+                "GatewayId",
+                &igw_id,
+            ),
+            default_route(
+                &resource_id(prefix, "PrivateDefaultRoute"),
+                &private_route_table_id,
+                "NatGatewayId",
+                &nat_gateway_id,
+            ),
+            route_table_association(
+                &resource_id(prefix, "PublicRouteTableAssociation1"),
+                &public_subnet_id(prefix, 1),
+                &public_route_table_id,
+            ),
+            route_table_association(
+                &resource_id(prefix, "PublicRouteTableAssociation2"),
+                &public_subnet_id(prefix, 2),
+                &public_route_table_id,
+            ),
+            route_table_association(
+                &resource_id(prefix, "PrivateRouteTableAssociation1"),
+                &private_subnet_id(prefix, 1),
+                &private_route_table_id,
+            ),
+            route_table_association(
+                &resource_id(prefix, "PrivateRouteTableAssociation2"),
+                &private_subnet_id(prefix, 2),
+                &private_route_table_id,
+            ),
+        ]);
+    }
+
+    resources.extend([
+        eks_cluster_role(
             ctx,
             &cluster_role_id,
-            "eks.amazonaws.com",
             &[
                 "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy",
                 "arn:aws:iam::aws:policy/AmazonEKSBlockStoragePolicy",
@@ -131,7 +140,7 @@ fn eks_resources(ctx: &EmitContext<'_>, prefix: &str) -> Vec<CfResource> {
                 "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy",
             ],
         ),
-    ];
+    ]);
 
     resources.push(eks_cluster(
         ctx,
@@ -184,9 +193,15 @@ fn eks_resources(ctx: &EmitContext<'_>, prefix: &str) -> Vec<CfResource> {
 
 fn vpc(ctx: &EmitContext<'_>, id: &str) -> CfResource {
     let mut resource = CfResource::new(id.to_string(), "AWS::EC2::VPC".to_string());
-    resource
-        .properties
-        .insert("CidrBlock".to_string(), CfExpression::from("10.251.0.0/16"));
+    resource.condition = Some(CONDITION_NETWORK_MODE_CREATE.to_string());
+    resource.properties.insert(
+        "CidrBlock".to_string(),
+        CfExpression::if_(
+            CONDITION_HAS_VPC_CIDR,
+            CfExpression::ref_(PARAM_VPC_CIDR),
+            CfExpression::from("10.251.0.0/16"),
+        ),
+    );
     resource
         .properties
         .insert("EnableDnsSupport".to_string(), CfExpression::from(true));
@@ -199,6 +214,7 @@ fn vpc(ctx: &EmitContext<'_>, id: &str) -> CfResource {
 
 fn internet_gateway(ctx: &EmitContext<'_>, id: &str) -> CfResource {
     let mut resource = CfResource::new(id.to_string(), "AWS::EC2::InternetGateway".to_string());
+    resource.condition = Some(CONDITION_NETWORK_MODE_CREATE.to_string());
     resource.properties.insert("Tags".to_string(), tags(ctx));
     resource
 }
@@ -206,6 +222,7 @@ fn internet_gateway(ctx: &EmitContext<'_>, id: &str) -> CfResource {
 fn vpc_gateway_attachment(id: &str, vpc_id: &str, igw_id: &str) -> CfResource {
     let mut resource =
         CfResource::new(id.to_string(), "AWS::EC2::VPCGatewayAttachment".to_string());
+    resource.condition = Some(CONDITION_NETWORK_MODE_CREATE.to_string());
     resource
         .properties
         .insert("VpcId".to_string(), CfExpression::ref_(vpc_id));
@@ -246,6 +263,7 @@ fn subnet(
     role_tag: Option<&str>,
 ) -> CfResource {
     let mut resource = CfResource::new(id.to_string(), "AWS::EC2::Subnet".to_string());
+    resource.condition = Some(CONDITION_NETWORK_MODE_CREATE.to_string());
     resource
         .properties
         .insert("VpcId".to_string(), CfExpression::ref_(vpc_id));
@@ -282,6 +300,7 @@ fn subnet(
 
 fn nat_eip(ctx: &EmitContext<'_>, id: &str) -> CfResource {
     let mut resource = CfResource::new(id.to_string(), "AWS::EC2::EIP".to_string());
+    resource.condition = Some(CONDITION_NETWORK_MODE_CREATE.to_string());
     resource
         .properties
         .insert("Domain".to_string(), CfExpression::from("vpc"));
@@ -291,6 +310,7 @@ fn nat_eip(ctx: &EmitContext<'_>, id: &str) -> CfResource {
 
 fn nat_gateway(ctx: &EmitContext<'_>, id: &str, eip_id: &str, subnet_id: &str) -> CfResource {
     let mut resource = CfResource::new(id.to_string(), "AWS::EC2::NatGateway".to_string());
+    resource.condition = Some(CONDITION_NETWORK_MODE_CREATE.to_string());
     resource.properties.insert(
         "AllocationId".to_string(),
         CfExpression::get_att(eip_id, "AllocationId"),
@@ -304,6 +324,7 @@ fn nat_gateway(ctx: &EmitContext<'_>, id: &str, eip_id: &str, subnet_id: &str) -
 
 fn route_table(ctx: &EmitContext<'_>, id: &str, vpc_id: &str) -> CfResource {
     let mut resource = CfResource::new(id.to_string(), "AWS::EC2::RouteTable".to_string());
+    resource.condition = Some(CONDITION_NETWORK_MODE_CREATE.to_string());
     resource
         .properties
         .insert("VpcId".to_string(), CfExpression::ref_(vpc_id));
@@ -313,6 +334,7 @@ fn route_table(ctx: &EmitContext<'_>, id: &str, vpc_id: &str) -> CfResource {
 
 fn default_route(id: &str, route_table_id: &str, target_key: &str, target_id: &str) -> CfResource {
     let mut resource = CfResource::new(id.to_string(), "AWS::EC2::Route".to_string());
+    resource.condition = Some(CONDITION_NETWORK_MODE_CREATE.to_string());
     resource.properties.insert(
         "RouteTableId".to_string(),
         CfExpression::ref_(route_table_id),
@@ -332,6 +354,7 @@ fn route_table_association(id: &str, subnet_id: &str, route_table_id: &str) -> C
         id.to_string(),
         "AWS::EC2::SubnetRouteTableAssociation".to_string(),
     );
+    resource.condition = Some(CONDITION_NETWORK_MODE_CREATE.to_string());
     resource
         .properties
         .insert("SubnetId".to_string(), CfExpression::ref_(subnet_id));
@@ -362,6 +385,38 @@ fn iam_role(ctx: &EmitContext<'_>, id: &str, service: &str, policy_arns: &[&str]
     resource
 }
 
+fn eks_cluster_role(ctx: &EmitContext<'_>, id: &str, policy_arns: &[&str]) -> CfResource {
+    let mut resource = iam_role(ctx, id, "eks.amazonaws.com", policy_arns);
+    resource.properties.insert(
+        "AssumeRolePolicyDocument".to_string(),
+        eks_cluster_trust_policy(),
+    );
+    resource
+}
+
+fn eks_cluster_trust_policy() -> CfExpression {
+    CfExpression::object([
+        ("Version", CfExpression::from("2012-10-17")),
+        (
+            "Statement",
+            CfExpression::list([CfExpression::object([
+                ("Effect", CfExpression::from("Allow")),
+                (
+                    "Principal",
+                    CfExpression::object([("Service", CfExpression::from("eks.amazonaws.com"))]),
+                ),
+                (
+                    "Action",
+                    CfExpression::list([
+                        CfExpression::from("sts:AssumeRole"),
+                        CfExpression::from("sts:TagSession"),
+                    ]),
+                ),
+            ])]),
+        ),
+    ])
+}
+
 fn eks_cluster(
     ctx: &EmitContext<'_>,
     id: &str,
@@ -385,15 +440,7 @@ fn eks_cluster(
     resource.properties.insert(
         "ResourcesVpcConfig".to_string(),
         CfExpression::object([
-            (
-                "SubnetIds",
-                CfExpression::list([
-                    CfExpression::ref_(public_subnet_id(prefix, 1)),
-                    CfExpression::ref_(public_subnet_id(prefix, 2)),
-                    CfExpression::ref_(private_subnet_id(prefix, 1)),
-                    CfExpression::ref_(private_subnet_id(prefix, 2)),
-                ]),
-            ),
+            ("SubnetIds", eks_private_subnet_ids(ctx, prefix)),
             ("EndpointPublicAccess", CfExpression::from(true)),
             ("EndpointPrivateAccess", CfExpression::from(true)),
         ]),
@@ -458,13 +505,9 @@ fn node_group(
         "NodeRole".to_string(),
         CfExpression::get_att(role_id, "Arn"),
     );
-    resource.properties.insert(
-        "Subnets".to_string(),
-        CfExpression::list([
-            CfExpression::ref_(private_subnet_id(prefix, 1)),
-            CfExpression::ref_(private_subnet_id(prefix, 2)),
-        ]),
-    );
+    resource
+        .properties
+        .insert("Subnets".to_string(), eks_private_subnet_ids(ctx, prefix));
     resource.properties.insert(
         "AmiType".to_string(),
         CfExpression::from("AL2023_ARM_64_STANDARD"),
@@ -652,6 +695,25 @@ fn resource_id(prefix: &str, suffix: &str) -> String {
 
 fn cluster_id(prefix: &str) -> String {
     resource_id(prefix, "Cluster")
+}
+
+fn eks_private_subnet_ids(ctx: &EmitContext<'_>, prefix: &str) -> CfExpression {
+    if default_network(ctx).is_some() {
+        return private_subnet_ids_expr(ctx);
+    }
+
+    CfExpression::if_(
+        CONDITION_NETWORK_MODE_CREATE,
+        CfExpression::list([
+            CfExpression::ref_(private_subnet_id(prefix, 1)),
+            CfExpression::ref_(private_subnet_id(prefix, 2)),
+        ]),
+        CfExpression::if_(
+            CONDITION_NETWORK_MODE_USE_EXISTING,
+            CfExpression::ref_("PrivateSubnetIds"),
+            CfExpression::list([]),
+        ),
+    )
 }
 
 fn public_subnet_id(prefix: &str, index: usize) -> String {

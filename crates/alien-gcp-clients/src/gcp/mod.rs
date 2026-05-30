@@ -214,8 +214,19 @@ impl GcpClientConfigExt for GcpClientConfig {
             Self::parse_credentials_json(&credential_data, &json, environment_variables).await?
         } else {
             // Fallback to metadata server authentication for GCP instances
-            let project_id = Self::fetch_metadata_project_id().await?;
-            let region = Self::fetch_metadata_region().await?;
+            let project_id = if let Some(project_id) = environment_variables
+                .get("GCP_PROJECT_ID")
+                .or_else(|| environment_variables.get("GOOGLE_CLOUD_PROJECT"))
+            {
+                project_id.clone()
+            } else {
+                Self::fetch_metadata_project_id().await?
+            };
+            let region = if let Some(region) = environment_variables.get("GCP_REGION") {
+                region.clone()
+            } else {
+                Self::fetch_metadata_region().await?
+            };
             (GcpCredentials::ServiceMetadata, project_id, region)
         };
 

@@ -11,7 +11,8 @@ use crate::{
 };
 use alien_core::{
     import::EmitContext, Container, ContainerCode, Daemon, DaemonCode, ErrorData, ExposeProtocol,
-    Ingress, Platform, ResourceLifecycle, Result, Stack, StackSettings, Worker, WorkerCode,
+    Ingress, Platform, RemoteStackManagementOutputs, ResourceLifecycle, Result, ServiceAccount,
+    ServiceAccountOutputs, Stack, StackSettings, Worker, WorkerCode,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use indexmap::IndexMap;
@@ -32,6 +33,21 @@ pub struct HelmOptions<'a> {
     pub registry: &'a HelmRegistry,
     pub stack_settings: StackSettings,
     pub chart_name: String,
+}
+
+/// Inputs for rendering the manager-fetch `values.yaml` used after setup import.
+pub struct ManagerFetchHelmValuesOptions<'a> {
+    pub deployment_id: &'a str,
+    pub deployment_name: &'a str,
+    pub manager_url: &'a str,
+    pub deployment_token: &'a str,
+    pub stack: &'a Stack,
+    pub stack_state: &'a alien_core::StackState,
+    pub stack_settings: &'a StackSettings,
+    pub base_platform: Option<Platform>,
+    pub region: Option<&'a str>,
+    pub gcp_project_id: Option<&'a str>,
+    pub azure_location: Option<&'a str>,
 }
 
 /// Generate a Helm chart for `stack`.
@@ -124,6 +140,88 @@ pub fn generate_helm_chart(stack: &Stack, options: HelmOptions<'_>) -> Result<He
         name: chart_name,
         files,
     })
+}
+
+/// Render one complete manager-fetch values file from imported deployment state.
+pub fn render_manager_fetch_values(options: ManagerFetchHelmValuesOptions<'_>) -> Result<String> {
+    let registry = HelmRegistry::built_in();
+    let analysis = ChartAnalysis::from_stack(options.stack, &registry)?;
+    let mut yaml = String::new();
+
+    yaml.push_str("management:\n");
+    yaml.push_str(&format!(
+        "  token: {}\n",
+        yaml_string(options.deployment_token)
+    ));
+    yaml.push_str(&format!(
+        "  name: {}\n",
+        yaml_string(options.deployment_name)
+    ));
+    yaml.push_str(&format!("  url: {}\n", yaml_string(options.manager_url)));
+    yaml.push_str(&format!(
+        "  deploymentId: {}\n",
+        yaml_string(options.deployment_id)
+    ));
+    yaml.push_str(&format!(
+        "  updates: {}\n",
+        yaml_string(updates_mode_value(options.stack_settings.updates))
+    ));
+    yaml.push_str(&format!(
+        "  telemetry: {}\n",
+        yaml_string(telemetry_mode_value(options.stack_settings.telemetry))
+    ));
+    yaml.push_str(&format!(
+        "  healthChecks: {}\n\n",
+        yaml_string(heartbeats_mode_value(options.stack_settings.heartbeats))
+    ));
+
+    append_stack_settings(&mut yaml, options.stack_settings)?;
+    yaml.push_str("\ninfrastructure: null\n\n");
+
+    match options.base_platform {
+        Some(platform) => yaml.push_str(&format!(
+            "basePlatform: {}\n",
+            yaml_string(platform.as_str())
+        )),
+        None => yaml.push_str("basePlatform: null\n"),
+    }
+    yaml.push_str("basePlatformConfig:\n");
+    yaml.push_str("  gcp:\n");
+    yaml.push_str(&format!(
+        "    projectId: {}\n",
+        yaml_string(options.gcp_project_id.unwrap_or(""))
+    ));
+    yaml.push_str(&format!(
+        "    region: {}\n",
+        yaml_string(options.region.unwrap_or(""))
+    ));
+    yaml.push_str("  aws:\n");
+    yaml.push_str(&format!(
+        "    region: {}\n",
+        yaml_string(options.region.unwrap_or(""))
+    ));
+    yaml.push_str("  azure:\n");
+    yaml.push_str(&format!(
+        "    location: {}\n",
+        yaml_string(options.azure_location.or(options.region).unwrap_or(""))
+    ));
+    yaml.push_str(&format!(
+        "serviceAccountPrefix: {}\n",
+        yaml_string(&options.stack_state.resource_prefix)
+    ));
+
+    append_manager_service_account(&mut yaml, options.stack_state, options.base_platform);
+    append_imported_service_accounts(
+        &mut yaml,
+        &analysis,
+        options.stack_state,
+        options.base_platform,
+    );
+    append_cluster_bootstrap(&mut yaml, options.stack_state, options.base_platform);
+    append_services(&mut yaml, &analysis);
+    yaml.push_str("\npublicUrls: {}\n");
+
+    Ok(yaml)
 }
 
 /// Result of dispatching every stack resource through the
@@ -410,7 +508,7 @@ clusterBootstrap:
 
     append_service_accounts(&mut yaml, analysis);
     append_stack_settings(&mut yaml, stack_settings)?;
-    yaml.push_str("\ninfrastructure: null\n\nbasePlatform: null\nserviceAccountPrefix: \"\"\nmanagerServiceAccount:\n  annotations: {}\n  labels: {}\n");
+    yaml.push_str("\ninfrastructure: null\n\nbasePlatform: null\nbasePlatformConfig:\n  gcp:\n    projectId: \"\"\n    region: \"\"\n  aws:\n    region: \"\"\n  azure:\n    location: \"\"\nserviceAccountPrefix: \"\"\nmanagerServiceAccount:\n  annotations: {}\n  labels: {}\n");
     append_services(&mut yaml, analysis);
     yaml.push_str("\npublicUrls: {}\n");
 
@@ -468,6 +566,169 @@ fn append_service_accounts(yaml: &mut String, analysis: &ChartAnalysis) {
                 yaml_key(name)
             ));
         }
+    }
+}
+
+fn append_imported_service_accounts(
+    yaml: &mut String,
+    analysis: &ChartAnalysis,
+    stack_state: &alien_core::StackState,
+    base_platform: Option<Platform>,
+) {
+    yaml.push_str("serviceAccounts:\n");
+    if analysis.service_accounts.is_empty() {
+        yaml.push_str("  {}\n");
+        return;
+    }
+
+    for name in &analysis.service_accounts {
+        yaml.push_str(&format!("  {}:\n", yaml_key(name)));
+        match service_account_identity_for_profile(stack_state, name) {
+            Some(identity) => {
+                yaml.push_str("    annotations:\n");
+                yaml.push_str(&format!(
+                    "      {}: {}\n",
+                    yaml_key(identity_annotation_key(base_platform)),
+                    yaml_string(identity)
+                ));
+            }
+            None => yaml.push_str("    annotations: {}\n"),
+        }
+        yaml.push_str("    labels: {}\n");
+    }
+}
+
+fn append_manager_service_account(
+    yaml: &mut String,
+    stack_state: &alien_core::StackState,
+    base_platform: Option<Platform>,
+) {
+    yaml.push_str("managerServiceAccount:\n");
+    match remote_stack_management_identity(stack_state) {
+        Some(identity) => {
+            yaml.push_str("  annotations:\n");
+            yaml.push_str(&format!(
+                "    {}: {}\n",
+                yaml_key(identity_annotation_key(base_platform)),
+                yaml_string(identity)
+            ));
+        }
+        None => yaml.push_str("  annotations: {}\n"),
+    }
+    yaml.push_str("  labels: {}\n");
+}
+
+fn append_cluster_bootstrap(
+    yaml: &mut String,
+    stack_state: &alien_core::StackState,
+    base_platform: Option<Platform>,
+) {
+    let eks_managed = base_platform == Some(Platform::Aws)
+        && stack_state.resources.values().any(|resource| {
+            resource
+                .outputs
+                .as_ref()
+                .and_then(|outputs| outputs.downcast_ref::<alien_core::KubernetesClusterOutputs>())
+                .is_some_and(|outputs| {
+                    outputs.provider == alien_core::KubernetesClusterProvider::Eks
+                        && outputs.ownership == alien_core::KubernetesClusterOwnership::Managed
+                })
+        });
+
+    yaml.push_str("clusterBootstrap:\n");
+    yaml.push_str("  metricsServer:\n");
+    yaml.push_str(&format!("    enabled: {}\n", eks_managed));
+    yaml.push_str("    image: registry.k8s.io/metrics-server/metrics-server:v0.8.1\n");
+    yaml.push_str("  storageClass:\n");
+    yaml.push_str("    default:\n");
+    yaml.push_str(&format!("      enabled: {}\n", eks_managed));
+    yaml.push_str("      name: \"gp3\"\n");
+    yaml.push_str("      provisioner: \"ebs.csi.aws.com\"\n");
+    yaml.push_str("      parameters:\n");
+    yaml.push_str("        type: \"gp3\"\n");
+    yaml.push_str("        fsType: \"ext4\"\n");
+    yaml.push_str("        encrypted: \"true\"\n");
+    yaml.push_str("  ingress:\n");
+    yaml.push_str("    eksAutoMode:\n");
+    yaml.push_str(&format!("      enabled: {}\n", eks_managed));
+    yaml.push_str("      name: alb\n");
+    yaml.push_str("      controller: eks.amazonaws.com/alb\n");
+    yaml.push_str("      scheme: internet-facing\n");
+    yaml.push_str("      subnetIds: []\n");
+    yaml.push_str("  compute:\n");
+    yaml.push_str("    eksAutoMode:\n");
+    yaml.push_str("      arm64NodePool:\n");
+    yaml.push_str(&format!("        enabled: {}\n", eks_managed));
+    yaml.push_str("        name: general-purpose-arm64\n");
+    yaml.push_str("        nodeClassName: default\n");
+    yaml.push_str("        capacityType: on-demand\n");
+    yaml.push_str("        instanceCategories:\n");
+    yaml.push_str("          - c\n");
+    yaml.push_str("          - m\n");
+    yaml.push_str("          - r\n");
+    yaml.push_str("        minInstanceGeneration: \"5\"\n");
+    yaml.push_str("        limits:\n");
+    yaml.push_str("          cpu: \"1000\"\n");
+    yaml.push_str("          memory: 1000Gi\n");
+}
+
+fn service_account_identity_for_profile<'a>(
+    stack_state: &'a alien_core::StackState,
+    profile: &str,
+) -> Option<&'a str> {
+    stack_state
+        .resources
+        .iter()
+        .find_map(|(resource_id, resource)| {
+            let outputs = resource
+                .outputs
+                .as_ref()
+                .and_then(|outputs| outputs.downcast_ref::<ServiceAccountOutputs>())?;
+            let service_account = resource.config.downcast_ref::<ServiceAccount>()?;
+            let account_profile =
+                alien_core::permission_profile_from_service_account_id(service_account.id());
+            (account_profile == profile || resource_id == profile)
+                .then_some(outputs.identity.as_str())
+        })
+}
+
+fn remote_stack_management_identity(stack_state: &alien_core::StackState) -> Option<&str> {
+    stack_state.resources.values().find_map(|resource| {
+        resource
+            .outputs
+            .as_ref()
+            .and_then(|outputs| outputs.downcast_ref::<RemoteStackManagementOutputs>())
+            .map(|outputs| outputs.management_resource_id.as_str())
+    })
+}
+
+fn identity_annotation_key(base_platform: Option<Platform>) -> &'static str {
+    match base_platform {
+        Some(Platform::Gcp) => "iam.gke.io/gcp-service-account",
+        Some(Platform::Azure) => "azure.workload.identity/client-id",
+        _ => "eks.amazonaws.com/role-arn",
+    }
+}
+
+fn updates_mode_value(mode: alien_core::UpdatesMode) -> &'static str {
+    match mode {
+        alien_core::UpdatesMode::Auto => "auto",
+        alien_core::UpdatesMode::ApprovalRequired => "approval-required",
+    }
+}
+
+fn telemetry_mode_value(mode: alien_core::TelemetryMode) -> &'static str {
+    match mode {
+        alien_core::TelemetryMode::Off => "off",
+        alien_core::TelemetryMode::Auto => "auto",
+        alien_core::TelemetryMode::ApprovalRequired => "approval-required",
+    }
+}
+
+fn heartbeats_mode_value(mode: alien_core::HeartbeatsMode) -> &'static str {
+    match mode {
+        alien_core::HeartbeatsMode::Off => "off",
+        alien_core::HeartbeatsMode::On => "on",
     }
 }
 
@@ -710,6 +971,34 @@ fn values_schema_json() -> String {
     },
     "infrastructure": { "type": ["object", "null"] },
     "basePlatform": { "type": ["string", "null"], "enum": ["aws", "gcp", "azure", null] },
+    "basePlatformConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "gcp": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "projectId": { "type": "string" },
+            "region": { "type": "string" }
+          }
+        },
+        "aws": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "region": { "type": "string" }
+          }
+        },
+        "azure": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "location": { "type": "string" }
+          }
+        }
+      }
+    },
     "heartbeat": {
       "type": "object",
       "additionalProperties": false,
@@ -1191,6 +1480,16 @@ spec:
             {{- if .Values.basePlatform }}
             - name: BASE_PLATFORM
               value: {{ .Values.basePlatform | quote }}
+            {{- end }}
+            {{- if and (eq .Values.basePlatform "gcp") .Values.basePlatformConfig.gcp.projectId }}
+            - name: GCP_PROJECT_ID
+              value: {{ .Values.basePlatformConfig.gcp.projectId | quote }}
+            - name: GOOGLE_CLOUD_PROJECT
+              value: {{ .Values.basePlatformConfig.gcp.projectId | quote }}
+            {{- end }}
+            {{- if and (eq .Values.basePlatform "gcp") .Values.basePlatformConfig.gcp.region }}
+            - name: GCP_REGION
+              value: {{ .Values.basePlatformConfig.gcp.region | quote }}
             {{- end }}
             - name: SYNC_URL
               value: {{ .Values.management.url | quote }}

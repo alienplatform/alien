@@ -1,6 +1,5 @@
 ---
 source: crates/alien-terraform/tests/generator/helpers.rs
-assertion_line: 56
 expression: buf
 ---
 === versions.tf ===
@@ -124,18 +123,13 @@ resource "random_id" "resource_prefix" {
 
 === locals.tf ===
 locals {
-  resource_prefix          = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
-  deployment_name          = var.name
-  deployment_platform      = "kubernetes"
-  deployment_base_platform = "azure"
-  deployment_target        = "aks"
-  deployment_region        = var.azure_location
-  deployment_management_config = {
-    platform         = "azure"
-    managingTenantId = var.azure_managing_tenant_id
-    oidcIssuer       = var.azure_oidc_issuer
-    oidcSubject      = var.azure_oidc_subject
-  }
+  resource_prefix              = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
+  deployment_name              = var.name
+  deployment_platform          = "kubernetes"
+  deployment_base_platform     = "azure"
+  deployment_target            = "aks"
+  deployment_region            = var.azure_location
+  deployment_management_config = null
   kubernetes_exposure = {
     mode = "disabled"
   }
@@ -180,26 +174,6 @@ locals {
   helm_manager_service_account = {
     annotations = {}
     labels      = {}
-  }
-  helm_values = {
-    serviceAccounts       = local.helm_service_accounts
-    managerServiceAccount = local.helm_manager_service_account
-    stackSettings         = local.deployment_settings
-    basePlatform          = local.deployment_base_platform
-    serviceAccountPrefix  = local.resource_prefix
-    heartbeat = {
-      collection = {
-        nodes = {
-          enabled = true
-        }
-      }
-    }
-    clusterBootstrap = {
-      metricsServer = {
-        enabled = var.kubernetes_cluster_mode == "create"
-        image   = "registry.k8s.io/metrics-server/metrics-server:v0.8.1"
-      }
-    }
   }
 }
 
@@ -356,12 +330,6 @@ output "kubernetes_kubeconfig" {
 output "kubernetes_kube_context" {
   value       = local.kubernetes_kube_context
   description = "Kube context for managed Kubernetes clusters created by this module."
-}
-
-output "helm_values" {
-  value       = jsonencode(local.helm_values)
-  description = "Helm values JSON for the manager-fetch Kubernetes install."
-  sensitive   = true
 }
 
 === README.md ===

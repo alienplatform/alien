@@ -3,9 +3,11 @@
 use super::helpers::render_built_ins_target;
 use alien_cloudformation::{CloudFormationTarget, RegistrationMode};
 use alien_core::{
-    KubernetesCluster, KubernetesClusterOwnership, KubernetesClusterProvider,
-    KubernetesHeartbeatMode, PermissionProfile, RemoteStackManagement, ResourceLifecycle,
-    ServiceAccount, Stack, StackSettings,
+    KubernetesCertificateMode, KubernetesCluster, KubernetesClusterOwnership,
+    KubernetesClusterProvider, KubernetesExposureSettings, KubernetesHeartbeatMode,
+    KubernetesIngressRouteProfile, KubernetesRouteProfile, KubernetesRouteProviderOptions,
+    KubernetesSettings, PermissionProfile, RemoteStackManagement, ResourceLifecycle,
+    ServiceAccount, Stack, StackSettings, Storage,
 };
 
 #[test]
@@ -37,18 +39,27 @@ fn eks_target_renders_managed_cluster_and_kubernetes_import_payload() {
     assert!(yaml.contains("Value: kubernetes"));
     assert!(yaml.contains("DeploymentBasePlatform:"));
     assert!(yaml.contains("Value: aws"));
-    assert!(yaml.contains("DeploymentHelmValues:"));
-    assert!(yaml.contains("namespace: alien"));
-    assert!(yaml.contains("clusterBootstrap:"));
-    assert!(yaml.contains("metricsServer:"));
-    let bootstrap_ingress = yaml
-        .split("clusterBootstrap:")
+    assert!(!yaml.contains("DeploymentHelmValues:"));
+    assert!(yaml.contains("KubernetesClusterRole:"));
+    let cluster_role = yaml
+        .split("KubernetesClusterRole:")
         .nth(1)
-        .expect("helm values should include clusterBootstrap")
-        .split("compute:")
+        .expect("template should include EKS cluster role")
+        .split("KubernetesNodeRole:")
         .next()
-        .expect("clusterBootstrap ingress should precede compute bootstrap");
-    assert!(!bootstrap_ingress.contains("targetType"));
+        .expect("cluster role should precede node role");
+    assert!(cluster_role.contains("sts:AssumeRole"));
+    assert!(cluster_role.contains("sts:TagSession"));
+    let node_role = yaml
+        .split("KubernetesNodeRole:")
+        .nth(1)
+        .expect("template should include EKS node role")
+        .split("KubernetesManagedNodeRole:")
+        .next()
+        .expect("node role should precede managed node role");
+    assert!(node_role.contains("sts:AssumeRole"));
+    assert!(!node_role.contains("sts:TagSession"));
+    assert!(!yaml.contains("managedAcmImport"));
     assert!(yaml.contains("NodePools:"));
     assert!(yaml.contains("- system"));
     assert!(!yaml.contains("general-purpose"));
@@ -93,4 +104,93 @@ fn eks_target_irsa_references_generated_cluster_resource() {
     assert!(!yaml.contains("- Kubernetes\n"));
     assert!(yaml.contains("system:serviceaccount:alien:${AWS::StackName}-manager-sa"));
     assert!(yaml.contains("system:serviceaccount:alien:${AWS::StackName}-execution-sa"));
+}
+
+#[test]
+fn eks_target_preserves_configured_kubernetes_exposure() {
+    let stack = Stack::new("kubernetes".to_string())
+        .add(
+            KubernetesCluster::new("kubernetes".to_string())
+                .provider(KubernetesClusterProvider::Eks)
+                .ownership(KubernetesClusterOwnership::Managed)
+                .namespace("alien".to_string())
+                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let mut settings = StackSettings::default();
+    settings.kubernetes = Some(KubernetesSettings {
+        cluster: None,
+        exposure: Some(KubernetesExposureSettings::Generated {
+            route: KubernetesRouteProfile::Ingress(KubernetesIngressRouteProfile {
+                controller: Some("eks.amazonaws.com/alb".to_string()),
+                ingress_class_name: "custom-alb".to_string(),
+                provider: Some(KubernetesRouteProviderOptions::AwsAlb {
+                    scheme: "internet-facing".to_string(),
+                    target_type: "ip".to_string(),
+                    ip_address_type: None,
+                    subnet_ids: vec![],
+                }),
+                ..Default::default()
+            }),
+            certificate: KubernetesCertificateMode::None,
+        }),
+    });
+
+    let yaml = render_built_ins_target(
+        &stack,
+        settings,
+        RegistrationMode::OutputsFallback,
+        CloudFormationTarget::Eks,
+        "kubernetes",
+        "eks managed cluster no tls exposure",
+    );
+
+    assert!(yaml.contains("namespace: alien"));
+    assert!(yaml.contains("mode: generated"));
+    assert!(yaml.contains("mode: none"));
+    assert!(yaml.matches("custom-alb").count() >= 2);
+    assert!(!yaml.contains("managedAcmImport"));
+}
+
+#[test]
+fn eks_target_attaches_storage_permissions_to_irsa_service_account() {
+    let stack = Stack::new("kubernetes".to_string())
+        .permission(
+            "app",
+            PermissionProfile::new().resource("files", ["storage/data-write"]),
+        )
+        .add(
+            KubernetesCluster::new("kubernetes".to_string())
+                .provider(KubernetesClusterProvider::Eks)
+                .ownership(KubernetesClusterOwnership::Managed)
+                .namespace("alien".to_string())
+                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Storage::new("files".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            ServiceAccount::new("app-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    let yaml = render_built_ins_target(
+        &stack,
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        CloudFormationTarget::Eks,
+        "kubernetes",
+        "eks storage permissions",
+    );
+
+    assert!(yaml.contains("Type: AWS::IAM::Policy"));
+    assert!(yaml.contains("- Ref: AppSaRole"));
+    assert!(yaml.contains("s3:PutObject"));
+    assert!(yaml.contains("arn:${AWS::Partition}:s3:::${AWS::StackName}-files/*"));
 }

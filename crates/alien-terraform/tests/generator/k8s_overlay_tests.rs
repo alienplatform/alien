@@ -13,11 +13,14 @@ use alien_core::{
     AzureResourceGroup, Ingress, KubernetesCertificateMode, KubernetesCluster,
     KubernetesClusterOwnership, KubernetesClusterProvider, KubernetesExposureSettings,
     KubernetesHeartbeatMode, KubernetesIngressRouteProfile, KubernetesRouteProfile,
-    KubernetesSettings, ManagementPermissions, PermissionProfile, PermissionsConfig,
-    RemoteStackManagement, ResourceLifecycle, ServiceAccount, Stack, StackSettings, Storage,
-    Worker, WorkerCode,
+    KubernetesSettings, ManagementPermissions, Network, NetworkSettings, PermissionProfile,
+    PermissionsConfig, RemoteStackManagement, ResourceLifecycle, ServiceAccount, Stack,
+    StackSettings, Storage, Worker, WorkerCode,
 };
-use alien_terraform::TerraformTarget;
+use alien_terraform::{
+    generate_terraform_module, TerraformHelmInstall, TerraformOptions, TerraformRegistration,
+    TerraformTarget, TfRegistry,
+};
 
 fn storage_data_read_service_account() -> ServiceAccount {
     ServiceAccount::new("execution-sa".to_string())
@@ -193,15 +196,10 @@ fn managed_kubernetes_cluster_emitters_export_runtime_metadata() {
                 assert!(main.contains("controller       = \"eks.amazonaws.com/alb\""));
                 assert!(main.contains("ingressClassName = \"alb\""));
                 assert!(main.contains("provider   = \"awsAlb\""));
-                assert!(main.contains("mode   = \"managedAcmImport\""));
-                assert!(main.contains("clusterBootstrap"));
-                assert!(main.contains("metricsServer"));
-                assert!(main.contains("storageClass"));
-                assert!(main.contains("provisioner = \"ebs.csi.aws.com\""));
-                assert!(main.contains("ingress"));
-                assert!(main.contains("eksAutoMode"));
-                assert!(main.contains("arm64NodePool"));
-                assert!(main.contains("general-purpose-arm64"));
+                assert!(main.contains("mode = \"none\""));
+                assert!(!main.contains("clusterBootstrap"));
+                assert!(!main.contains("metricsServer"));
+                assert!(!main.contains("eksAutoMode"));
                 assert!(cluster.contains(
                     r#""kubernetes.io/cluster/${local.resource_prefix}-k8s" = "shared""#
                 ));
@@ -212,14 +210,21 @@ fn managed_kubernetes_cluster_emitters_export_runtime_metadata() {
             TerraformTarget::Gke => {
                 assert!(main.contains("routeApi         = \"gateway\""));
                 assert!(main.contains("gatewayClassName = \"gke-l7-global-external-managed\""));
+                assert!(main.contains("listenerPort     = 80"));
                 assert!(main.contains("provider          = \"gkeGateway\""));
-                assert!(main.contains("mode               = \"managedTlsSecret\""));
+                assert!(main.contains("mode = \"none\""));
+                assert!(main.contains("gke-gcloud-auth-plugin"));
+                assert!(main.contains("provideClusterInfo = true"));
+                assert!(cluster.contains(r#"data "google_client_config" "current""#));
+                assert!(!main.contains("client-certificate-data"));
+                assert!(!main.contains("client-key-data"));
             }
             TerraformTarget::Aks => {
                 assert!(main.contains("routeApi         = \"gateway\""));
                 assert!(main.contains("gatewayClassName = \"azure-alb-external\""));
+                assert!(main.contains("listenerPort     = 80"));
                 assert!(main.contains("provider = \"azureApplicationGatewayForContainers\""));
-                assert!(main.contains("mode               = \"managedTlsSecret\""));
+                assert!(main.contains("mode = \"none\""));
             }
             _ => unreachable!("only managed Kubernetes targets are tested here"),
         }
@@ -266,8 +271,8 @@ fn managed_kubernetes_clusters_install_generated_public_endpoint_support() {
         if target == TerraformTarget::Eks {
             let locals = module.get("locals.tf").expect("locals should render");
             assert!(locals.contains(r#"controller       = "eks.amazonaws.com/alb""#));
-            assert!(locals.contains("arm64NodePool"));
-            assert!(locals.contains("general-purpose-arm64"));
+            assert!(!locals.contains("eksAutoMode"));
+            assert!(!locals.contains("arm64NodePool"));
             assert!(!cluster.contains("IngressClassParams"));
             assert!(!cluster.contains(r#"resource "kubernetes_manifest" "kubernetes_alb"#));
         }
@@ -392,13 +397,9 @@ fn managed_kubernetes_cluster_emitters_do_not_apply_in_cluster_manifests() {
         assert!(!cluster.contains(r#"resource "kubernetes_manifest""#));
 
         let locals = module.get("locals.tf").expect("locals should render");
-        assert!(locals.contains("metricsServer"));
-        assert!(locals.contains("registry.k8s.io/metrics-server/metrics-server:v0.8.1"));
-        assert!(locals.contains("var.kubernetes_cluster_mode == \"create\""));
-        if target == TerraformTarget::Eks {
-            assert!(locals.contains("arm64NodePool"));
-            assert!(locals.contains("general-purpose-arm64"));
-        }
+        assert!(!locals.contains("metricsServer"));
+        assert!(!locals.contains("registry.k8s.io/metrics-server/metrics-server:v0.8.1"));
+        assert!(!locals.contains("arm64NodePool"));
 
         assert_terraform_valid(
             &module,
@@ -408,4 +409,137 @@ fn managed_kubernetes_cluster_emitters_do_not_apply_in_cluster_manifests() {
             ),
         );
     }
+}
+
+#[test]
+fn registered_kubernetes_module_installs_provider_rendered_helm_values() {
+    let stack = Stack::new("eks-manager-fetch-values".to_string())
+        .add(
+            KubernetesCluster::new("kubernetes".to_string())
+                .provider(KubernetesClusterProvider::Eks)
+                .ownership(KubernetesClusterOwnership::Managed)
+                .namespace("alien".to_string())
+                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let registry = TfRegistry::built_in();
+    let module = generate_terraform_module(
+        &stack,
+        TerraformTarget::Eks,
+        TerraformOptions {
+            display_name: None,
+            registry: &registry,
+            stack_settings: StackSettings::default(),
+            registration: Some(TerraformRegistration {
+                provider_name: "alien".to_string(),
+                provider_source: "pkg.example.com/acme/app".to_string(),
+                provider_version: "1.0.0".to_string(),
+                resource_type: "deployment".to_string(),
+                setup_target: "kubernetes".to_string(),
+                setup_fingerprint: "test".to_string(),
+                setup_fingerprint_version: 1,
+            }),
+            helm_install: Some(TerraformHelmInstall {
+                chart_ref: "oci://pkg.example.com/acme/app/helm".to_string(),
+            }),
+        },
+    )
+    .expect("module should render");
+
+    let locals = module
+        .get("locals.tf")
+        .expect("registered module should include locals");
+    assert!(!locals.contains("helm_values"));
+
+    if let Some(outputs) = module.get("outputs.tf") {
+        assert!(!outputs.contains("helm_values"));
+    }
+
+    let helm = module
+        .get("helm.tf")
+        .expect("registered module with helm install should include helm.tf");
+    assert!(helm.contains("alien_deployment.this.helm_values"));
+    assert!(!helm.contains("local.helm_values"));
+}
+
+#[test]
+fn registered_gke_kubernetes_module_declares_dynamic_network_inputs() {
+    let stack = Stack::new("gke-manager-fetch-values".to_string())
+        .add(
+            KubernetesCluster::new("kubernetes".to_string())
+                .provider(KubernetesClusterProvider::Gke)
+                .ownership(KubernetesClusterOwnership::Managed)
+                .namespace("alien".to_string())
+                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Network::new("default-network".to_string())
+                .settings(NetworkSettings::Create {
+                    cidr: None,
+                    availability_zones: 2,
+                })
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let registry = TfRegistry::built_in();
+    let module = generate_terraform_module(
+        &stack,
+        TerraformTarget::Gke,
+        TerraformOptions {
+            display_name: None,
+            registry: &registry,
+            stack_settings: StackSettings::default(),
+            registration: Some(TerraformRegistration {
+                provider_name: "alien".to_string(),
+                provider_source: "pkg.example.com/acme/app".to_string(),
+                provider_version: "1.0.0".to_string(),
+                resource_type: "deployment".to_string(),
+                setup_target: "kubernetes".to_string(),
+                setup_fingerprint: "test".to_string(),
+                setup_fingerprint_version: 1,
+            }),
+            helm_install: Some(TerraformHelmInstall {
+                chart_ref: "oci://pkg.example.com/acme/app/helm".to_string(),
+            }),
+        },
+    )
+    .expect("module should render");
+
+    let variables = module
+        .get("variables.tf")
+        .expect("registered GKE module should include variables");
+    for variable in [
+        "network_mode",
+        "network_cidr",
+        "availability_zones",
+        "network_name",
+        "subnet_name",
+        "network_region",
+    ] {
+        assert!(
+            variables.contains(&format!("variable \"{variable}\"")),
+            "variables.tf should declare {variable}"
+        );
+    }
+
+    let rendered = module
+        .iter()
+        .map(|(_, contents)| contents)
+        .collect::<String>();
+    assert!(rendered.contains("var.network_mode"));
+    assert!(rendered.contains("var.network_name"));
+    assert!(rendered.contains("var.subnet_name"));
+    assert!(rendered.contains("var.network_region"));
+    assert!(!rendered.contains("${local.resource_prefix}-default_network"));
+    assert!(rendered.contains("${local.resource_prefix}-default-network"));
+    assert!(rendered.contains("gke-gcloud-auth-plugin"));
+    assert!(rendered.contains(r#"data "google_client_config" "current""#));
+    assert!(rendered.contains("data.google_client_config.current.access_token"));
+    assert!(!rendered.contains("client-certificate-data"));
+    assert!(!rendered.contains("client-key-data"));
 }

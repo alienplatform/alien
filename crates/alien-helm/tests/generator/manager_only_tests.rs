@@ -192,6 +192,35 @@ fn manager_chart_uses_explicit_secrets_and_restricted_defaults() {
 }
 
 #[test]
+fn gcp_base_platform_config_renders_agent_environment() {
+    let stack = Stack::new("gcp-runtime-config".to_string()).build();
+    let chart = render(&stack, StackSettings::default());
+    let files = chart.files.clone();
+    let values = files.get("values.yaml").expect("values.yaml");
+    let gcp_values = values
+        .replace("basePlatform: null", "basePlatform: gcp")
+        .replace("projectId: \"\"", "projectId: alien-test-target")
+        .replace("region: \"\"", "region: us-east4");
+
+    let rendered = alien_helm::test_utils::helm_template(&files, Some(&gcp_values));
+    match &rendered.status {
+        LinterStatus::Passed => {
+            assert!(rendered.stdout.contains("name: BASE_PLATFORM"));
+            assert!(rendered.stdout.contains("value: \"gcp\""));
+            assert!(rendered.stdout.contains("name: GCP_PROJECT_ID"));
+            assert!(rendered.stdout.contains("value: \"alien-test-target\""));
+            assert!(rendered.stdout.contains("name: GOOGLE_CLOUD_PROJECT"));
+            assert!(rendered.stdout.contains("name: GCP_REGION"));
+            assert!(rendered.stdout.contains("value: \"us-east4\""));
+        }
+        LinterStatus::Skipped(reason) => {
+            eprintln!("skipped GCP runtime config render assertions: {reason}");
+        }
+        LinterStatus::Failed(_) => rendered.assert_ok("GCP runtime config render"),
+    }
+}
+
+#[test]
 fn cluster_bootstrap_renders_only_when_enabled() {
     let stack = Stack::new("cluster-bootstrap".to_string()).build();
     let chart = render(&stack, StackSettings::default());
