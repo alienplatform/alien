@@ -11,10 +11,13 @@ use alien_azure_clients::authorization::{AuthorizationApi, Scope};
 use alien_azure_clients::models::authorization_role_assignments::{
     RoleAssignment, RoleAssignmentProperties, RoleAssignmentPropertiesPrincipalType,
 };
+use alien_azure_clients::models::authorization_role_definitions::{
+    Permission, RoleDefinition, RoleDefinitionProperties,
+};
 use alien_error::{AlienError, Context};
 use alien_permissions::{
     generators::{
-        dedupe_azure_role_bindings, AzureRoleBinding, AzureRoleDefinitionRef,
+        dedupe_azure_role_bindings, AzureCustomRole, AzureRoleBinding, AzureRoleDefinitionRef,
         AzureRuntimePermissionsGenerator,
     },
     BindingTarget, PermissionContext,
@@ -148,6 +151,7 @@ impl AzurePermissionsHelper {
         let role_definition_scope =
             Self::role_definition_scope_for_assignment_scope(resource_scope);
 
+        let mut custom_roles = Vec::new();
         let mut bindings = Vec::new();
         for permission_set_ref in permission_set_refs {
             let permission_set = permission_set_ref
@@ -177,8 +181,24 @@ impl AzurePermissionsHelper {
                 "Generated Azure role assignments"
             );
 
+            custom_roles.extend(
+                grant_plan
+                    .custom_roles
+                    .into_iter()
+                    .map(|custom_role| (permission_set.id.clone(), custom_role)),
+            );
             bindings.extend(grant_plan.bindings);
         }
+
+        Self::ensure_profile_custom_role_definitions(
+            ctx,
+            authorization_client,
+            profile_name,
+            custom_roles,
+            &role_definition_scope,
+            azure_config,
+        )
+        .await?;
 
         let bindings = dedupe_azure_role_bindings(bindings);
         let futures = bindings
@@ -259,16 +279,12 @@ impl AzurePermissionsHelper {
         match &binding.role_definition {
             AzureRoleDefinitionRef::Predefined { role_definition_id } => role_definition_id.clone(),
             AzureRoleDefinitionRef::Custom { key } => {
-                let role_segment = azure_role_key_segment(key);
-                let role_definition_id = Uuid::new_v5(
-                    &Uuid::NAMESPACE_OID,
-                    format!(
-                        "deployment:azure:res-role-def:{}:{}:{}:{}",
-                        resource_prefix, profile_name, binding.permission_set_id, role_segment
-                    )
-                    .as_bytes(),
-                )
-                .to_string();
+                let role_definition_id = Self::resource_custom_role_definition_uuid(
+                    resource_prefix,
+                    profile_name,
+                    &binding.permission_set_id,
+                    key,
+                );
                 format!(
                     "/{}/providers/Microsoft.Authorization/roleDefinitions/{}",
                     role_definition_scope.to_scope_string(azure_config),
@@ -276,6 +292,159 @@ impl AzurePermissionsHelper {
                 )
             }
         }
+    }
+
+    async fn ensure_profile_custom_role_definitions(
+        ctx: &ResourceControllerContext<'_>,
+        authorization_client: &Arc<dyn AuthorizationApi>,
+        profile_name: &str,
+        custom_roles: Vec<(String, AzureCustomRole)>,
+        role_definition_scope: &Scope,
+        azure_config: &alien_azure_clients::AzureClientConfig,
+    ) -> Result<()> {
+        for (permission_set_id, custom_role) in custom_roles {
+            let role_definition_id = Self::resource_custom_role_definition_uuid(
+                ctx.resource_prefix,
+                profile_name,
+                &permission_set_id,
+                &custom_role.key,
+            );
+            let role_name = format!(
+                "{}-{} [{}]",
+                ctx.resource_prefix, custom_role.role_definition.name, profile_name
+            );
+
+            Self::create_or_update_custom_role_definition(
+                authorization_client,
+                azure_config,
+                role_definition_scope,
+                &role_definition_id,
+                role_name,
+                custom_role,
+                &permission_set_id,
+            )
+            .await?;
+        }
+
+        Ok(())
+    }
+
+    async fn ensure_management_custom_role_definitions(
+        ctx: &ResourceControllerContext<'_>,
+        authorization_client: &Arc<dyn AuthorizationApi>,
+        custom_roles: Vec<(String, AzureCustomRole)>,
+        role_definition_scope: &Scope,
+        azure_config: &alien_azure_clients::AzureClientConfig,
+    ) -> Result<()> {
+        for (permission_set_id, custom_role) in custom_roles {
+            let role_definition_id = Self::management_resource_custom_role_definition_uuid(
+                ctx.resource_prefix,
+                &permission_set_id,
+                &custom_role.key,
+            );
+            let role_name = format!(
+                "{}-{} [mgmt]",
+                ctx.resource_prefix, custom_role.role_definition.name
+            );
+
+            Self::create_or_update_custom_role_definition(
+                authorization_client,
+                azure_config,
+                role_definition_scope,
+                &role_definition_id,
+                role_name,
+                custom_role,
+                &permission_set_id,
+            )
+            .await?;
+        }
+
+        Ok(())
+    }
+
+    async fn create_or_update_custom_role_definition(
+        authorization_client: &Arc<dyn AuthorizationApi>,
+        azure_config: &alien_azure_clients::AzureClientConfig,
+        role_definition_scope: &Scope,
+        role_definition_id: &str,
+        role_name: String,
+        custom_role: AzureCustomRole,
+        permission_set_id: &str,
+    ) -> Result<()> {
+        let assignable_scope = role_definition_scope.to_resource_id_string(azure_config);
+        let role_definition = custom_role.role_definition;
+        let role_definition = RoleDefinition {
+            properties: Some(RoleDefinitionProperties {
+                role_name: Some(role_name.clone()),
+                description: Some(role_definition.description),
+                type_: Some("CustomRole".to_string()),
+                permissions: vec![Permission {
+                    actions: role_definition.actions,
+                    not_actions: role_definition.not_actions,
+                    data_actions: role_definition.data_actions,
+                    not_data_actions: role_definition.not_data_actions,
+                }],
+                assignable_scopes: vec![assignable_scope],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        authorization_client
+            .create_or_update_role_definition(
+                role_definition_scope,
+                role_definition_id.to_string(),
+                &role_definition,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to create Azure custom role definition '{role_name}'"),
+                resource_id: Some(permission_set_id.to_string()),
+            })?;
+
+        info!(
+            role_name = %role_name,
+            role_definition_id = %role_definition_id,
+            permission_set = %permission_set_id,
+            "Azure custom role definition ensured"
+        );
+
+        Ok(())
+    }
+
+    fn resource_custom_role_definition_uuid(
+        resource_prefix: &str,
+        profile_name: &str,
+        permission_set_id: &str,
+        key: &str,
+    ) -> String {
+        let role_segment = azure_role_key_segment(key);
+        Uuid::new_v5(
+            &Uuid::NAMESPACE_OID,
+            format!(
+                "deployment:azure:res-role-def:{}:{}:{}:{}",
+                resource_prefix, profile_name, permission_set_id, role_segment
+            )
+            .as_bytes(),
+        )
+        .to_string()
+    }
+
+    fn management_resource_custom_role_definition_uuid(
+        resource_prefix: &str,
+        permission_set_id: &str,
+        key: &str,
+    ) -> String {
+        let role_segment = azure_role_key_segment(key);
+        Uuid::new_v5(
+            &Uuid::NAMESPACE_OID,
+            format!(
+                "deployment:azure:mgmt-res-role-def:{}:{}:{}",
+                resource_prefix, permission_set_id, role_segment
+            )
+            .as_bytes(),
+        )
+        .to_string()
     }
 
     /// Create an Azure role assignment
@@ -391,6 +560,7 @@ impl AzurePermissionsHelper {
         let role_definition_scope =
             Self::role_definition_scope_for_assignment_scope(resource_scope);
 
+        let mut custom_roles = Vec::new();
         let mut bindings = Vec::new();
         let generator = AzureRuntimePermissionsGenerator::new();
         for permission_set_ref in &non_provision_refs {
@@ -423,8 +593,23 @@ impl AzurePermissionsHelper {
                 "Generated management role assignments"
             );
 
+            custom_roles.extend(
+                grant_plan
+                    .custom_roles
+                    .into_iter()
+                    .map(|custom_role| (permission_set.id.clone(), custom_role)),
+            );
             bindings.extend(grant_plan.bindings);
         }
+
+        Self::ensure_management_custom_role_definitions(
+            ctx,
+            &authorization_client,
+            custom_roles,
+            &role_definition_scope,
+            azure_config,
+        )
+        .await?;
 
         let bindings = dedupe_azure_role_bindings(bindings);
         let futures = bindings
@@ -442,16 +627,12 @@ impl AzurePermissionsHelper {
                             role_definition_id.clone()
                         }
                         AzureRoleDefinitionRef::Custom { key } => {
-                            let role_segment = azure_role_key_segment(key);
-                            let role_definition_id = Uuid::new_v5(
-                                &Uuid::NAMESPACE_OID,
-                                format!(
-                                    "deployment:azure:mgmt-res-role-def:{}:{}:{}",
-                                    ctx.resource_prefix, binding.permission_set_id, role_segment
-                                )
-                                .as_bytes(),
-                            )
-                            .to_string();
+                            let role_definition_id =
+                                Self::management_resource_custom_role_definition_uuid(
+                                    ctx.resource_prefix,
+                                    &binding.permission_set_id,
+                                    key,
+                                );
                             format!(
                                 "/{}/providers/Microsoft.Authorization/roleDefinitions/{}",
                                 role_definition_scope.to_scope_string(&azure_config),

@@ -89,6 +89,7 @@ pub fn helm_template_and_validate(files: &LinterFiles, values_yaml: Option<&str>
         }
 
         let rendered = run_command("helm", args.iter().map(|arg| arg.as_os_str()), None)?;
+        let rendered = helm_template_with_debug_on_failure(rendered, &args)?;
         if !matches!(rendered.status, LinterStatus::Passed) {
             return Ok(rendered);
         }
@@ -131,7 +132,35 @@ pub fn helm_template(files: &LinterFiles, values_yaml: Option<&str>) -> LinterRu
             args.push(path.as_os_str().to_os_string());
         }
 
-        run_command("helm", args.iter().map(|arg| arg.as_os_str()), None)
+        let rendered = run_command("helm", args.iter().map(|arg| arg.as_os_str()), None)?;
+        helm_template_with_debug_on_failure(rendered, &args)
+    })
+}
+
+fn helm_template_with_debug_on_failure(
+    rendered: LinterRun,
+    args: &[std::ffi::OsString],
+) -> Result<LinterRun, String> {
+    if matches!(rendered.status, LinterStatus::Passed) {
+        return Ok(rendered);
+    }
+
+    let mut debug_args = Vec::with_capacity(args.len() + 1);
+    debug_args.push(OsStr::new("--debug").to_os_string());
+    debug_args.extend(args.iter().cloned());
+    let debug = run_command("helm", debug_args.iter().map(|arg| arg.as_os_str()), None)?;
+    Ok(LinterRun {
+        tool: rendered.tool,
+        command: rendered.command,
+        status: rendered.status,
+        stdout: format!(
+            "{}\n\n--- helm template --debug stdout ---\n{}",
+            rendered.stdout, debug.stdout
+        ),
+        stderr: format!(
+            "{}\n\n--- helm template --debug stderr ---\n{}",
+            rendered.stderr, debug.stderr
+        ),
     })
 }
 

@@ -15,10 +15,6 @@ terraform {
       source  = "hashicorp/tls"
       version = ">= 4.0"
     }
-    kubernetes = {
-      source  = "hashicorp/kubernetes"
-      version = ">= 2.30"
-    }
     random = {
       source  = "hashicorp/random"
       version = ">= 3.6"
@@ -86,12 +82,6 @@ variable "kubernetes_cluster_mode" {
   default     = "create"
 }
 
-variable "install_metrics_server" {
-  type        = bool
-  description = "Whether to install metrics-server into Kubernetes clusters created by this module."
-  default     = true
-}
-
 variable "kubernetes_namespace" {
   type        = string
   description = "Kubernetes namespace for runtime resources."
@@ -113,12 +103,6 @@ data "aws_caller_identity" "current" {}
 
 data "aws_region" "current" {}
 
-provider "kubernetes" {
-  host                   = data.aws_eks_cluster.target.endpoint
-  cluster_ca_certificate = base64decode(data.aws_eks_cluster.target.certificate_authority[0].data)
-  token                  = data.aws_eks_cluster_auth.target.token
-}
-
 === resource_prefix.tf ===
 resource "random_id" "resource_prefix" {
   byte_length = 4
@@ -136,7 +120,7 @@ locals {
     platform        = "aws"
     managingRoleArn = var.managing_role_arn
   }
-  deployment_kubernetes_settings = merge(try(jsondecode(var.stack_settings_json).kubernetes, {}), { exposure = coalesce(try(jsondecode(var.stack_settings_json).kubernetes.exposure, null), local.kubernetes_exposure) })
+  deployment_kubernetes_settings = merge(try(jsondecode(var.stack_settings_json).kubernetes, {}), { exposure = jsondecode(try(jsondecode(var.stack_settings_json).kubernetes.exposure, null) == null ? jsonencode(local.kubernetes_exposure) : jsonencode(jsondecode(var.stack_settings_json).kubernetes.exposure)) })
   deployment_settings            = merge(jsondecode(var.stack_settings_json), { kubernetes = local.deployment_kubernetes_settings })
   deployment_resources = [
     {
@@ -207,6 +191,53 @@ locals {
       collection = {
         nodes = {
           enabled = true
+        }
+      }
+    }
+    clusterBootstrap = {
+      metricsServer = {
+        enabled = var.kubernetes_cluster_mode == "create"
+        image   = "registry.k8s.io/metrics-server/metrics-server:v0.8.1"
+      }
+      storageClass = {
+        default = {
+          enabled     = var.kubernetes_cluster_mode == "create"
+          name        = "gp3"
+          provisioner = "ebs.csi.aws.com"
+          parameters = {
+            type      = "gp3"
+            fsType    = "ext4"
+            encrypted = "true"
+          }
+        }
+      }
+      ingress = {
+        eksAutoMode = {
+          enabled    = var.kubernetes_cluster_mode == "create"
+          name       = "alb"
+          controller = "eks.amazonaws.com/alb"
+          scheme     = "internet-facing"
+          subnetIds  = var.kubernetes_cluster_mode == "create" ? aws_subnet.kubernetes_public[*].id : []
+        }
+      }
+      compute = {
+        eksAutoMode = {
+          arm64NodePool = {
+            enabled       = var.kubernetes_cluster_mode == "create"
+            name          = "general-purpose-arm64"
+            nodeClassName = "default"
+            capacityType  = "on-demand"
+            instanceCategories = [
+              "c",
+              "m",
+              "r"
+            ]
+            minInstanceGeneration = "5"
+            limits = {
+              cpu    = "1000"
+              memory = "1000Gi"
+            }
+          }
         }
       }
     }
@@ -284,9 +315,9 @@ resource "aws_subnet" "kubernetes_public" {
   availability_zone       = data.aws_availability_zones.kubernetes_available[0].names[count.index]
   map_public_ip_on_launch = true
   tags = {
-    Name                                                  = "$${local.resource_prefix}-kubernetes-public"
-    "kubernetes.io/cluster/$${local.resource_prefix}-k8s" = "shared"
-    "kubernetes.io/role/elb"                              = "1"
+    Name                                                 = "${local.resource_prefix}-kubernetes-public"
+    "kubernetes.io/cluster/${local.resource_prefix}-k8s" = "shared"
+    "kubernetes.io/role/elb"                             = "1"
   }
 }
 
@@ -296,9 +327,9 @@ resource "aws_subnet" "kubernetes_private" {
   cidr_block        = cidrsubnet(aws_vpc.kubernetes[0].cidr_block, 8, count.index + 10)
   availability_zone = data.aws_availability_zones.kubernetes_available[0].names[count.index]
   tags = {
-    Name                                                  = "$${local.resource_prefix}-kubernetes-private"
-    "kubernetes.io/cluster/$${local.resource_prefix}-k8s" = "shared"
-    "kubernetes.io/role/internal-elb"                     = "1"
+    Name                                                 = "${local.resource_prefix}-kubernetes-private"
+    "kubernetes.io/cluster/${local.resource_prefix}-k8s" = "shared"
+    "kubernetes.io/role/internal-elb"                    = "1"
   }
 }
 
@@ -415,7 +446,6 @@ resource "aws_eks_cluster" "kubernetes" {
   compute_config {
     enabled = true
     node_pools = [
-      "general-purpose",
       "system"
     ]
     node_role_arn = aws_iam_role.kubernetes_node[0].arn
@@ -512,354 +542,6 @@ resource "aws_eks_addon" "kubernetes_coredns" {
   addon_name   = "coredns"
   depends_on = [
     aws_eks_node_group.kubernetes
-  ]
-}
-
-resource "kubernetes_manifest" "kubernetes_gp3_storage_class" {
-  count = var.kubernetes_cluster_mode == "create" ? 1 : 0
-  manifest = {
-    apiVersion = "storage.k8s.io/v1"
-    kind       = "StorageClass"
-    metadata = {
-      name = "gp3"
-      annotations = {
-        "storageclass.kubernetes.io/is-default-class" = "true"
-      }
-    }
-    provisioner = "ebs.csi.aws.com"
-    parameters = {
-      type   = "gp3"
-      fsType = "ext4"
-    }
-    reclaimPolicy        = "Delete"
-    volumeBindingMode    = "WaitForFirstConsumer"
-    allowVolumeExpansion = true
-  }
-  depends_on = [
-    aws_eks_addon.kubernetes_ebs_csi
-  ]
-}
-
-resource "kubernetes_manifest" "kubernetes_metrics_server_service_account" {
-  count = var.kubernetes_cluster_mode == "create" && var.install_metrics_server ? 1 : 0
-  manifest = {
-    apiVersion = "v1"
-    kind       = "ServiceAccount"
-    metadata = {
-      name      = "metrics-server"
-      namespace = "kube-system"
-      labels = {
-        "k8s-app" = "metrics-server"
-      }
-    }
-  }
-  depends_on = [
-    aws_eks_cluster.kubernetes
-  ]
-}
-
-resource "kubernetes_manifest" "kubernetes_metrics_server_aggregated_metrics_reader" {
-  count = var.kubernetes_cluster_mode == "create" && var.install_metrics_server ? 1 : 0
-  manifest = {
-    apiVersion = "rbac.authorization.k8s.io/v1"
-    kind       = "ClusterRole"
-    metadata = {
-      name = "system:aggregated-metrics-reader"
-      labels = {
-        "rbac.authorization.k8s.io/aggregate-to-admin" = "true"
-        "rbac.authorization.k8s.io/aggregate-to-edit"  = "true"
-        "rbac.authorization.k8s.io/aggregate-to-view"  = "true"
-      }
-    }
-    rules = [
-      {
-        apiGroups = [
-          "metrics.k8s.io"
-        ]
-        resources = [
-          "pods",
-          "nodes"
-        ]
-        verbs = [
-          "get",
-          "list",
-          "watch"
-        ]
-      }
-    ]
-  }
-  depends_on = [
-    aws_eks_cluster.kubernetes
-  ]
-}
-
-resource "kubernetes_manifest" "kubernetes_metrics_server_cluster_role" {
-  count = var.kubernetes_cluster_mode == "create" && var.install_metrics_server ? 1 : 0
-  manifest = {
-    apiVersion = "rbac.authorization.k8s.io/v1"
-    kind       = "ClusterRole"
-    metadata = {
-      name = "system:metrics-server"
-      labels = {
-        "k8s-app" = "metrics-server"
-      }
-    }
-    rules = [
-      {
-        apiGroups = [
-          ""
-        ]
-        resources = [
-          "nodes/metrics"
-        ]
-        verbs = [
-          "get"
-        ]
-      },
-      {
-        apiGroups = [
-          ""
-        ]
-        resources = [
-          "pods",
-          "nodes"
-        ]
-        verbs = [
-          "get",
-          "list",
-          "watch"
-        ]
-      }
-    ]
-  }
-  depends_on = [
-    aws_eks_cluster.kubernetes
-  ]
-}
-
-resource "kubernetes_manifest" "kubernetes_metrics_server_auth_reader_role_binding" {
-  count = var.kubernetes_cluster_mode == "create" && var.install_metrics_server ? 1 : 0
-  manifest = {
-    apiVersion = "rbac.authorization.k8s.io/v1"
-    kind       = "RoleBinding"
-    metadata = {
-      name      = "metrics-server-auth-reader"
-      namespace = "kube-system"
-      labels = {
-        "k8s-app" = "metrics-server"
-      }
-    }
-    roleRef = {
-      apiGroup = "rbac.authorization.k8s.io"
-      kind     = "Role"
-      name     = "extension-apiserver-authentication-reader"
-    }
-    subjects = [
-      {
-        kind      = "ServiceAccount"
-        name      = "metrics-server"
-        namespace = "kube-system"
-      }
-    ]
-  }
-  depends_on = [
-    aws_eks_cluster.kubernetes
-  ]
-}
-
-resource "kubernetes_manifest" "kubernetes_metrics_server_auth_delegator_binding" {
-  count = var.kubernetes_cluster_mode == "create" && var.install_metrics_server ? 1 : 0
-  manifest = {
-    apiVersion = "rbac.authorization.k8s.io/v1"
-    kind       = "ClusterRoleBinding"
-    metadata = {
-      name = "metrics-server:system:auth-delegator"
-      labels = {
-        "k8s-app" = "metrics-server"
-      }
-    }
-    roleRef = {
-      apiGroup = "rbac.authorization.k8s.io"
-      kind     = "ClusterRole"
-      name     = "system:auth-delegator"
-    }
-    subjects = [
-      {
-        kind      = "ServiceAccount"
-        name      = "metrics-server"
-        namespace = "kube-system"
-      }
-    ]
-  }
-  depends_on = [
-    aws_eks_cluster.kubernetes
-  ]
-}
-
-resource "kubernetes_manifest" "kubernetes_metrics_server_cluster_role_binding" {
-  count = var.kubernetes_cluster_mode == "create" && var.install_metrics_server ? 1 : 0
-  manifest = {
-    apiVersion = "rbac.authorization.k8s.io/v1"
-    kind       = "ClusterRoleBinding"
-    metadata = {
-      name = "system:metrics-server"
-      labels = {
-        "k8s-app" = "metrics-server"
-      }
-    }
-    roleRef = {
-      apiGroup = "rbac.authorization.k8s.io"
-      kind     = "ClusterRole"
-      name     = "system:metrics-server"
-    }
-    subjects = [
-      {
-        kind      = "ServiceAccount"
-        name      = "metrics-server"
-        namespace = "kube-system"
-      }
-    ]
-  }
-  depends_on = [
-    aws_eks_cluster.kubernetes
-  ]
-}
-
-resource "kubernetes_manifest" "kubernetes_metrics_server_service" {
-  count = var.kubernetes_cluster_mode == "create" && var.install_metrics_server ? 1 : 0
-  manifest = {
-    apiVersion = "v1"
-    kind       = "Service"
-    metadata = {
-      name      = "metrics-server"
-      namespace = "kube-system"
-      labels = {
-        "k8s-app" = "metrics-server"
-      }
-    }
-    spec = {
-      selector = {
-        "k8s-app" = "metrics-server"
-      }
-      ports = [
-        {
-          name       = "https"
-          port       = 443
-          protocol   = "TCP"
-          targetPort = "https"
-        }
-      ]
-    }
-  }
-  depends_on = [
-    aws_eks_cluster.kubernetes
-  ]
-}
-
-resource "kubernetes_manifest" "kubernetes_metrics_server_deployment" {
-  count = var.kubernetes_cluster_mode == "create" && var.install_metrics_server ? 1 : 0
-  manifest = {
-    apiVersion = "apps/v1"
-    kind       = "Deployment"
-    metadata = {
-      name      = "metrics-server"
-      namespace = "kube-system"
-      labels = {
-        "k8s-app" = "metrics-server"
-      }
-    }
-    spec = {
-      selector = {
-        matchLabels = {
-          "k8s-app" = "metrics-server"
-        }
-      }
-      strategy = {
-        rollingUpdate = {
-          maxUnavailable = 0
-        }
-      }
-      template = {
-        metadata = {
-          labels = {
-            "k8s-app" = "metrics-server"
-          }
-        }
-        spec = {
-          serviceAccountName = "metrics-server"
-          priorityClassName  = "system-cluster-critical"
-          containers = [
-            {
-              name  = "metrics-server"
-              image = "registry.k8s.io/metrics-server/metrics-server:v0.8.1"
-              args = [
-                "--cert-dir=/tmp",
-                "--secure-port=10250",
-                "--kubelet-preferred-address-types=InternalIP,ExternalIP,Hostname",
-                "--kubelet-use-node-status-port",
-                "--metric-resolution=15s"
-              ]
-              ports = [
-                {
-                  name          = "https"
-                  containerPort = 10250
-                  protocol      = "TCP"
-                }
-              ]
-              resources = {
-                requests = {
-                  cpu    = "100m"
-                  memory = "200Mi"
-                }
-              }
-              volumeMounts = [
-                {
-                  name      = "tmp-dir"
-                  mountPath = "/tmp"
-                }
-              ]
-            }
-          ]
-          volumes = [
-            {
-              name     = "tmp-dir"
-              emptyDir = {}
-            }
-          ]
-        }
-      }
-    }
-  }
-  depends_on = [
-    aws_eks_cluster.kubernetes
-  ]
-}
-
-resource "kubernetes_manifest" "kubernetes_metrics_server_api_service" {
-  count = var.kubernetes_cluster_mode == "create" && var.install_metrics_server ? 1 : 0
-  manifest = {
-    apiVersion = "apiregistration.k8s.io/v1"
-    kind       = "APIService"
-    metadata = {
-      name = "v1beta1.metrics.k8s.io"
-      labels = {
-        "k8s-app" = "metrics-server"
-      }
-    }
-    spec = {
-      group                 = "metrics.k8s.io"
-      version               = "v1beta1"
-      groupPriorityMinimum  = 100
-      versionPriority       = 100
-      insecureSkipTLSVerify = true
-      service = {
-        name      = "metrics-server"
-        namespace = "kube-system"
-      }
-    }
-  }
-  depends_on = [
-    aws_eks_cluster.kubernetes
   ]
 }
 
@@ -966,16 +648,6 @@ resource "terraform_data" "deployment_import" {
     aws_eks_addon.kubernetes_ebs_csi,
     aws_eks_addon.kubernetes_kube_proxy,
     aws_eks_addon.kubernetes_coredns,
-    kubernetes_manifest.kubernetes_gp3_storage_class,
-    kubernetes_manifest.kubernetes_metrics_server_service_account,
-    kubernetes_manifest.kubernetes_metrics_server_aggregated_metrics_reader,
-    kubernetes_manifest.kubernetes_metrics_server_cluster_role,
-    kubernetes_manifest.kubernetes_metrics_server_auth_reader_role_binding,
-    kubernetes_manifest.kubernetes_metrics_server_auth_delegator_binding,
-    kubernetes_manifest.kubernetes_metrics_server_cluster_role_binding,
-    kubernetes_manifest.kubernetes_metrics_server_service,
-    kubernetes_manifest.kubernetes_metrics_server_deployment,
-    kubernetes_manifest.kubernetes_metrics_server_api_service,
     aws_iam_role.remote_stack_management,
     aws_iam_policy.remote_stack_management_managed_policy_0,
     aws_iam_role_policy_attachment.remote_stack_management_managed_policy_0_attachment,

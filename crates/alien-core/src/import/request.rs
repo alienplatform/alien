@@ -96,6 +96,9 @@ pub struct ImportedResource {
 pub struct StackImportResponse {
     /// Deployment created.
     pub deployment_id: String,
+    /// Deployment bearer token for the imported deployment, when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deployment_token: Option<String>,
     /// Stack settings persisted for the deployment.
     pub stack_settings: StackSettings,
     /// Fully populated imported stack state.

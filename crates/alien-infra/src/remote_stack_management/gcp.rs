@@ -545,7 +545,7 @@ impl GcpRemoteStackManagementController {
         }
 
         Ok(HandlerAction::Continue {
-            state: DeletingServiceAccount,
+            state: DeletingRole,
             suggested_delay: None,
         })
     }
@@ -557,8 +557,13 @@ impl GcpRemoteStackManagementController {
     )]
     async fn deleting_role(
         &mut self,
-        _ctx: &ResourceControllerContext<'_>,
+        ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        let permission_context =
+            ResourcePermissionsHelper::build_gcp_permission_context(ctx, ctx.resource_prefix)?;
+
+        ResourcePermissionsHelper::delete_gcp_custom_roles(ctx, &permission_context).await?;
+
         Ok(HandlerAction::Continue {
             state: DeletingServiceAccount,
             suggested_delay: None,

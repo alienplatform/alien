@@ -77,9 +77,9 @@ rand = { workspace = true }
 ngrok = { workspace = true }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 url = { workspace = true }
+async-trait = { workspace = true }
 
 [dev-dependencies]
 chrono = { workspace = true }
 test-context = { workspace = true }
-async-trait = { workspace = true }
 temp-env = { workspace = true }

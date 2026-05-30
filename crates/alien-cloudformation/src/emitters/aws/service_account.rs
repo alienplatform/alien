@@ -9,7 +9,7 @@ use crate::{
     emitter::CfEmitter,
     emitters::aws::helpers::{
         cf_from_json, required_logical_id, resource_config, service_trust_policy, stack_name, tags,
-        INLINE_POLICY_NAME,
+        uniquify_iam_statement_sids, INLINE_POLICY_NAME,
     },
     template::{CfExpression, CfResource},
 };
@@ -199,7 +199,10 @@ fn service_account_policy_document(
 
     Ok(Some(CfExpression::object([
         ("Version", CfExpression::from("2012-10-17")),
-        ("Statement", CfExpression::list(statements)),
+        (
+            "Statement",
+            CfExpression::list(uniquify_iam_statement_sids(statements)),
+        ),
     ])))
 }
 

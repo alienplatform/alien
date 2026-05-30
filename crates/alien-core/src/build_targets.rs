@@ -253,7 +253,7 @@ impl BinaryTarget {
             crate::Platform::Aws => vec![Self::LinuxArm64],
             crate::Platform::Gcp => vec![Self::LinuxX64],
             crate::Platform::Azure => vec![Self::LinuxX64],
-            crate::Platform::Kubernetes => vec![Self::LinuxArm64],
+            crate::Platform::Kubernetes => Self::LINUX.to_vec(),
             crate::Platform::Local => vec![Self::current_os()],
             crate::Platform::Test => vec![Self::LinuxX64],
         }
@@ -339,7 +339,7 @@ mod tests {
         );
         assert_eq!(
             BinaryTarget::defaults_for_platform(Platform::Kubernetes),
-            vec![BinaryTarget::LinuxArm64]
+            vec![BinaryTarget::LinuxX64, BinaryTarget::LinuxArm64]
         );
     }
 }

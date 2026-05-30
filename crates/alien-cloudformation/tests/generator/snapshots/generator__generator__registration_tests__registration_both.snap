@@ -172,6 +172,12 @@ Outputs:
   DeploymentSourceKind:
     Value: cloudformation
     Description: Setup source kind.
+  DeploymentId:
+    Value:
+      Fn::GetAtt:
+      - DeploymentStackImport
+      - DeploymentId
+    Description: Imported deployment ID.
   DeploymentResourcePrefix:
     Value:
       Ref: AWS::StackName

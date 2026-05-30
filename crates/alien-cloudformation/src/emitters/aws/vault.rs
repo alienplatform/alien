@@ -9,7 +9,9 @@
 use crate::{
     emitter::CfEmitter,
     emitters::aws::{
-        helpers::{cf_from_json, required_logical_id, resource_config},
+        helpers::{
+            cf_from_json, required_logical_id, resource_config, uniquify_iam_statement_sids,
+        },
         service_account::permission_context,
     },
     template::{CfExpression, CfResource},
@@ -131,7 +133,10 @@ fn management_vault_policy_document(
 
     Ok(Some(CfExpression::object([
         ("Version", CfExpression::from("2012-10-17")),
-        ("Statement", CfExpression::list(statements)),
+        (
+            "Statement",
+            CfExpression::list(uniquify_iam_statement_sids(statements)),
+        ),
     ])))
 }
 

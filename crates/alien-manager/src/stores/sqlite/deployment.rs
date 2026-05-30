@@ -34,6 +34,11 @@ impl SqliteDeploymentStore {
         Self { db }
     }
 
+    fn stale_lock_condition_sql() -> String {
+        "\"locked_at\" IS NOT NULL AND julianday(\"locked_at\") < julianday('now', '-5 minutes')"
+            .to_string()
+    }
+
     /// All columns needed for deployment queries (must match parse_deployment order).
     const DEPLOYMENT_COLUMNS: [Deployments; 27] = [
         Deployments::Id,
@@ -149,6 +154,20 @@ impl SqliteDeploymentStore {
                 .optional_string(6, "project_id")?
                 .unwrap_or_else(|| "default".to_string()),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SqliteDeploymentStore;
+
+    #[test]
+    fn stale_lock_condition_parses_rfc3339_timestamps() {
+        let condition = SqliteDeploymentStore::stale_lock_condition_sql();
+
+        assert!(condition.contains("julianday(\"locked_at\")"));
+        assert!(condition.contains("julianday('now', '-5 minutes')"));
+        assert!(!condition.contains("\"locked_at\" < datetime"));
     }
 }
 
@@ -771,7 +790,7 @@ impl DeploymentStore for SqliteDeploymentStore {
 
         // Stale lock threshold: 5 minutes. If a manager crashed mid-processing,
         // the lock will self-heal after this period.
-        let stale_lock_threshold = "datetime('now', '-5 minutes')";
+        let stale_lock_condition = Self::stale_lock_condition_sql();
 
         // SELECT deployments that need work AND are either unlocked or stale-locked
         let select_sql = {
@@ -792,10 +811,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                 .cond_where(
                     sea_query::Cond::any()
                         .add(Expr::col(Deployments::LockedBy).is_null())
-                        .add(Expr::cust(format!(
-                            "\"locked_at\" < {}",
-                            stale_lock_threshold
-                        ))),
+                        .add(Expr::cust(stale_lock_condition.clone())),
                 );
 
             if let Some(dg_id) = &filter.deployment_group_id {
@@ -861,10 +877,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                     .cond_where(
                         sea_query::Cond::any()
                             .add(Expr::col(Deployments::LockedBy).is_null())
-                            .add(Expr::cust(format!(
-                                "\"locked_at\" < {}",
-                                stale_lock_threshold
-                            ))),
+                            .add(Expr::cust(stale_lock_condition.clone())),
                     )
                     .to_string(SqliteQueryBuilder)
             };
@@ -1020,6 +1033,17 @@ impl DeploymentStore for SqliteDeploymentStore {
         };
 
         self.db.execute(&sql).await?;
+
+        // Keep the active lease alive while a caller is making progress.
+        // Long cloud waits can legitimately exceed the stale-lock window; a
+        // reconcile from the lock owner is the durable progress signal.
+        let lock_heartbeat_sql = Query::update()
+            .table(Deployments::Table)
+            .value(Deployments::LockedAt, now.to_rfc3339())
+            .and_where(Expr::col(Deployments::Id).eq(&data.deployment_id as &str))
+            .and_where(Expr::col(Deployments::LockedBy).eq(&data.session as &str))
+            .to_string(SqliteQueryBuilder);
+        self.db.execute(&lock_heartbeat_sql).await?;
 
         // Fetch and return the updated deployment
         self.get_deployment(caller, &data.deployment_id)

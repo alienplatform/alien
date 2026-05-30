@@ -440,7 +440,7 @@ pub async fn derive_native_image_host(
 /// Cloud image routes are registered from per-target providers, while the
 /// primary provider is the embedded local fallback. Prefer the target provider
 /// so registry access reconciliation and native image host derivation use the
-/// same ECR/GAR/ACR registry that the proxy pushed images to.
+/// same ECR/GAR registry that the proxy pushed images to.
 pub async fn load_artifact_registry(
     primary_provider: &Option<Arc<dyn BindingsProviderApi>>,
     target_providers: &HashMap<Platform, Arc<dyn BindingsProviderApi>>,

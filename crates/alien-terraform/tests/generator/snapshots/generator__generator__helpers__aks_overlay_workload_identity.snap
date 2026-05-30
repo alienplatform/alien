@@ -1,5 +1,6 @@
 ---
 source: crates/alien-terraform/tests/generator/helpers.rs
+assertion_line: 56
 expression: buf
 ---
 === versions.tf ===
@@ -91,12 +92,6 @@ variable "kubernetes_cluster_mode" {
   default     = "create"
 }
 
-variable "install_metrics_server" {
-  type        = bool
-  description = "Whether to install metrics-server into Kubernetes clusters created by this module."
-  default     = true
-}
-
 variable "kubernetes_namespace" {
   type        = string
   description = "Kubernetes namespace for runtime resources."
@@ -144,7 +139,7 @@ locals {
   kubernetes_exposure = {
     mode = "disabled"
   }
-  deployment_kubernetes_settings = merge(try(jsondecode(var.stack_settings_json).kubernetes, {}), { exposure = coalesce(try(jsondecode(var.stack_settings_json).kubernetes.exposure, null), local.kubernetes_exposure) })
+  deployment_kubernetes_settings = merge(try(jsondecode(var.stack_settings_json).kubernetes, {}), { exposure = jsondecode(try(jsondecode(var.stack_settings_json).kubernetes.exposure, null) == null ? jsonencode(local.kubernetes_exposure) : jsonencode(jsondecode(var.stack_settings_json).kubernetes.exposure)) })
   deployment_settings            = merge(jsondecode(var.stack_settings_json), { kubernetes = local.deployment_kubernetes_settings })
   deployment_resources = [
     {
@@ -197,6 +192,12 @@ locals {
         nodes = {
           enabled = true
         }
+      }
+    }
+    clusterBootstrap = {
+      metricsServer = {
+        enabled = var.kubernetes_cluster_mode == "create"
+        image   = "registry.k8s.io/metrics-server/metrics-server:v0.8.1"
       }
     }
   }

@@ -8,6 +8,7 @@
 pub mod artifact_registry;
 pub mod build;
 pub mod helpers;
+pub mod kubernetes_cluster;
 pub mod kv;
 pub mod network;
 pub mod queue;
@@ -19,6 +20,7 @@ pub mod worker;
 
 pub use artifact_registry::AwsArtifactRegistryEmitter;
 pub use build::AwsBuildEmitter;
+pub use kubernetes_cluster::AwsKubernetesClusterEmitter;
 pub use kv::AwsKvEmitter;
 pub use network::AwsNetworkEmitter;
 pub use queue::AwsQueueEmitter;

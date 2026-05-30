@@ -42,6 +42,16 @@ pub(crate) struct KubernetesPublicEndpointState {
     pub(crate) published_certificate_issued_at: Option<String>,
 }
 
+impl KubernetesPublicEndpointState {
+    pub(crate) fn effective_public_url(&self) -> Option<String> {
+        self.public_url.clone().or_else(|| {
+            self.load_balancer_endpoint
+                .as_ref()
+                .map(load_balancer_endpoint_url)
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct KubernetesPublicEndpointTarget<'a> {
     pub(crate) resource_id: &'a str,
@@ -876,10 +886,10 @@ fn build_ingress(
     tls_ref: Option<&KubernetesTlsSecretRef>,
 ) -> Result<K8sIngress> {
     let mut annotations = profile.annotations.clone();
-    if matches!(
-        &profile.provider,
-        Some(KubernetesRouteProviderOptions::AwsAlb { .. })
-    ) {
+    if let Some(KubernetesRouteProviderOptions::AwsAlb { target_type, .. }) = &profile.provider {
+        annotations
+            .entry("alb.ingress.kubernetes.io/target-type".to_string())
+            .or_insert_with(|| target_type.clone());
         if let Some(path) = target.health_check_path.as_ref() {
             annotations
                 .entry("alb.ingress.kubernetes.io/healthcheck-path".to_string())
@@ -1604,6 +1614,22 @@ mod tests {
             .expect("ingress");
 
         assert_eq!(ingress.metadata.annotations, None);
+    }
+
+    #[test]
+    fn endpoint_state_derives_url_from_observed_load_balancer() {
+        let state = KubernetesPublicEndpointState {
+            load_balancer_endpoint: Some(LoadBalancerEndpoint {
+                dns_name: "k8s-api.example.elb.amazonaws.com".to_string(),
+                hosted_zone_id: None,
+            }),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            state.effective_public_url().as_deref(),
+            Some("http://k8s-api.example.elb.amazonaws.com")
+        );
     }
 
     #[test]

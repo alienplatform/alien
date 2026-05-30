@@ -1086,7 +1086,7 @@ impl KubernetesContainerController {
                 current_replicas: 0, // Will be updated by runtime
                 desired_replicas: 0, // Will be updated by runtime
                 internal_dns: format!("{}.svc.cluster.local", workload_name),
-                url: self.public_endpoint.public_url.clone(),
+                url: self.public_endpoint.effective_public_url(),
                 replicas: Vec::new(), // Replica details tracked separately
                 load_balancer_endpoint: self.public_endpoint.load_balancer_endpoint.clone(),
             }))
@@ -1109,9 +1109,8 @@ impl KubernetesContainerController {
                 service_port: BindingValue::Value(self.service_port.unwrap_or(80)),
                 public_url: self
                     .public_endpoint
-                    .public_url
-                    .as_ref()
-                    .map(|url| BindingValue::Value(url.clone())),
+                    .effective_public_url()
+                    .map(BindingValue::Value),
             };
 
             // Serialize to JSON
@@ -1163,6 +1162,38 @@ mod output_tests {
         assert_eq!(
             container_outputs.url.as_deref(),
             Some("https://container.example.test")
+        );
+    }
+
+    #[test]
+    fn build_outputs_derives_public_url_from_load_balancer_endpoint() {
+        let public_endpoint = KubernetesPublicEndpointState {
+            load_balancer_endpoint: Some(alien_core::LoadBalancerEndpoint {
+                dns_name: "k8s-container.example.elb.amazonaws.com".to_string(),
+                hosted_zone_id: None,
+            }),
+            ..Default::default()
+        };
+        let controller = KubernetesContainerController {
+            state: KubernetesContainerState::Ready,
+            workload_name: Some("test-container".to_string()),
+            is_stateful: false,
+            namespace: Some("test-namespace".to_string()),
+            service_name: Some("test-container".to_string()),
+            service_port: Some(3000),
+            container_id: Some("container".to_string()),
+            public_endpoint,
+            _internal_stay_count: None,
+        };
+
+        let outputs = controller.build_outputs().expect("outputs");
+        let container_outputs = outputs
+            .downcast_ref::<ContainerOutputs>()
+            .expect("container outputs");
+
+        assert_eq!(
+            container_outputs.url.as_deref(),
+            Some("http://k8s-container.example.elb.amazonaws.com")
         );
     }
 }

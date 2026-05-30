@@ -518,6 +518,7 @@ impl Toolchain for TypeScriptToolchain {
                 build_output: None,
             }));
         }
+        super::validate_executable_format(&binary_path, context.build_target, &binary_name)?;
 
         info!(
             "Successfully compiled TypeScript to single executable: {}",
@@ -530,7 +531,8 @@ impl Toolchain for TypeScriptToolchain {
         // Determine if we need alien-runtime in the image
         // Workers on local platform use embedded runtime in agent (no runtime in image)
         // Everything else (containers on any platform, functions on cloud) needs alien-runtime
-        let needs_runtime_in_image = context.is_container || context.platform_name != "local";
+        let needs_runtime_in_image =
+            context.is_container || context.runtime_platform_name != "local";
 
         if !needs_runtime_in_image {
             // Worker on local platform - runtime is embedded in operator
@@ -562,7 +564,11 @@ impl Toolchain for TypeScriptToolchain {
         Ok(ToolchainOutput {
             build_strategy: super::ImageBuildStrategy::FromBaseImage {
                 base_images,
-                files_to_package: vec![(binary_path, format!("./{}", binary_filename))],
+                files_to_package: vec![super::FileSpec {
+                    host_path: binary_path,
+                    container_path: format!("./{}", binary_filename),
+                    mode: Some(0o755),
+                }],
             },
             runtime_command,
         })

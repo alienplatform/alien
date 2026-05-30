@@ -271,8 +271,11 @@ resource "aws_eks_cluster" "e2e" {
   }
 
   compute_config {
-    enabled       = true
-    node_pools    = ["general-purpose", "system"]
+    enabled = true
+    # Application images built for AWS/EKS E2E are linux/arm64. Keep Auto Mode
+    # system capacity enabled, but run test workloads on the explicit ARM64
+    # managed node group below instead of EKS's default mixed general-purpose pool.
+    node_pools    = ["system"]
     node_role_arn = "arn:aws:iam::${data.aws_caller_identity.target.account_id}:role/${local.e2e_eks_node_role_name}"
   }
 

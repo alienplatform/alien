@@ -127,6 +127,7 @@ pub async fn cleanup_helm_release(
     namespace: &str,
     kubeconfig: Option<&str>,
     kube_context: Option<&str>,
+    command_env: &[(String, String)],
 ) -> Result<(), Box<dyn std::error::Error>> {
     info!(%release_name, %namespace, "cleaning up helm release");
 
@@ -139,6 +140,7 @@ pub async fn cleanup_helm_release(
     if let Some(context) = kube_context {
         cmd.arg("--kube-context").arg(context);
     }
+    apply_command_env(&mut cmd, command_env);
 
     match cmd.output().await {
         Ok(out) if out.status.success() => {
@@ -163,6 +165,7 @@ pub async fn cleanup_kubernetes_namespace(
     namespace: &str,
     kubeconfig: Option<&str>,
     kube_context: Option<&str>,
+    command_env: &[(String, String)],
 ) -> Result<(), Box<dyn std::error::Error>> {
     info!(%namespace, "deleting kubernetes test namespace");
 
@@ -175,6 +178,7 @@ pub async fn cleanup_kubernetes_namespace(
     if let Some(context) = kube_context {
         cmd.arg("--context").arg(context);
     }
+    apply_command_env(&mut cmd, command_env);
 
     match cmd.output().await {
         Ok(out) if out.status.success() => {
@@ -190,6 +194,12 @@ pub async fn cleanup_kubernetes_namespace(
     }
 
     Ok(())
+}
+
+fn apply_command_env(cmd: &mut tokio::process::Command, env: &[(String, String)]) {
+    for (key, value) in env {
+        cmd.env(key, value);
+    }
 }
 
 /// Clean up all test-related resources. Combines deployment cleanup with

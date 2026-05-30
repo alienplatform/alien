@@ -25,6 +25,10 @@ pub struct LinkArgs {
     #[arg(long)]
     pub name: Option<String>,
 
+    /// Do not attach detected git repository metadata when creating a project
+    #[arg(long)]
+    pub no_git: bool,
+
     /// Emit structured JSON output
     #[arg(long)]
     pub json: bool,
@@ -71,6 +75,7 @@ pub async fn link_task(args: LinkArgs, ctx: ExecutionMode) -> Result<()> {
             Some(name),
             &current_dir,
             false,
+            !args.no_git,
         )
         .await?;
 

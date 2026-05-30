@@ -130,6 +130,7 @@ impl GrpcStorage {
     fn http_presigned_backend(
         url: &str,
         method: &str,
+        headers: HashMap<String, String>,
         invalid_url_reason: &str,
     ) -> crate::error::Result<PresignedRequestBackend> {
         Url::parse(url)
@@ -142,7 +143,7 @@ impl GrpcStorage {
         Ok(PresignedRequestBackend::Http {
             url: url.to_string(),
             method: method.to_string(),
-            headers: HashMap::new(),
+            headers,
         })
     }
 }
@@ -204,9 +205,14 @@ impl crate::Storage for GrpcStorage {
             .into_inner();
 
         // Parse the returned URL to determine if it's HTTP or local
+        let headers = response
+            .headers
+            .into_iter()
+            .map(|header| (header.key, header.value))
+            .collect();
         let url = &response.url;
         let backend = if url.starts_with("http://") || url.starts_with("https://") {
-            Self::http_presigned_backend(url, "PUT", "Invalid presigned PUT URL format")?
+            Self::http_presigned_backend(url, "PUT", headers, "Invalid presigned PUT URL format")?
         } else if url.starts_with("local://") {
             // Local filesystem URL
             let file_path = url.strip_prefix("local://").unwrap_or(url);
@@ -264,9 +270,14 @@ impl crate::Storage for GrpcStorage {
             .into_inner();
 
         // Parse the returned URL to determine if it's HTTP or local
+        let headers = response
+            .headers
+            .into_iter()
+            .map(|header| (header.key, header.value))
+            .collect();
         let url = &response.url;
         let backend = if url.starts_with("http://") || url.starts_with("https://") {
-            Self::http_presigned_backend(url, "GET", "Invalid presigned GET URL format")?
+            Self::http_presigned_backend(url, "GET", headers, "Invalid presigned GET URL format")?
         } else if url.starts_with("local://") {
             // Local filesystem URL
             let file_path = url.strip_prefix("local://").unwrap_or(url);
@@ -324,9 +335,19 @@ impl crate::Storage for GrpcStorage {
             .into_inner();
 
         // Parse the returned URL to determine if it's HTTP or local
+        let headers = response
+            .headers
+            .into_iter()
+            .map(|header| (header.key, header.value))
+            .collect();
         let url = &response.url;
         let backend = if url.starts_with("http://") || url.starts_with("https://") {
-            Self::http_presigned_backend(url, "DELETE", "Invalid presigned DELETE URL format")?
+            Self::http_presigned_backend(
+                url,
+                "DELETE",
+                headers,
+                "Invalid presigned DELETE URL format",
+            )?
         } else if url.starts_with("local://") {
             // Local filesystem URL
             let file_path = url.strip_prefix("local://").unwrap_or(url);
@@ -749,6 +770,7 @@ mod tests {
         let backend = GrpcStorage::http_presigned_backend(
             signed_url,
             "PUT",
+            HashMap::new(),
             "Invalid presigned PUT URL format",
         )
         .expect("valid signed URL");
@@ -762,6 +784,31 @@ mod tests {
                 assert_eq!(url, signed_url);
                 assert_eq!(method, "PUT");
                 assert!(headers.is_empty());
+            }
+            PresignedRequestBackend::Local { .. } => panic!("expected HTTP backend"),
+        }
+    }
+
+    #[test]
+    fn http_presigned_backend_preserves_provider_headers() {
+        let signed_url = "https://account.blob.core.windows.net/container/key?sas=token";
+        let mut headers = HashMap::new();
+        headers.insert("x-ms-blob-type".to_string(), "BlockBlob".to_string());
+
+        let backend = GrpcStorage::http_presigned_backend(
+            signed_url,
+            "PUT",
+            headers,
+            "Invalid presigned PUT URL format",
+        )
+        .expect("valid signed URL");
+
+        match backend {
+            PresignedRequestBackend::Http { headers, .. } => {
+                assert_eq!(
+                    headers.get("x-ms-blob-type"),
+                    Some(&"BlockBlob".to_string())
+                );
             }
             PresignedRequestBackend::Local { .. } => panic!("expected HTTP backend"),
         }

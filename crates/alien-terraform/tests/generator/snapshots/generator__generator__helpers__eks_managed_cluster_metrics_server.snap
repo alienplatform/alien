@@ -517,8 +517,9 @@ resource "kubernetes_manifest" "kubernetes_gp3_storage_class" {
     }
     provisioner = "ebs.csi.aws.com"
     parameters = {
-      type   = "gp3"
-      fsType = "ext4"
+      type      = "gp3"
+      fsType    = "ext4"
+      encrypted = "true"
     }
     reclaimPolicy        = "Delete"
     volumeBindingMode    = "WaitForFirstConsumer"

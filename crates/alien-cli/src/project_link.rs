@@ -170,7 +170,8 @@ pub async fn choose_or_create_project(
 
     let existing_projects = response.into_inner().items;
     if existing_projects.is_empty() {
-        return create_new_project(client, workspace, suggested_name, dir, allow_prompt).await;
+        return create_new_project(client, workspace, suggested_name, dir, allow_prompt, true)
+            .await;
     }
 
     interaction.require_prompt(
@@ -185,7 +186,7 @@ pub async fn choose_or_create_project(
 
     let selected = prompt_select("Link this directory to which project?", &choices)?;
     if selected == "Create new project" {
-        create_new_project(client, workspace, suggested_name, dir, true).await
+        create_new_project(client, workspace, suggested_name, dir, true, true).await
     } else {
         existing_projects
             .into_iter()
@@ -204,6 +205,7 @@ pub async fn create_new_project(
     suggested_name: Option<&str>,
     dir: &Path,
     allow_prompt: bool,
+    include_git_repository: bool,
 ) -> Result<types::ProjectListItemResponse> {
     let interaction = InteractionMode::new(false, allow_prompt && can_prompt());
     let project_name = match suggested_name {
@@ -226,13 +228,17 @@ pub async fn create_new_project(
         }));
     }
 
-    let git_repository = match git_utils::detect_git_repository(dir) {
-        Ok(Some(repo_info)) => Some(repo_info),
-        Ok(None) => None,
-        Err(error) => {
-            println!("Warning: failed to detect git repository: {error}");
-            None
+    let git_repository = if include_git_repository {
+        match git_utils::detect_git_repository(dir) {
+            Ok(Some(repo_info)) => Some(repo_info),
+            Ok(None) => None,
+            Err(error) => {
+                println!("Warning: failed to detect git repository: {error}");
+                None
+            }
         }
+    } else {
+        None
     };
 
     let workspace_param = types::CreateProjectWorkspace::try_from(workspace)

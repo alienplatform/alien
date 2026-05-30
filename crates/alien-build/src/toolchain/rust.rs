@@ -6,9 +6,10 @@ use async_trait::async_trait;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use tokio::fs;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 /// Rust toolchain implementation using Cargo with Zig cross-compilation
 #[derive(Debug, Clone)]
@@ -266,6 +267,52 @@ impl Toolchain for RustToolchain {
             );
         }
 
+        // Determine the expected binary path before building so stale corrupt
+        // artifacts from interrupted builds cannot be reused by Cargo.
+        let target_dir_base = self.get_target_directory(&context.src_dir).await?;
+        let target_subdir = if context.debug_mode {
+            "debug"
+        } else {
+            "release"
+        };
+        let target_platform_dir = target_dir_base
+            .join(context.build_target.rust_target_triple())
+            .join(target_subdir);
+        let binary_filename = format!(
+            "{}{}",
+            self.binary_name,
+            context.build_target.binary_extension()
+        );
+        let binary_path = target_platform_dir.join(&binary_filename);
+
+        if binary_path.exists() {
+            if let Some(reason) = super::executable_format_error(&binary_path, context.build_target)
+                .into_alien_error()
+                .context(ErrorData::ImageBuildFailed {
+                    resource_name: self.binary_name.clone(),
+                    reason: format!(
+                        "Failed to inspect existing binary at {}",
+                        binary_path.display()
+                    ),
+                    build_output: None,
+                })?
+            {
+                warn!(
+                    binary = %binary_path.display(),
+                    reason = %reason,
+                    "Removing stale invalid Rust build artifact before rebuilding"
+                );
+                fs::remove_file(&binary_path)
+                    .await
+                    .into_alien_error()
+                    .context(ErrorData::FileOperationFailed {
+                        operation: "remove file".to_string(),
+                        file_path: binary_path.display().to_string(),
+                        reason: "Failed to remove stale invalid Rust build artifact".to_string(),
+                    })?;
+            }
+        }
+
         // Build the project for the target platform.
         // Always pass --target for consistent output directory structure.
         let strategy_args = strategy.cargo_args();
@@ -367,26 +414,6 @@ impl Toolchain for RustToolchain {
         })
         .await?;
 
-        // Save updated cache if available
-        cache_utils::save_cache(context.cache_store.as_deref(), &cache_key, &cache_paths).await?;
-
-        // Determine the actual target directory (workspace-aware) and binary path
-        let target_dir_base = self.get_target_directory(&context.src_dir).await?;
-        let target_subdir = if context.debug_mode {
-            "debug"
-        } else {
-            "release"
-        };
-        let target_platform_dir = target_dir_base
-            .join(context.build_target.rust_target_triple())
-            .join(target_subdir);
-        let binary_filename = format!(
-            "{}{}",
-            self.binary_name,
-            context.build_target.binary_extension()
-        );
-        let binary_path = target_platform_dir.join(&binary_filename);
-
         // Verify the binary was built
         if !binary_path.exists() {
             return Err(AlienError::new(ErrorData::ImageBuildFailed {
@@ -399,13 +426,18 @@ impl Toolchain for RustToolchain {
                 build_output: None,
             }));
         }
+        super::validate_executable_format(&binary_path, context.build_target, &self.binary_name)?;
 
         info!("Successfully built Rust binary: {}", binary_path.display());
+
+        // Save updated cache only after validating the build output.
+        cache_utils::save_cache(context.cache_store.as_deref(), &cache_key, &cache_paths).await?;
 
         // Determine if we need alien-runtime in the image
         // Workers on local platform use embedded runtime in agent (no runtime in image)
         // Everything else (containers on any platform, functions on cloud) needs alien-runtime
-        let needs_runtime_in_image = context.is_container || context.platform_name != "local";
+        let needs_runtime_in_image =
+            context.is_container || context.runtime_platform_name != "local";
 
         if !needs_runtime_in_image {
             // Worker on local platform - runtime is embedded in operator
@@ -438,7 +470,11 @@ impl Toolchain for RustToolchain {
         Ok(ToolchainOutput {
             build_strategy: super::ImageBuildStrategy::FromBaseImage {
                 base_images,
-                files_to_package: vec![(binary_path, format!("./{}", binary_filename))],
+                files_to_package: vec![super::FileSpec {
+                    host_path: binary_path,
+                    container_path: format!("./{}", binary_filename),
+                    mode: Some(0o755),
+                }],
             },
             runtime_command,
         })
@@ -568,7 +604,7 @@ version = "0.1.0"
             cache_store: None,
             cache_prefix: "test".to_string(),
             build_target: alien_core::BinaryTarget::LinuxX64,
-            platform_name: "aws".to_string(),
+            runtime_platform_name: "aws".to_string(),
             debug_mode: false,
             is_container: false,
         };

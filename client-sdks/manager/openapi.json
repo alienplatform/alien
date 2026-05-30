@@ -11904,6 +11904,13 @@
             "type": "string",
             "description": "Deployment created."
           },
+          "deploymentToken": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Deployment bearer token for the imported deployment, when available."
+          },
           "stackSettings": {
             "$ref": "#/components/schemas/StackSettings",
             "description": "Stack settings persisted for the deployment."

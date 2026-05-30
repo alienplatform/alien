@@ -33,14 +33,11 @@ async fn check_distribution_deployment(ctx: &mut alien_test::TestContext) {
     }
 }
 
-fn public_url(ctx: &alien_test::TestContext) -> anyhow::Result<String> {
-    Ok(ctx
-        .deployment
-        .url
-        .as_deref()
-        .context("full-stack microservices deployment did not expose a public URL")?
-        .trim_end_matches('/')
-        .to_string())
+async fn public_url(ctx: &mut alien_test::TestContext) -> anyhow::Result<String> {
+    ctx.deployment
+        .wait_for_public_url(Duration::from_secs(180))
+        .await
+        .map_err(|error| anyhow!("{error}"))
 }
 
 async fn expect_json(response: Response, label: &str) -> anyhow::Result<Value> {
@@ -104,8 +101,8 @@ fn string_field<'a>(value: &'a Value, path: &[&str], label: &str) -> anyhow::Res
         .with_context(|| format!("{label} field {} was not a string", path.join(".")))
 }
 
-async fn check_full_stack_microservices(ctx: &alien_test::TestContext) -> anyhow::Result<()> {
-    let url = public_url(ctx)?;
+async fn check_full_stack_microservices(ctx: &mut alien_test::TestContext) -> anyhow::Result<()> {
+    let url = public_url(ctx).await?;
     let client = Client::builder().timeout(Duration::from_secs(30)).build()?;
 
     expect_json_get_ready(
@@ -231,22 +228,24 @@ async fn check_full_stack_microservices(ctx: &alien_test::TestContext) -> anyhow
 }
 
 async fn dump_kubernetes_debug(ctx: &alien_test::TestContext, error: &anyhow::Error) {
-    let Some((namespace, kubeconfig, kube_context)) =
-        ctx.distribution_cleanups
-            .iter()
-            .find_map(|cleanup| match cleanup {
-                alien_test::distribution::DistributionArtifactCleanup::Helm {
-                    namespace,
-                    kubeconfig,
-                    kube_context,
-                    ..
-                } => Some((
-                    namespace.as_str(),
-                    kubeconfig.as_deref(),
-                    kube_context.as_deref(),
-                )),
-                _ => None,
-            })
+    let Some((namespace, kubeconfig, kube_context, env)) = ctx
+        .distribution_cleanups
+        .iter()
+        .find_map(|cleanup| match cleanup {
+            alien_test::distribution::DistributionArtifactCleanup::Helm {
+                namespace,
+                kubeconfig,
+                kube_context,
+                env,
+                ..
+            } => Some((
+                namespace.as_str(),
+                kubeconfig.as_deref(),
+                kube_context.as_deref(),
+                env.as_slice(),
+            )),
+            _ => None,
+        })
     else {
         return;
     };
@@ -257,6 +256,7 @@ async fn dump_kubernetes_debug(ctx: &alien_test::TestContext, error: &anyhow::Er
         namespace,
         kubeconfig,
         kube_context,
+        env,
         &["get", "pods,svc,ingress,serviceaccount", "-o", "wide"],
     )
     .await;
@@ -264,6 +264,7 @@ async fn dump_kubernetes_debug(ctx: &alien_test::TestContext, error: &anyhow::Er
         namespace,
         kubeconfig,
         kube_context,
+        env,
         &[
             "get",
             "pods",
@@ -276,6 +277,7 @@ async fn dump_kubernetes_debug(ctx: &alien_test::TestContext, error: &anyhow::Er
         namespace,
         kubeconfig,
         kube_context,
+        env,
         &["get", "serviceaccount", "-o", "yaml"],
     )
     .await;
@@ -283,6 +285,7 @@ async fn dump_kubernetes_debug(ctx: &alien_test::TestContext, error: &anyhow::Er
         namespace,
         kubeconfig,
         kube_context,
+        env,
         &[
             "logs",
             "-l",
@@ -297,6 +300,7 @@ async fn dump_kubernetes_debug(ctx: &alien_test::TestContext, error: &anyhow::Er
         namespace,
         kubeconfig,
         kube_context,
+        env,
         &[
             "logs",
             "-l",
@@ -314,11 +318,13 @@ async fn run_kubectl_debug(
     namespace: &str,
     kubeconfig: Option<&str>,
     kube_context: Option<&str>,
+    env: &[(String, String)],
     args: &[&str],
 ) {
     let mut cmd = Command::new("kubectl");
     cmd.args(["-n", namespace]);
     cmd.args(args);
+    cmd.envs(env.iter().map(|(key, value)| (key, value)));
     if let Some(kubeconfig) = kubeconfig {
         cmd.env("KUBECONFIG", kubeconfig);
     }
@@ -383,6 +389,20 @@ distribution_test_context!(
 #[test_context(CloudFormationAwsPushRust)]
 #[tokio::test]
 async fn cloudformation_aws_push_comprehensive_rust(ctx: &mut CloudFormationAwsPushRust) {
+    check_distribution_deployment(&mut ctx.ctx).await;
+}
+
+distribution_test_context!(
+    CloudFormationEksHelmPullFullStackMicroservices,
+    DistributionFlow::CloudFormationEksHelmPull,
+    TestApp::FullStackMicroservices
+);
+
+#[test_context(CloudFormationEksHelmPullFullStackMicroservices)]
+#[tokio::test]
+async fn cloudformation_eks_helm_pull_full_stack_microservices(
+    ctx: &mut CloudFormationEksHelmPullFullStackMicroservices,
+) {
     check_distribution_deployment(&mut ctx.ctx).await;
 }
 

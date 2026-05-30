@@ -392,6 +392,11 @@ output "management_azure_client_id" {
   sensitive = true
 }
 
+output "management_azure_principal_id" {
+  value     = module.azure.management_principal_id
+  sensitive = true
+}
+
 output "management_azure_client_secret" {
   value     = var.azure_management_client_secret
   sensitive = true
@@ -415,6 +420,11 @@ output "target_azure_tenant_id" {
 
 output "target_azure_client_id" {
   value     = module.azure.target_client_id
+  sensitive = true
+}
+
+output "target_azure_principal_id" {
+  value     = module.azure.target_principal_id
   sensitive = true
 }
 
@@ -518,6 +528,7 @@ output "azure_target_options" {
       AZURE_TARGET_SUBSCRIPTION_ID              = var.azure_target_subscription_id
       AZURE_TARGET_TENANT_ID                    = var.azure_target_tenant_id
       AZURE_TARGET_CLIENT_ID                    = module.azure.target_client_id
+      AZURE_TARGET_PRINCIPAL_ID                 = module.azure.target_principal_id
       AZURE_TARGET_CLIENT_SECRET                = module.azure.target_client_secret
       AZURE_TARGET_REGION                       = var.azure_management_region
       AZURE_TARGET_RESOURCE_GROUP               = module.azure.shared_container_env_resource_group

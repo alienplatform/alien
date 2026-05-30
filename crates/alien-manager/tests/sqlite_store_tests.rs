@@ -615,6 +615,71 @@ async fn reconcile_succeeds_under_other_session_lock() {
 }
 
 #[tokio::test]
+async fn reconcile_refreshes_owned_lock_lease() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db.clone());
+    let group_id = create_test_group(&store).await;
+
+    let dep = create_test_deployment(&store, &group_id, "dep", Platform::Aws).await;
+
+    let acquired = store
+        .acquire(
+            &test_subject(),
+            "session-A",
+            &DeploymentFilter::default(),
+            10,
+        )
+        .await
+        .unwrap();
+    assert_eq!(acquired.len(), 1);
+
+    let stale_time = "2020-01-01T00:00:00+00:00";
+    let lock_sql = format!(
+        "UPDATE deployments SET locked_at = '{}' WHERE id = '{}'",
+        stale_time, dep.id
+    );
+    db.conn().lock().await.execute(&lock_sql, ()).await.unwrap();
+
+    let state = DeploymentState {
+        status: DeploymentStatus::InitialSetup,
+        platform: Platform::Aws,
+        current_release: None,
+        target_release: None,
+        stack_state: None,
+        environment_info: None,
+        runtime_metadata: None,
+        retry_requested: false,
+        protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+    };
+    store
+        .reconcile(
+            &test_subject(),
+            ReconcileData {
+                deployment_id: dep.id.clone(),
+                session: "session-A".to_string(),
+                state,
+                update_heartbeat: false,
+                heartbeats: vec![],
+                error: None,
+                suggested_delay_ms: None,
+            },
+        )
+        .await
+        .expect("lock owner reconcile should refresh the lock lease");
+
+    let fetched = store
+        .get_deployment(&test_subject(), &dep.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(fetched.locked_by.as_deref(), Some("session-A"));
+    assert!(
+        fetched.locked_at.unwrap().to_rfc3339().as_str() > stale_time,
+        "reconcile by the lock owner should move locked_at forward"
+    );
+}
+
+#[tokio::test]
 async fn delete_deployment() {
     let db = fresh_db().await;
     let store = SqliteDeploymentStore::new(db);

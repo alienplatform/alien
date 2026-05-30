@@ -25,14 +25,24 @@ pub enum PlatformBuildSettings {
     },
     Gcp {},
     Azure {},
-    Kubernetes {},
+    Kubernetes {
+        /// Cloud platform backing the Kubernetes cluster, when known.
+        ///
+        /// This does not change the runtime platform. It only lets builds pick
+        /// the same default image architecture as the cluster node pool.
+        base_platform: Option<Platform>,
+    },
     Local {},
     Test {},
 }
 
 impl PlatformBuildSettings {
-    /// Returns the corresponding Platform enum variant.
-    pub fn platform(&self) -> Platform {
+    /// Platform where the built application will run.
+    ///
+    /// For managed Kubernetes this is always [`Platform::Kubernetes`]. The
+    /// optional base cloud only influences build defaults such as image
+    /// architecture; it is not the application runtime platform.
+    pub fn runtime_platform(&self) -> Platform {
         match self {
             PlatformBuildSettings::Aws { .. } => Platform::Aws,
             PlatformBuildSettings::Gcp { .. } => Platform::Gcp,
@@ -41,6 +51,23 @@ impl PlatformBuildSettings {
             PlatformBuildSettings::Local { .. } => Platform::Local,
             PlatformBuildSettings::Test { .. } => Platform::Test,
         }
+    }
+
+    /// Cloud platform backing a managed Kubernetes cluster, when known.
+    pub fn base_platform(&self) -> Option<Platform> {
+        match self {
+            PlatformBuildSettings::Kubernetes { base_platform } => *base_platform,
+            PlatformBuildSettings::Aws { .. }
+            | PlatformBuildSettings::Gcp { .. }
+            | PlatformBuildSettings::Azure { .. }
+            | PlatformBuildSettings::Local { .. }
+            | PlatformBuildSettings::Test { .. } => None,
+        }
+    }
+
+    /// Backward-compatible alias for the runtime platform.
+    pub fn platform(&self) -> Platform {
+        self.runtime_platform()
     }
 }
 
@@ -56,7 +83,7 @@ pub struct BuildSettings {
     /// AWS default: [LinuxArm64]
     /// GCP default: [LinuxX64]
     /// Azure default: [LinuxX64]
-    /// Kubernetes default: [LinuxArm64]
+    /// Kubernetes default: [LinuxX64, LinuxArm64], or the base cloud default when base_platform is set
     /// Local default: [current host target]
     pub targets: Option<Vec<BinaryTarget>>,
     /// Optional cache URL for build caching (e.g., s3://bucket/path, gcs://bucket/path).
@@ -85,9 +112,68 @@ impl BuildSettings {
     /// Get the build targets (OS/arch combinations) for this build.
     /// Returns specified targets or platform-specific defaults if not specified.
     pub fn get_targets(&self) -> Vec<BinaryTarget> {
-        self.targets
-            .as_ref()
-            .cloned()
-            .unwrap_or_else(|| BinaryTarget::defaults_for_platform(self.platform.platform()))
+        self.targets.as_ref().cloned().unwrap_or_else(|| {
+            if let Some(base_platform) = self.platform.base_platform() {
+                return BinaryTarget::defaults_for_platform(base_platform);
+            }
+
+            BinaryTarget::defaults_for_platform(self.platform.runtime_platform())
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn settings(platform: PlatformBuildSettings) -> BuildSettings {
+        BuildSettings {
+            platform,
+            output_directory: "target/test-build-settings".to_string(),
+            targets: None,
+            cache_url: None,
+            override_base_image: None,
+            debug_mode: true,
+        }
+    }
+
+    #[test]
+    fn kubernetes_without_base_platform_builds_all_linux_targets() {
+        let settings = settings(PlatformBuildSettings::Kubernetes {
+            base_platform: None,
+        });
+
+        assert_eq!(
+            settings.get_targets(),
+            vec![BinaryTarget::LinuxX64, BinaryTarget::LinuxArm64]
+        );
+    }
+
+    #[test]
+    fn kubernetes_with_base_platform_uses_base_cloud_default_targets() {
+        let eks = settings(PlatformBuildSettings::Kubernetes {
+            base_platform: Some(Platform::Aws),
+        });
+        let gke = settings(PlatformBuildSettings::Kubernetes {
+            base_platform: Some(Platform::Gcp),
+        });
+        let aks = settings(PlatformBuildSettings::Kubernetes {
+            base_platform: Some(Platform::Azure),
+        });
+
+        assert_eq!(eks.get_targets(), vec![BinaryTarget::LinuxArm64]);
+        assert_eq!(gke.get_targets(), vec![BinaryTarget::LinuxX64]);
+        assert_eq!(aks.get_targets(), vec![BinaryTarget::LinuxX64]);
+    }
+
+    #[test]
+    fn kubernetes_with_base_platform_keeps_kubernetes_runtime_platform() {
+        let settings = PlatformBuildSettings::Kubernetes {
+            base_platform: Some(Platform::Gcp),
+        };
+
+        assert_eq!(settings.runtime_platform(), Platform::Kubernetes);
+        assert_eq!(settings.platform(), Platform::Kubernetes);
+        assert_eq!(settings.base_platform(), Some(Platform::Gcp));
     }
 }

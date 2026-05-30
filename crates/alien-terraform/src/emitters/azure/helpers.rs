@@ -345,7 +345,7 @@ pub fn emit_setup_resource_role_definitions(
                 else {
                     continue;
                 };
-                if permission_set.platforms.azure.is_none() {
+                if !supports_azure_resource_binding(&permission_set) {
                     continue;
                 }
                 if !seen_execution_roles.insert((profile_name.clone(), permission_set.id.clone())) {
@@ -369,7 +369,7 @@ pub fn emit_setup_resource_role_definitions(
             else {
                 continue;
             };
-            if permission_set.platforms.azure.is_none() {
+            if !supports_azure_resource_binding(&permission_set) {
                 continue;
             }
             if !seen_management_roles.insert(permission_set.id.clone()) {
@@ -410,16 +410,30 @@ fn resource_scoped_permission_refs<'a>(
     refs
 }
 
+fn supports_azure_resource_binding(permission_set: &PermissionSet) -> bool {
+    permission_set
+        .platforms
+        .azure
+        .as_ref()
+        .is_some_and(|permissions| {
+            permissions
+                .iter()
+                .any(|permission| permission.binding.resource.is_some())
+        })
+}
+
 fn emit_setup_execution_role_definitions(
     fragment: &mut TfFragment,
     profile_name: &str,
     permission_set: &PermissionSet,
 ) -> Result<()> {
-    for (index, mut role_definition) in setup_resource_role_definitions(permission_set)?
+    for (index, mut custom_role) in setup_resource_custom_roles(permission_set)?
         .into_iter()
         .enumerate()
     {
+        let role_definition = &mut custom_role.role_definition;
         let role_label = setup_execution_role_label(profile_name, &role_definition.name, index);
+        let role_segment = azure_resource_role_key_segment(&custom_role.key);
         role_definition.name = format!(
             "${{local.resource_prefix}}-{} [{}]",
             role_definition.name, profile_name
@@ -429,9 +443,10 @@ fn emit_setup_execution_role_definitions(
             &role_label,
             expr::template(role_definition.name.clone()),
             expr::raw(&format!(
-                "uuidv5(\"oid\", \"deployment:azure:res-role-def:${{local.resource_prefix}}:{profile_name}:{role_label}\")",
+                "uuidv5(\"oid\", \"deployment:azure:res-role-def:${{local.resource_prefix}}:{profile_name}:{}:{role_segment}\")",
+                permission_set.id
             )),
-            role_definition,
+            custom_role.role_definition,
         ));
     }
 
@@ -442,11 +457,13 @@ fn emit_setup_management_role_definitions(
     fragment: &mut TfFragment,
     permission_set: &PermissionSet,
 ) -> Result<()> {
-    for (index, mut role_definition) in setup_resource_role_definitions(permission_set)?
+    for (index, mut custom_role) in setup_resource_custom_roles(permission_set)?
         .into_iter()
         .enumerate()
     {
+        let role_definition = &mut custom_role.role_definition;
         let role_label = setup_management_role_label(&role_definition.name, index);
+        let role_segment = azure_resource_role_key_segment(&custom_role.key);
         role_definition.name =
             format!("${{local.resource_prefix}}-{} [mgmt]", role_definition.name);
 
@@ -454,18 +471,19 @@ fn emit_setup_management_role_definitions(
             &role_label,
             expr::template(role_definition.name.clone()),
             expr::raw(&format!(
-                "uuidv5(\"oid\", \"deployment:azure:mgmt-res-role-def:${{local.resource_prefix}}:{role_label}\")",
+                "uuidv5(\"oid\", \"deployment:azure:mgmt-res-role-def:${{local.resource_prefix}}:{}:{role_segment}\")",
+                permission_set.id
             )),
-            role_definition,
+            custom_role.role_definition,
         ));
     }
 
     Ok(())
 }
 
-fn setup_resource_role_definitions(
+fn setup_resource_custom_roles(
     permission_set: &PermissionSet,
-) -> Result<Vec<alien_permissions::generators::AzureRoleDefinition>> {
+) -> Result<Vec<alien_permissions::generators::AzureCustomRole>> {
     let generator = AzureRuntimePermissionsGenerator::new();
     let context = permission_context("setup-resource-permissions")
         .with_resource_name("${local.resource_prefix}-setup-role-scope".to_string());
@@ -486,7 +504,7 @@ fn setup_resource_role_definitions(
                 "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
                     .to_string(),
             ];
-            custom_role.role_definition
+            custom_role
         })
         .collect())
 }
@@ -583,6 +601,25 @@ fn custom_role_segment(key: &str) -> String {
     key.rsplit(':')
         .next()
         .map(sanitize_role_label)
+        .filter(|segment| !segment.is_empty())
+        .unwrap_or_else(|| "custom".to_string())
+}
+
+fn azure_resource_role_key_segment(key: &str) -> String {
+    key.rsplit(':')
+        .next()
+        .map(|segment| {
+            segment
+                .chars()
+                .map(|ch| {
+                    if ch.is_ascii_alphanumeric() {
+                        ch.to_ascii_lowercase()
+                    } else {
+                        '-'
+                    }
+                })
+                .collect::<String>()
+        })
         .filter(|segment| !segment.is_empty())
         .unwrap_or_else(|| "custom".to_string())
 }

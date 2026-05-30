@@ -98,6 +98,8 @@ export interface SignedUrlOptions {
 export interface SignedUrlResult {
   /** The signed URL */
   url: string
+  /** Headers that must be included when using the signed URL */
+  headers?: Record<string, string>
   /** URL expiration timestamp */
   expiresAt?: Date
 }

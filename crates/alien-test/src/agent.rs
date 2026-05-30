@@ -97,6 +97,8 @@ pub struct TestAlienAgent {
     pub kubeconfig: Option<String>,
     /// Kube context for Helm installs.
     pub kube_context: Option<String>,
+    /// Extra environment needed by Kubernetes CLI auth plugins.
+    pub kubernetes_command_env: Vec<(String, String)>,
     /// Native process child handle (if started via `start_local_process`).
     pub child_process: Option<tokio::process::Child>,
     /// Temp data directory for native agent (cleaned up on drop).
@@ -189,6 +191,7 @@ impl TestAlienAgent {
             helm_namespace: None,
             kubeconfig: None,
             kube_context: None,
+            kubernetes_command_env: Vec::new(),
             child_process: None,
             data_dir: None,
             sync_token_file: None,
@@ -275,6 +278,7 @@ impl TestAlienAgent {
             helm_namespace: None,
             kubeconfig: None,
             kube_context: None,
+            kubernetes_command_env: Vec::new(),
             child_process: Some(child),
             data_dir: Some(data_dir),
             sync_token_file: Some(sync_token_file),
@@ -344,6 +348,7 @@ impl TestAlienAgent {
             helm_namespace: Some(namespace.to_string()),
             kubeconfig: kubeconfig.map(String::from),
             kube_context: None,
+            kubernetes_command_env: Vec::new(),
             child_process: None,
             data_dir: None,
             sync_token_file: None,
@@ -366,6 +371,7 @@ impl TestAlienAgent {
         namespace: &str,
         kubeconfig: Option<&str>,
         kube_context: Option<&str>,
+        command_env: &[(String, String)],
     ) -> Result<Self, Box<dyn std::error::Error>> {
         info!(
             %release_name,
@@ -394,8 +400,9 @@ impl TestAlienAgent {
         if let Some(context) = kube_context {
             cmd.arg("--kube-context").arg(context);
         }
+        apply_command_env(&mut cmd, command_env);
 
-        ensure_ghcr_pull_secret(namespace, kubeconfig, kube_context).await?;
+        ensure_ghcr_pull_secret(namespace, kubeconfig, kube_context, command_env).await?;
 
         let output = cmd.output().await?;
 
@@ -412,6 +419,7 @@ impl TestAlienAgent {
             helm_namespace: Some(namespace.to_string()),
             kubeconfig: kubeconfig.map(String::from),
             kube_context: kube_context.map(String::from),
+            kubernetes_command_env: command_env.to_vec(),
             child_process: None,
             data_dir: None,
             sync_token_file: None,
@@ -463,6 +471,7 @@ impl TestAlienAgent {
             namespace,
             self.kubeconfig.as_deref(),
             self.kube_context.as_deref(),
+            &self.kubernetes_command_env,
         )
         .await
     }
@@ -472,6 +481,7 @@ async fn ensure_ghcr_pull_secret(
     namespace: &str,
     kubeconfig: Option<&str>,
     kube_context: Option<&str>,
+    command_env: &[(String, String)],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let Some((username, token)) = ghcr_pull_credentials() else {
         return Ok(());
@@ -479,6 +489,7 @@ async fn ensure_ghcr_pull_secret(
 
     let mut namespace_cmd = kubectl(kubeconfig, kube_context);
     namespace_cmd.args(["create", "namespace", namespace]);
+    apply_command_env(&mut namespace_cmd, command_env);
     let namespace_output = namespace_cmd.output().await?;
     if !namespace_output.status.success() {
         let stderr = String::from_utf8_lossy(&namespace_output.stderr);
@@ -502,6 +513,7 @@ async fn ensure_ghcr_pull_secret(
         "-o",
         "yaml",
     ]);
+    apply_command_env(&mut create_cmd, command_env);
     let secret_yaml = create_cmd.output().await?;
     if !secret_yaml.status.success() {
         let stderr = String::from_utf8_lossy(&secret_yaml.stderr);
@@ -511,6 +523,7 @@ async fn ensure_ghcr_pull_secret(
     let mut apply_cmd = kubectl(kubeconfig, kube_context);
     apply_cmd.args(["apply", "-f", "-"]);
     apply_cmd.stdin(Stdio::piped());
+    apply_command_env(&mut apply_cmd, command_env);
     let mut child = apply_cmd.spawn()?;
     if let Some(stdin) = child.stdin.as_mut() {
         stdin.write_all(&secret_yaml.stdout).await?;
@@ -535,6 +548,12 @@ fn kubectl(kubeconfig: Option<&str>, kube_context: Option<&str>) -> tokio::proce
     cmd
 }
 
+fn apply_command_env(cmd: &mut tokio::process::Command, env: &[(String, String)]) {
+    for (key, value) in env {
+        cmd.env(key, value);
+    }
+}
+
 impl TestAlienAgent {
     /// Create a `TestAlienAgent` representing an OS service installed by `alien-deploy deploy`.
     pub fn from_service(deploy_binary: Option<std::path::PathBuf>) -> Self {
@@ -544,6 +563,7 @@ impl TestAlienAgent {
             helm_namespace: None,
             kubeconfig: None,
             kube_context: None,
+            kubernetes_command_env: Vec::new(),
             child_process: None,
             data_dir: None,
             sync_token_file: None,

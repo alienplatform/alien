@@ -324,6 +324,84 @@ impl ResourcePermissionsHelper {
         Ok(())
     }
 
+    /// Setup-delete: delete the GCP custom roles generated for the selected permission sets.
+    ///
+    /// Project IAM/resource IAM bindings must be removed before this runs. Missing
+    /// roles are tolerated so delete stays idempotent.
+    pub async fn delete_gcp_custom_roles(
+        ctx: &ResourceControllerContext<'_>,
+        permission_context: &PermissionContext,
+    ) -> Result<()> {
+        let gcp_config = ctx.get_gcp_config()?;
+        let iam_client = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
+        let role_name_prefix = format!(
+            "projects/{}/roles/{}",
+            gcp_config.project_id,
+            custom_role_prefix(permission_context)
+        );
+        let mut role_names = Vec::new();
+        let mut page_token = None;
+
+        loop {
+            let response = iam_client
+                .list_roles(Some(100), page_token, Some(false))
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to list GCP custom roles before cleanup".to_string(),
+                    resource_id: Some(ctx.resource_prefix.to_string()),
+                })?;
+
+            for role in response.roles {
+                let Some(role_name) = role.name else {
+                    continue;
+                };
+                if role_name.starts_with(&role_name_prefix) {
+                    role_names.push(role_name);
+                }
+            }
+
+            match response.next_page_token {
+                Some(token) if !token.is_empty() => page_token = Some(token),
+                _ => break,
+            }
+        }
+
+        for role_name in role_names {
+            let role_id = role_name
+                .rsplit('/')
+                .next()
+                .unwrap_or(role_name.as_str())
+                .to_string();
+            match iam_client.delete_role(role_name.clone()).await {
+                Ok(_) => {
+                    info!(
+                        role_id = %role_id,
+                        "Deleted GCP custom role"
+                    );
+                }
+                Err(e)
+                    if matches!(
+                        e.error,
+                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                    ) =>
+                {
+                    info!(
+                        role_id = %role_id,
+                        "GCP custom role already deleted"
+                    );
+                }
+                Err(e) => {
+                    return Err(e.context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to delete GCP custom role '{}'", role_id),
+                        resource_id: Some(ctx.resource_prefix.to_string()),
+                    }));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Return the fully-qualified custom-role prefix owned by this stack.
     pub fn gcp_stack_custom_role_name_prefix(permission_context: &PermissionContext) -> String {
         let project = permission_context
@@ -619,7 +697,7 @@ impl ResourcePermissionsHelper {
     }
 
     /// Build GCP permission context for a resource
-    fn build_gcp_permission_context(
+    pub(crate) fn build_gcp_permission_context(
         ctx: &ResourceControllerContext<'_>,
         resource_name: &str,
     ) -> Result<PermissionContext> {

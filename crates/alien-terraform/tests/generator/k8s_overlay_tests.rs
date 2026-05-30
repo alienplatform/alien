@@ -6,8 +6,7 @@
 //! `azurerm_user_assigned_identity` — the federated identity
 //! credential trusts the AKS cluster's OIDC issuer and the K8s SA
 //! carries `azure.workload.identity/client-id`. Both modules pass
-//! `terraform fmt -check` + `terraform validate` against the cloud +
-//! Kubernetes providers.
+//! `terraform fmt -check` + `terraform validate` against the cloud providers.
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
@@ -188,11 +187,27 @@ fn managed_kubernetes_cluster_emitters_export_runtime_metadata() {
         ));
         match target {
             TerraformTarget::Eks => {
+                assert!(main.contains("command = \"aws\""));
+                assert!(main.contains("eks\", \"get-token\""));
                 assert!(main.contains("routeApi         = \"ingress\""));
                 assert!(main.contains("controller       = \"eks.amazonaws.com/alb\""));
                 assert!(main.contains("ingressClassName = \"alb\""));
                 assert!(main.contains("provider   = \"awsAlb\""));
                 assert!(main.contains("mode   = \"managedAcmImport\""));
+                assert!(main.contains("clusterBootstrap"));
+                assert!(main.contains("metricsServer"));
+                assert!(main.contains("storageClass"));
+                assert!(main.contains("provisioner = \"ebs.csi.aws.com\""));
+                assert!(main.contains("ingress"));
+                assert!(main.contains("eksAutoMode"));
+                assert!(main.contains("arm64NodePool"));
+                assert!(main.contains("general-purpose-arm64"));
+                assert!(cluster.contains(
+                    r#""kubernetes.io/cluster/${local.resource_prefix}-k8s" = "shared""#
+                ));
+                assert!(
+                    !cluster.contains(r#""kubernetes.io/cluster/$${local.resource_prefix}-k8s""#)
+                );
             }
             TerraformTarget::Gke => {
                 assert!(main.contains("routeApi         = \"gateway\""));
@@ -218,17 +233,9 @@ fn managed_kubernetes_cluster_emitters_export_runtime_metadata() {
 
 #[test]
 fn managed_kubernetes_clusters_install_generated_public_endpoint_support() {
-    for (target, provider, expected) in [
-        (
-            TerraformTarget::Eks,
-            KubernetesClusterProvider::Eks,
-            r#"kind       = "IngressClassParams""#,
-        ),
-        (
-            TerraformTarget::Aks,
-            KubernetesClusterProvider::Aks,
-            r#"resource "azapi_update_resource" "kubernetes_alb_controller""#,
-        ),
+    for (target, provider) in [
+        (TerraformTarget::Eks, KubernetesClusterProvider::Eks),
+        (TerraformTarget::Aks, KubernetesClusterProvider::Aks),
     ] {
         let stack = Stack::new(format!("{}-public-endpoint", target.name()))
             .add(
@@ -256,11 +263,18 @@ fn managed_kubernetes_clusters_install_generated_public_endpoint_support() {
         let cluster = module
             .get("kubernetes.tf")
             .expect("cluster resource file should render");
-        assert!(cluster.contains(expected));
         if target == TerraformTarget::Eks {
-            assert!(cluster.contains(r#"controller = "eks.amazonaws.com/alb""#));
+            let locals = module.get("locals.tf").expect("locals should render");
+            assert!(locals.contains(r#"controller       = "eks.amazonaws.com/alb""#));
+            assert!(locals.contains("arm64NodePool"));
+            assert!(locals.contains("general-purpose-arm64"));
+            assert!(!cluster.contains("IngressClassParams"));
+            assert!(!cluster.contains(r#"resource "kubernetes_manifest" "kubernetes_alb"#));
         }
         if target == TerraformTarget::Aks {
+            assert!(
+                cluster.contains(r#"resource "azapi_update_resource" "kubernetes_alb_controller""#)
+            );
             assert!(cluster.contains(r#"applicationLoadBalancer = {"#));
             assert!(cluster.contains(r#"installation = "Standard""#));
         }
@@ -346,7 +360,7 @@ fn managed_kubernetes_cluster_preserves_stack_settings_exposure() {
 }
 
 #[test]
-fn managed_kubernetes_cluster_emitters_install_metrics_server_for_created_clusters() {
+fn managed_kubernetes_cluster_emitters_do_not_apply_in_cluster_manifests() {
     for (target, provider) in [
         (TerraformTarget::Eks, KubernetesClusterProvider::Eks),
         (TerraformTarget::Gke, KubernetesClusterProvider::Gke),
@@ -365,26 +379,33 @@ fn managed_kubernetes_cluster_emitters_install_metrics_server_for_created_cluste
             .build();
 
         let module = render(&stack, target, StackSettings::default());
-        snapshot_module(
-            &format!("{}_managed_cluster_metrics_server", target.name()),
-            &module,
-        );
 
         let variables = module.get("variables.tf").expect("variables should render");
-        assert!(variables.contains(r#"variable "install_metrics_server""#));
-        assert!(variables.contains("default     = true"));
-
-        let providers = module.get("providers.tf").expect("providers should render");
-        assert!(providers.contains(r#"provider "kubernetes""#));
+        assert!(!variables.contains(r#"variable "install_metrics_server""#));
 
         let cluster = module
             .get("kubernetes.tf")
             .expect("cluster resource file should render");
-        assert!(cluster.contains("metrics-server"));
-        assert!(cluster.contains(
-            r#"count = var.kubernetes_cluster_mode == "create" && var.install_metrics_server ? 1 : 0"#
-        ));
+        assert!(!cluster.contains("metrics-server"));
+        assert!(!cluster.contains("IngressClassParams"));
+        assert!(!cluster.contains("kind       = \"StorageClass\""));
+        assert!(!cluster.contains(r#"resource "kubernetes_manifest""#));
 
-        assert_terraform_valid(&module, &format!("{}_metrics_server", target.name()));
+        let locals = module.get("locals.tf").expect("locals should render");
+        assert!(locals.contains("metricsServer"));
+        assert!(locals.contains("registry.k8s.io/metrics-server/metrics-server:v0.8.1"));
+        assert!(locals.contains("var.kubernetes_cluster_mode == \"create\""));
+        if target == TerraformTarget::Eks {
+            assert!(locals.contains("arm64NodePool"));
+            assert!(locals.contains("general-purpose-arm64"));
+        }
+
+        assert_terraform_valid(
+            &module,
+            &format!(
+                "{}_managed_cluster_without_in_cluster_manifests",
+                target.name()
+            ),
+        );
     }
 }

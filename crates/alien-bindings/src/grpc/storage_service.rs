@@ -31,10 +31,11 @@ use alien_bindings::storage::{
     storage_service_server::{StorageService, StorageServiceServer},
     GetResponsePart, StorageCopyRequest, StorageDeleteRequest, StorageGetBaseDirRequest,
     StorageGetBaseDirResponse, StorageGetRequest, StorageGetUrlRequest, StorageGetUrlResponse,
-    StorageHeadRequest, StorageHttpMethod, StorageListRequest, StorageListResultProto,
-    StorageListWithDelimiterRequest, StorageObjectMeta, StorageOperationResponse,
-    StoragePutMultipartChunkRequest, StoragePutMultipartMetadata, StoragePutRequest,
-    StoragePutResponse, StorageRenameRequest, StorageSignedUrlRequest, StorageSignedUrlResponse,
+    StorageHeadRequest, StorageHttpHeader, StorageHttpMethod, StorageListRequest,
+    StorageListResultProto, StorageListWithDelimiterRequest, StorageObjectMeta,
+    StorageOperationResponse, StoragePutMultipartChunkRequest, StoragePutMultipartMetadata,
+    StoragePutRequest, StoragePutResponse, StorageRenameRequest, StorageSignedUrlRequest,
+    StorageSignedUrlResponse,
 };
 
 pub struct StorageGrpcServer {
@@ -425,9 +426,15 @@ impl StorageService for StorageGrpcServer {
         .map_err(alien_error_to_status)?;
 
         let signed_url = presigned_request.url();
+        let headers = presigned_request
+            .headers()
+            .into_iter()
+            .map(|(key, value)| StorageHttpHeader { key, value })
+            .collect();
 
         Ok(Response::new(StorageSignedUrlResponse {
             url: signed_url.to_string(),
+            headers,
         }))
     }
 }

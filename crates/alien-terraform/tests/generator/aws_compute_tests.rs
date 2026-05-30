@@ -108,6 +108,7 @@ fn aws_container_cluster_without_platform_extension_errors_cleanly() {
             registry: &registry,
             stack_settings: StackSettings::default(),
             registration: None,
+            helm_install: None,
         },
     )
     .expect_err("OSS registry should not register container_cluster");

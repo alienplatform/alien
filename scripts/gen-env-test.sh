@@ -123,12 +123,14 @@ e2e_gke_ingress_annotations=$(
 azure_management_subscription_id=$(jq_val management_azure_subscription_id)
 azure_management_tenant_id=$(jq_val management_azure_tenant_id)
 azure_management_client_id=$(jq_val management_azure_client_id)
+azure_management_principal_id=$(jq_val management_azure_principal_id)
 azure_management_client_secret=$(jq_val management_azure_client_secret)
 azure_management_region=$(jq_val management_azure_region)
 
 azure_target_subscription_id=$(jq_val target_azure_subscription_id)
 azure_target_tenant_id=$(jq_val target_azure_tenant_id)
 azure_target_client_id=$(jq_val target_azure_client_id)
+azure_target_principal_id=$(jq_val target_azure_principal_id)
 azure_target_client_secret=$(jq_val target_azure_client_secret)
 
 azure_resource_group=$(jq_val azure_resource_group)
@@ -268,6 +270,7 @@ ALIEN_TEST_GKE_PUBLIC_HOST_SUFFIX='${e2e_gke_public_host_suffix}'
 AZURE_MANAGEMENT_SUBSCRIPTION_ID='${azure_management_subscription_id}'
 AZURE_MANAGEMENT_TENANT_ID='${azure_management_tenant_id}'
 AZURE_MANAGEMENT_CLIENT_ID='${azure_management_client_id}'
+AZURE_MANAGEMENT_PRINCIPAL_ID='${azure_management_principal_id}'
 AZURE_MANAGEMENT_CLIENT_SECRET='${azure_management_client_secret}'
 AZURE_MANAGEMENT_REGION='${azure_management_region}'
 
@@ -279,6 +282,7 @@ AZURE_MANAGEMENT_OIDC_SUBJECT='${AZURE_MANAGEMENT_OIDC_SUBJECT:-}'
 AZURE_TARGET_SUBSCRIPTION_ID='${azure_target_subscription_id}'
 AZURE_TARGET_TENANT_ID='${azure_target_tenant_id}'
 AZURE_TARGET_CLIENT_ID='${azure_target_client_id}'
+AZURE_TARGET_PRINCIPAL_ID='${azure_target_principal_id}'
 AZURE_TARGET_CLIENT_SECRET='${azure_target_client_secret}'
 AZURE_TARGET_REGION='${azure_management_region}'
 AZURE_TARGET_RESOURCE_GROUP='${azure_shared_container_env_resource_group}'

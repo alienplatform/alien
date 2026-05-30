@@ -166,6 +166,14 @@ message StorageAttributeKeyValuePair {
     string value = 2;
 }
 
+// Represents a single HTTP header required by a signed URL request.
+message StorageHttpHeader {
+    // Header name.
+    string key = 1;
+    // Header value.
+    string value = 2;
+}
+
 // A collection of storage attributes.
 // Maps to object_store::Attributes.
 message StorageAttributesMap {
@@ -435,4 +443,6 @@ message StorageSignedUrlRequest {
 message StorageSignedUrlResponse {
     // The generated signed URL.
     string url = 1;
+    // Headers that must be included when executing the signed request.
+    repeated StorageHttpHeader headers = 2;
 } 

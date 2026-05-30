@@ -96,8 +96,6 @@
           "actions": [
             "Microsoft.ContainerRegistry/registries/write",
             "Microsoft.ContainerRegistry/registries/delete",
-            "Microsoft.ContainerRegistry/registries/importImage/action",
-            "Microsoft.ContainerRegistry/registries/scheduleRun/action",
             "Microsoft.ContainerRegistry/registries/updatePolicies/write",
             "Microsoft.ContainerRegistry/registries/read",
             "Microsoft.ContainerRegistry/registries/metadata/read",

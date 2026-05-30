@@ -421,21 +421,29 @@ mod tests {
     use crate::traits::DeploymentRecord;
 
     use super::{
-        deployment_state_from_record, release_stack_platform, should_ignore_agent_state_report,
-        validate_initialize_base_platform, ReconcileRequest,
+        deployment_state_from_record, management_platform, release_stack_platform,
+        should_ignore_agent_state_report, validate_initialize_base_platform, ReconcileRequest,
     };
 
     #[test]
-    fn release_stack_platform_uses_base_platform_for_imported_kubernetes_deployments() {
+    fn release_stack_platform_keeps_imported_kubernetes_deployment_platform() {
         assert_eq!(
-            release_stack_platform(Platform::Kubernetes, Some(Platform::Aws)),
-            Platform::Aws
+            release_stack_platform(Platform::Kubernetes),
+            Platform::Kubernetes
         );
     }
 
     #[test]
     fn release_stack_platform_defaults_to_deployment_platform() {
-        assert_eq!(release_stack_platform(Platform::Gcp, None), Platform::Gcp);
+        assert_eq!(release_stack_platform(Platform::Gcp), Platform::Gcp);
+    }
+
+    #[test]
+    fn management_platform_uses_base_platform_for_imported_kubernetes_deployments() {
+        assert_eq!(
+            management_platform(Platform::Kubernetes, Some(Platform::Aws)),
+            Platform::Aws
+        );
     }
 
     #[test]
@@ -745,8 +753,9 @@ async fn agent_sync(
             None
         };
 
-        let release_stack_platform =
-            release_stack_platform(deployment.platform, deployment.base_platform);
+        let release_stack_platform = release_stack_platform(deployment.platform);
+        let management_platform =
+            management_platform(deployment.platform, deployment.base_platform);
 
         // Resolve management config (same pattern as push-mode deployment loop).
         // 1. From deployment record (platform API / private managers)
@@ -756,7 +765,7 @@ async fn agent_sync(
         } else {
             state
                 .credential_resolver
-                .resolve_management_config(release_stack_platform)
+                .resolve_management_config(management_platform)
                 .await
                 .unwrap_or(None)
         };
@@ -781,7 +790,7 @@ async fn agent_sync(
         let native_image_host = crate::registry_access::derive_native_image_host(
             &state.bindings_provider,
             &state.target_bindings_providers,
-            &release_stack_platform,
+            &management_platform,
         )
         .await;
 
@@ -803,14 +812,24 @@ async fn agent_sync(
                     .clone()
                     .unwrap_or_default();
 
-                Some(TargetDeployment {
-                    release_info: ReleaseInfo {
-                        release_id: r.id,
-                        version: None,
-                        description: None,
-                        stack,
-                    },
-                    config: DeploymentConfig::builder()
+                let config = if let Some(mut config) = deployment.deployment_config.clone() {
+                    if config.deployment_name.is_none() {
+                        config.deployment_name = Some(deployment.name.clone());
+                    }
+                    if config.management_config.is_none() {
+                        config.management_config = management_config;
+                    }
+                    if config.deployment_token.is_none() {
+                        config.deployment_token = agent_token.clone();
+                    }
+                    if config.base_platform.is_none() {
+                        config.base_platform = deployment.base_platform;
+                    }
+                    config.manager_url = Some(manager_url);
+                    config.native_image_host = native_image_host;
+                    config
+                } else {
+                    DeploymentConfig::builder()
                         .deployment_name(deployment.name.clone())
                         .stack_settings(deployment.stack_settings.clone())
                         .maybe_management_config(management_config)
@@ -831,7 +850,17 @@ async fn agent_sync(
                         .maybe_manager_url(Some(manager_url))
                         .maybe_deployment_token(agent_token)
                         .maybe_native_image_host(native_image_host)
-                        .build(),
+                        .build()
+                };
+
+                Some(TargetDeployment {
+                    release_info: ReleaseInfo {
+                        release_id: r.id,
+                        version: None,
+                        description: None,
+                        stack,
+                    },
+                    config,
                 })
             }
             None => None,
@@ -841,8 +870,7 @@ async fn agent_sync(
     };
 
     let current_state = if ignored_agent_state_report {
-        let release_stack_platform =
-            release_stack_platform(deployment.platform, deployment.base_platform);
+        let release_stack_platform = release_stack_platform(deployment.platform);
         let current_release = if let Some(ref release_id) = deployment.current_release_id {
             let system = crate::auth::Subject::system();
             match state.release_store.get_release(&system, release_id).await {
@@ -892,7 +920,11 @@ async fn agent_sync(
     .into_response()
 }
 
-fn release_stack_platform(platform: Platform, base_platform: Option<Platform>) -> Platform {
+fn release_stack_platform(platform: Platform) -> Platform {
+    platform
+}
+
+fn management_platform(platform: Platform, base_platform: Option<Platform>) -> Platform {
     base_platform.unwrap_or(platform)
 }
 

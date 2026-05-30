@@ -246,6 +246,40 @@ fn gcp_artifact_registry_management_stack_binding_is_project_scoped() {
     assert_eq!(result.bindings[0].target, GcpBindingTargetScope::Project);
 }
 
+#[test]
+fn gcp_generated_custom_role_ids_fit_gcp_role_id_limits() {
+    let generator = GcpRuntimePermissionsGenerator::new();
+    let context = create_test_context().with_stack_prefix("e2e-32-gcpcr-t1");
+
+    for permission_set_id in list_permission_set_ids() {
+        let permission_set = get_permission_set(permission_set_id).expect("permission set exists");
+        if permission_set.platforms.gcp.is_none() {
+            continue;
+        }
+
+        let roles = generator
+            .generate_custom_roles(permission_set, &context)
+            .expect("GCP custom roles should compile");
+
+        for role in roles {
+            assert!(
+                role.role_id.len() <= 64,
+                "permission set '{}' generated overlong GCP role id '{}'",
+                permission_set_id,
+                role.role_id
+            );
+            assert!(
+                role.role_id
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '_'),
+                "permission set '{}' generated invalid GCP role id '{}'",
+                permission_set_id,
+                role.role_id
+            );
+        }
+    }
+}
+
 #[rstest]
 #[case::data_read("storage/data-read")]
 #[case::data_write("storage/data-write")]

@@ -77,18 +77,18 @@ impl DedupeKey {
 pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<Stack> {
     info!(
         "Starting stack build process for platform: {:?}...",
-        settings.platform.platform()
+        settings.platform.runtime_platform()
     );
 
     // Run preflights (compile-time checks only)
     let preflight_runner = PreflightRunner::new();
     let preflight_summary = AlienEvent::RunningPreflights {
         stack: stack.id().to_string(),
-        platform: settings.platform.platform().as_str().to_string(),
+        platform: settings.platform.runtime_platform().as_str().to_string(),
     }
     .in_scope(|_| async {
         preflight_runner
-            .run_build_time_preflights(&stack, settings.platform.platform())
+            .run_build_time_preflights(&stack, settings.platform.runtime_platform())
             .await
             .context(ErrorData::StackProcessorFailed {
                 message: "Failed to run build-time preflights".to_string(),
@@ -109,7 +109,7 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
     );
 
     let base_output_dir = PathBuf::from(&settings.output_directory);
-    let platform_name = settings.platform.platform().as_str();
+    let platform_name = settings.platform.runtime_platform().as_str();
     let output_dir = base_output_dir.join("build").join(platform_name);
     info!("Target output directory: {}", output_dir.display());
 
@@ -1364,7 +1364,7 @@ async fn build_target_to_file(
             target.runtime_platform_id()
         ),
         build_target: *target,
-        platform_name: settings.platform.platform().as_str().to_string(),
+        runtime_platform_name: settings.platform.runtime_platform().as_str().to_string(),
         debug_mode: settings.debug_mode,
         is_container,
     };
@@ -1440,22 +1440,26 @@ async fn build_target_to_file(
                     // dockdash layers are consumed by the image builder.
                     let mut app_layer_builder = DockDashLayer::builder().map_dockdash_err()?;
 
-                    for (host_path, container_path) in files_to_package {
-                        let absolute_container_path = if container_path.starts_with("/") {
-                            container_path.clone()
-                        } else if container_path.starts_with("./") {
-                            format!("/app/{}", &container_path[2..])
+                    for file_spec in files_to_package {
+                        let absolute_container_path = if file_spec.container_path.starts_with("/") {
+                            file_spec.container_path.clone()
+                        } else if file_spec.container_path.starts_with("./") {
+                            format!("/app/{}", &file_spec.container_path[2..])
                         } else {
-                            format!("/app/{}", container_path)
+                            format!("/app/{}", file_spec.container_path)
                         };
 
-                        if host_path.is_dir() {
+                        if file_spec.host_path.is_dir() {
                             app_layer_builder = app_layer_builder
-                                .directory(host_path, &absolute_container_path)
+                                .directory(&file_spec.host_path, &absolute_container_path)
                                 .map_dockdash_err()?;
-                        } else if host_path.is_file() {
+                        } else if file_spec.host_path.is_file() {
                             app_layer_builder = app_layer_builder
-                                .file(host_path, &absolute_container_path, None)
+                                .file(
+                                    &file_spec.host_path,
+                                    &absolute_container_path,
+                                    file_spec.mode,
+                                )
                                 .map_dockdash_err()?;
                         }
                     }

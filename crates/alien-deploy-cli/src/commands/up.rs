@@ -259,6 +259,21 @@ mod tests {
     }
 
     #[test]
+    fn release_stack_for_kubernetes_uses_runtime_platform_not_base_platform() {
+        let stack = alien_manager_api::types::StackByPlatform {
+            aws: Some(serde_json::json!({ "id": "aws-stack" })),
+            gcp: Some(serde_json::json!({ "id": "gcp-stack" })),
+            azure: Some(serde_json::json!({ "id": "azure-stack" })),
+            kubernetes: Some(serde_json::json!({ "id": "kubernetes-stack" })),
+            local: None,
+            test: None,
+        };
+
+        let selected = release_stack_value_for_platform(stack, Platform::Kubernetes).unwrap();
+        assert_eq!(selected["id"], "kubernetes-stack");
+    }
+
+    #[test]
     fn split_image_tag_defaults_missing_tag_to_latest() {
         assert_eq!(
             split_image_tag("ghcr.io/alienplatform/alien-agent").unwrap(),
@@ -487,6 +502,20 @@ struct ResolvedInfo {
 
 fn requires_install_context(platform: Platform) -> bool {
     matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
+}
+
+fn release_stack_value_for_platform(
+    stack: alien_manager_api::types::StackByPlatform,
+    platform: Platform,
+) -> Option<serde_json::Value> {
+    match platform {
+        Platform::Aws => stack.aws,
+        Platform::Gcp => stack.gcp,
+        Platform::Azure => stack.azure,
+        Platform::Kubernetes => stack.kubernetes,
+        Platform::Local => stack.local,
+        Platform::Test => stack.test,
+    }
 }
 
 fn parse_base_platform(
@@ -1602,26 +1631,16 @@ pub async fn push_initial_setup(
         match client.get_release().id(release_id).send().await {
             Ok(resp) => {
                 let rel = resp.into_inner();
-                // The API returns stacks keyed by platform (e.g. {"gcp": {...}}).
-                // Extract the inner stack value for the target platform.
-                let release_stack_platform = base_platform.unwrap_or(platform);
-                let platform_stack_value = match release_stack_platform {
-                    Platform::Aws => rel.stack.aws,
-                    Platform::Gcp => rel.stack.gcp,
-                    Platform::Azure => rel.stack.azure,
-                    Platform::Kubernetes => rel.stack.kubernetes,
-                    Platform::Local => rel.stack.local,
-                    Platform::Test => rel.stack.test,
-                }
-                .ok_or_else(|| {
-                    AlienError::new(ErrorData::ConfigurationError {
-                        message: format!(
-                            "Release {} has no stack for platform {}",
-                            release_id,
-                            release_stack_platform.as_str()
-                        ),
-                    })
-                })?;
+                let platform_stack_value = release_stack_value_for_platform(rel.stack, platform)
+                    .ok_or_else(|| {
+                        AlienError::new(ErrorData::ConfigurationError {
+                            message: format!(
+                                "Release {} has no stack for platform {}",
+                                release_id,
+                                platform.as_str()
+                            ),
+                        })
+                    })?;
 
                 // No stack rewriting — release already stores proxy URIs.
                 // Controllers use image URIs as-is.
@@ -1884,14 +1903,7 @@ pub async fn push_deletion(
         match client.get_release().id(release_id).send().await {
             Ok(resp) => {
                 let rel = resp.into_inner();
-                let platform_stack_value = match platform {
-                    Platform::Aws => rel.stack.aws,
-                    Platform::Gcp => rel.stack.gcp,
-                    Platform::Azure => rel.stack.azure,
-                    Platform::Kubernetes => rel.stack.kubernetes,
-                    Platform::Local => rel.stack.local,
-                    Platform::Test => rel.stack.test,
-                };
+                let platform_stack_value = release_stack_value_for_platform(rel.stack, platform);
                 platform_stack_value
                     .and_then(|v| serde_json::from_value(v).ok())
                     .map(|stack| ReleaseInfo {

@@ -24,8 +24,8 @@ use crate::{
 };
 use alien_core::{
     import::{EmitContext, CURRENT_SETUP_IMPORT_FORMAT_VERSION},
-    ownership_policy_for_resource_type, ErrorData, Network, NetworkSettings, Result, Stack,
-    StackSettings,
+    ownership_policy_for_resource_type, ErrorData, KubernetesCluster, KubernetesClusterOwnership,
+    KubernetesClusterProvider, Network, NetworkSettings, Result, Stack, StackSettings,
 };
 use alien_error::{AlienError, IntoAlienError};
 use hcl::{
@@ -74,6 +74,10 @@ pub struct TerraformOptions<'a> {
     /// requires the configured provider and creates its registration resource
     /// after raw infrastructure is resolved.
     pub registration: Option<TerraformRegistration>,
+    /// Optional Helm chart install settings. Only Kubernetes targets with
+    /// self-registration can install the chart because the chart needs the
+    /// manager deployment id and deployment token.
+    pub helm_install: Option<TerraformHelmInstall>,
 }
 
 /// Terraform provider dependency used by self-registering modules.
@@ -96,6 +100,11 @@ impl TerraformRegistration {
     fn provider_resource_type(&self) -> String {
         format!("{}_{}", self.provider_name, self.resource_type)
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TerraformHelmInstall {
+    pub chart_ref: String,
 }
 
 /// Per-network-resource extra variables (e.g. existing VPC ids for AWS).
@@ -159,7 +168,7 @@ pub fn generate_terraform_module(
     options: TerraformOptions<'_>,
 ) -> Result<ModuleFiles> {
     let labels = resource_labels(stack)?;
-    let platform = target.platform();
+    let platform = target.cloud_platform();
 
     let mut per_resource: IndexMap<String, TfFragment> = IndexMap::new();
     let mut imported_resources: Vec<Expression> = Vec::new();
@@ -234,13 +243,10 @@ pub fn generate_terraform_module(
     }
 
     let network_vars = network_extra_variables(stack, &labels);
-    let has_kubernetes_cluster = stack.resources().any(|(_, entry)| {
-        entry
-            .config
-            .downcast_ref::<alien_core::KubernetesCluster>()
-            .is_some()
-    });
-    let include_kubernetes_provider = target.is_kubernetes() && has_kubernetes_cluster;
+    let include_kubernetes_provider =
+        target.is_kubernetes() && has_resource_type(&per_resource, "kubernetes_manifest");
+    let include_helm_provider =
+        target.is_kubernetes() && options.registration.is_some() && options.helm_install.is_some();
     let include_azapi_provider = has_resource_type(&per_resource, "azapi_update_resource");
     let deployment_name_default = options
         .display_name
@@ -257,6 +263,7 @@ pub fn generate_terraform_module(
             options.registration.as_ref(),
             gcp_iam_propagation_barrier.is_some(),
             include_kubernetes_provider,
+            include_helm_provider,
             include_azapi_provider,
         ))?,
     );
@@ -267,6 +274,7 @@ pub fn generate_terraform_module(
             &network_vars,
             &options.stack_settings,
             options.registration.as_ref(),
+            options.helm_install.as_ref(),
             &deployment_name_default,
         )?)?,
     );
@@ -275,6 +283,7 @@ pub fn generate_terraform_module(
         render_body(providers_body(
             target,
             include_kubernetes_provider,
+            include_helm_provider,
             include_azapi_provider,
         ))?,
     );
@@ -286,6 +295,8 @@ pub fn generate_terraform_module(
         "locals.tf".to_string(),
         render_body(locals_body(
             target,
+            stack,
+            &labels,
             &options.stack_settings,
             imported_resources,
             &shared_locals,
@@ -314,6 +325,19 @@ pub fn generate_terraform_module(
             &import_depends_on,
         ))?,
     );
+    if let Some(helm_install) = options
+        .helm_install
+        .as_ref()
+        .filter(|_| target.is_kubernetes() && options.registration.is_some())
+    {
+        files.insert(
+            "helm.tf".to_string(),
+            render_body(helm_install_body(
+                options.registration.as_ref().expect("checked above"),
+                helm_install,
+            ))?,
+        );
+    }
     files.insert(
         "outputs.tf".to_string(),
         render_body(outputs_body(target, options.registration.as_ref()))?,
@@ -662,6 +686,7 @@ fn versions_body(
     registration: Option<&TerraformRegistration>,
     include_time_provider: bool,
     include_kubernetes_provider: bool,
+    include_helm_provider: bool,
     include_azapi_provider: bool,
 ) -> Body {
     let mut required: Vec<Structure> = vec![attr(
@@ -670,19 +695,19 @@ fn versions_body(
     )];
 
     let mut provider_attrs: Vec<Structure> = Vec::new();
-    if matches!(target.platform(), alien_core::Platform::Aws) {
+    if matches!(target.cloud_platform(), alien_core::Platform::Aws) {
         provider_attrs.push(attr("aws", provider_decl_attr("hashicorp/aws", ">= 5.0")));
         if matches!(target, TerraformTarget::Eks) {
             provider_attrs.push(attr("tls", provider_decl_attr("hashicorp/tls", ">= 4.0")));
         }
     }
-    if matches!(target.platform(), alien_core::Platform::Gcp) {
+    if matches!(target.cloud_platform(), alien_core::Platform::Gcp) {
         provider_attrs.push(attr(
             "google",
             provider_decl_attr("hashicorp/google", ">= 5.0"),
         ));
     }
-    if matches!(target.platform(), alien_core::Platform::Azure) {
+    if matches!(target.cloud_platform(), alien_core::Platform::Azure) {
         provider_attrs.push(attr(
             "azurerm",
             provider_decl_attr("hashicorp/azurerm", ">= 3.100"),
@@ -698,6 +723,12 @@ fn versions_body(
         provider_attrs.push(attr(
             "kubernetes",
             provider_decl_attr("hashicorp/kubernetes", ">= 2.30"),
+        ));
+    }
+    if include_helm_provider {
+        provider_attrs.push(attr(
+            "helm",
+            provider_decl_attr("hashicorp/helm", ">= 2.13"),
         ));
     }
     provider_attrs.push(attr(
@@ -740,6 +771,7 @@ fn variables_body(
     network_vars: &NetworkVariables,
     stack_settings: &StackSettings,
     registration: Option<&TerraformRegistration>,
+    helm_install: Option<&TerraformHelmInstall>,
     deployment_name_default: &str,
 ) -> Result<Body> {
     let mut blocks: Vec<Structure> = Vec::new();
@@ -793,7 +825,7 @@ fn variables_body(
         true,
     )));
 
-    if matches!(target.platform(), alien_core::Platform::Aws) {
+    if matches!(target.cloud_platform(), alien_core::Platform::Aws) {
         blocks.push(nested(variable_block(
             "aws_region",
             "AWS region used by the AWS provider.",
@@ -813,7 +845,7 @@ fn variables_body(
             false,
         )));
     }
-    if matches!(target.platform(), alien_core::Platform::Aws)
+    if matches!(target.cloud_platform(), alien_core::Platform::Aws)
         && has_dynamic_aws_network_settings(stack_settings.network.as_ref())
     {
         blocks.push(nested(variable_block(
@@ -855,7 +887,7 @@ fn variables_body(
             Some(vec![]),
         )));
     }
-    if matches!(target.platform(), alien_core::Platform::Gcp) {
+    if matches!(target.cloud_platform(), alien_core::Platform::Gcp) {
         blocks.push(nested(variable_block(
             "gcp_project",
             "GCP project ID.",
@@ -923,7 +955,7 @@ fn variables_body(
             )));
         }
     }
-    if matches!(target.platform(), alien_core::Platform::Azure) {
+    if matches!(target.cloud_platform(), alien_core::Platform::Azure) {
         blocks.push(nested(variable_block(
             "azure_location",
             "Azure location.",
@@ -968,15 +1000,31 @@ fn variables_body(
             Some(Expression::String("create".to_string())),
             false,
         )));
-        blocks.push(nested(bool_variable_block(
-            "install_metrics_server",
-            "Whether to install metrics-server into Kubernetes clusters created by this module.",
-            Some(true),
-        )));
         blocks.push(nested(variable_block(
             "kubernetes_namespace",
             "Kubernetes namespace for runtime resources.",
             Some(Expression::String("default".to_string())),
+            false,
+        )));
+    }
+    if target.is_kubernetes() && registration.is_some() && helm_install.is_some() {
+        blocks.push(nested(bool_variable_block(
+            "helm_install_enabled",
+            "Whether this module installs the Alien Helm chart after registering the deployment.",
+            Some(true),
+        )));
+        blocks.push(nested(variable_block(
+            "helm_release_name",
+            "Helm release name used for the Alien runtime chart.",
+            Some(Expression::String("alien".to_string())),
+            false,
+        )));
+        blocks.push(nested(variable_block(
+            "helm_chart",
+            "OCI Helm chart reference to install.",
+            Some(Expression::String(
+                helm_install.expect("checked above").chart_ref.clone(),
+            )),
             false,
         )));
     }
@@ -1150,10 +1198,11 @@ fn variable_block(
 fn providers_body(
     target: TerraformTarget,
     include_kubernetes_provider: bool,
+    include_helm_provider: bool,
     include_azapi_provider: bool,
 ) -> Body {
     let mut structures: Vec<Structure> = Vec::new();
-    match target.platform() {
+    match target.cloud_platform() {
         alien_core::Platform::Aws => {
             structures.push(Structure::Block(Block {
                 identifier: Identifier::sanitized("provider"),
@@ -1214,6 +1263,16 @@ fn providers_body(
             identifier: Identifier::sanitized("provider"),
             labels: vec![BlockLabel::String("kubernetes".to_string())],
             body: Body::from(kubernetes_provider_body(target)),
+        }));
+    }
+    if include_helm_provider {
+        structures.push(Structure::Block(Block {
+            identifier: Identifier::sanitized("provider"),
+            labels: vec![BlockLabel::String("helm".to_string())],
+            body: Body::from(vec![nested(block(
+                "kubernetes",
+                kubernetes_provider_body(target),
+            ))]),
         }));
     }
     Body::from(structures)
@@ -1290,6 +1349,8 @@ fn resource_prefix_body() -> Body {
 
 fn locals_body(
     target: TerraformTarget,
+    stack: &Stack,
+    labels: &IndexMap<String, String>,
     stack_settings: &StackSettings,
     imported_resources: Vec<Expression>,
     extra: &IndexMap<String, Expression>,
@@ -1311,7 +1372,7 @@ fn locals_body(
             "var.name"
         }),
     ));
-    if matches!(target.platform(), alien_core::Platform::Gcp) {
+    if matches!(target.cloud_platform(), alien_core::Platform::Gcp) {
         body.push(attr(
             "gcp_custom_role_prefix",
             expr::raw(
@@ -1321,20 +1382,12 @@ fn locals_body(
     }
     body.push(attr(
         "deployment_platform",
-        Expression::String(
-            if target.is_kubernetes() {
-                alien_core::Platform::Kubernetes
-            } else {
-                target.platform()
-            }
-            .as_str()
-            .to_string(),
-        ),
+        Expression::String(target.deployment_platform().as_str().to_string()),
     ));
-    if target.is_kubernetes() {
+    if let Some(base_platform) = target.base_platform() {
         body.push(attr(
             "deployment_base_platform",
-            Expression::String(target.platform().as_str().to_string()),
+            Expression::String(base_platform.as_str().to_string()),
         ));
     }
     body.push(attr(
@@ -1386,29 +1439,28 @@ fn locals_body(
         body.push(attr(name, value.clone()));
     }
     if target.is_kubernetes() {
-        body.push(attr(
-            "helm_values",
-            expr::object([
-                ("serviceAccounts", expr::raw("local.helm_service_accounts")),
-                (
-                    "managerServiceAccount",
-                    expr::raw("local.helm_manager_service_account"),
-                ),
-                ("stackSettings", expr::raw("local.deployment_settings")),
-                ("basePlatform", expr::raw("local.deployment_base_platform")),
-                ("serviceAccountPrefix", expr::raw("local.resource_prefix")),
-                (
-                    "heartbeat",
-                    expr::object([(
-                        "collection",
-                        expr::object([(
-                            "nodes",
-                            expr::object([("enabled", Expression::Bool(true))]),
-                        )]),
-                    )]),
-                ),
-            ]),
+        let mut helm_values = vec![
+            ("serviceAccounts", expr::raw("local.helm_service_accounts")),
+            (
+                "managerServiceAccount",
+                expr::raw("local.helm_manager_service_account"),
+            ),
+            ("stackSettings", expr::raw("local.deployment_settings")),
+            ("basePlatform", expr::raw("local.deployment_base_platform")),
+            ("serviceAccountPrefix", expr::raw("local.resource_prefix")),
+            (
+                "heartbeat",
+                expr::object([(
+                    "collection",
+                    expr::object([("nodes", expr::object([("enabled", Expression::Bool(true))]))]),
+                )]),
+            ),
+        ];
+        helm_values.push((
+            "clusterBootstrap",
+            cluster_bootstrap_values(target, stack, labels),
         ));
+        body.push(attr("helm_values", expr::object(helm_values)));
     }
 
     Ok(Body::from(vec![Structure::Block(Block {
@@ -1418,8 +1470,141 @@ fn locals_body(
     })]))
 }
 
+fn cluster_bootstrap_values(
+    target: TerraformTarget,
+    stack: &Stack,
+    labels: &IndexMap<String, String>,
+) -> Expression {
+    let mut values = vec![(
+        "metricsServer",
+        expr::object([
+            (
+                "enabled",
+                expr::raw("var.kubernetes_cluster_mode == \"create\""),
+            ),
+            (
+                "image",
+                Expression::String(
+                    "registry.k8s.io/metrics-server/metrics-server:v0.8.1".to_string(),
+                ),
+            ),
+        ]),
+    )];
+
+    if target == TerraformTarget::Eks {
+        values.extend([
+            (
+                "storageClass",
+                expr::object([(
+                    "default",
+                    expr::object([
+                        (
+                            "enabled",
+                            expr::raw("var.kubernetes_cluster_mode == \"create\""),
+                        ),
+                        ("name", Expression::String("gp3".to_string())),
+                        (
+                            "provisioner",
+                            Expression::String("ebs.csi.aws.com".to_string()),
+                        ),
+                        (
+                            "parameters",
+                            expr::object([
+                                ("type", Expression::String("gp3".to_string())),
+                                ("fsType", Expression::String("ext4".to_string())),
+                                ("encrypted", Expression::String("true".to_string())),
+                            ]),
+                        ),
+                    ]),
+                )]),
+            ),
+            (
+                "ingress",
+                expr::object([(
+                    "eksAutoMode",
+                    expr::object([
+                        (
+                            "enabled",
+                            expr::raw("var.kubernetes_cluster_mode == \"create\""),
+                        ),
+                        ("name", Expression::String("alb".to_string())),
+                        (
+                            "controller",
+                            Expression::String("eks.amazonaws.com/alb".to_string()),
+                        ),
+                        ("scheme", Expression::String("internet-facing".to_string())),
+                        (
+                            "subnetIds",
+                            generated_eks_public_subnet_ids(stack, labels)
+                                .map(expr::raw)
+                                .unwrap_or_else(|| Expression::Array(Vec::new())),
+                        ),
+                    ]),
+                )]),
+            ),
+            (
+                "compute",
+                expr::object([(
+                    "eksAutoMode",
+                    expr::object([(
+                        "arm64NodePool",
+                        expr::object([
+                            (
+                                "enabled",
+                                expr::raw("var.kubernetes_cluster_mode == \"create\""),
+                            ),
+                            (
+                                "name",
+                                Expression::String("general-purpose-arm64".to_string()),
+                            ),
+                            ("nodeClassName", Expression::String("default".to_string())),
+                            ("capacityType", Expression::String("on-demand".to_string())),
+                            (
+                                "instanceCategories",
+                                Expression::Array(vec![
+                                    Expression::String("c".to_string()),
+                                    Expression::String("m".to_string()),
+                                    Expression::String("r".to_string()),
+                                ]),
+                            ),
+                            ("minInstanceGeneration", Expression::String("5".to_string())),
+                            (
+                                "limits",
+                                expr::object([
+                                    ("cpu", Expression::String("1000".to_string())),
+                                    ("memory", Expression::String("1000Gi".to_string())),
+                                ]),
+                            ),
+                        ]),
+                    )]),
+                )]),
+            ),
+        ]);
+    }
+
+    expr::object(values)
+}
+
+fn generated_eks_public_subnet_ids(
+    stack: &Stack,
+    labels: &IndexMap<String, String>,
+) -> Option<String> {
+    stack.resources().find_map(|(resource_id, entry)| {
+        let cluster = entry.config.downcast_ref::<KubernetesCluster>()?;
+        if cluster.provider != KubernetesClusterProvider::Eks
+            || cluster.ownership != KubernetesClusterOwnership::Managed
+        {
+            return None;
+        }
+        let label = labels.get(resource_id)?;
+        Some(format!(
+            "var.kubernetes_cluster_mode == \"create\" ? aws_subnet.{label}_public[*].id : []"
+        ))
+    })
+}
+
 fn region_expression(target: TerraformTarget) -> Expression {
-    match target.platform() {
+    match target.cloud_platform() {
         alien_core::Platform::Aws => expr::raw("data.aws_region.current.region"),
         alien_core::Platform::Gcp => expr::raw("var.gcp_region"),
         alien_core::Platform::Azure => expr::raw("var.azure_location"),
@@ -1431,9 +1616,9 @@ fn management_config_expression(target: TerraformTarget) -> Expression {
     let mut object: indexmap::IndexMap<&str, Expression> = indexmap::IndexMap::new();
     object.insert(
         "platform",
-        Expression::String(target.platform().as_str().to_string()),
+        Expression::String(target.cloud_platform().as_str().to_string()),
     );
-    match target.platform() {
+    match target.cloud_platform() {
         alien_core::Platform::Aws => {
             object.insert("managingRoleArn", expr::raw("var.managing_role_arn"));
         }
@@ -1461,7 +1646,7 @@ fn stack_settings_expression(
     target: TerraformTarget,
     stack_settings: &StackSettings,
 ) -> Expression {
-    match target.platform() {
+    match target.cloud_platform() {
         alien_core::Platform::Aws
             if has_dynamic_aws_network_settings(stack_settings.network.as_ref()) =>
         {
@@ -1675,6 +1860,43 @@ fn import_body(
     ))])
 }
 
+fn helm_install_body(
+    registration: &TerraformRegistration,
+    _helm_install: &TerraformHelmInstall,
+) -> Body {
+    let provider_resource = registration.provider_resource_type();
+    let values = expr::raw(format!(
+        r#"jsonencode(merge(local.helm_values, {{
+  management = {{
+    url          = var.manager_url
+    deploymentId = {provider_resource}.this.deployment_id
+    token        = {provider_resource}.this.deployment_token
+    updates      = "auto"
+    telemetry    = "auto"
+    healthChecks = "on"
+  }}
+  infrastructure = null
+}}))"#
+    ));
+
+    Body::from(vec![Structure::Block(resource_block(
+        "helm_release",
+        "alien",
+        [
+            attr("count", expr::raw("var.helm_install_enabled ? 1 : 0")),
+            attr("name", expr::raw("var.helm_release_name")),
+            attr("namespace", expr::raw("var.kubernetes_namespace")),
+            attr("create_namespace", Expression::Bool(true)),
+            attr("chart", expr::raw("var.helm_chart")),
+            attr("values", Expression::Array(vec![values])),
+            attr(
+                "depends_on",
+                Expression::Array(vec![expr::raw(format!("{provider_resource}.this"))]),
+            ),
+        ],
+    ))])
+}
+
 fn outputs_body(target: TerraformTarget, registration: Option<&TerraformRegistration>) -> Body {
     let mut outputs = vec![
         (
@@ -1756,6 +1978,14 @@ fn outputs_body(target: TerraformTarget, registration: Option<&TerraformRegistra
             )),
             "Manager deployment id assigned by the Terraform registration provider.",
         ));
+        outputs.push((
+            "deployment_token",
+            expr::raw(format!(
+                "{}.this.deployment_token",
+                registration.provider_resource_type()
+            )),
+            "Deployment token assigned by the Terraform registration provider.",
+        ));
     }
     if target.is_kubernetes() {
         outputs.push((
@@ -1788,6 +2018,7 @@ fn outputs_body(target: TerraformTarget, registration: Option<&TerraformRegistra
                 attr("description", Expression::String(description.to_string())),
             ];
             if name == "deployment_stack_settings"
+                || name == "deployment_token"
                 || name == "helm_values"
                 || name == "kubernetes_kubeconfig"
             {
@@ -1870,6 +2101,7 @@ mod tests {
         let versions = render_body(versions_body(
             TerraformTarget::Aws,
             Some(&registration),
+            false,
             false,
             false,
             false,

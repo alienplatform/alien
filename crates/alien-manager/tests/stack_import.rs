@@ -587,8 +587,9 @@ async fn happy_path_creates_imported_deployment() {
 }
 
 #[tokio::test]
-async fn kubernetes_import_derives_kubernetes_setup_stack_from_base_cloud_release() {
-    let fixture = make_fixture(Some(stack_with_worker("worker"))).await;
+async fn kubernetes_import_resolves_release_stack_by_runtime_platform() {
+    let fixture =
+        make_fixture_for_platform(Platform::Kubernetes, Some(stack_with_worker("worker"))).await;
     let body = eks_cluster_import_request("acme-k8s", "us-east-1");
 
     let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;

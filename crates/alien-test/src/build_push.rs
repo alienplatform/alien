@@ -50,17 +50,34 @@ fn resolve_source_paths(stack: &mut alien_core::Stack, app_dir: &Path) {
 /// `app_dir` is the path to the test app source directory — relative `src` paths
 /// in the stack will be resolved against it.
 pub async fn build_and_push_stack(
-    mut stack: alien_core::Stack,
+    stack: alien_core::Stack,
     platform: Platform,
+    config: &TestConfig,
+    app_dir: &Path,
+    manager: &TestManager,
+) -> anyhow::Result<alien_core::Stack> {
+    build_and_push_stack_for_registry(stack, platform, platform, None, config, app_dir, manager)
+        .await
+}
+
+/// Build for one runtime platform and push through a possibly different cloud
+/// registry binding. Managed Kubernetes uses this because the runtime platform
+/// is Kubernetes, while the registry proxy is backed by AWS/GCP/Azure.
+pub async fn build_and_push_stack_for_registry(
+    mut stack: alien_core::Stack,
+    build_platform: Platform,
+    registry_platform: Platform,
+    base_platform: Option<Platform>,
     config: &TestConfig,
     app_dir: &Path,
     manager: &TestManager,
 ) -> anyhow::Result<alien_core::Stack> {
     resolve_source_paths(&mut stack, app_dir);
 
-    let build_settings = create_build_settings(platform, config)?;
+    let build_settings = create_build_settings(build_platform, base_platform, config)?;
     info!(
-        platform = %platform.as_str(),
+        build_platform = %build_platform.as_str(),
+        registry_platform = %registry_platform.as_str(),
         output_dir = %build_settings.output_directory,
         "Building stack"
     );
@@ -70,10 +87,10 @@ pub async fn build_and_push_stack(
         .map_err(|e| anyhow::anyhow!("build_stack failed: {}", e))?;
     info!("Stack built successfully");
 
-    let push_settings = create_proxy_push_settings(platform, config, manager);
+    let push_settings = create_proxy_push_settings(registry_platform, config, manager);
     info!(repository = %push_settings.repository, "Pushing stack through manager proxy");
 
-    let pushed_stack = alien_build::push_stack(built_stack, platform, &push_settings)
+    let pushed_stack = alien_build::push_stack(built_stack, build_platform, &push_settings)
         .await
         .map_err(|e| anyhow::anyhow!("push_stack failed: {}", e))?;
     info!("Stack pushed successfully");
@@ -164,9 +181,13 @@ fn upstream_repo_name(platform: Platform, config: &TestConfig) -> String {
 
 /// Construct [`BuildSettings`] for the given platform.
 ///
-/// Uses platform defaults for target architecture (AWS=arm64, GCP/Azure=x64)
-/// and enables debug mode for faster test builds.
-fn create_build_settings(platform: Platform, config: &TestConfig) -> anyhow::Result<BuildSettings> {
+/// Uses platform defaults for target architecture. Kubernetes can receive a
+/// base cloud platform so managed cluster tests build for the node pool arch.
+fn create_build_settings(
+    platform: Platform,
+    base_platform: Option<Platform>,
+    config: &TestConfig,
+) -> anyhow::Result<BuildSettings> {
     let output_dir = tempfile::tempdir()
         .context("Failed to create temp dir for build output")?
         .keep();
@@ -177,7 +198,7 @@ fn create_build_settings(platform: Platform, config: &TestConfig) -> anyhow::Res
         },
         Platform::Gcp => PlatformBuildSettings::Gcp {},
         Platform::Azure => PlatformBuildSettings::Azure {},
-        Platform::Kubernetes => PlatformBuildSettings::Kubernetes {},
+        Platform::Kubernetes => PlatformBuildSettings::Kubernetes { base_platform },
         Platform::Local => PlatformBuildSettings::Local {},
         other => anyhow::bail!("Unsupported platform for build: {:?}", other),
     };

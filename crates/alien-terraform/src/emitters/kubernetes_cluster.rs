@@ -491,10 +491,9 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                             attr("enabled", Expression::Bool(true)),
                             attr(
                                 "node_pools",
-                                Expression::Array(vec![
-                                    Expression::String("general-purpose".to_string()),
-                                    Expression::String("system".to_string()),
-                                ]),
+                                Expression::Array(vec![Expression::String(
+                                    "system".to_string(),
+                                )]),
                             ),
                             attr("node_role_arn", expr::raw(format!("aws_iam_role.{label}_node[0].arn"))),
                         ],
@@ -672,16 +671,6 @@ impl TfEmitter for AwsKubernetesClusterEmitter {
                 ],
             ),
         ]);
-        add_eks_gp3_storage_class(&mut fragment, label);
-        if stack_has_public_https_endpoint(ctx.stack) {
-            add_eks_auto_mode_ingress_class(&mut fragment, label);
-        }
-        add_metrics_server(
-            &mut fragment,
-            label,
-            expr::raw(format!("[aws_eks_cluster.{label}]")),
-        );
-
         Ok(fragment)
     }
 
@@ -782,98 +771,6 @@ fn add_eks_workload_identity_data(fragment: &mut TfFragment, label: &str) {
     ));
 }
 
-fn add_eks_gp3_storage_class(fragment: &mut TfFragment, label: &str) {
-    fragment.resource_blocks.push(resource_block(
-        "kubernetes_manifest",
-        &format!("{label}_gp3_storage_class"),
-        [
-            attr(
-                "count",
-                expr::raw("var.kubernetes_cluster_mode == \"create\" ? 1 : 0"),
-            ),
-            attr(
-                "manifest",
-                expr::raw(
-                    r#"{
-  apiVersion = "storage.k8s.io/v1"
-  kind       = "StorageClass"
-  metadata = {
-    name = "gp3"
-    annotations = {
-      "storageclass.kubernetes.io/is-default-class" = "true"
-    }
-  }
-  provisioner          = "ebs.csi.aws.com"
-  parameters           = { type = "gp3", fsType = "ext4" }
-  reclaimPolicy        = "Delete"
-  volumeBindingMode    = "WaitForFirstConsumer"
-  allowVolumeExpansion = true
-}"#,
-                ),
-            ),
-            attr(
-                "depends_on",
-                expr::raw(format!("[aws_eks_addon.{label}_ebs_csi]")),
-            ),
-        ],
-    ));
-}
-
-fn add_eks_auto_mode_ingress_class(fragment: &mut TfFragment, label: &str) {
-    for (name, manifest) in [
-        (
-            "alb_ingress_class_params",
-            r#"{
-  apiVersion = "eks.amazonaws.com/v1"
-  kind       = "IngressClassParams"
-  metadata = {
-    name = "alb"
-  }
-  spec = {
-    scheme     = "internet-facing"
-    targetType = "ip"
-  }
-}"#,
-        ),
-        (
-            "alb_ingress_class",
-            r#"{
-  apiVersion = "networking.k8s.io/v1"
-  kind       = "IngressClass"
-  metadata = {
-    name = "alb"
-  }
-  spec = {
-    controller = "eks.amazonaws.com/alb"
-    parameters = {
-      apiGroup = "eks.amazonaws.com"
-      kind     = "IngressClassParams"
-      name     = "alb"
-    }
-  }
-}"#,
-        ),
-    ] {
-        fragment.resource_blocks.push(resource_block(
-            "kubernetes_manifest",
-            &format!("{label}_{name}"),
-            [
-                attr(
-                    "count",
-                    generated_kubernetes_exposure_count_expr(
-                        "var.kubernetes_cluster_mode == \"create\"",
-                    ),
-                ),
-                attr("manifest", expr::raw(manifest)),
-                attr(
-                    "depends_on",
-                    expr::raw(format!("[aws_eks_cluster.{label}]")),
-                ),
-            ],
-        ));
-    }
-}
-
 fn generated_kubernetes_exposure_count_expr(cluster_mode_condition: &str) -> Expression {
     expr::raw(format!(
         "{cluster_mode_condition} && try(jsondecode(var.stack_settings_json).kubernetes.exposure.mode, \"generated\") == \"generated\" ? 1 : 0"
@@ -900,273 +797,10 @@ fn stack_has_public_https_endpoint(stack: &Stack) -> bool {
     })
 }
 
-fn add_metrics_server(fragment: &mut TfFragment, label: &str, depends_on: Expression) {
-    for (name, manifest) in [
-        (
-            "service_account",
-            r#"{
-  apiVersion = "v1"
-  kind       = "ServiceAccount"
-  metadata = {
-    name      = "metrics-server"
-    namespace = "kube-system"
-    labels = {
-      "k8s-app" = "metrics-server"
-    }
-  }
-}"#,
-        ),
-        (
-            "aggregated_metrics_reader",
-            r#"{
-  apiVersion = "rbac.authorization.k8s.io/v1"
-  kind       = "ClusterRole"
-  metadata = {
-    name = "system:aggregated-metrics-reader"
-    labels = {
-      "rbac.authorization.k8s.io/aggregate-to-admin" = "true"
-      "rbac.authorization.k8s.io/aggregate-to-edit"  = "true"
-      "rbac.authorization.k8s.io/aggregate-to-view"  = "true"
-    }
-  }
-  rules = [{
-    apiGroups = ["metrics.k8s.io"]
-    resources = ["pods", "nodes"]
-    verbs     = ["get", "list", "watch"]
-  }]
-}"#,
-        ),
-        (
-            "cluster_role",
-            r#"{
-  apiVersion = "rbac.authorization.k8s.io/v1"
-  kind       = "ClusterRole"
-  metadata = {
-    name = "system:metrics-server"
-    labels = {
-      "k8s-app" = "metrics-server"
-    }
-  }
-  rules = [
-    {
-      apiGroups = [""]
-      resources = ["nodes/metrics"]
-      verbs     = ["get"]
-    },
-    {
-      apiGroups = [""]
-      resources = ["pods", "nodes"]
-      verbs     = ["get", "list", "watch"]
-    }
-  ]
-}"#,
-        ),
-        (
-            "auth_reader_role_binding",
-            r#"{
-  apiVersion = "rbac.authorization.k8s.io/v1"
-  kind       = "RoleBinding"
-  metadata = {
-    name      = "metrics-server-auth-reader"
-    namespace = "kube-system"
-    labels = {
-      "k8s-app" = "metrics-server"
-    }
-  }
-  roleRef = {
-    apiGroup = "rbac.authorization.k8s.io"
-    kind     = "Role"
-    name     = "extension-apiserver-authentication-reader"
-  }
-  subjects = [{
-    kind      = "ServiceAccount"
-    name      = "metrics-server"
-    namespace = "kube-system"
-  }]
-}"#,
-        ),
-        (
-            "auth_delegator_binding",
-            r#"{
-  apiVersion = "rbac.authorization.k8s.io/v1"
-  kind       = "ClusterRoleBinding"
-  metadata = {
-    name = "metrics-server:system:auth-delegator"
-    labels = {
-      "k8s-app" = "metrics-server"
-    }
-  }
-  roleRef = {
-    apiGroup = "rbac.authorization.k8s.io"
-    kind     = "ClusterRole"
-    name     = "system:auth-delegator"
-  }
-  subjects = [{
-    kind      = "ServiceAccount"
-    name      = "metrics-server"
-    namespace = "kube-system"
-  }]
-}"#,
-        ),
-        (
-            "cluster_role_binding",
-            r#"{
-  apiVersion = "rbac.authorization.k8s.io/v1"
-  kind       = "ClusterRoleBinding"
-  metadata = {
-    name = "system:metrics-server"
-    labels = {
-      "k8s-app" = "metrics-server"
-    }
-  }
-  roleRef = {
-    apiGroup = "rbac.authorization.k8s.io"
-    kind     = "ClusterRole"
-    name     = "system:metrics-server"
-  }
-  subjects = [{
-    kind      = "ServiceAccount"
-    name      = "metrics-server"
-    namespace = "kube-system"
-  }]
-}"#,
-        ),
-        (
-            "service",
-            r#"{
-  apiVersion = "v1"
-  kind       = "Service"
-  metadata = {
-    name      = "metrics-server"
-    namespace = "kube-system"
-    labels = {
-      "k8s-app" = "metrics-server"
-    }
-  }
-  spec = {
-    selector = {
-      "k8s-app" = "metrics-server"
-    }
-    ports = [{
-      name       = "https"
-      port       = 443
-      protocol   = "TCP"
-      targetPort = "https"
-    }]
-  }
-}"#,
-        ),
-        (
-            "deployment",
-            r#"{
-  apiVersion = "apps/v1"
-  kind       = "Deployment"
-  metadata = {
-    name      = "metrics-server"
-    namespace = "kube-system"
-    labels = {
-      "k8s-app" = "metrics-server"
-    }
-  }
-  spec = {
-    selector = {
-      matchLabels = {
-        "k8s-app" = "metrics-server"
-      }
-    }
-    strategy = {
-      rollingUpdate = {
-        maxUnavailable = 0
-      }
-    }
-    template = {
-      metadata = {
-        labels = {
-          "k8s-app" = "metrics-server"
-        }
-      }
-      spec = {
-        serviceAccountName = "metrics-server"
-        priorityClassName  = "system-cluster-critical"
-        containers = [{
-          name  = "metrics-server"
-          image = "registry.k8s.io/metrics-server/metrics-server:v0.8.1"
-          args = [
-            "--cert-dir=/tmp",
-            "--secure-port=10250",
-            "--kubelet-preferred-address-types=InternalIP,ExternalIP,Hostname",
-            "--kubelet-use-node-status-port",
-            "--metric-resolution=15s"
-          ]
-          ports = [{
-            name          = "https"
-            containerPort = 10250
-            protocol      = "TCP"
-          }]
-          resources = {
-            requests = {
-              cpu    = "100m"
-              memory = "200Mi"
-            }
-          }
-          volumeMounts = [{
-            name      = "tmp-dir"
-            mountPath = "/tmp"
-          }]
-        }]
-        volumes = [{
-          name = "tmp-dir"
-          emptyDir = {}
-        }]
-      }
-    }
-  }
-}"#,
-        ),
-        (
-            "api_service",
-            r#"{
-  apiVersion = "apiregistration.k8s.io/v1"
-  kind       = "APIService"
-  metadata = {
-    name = "v1beta1.metrics.k8s.io"
-    labels = {
-      "k8s-app" = "metrics-server"
-    }
-  }
-  spec = {
-    group                    = "metrics.k8s.io"
-    version                  = "v1beta1"
-    groupPriorityMinimum     = 100
-    versionPriority          = 100
-    insecureSkipTLSVerify    = true
-    service = {
-      name      = "metrics-server"
-      namespace = "kube-system"
-    }
-  }
-}"#,
-        ),
-    ] {
-        fragment.resource_blocks.push(resource_block(
-            "kubernetes_manifest",
-            &format!("{label}_metrics_server_{name}"),
-            [
-                attr(
-                    "count",
-                    expr::raw("var.kubernetes_cluster_mode == \"create\" && var.install_metrics_server ? 1 : 0"),
-                ),
-                attr("manifest", expr::raw(manifest)),
-                attr("depends_on", depends_on.clone()),
-            ],
-        ));
-    }
-}
-
 impl TfEmitter for GcpKubernetesClusterEmitter {
     fn emit(&self, ctx: &EmitContext<'_>) -> Result<TfFragment> {
         let label = required_label(ctx)?;
-        let mut fragment = TfFragment::default()
+        let fragment = TfFragment::default()
             .with_local(
                 format!("{label}_cluster_name"),
                 expr::raw(format!(
@@ -1297,11 +931,6 @@ impl TfEmitter for GcpKubernetesClusterEmitter {
                     )),
                 ],
             ));
-        add_metrics_server(
-            &mut fragment,
-            label,
-            expr::raw(format!("[google_container_cluster.{label}]")),
-        );
         Ok(fragment)
     }
 
@@ -1485,14 +1114,6 @@ impl TfEmitter for AzureKubernetesClusterEmitter {
                 ],
             ));
         }
-        let metrics_server_depends_on = if has_public_https_endpoint {
-            expr::raw(format!(
-                "[azurerm_kubernetes_cluster.{label}, azapi_update_resource.{label}_alb_controller]"
-            ))
-        } else {
-            expr::raw(format!("[azurerm_kubernetes_cluster.{label}]"))
-        };
-        add_metrics_server(&mut fragment, label, metrics_server_depends_on);
         Ok(fragment)
     }
 
@@ -1577,18 +1198,11 @@ fn name_tags(name: impl Into<String>) -> Expression {
 }
 
 fn eks_subnet_tags(label: &str, kind: &str, role: &str) -> Expression {
-    expr::object([
-        (
-            "Name".to_string(),
-            Expression::String(format!("${{local.resource_prefix}}-{label}-{kind}")),
-        ),
-        (
-            "kubernetes.io/cluster/${local.resource_prefix}-k8s".to_string(),
-            Expression::String("shared".to_string()),
-        ),
-        (
-            format!("kubernetes.io/role/{role}"),
-            Expression::String("1".to_string()),
-        ),
-    ])
+    expr::raw(format!(
+        r#"{{
+  Name = "${{local.resource_prefix}}-{label}-{kind}"
+  "kubernetes.io/cluster/${{local.resource_prefix}}-k8s" = "shared"
+  "kubernetes.io/role/{role}" = "1"
+}}"#
+    ))
 }

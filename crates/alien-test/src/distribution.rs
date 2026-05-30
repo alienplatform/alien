@@ -4,13 +4,14 @@
 //! CloudFormation/Terraform/Helm tests cannot accidentally validate controller
 //! provisioning instead of the setup import path.
 
-use std::{collections::BTreeMap, path::Path, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, env, path::Path, sync::Arc, time::Duration};
 
 use alien_azure_clients::{
     AzureServiceBusManagementClient, AzureTokenCache, ServiceBusManagementApi,
 };
 use alien_core::{
     import::{
+        data::{AwsArtifactRegistryImportData, AwsKvImportData, AwsStorageImportData},
         AzureRemoteStackManagementImportData, AzureServiceBusNamespaceImportData,
         GcpRemoteStackManagementImportData, ImportSourceKind, ImportedResource, StackImportRequest,
         StackImportResponse,
@@ -18,10 +19,10 @@ use alien_core::{
     AwsManagementConfig, AzureClientConfig, AzureCredentials, AzureManagementConfig,
     DeploymentConfig, DeploymentModel as StackDeploymentModel, EnvironmentVariablesSnapshot,
     ExternalBinding, ExternalBindings, GcpClientConfig, GcpCredentials, GcpImpersonationConfig,
-    GcpManagementConfig, KubernetesCertificateMode, KubernetesExposureSettings,
-    KubernetesIngressRouteProfile, KubernetesRouteProfile, KubernetesRouteProviderOptions,
-    KubernetesSettings, ManagementConfig, Platform, Stack, StackSettings, StackState, Worker,
-    WorkerCode,
+    GcpManagementConfig, KubernetesCertificateMode, KubernetesClusterOwnership,
+    KubernetesClusterSettings, KubernetesExposureSettings, KubernetesIngressRouteProfile,
+    KubernetesRouteProfile, KubernetesRouteProviderOptions, KubernetesSettings, ManagementConfig,
+    Platform, Stack, StackSettings, StackState, Worker, WorkerCode,
 };
 #[cfg(test)]
 use alien_core::{Container, ContainerCode, ResourceSpec, Vault};
@@ -33,7 +34,7 @@ use tokio::{fs, process::Command};
 use tracing::{info, warn};
 
 use crate::{
-    build_push::build_and_push_stack,
+    build_push::build_and_push_stack_for_registry,
     config::{
         AwsConfig, AzureConfig, GcpConfig, KubernetesClusterMode, KubernetesRuntimeConfig,
         TestConfig,
@@ -50,6 +51,8 @@ pub enum DistributionArtifactCleanup {
         stack_name: String,
         region: String,
         env: Vec<(String, String)>,
+        retained_resources: Vec<ImportedResource>,
+        workdir: Option<TempDir>,
     },
     Terraform {
         workdir: TempDir,
@@ -60,16 +63,27 @@ pub enum DistributionArtifactCleanup {
         namespace: String,
         kubeconfig: Option<String>,
         kube_context: Option<String>,
+        env: Vec<(String, String)>,
     },
 }
 
 impl DistributionArtifactCleanup {
+    fn command_env(&self) -> &[(String, String)] {
+        match self {
+            DistributionArtifactCleanup::CloudFormation { env, .. }
+            | DistributionArtifactCleanup::Terraform { env, .. }
+            | DistributionArtifactCleanup::Helm { env, .. } => env,
+        }
+    }
+
     pub async fn cleanup(self) {
         match self {
             DistributionArtifactCleanup::CloudFormation {
                 stack_name,
                 region,
                 env,
+                retained_resources,
+                workdir: _workdir,
             } => {
                 info!(%stack_name, %region, "deleting CloudFormation distribution stack");
                 let mut cmd = Command::new("aws");
@@ -87,6 +101,7 @@ impl DistributionArtifactCleanup {
                     return;
                 }
 
+                let mut stack_deleted = false;
                 for attempt in 1..=3 {
                     let mut wait = Command::new("aws");
                     wait.args([
@@ -101,6 +116,7 @@ impl DistributionArtifactCleanup {
                     apply_env(&mut wait, &env);
                     match run_command(wait, "aws cloudformation wait stack-delete-complete").await {
                         Ok(()) => {
+                            stack_deleted = true;
                             info!(%stack_name, "CloudFormation distribution stack deleted");
                             break;
                         }
@@ -120,6 +136,18 @@ impl DistributionArtifactCleanup {
                                 "CloudFormation cleanup wait failed"
                             );
                         }
+                    }
+                }
+
+                if stack_deleted {
+                    if let Err(error) =
+                        cleanup_retained_cloudformation_resources(&env, &retained_resources).await
+                    {
+                        tracing::warn!(
+                            %stack_name,
+                            %error,
+                            "CloudFormation retained resource cleanup failed"
+                        );
                     }
                 }
             }
@@ -164,12 +192,14 @@ impl DistributionArtifactCleanup {
                 namespace,
                 kubeconfig,
                 kube_context,
+                env,
             } => {
                 if let Err(error) = crate::cleanup::cleanup_helm_release(
                     &release,
                     &namespace,
                     kubeconfig.as_deref(),
                     kube_context.as_deref(),
+                    &env,
                 )
                 .await
                 {
@@ -179,6 +209,7 @@ impl DistributionArtifactCleanup {
                     &namespace,
                     kubeconfig.as_deref(),
                     kube_context.as_deref(),
+                    &env,
                 )
                 .await
                 {
@@ -187,6 +218,166 @@ impl DistributionArtifactCleanup {
             }
         }
     }
+}
+
+async fn cleanup_retained_cloudformation_resources(
+    env: &[(String, String)],
+    resources: &[ImportedResource],
+) -> anyhow::Result<()> {
+    for resource in resources {
+        match resource.resource_type.as_ref() {
+            "storage" => {
+                let data: AwsStorageImportData =
+                    serde_json::from_value(resource.import_data.clone()).with_context(|| {
+                        format!(
+                            "Failed to parse AWS storage import data for '{}'",
+                            resource.id
+                        )
+                    })?;
+                cleanup_retained_s3_bucket(env, &data.bucket_name).await?;
+            }
+            "kv" => {
+                let data: AwsKvImportData = serde_json::from_value(resource.import_data.clone())
+                    .with_context(|| {
+                        format!("Failed to parse AWS KV import data for '{}'", resource.id)
+                    })?;
+                cleanup_retained_dynamodb_table(env, &data.table_name).await?;
+            }
+            "artifact-registry" => {
+                let data: AwsArtifactRegistryImportData =
+                    serde_json::from_value(resource.import_data.clone()).with_context(|| {
+                        format!(
+                            "Failed to parse AWS artifact registry import data for '{}'",
+                            resource.id
+                        )
+                    })?;
+                cleanup_retained_ecr_repository(env, &data.repository_prefix, &data.region).await?;
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
+
+async fn cleanup_retained_s3_bucket(env: &[(String, String)], bucket: &str) -> anyhow::Result<()> {
+    info!(%bucket, "deleting retained CloudFormation S3 bucket");
+    let temp = TempDir::new().context("Failed to create retained S3 cleanup temp dir")?;
+
+    let mut list = Command::new("aws");
+    list.args([
+        "s3api",
+        "list-object-versions",
+        "--bucket",
+        bucket,
+        "--output",
+        "json",
+    ]);
+    apply_env(&mut list, env);
+    let output = command_output(list, "aws s3api list-object-versions").await?;
+    let versions: Value = serde_json::from_slice(&output.stdout)
+        .context("Failed to parse S3 list-object-versions response")?;
+    let mut objects = Vec::new();
+
+    for field in ["Versions", "DeleteMarkers"] {
+        let Some(entries) = versions.get(field).and_then(Value::as_array) else {
+            continue;
+        };
+
+        for entry in entries {
+            let Some(key) = entry.get("Key").and_then(Value::as_str) else {
+                continue;
+            };
+            let mut object = serde_json::Map::new();
+            object.insert("Key".to_string(), Value::String(key.to_string()));
+            if let Some(version_id) = entry.get("VersionId").and_then(Value::as_str) {
+                object.insert(
+                    "VersionId".to_string(),
+                    Value::String(version_id.to_string()),
+                );
+            }
+            objects.push(Value::Object(object));
+        }
+    }
+
+    for (index, chunk) in objects.chunks(1000).enumerate() {
+        let delete_file = temp.path().join(format!("delete-{index}.json"));
+        let payload = serde_json::json!({
+            "Objects": chunk,
+            "Quiet": true,
+        });
+        fs::write(
+            &delete_file,
+            serde_json::to_vec(&payload).context("Failed to serialize S3 delete payload")?,
+        )
+        .await
+        .context("Failed to write S3 delete payload")?;
+
+        let mut delete = Command::new("aws");
+        delete.args([
+            "s3api",
+            "delete-objects",
+            "--bucket",
+            bucket,
+            "--delete",
+            &format!("file://{}", delete_file.display()),
+        ]);
+        apply_env(&mut delete, env);
+        run_command(delete, "aws s3api delete-objects").await?;
+    }
+
+    let mut delete_bucket = Command::new("aws");
+    delete_bucket.args(["s3api", "delete-bucket", "--bucket", bucket]);
+    apply_env(&mut delete_bucket, env);
+    run_command(delete_bucket, "aws s3api delete-bucket").await?;
+
+    Ok(())
+}
+
+async fn cleanup_retained_ecr_repository(
+    env: &[(String, String)],
+    repository_name: &str,
+    region: &str,
+) -> anyhow::Result<()> {
+    info!(%repository_name, %region, "deleting retained CloudFormation ECR repository");
+    let mut delete = Command::new("aws");
+    delete.args([
+        "ecr",
+        "delete-repository",
+        "--repository-name",
+        repository_name,
+        "--region",
+        region,
+        "--force",
+    ]);
+    apply_env(&mut delete, env);
+    run_command(delete, "aws ecr delete-repository").await?;
+
+    Ok(())
+}
+
+async fn cleanup_retained_dynamodb_table(
+    env: &[(String, String)],
+    table_name: &str,
+) -> anyhow::Result<()> {
+    info!(%table_name, "deleting retained CloudFormation DynamoDB table");
+    let mut delete = Command::new("aws");
+    delete.args(["dynamodb", "delete-table", "--table-name", table_name]);
+    apply_env(&mut delete, env);
+    run_command(delete, "aws dynamodb delete-table").await?;
+
+    let mut wait = Command::new("aws");
+    wait.args([
+        "dynamodb",
+        "wait",
+        "table-not-exists",
+        "--table-name",
+        table_name,
+    ]);
+    apply_env(&mut wait, env);
+    run_command(wait, "aws dynamodb wait table-not-exists").await?;
+
+    Ok(())
 }
 
 struct DistributionPrepared {
@@ -222,6 +413,7 @@ pub async fn setup_distribution(
 
     let result = match flow {
         DistributionFlow::CloudFormationAwsPush => run_cloudformation_aws(&mut prepared).await,
+        DistributionFlow::CloudFormationEksHelmPull => run_cloudformation_k8s(&mut prepared).await,
         DistributionFlow::TerraformAwsPush => {
             run_terraform_cloud(&mut prepared, alien_terraform::TerraformTarget::Aws).await
         }
@@ -290,20 +482,31 @@ async fn prepare_distribution(
         )
     };
 
-    let build_platform = build_platform_for_flow(flow, &config)?;
+    // Managed Kubernetes distributions render and build as Kubernetes. Their
+    // registry/setup cloud remains separate from the runtime platform.
+    let registry_platform = image_registry_platform_for_flow(flow, &config)?;
+    let build_base_platform = flow.kubernetes_base_platform();
     let e2e_root = e2e::e2e_test_apps_root()?;
     let app_path = e2e_root.join(e2e::test_app_path(app));
-    let stack_json = e2e::load_stack_json(&app_path, "alien.ts", build_platform).await?;
+    let stack_json = e2e::load_stack_json(&app_path, "alien.ts", platform).await?;
     let stack_value = stack_json
-        .get(build_platform.as_str())
-        .context("Stack JSON missing build platform key")?;
+        .get(platform.as_str())
+        .context("Stack JSON missing platform key")?;
     let stack: Stack =
         serde_json::from_value(stack_value.clone()).context("Failed to deserialize Stack JSON")?;
 
-    let pushed_stack =
-        build_and_push_stack(stack, build_platform, &config, &app_path, &manager).await?;
+    let pushed_stack = build_and_push_stack_for_registry(
+        stack,
+        platform,
+        registry_platform,
+        build_base_platform,
+        &config,
+        &app_path,
+        &manager,
+    )
+    .await?;
 
-    if build_platform == Platform::Aws && config.aws_target.is_some() {
+    if registry_platform == Platform::Aws && config.aws_target.is_some() {
         let tags = e2e::extract_ecr_image_tags(&pushed_stack);
         if !tags.is_empty() {
             crate::build_push::wait_for_ecr_replication(&config, &tags).await?;
@@ -314,17 +517,17 @@ async fn prepare_distribution(
     // `alien release`. Setup artifacts render from a derived stack after
     // template mutations add setup-owned resources such as remote management.
     let render_stack = if model == DeploymentModel::Push {
-        rewrite_push_distribution_images(pushed_stack.clone(), build_platform, &config)?
+        rewrite_push_distribution_images(pushed_stack.clone(), platform, &config)?
     } else {
         pushed_stack.clone()
     };
 
-    let stack_settings = e2e_stack_settings_for_flow(model, &config, build_platform)?;
-    let rendered_stack = apply_render_mutations(render_stack, build_platform, &stack_settings)
+    let stack_settings = e2e_stack_settings_for_flow(model, &config, platform)?;
+    let rendered_stack = apply_render_mutations(render_stack, platform, &stack_settings)
         .await
         .context("Failed to apply distribution render preflights")?;
 
-    create_release(&manager, build_platform, &pushed_stack).await?;
+    create_release(&manager, platform, &pushed_stack).await?;
     let (group_id, dg_token) = create_deployment_group_token(&manager).await?;
 
     Ok(DistributionPrepared {
@@ -346,6 +549,15 @@ fn missing_distribution_flow_config(
     config: &TestConfig,
 ) -> Option<&'static str> {
     match flow {
+        DistributionFlow::CloudFormationEksHelmPull => {
+            if !config.has_platform(Platform::Aws) {
+                Some("AWS management and target credentials are required")
+            } else if config.kubernetes_cluster_mode == KubernetesClusterMode::Existing {
+                Some("CloudFormation EKS Helm distribution creates a new EKS cluster")
+            } else {
+                None
+            }
+        }
         DistributionFlow::TerraformEksHelmPull => {
             if !config.has_platform(Platform::Aws) {
                 Some("AWS management and target credentials are required")
@@ -412,10 +624,11 @@ fn has_azure_management_oidc(config: &TestConfig) -> bool {
 }
 
 fn manager_platforms_for_flow(flow: DistributionFlow, config: &TestConfig) -> Vec<Platform> {
+    if let Some(base_platform) = flow.kubernetes_base_platform() {
+        return vec![base_platform];
+    }
+
     match flow {
-        DistributionFlow::TerraformEksHelmPull => vec![Platform::Aws],
-        DistributionFlow::TerraformGkeHelmPull => vec![Platform::Gcp],
-        DistributionFlow::TerraformAksHelmPull => vec![Platform::Azure],
         DistributionFlow::TerraformOnpremHelmPull => {
             [Platform::Aws, Platform::Gcp, Platform::Azure]
                 .into_iter()
@@ -426,20 +639,20 @@ fn manager_platforms_for_flow(flow: DistributionFlow, config: &TestConfig) -> Ve
     }
 }
 
-fn build_platform_for_flow(
+fn image_registry_platform_for_flow(
     flow: DistributionFlow,
     config: &TestConfig,
 ) -> anyhow::Result<Platform> {
+    if let Some(base_platform) = flow.kubernetes_base_platform() {
+        return Ok(base_platform);
+    }
+
     match flow {
-        DistributionFlow::CloudFormationAwsPush
-        | DistributionFlow::TerraformAwsPush
-        | DistributionFlow::TerraformEksHelmPull => Ok(Platform::Aws),
-        DistributionFlow::TerraformGcpPush | DistributionFlow::TerraformGkeHelmPull => {
-            Ok(Platform::Gcp)
+        DistributionFlow::CloudFormationAwsPush | DistributionFlow::TerraformAwsPush => {
+            Ok(Platform::Aws)
         }
-        DistributionFlow::TerraformAzurePush | DistributionFlow::TerraformAksHelmPull => {
-            Ok(Platform::Azure)
-        }
+        DistributionFlow::TerraformGcpPush => Ok(Platform::Gcp),
+        DistributionFlow::TerraformAzurePush => Ok(Platform::Azure),
         DistributionFlow::TerraformOnpremHelmPull => {
             [Platform::Aws, Platform::Gcp, Platform::Azure]
                 .into_iter()
@@ -447,6 +660,12 @@ fn build_platform_for_flow(
                 .context(
                     "on-prem Helm distribution needs at least one cloud artifact registry config",
                 )
+        }
+        DistributionFlow::CloudFormationEksHelmPull
+        | DistributionFlow::TerraformEksHelmPull
+        | DistributionFlow::TerraformGkeHelmPull
+        | DistributionFlow::TerraformAksHelmPull => {
+            unreachable!("managed Kubernetes flows returned earlier")
         }
     }
 }
@@ -519,8 +738,10 @@ fn e2e_kubernetes_exposure(
     app: TestApp,
     target: alien_terraform::TerraformTarget,
 ) -> Option<KubernetesExposureSettings> {
-    if flow != DistributionFlow::TerraformEksHelmPull
-        || app != TestApp::FullStackMicroservices
+    if !matches!(
+        flow,
+        DistributionFlow::TerraformEksHelmPull | DistributionFlow::CloudFormationEksHelmPull
+    ) || app != TestApp::FullStackMicroservices
         || target != alien_terraform::TerraformTarget::Eks
     {
         return None;
@@ -683,6 +904,7 @@ async fn run_cloudformation_aws(
         &prepared.rendered_stack,
         alien_cloudformation::CloudFormationOptions {
             registry: &registry,
+            target: alien_cloudformation::CloudFormationTarget::Aws,
             stack_settings: e2e_stack_settings_for_flow(
                 prepared.model,
                 &prepared.config,
@@ -707,6 +929,8 @@ async fn run_cloudformation_aws(
         stack_name: stack_name.clone(),
         region: target.region.clone(),
         env: env.clone(),
+        retained_resources: Vec::new(),
+        workdir: Some(workdir),
     };
 
     let role_arn = prepared
@@ -756,22 +980,269 @@ async fn run_cloudformation_aws(
             &target.region,
         ]);
         apply_env(&mut wait, &env);
-        run_command(wait, "aws cloudformation wait stack-create-complete").await?;
+        wait_for_cloudformation_stack_create(&stack_name, &target.region, &env).await?;
 
         let request =
             cloudformation_import_request(&stack_name, &target.region, &env, &prepared.dg_token)
                 .await?;
-        import_stack(prepared, request).await
+        let retained_resources = request.resources.clone();
+        let deployment = import_stack(prepared, request).await?;
+        Ok((deployment, retained_resources))
     }
     .await;
 
     match create_result {
-        Ok(deployment) => Ok(context_from_deployment(prepared, deployment, vec![cleanup])),
+        Ok((deployment, retained_resources)) => {
+            let cleanup = DistributionArtifactCleanup::CloudFormation {
+                stack_name,
+                region: target.region.clone(),
+                env,
+                retained_resources,
+                workdir: None,
+            };
+            Ok(context_from_deployment(prepared, deployment, vec![cleanup]))
+        }
         Err(error) => {
             cleanup.cleanup().await;
             Err(error)
         }
     }
+}
+
+async fn run_cloudformation_k8s(
+    prepared: &mut DistributionPrepared,
+) -> anyhow::Result<TestContext> {
+    let target = prepared
+        .config
+        .aws_target
+        .as_ref()
+        .context("AWS target config is required")?;
+    let mgmt = prepared
+        .config
+        .aws_mgmt
+        .as_ref()
+        .context("AWS management config is required")?;
+    let env = aws_env(target);
+    let stack_name = crate::config::e2e_resource_prefix()?;
+    let workdir = tempfile::tempdir().context("Failed to create CFN EKS workdir")?;
+    let kubeconfig_path = workdir.path().join("eks.kubeconfig");
+    let helm_namespace = random_kubernetes_namespace("alien-test");
+
+    let mut cleanup = DistributionArtifactCleanup::CloudFormation {
+        stack_name: stack_name.clone(),
+        region: target.region.clone(),
+        env: env.clone(),
+        retained_resources: Vec::new(),
+        workdir: Some(workdir),
+    };
+
+    let create_result = async {
+        let registry = alien_cloudformation::CfRegistry::built_in();
+        let mut stack_settings =
+            stack_settings_for_terraform(prepared, alien_terraform::TerraformTarget::Eks)?;
+        set_kubernetes_namespace(&mut stack_settings, helm_namespace.clone());
+        let cloudformation_stack = terraform_kubernetes_stack_for_target(
+            prepared.built_stack.clone(),
+            alien_terraform::TerraformTarget::Eks,
+            stack_settings.clone(),
+        )
+        .await?;
+        let template = alien_cloudformation::generate_cloudformation_template(
+            &cloudformation_stack,
+            alien_cloudformation::CloudFormationOptions {
+                registry: &registry,
+                target: alien_cloudformation::CloudFormationTarget::Eks,
+                stack_settings,
+                setup_target: "eks".to_string(),
+                setup_fingerprint: "test".to_string(),
+                setup_fingerprint_version: 1,
+                registration: alien_cloudformation::RegistrationMode::OutputsFallback,
+                description: Some(format!("Alien E2E EKS distribution stack {stack_name}")),
+            },
+        )
+        .map_err(|error| anyhow::anyhow!("CloudFormation render failed: {error}"))?;
+        let yaml = alien_cloudformation::to_yaml(&template)
+            .map_err(|error| anyhow::anyhow!("CloudFormation serialization failed: {error}"))?;
+        let template_path = match &cleanup {
+            DistributionArtifactCleanup::CloudFormation {
+                workdir: Some(workdir),
+                ..
+            } => workdir.path().join("template.yaml"),
+            _ => anyhow::bail!("CloudFormation EKS cleanup workdir missing"),
+        };
+        fs::write(&template_path, yaml)
+            .await
+            .context("Failed to write CloudFormation template")?;
+
+        let role_arn = prepared
+            .manager
+            .management_config()
+            .and_then(|config| match config {
+                ManagementConfig::Aws(config) => Some(config.managing_role_arn),
+                _ => None,
+            })
+            .context("AWS management config is required")?;
+        let managing_account_id = mgmt.account_id.clone().unwrap_or_default();
+
+        let mut create = Command::new("aws");
+        create.args([
+            "cloudformation",
+            "create-stack",
+            "--stack-name",
+            &stack_name,
+            "--template-body",
+            &format!("file://{}", template_path.display()),
+            "--region",
+            &target.region,
+            "--capabilities",
+            "CAPABILITY_IAM",
+            "CAPABILITY_NAMED_IAM",
+            "CAPABILITY_AUTO_EXPAND",
+            "--parameters",
+            &format!("ParameterKey=Token,ParameterValue={}", prepared.dg_token),
+            &format!("ParameterKey=ManagingRoleArn,ParameterValue={role_arn}"),
+            &format!("ParameterKey=ManagingAccountId,ParameterValue={managing_account_id}"),
+            "ParameterKey=DomainName,ParameterValue=",
+            "ParameterKey=HostedZoneId,ParameterValue=",
+            "ParameterKey=CertificateArn,ParameterValue=",
+            "ParameterKey=UpdatesMode,ParameterValue=auto",
+            "ParameterKey=TelemetryMode,ParameterValue=auto",
+            "ParameterKey=HeartbeatsMode,ParameterValue=on",
+        ]);
+        apply_env(&mut create, &env);
+        run_command(create, "aws cloudformation create-stack").await?;
+
+        wait_for_cloudformation_stack_create(&stack_name, &target.region, &env).await?;
+
+        let outputs = cloudformation_outputs(&stack_name, &target.region, &env).await?;
+        let request =
+            cloudformation_import_request_from_outputs(&stack_name, &prepared.dg_token, &outputs)?;
+        let retained_resources = request.resources.clone();
+        let deployment = import_stack(prepared, request).await?;
+
+        let mut kubeconfig = Command::new("aws");
+        kubeconfig.args([
+            "eks",
+            "update-kubeconfig",
+            "--name",
+            &format!("{stack_name}-k8s"),
+            "--region",
+            &target.region,
+            "--kubeconfig",
+            &kubeconfig_path.to_string_lossy(),
+        ]);
+        apply_env(&mut kubeconfig, &env);
+        run_command(kubeconfig, "aws eks update-kubeconfig").await?;
+
+        Ok::<_, anyhow::Error>((deployment, outputs, retained_resources))
+    }
+    .await;
+
+    let (deployment, outputs, retained_resources) = match create_result {
+        Ok(result) => result,
+        Err(error) => {
+            cleanup.cleanup().await;
+            return Err(error);
+        }
+    };
+    if let DistributionArtifactCleanup::CloudFormation {
+        retained_resources: cleanup_retained,
+        ..
+    } = &mut cleanup
+    {
+        *cleanup_retained = retained_resources;
+    }
+
+    let chart_dir = match render_helm_chart(prepared).await {
+        Ok(chart_dir) => chart_dir,
+        Err(error) => {
+            cleanup.cleanup().await;
+            return Err(error);
+        }
+    };
+    let helm_target = KubernetesHelmTarget {
+        namespace: helm_namespace,
+        runtime: KubernetesRuntimeConfig {
+            kubeconfig: kubeconfig_path.to_string_lossy().into_owned(),
+            kube_context: None,
+            namespace_prefix: "alien-test".to_string(),
+        },
+    };
+    let values = match cloudformation_helm_values(&outputs) {
+        Ok(values) => values,
+        Err(error) => {
+            cleanup.cleanup().await;
+            return Err(error);
+        }
+    };
+    let values_file = match write_manager_fetch_values_from_base(
+        prepared,
+        &deployment,
+        values,
+        &chart_dir,
+        Some(&helm_target),
+    )
+    .await
+    {
+        Ok(values_file) => values_file,
+        Err(error) => {
+            cleanup.cleanup().await;
+            return Err(error);
+        }
+    };
+    let release = format!("alien-e2e-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+    let agent_result = crate::agent::TestAlienAgent::helm_install_with_values(
+        chart_dir.path(),
+        &values_file,
+        &release,
+        &helm_target.namespace,
+        Some(&helm_target.runtime.kubeconfig),
+        None,
+        &env,
+    )
+    .await
+    .map_err(|error| error.to_string());
+    let agent = match agent_result {
+        Ok(agent) => agent,
+        Err(error) => {
+            cleanup.cleanup().await;
+            return Err(anyhow::anyhow!(
+                "Failed to install CloudFormation Helm distribution runtime: {error}"
+            ));
+        }
+    };
+
+    let mut ctx = context_from_deployment(
+        prepared,
+        deployment,
+        vec![
+            DistributionArtifactCleanup::Helm {
+                release,
+                namespace: helm_target.namespace,
+                kubeconfig: Some(helm_target.runtime.kubeconfig),
+                kube_context: None,
+                env,
+            },
+            cleanup,
+        ],
+    );
+    ctx.agent = Some(agent);
+    Ok(ctx)
+}
+
+fn set_kubernetes_namespace(settings: &mut StackSettings, namespace: String) {
+    let mut kubernetes = settings.kubernetes.take().unwrap_or(KubernetesSettings {
+        cluster: None,
+        exposure: None,
+    });
+    let mut cluster = kubernetes.cluster.unwrap_or(KubernetesClusterSettings {
+        ownership: KubernetesClusterOwnership::Managed,
+        namespace: None,
+        cloud: None,
+    });
+    cluster.namespace = Some(namespace);
+    kubernetes.cluster = Some(cluster);
+    settings.kubernetes = Some(kubernetes);
 }
 
 fn rewrite_push_distribution_images(
@@ -872,10 +1343,20 @@ async fn run_terraform_k8s(
         .map(|target| target.namespace.clone())
         .unwrap_or_else(|| random_kubernetes_namespace("alien-test"));
     let result = apply_terraform_and_import(prepared, target, Some(&namespace)).await?;
-    let helm_target = match existing_helm_target {
+    let mut helm_target = match existing_helm_target {
         Some(helm_target) => helm_target,
         None => kubernetes_helm_target_from_outputs(&result.outputs, namespace)?,
     };
+    materialize_kubeconfig_for_helm(&mut helm_target, &result.cleanup).await?;
+    let kubernetes_command_env = result.cleanup.command_env().to_vec();
+    if terraform_handoff_debug_enabled() {
+        return stop_before_helm_for_terraform_handoff_debug(
+            prepared,
+            target,
+            result,
+            &helm_target,
+        );
+    }
     let chart_dir = match render_helm_chart(prepared).await {
         Ok(chart_dir) => chart_dir,
         Err(error) => {
@@ -906,6 +1387,7 @@ async fn run_terraform_k8s(
         &helm_target.namespace,
         Some(&helm_target.runtime.kubeconfig),
         helm_target.runtime.kube_context.as_deref(),
+        &kubernetes_command_env,
     )
     .await
     .map_err(|error| error.to_string());
@@ -929,11 +1411,112 @@ async fn run_terraform_k8s(
                 namespace: helm_target.namespace,
                 kubeconfig: Some(helm_target.runtime.kubeconfig),
                 kube_context: helm_target.runtime.kube_context,
+                env: kubernetes_command_env,
             },
         ],
     );
     ctx.agent = Some(agent);
     Ok(ctx)
+}
+
+fn terraform_handoff_debug_enabled() -> bool {
+    env::var("ALIEN_E2E_DEBUG_TERRAFORM_HANDOFF")
+        .map(|value| matches!(value.as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
+}
+
+fn stop_before_helm_for_terraform_handoff_debug(
+    prepared: &DistributionPrepared,
+    target: alien_terraform::TerraformTarget,
+    result: TerraformApplyResult,
+    helm_target: &KubernetesHelmTarget,
+) -> anyhow::Result<TestContext> {
+    let TerraformApplyResult {
+        deployment: _,
+        cleanup,
+        outputs,
+    } = result;
+    let DistributionArtifactCleanup::Terraform { workdir, env: _ } = cleanup else {
+        anyhow::bail!("Terraform handoff debug requires Terraform cleanup state");
+    };
+    let workdir = workdir.keep();
+
+    let mut commands = vec![
+        format!("cd {}", shell_quote_path(&workdir)),
+        format!(
+            "kubectl --kubeconfig {} --context {} config view --minify",
+            shell_quote(&helm_target.runtime.kubeconfig),
+            shell_quote(helm_target.runtime.kube_context.as_deref().unwrap_or(""))
+        ),
+        format!(
+            "kubectl --kubeconfig {} --context {} get --raw=/readyz",
+            shell_quote(&helm_target.runtime.kubeconfig),
+            shell_quote(helm_target.runtime.kube_context.as_deref().unwrap_or(""))
+        ),
+        format!(
+            "kubectl --kubeconfig {} --context {} auth can-i create namespaces",
+            shell_quote(&helm_target.runtime.kubeconfig),
+            shell_quote(helm_target.runtime.kube_context.as_deref().unwrap_or(""))
+        ),
+    ];
+
+    if target == alien_terraform::TerraformTarget::Eks {
+        if let Some(aws) = prepared.config.aws_target.as_ref() {
+            if let Ok(cluster_name) = terraform_output_string(&outputs, "kubernetes_kube_context") {
+                commands.insert(
+                    1,
+                    "export AWS_ACCESS_KEY_ID=\"$AWS_TARGET_ACCESS_KEY_ID\"".to_string(),
+                );
+                commands.insert(
+                    2,
+                    "export AWS_SECRET_ACCESS_KEY=\"$AWS_TARGET_SECRET_ACCESS_KEY\"".to_string(),
+                );
+                commands.insert(
+                    3,
+                    "export AWS_SESSION_TOKEN=\"${AWS_TARGET_SESSION_TOKEN:-}\"".to_string(),
+                );
+                commands.insert(
+                    4,
+                    "export AWS_DEFAULT_REGION=\"$AWS_TARGET_REGION\"".to_string(),
+                );
+                commands.insert(5, "export AWS_REGION=\"$AWS_TARGET_REGION\"".to_string());
+                commands.insert(6, "aws sts get-caller-identity".to_string());
+                commands.insert(
+                    7,
+                    format!(
+                        "aws eks get-token --cluster-name {} --region {} >/tmp/alien-e2e-eks-token.json",
+                        shell_quote(&cluster_name),
+                        shell_quote(&aws.region)
+                    ),
+                );
+            }
+        }
+    }
+
+    commands.push("helm version".to_string());
+    commands.push("terraform destroy -auto-approve -input=false -lock-timeout=5m".to_string());
+
+    anyhow::bail!(
+        "ALIEN_E2E_DEBUG_TERRAFORM_HANDOFF stopped after Terraform apply and before Helm install.\n\
+         Terraform workdir: {}\n\
+         Kubeconfig: {}\n\
+         Kube context: {}\n\
+         Namespace: {}\n\
+         No automatic cleanup ran. Run the destroy command below when finished.\n\n{}",
+        workdir.display(),
+        helm_target.runtime.kubeconfig,
+        helm_target.runtime.kube_context.as_deref().unwrap_or("<none>"),
+        helm_target.namespace,
+        commands.join("\n")
+    )
+}
+
+fn shell_quote_path(path: &Path) -> String {
+    shell_quote(&path.to_string_lossy())
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 async fn run_onprem_k8s(_prepared: &mut DistributionPrepared) -> anyhow::Result<TestContext> {
@@ -959,6 +1542,7 @@ async fn apply_terraform_and_import(
             registry: &registry,
             stack_settings,
             registration: None,
+            helm_install: None,
         },
     )
     .map_err(|error| anyhow::anyhow!("Terraform render failed: {error}"))?;
@@ -971,7 +1555,7 @@ async fn apply_terraform_and_import(
         fs::write(path, contents).await?;
     }
 
-    let env = terraform_env(&prepared.config, target.platform())?;
+    let env = terraform_env(&prepared.config, target.cloud_platform())?;
     let tfvars = terraform_tfvars(prepared, target, kubernetes_namespace)?;
     fs::write(
         workdir.path().join("terraform.tfvars.json"),
@@ -996,13 +1580,13 @@ async fn apply_terraform_and_import(
         .await?;
 
         let outputs = terraform_output_json(&workdir_path, &env).await?;
-        if target.platform() == Platform::Azure {
+        if target.cloud_platform() == Platform::Azure {
             grant_terraform_shared_env_join_permission(&prepared.config, &outputs).await?;
         }
-        if target.platform() == Platform::Gcp {
+        if target.cloud_platform() == Platform::Gcp {
             wait_for_gcp_management_permissions(&prepared.config, &outputs).await?;
         }
-        if target.platform() == Platform::Azure {
+        if target.cloud_platform() == Platform::Azure {
             wait_for_azure_management_permissions(&prepared.config, &outputs).await?;
         }
         let request = terraform_import_request_from_outputs(&outputs, &prepared.dg_token)?;
@@ -1059,7 +1643,7 @@ async fn terraform_kubernetes_stack_for_target(
     let config = DeploymentConfig {
         deployment_name: Some(stack.id().to_string()),
         stack_settings: stack_settings.clone(),
-        management_config: render_management_config(target.platform(), &stack_settings),
+        management_config: render_management_config(target.cloud_platform(), &stack_settings),
         environment_variables: EnvironmentVariablesSnapshot {
             variables: Vec::new(),
             hash: "empty".to_string(),
@@ -1068,7 +1652,7 @@ async fn terraform_kubernetes_stack_for_target(
         allow_frozen_changes: false,
         compute_backend: None,
         external_bindings: ExternalBindings::default(),
-        base_platform: Some(target.platform()),
+        base_platform: target.base_platform(),
         public_urls: None,
         domain_metadata: None,
         monitoring: None,
@@ -1122,7 +1706,17 @@ async fn write_manager_fetch_values(
     chart_dir: &TempDir,
     helm_target: Option<&KubernetesHelmTarget>,
 ) -> anyhow::Result<std::path::PathBuf> {
-    let mut values = terraform_helm_values(terraform_outputs)?;
+    let values = terraform_helm_values(terraform_outputs)?;
+    write_manager_fetch_values_from_base(prepared, deployment, values, chart_dir, helm_target).await
+}
+
+async fn write_manager_fetch_values_from_base(
+    prepared: &DistributionPrepared,
+    deployment: &TestDeployment,
+    mut values: Value,
+    chart_dir: &TempDir,
+    helm_target: Option<&KubernetesHelmTarget>,
+) -> anyhow::Result<std::path::PathBuf> {
     let values_object = values
         .as_object_mut()
         .context("helm_values output must be a JSON object")?;
@@ -1159,6 +1753,15 @@ async fn write_manager_fetch_values(
 fn terraform_helm_values(outputs: &Value) -> anyhow::Result<Value> {
     serde_json::from_str(&terraform_output_string(outputs, "helm_values")?)
         .context("Failed to parse terraform output helm_values")
+}
+
+fn cloudformation_helm_values(values: &BTreeMap<String, String>) -> anyhow::Result<Value> {
+    serde_json::from_str(
+        values
+            .get("DeploymentHelmValues")
+            .context("DeploymentHelmValues output missing")?,
+    )
+    .context("Failed to parse DeploymentHelmValues")
 }
 
 fn runtime_values() -> anyhow::Result<Value> {
@@ -1310,6 +1913,43 @@ fn kubernetes_helm_target_from_outputs(
     })
 }
 
+async fn materialize_kubeconfig_for_helm(
+    target: &mut KubernetesHelmTarget,
+    cleanup: &DistributionArtifactCleanup,
+) -> anyhow::Result<()> {
+    if Path::new(&target.runtime.kubeconfig).exists() {
+        return Ok(());
+    }
+    if !looks_like_kubeconfig_contents(&target.runtime.kubeconfig) {
+        return Ok(());
+    }
+
+    let DistributionArtifactCleanup::Terraform { workdir, .. } = cleanup else {
+        anyhow::bail!("Terraform-generated kubeconfig contents require a Terraform workdir");
+    };
+
+    let path = workdir.path().join("kubernetes.kubeconfig");
+    write_kubeconfig_file(&path, &target.runtime.kubeconfig).await?;
+    target.runtime.kubeconfig = path.to_string_lossy().into_owned();
+    Ok(())
+}
+
+async fn write_kubeconfig_file(path: &Path, contents: &str) -> anyhow::Result<()> {
+    fs::write(path, contents).await.with_context(|| {
+        format!(
+            "Failed to write Kubernetes kubeconfig to {}",
+            path.display()
+        )
+    })
+}
+
+fn looks_like_kubeconfig_contents(value: &str) -> bool {
+    let trimmed = value.trim_start();
+    (trimmed.starts_with("apiVersion:") || trimmed.starts_with("\"apiVersion\""))
+        && (trimmed.contains("\nclusters:") || trimmed.contains("\n\"clusters\""))
+        && (trimmed.contains("\nusers:") || trimmed.contains("\n\"users\""))
+}
+
 fn random_kubernetes_namespace(prefix: &str) -> String {
     let prefix = sanitize_kubernetes_dns_label(prefix);
     format!("{prefix}-{}", &uuid::Uuid::new_v4().to_string()[..8])
@@ -1451,6 +2091,15 @@ async fn cloudformation_import_request(
     env: &[(String, String)],
     token: &str,
 ) -> anyhow::Result<StackImportRequest> {
+    let values = cloudformation_outputs(stack_name, region, env).await?;
+    cloudformation_import_request_from_outputs(stack_name, token, &values)
+}
+
+async fn cloudformation_outputs(
+    stack_name: &str,
+    region: &str,
+    env: &[(String, String)],
+) -> anyhow::Result<BTreeMap<String, String>> {
     let mut cmd = Command::new("aws");
     cmd.args([
         "cloudformation",
@@ -1474,12 +2123,27 @@ async fn cloudformation_import_request(
             values.insert(key.clone(), value.clone());
         }
     }
+    Ok(values)
+}
 
+fn cloudformation_import_request_from_outputs(
+    stack_name: &str,
+    token: &str,
+    values: &BTreeMap<String, String>,
+) -> anyhow::Result<StackImportRequest> {
     let platform: Platform = values
         .get("DeploymentPlatform")
         .context("DeploymentPlatform output missing")?
         .parse()
         .map_err(|error| anyhow::anyhow!("Invalid DeploymentPlatform output: {error}"))?;
+    let base_platform = values
+        .get("DeploymentBasePlatform")
+        .map(|value| {
+            value
+                .parse()
+                .map_err(|error| anyhow::anyhow!("Invalid DeploymentBasePlatform output: {error}"))
+        })
+        .transpose()?;
     let resource_prefix = values
         .get("DeploymentResourcePrefix")
         .cloned()
@@ -1492,6 +2156,15 @@ async fn cloudformation_import_request(
         .get("DeploymentSetupTarget")
         .cloned()
         .context("DeploymentSetupTarget output missing")?;
+    let setup_import_format_version = values
+        .get("DeploymentSetupImportFormatVersion")
+        .map(|value| {
+            value
+                .parse()
+                .context("DeploymentSetupImportFormatVersion output is invalid")
+        })
+        .transpose()?
+        .unwrap_or(1);
     let setup_fingerprint = values
         .get("DeploymentSetupFingerprint")
         .cloned()
@@ -1507,14 +2180,14 @@ async fn cloudformation_import_request(
     let resources = parse_cfn_resources(&values)?;
 
     Ok(StackImportRequest {
-        setup_import_format_version: 1,
+        setup_import_format_version,
         deployment_group_token: token.to_string(),
         deployment_name: stack_name.to_string(),
         resource_prefix,
         source_kind: Some(ImportSourceKind::CloudFormation),
         release_id: None,
         platform,
-        base_platform: None,
+        base_platform,
         region,
         setup_target,
         setup_fingerprint,
@@ -2099,7 +2772,7 @@ fn terraform_tfvars(
         Value::String(prepared.manager.url.clone()),
     );
 
-    match target.platform() {
+    match target.cloud_platform() {
         Platform::Aws => {
             let target = prepared
                 .config
@@ -2368,6 +3041,65 @@ async fn run_terraform_cmd<const N: usize>(
     run_command(cmd, "terraform").await
 }
 
+async fn wait_for_cloudformation_stack_create(
+    stack_name: &str,
+    region: &str,
+    env: &[(String, String)],
+) -> anyhow::Result<()> {
+    let mut wait = Command::new("aws");
+    wait.args([
+        "cloudformation",
+        "wait",
+        "stack-create-complete",
+        "--stack-name",
+        stack_name,
+        "--region",
+        region,
+    ]);
+    apply_env(&mut wait, env);
+
+    match run_command(wait, "aws cloudformation wait stack-create-complete").await {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let events = describe_cloudformation_stack_events(stack_name, region, env)
+                .await
+                .unwrap_or_else(|events_error| {
+                    format!("failed to describe stack events after wait failure: {events_error}")
+                });
+            Err(error).with_context(|| {
+                format!(
+                    "CloudFormation stack {stack_name} did not reach CREATE_COMPLETE. Recent events:\n{events}"
+                )
+            })
+        }
+    }
+}
+
+async fn describe_cloudformation_stack_events(
+    stack_name: &str,
+    region: &str,
+    env: &[(String, String)],
+) -> anyhow::Result<String> {
+    let mut cmd = Command::new("aws");
+    cmd.args([
+        "cloudformation",
+        "describe-stack-events",
+        "--stack-name",
+        stack_name,
+        "--region",
+        region,
+        "--max-items",
+        "40",
+        "--query",
+        "StackEvents[].{Time:Timestamp,Status:ResourceStatus,Type:ResourceType,LogicalId:LogicalResourceId,Reason:ResourceStatusReason}",
+        "--output",
+        "table",
+    ]);
+    apply_env(&mut cmd, env);
+    let output = command_output(cmd, "aws cloudformation describe-stack-events").await?;
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
 async fn run_command(mut cmd: Command, label: &str) -> anyhow::Result<()> {
     let output = cmd
         .output()
@@ -2464,6 +3196,65 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn terraform_output_kubeconfig_is_materialized_for_helm() {
+        let workdir = tempfile::tempdir().expect("tempdir");
+        let cleanup = DistributionArtifactCleanup::Terraform {
+            workdir,
+            env: Vec::new(),
+        };
+        let kubeconfig = r#""apiVersion": "v1"
+"clusters": []
+"contexts": []
+"current-context": "test"
+"kind": "Config"
+"users": []
+"#;
+        let mut target = KubernetesHelmTarget {
+            namespace: "alien-test".to_string(),
+            runtime: KubernetesRuntimeConfig {
+                kubeconfig: kubeconfig.to_string(),
+                kube_context: Some("test".to_string()),
+                namespace_prefix: "alien-test".to_string(),
+            },
+        };
+
+        materialize_kubeconfig_for_helm(&mut target, &cleanup)
+            .await
+            .expect("kubeconfig should be written");
+
+        assert_ne!(target.runtime.kubeconfig, kubeconfig);
+        assert_eq!(
+            std::fs::read_to_string(&target.runtime.kubeconfig).expect("kubeconfig file"),
+            kubeconfig
+        );
+    }
+
+    #[tokio::test]
+    async fn existing_kubeconfig_path_is_left_unchanged() {
+        let workdir = tempfile::tempdir().expect("tempdir");
+        let kubeconfig_path = workdir.path().join("existing.kubeconfig");
+        std::fs::write(&kubeconfig_path, "apiVersion: v1\n").expect("write kubeconfig");
+        let cleanup = DistributionArtifactCleanup::Terraform {
+            workdir,
+            env: Vec::new(),
+        };
+        let mut target = KubernetesHelmTarget {
+            namespace: "alien-test".to_string(),
+            runtime: KubernetesRuntimeConfig {
+                kubeconfig: kubeconfig_path.to_string_lossy().into_owned(),
+                kube_context: None,
+                namespace_prefix: "alien-test".to_string(),
+            },
+        };
+
+        materialize_kubeconfig_for_helm(&mut target, &cleanup)
+            .await
+            .expect("existing path should be accepted");
+
+        assert_eq!(target.runtime.kubeconfig, kubeconfig_path.to_string_lossy());
+    }
+
+    #[tokio::test]
     async fn eks_pull_distribution_values_include_manager_irsa() {
         let source_stack = Stack::new("distribution-eks-pull".to_string())
             .permission(
@@ -2503,6 +3294,7 @@ mod tests {
                 registry: &registry,
                 stack_settings,
                 registration: None,
+                helm_install: None,
             },
         )
         .expect("Terraform generation should succeed");
@@ -2613,6 +3405,7 @@ mod tests {
                 registry: &registry,
                 stack_settings,
                 registration: None,
+                helm_install: None,
             },
         )
         .expect("Terraform generation should not require a compute-cluster emitter");
@@ -2631,6 +3424,7 @@ mod tests {
             client_id: "client-id".to_string(),
             client_secret: "client-secret".to_string(),
             region: region.to_string(),
+            principal_id: None,
             oidc_issuer: oidc_issuer.map(ToString::to_string),
             oidc_subject: oidc_subject.map(ToString::to_string),
         }
@@ -2668,6 +3462,7 @@ mod tests {
                 registry: &registry,
                 stack_settings,
                 registration: None,
+                helm_install: None,
             },
         )
         .expect("Terraform generation should succeed");
@@ -2704,6 +3499,7 @@ mod tests {
                 registry: &registry,
                 stack_settings,
                 registration: None,
+                helm_install: None,
             },
         )
         .expect("Terraform generation should succeed");

@@ -702,20 +702,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_manager_platform_rejects_unknown_values() {
-        let err = parse_manager_platform("local").unwrap_err();
+    fn parse_manager_cloud_rejects_unknown_values() {
+        let err = parse_manager_cloud("local").unwrap_err();
         assert!(err.to_string().contains("Managers can be deployed on"));
     }
 
     #[test]
-    fn parse_target_platform_accepts_aliases() {
+    fn parse_manager_cloud_accepts_supported_clouds() {
         assert_eq!(
-            parse_target_platform("k8s").unwrap(),
-            NewManagerRequestTargetsItem::Kubernetes
+            parse_manager_cloud("aws").unwrap(),
+            PrivateManagerCloud::Aws
         );
         assert_eq!(
-            parse_target_platform("local").unwrap(),
-            NewManagerRequestTargetsItem::Local
+            parse_manager_cloud("gcp").unwrap(),
+            PrivateManagerCloud::Gcp
+        );
+        assert_eq!(
+            parse_manager_cloud("azure").unwrap(),
+            PrivateManagerCloud::Azure
         );
     }
 

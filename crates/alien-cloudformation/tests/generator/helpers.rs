@@ -7,7 +7,7 @@
 
 use alien_cloudformation::{
     generate_cloudformation_template, to_yaml, CfEmitter, CfExpression, CfRegistry, CfResource,
-    CloudFormationOptions, RegistrationMode,
+    CloudFormationOptions, CloudFormationTarget, RegistrationMode,
 };
 use alien_core::{
     import::EmitContext, Platform, ResourceDefinition, ResourceLifecycle, ResourceRef,
@@ -24,13 +24,33 @@ pub fn render_built_ins(
     registration: RegistrationMode,
     description: &str,
 ) -> String {
+    render_built_ins_target(
+        stack,
+        settings,
+        registration,
+        CloudFormationTarget::Aws,
+        "aws",
+        description,
+    )
+}
+
+/// Render a stack against the built-in registry for a chosen package target.
+pub fn render_built_ins_target(
+    stack: &Stack,
+    settings: StackSettings,
+    registration: RegistrationMode,
+    target: CloudFormationTarget,
+    setup_target: &str,
+    description: &str,
+) -> String {
     let registry = CfRegistry::built_in();
     let template = generate_cloudformation_template(
         stack,
         CloudFormationOptions {
             registry: &registry,
+            target,
             stack_settings: settings,
-            setup_target: "aws".to_string(),
+            setup_target: setup_target.to_string(),
             setup_fingerprint: "test".to_string(),
             setup_fingerprint_version: 1,
             registration,
@@ -58,6 +78,7 @@ pub fn render_sample(
         stack,
         CloudFormationOptions {
             registry: &registry,
+            target: CloudFormationTarget::Aws,
             stack_settings: settings,
             setup_target: "aws".to_string(),
             setup_fingerprint: "test".to_string(),
