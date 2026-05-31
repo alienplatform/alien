@@ -29,11 +29,11 @@ use crate::{
 };
 use alien_core::{
     import::EmitContext, AzureStorageAccount, ErrorData, LifecycleRule, PermissionProfile,
-    PermissionSetReference, RemoteStackManagement, Result, Storage,
+    PermissionSet, PermissionSetReference, RemoteStackManagement, Result, Storage,
 };
 use alien_error::{AlienError, Context};
 use alien_permissions::{
-    generators::{AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator},
+    generators::{AzureCustomRole, AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator},
     BindingTarget,
 };
 use hcl::expr::Expression;
@@ -182,11 +182,7 @@ fn emit_storage_permissions(
         };
 
         for permission_set_ref in permission_set_refs {
-            let Some(permission_set) = permission_set_ref
-                .resolve(|name| alien_permissions::get_permission_set(name).cloned())
-            else {
-                continue;
-            };
+            let permission_set = resolve_permission_set(permission_set_ref, ctx.resource_id)?;
             if permission_set.id.ends_with("/provision") || permission_set.platforms.azure.is_none()
             {
                 continue;
@@ -215,11 +211,8 @@ fn emit_storage_permissions(
                         expr::template(role_definition_id.clone())
                     }
                     AzureRoleDefinitionRef::Custom { key } => {
-                        let index = grant_plan
-                            .custom_roles
-                            .iter()
-                            .position(|role| role.key == *key)
-                            .unwrap_or(0);
+                        let index =
+                            custom_role_index(&grant_plan.custom_roles, key, &permission_set.id)?;
                         let role_label =
                             setup_execution_role_label(&profile_name, &binding.role_name, index);
                         expr::traversal([
@@ -255,11 +248,7 @@ fn emit_storage_permissions(
     ]);
 
     for permission_set_ref in management_permission_refs(ctx) {
-        let Some(permission_set) =
-            permission_set_ref.resolve(|name| alien_permissions::get_permission_set(name).cloned())
-        else {
-            continue;
-        };
+        let permission_set = resolve_permission_set(permission_set_ref, ctx.resource_id)?;
         if permission_set.id.ends_with("/provision") || permission_set.platforms.azure.is_none() {
             continue;
         }
@@ -287,11 +276,8 @@ fn emit_storage_permissions(
                     expr::template(role_definition_id.clone())
                 }
                 AzureRoleDefinitionRef::Custom { key } => {
-                    let index = grant_plan
-                        .custom_roles
-                        .iter()
-                        .position(|role| role.key == *key)
-                        .unwrap_or(0);
+                    let index =
+                        custom_role_index(&grant_plan.custom_roles, key, &permission_set.id)?;
                     let role_label = setup_management_role_label(&binding.role_name, index);
                     expr::traversal([
                         "azurerm_role_definition",
@@ -315,6 +301,41 @@ fn emit_storage_permissions(
     }
 
     Ok(())
+}
+
+fn resolve_permission_set(
+    permission_set_ref: &PermissionSetReference,
+    resource_id: &str,
+) -> Result<PermissionSet> {
+    permission_set_ref
+        .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::GenericError {
+                message: format!(
+                    "permission set '{}' referenced by Azure storage resource '{}' was not found",
+                    permission_set_ref.id(),
+                    resource_id
+                ),
+            })
+        })
+}
+
+fn custom_role_index(
+    custom_roles: &[AzureCustomRole],
+    key: &str,
+    permission_set_id: &str,
+) -> Result<usize> {
+    custom_roles
+        .iter()
+        .position(|role| role.key == key)
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::GenericError {
+                message: format!(
+                    "Azure storage permission set '{}' generated a binding for missing custom role '{}'",
+                    permission_set_id, key
+                ),
+            })
+        })
 }
 
 fn emit_role_assignment(

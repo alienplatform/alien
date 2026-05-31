@@ -32,6 +32,7 @@
         "grant": {
           "permissions": [
             "datastore.databases.get",
+            "datastore.databases.getMetadata",
             "datastore.databases.create",
             "datastore.databases.update",
             "datastore.databases.delete",

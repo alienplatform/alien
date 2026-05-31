@@ -274,6 +274,35 @@
       },
       {
         "grant": {
+          "actions": ["elasticloadbalancing:ModifyTargetGroupAttributes"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/${stackPrefix}-*/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "deployment"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/${stackPrefix}-*/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "deployment"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
           "actions": ["elasticloadbalancing:DeleteTargetGroup"]
         },
         "binding": {
@@ -398,6 +427,9 @@
             "compute.healthChecks.delete",
             "compute.healthChecks.get",
             "compute.healthChecks.use",
+            "compute.disks.create",
+            "compute.disks.delete",
+            "compute.disks.get",
             "compute.instanceGroups.create",
             "compute.instanceGroups.delete",
             "compute.instanceGroups.get",

@@ -30,6 +30,7 @@
         "grant": {
           "permissions": [
             "datastore.databases.get",
+            "datastore.databases.getMetadata",
             "datastore.databases.list",
             "datastore.indexes.get",
             "datastore.indexes.list"

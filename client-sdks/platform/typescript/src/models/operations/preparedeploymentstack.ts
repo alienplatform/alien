@@ -974,6 +974,7 @@ export type StackSettings = {
 export type PrepareDeploymentStackRequestBody = {
   platform: PrepareDeploymentStackPlatform;
   setupMethod: models.DeploymentSetupMethod;
+  region?: string | undefined;
   /**
    * User-customizable deployment settings specified at deploy time.
    *
@@ -2788,6 +2789,7 @@ export function stackSettingsToJSON(stackSettings: StackSettings): string {
 export type PrepareDeploymentStackRequestBody$Outbound = {
   platform: string;
   setupMethod: string;
+  region?: string | undefined;
   stackSettings: StackSettings$Outbound;
 };
 
@@ -2798,6 +2800,7 @@ export const PrepareDeploymentStackRequestBody$outboundSchema: z.ZodType<
 > = z.object({
   platform: PrepareDeploymentStackPlatform$outboundSchema,
   setupMethod: models.DeploymentSetupMethod$outboundSchema,
+  region: z.string().optional(),
   stackSettings: z.lazy(() => StackSettings$outboundSchema),
 });
 

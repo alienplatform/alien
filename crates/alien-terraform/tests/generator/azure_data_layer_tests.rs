@@ -17,7 +17,7 @@ use alien_core::{
     PermissionProfile, Queue, ResourceLifecycle, ResourceRef, ServiceAccount, Stack, StackSettings,
     Storage, Vault,
 };
-use alien_terraform::TerraformTarget;
+use alien_terraform::{generate_terraform_module, TerraformOptions, TerraformTarget, TfRegistry};
 
 fn resource_group() -> AzureResourceGroup {
     AzureResourceGroup::new("default-resource-group".to_string()).build()
@@ -100,6 +100,42 @@ fn azure_storage_profile_permissions_emit_container_role_assignment() {
     assert!(rendered.contains("azurerm_user_assigned_identity.app_sa.principal_id"));
     assert!(rendered.contains("blobServices/default/containers"));
     assert_terraform_valid(&module, "azure_storage_profile_permissions");
+}
+
+#[test]
+fn azure_storage_profile_permissions_fail_for_unknown_permission_set() {
+    let stack = Stack::new("acme-storage-permissions".to_string())
+        .permissions(alien_core::PermissionsConfig::new().with_profile(
+            "app",
+            PermissionProfile::new().resource("files", ["storage/not-a-real-permission"]),
+        ))
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add(storage_account(), ResourceLifecycle::Frozen)
+        .add(
+            Storage::new("files".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            ServiceAccount::new("app-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let registry = TfRegistry::built_in();
+    let err = generate_terraform_module(
+        &stack,
+        TerraformTarget::Azure,
+        TerraformOptions {
+            display_name: None,
+            registry: &registry,
+            stack_settings: StackSettings::default(),
+            registration: None,
+            helm_install: None,
+            supported_aws_regions: Vec::new(),
+        },
+    )
+    .expect_err("unknown Azure storage permission set should fail module generation");
+
+    assert!(err.to_string().contains("storage/not-a-real-permission"));
 }
 
 #[test]

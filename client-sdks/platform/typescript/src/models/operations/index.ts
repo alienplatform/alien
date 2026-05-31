@@ -28,6 +28,7 @@ export * from "./deleteworkspace.js";
 export * from "./dismissworkspaceonboarding.js";
 export * from "./generatemanagertoken.js";
 export * from "./getapikey.js";
+export * from "./getcloudregions.js";
 export * from "./getcommand.js";
 export * from "./getdeployment.js";
 export * from "./getdeploymentconnectioninfo.js";

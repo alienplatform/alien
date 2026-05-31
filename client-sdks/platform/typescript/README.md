@@ -162,6 +162,10 @@ run();
 * [listAuditLog](docs/sdks/billing/README.md#listauditlog) - List billing activity entries for the current workspace.
 * [getPlan](docs/sdks/billing/README.md#getplan) - Get the active plan id for the current workspace. Reads a cached value on the workspace row updated via the Autumn customer.products.updated webhook; falls back to a one-shot Autumn sync if the cache is empty.
 
+### [CloudRegions](docs/sdks/cloudregions/README.md)
+
+* [get](docs/sdks/cloudregions/README.md#get) - Get cloud regions supported by this Alien environment.
+
 ### [Commands](docs/sdks/commands/README.md)
 
 * [list](docs/sdks/commands/README.md#list) - Retrieve commands. Use for dashboard analytics and command history.
@@ -329,6 +333,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`authWhoami`](docs/sdks/auth/README.md#whoami) - Get the current authenticated principal (user or service account). Works with both session cookies and API keys.
 - [`billingGetPlan`](docs/sdks/billing/README.md#getplan) - Get the active plan id for the current workspace. Reads a cached value on the workspace row updated via the Autumn customer.products.updated webhook; falls back to a one-shot Autumn sync if the cache is empty.
 - [`billingListAuditLog`](docs/sdks/billing/README.md#listauditlog) - List billing activity entries for the current workspace.
+- [`cloudRegionsGet`](docs/sdks/cloudregions/README.md#get) - Get cloud regions supported by this Alien environment.
 - [`commandsCreate`](docs/sdks/commands/README.md#create) - Create command metadata. Called by manager when processing commands. Returns project info for routing decisions.
 - [`commandsGet`](docs/sdks/commands/README.md#get) - Retrieve a command by ID.
 - [`commandsList`](docs/sdks/commands/README.md#list) - Retrieve commands. Use for dashboard analytics and command history.

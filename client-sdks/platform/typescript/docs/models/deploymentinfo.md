@@ -35,6 +35,21 @@ let value: DeploymentInfo = {
       },
     },
   },
+  supportedRegions: {
+    aws: [
+      "<value 1>",
+      "<value 2>",
+      "<value 3>",
+    ],
+    gcp: [
+      "<value 1>",
+      "<value 2>",
+      "<value 3>",
+    ],
+    azure: [
+      "<value 1>",
+    ],
+  },
 };
 ```
 
@@ -49,4 +64,5 @@ let value: DeploymentInfo = {
 | `project`                                                                          | [models.DeploymentInfoProject](../models/deploymentinfoproject.md)                 | :heavy_check_mark:                                                                 | N/A                                                                                |
 | `packages`                                                                         | [models.Packages](../models/packages.md)                                           | :heavy_check_mark:                                                                 | N/A                                                                                |
 | `installContext`                                                                   | [models.DeploymentInfoInstallContext](../models/deploymentinfoinstallcontext.md)   | :heavy_check_mark:                                                                 | N/A                                                                                |
+| `supportedRegions`                                                                 | [models.SupportedCloudRegions](../models/supportedcloudregions.md)                 | :heavy_check_mark:                                                                 | N/A                                                                                |
 | `setupConfig`                                                                      | [models.DeploymentInfoSetupConfig](../models/deploymentinfosetupconfig.md)         | :heavy_minus_sign:                                                                 | N/A                                                                                |

@@ -50,6 +50,10 @@ export type ConfigTerraform = {
    * Human-friendly application name shown in generated install artifacts.
    */
   displayName?: string | null | undefined;
+  /**
+   * AWS regions supported by the Alien environment that built this package.
+   */
+  supportedAwsRegions?: Array<string> | undefined;
   type: "terraform";
 };
 
@@ -91,6 +95,10 @@ export type ConfigCloudformation = {
    * Human-friendly application name shown in generated install artifacts.
    */
   displayName?: string | null | undefined;
+  /**
+   * AWS regions supported by the Alien environment that built this package.
+   */
+  supportedAwsRegions?: Array<string> | undefined;
   type: "cloudformation";
 };
 
@@ -455,6 +463,7 @@ export const ConfigTerraform$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   displayName: z.nullable(z.string()).optional(),
+  supportedAwsRegions: z.array(z.string()).optional(),
   type: z.literal("terraform"),
 });
 
@@ -512,6 +521,7 @@ export const ConfigCloudformation$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   displayName: z.nullable(z.string()).optional(),
+  supportedAwsRegions: z.array(z.string()).optional(),
   type: z.literal("cloudformation"),
 });
 

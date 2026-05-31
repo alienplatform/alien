@@ -600,19 +600,34 @@ fn role_suffix(
     explicit_label: Option<&str>,
     has_multiple_entries: bool,
 ) -> Option<String> {
-    if has_explicit_label(explicit_label) || has_multiple_entries {
-        let max_len = if has_explicit_label(explicit_label) {
-            40
-        } else {
-            28
-        };
-        Some(sanitize_role_segment(
-            &entry_snake_label(explicit_label, grant),
-            max_len,
-        ))
+    let explicit = has_explicit_label(explicit_label);
+    if explicit || has_multiple_entries {
+        let max_len = if explicit { 40 } else { 28 };
+        let mut label = entry_snake_label(explicit_label, grant);
+        if !explicit {
+            label.push('_');
+            label.push_str(&grant_suffix_hash(grant));
+        }
+        Some(sanitize_role_segment(&label, max_len))
     } else {
         None
     }
+}
+
+fn grant_suffix_hash(grant: &PermissionGrant) -> String {
+    let mut values = Vec::new();
+    if let Some(predefined_roles) = &grant.predefined_roles {
+        values.extend(predefined_roles.iter().map(|role| format!("role:{role}")));
+    }
+    if let Some(permissions) = gcp_residual_permissions(grant) {
+        values.extend(
+            permissions
+                .iter()
+                .map(|permission| format!("permission:{permission}")),
+        );
+    }
+    values.sort();
+    stable_role_hash(&values.join("|"))
 }
 
 fn sanitize_role_segment(value: &str, max_len: usize) -> String {

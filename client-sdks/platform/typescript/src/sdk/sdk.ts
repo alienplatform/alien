@@ -6,6 +6,7 @@ import { ClientSDK } from "../lib/sdks.js";
 import { ApiKeys } from "./apikeys.js";
 import { Auth } from "./auth.js";
 import { Billing } from "./billing.js";
+import { CloudRegions } from "./cloudregions.js";
 import { Commands } from "./commands.js";
 import { Deployment } from "./deployment.js";
 import { DeploymentGroups } from "./deploymentgroups.js";
@@ -106,6 +107,11 @@ export class Alien extends ClientSDK {
   private _resolve?: Resolve;
   get resolve(): Resolve {
     return (this._resolve ??= new Resolve(this._options));
+  }
+
+  private _cloudRegions?: CloudRegions;
+  get cloudRegions(): CloudRegions {
+    return (this._cloudRegions ??= new CloudRegions(this._options));
   }
 
   private _billing?: Billing;

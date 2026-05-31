@@ -1244,6 +1244,38 @@ export type PersistImportedDeploymentRequestDeleteScopeUnion =
   | PersistImportedDeploymentRequestDeleteScopeEnum
   | any;
 
+/**
+ * Scope for a delete operation.
+ *
+ * @remarks
+ *
+ * Full deletes are setup/admin owned and may remove both Frozen and Live
+ * resources. Live-only deletes are used by setup handoff resources
+ * (Terraform/CloudFormation) so Alien removes only the resources it owns
+ * before setup tears down Frozen resources.
+ */
+export const PersistImportedDeploymentRequestPendingDeleteScopeEnum = {
+  Full: "full",
+  LiveOnly: "liveOnly",
+} as const;
+/**
+ * Scope for a delete operation.
+ *
+ * @remarks
+ *
+ * Full deletes are setup/admin owned and may remove both Frozen and Live
+ * resources. Live-only deletes are used by setup handoff resources
+ * (Terraform/CloudFormation) so Alien removes only the resources it owns
+ * before setup tears down Frozen resources.
+ */
+export type PersistImportedDeploymentRequestPendingDeleteScopeEnum = ClosedEnum<
+  typeof PersistImportedDeploymentRequestPendingDeleteScopeEnum
+>;
+
+export type PersistImportedDeploymentRequestPendingDeleteScopeUnion =
+  | PersistImportedDeploymentRequestPendingDeleteScopeEnum
+  | any;
+
 export const PersistImportedDeploymentRequestManagementEnum = {
   Auto: "auto",
 } as const;
@@ -2497,6 +2529,11 @@ export type PersistImportedDeploymentRequestRuntimeMetadata = {
    * Used to avoid redundant sync operations during incremental deployment
    */
   lastSyncedEnvVarsHash?: string | null | undefined;
+  pendingDeleteScope?:
+    | PersistImportedDeploymentRequestPendingDeleteScopeEnum
+    | any
+    | null
+    | undefined;
   preparedStack?:
     | PersistImportedDeploymentRequestPreparedStack
     | any
@@ -5372,6 +5409,36 @@ export function persistImportedDeploymentRequestDeleteScopeUnionToJSON(
 }
 
 /** @internal */
+export const PersistImportedDeploymentRequestPendingDeleteScopeEnum$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestPendingDeleteScopeEnum> = z
+    .enum(PersistImportedDeploymentRequestPendingDeleteScopeEnum);
+
+/** @internal */
+export type PersistImportedDeploymentRequestPendingDeleteScopeUnion$Outbound =
+  | string
+  | any;
+
+/** @internal */
+export const PersistImportedDeploymentRequestPendingDeleteScopeUnion$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestPendingDeleteScopeUnion$Outbound,
+    PersistImportedDeploymentRequestPendingDeleteScopeUnion
+  > = z.union([
+    PersistImportedDeploymentRequestPendingDeleteScopeEnum$outboundSchema,
+    z.any(),
+  ]);
+
+export function persistImportedDeploymentRequestPendingDeleteScopeUnionToJSON(
+  persistImportedDeploymentRequestPendingDeleteScopeUnion:
+    PersistImportedDeploymentRequestPendingDeleteScopeUnion,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestPendingDeleteScopeUnion$outboundSchema
+      .parse(persistImportedDeploymentRequestPendingDeleteScopeUnion),
+  );
+}
+
+/** @internal */
 export const PersistImportedDeploymentRequestManagementEnum$outboundSchema:
   z.ZodEnum<typeof PersistImportedDeploymentRequestManagementEnum> = z.enum(
     PersistImportedDeploymentRequestManagementEnum,
@@ -7840,6 +7907,7 @@ export function persistImportedDeploymentRequestPreparedStackUnionToJSON(
 export type PersistImportedDeploymentRequestRuntimeMetadata$Outbound = {
   deleteScope?: string | any | null | undefined;
   lastSyncedEnvVarsHash?: string | null | undefined;
+  pendingDeleteScope?: string | any | null | undefined;
   preparedStack?:
     | PersistImportedDeploymentRequestPreparedStack$Outbound
     | any
@@ -7861,6 +7929,12 @@ export const PersistImportedDeploymentRequestRuntimeMetadata$outboundSchema:
       ]),
     ).optional(),
     lastSyncedEnvVarsHash: z.nullable(z.string()).optional(),
+    pendingDeleteScope: z.nullable(
+      z.union([
+        PersistImportedDeploymentRequestPendingDeleteScopeEnum$outboundSchema,
+        z.any(),
+      ]),
+    ).optional(),
     preparedStack: z.nullable(
       z.union([
         z.lazy(() =>

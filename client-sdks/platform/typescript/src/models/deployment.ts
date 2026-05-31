@@ -1492,6 +1492,38 @@ export type DeploymentDeleteScopeEnum = ClosedEnum<
 
 export type DeploymentDeleteScopeUnion = DeploymentDeleteScopeEnum | any;
 
+/**
+ * Scope for a delete operation.
+ *
+ * @remarks
+ *
+ * Full deletes are setup/admin owned and may remove both Frozen and Live
+ * resources. Live-only deletes are used by setup handoff resources
+ * (Terraform/CloudFormation) so Alien removes only the resources it owns
+ * before setup tears down Frozen resources.
+ */
+export const DeploymentPendingDeleteScopeEnum = {
+  Full: "full",
+  LiveOnly: "liveOnly",
+} as const;
+/**
+ * Scope for a delete operation.
+ *
+ * @remarks
+ *
+ * Full deletes are setup/admin owned and may remove both Frozen and Live
+ * resources. Live-only deletes are used by setup handoff resources
+ * (Terraform/CloudFormation) so Alien removes only the resources it owns
+ * before setup tears down Frozen resources.
+ */
+export type DeploymentPendingDeleteScopeEnum = ClosedEnum<
+  typeof DeploymentPendingDeleteScopeEnum
+>;
+
+export type DeploymentPendingDeleteScopeUnion =
+  | DeploymentPendingDeleteScopeEnum
+  | any;
+
 export const DeploymentManagementEnum = {
   Auto: "auto",
 } as const;
@@ -2686,6 +2718,11 @@ export type DeploymentRuntimeMetadata = {
    * Used to avoid redundant sync operations during incremental deployment
    */
   lastSyncedEnvVarsHash?: string | null | undefined;
+  pendingDeleteScope?:
+    | DeploymentPendingDeleteScopeEnum
+    | any
+    | null
+    | undefined;
   preparedStack?: DeploymentPreparedStack | any | null | undefined;
   /**
    * Whether cross-account registry access has been successfully granted.
@@ -4979,6 +5016,27 @@ export function deploymentDeleteScopeUnionFromJSON(
 }
 
 /** @internal */
+export const DeploymentPendingDeleteScopeEnum$inboundSchema: z.ZodEnum<
+  typeof DeploymentPendingDeleteScopeEnum
+> = z.enum(DeploymentPendingDeleteScopeEnum);
+
+/** @internal */
+export const DeploymentPendingDeleteScopeUnion$inboundSchema: z.ZodType<
+  DeploymentPendingDeleteScopeUnion,
+  unknown
+> = z.union([DeploymentPendingDeleteScopeEnum$inboundSchema, z.any()]);
+
+export function deploymentPendingDeleteScopeUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentPendingDeleteScopeUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentPendingDeleteScopeUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentPendingDeleteScopeUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentManagementEnum$inboundSchema: z.ZodEnum<
   typeof DeploymentManagementEnum
 > = z.enum(DeploymentManagementEnum);
@@ -6582,6 +6640,9 @@ export const DeploymentRuntimeMetadata$inboundSchema: z.ZodType<
     z.union([DeploymentDeleteScopeEnum$inboundSchema, z.any()]),
   ).optional(),
   lastSyncedEnvVarsHash: z.nullable(z.string()).optional(),
+  pendingDeleteScope: z.nullable(
+    z.union([DeploymentPendingDeleteScopeEnum$inboundSchema, z.any()]),
+  ).optional(),
   preparedStack: z.nullable(
     z.union([z.lazy(() => DeploymentPreparedStack$inboundSchema), z.any()]),
   ).optional(),

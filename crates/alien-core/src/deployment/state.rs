@@ -49,6 +49,13 @@ pub struct RuntimeMetadata {
     /// Scope selected by the caller that requested deletion.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delete_scope: Option<DeleteScope>,
+
+    /// Delete scope requested while another actor owns the deployment lock.
+    ///
+    /// The lock owner consumes this on its next reconcile and yields to
+    /// deletion without overwriting the queued delete request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending_delete_scope: Option<DeleteScope>,
 }
 
 /// Deployment state

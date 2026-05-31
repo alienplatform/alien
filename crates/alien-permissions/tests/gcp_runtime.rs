@@ -74,6 +74,44 @@ fn gcp_permission_set_can_compile_explicit_command_permissions() {
         .all(|binding| binding.target == GcpBindingTargetScope::CurrentResource));
 }
 
+#[test]
+fn gcp_compute_cluster_execute_keeps_distinct_generated_role_permissions() {
+    let generator = GcpRuntimePermissionsGenerator::new();
+    let permission_set =
+        get_permission_set("compute-cluster/execute").expect("permission set exists");
+    let context = create_test_context();
+
+    let grant_plan = generator
+        .generate_grant_plan(permission_set, BindingTarget::Stack, &context)
+        .expect("should generate compute cluster execute grant plan");
+    let project_bindings = grant_plan.bindings_for_target(GcpBindingTargetScope::Project);
+    let project_roles = grant_plan.custom_roles_for_bindings(&project_bindings);
+
+    assert!(
+        project_roles.iter().any(|role| {
+            role.included_permissions.iter().any(|permission| {
+                permission == "compute.networkEndpointGroups.attachNetworkEndpoints"
+            })
+        }),
+        "compute-cluster/execute must include NEG endpoint registration"
+    );
+    assert!(
+        project_roles.iter().any(|role| role
+            .included_permissions
+            .iter()
+            .any(|permission| permission == "compute.instances.attachDisk")),
+        "compute-cluster/execute must include disk attach permissions"
+    );
+    for left in 0..project_roles.len() {
+        for right in (left + 1)..project_roles.len() {
+            assert_ne!(
+                project_roles[left].role_id, project_roles[right].role_id,
+                "generated custom role IDs must not collide"
+            );
+        }
+    }
+}
+
 #[rstest]
 #[case::stack_binding(BindingTarget::Stack, GcpBindingTargetScope::Project)]
 #[case::resource_binding(BindingTarget::Resource, GcpBindingTargetScope::CurrentResource)]

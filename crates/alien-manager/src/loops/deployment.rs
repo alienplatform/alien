@@ -13,7 +13,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use futures::FutureExt;
+use futures::{stream, FutureExt, StreamExt};
 use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
 
@@ -37,6 +37,8 @@ use crate::transports::ManagerTransport;
 
 /// Maximum number of step() calls per deployment per tick.
 const MAX_STEPS_PER_TICK: usize = 100;
+/// Maximum number of deployments to process concurrently per tick.
+const MAX_CONCURRENT_DEPLOYMENTS: usize = 4;
 /// Suggested delay threshold (ms) — if step suggests waiting longer, yield.
 const SUGGESTED_DELAY_THRESHOLD_MS: u64 = 500;
 
@@ -191,9 +193,11 @@ impl DeploymentLoop {
                 if !acquired.is_empty() {
                     debug!(count = acquired.len(), session = %session, "Acquired deployments");
                 }
-                for item in acquired {
-                    self.process_deployment(item.deployment, &session).await;
-                }
+                stream::iter(acquired)
+                    .for_each_concurrent(MAX_CONCURRENT_DEPLOYMENTS, |item| async {
+                        self.process_deployment(item.deployment, &session).await;
+                    })
+                    .await;
             }
             Err(e) => {
                 error!(error = %e, "Failed to acquire deployments");

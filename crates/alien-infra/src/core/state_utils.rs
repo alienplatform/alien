@@ -173,6 +173,7 @@ impl StackResourceStateExt for StackResourceState {
             ResourceStatus::ProvisionFailed
                 | ResourceStatus::UpdateFailed
                 | ResourceStatus::DeleteFailed
+                | ResourceStatus::RefreshFailed
         );
 
         if !is_failed {
@@ -387,10 +388,9 @@ fn prepare_for_destroy_matching(
 mod tests {
     use super::*;
     use crate::worker::{TestWorkerController, TestWorkerState};
-    use alien_core::{
-        Platform, Resource, ResourceStatus, StackResourceState, StackSettings, StackState,
-    };
+    use alien_core::{Platform, Resource, ResourceStatus, StackResourceState, StackState};
     use alien_core::{Worker, WorkerCode};
+    use alien_error::GenericError;
 
     #[tokio::test]
     async fn test_prepare_for_destroy_provision_failed() {
@@ -641,5 +641,41 @@ mod tests {
             "_internal_stay_count must be None after retry, got {:?}",
             restored._internal_stay_count
         );
+    }
+
+    #[tokio::test]
+    async fn test_retry_failed_recovers_refresh_failed_resource() {
+        let function_config = Worker::new("test-function".to_string())
+            .code(WorkerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .permissions("execution".to_string())
+            .build();
+
+        let mut last_ready_controller = TestWorkerController::default();
+        last_ready_controller.state = TestWorkerState::Ready;
+
+        let mut resource_state = StackResourceState::new_pending(
+            "worker".to_string(),
+            Resource::new(function_config),
+            None,
+            Vec::new(),
+        );
+        resource_state.status = ResourceStatus::RefreshFailed;
+        resource_state.retry_attempt = 10;
+        resource_state.error = Some(AlienError::new(GenericError {
+            message: "heartbeat failed".to_string(),
+        }));
+        resource_state
+            .set_last_failed_controller(Some(Box::new(last_ready_controller)))
+            .unwrap();
+
+        let retried = resource_state.retry_failed().unwrap();
+
+        assert!(retried, "refresh-failed resources must be retryable");
+        assert_eq!(resource_state.status, ResourceStatus::Running);
+        assert_eq!(resource_state.retry_attempt, 0);
+        assert!(resource_state.error.is_none());
+        assert!(resource_state.last_failed_state.is_none());
     }
 }

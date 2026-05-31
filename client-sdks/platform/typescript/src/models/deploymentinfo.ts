@@ -15,6 +15,10 @@ import {
   DeploymentPortalAppearance$inboundSchema,
 } from "./deploymentportalappearance.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
+import {
+  SupportedCloudRegions,
+  SupportedCloudRegions$inboundSchema,
+} from "./supportedcloudregions.js";
 
 /**
  * Type of token used to authenticate this request
@@ -600,6 +604,7 @@ export type DeploymentInfo = {
   project: DeploymentInfoProject;
   packages: Packages;
   installContext: DeploymentInfoInstallContext;
+  supportedRegions: SupportedCloudRegions;
   setupConfig?: DeploymentInfoSetupConfig | undefined;
 };
 
@@ -1284,6 +1289,7 @@ export const DeploymentInfo$inboundSchema: z.ZodType<DeploymentInfo, unknown> =
     project: z.lazy(() => DeploymentInfoProject$inboundSchema),
     packages: z.lazy(() => Packages$inboundSchema),
     installContext: z.lazy(() => DeploymentInfoInstallContext$inboundSchema),
+    supportedRegions: SupportedCloudRegions$inboundSchema,
     setupConfig: DeploymentInfoSetupConfig$inboundSchema.optional(),
   });
 

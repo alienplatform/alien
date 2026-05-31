@@ -7,6 +7,10 @@ import {
   PrivateManagerCloud,
   PrivateManagerCloud$outboundSchema,
 } from "./privatemanagercloud.js";
+import {
+  PrivateManagerSetupMethod,
+  PrivateManagerSetupMethod$outboundSchema,
+} from "./privatemanagersetupmethod.js";
 
 /**
  * Optional external OTLP config for forwarding logs to Axiom, Datadog, etc. Falls back to built-in DeepStore when not set.
@@ -32,6 +36,10 @@ export type NewManagerRequest = {
    * Cloud region for the manager.
    */
   region: string;
+  /**
+   * Optional setup method. Defaults to cloudformation for AWS, google-oauth for GCP, and terraform for Azure.
+   */
+  setupMethod?: PrivateManagerSetupMethod | undefined;
   /**
    * Optional external OTLP config for forwarding logs to Axiom, Datadog, etc. Falls back to built-in DeepStore when not set.
    */
@@ -62,6 +70,7 @@ export type NewManagerRequest$Outbound = {
   name: string;
   cloud: string;
   region: string;
+  setupMethod?: string | undefined;
   otlpConfig?: OtlpConfig$Outbound | undefined;
 };
 
@@ -73,6 +82,7 @@ export const NewManagerRequest$outboundSchema: z.ZodType<
   name: z.string(),
   cloud: PrivateManagerCloud$outboundSchema,
   region: z.string(),
+  setupMethod: PrivateManagerSetupMethod$outboundSchema.optional(),
   otlpConfig: z.lazy(() => OtlpConfig$outboundSchema).optional(),
 });
 

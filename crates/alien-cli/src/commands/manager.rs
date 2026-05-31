@@ -54,6 +54,10 @@ pub enum ManagersCmd {
         #[arg(long)]
         setup: Option<PrivateManagerSetupMethodArg>,
 
+        /// Network mode. Defaults to create; use default for faster dev/test setup.
+        #[arg(long)]
+        network: Option<PrivateManagerNetworkArg>,
+
         /// Write Terraform setup files to this directory
         #[arg(long)]
         output_dir: Option<PathBuf>,
@@ -178,6 +182,22 @@ impl PrivateManagerSetupMethodArg {
 
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+pub enum PrivateManagerNetworkArg {
+    Create,
+    Default,
+}
+
+impl PrivateManagerNetworkArg {
+    fn as_api_str(self) -> &'static str {
+        match self {
+            Self::Create => "create",
+            Self::Default => "default",
+        }
+    }
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum PrivateManagerCloudArg {
     Aws,
     Gcp,
@@ -294,6 +314,8 @@ struct CreateManagerRequest<'a> {
     region: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     setup_method: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    network: Option<&'a str>,
 }
 
 pub async fn managers_task(args: ManagersArgs, ctx: ExecutionMode) -> Result<()> {
@@ -328,6 +350,7 @@ pub async fn managers_task(args: ManagersArgs, ctx: ExecutionMode) -> Result<()>
             cloud,
             region,
             setup,
+            network,
             output_dir,
             open,
         } => {
@@ -338,6 +361,7 @@ pub async fn managers_task(args: ManagersArgs, ctx: ExecutionMode) -> Result<()>
                 cloud,
                 &region,
                 setup,
+                network,
                 output_dir.as_deref(),
                 open,
                 ctx.no_browser(),
@@ -391,6 +415,7 @@ async fn create_manager_task(
     cloud: PrivateManagerCloudArg,
     region: &str,
     setup: Option<PrivateManagerSetupMethodArg>,
+    network: Option<PrivateManagerNetworkArg>,
     output_dir: Option<&Path>,
     open_browser: bool,
     no_browser: bool,
@@ -410,6 +435,7 @@ async fn create_manager_task(
         cloud: cloud.as_api_str(),
         region,
         setup_method: setup.map(PrivateManagerSetupMethodArg::as_api_str),
+        network: network.map(PrivateManagerNetworkArg::as_api_str),
     };
     let url = api_url(&auth.base_url, "/v1/managers", workspace, None)?;
     let response: ManagerSetupResponse = send_json(auth, Method::POST, url, Some(&body)).await?;
