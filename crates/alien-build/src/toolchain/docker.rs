@@ -1,4 +1,5 @@
 use super::{Toolchain, ToolchainContext, ToolchainOutput};
+use crate::command_output::{image_build_error_with_output, wait_with_captured_output};
 use crate::error::{ErrorData, Result};
 use crate::settings::BinaryTargetExt;
 use alien_core::AlienEvent;
@@ -7,7 +8,6 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Stdio;
-use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tracing::info;
 
@@ -53,31 +53,15 @@ impl DockerToolchain {
     fn humanize_buildx_failure(stderr_output: &str) -> String {
         let lower = stderr_output.to_ascii_lowercase();
 
-        let summary = if lower.contains("cannot connect to the docker daemon")
+        if lower.contains("cannot connect to the docker daemon")
             || lower.contains("is the docker daemon running")
             || lower.contains("docker.sock")
         {
             "Docker is installed but the daemon is unavailable. Start Docker or OrbStack and retry."
         } else {
             "docker buildx build failed"
-        };
-
-        let tail = stderr_output
-            .lines()
-            .rev()
-            .filter(|line| !line.trim().is_empty())
-            .take(20)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        if tail.is_empty() {
-            summary.to_string()
-        } else {
-            format!("{summary}; docker output:\n{tail}")
         }
+        .to_string()
     }
 }
 
@@ -168,48 +152,34 @@ impl Toolchain for DockerToolchain {
                     build_output: None,
                 })?;
 
-            // Read stderr for progress (docker outputs to stderr)
-            let stderr = child.stderr.take().unwrap();
-            let mut stderr_reader = BufReader::new(stderr).lines();
-            let mut stderr_lines = Vec::new();
-
-            while let Some(line) = stderr_reader.next_line().await.into_alien_error().context(
-                ErrorData::ImageBuildFailed {
-                    resource_name: "docker-build".to_string(),
-                    reason: "Failed to read docker build output".to_string(),
-                    build_output: None,
+            let (output, captured_output) = wait_with_captured_output(
+                &mut child,
+                "docker-build",
+                "Failed to read docker build output",
+                "Failed to wait for docker build completion",
+                |line| {
+                    let compilation_event = &compilation_event;
+                    async move {
+                        let trimmed_line = line.line.trim();
+                        if !trimmed_line.is_empty() {
+                            let _ = compilation_event
+                                .update(AlienEvent::CompilingCode {
+                                    language: "docker".to_string(),
+                                    progress: Some(trimmed_line.to_string()),
+                                })
+                                .await;
+                        }
+                    }
                 },
-            )? {
-                stderr_lines.push(line.clone());
-
-                let trimmed_line = line.trim();
-                if !trimmed_line.is_empty() {
-                    let _ = compilation_event
-                        .update(AlienEvent::CompilingCode {
-                            language: "docker".to_string(),
-                            progress: Some(trimmed_line.to_string()),
-                        })
-                        .await;
-                }
-            }
-
-            let output =
-                child
-                    .wait()
-                    .await
-                    .into_alien_error()
-                    .context(ErrorData::ImageBuildFailed {
-                        resource_name: "docker-build".to_string(),
-                        reason: "Failed to wait for docker build completion".to_string(),
-                        build_output: None,
-                    })?;
+            )
+            .await?;
 
             if !output.success() {
-                let stderr_output = stderr_lines.join("\n");
+                let build_output = captured_output.display();
                 return Err(AlienError::new(ErrorData::ImageBuildFailed {
                     resource_name: "docker-build".to_string(),
-                    reason: Self::humanize_buildx_failure(&stderr_output),
-                    build_output: Some(stderr_output),
+                    reason: Self::humanize_buildx_failure(&build_output),
+                    build_output: Some(build_output),
                 }));
             }
 
@@ -247,12 +217,11 @@ impl Toolchain for DockerToolchain {
             })?;
 
         if !save_output.status.success() {
-            let stderr = String::from_utf8_lossy(&save_output.stderr);
-            return Err(AlienError::new(ErrorData::ImageBuildFailed {
-                resource_name: "docker-build".to_string(),
-                reason: "docker save failed".to_string(),
-                build_output: Some(stderr.to_string()),
-            }));
+            return Err(image_build_error_with_output(
+                "docker-build",
+                "docker save failed",
+                &save_output,
+            ));
         }
 
         info!("Successfully exported Docker image to OCI tarball");

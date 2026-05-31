@@ -1,4 +1,5 @@
 use super::{cache_utils, Toolchain, ToolchainContext, ToolchainOutput};
+use crate::command_output::{image_build_error_with_output, wait_with_captured_output};
 use crate::error::{ErrorData, Result};
 use alien_core::AlienEvent;
 use alien_error::{AlienError, Context, IntoAlienError};
@@ -7,7 +8,6 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tokio::fs;
-use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tracing::{error, info, warn};
 
@@ -111,12 +111,11 @@ impl RustToolchain {
             })?;
 
         if !metadata_output.status.success() {
-            let stderr = String::from_utf8_lossy(&metadata_output.stderr);
-            return Err(AlienError::new(ErrorData::ImageBuildFailed {
-                resource_name: self.binary_name.clone(),
-                reason: "cargo metadata failed".to_string(),
-                build_output: Some(stderr.to_string()),
-            }));
+            return Err(image_build_error_with_output(
+                self.binary_name.clone(),
+                "cargo metadata failed",
+                &metadata_output,
+            ));
         }
 
         let stdout = String::from_utf8_lossy(&metadata_output.stdout);
@@ -195,12 +194,11 @@ impl Toolchain for RustToolchain {
                     })?;
 
                 if !install_output.status.success() {
-                    let stderr = String::from_utf8_lossy(&install_output.stderr);
-                    return Err(AlienError::new(ErrorData::ImageBuildFailed {
-                        resource_name: self.binary_name.clone(),
-                        reason: format!("Failed to install {}", package),
-                        build_output: Some(stderr.to_string()),
-                    }));
+                    return Err(image_build_error_with_output(
+                        self.binary_name.clone(),
+                        format!("Failed to install {}", package),
+                        &install_output,
+                    ));
                 }
                 info!("Successfully installed {}", package);
             } else {
@@ -246,15 +244,14 @@ impl Toolchain for RustToolchain {
                 })?;
 
             if !install_target_output.status.success() {
-                let stderr = String::from_utf8_lossy(&install_target_output.stderr);
-                return Err(AlienError::new(ErrorData::ImageBuildFailed {
-                    resource_name: self.binary_name.clone(),
-                    reason: format!(
+                return Err(image_build_error_with_output(
+                    self.binary_name.clone(),
+                    format!(
                         "Failed to install target {}",
                         context.build_target.rust_target_triple()
                     ),
-                    build_output: Some(stderr.to_string()),
-                }));
+                    &install_target_output,
+                ));
             }
             info!(
                 "Successfully installed target {}",
@@ -356,56 +353,40 @@ impl Toolchain for RustToolchain {
                     build_output: None,
                 })?;
 
-            // Read stderr line by line for progress updates
-            let stderr = child.stderr.take().unwrap();
-            let mut stderr_reader = BufReader::new(stderr).lines();
-            let mut stderr_lines = Vec::new();
-
-            // Process stderr output line by line
-            while let Some(line) = stderr_reader.next_line().await.into_alien_error().context(
-                ErrorData::ImageBuildFailed {
-                    resource_name: self.binary_name.clone(),
-                    reason: "Failed to read cargo build output".to_string(),
-                    build_output: None,
+            let (output, captured_output) = wait_with_captured_output(
+                &mut child,
+                &self.binary_name,
+                "Failed to read cargo build output",
+                &format!("Failed to wait for {} completion", build_command),
+                |line| {
+                    let compilation_event = &compilation_event;
+                    async move {
+                        // Update the event with the latest line for progress.
+                        // Only show meaningful cargo output, filtering out decorative lines.
+                        if Self::is_meaningful_cargo_line(&line.line) {
+                            let _ = compilation_event
+                                .update(AlienEvent::CompilingCode {
+                                    language: "rust".to_string(),
+                                    progress: Some(line.line.trim().to_string()),
+                                })
+                                .await; // Ignore update errors to not fail the build
+                        }
+                    }
                 },
-            )? {
-                stderr_lines.push(line.clone());
-
-                // Update the event with the latest line for progress
-                // Only show meaningful cargo output, filtering out decorative lines
-                if Self::is_meaningful_cargo_line(&line) {
-                    let _ = compilation_event
-                        .update(AlienEvent::CompilingCode {
-                            language: "rust".to_string(),
-                            progress: Some(line.trim().to_string()),
-                        })
-                        .await; // Ignore update errors to not fail the build
-                }
-            }
-
-            // Wait for the process to complete
-            let output =
-                child
-                    .wait()
-                    .await
-                    .into_alien_error()
-                    .context(ErrorData::ImageBuildFailed {
-                        resource_name: self.binary_name.clone(),
-                        reason: format!("Failed to wait for {} completion", build_command),
-                        build_output: None,
-                    })?;
+            )
+            .await?;
 
             if !output.success() {
-                let stderr_output = stderr_lines.join("\n");
+                let build_output = captured_output.display();
                 error!(
                     binary = %self.binary_name,
                     "{} failed. Build output:\n{}",
-                    build_command, stderr_output
+                    build_command, build_output
                 );
                 return Err(AlienError::new(ErrorData::ImageBuildFailed {
                     resource_name: self.binary_name.clone(),
                     reason: format!("{} failed", build_command),
-                    build_output: Some(stderr_output),
+                    build_output: Some(build_output),
                 }));
             }
 

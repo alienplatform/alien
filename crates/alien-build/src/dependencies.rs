@@ -1,3 +1,4 @@
+use crate::command_output::{image_build_error_with_output, CapturedCommandOutput};
 use crate::error::{ErrorData, Result};
 use alien_error::{AlienError, Context, IntoAlienError};
 use std::path::{Path, PathBuf};
@@ -227,17 +228,16 @@ pub async fn install_dependencies(src_dir: &Path) -> Result<()> {
         })?;
 
     if !install_output.status.success() {
-        let stderr = String::from_utf8_lossy(&install_output.stderr);
-        let stdout = String::from_utf8_lossy(&install_output.stdout);
+        let captured = CapturedCommandOutput::from_output(&install_output).display();
         debug!(
-            "Failed to install dependencies - stderr: {}, stdout: {}",
-            stderr, stdout
+            "Failed to install dependencies with {}. Build output:\n{}",
+            pm_command, captured
         );
-        return Err(AlienError::new(ErrorData::ImageBuildFailed {
-            resource_name: "dependency-install".to_string(),
-            reason: format!("{} install failed", pm_command),
-            build_output: Some(stderr.to_string()),
-        }));
+        return Err(image_build_error_with_output(
+            "dependency-install",
+            format!("{} install failed", pm_command),
+            &install_output,
+        ));
     }
 
     let install_stdout = String::from_utf8_lossy(&install_output.stdout);
