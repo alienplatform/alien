@@ -77,6 +77,13 @@ pub struct ReleaseResponse {
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
+pub struct ListReleasesResponse {
+    pub items: Vec<ReleaseResponse>,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
 pub struct GitMetadataResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub commit_sha: Option<String>,
@@ -90,7 +97,7 @@ pub struct GitMetadataResponse {
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/v1/releases", post(create_release))
+        .route("/v1/releases", post(create_release).get(list_releases))
         .route("/v1/releases/latest", get(get_latest_release))
         .route("/v1/releases/{id}", get(get_release))
 }
@@ -304,6 +311,44 @@ async fn get_release(
         Ok(resp) => Json(resp).into_response(),
         Err(e) => e.into_response(),
     }
+}
+
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/v1/releases",
+    tag = "releases",
+    responses(
+        (status = 200, description = "Releases listed", body = ListReleasesResponse),
+        (status = 401, description = "Unauthorized")
+    ),
+    security(
+        ("bearer" = [])
+    )
+))]
+async fn list_releases(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let subject = match auth::require_auth(&state, &headers).await {
+        Ok(s) => s,
+        Err(e) => return e.into_response(),
+    };
+
+    let releases = match state.release_store.list_releases(&subject).await {
+        Ok(r) => r,
+        Err(e) => return e.into_response(),
+    };
+
+    // Like get_release, return only the releases the caller may read.
+    let mut items = Vec::with_capacity(releases.len());
+    for release in &releases {
+        if !state.authz.can_read_release(&subject, release) {
+            continue;
+        }
+        match record_to_response(release) {
+            Ok(resp) => items.push(resp),
+            Err(e) => return e.into_response(),
+        }
+    }
+
+    Json(ListReleasesResponse { items }).into_response()
 }
 
 #[cfg_attr(feature = "openapi", utoipa::path(

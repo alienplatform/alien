@@ -61,4 +61,9 @@ pub trait ReleaseStore: Send + Sync {
         &self,
         caller: &crate::auth::Subject,
     ) -> Result<Option<ReleaseRecord>, AlienError>;
+
+    async fn list_releases(
+        &self,
+        caller: &crate::auth::Subject,
+    ) -> Result<Vec<ReleaseRecord>, AlienError>;
 }

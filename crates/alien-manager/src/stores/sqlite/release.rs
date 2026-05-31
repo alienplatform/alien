@@ -166,4 +166,34 @@ impl ReleaseStore for SqliteReleaseStore {
             None => Ok(None),
         }
     }
+
+    async fn list_releases(
+        &self,
+        _caller: &crate::auth::Subject,
+    ) -> Result<Vec<ReleaseRecord>, AlienError> {
+        // Single-tenant store: no workspace filter (every row is the one
+        // workspace). Multi-tenant scoping is the embedder's job.
+        let sql = Query::select()
+            .columns(Self::RELEASE_COLUMNS)
+            .from(Releases::Table)
+            .order_by(Releases::CreatedAt, Order::Desc)
+            .to_string(SqliteQueryBuilder);
+
+        let conn = self.db.conn().lock().await;
+        let mut rows = conn
+            .query(&sql, ())
+            .await
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to query releases".to_string(),
+            })?;
+
+        let mut releases = Vec::new();
+        while let Some(row) = rows.next().await.into_alien_error().context(GenericError {
+            message: "Failed to fetch release row".to_string(),
+        })? {
+            releases.push(Self::parse_release(&row)?);
+        }
+        Ok(releases)
+    }
 }
