@@ -245,7 +245,13 @@ impl DeploymentLoop {
 
         // Pull-mode deployments are entirely driven by the alien-agent running in the
         // target environment. The manager must not attempt to provision or deploy them.
-        if deployment.stack_settings.deployment_model == alien_core::DeploymentModel::Pull {
+        if deployment
+            .stack_settings
+            .as_ref()
+            .expect("stored deployment carries stack_settings")
+            .deployment_model
+            == alien_core::DeploymentModel::Pull
+        {
             debug!(
                 deployment_id = %deployment_id,
                 "Skipping pull-mode deployment — handled by alien-agent"
@@ -407,13 +413,18 @@ impl DeploymentLoop {
         } else {
             DeploymentConfig {
                 deployment_name: Some(deployment.name.clone()),
-                stack_settings: deployment.stack_settings.clone(),
+                stack_settings: deployment
+                    .stack_settings
+                    .clone()
+                    .expect("stored deployment carries stack_settings"),
                 management_config,
                 environment_variables,
                 allow_frozen_changes: false,
                 compute_backend: None,
                 external_bindings: deployment
                     .stack_settings
+                    .as_ref()
+                    .expect("stored deployment carries stack_settings")
                     .external_bindings
                     .clone()
                     .unwrap_or_default(),

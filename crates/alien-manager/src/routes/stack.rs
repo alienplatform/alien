@@ -273,7 +273,9 @@ pub async fn stack_import(
                 Json(StackImportResponse {
                     deployment_id: updated.id,
                     deployment_token: updated.deployment_token,
-                    stack_settings: updated.stack_settings,
+                    stack_settings: updated
+                        .stack_settings
+                        .expect("imported deployment carries stack_settings"),
                     stack_state,
                 }),
             )
@@ -351,7 +353,9 @@ pub async fn stack_import(
         Json(StackImportResponse {
             deployment_id: created.id,
             deployment_token: Some(raw_token),
-            stack_settings: created.stack_settings,
+            stack_settings: created
+                .stack_settings
+                .expect("created deployment carries stack_settings"),
             stack_state,
         }),
     )
@@ -510,7 +514,7 @@ fn import_changes_deployment(
         || existing.setup_target.as_deref() != Some(req.setup_target.as_str())
         || existing.setup_fingerprint.as_deref() != Some(req.setup_fingerprint.as_str())
         || existing.setup_fingerprint_version != Some(req.setup_fingerprint_version)
-        || existing.stack_settings != req.stack_settings
+        || existing.stack_settings.as_ref() != Some(&req.stack_settings)
         || existing.environment_info.as_ref() != environment_info.as_ref()
         || existing.runtime_metadata.as_ref() != Some(runtime_metadata)
         || !imported_resources_are_unchanged(existing, imported_stack_state)

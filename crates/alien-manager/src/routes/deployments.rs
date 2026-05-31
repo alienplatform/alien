@@ -197,7 +197,10 @@ fn record_to_response(
         platform: r.platform.clone(),
         status: r.status.clone(),
         deployment_group_id: r.deployment_group_id.clone(),
-        stack_settings: Some(serde_json::to_value(&r.stack_settings).unwrap_or_default()),
+        stack_settings: r
+            .stack_settings
+            .as_ref()
+            .map(|s| serde_json::to_value(s).unwrap_or_default()),
         stack_state: r
             .stack_state
             .as_ref()

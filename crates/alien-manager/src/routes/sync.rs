@@ -607,7 +607,7 @@ mod tests {
             deployment_protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
             base_platform: Some(Platform::Aws),
             status: status.to_string(),
-            stack_settings: StackSettings::default(),
+            stack_settings: Some(StackSettings::default()),
             stack_state,
             environment_info: None,
             runtime_metadata: None,
@@ -829,7 +829,12 @@ async fn agent_sync(
                 } else {
                     DeploymentConfig::builder()
                         .deployment_name(deployment.name.clone())
-                        .stack_settings(deployment.stack_settings.clone())
+                        .stack_settings(
+                            deployment
+                                .stack_settings
+                                .clone()
+                                .expect("synced deployment carries stack_settings"),
+                        )
                         .maybe_management_config(management_config)
                         .environment_variables(EnvironmentVariablesSnapshot {
                             variables: env_vars,
@@ -840,6 +845,8 @@ async fn agent_sync(
                         .external_bindings(
                             deployment
                                 .stack_settings
+                                .as_ref()
+                                .expect("synced deployment carries stack_settings")
                                 .external_bindings
                                 .clone()
                                 .unwrap_or_default(),

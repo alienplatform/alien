@@ -255,7 +255,7 @@ mod tests {
             platform: alien_core::Platform::Local,
             base_platform: None,
             status: "pending".to_string(),
-            stack_settings: alien_core::StackSettings::default(),
+            stack_settings: Some(alien_core::StackSettings::default()),
             stack_state: None,
             environment_info: None,
             runtime_metadata: None,
