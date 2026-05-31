@@ -6,12 +6,12 @@
 
 import type { ArtifactRegistry } from "./bindings/artifact-registry.js"
 import type { Build } from "./bindings/build.js"
-import type { WorkerBinding } from "./bindings/worker.js"
 import type { Kv } from "./bindings/kv.js"
 import type { Queue } from "./bindings/queue.js"
 import type { ServiceAccount } from "./bindings/service-account.js"
 import type { Storage } from "./bindings/storage.js"
 import type { Vault } from "./bindings/vault.js"
+import type { WorkerBinding } from "./bindings/worker.js"
 
 import { AlienContext } from "./context.js"
 import {

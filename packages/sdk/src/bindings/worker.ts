@@ -6,8 +6,8 @@
 
 import { type Channel, createClient } from "nice-grpc"
 import {
-  WorkerServiceDefinition,
   type WorkerServiceClient as GeneratedClient,
+  WorkerServiceDefinition,
 } from "../generated/worker.js"
 import { wrapGrpcCall } from "../grpc-utils.js"
 import type { WorkerInvokeRequest, WorkerInvokeResponse } from "../types.js"
