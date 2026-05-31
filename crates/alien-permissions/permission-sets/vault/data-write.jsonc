@@ -15,9 +15,7 @@
             "resources": ["arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-*"]
           },
           "resource": {
-            "resources": [
-              "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${resourceName}-*"
-            ]
+            "resources": ["arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${resourceName}-*"]
           }
         }
       }
@@ -43,10 +41,7 @@
         "description": "Add values to application-owned Secret Manager secrets and delete those secrets during cleanup.",
         "grant": {
           "predefinedRoles": ["roles/secretmanager.secretVersionAdder"],
-          "residualPermissions": [
-            "secretmanager.secrets.get",
-            "secretmanager.secrets.delete"
-          ]
+          "residualPermissions": ["secretmanager.secrets.get", "secretmanager.secrets.delete"]
         },
         "binding": {
           "stack": {

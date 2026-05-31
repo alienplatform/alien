@@ -13,9 +13,7 @@
             "resources": ["arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-*"]
           },
           "resource": {
-            "resources": [
-              "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${resourceName}-*"
-            ]
+            "resources": ["arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${resourceName}-*"]
           }
         }
       }
@@ -23,10 +21,7 @@
     "gcp": [
       {
         "grant": {
-          "predefinedRoles": [
-            "roles/secretmanager.viewer",
-            "roles/secretmanager.secretAccessor"
-          ]
+          "predefinedRoles": ["roles/secretmanager.viewer", "roles/secretmanager.secretAccessor"]
         },
         "binding": {
           "stack": {

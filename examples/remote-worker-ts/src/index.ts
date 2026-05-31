@@ -42,11 +42,7 @@ command("where-am-i", async () => ({
     process.env.GCP_PROJECT_ID ??
     process.env.AZURE_SUBSCRIPTION_ID ??
     null,
-  region:
-    process.env.AWS_REGION ??
-    process.env.GCP_REGION ??
-    process.env.AZURE_REGION ??
-    null,
+  region: process.env.AWS_REGION ?? process.env.GCP_REGION ?? process.env.AZURE_REGION ?? null,
   timestamp: new Date().toISOString(),
 }))
 

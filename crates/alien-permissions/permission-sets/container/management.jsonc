@@ -51,7 +51,11 @@
       },
       {
         "grant": {
-          "actions": ["acm:AddTagsToCertificate", "acm:DeleteCertificate", "acm:DescribeCertificate"]
+          "actions": [
+            "acm:AddTagsToCertificate",
+            "acm:DeleteCertificate",
+            "acm:DescribeCertificate"
+          ]
         },
         "binding": {
           "stack": {

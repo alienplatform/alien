@@ -1,11 +1,11 @@
 import {
+  type Ingress,
+  type ReadinessProbe,
+  type ResourceType,
   type WorkerCode,
   type Worker as WorkerConfig,
   WorkerSchema,
   type WorkerTrigger,
-  type Ingress,
-  type ReadinessProbe,
-  type ResourceType,
 } from "./generated/index.js"
 import { Resource } from "./resource.js"
 
@@ -30,7 +30,6 @@ export {
  * Represents a serverless worker that executes code in response to triggers or direct invocations.
  * Workers are the primary compute resource in serverless applications, designed to be stateless and ephemeral.
  */
-// biome-ignore lint/suspicious/noShadowRestrictedNames: intentionally shadows built-in `Worker`
 export class Worker {
   private _config: Partial<WorkerConfig> = {
     links: [],

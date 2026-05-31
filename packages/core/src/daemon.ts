@@ -7,7 +7,12 @@ import {
 } from "./generated/index.js"
 import { Resource } from "./resource.js"
 
-export type { Daemon as DaemonConfig, DaemonCode, DaemonOutputs, ResourceSpec } from "./generated/index.js"
+export type {
+  Daemon as DaemonConfig,
+  DaemonCode,
+  DaemonOutputs,
+  ResourceSpec,
+} from "./generated/index.js"
 export {
   DaemonCodeSchema,
   DaemonSchema as DaemonConfigSchema,

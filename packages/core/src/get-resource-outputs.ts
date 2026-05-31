@@ -8,8 +8,6 @@ import {
   BuildSchema,
   ContainerOutputsSchema,
   ContainerSchema,
-  WorkerOutputsSchema,
-  WorkerSchema,
   KvOutputsSchema,
   KvSchema,
   QueueOutputsSchema,
@@ -22,6 +20,8 @@ import {
   StorageSchema,
   VaultOutputsSchema,
   VaultSchema,
+  WorkerOutputsSchema,
+  WorkerSchema,
 } from "./generated/index.js"
 import type { StackState } from "./stack.js"
 

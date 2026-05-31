@@ -5,20 +5,14 @@
     "aws": [
       {
         "grant": {
-          "actions": [
-            "eks:DescribeCluster"
-          ]
+          "actions": ["eks:DescribeCluster"]
         },
         "binding": {
           "stack": {
-            "resources": [
-              "arn:aws:eks:${awsRegion}:${awsAccountId}:cluster/${stackPrefix}-*"
-            ]
+            "resources": ["arn:aws:eks:${awsRegion}:${awsAccountId}:cluster/${stackPrefix}-*"]
           },
           "resource": {
-            "resources": [
-              "arn:aws:eks:${awsRegion}:${awsAccountId}:cluster/${resourceName}"
-            ]
+            "resources": ["arn:aws:eks:${awsRegion}:${awsAccountId}:cluster/${resourceName}"]
           }
         }
       }
@@ -26,10 +20,7 @@
     "gcp": [
       {
         "grant": {
-          "permissions": [
-            "container.clusters.get",
-            "container.clusters.list"
-          ]
+          "permissions": ["container.clusters.get", "container.clusters.list"]
         },
         "binding": {
           "stack": {
@@ -44,9 +35,7 @@
     "azure": [
       {
         "grant": {
-          "actions": [
-            "Microsoft.ContainerService/managedClusters/read"
-          ]
+          "actions": ["Microsoft.ContainerService/managedClusters/read"]
         },
         "binding": {
           "stack": {

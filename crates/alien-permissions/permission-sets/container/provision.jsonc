@@ -92,10 +92,7 @@
       // EBS Volumes for stateful containers with .persistentStorage()
       {
         "grant": {
-          "actions": [
-            "ec2:CreateVolume",
-            "ec2:CreateTags"
-          ]
+          "actions": ["ec2:CreateVolume", "ec2:CreateTags"]
         },
         "binding": {
           "stack": {
@@ -217,10 +214,7 @@
       },
       {
         "grant": {
-          "actions": [
-            "ec2:DeleteSecurityGroup",
-            "ec2:AuthorizeSecurityGroupIngress"
-          ]
+          "actions": ["ec2:DeleteSecurityGroup", "ec2:AuthorizeSecurityGroupIngress"]
         },
         "binding": {
           "stack": {
@@ -247,10 +241,7 @@
       {
         // AWS requires Resource: "*" for security group and VPC describe APIs.
         "grant": {
-          "actions": [
-            "ec2:DescribeSecurityGroups",
-            "ec2:DescribeVpcs"
-          ]
+          "actions": ["ec2:DescribeSecurityGroups", "ec2:DescribeVpcs"]
         },
         "binding": {
           "stack": {
@@ -290,7 +281,11 @@
       },
       {
         "grant": {
-          "actions": ["acm:AddTagsToCertificate", "acm:DeleteCertificate", "acm:DescribeCertificate"]
+          "actions": [
+            "acm:AddTagsToCertificate",
+            "acm:DeleteCertificate",
+            "acm:DescribeCertificate"
+          ]
         },
         "binding": {
           "stack": {

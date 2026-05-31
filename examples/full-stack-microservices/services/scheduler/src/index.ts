@@ -18,7 +18,9 @@ async function enqueueMaintenance() {
     headers,
   })
   if (!response.ok) {
-    throw new Error(`maintenance enqueue failed with HTTP ${response.status}: ${await response.text()}`)
+    throw new Error(
+      `maintenance enqueue failed with HTTP ${response.status}: ${await response.text()}`,
+    )
   }
   console.log(await response.text())
 }

@@ -324,9 +324,7 @@
             "Microsoft.KeyVault/vaults/secrets/write",
             "Microsoft.KeyVault/vaults/secrets/read"
           ],
-          "dataActions": [
-            "Microsoft.KeyVault/vaults/secrets/delete"
-          ]
+          "dataActions": ["Microsoft.KeyVault/vaults/secrets/delete"]
         },
         "binding": {
           "stack": {

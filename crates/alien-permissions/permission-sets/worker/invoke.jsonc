@@ -20,10 +20,7 @@
     "gcp": [
       {
         "grant": {
-          "predefinedRoles": [
-            "roles/run.invoker",
-            "roles/run.jobsExecutorWithOverrides"
-          ]
+          "predefinedRoles": ["roles/run.invoker", "roles/run.jobsExecutorWithOverrides"]
         },
         // Cloud Run does not support IAM conditions (resource.name/resource.type) for any operation.
         // All conditions silently fail. Stack: scope-only. Resource: scoped to specific service.
