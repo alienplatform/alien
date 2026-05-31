@@ -40,7 +40,7 @@ impl SqliteDeploymentStore {
     }
 
     /// All columns needed for deployment queries (must match parse_deployment order).
-    const DEPLOYMENT_COLUMNS: [Deployments; 31] = [
+    const DEPLOYMENT_COLUMNS: [Deployments; 32] = [
         Deployments::Id,
         Deployments::Name,
         Deployments::DeploymentGroupId,
@@ -73,6 +73,8 @@ impl SqliteDeploymentStore {
         Deployments::AgentOs,
         Deployments::AgentArch,
         Deployments::Regime,
+        // Manager-driven upgrade target:
+        Deployments::TargetAgentVersion,
     ];
 
     fn parse_deployment(row: &turso::Row) -> Result<DeploymentRecord, AlienError> {
@@ -146,6 +148,7 @@ impl SqliteDeploymentStore {
             agent_os: p.optional_string(28, "agent_os")?,
             agent_arch: p.optional_string(29, "agent_arch")?,
             regime: p.optional_string(30, "regime")?,
+            target_agent_version: p.optional_string(31, "target_agent_version")?,
         })
     }
 
@@ -313,6 +316,7 @@ impl DeploymentStore for SqliteDeploymentStore {
             agent_os: None,
             agent_arch: None,
             regime: None,
+            target_agent_version: None,
         })
     }
 
@@ -475,6 +479,7 @@ impl DeploymentStore for SqliteDeploymentStore {
             agent_os: None,
             agent_arch: None,
             regime: None,
+            target_agent_version: None,
         })
     }
 

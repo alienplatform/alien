@@ -52,6 +52,9 @@ pub(crate) enum Deployments {
     AgentArch,
     /// Supervisor regime — `os-service` / `kubernetes`. NULL until first sync.
     Regime,
+    /// Pinned target agent version. NULL = no pin. When set ≠ AgentVersion,
+    /// sync handler emits `agent_target` to drive an upgrade.
+    TargetAgentVersion,
 }
 
 #[derive(Iden, Clone, Copy)]
@@ -337,6 +340,10 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
         "ALTER TABLE deployments ADD COLUMN agent_os TEXT",
         "ALTER TABLE deployments ADD COLUMN agent_arch TEXT",
         "ALTER TABLE deployments ADD COLUMN regime TEXT",
+        // Pinned target agent version. Sync handler reads this on every
+        // request and emits agent_target when it differs from the agent's
+        // reported version. Drives the manager-directed upgrade flow.
+        "ALTER TABLE deployments ADD COLUMN target_agent_version TEXT",
     ];
     for sql in alter_statements {
         if let Err(e) = conn.execute(sql, ()).await {

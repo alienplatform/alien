@@ -967,6 +967,13 @@ async fn agent_sync(
         None
     };
 
+    // Agent upgrade decision: if the deployment has a pinned target version
+    // that differs from what the agent just reported, drive an upgrade via
+    // `agent_target` in the response.
+    let agent_target =
+        build_agent_target(&deployment, req.agent_version.as_deref(), req.regime.as_deref())
+            .and_then(|t| serde_json::to_value(t).ok());
+
     Json(AgentSyncResponse {
         current_state,
         target: match target.map(|t| serde_json::to_value(&t)).transpose() {
@@ -978,13 +985,47 @@ async fn agent_sync(
             }
         },
         commands_url: Some(state.config.commands_base_url()),
-        // The manager is the single source of truth for the agent's
-        // self-update target. The OSS manager doesn't drive agent upgrades yet
-        // (no signing key / fleet rollout policy), so this stays None — the
-        // wire field exists so newer agents can act on it once enabled.
-        agent_target: None,
+        agent_target,
     })
     .into_response()
+}
+
+/// Build `AgentTarget` when `deployment.target_agent_version` is set AND
+/// differs from what the agent just reported. The regime field controls
+/// which sub-target (`binary` for os-service, `helm` for kubernetes) gets
+/// populated.
+///
+/// k8s-only MVP: only the helm path is wired. chart_repo / chart_version are
+/// emitted as empty strings — the agent re-uses its current chart_ref (from
+/// the existing helm release metadata) and only the values overlay flips the
+/// `runtime.image.tag`. This avoids per-version chart re-publication.
+fn build_agent_target(
+    deployment: &crate::traits::DeploymentRecord,
+    reported_version: Option<&str>,
+    regime: Option<&str>,
+) -> Option<alien_core::sync::AgentTarget> {
+    let target_version = deployment.target_agent_version.as_deref()?;
+    if reported_version == Some(target_version) {
+        return None;
+    }
+    let helm = (regime == Some("kubernetes")).then(|| alien_core::sync::AgentHelmTarget {
+        chart_repo: String::new(),
+        chart_version: String::new(),
+        values: serde_json::json!({
+            "runtime": { "image": { "tag": target_version } }
+        }),
+        sensitive_values: Default::default(),
+    });
+    if helm.is_none() {
+        // os-service path not in this MVP — skip without emitting.
+        return None;
+    }
+    Some(alien_core::sync::AgentTarget {
+        version: target_version.to_string(),
+        min_supported_version: target_version.to_string(),
+        binary: None,
+        helm,
+    })
 }
 
 fn release_stack_platform(platform: Platform) -> Platform {

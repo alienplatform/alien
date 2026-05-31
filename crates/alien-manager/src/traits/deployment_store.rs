@@ -76,6 +76,12 @@ pub struct DeploymentRecord {
     pub agent_arch: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub regime: Option<String>,
+
+    // Desired agent version. When set AND ≠ `agent_version`, the sync
+    // handler emits `agent_target` in the response so the agent triggers
+    // an upgrade. NULL = no pin, no upgrade.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_agent_version: Option<String>,
 }
 
 impl std::fmt::Debug for DeploymentRecord {
