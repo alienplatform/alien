@@ -134,12 +134,6 @@ impl EcrArtifactRegistry {
         )
     }
 
-    fn arn_account_id(arn: &str) -> Option<&str> {
-        arn.split(':')
-            .nth(4)
-            .filter(|account_id| !account_id.is_empty())
-    }
-
     /// Internal helper to set the complete ECR policy from an AwsCrossAccountAccess configuration
     async fn set_full_policy(
         &self,
@@ -925,26 +919,12 @@ impl ArtifactRegistry for EcrArtifactRegistry {
         );
 
         // Get the role ARN (optional for single-account deployments).
-        //
-        // Same-account push is performed inside the trusted manager process.
-        // Prefer base credentials there so a regional ECR repository does not
-        // fail behind a role policy scoped to another region.
+        // Push credentials use the configured push role consistently with
+        // repository creation; the caller may only be allowed to assume that
+        // role and not call ECR directly.
         let role_arn = match permissions {
             ArtifactRegistryPermissions::Pull => self.pull_role_arn.as_ref(),
-            ArtifactRegistryPermissions::PushPull => {
-                self.push_role_arn.as_ref().filter(|role_arn| {
-                    match Self::arn_account_id(role_arn) {
-                        Some(account_id) if account_id == self.credentials.account_id() => {
-                            info!(
-                                role_arn = %role_arn,
-                                "Using direct credentials for same-account ECR push access"
-                            );
-                            false
-                        }
-                        _ => true,
-                    }
-                })
-            }
+            ArtifactRegistryPermissions::PushPull => self.push_role_arn.as_ref(),
         };
 
         // When a role ARN is configured, assume it for cross-account access.
