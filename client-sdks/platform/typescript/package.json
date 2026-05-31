@@ -52,7 +52,7 @@
   "sideEffects": false,
   "scripts": {
     "lint": "eslint --cache --max-warnings=0 src",
-    "build": "tsc",
+    "build": "NODE_OPTIONS=--max-old-space-size=8192 tsc",
     "prepublishOnly": "npm run build"
   },
   "peerDependencies": {
