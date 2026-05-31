@@ -32,6 +32,14 @@ pub struct SyncRequest {
     /// (Helm). Detected at runtime from `KUBERNETES_SERVICE_HOST`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub regime: Option<AgentRegime>,
+    /// Container image repository the agent was pulled from (without the
+    /// tag), e.g. `ghcr.io/alien-dev/alien-agent`. The chart injects this
+    /// via `ALIEN_AGENT_IMAGE_REPOSITORY` (= `.Values.runtime.image.repository`),
+    /// so admins can see the supply-chain link before pinning a new tag.
+    /// Optional and Kubernetes-only — the os-service regime fills the same
+    /// role with its launcher manifest URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_image_repository: Option<String>,
 }
 
 /// Supervisor regime for an agent. Drives which `agent_target` payload
@@ -167,6 +175,7 @@ mod tests {
             agent_os: None,
             agent_arch: None,
             regime: None,
+            agent_image_repository: None,
         }
     }
 
@@ -241,14 +250,20 @@ mod tests {
             agent_os: Some("linux".to_string()),
             agent_arch: Some("aarch64".to_string()),
             regime: Some(AgentRegime::Kubernetes),
+            agent_image_repository: Some("ghcr.io/alien-dev/alien-agent".to_string()),
         };
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["agentVersion"], "1.3.5");
         assert_eq!(json["agentOs"], "linux");
         assert_eq!(json["agentArch"], "aarch64");
         assert_eq!(json["regime"], "kubernetes"); // kebab-case enum
+        assert_eq!(json["agentImageRepository"], "ghcr.io/alien-dev/alien-agent");
         let back: SyncRequest = serde_json::from_value(json).unwrap();
         assert_eq!(back.agent_version.as_deref(), Some("1.3.5"));
+        assert_eq!(
+            back.agent_image_repository.as_deref(),
+            Some("ghcr.io/alien-dev/alien-agent")
+        );
         assert_eq!(back.regime, Some(AgentRegime::Kubernetes));
     }
 

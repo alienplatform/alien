@@ -1626,6 +1626,11 @@ spec:
               value: {{ .Release.Name | quote }}
             - name: ALIEN_AGENT_UPGRADER_SA
               value: {{ include "alien.upgraderServiceAccountName" . | quote }}
+            # Reported back on /v1/sync so the dashboard can surface the
+            # registry an admin will pull a new tag from when pinning a
+            # target agent version.
+            - name: ALIEN_AGENT_IMAGE_REPOSITORY
+              value: {{ .Values.runtime.image.repository | quote }}
             {{- if .Values.runtime.upgrade.chartRef }}
             # Used by the agent when it receives `agent_target.helm` and
             # spawns a Helm-runner Job to apply the new version. The Job

@@ -146,6 +146,11 @@ async fn sync_with_manager(
         agent_os: Some(std::env::consts::OS.to_string()),
         agent_arch: Some(std::env::consts::ARCH.to_string()),
         regime: Some(detect_agent_regime()),
+        // Chart-injected at install time so admins can see the registry
+        // the agent will pull a new tag from. Absent under os-service.
+        agent_image_repository: std::env::var("ALIEN_AGENT_IMAGE_REPOSITORY")
+            .ok()
+            .filter(|s| !s.is_empty()),
     };
 
     // Call manager with deployment_id in request body.

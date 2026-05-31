@@ -124,6 +124,12 @@ pub struct AgentSyncRequest {
     /// Supervisor regime — `os-service` / `kubernetes`.
     #[serde(default)]
     pub regime: Option<String>,
+    /// Image repository the agent was pulled from (no tag), injected by
+    /// the chart at install time. Surfaced in the dashboard so admins see
+    /// the registry a pinned tag will be pulled from. Optional and
+    /// Kubernetes-only.
+    #[serde(default)]
+    pub agent_image_repository: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -356,6 +362,7 @@ async fn reconcile(
                 agent_os: None,
                 agent_arch: None,
                 regime: None,
+                agent_image_repository: None,
             },
         )
         .await
@@ -715,6 +722,7 @@ async fn agent_sync(
             req.agent_os.as_deref(),
             req.agent_arch.as_deref(),
             req.regime.as_deref(),
+            req.agent_image_repository.as_deref(),
         )
         .await
     {
@@ -769,6 +777,7 @@ async fn agent_sync(
                                 agent_os: req.agent_os.clone(),
                                 agent_arch: req.agent_arch.clone(),
                                 regime: req.regime.clone(),
+                                agent_image_repository: req.agent_image_repository.clone(),
                             },
                         )
                         .await

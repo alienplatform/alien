@@ -52,6 +52,9 @@ pub(crate) enum Deployments {
     AgentArch,
     /// Supervisor regime — `os-service` / `kubernetes`. NULL until first sync.
     Regime,
+    /// Image repository the agent was pulled from (no tag), reported on
+    /// each sync. Drives the dashboard's pin-version registry display.
+    AgentImageRepository,
     /// Pinned target agent version. NULL = no pin. When set ≠ AgentVersion,
     /// sync handler emits `agent_target` to drive an upgrade.
     TargetAgentVersion,
@@ -340,6 +343,9 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
         "ALTER TABLE deployments ADD COLUMN agent_os TEXT",
         "ALTER TABLE deployments ADD COLUMN agent_arch TEXT",
         "ALTER TABLE deployments ADD COLUMN regime TEXT",
+        // Image repository the agent was pulled from, reported on sync.
+        // Surfaced in the dashboard pin-version UI so admins see the registry.
+        "ALTER TABLE deployments ADD COLUMN agent_image_repository TEXT",
         // Pinned target agent version. Sync handler reads this on every
         // request and emits agent_target when it differs from the agent's
         // reported version. Drives the manager-directed upgrade flow.

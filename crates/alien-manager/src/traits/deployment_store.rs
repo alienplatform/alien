@@ -76,6 +76,10 @@ pub struct DeploymentRecord {
     pub agent_arch: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub regime: Option<String>,
+    // Image repository the agent was pulled from, reported on sync.
+    // Surfaced in the dashboard pin-version UI so admins see the registry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_image_repository: Option<String>,
 
     // Desired agent version. When set AND ≠ `agent_version`, the sync
     // handler emits `agent_target` in the response so the agent triggers
@@ -229,6 +233,7 @@ pub struct ReconcileData {
     pub agent_os: Option<String>,
     pub agent_arch: Option<String>,
     pub regime: Option<String>,
+    pub agent_image_repository: Option<String>,
 }
 
 /// Persistence for deployments and deployment groups.
@@ -334,11 +339,12 @@ pub trait DeploymentStore: Send + Sync {
     ) -> Result<(), AlienError>;
 
     /// Persist the agent self-update inventory reported on a `SyncRequest`
-    /// (`agent_version`, `agent_os`, `agent_arch`, `regime`). Called on every
-    /// agent sync — alongside the heartbeat update — so the manager has a
-    /// fleet-wide view of which version each host is on and can decide
-    /// whether to send an `agent_target` in the response. A field of `None`
-    /// leaves the corresponding column untouched.
+    /// (`agent_version`, `agent_os`, `agent_arch`, `regime`, image repo).
+    /// Called on every agent sync — alongside the heartbeat update — so the
+    /// manager has a fleet-wide view of which version + registry each host
+    /// is on and can decide whether to send an `agent_target` in the
+    /// response. A field of `None` leaves the corresponding column
+    /// untouched.
     async fn update_agent_metadata(
         &self,
         caller: &crate::auth::Subject,
@@ -347,6 +353,7 @@ pub trait DeploymentStore: Send + Sync {
         agent_os: Option<&str>,
         agent_arch: Option<&str>,
         regime: Option<&str>,
+        agent_image_repository: Option<&str>,
     ) -> Result<(), AlienError>;
 
     async fn set_redeploy(&self, caller: &crate::auth::Subject, id: &str)

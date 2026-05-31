@@ -40,7 +40,7 @@ impl SqliteDeploymentStore {
     }
 
     /// All columns needed for deployment queries (must match parse_deployment order).
-    const DEPLOYMENT_COLUMNS: [Deployments; 32] = [
+    const DEPLOYMENT_COLUMNS: [Deployments; 33] = [
         Deployments::Id,
         Deployments::Name,
         Deployments::DeploymentGroupId,
@@ -73,6 +73,7 @@ impl SqliteDeploymentStore {
         Deployments::AgentOs,
         Deployments::AgentArch,
         Deployments::Regime,
+        Deployments::AgentImageRepository,
         // Manager-driven upgrade target:
         Deployments::TargetAgentVersion,
     ];
@@ -148,7 +149,8 @@ impl SqliteDeploymentStore {
             agent_os: p.optional_string(28, "agent_os")?,
             agent_arch: p.optional_string(29, "agent_arch")?,
             regime: p.optional_string(30, "regime")?,
-            target_agent_version: p.optional_string(31, "target_agent_version")?,
+            agent_image_repository: p.optional_string(31, "agent_image_repository")?,
+            target_agent_version: p.optional_string(32, "target_agent_version")?,
         })
     }
 
@@ -316,6 +318,7 @@ impl DeploymentStore for SqliteDeploymentStore {
             agent_os: None,
             agent_arch: None,
             regime: None,
+            agent_image_repository: None,
             target_agent_version: None,
         })
     }
@@ -479,6 +482,7 @@ impl DeploymentStore for SqliteDeploymentStore {
             agent_os: None,
             agent_arch: None,
             regime: None,
+            agent_image_repository: None,
             target_agent_version: None,
         })
     }
@@ -738,6 +742,7 @@ impl DeploymentStore for SqliteDeploymentStore {
         agent_os: Option<&str>,
         agent_arch: Option<&str>,
         regime: Option<&str>,
+        agent_image_repository: Option<&str>,
     ) -> Result<(), AlienError> {
         // Nothing to do if the agent didn't report any of these fields
         // (e.g. an older agent on the wire).
@@ -745,6 +750,7 @@ impl DeploymentStore for SqliteDeploymentStore {
             && agent_os.is_none()
             && agent_arch.is_none()
             && regime.is_none()
+            && agent_image_repository.is_none()
         {
             return Ok(());
         }
@@ -764,6 +770,9 @@ impl DeploymentStore for SqliteDeploymentStore {
             }
             if let Some(v) = regime {
                 q.value(Deployments::Regime, v);
+            }
+            if let Some(v) = agent_image_repository {
+                q.value(Deployments::AgentImageRepository, v);
             }
             q.and_where(Expr::col(Deployments::Id).eq(id))
                 .to_string(SqliteQueryBuilder)
