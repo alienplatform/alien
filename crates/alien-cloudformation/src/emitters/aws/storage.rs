@@ -10,8 +10,8 @@ use crate::{
     emitters::aws::{
         helpers::{
             cf_from_json, required_logical_id, resource_config, service_account_role_id,
-            stack_name, storage_notification_configuration, storage_notification_dependencies,
-            tags, uniquify_iam_statement_sids,
+            storage_notification_configuration, storage_notification_dependencies, tags,
+            uniquify_iam_statement_sids,
         },
         service_account::permission_context,
     },
@@ -36,7 +36,7 @@ impl CfEmitter for AwsStorageEmitter {
         let mut bucket = CfResource::new(bucket_id.to_string(), "AWS::S3::Bucket".to_string());
         bucket
             .properties
-            .insert("BucketName".to_string(), stack_name(storage.id()));
+            .insert("BucketName".to_string(), bucket_name(storage.id()));
         bucket.properties.insert(
             "BucketEncryption".to_string(),
             CfExpression::object([(
@@ -137,12 +137,55 @@ impl CfEmitter for AwsStorageEmitter {
     }
 
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<CfExpression>> {
-        let storage = resource_config::<Storage>(ctx, Storage::RESOURCE_TYPE)?;
+        resource_config::<Storage>(ctx, Storage::RESOURCE_TYPE)?;
+        let bucket_id = required_logical_id(ctx)?;
         Ok(Some(CfExpression::object([
             ("service", CfExpression::from("s3")),
-            ("bucketName", stack_name(storage.id())),
+            ("bucketName", CfExpression::ref_(bucket_id)),
         ])))
     }
+}
+
+fn bucket_name(storage_id: &str) -> CfExpression {
+    CfExpression::object([(
+        "Fn::Join",
+        CfExpression::list([
+            CfExpression::from("-"),
+            CfExpression::list([
+                CfExpression::ref_("AWS::StackName"),
+                CfExpression::from(storage_id),
+                stack_id_short_suffix(),
+            ]),
+        ]),
+    )])
+}
+
+fn stack_id_short_suffix() -> CfExpression {
+    CfExpression::object([(
+        "Fn::Select",
+        CfExpression::list([
+            CfExpression::Integer(0),
+            CfExpression::object([(
+                "Fn::Split",
+                CfExpression::list([
+                    CfExpression::from("-"),
+                    CfExpression::object([(
+                        "Fn::Select",
+                        CfExpression::list([
+                            CfExpression::Integer(2),
+                            CfExpression::object([(
+                                "Fn::Split",
+                                CfExpression::list([
+                                    CfExpression::from("/"),
+                                    CfExpression::ref_("AWS::StackId"),
+                                ]),
+                            )]),
+                        ]),
+                    )]),
+                ]),
+            )]),
+        ]),
+    )])
 }
 
 fn public_access_block(block_public_access: bool) -> CfExpression {
@@ -242,6 +285,10 @@ fn storage_iam_policies(
             else {
                 continue;
             };
+            let policy_statements = policy_statements
+                .into_iter()
+                .map(|statement| storage_policy_statement_for_bucket(statement, bucket_id))
+                .collect::<Vec<_>>();
 
             let policy_id =
                 format!("{bucket_id}{role_id}StoragePermission{owner_index}{permission_index}");
@@ -274,6 +321,47 @@ fn storage_iam_policies(
     }
 
     Ok(resources)
+}
+
+fn storage_policy_statement_for_bucket(statement: CfExpression, bucket_id: &str) -> CfExpression {
+    let CfExpression::Object(mut statement_object) = statement else {
+        return statement;
+    };
+    if let Some(resource) = statement_object.get_mut("Resource") {
+        let original = std::mem::replace(resource, CfExpression::list(Vec::<CfExpression>::new()));
+        *resource = storage_resource_refs(original, bucket_id);
+    }
+    CfExpression::Object(statement_object)
+}
+
+fn storage_resource_refs(resource: CfExpression, bucket_id: &str) -> CfExpression {
+    match resource {
+        CfExpression::List(resources) => CfExpression::list(
+            resources
+                .into_iter()
+                .map(|resource| storage_resource_ref(resource, bucket_id)),
+        ),
+        resource => storage_resource_ref(resource, bucket_id),
+    }
+}
+
+fn storage_resource_ref(resource: CfExpression, bucket_id: &str) -> CfExpression {
+    if storage_resource_is_object_arn(&resource) {
+        CfExpression::sub(format!("arn:${{AWS::Partition}}:s3:::${{{bucket_id}}}/*"))
+    } else {
+        CfExpression::get_att(bucket_id, "Arn")
+    }
+}
+
+fn storage_resource_is_object_arn(resource: &CfExpression) -> bool {
+    match resource {
+        CfExpression::String(value) => value.ends_with("/*"),
+        CfExpression::Object(object) => object
+            .get("Fn::Sub")
+            .is_some_and(storage_resource_is_object_arn),
+        CfExpression::List(values) => values.iter().any(storage_resource_is_object_arn),
+        _ => false,
+    }
 }
 
 fn storage_permission_owners(

@@ -925,7 +925,19 @@ Resources:
     Type: AWS::S3::Bucket
     Properties:
       BucketName:
-        Fn::Sub: ${AWS::StackName}-assets
+        Fn::Join:
+        - '-'
+        - - Ref: AWS::StackName
+          - assets
+          - Fn::Select:
+            - 0
+            - Fn::Split:
+              - '-'
+              - Fn::Select:
+                - 2
+                - Fn::Split:
+                  - /
+                  - Ref: AWS::StackId
       BucketEncryption:
         ServerSideEncryptionConfiguration:
         - ServerSideEncryptionByDefault:
@@ -990,7 +1002,9 @@ Resources:
           - s3:GetLifecycleConfiguration
           Effect: Allow
           Resource:
-          - Fn::Sub: arn:${AWS::Partition}:s3:::${AWS::StackName}-assets
+          - Fn::GetAtt:
+            - Assets
+            - Arn
           Sid: CheckS3BucketHealth
       Roles:
       - Ref: ManagementRole

@@ -117,6 +117,7 @@ pub struct StackExecutor {
     node_index_to_id: HashMap<NodeIndex, String>,
     lifecycle_filter: Option<HashSet<ResourceLifecycle>>,
     step_running_resources: bool,
+    step_out_of_scope_resources: bool,
     desired_stack: Stack,
 
     // --- Stored from config for use during step() ---
@@ -213,6 +214,11 @@ pub struct StackExecutorConfig<'a> {
     #[builder(default = true)]
     step_running_resources: bool,
 
+    /// Whether resources outside the lifecycle filter may be stepped to keep
+    /// dependency discovery and health checks current.
+    #[builder(default = true)]
+    step_out_of_scope_resources: bool,
+
     /// Custom resource registry (defaults to built-in registry)
     #[builder(default = Arc::new(ResourceRegistry::with_built_ins()))]
     resource_registry: Arc<ResourceRegistry>,
@@ -288,6 +294,7 @@ impl StackExecutor {
         let deployment_config = config.deployment_config.clone();
         let lifecycle_filter = config.lifecycle_filter;
         let step_running_resources = config.step_running_resources;
+        let step_out_of_scope_resources = config.step_out_of_scope_resources;
         let platform = client_config.platform();
         let base_platform = deployment_config.base_platform;
 
@@ -417,6 +424,7 @@ impl StackExecutor {
             node_index_to_id: node_to_id,
             lifecycle_filter: filter_set,
             step_running_resources,
+            step_out_of_scope_resources,
             desired_stack: stack.clone(),
             client_config,
             resource_registry,
@@ -437,6 +445,7 @@ impl StackExecutor {
 
         Self::builder(&empty_stack, client_config)
             .deployment_config(deployment_config)
+            .step_out_of_scope_resources(false)
             .maybe_lifecycle_filter(lifecycle_filter)
             .build()
     }
@@ -455,6 +464,7 @@ impl StackExecutor {
         Self::builder(&empty_stack, client_config)
             .deployment_config(deployment_config)
             .service_provider(service_provider)
+            .step_out_of_scope_resources(false)
             .maybe_lifecycle_filter(lifecycle_filter)
             .build()
     }
@@ -851,6 +861,10 @@ impl StackExecutor {
             || self.resources.contains_key(resource_id)
             || self.is_external_binding_resource(resource_id)
         {
+            return false;
+        }
+
+        if !self.step_out_of_scope_resources {
             return false;
         }
 

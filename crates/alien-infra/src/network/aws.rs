@@ -1688,8 +1688,15 @@ impl AwsNetworkController {
     async fn delete_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Network>()?;
 
-        // For BYO-VPC, nothing to delete
-        if self.is_byo_vpc {
+        let settings_is_setup_owned_vpc = matches!(
+            &config.settings,
+            NetworkSettings::UseDefault | NetworkSettings::ByoVpcAws { .. }
+        );
+
+        // For setup-owned VPCs, nothing to delete. The settings check protects
+        // states imported before `is_byo_vpc` was derived from network mode.
+        if self.is_byo_vpc || settings_is_setup_owned_vpc {
+            self.is_byo_vpc = true;
             info!(network_id = %config.id, "BYO-VPC network - nothing to delete");
             return Ok(HandlerAction::Continue {
                 state: Deleted,

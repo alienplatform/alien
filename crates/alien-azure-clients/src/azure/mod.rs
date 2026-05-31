@@ -9,6 +9,7 @@ pub use alien_core::{
     AzureServiceOverrides as ServiceOverrides,
 };
 
+pub mod application_gateways;
 pub mod authorization;
 pub mod blob_containers;
 pub mod common;

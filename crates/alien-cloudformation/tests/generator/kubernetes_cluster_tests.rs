@@ -193,5 +193,5 @@ fn eks_target_attaches_storage_permissions_to_irsa_service_account() {
     assert!(yaml.contains("Type: AWS::IAM::Policy"));
     assert!(yaml.contains("- Ref: AppSaRole"));
     assert!(yaml.contains("s3:PutObject"));
-    assert!(yaml.contains("arn:${AWS::Partition}:s3:::${AWS::StackName}-files/*"));
+    assert!(yaml.contains("arn:${AWS::Partition}:s3:::${Files}/*"));
 }

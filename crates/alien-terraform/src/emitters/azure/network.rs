@@ -47,11 +47,13 @@ impl TfEmitter for AzureNetworkEmitter {
                 vnet_resource_id,
                 public_subnet_name,
                 private_subnet_name,
+                application_gateway_subnet_name,
             } => Ok(byo_topology(
                 label,
                 vnet_resource_id,
                 public_subnet_name,
                 private_subnet_name,
+                application_gateway_subnet_name.as_deref(),
             )),
             NetworkSettings::ByoVpcAws { .. } | NetworkSettings::ByoVpcGcp { .. } => {
                 Err(AlienError::new(ErrorData::OperationNotSupported {
@@ -91,6 +93,14 @@ impl TfEmitter for AzureNetworkEmitter {
                     ]),
                 ),
                 (
+                    "applicationGatewaySubnetId",
+                    expr::traversal(["azurerm_subnet", &format!("{label}_appgw"), "id"]),
+                ),
+                (
+                    "applicationGatewaySubnetName",
+                    expr::traversal(["azurerm_subnet", &format!("{label}_appgw"), "name"]),
+                ),
+                (
                     "natGatewayId",
                     expr::traversal(["azurerm_nat_gateway", &nat_label, "id"]),
                 ),
@@ -118,6 +128,14 @@ impl TfEmitter for AzureNetworkEmitter {
                         expr::traversal(["data", "azurerm_subnet", &private_subnet_label, "id"]),
                     ]),
                 ),
+                (
+                    "applicationGatewaySubnetId",
+                    expr::traversal(["data", "azurerm_subnet", &format!("{label}_appgw"), "id"]),
+                ),
+                (
+                    "applicationGatewaySubnetName",
+                    expr::traversal(["data", "azurerm_subnet", &format!("{label}_appgw"), "name"]),
+                ),
                 ("natGatewayId", Expression::Null),
                 ("networkSecurityGroupId", Expression::Null),
                 ("isByoVnet", Expression::Bool(true)),
@@ -131,7 +149,7 @@ fn create_topology(ctx: &EmitContext<'_>, label: &str, cidr: Option<String>) -> 
     let cidr = cidr.unwrap_or_else(|| "10.46.0.0/16".to_string());
     let public_label = format!("{label}_public");
     let private_label = format!("{label}_private");
-    let alb_label = format!("{label}_alb");
+    let appgw_label = format!("{label}_appgw");
     let nat_label = format!("{label}_nat");
     let nat_pip_label = format!("{label}_nat_pip");
     let nsg_label = format!("{label}_workload");
@@ -211,11 +229,11 @@ fn create_topology(ctx: &EmitContext<'_>, label: &str, cidr: Option<String>) -> 
 
     fragment.resource_blocks.push(resource_block(
         "azurerm_subnet",
-        &alb_label,
+        &appgw_label,
         [
             attr(
                 "name",
-                expr::template(format!("${{local.resource_prefix}}-{label}-alb")),
+                expr::template(format!("${{local.resource_prefix}}-{label}-appgw")),
             ),
             attr(
                 "resource_group_name",
@@ -231,33 +249,6 @@ fn create_topology(ctx: &EmitContext<'_>, label: &str, cidr: Option<String>) -> 
                     "cidrsubnet(tolist(azurerm_virtual_network.{label}.address_space)[0], 8, 2)"
                 ))]),
             ),
-            nested(crate::block::block(
-                "delegation",
-                [
-                    attr(
-                        "name",
-                        Expression::String("application-gateway-for-containers".to_string()),
-                    ),
-                    nested(crate::block::block(
-                        "service_delegation",
-                        [
-                            attr(
-                                "name",
-                                Expression::String(
-                                    "Microsoft.ServiceNetworking/trafficControllers".to_string(),
-                                ),
-                            ),
-                            attr(
-                                "actions",
-                                Expression::Array(vec![Expression::String(
-                                    "Microsoft.Network/virtualNetworks/subnets/join/action"
-                                        .to_string(),
-                                )]),
-                            ),
-                        ],
-                    )),
-                ],
-            )),
         ],
     ));
 
@@ -398,9 +389,11 @@ fn byo_topology(
     vnet_resource_id: &str,
     public_subnet_name: &str,
     private_subnet_name: &str,
+    application_gateway_subnet_name: Option<&str>,
 ) -> TfFragment {
     let public_label = format!("{label}_public");
     let private_label = format!("{label}_private");
+    let appgw_label = format!("{label}_appgw");
     let mut fragment = TfFragment::default();
 
     fragment.data_blocks.push(data_block(
@@ -418,9 +411,11 @@ fn byo_topology(
         ],
     ));
 
+    let appgw_subnet_name = application_gateway_subnet_name.unwrap_or(public_subnet_name);
     for (subnet_label, subnet_name) in [
         (public_label, public_subnet_name),
         (private_label, private_subnet_name),
+        (appgw_label, appgw_subnet_name),
     ] {
         fragment.data_blocks.push(data_block(
             "azurerm_subnet",

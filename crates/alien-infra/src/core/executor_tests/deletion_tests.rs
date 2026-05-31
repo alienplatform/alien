@@ -238,6 +238,35 @@ async fn test_lifecycle_filter_skips_out_of_scope_deleting_resources() -> Result
     Ok(())
 }
 
+/// Tests live-only deletion does not step non-terminal Frozen resources.
+///
+/// This covers imported setup-owned resources that may still be Provisioning
+/// for read-only discovery while live resource deletion runs.
+#[tokio::test]
+async fn test_lifecycle_filter_skips_out_of_scope_provisioning_resources() -> Result<()> {
+    let mut state = new_test_state();
+
+    let mut frozen_func = create_provisioning_function_state("frozen-func");
+    frozen_func.lifecycle = Some(ResourceLifecycle::Frozen);
+    state
+        .resources
+        .insert("frozen-func".to_string(), frozen_func);
+
+    let live_deletion = new_deletion_executor_with_filter(vec![ResourceLifecycle::Live])?;
+    let step_result = live_deletion.step(state).await?;
+
+    assert_eq!(
+        get_status(&step_result.next_state, "frozen-func"),
+        Some(ResourceStatus::Provisioning)
+    );
+    assert!(
+        live_deletion.is_synced(&step_result.next_state),
+        "live-only deletion should be synced without stepping frozen provisioning resources"
+    );
+
+    Ok(())
+}
+
 /// Tests deleting multiple independent resources.
 #[tokio::test]
 async fn test_delete_multiple_independent_resources() -> Result<()> {

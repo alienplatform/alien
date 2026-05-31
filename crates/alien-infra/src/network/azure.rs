@@ -83,6 +83,7 @@ fn emit_azure_network_heartbeat(
                 cidr_block: controller.cidr_block.clone(),
                 public_subnet_name: controller.public_subnet_name.clone(),
                 private_subnet_name: controller.private_subnet_name.clone(),
+                application_gateway_subnet_name: controller.application_gateway_subnet_name.clone(),
                 nat_gateway_id: controller.nat_gateway_id.clone(),
                 public_ip_id: controller.public_ip_id.clone(),
                 nsg_id: controller.nsg_id.clone(),
@@ -112,6 +113,8 @@ pub struct AzureNetworkController {
     pub vnet_resource_id: Option<String>,
     pub public_subnet_name: Option<String>,
     pub private_subnet_name: Option<String>,
+    #[serde(default)]
+    pub application_gateway_subnet_name: Option<String>,
     pub(crate) nat_gateway_name: Option<String>,
     pub nat_gateway_id: Option<String>,
     pub(crate) public_ip_name: Option<String>,
@@ -151,6 +154,14 @@ impl AzureNetworkController {
         format!("{}-{}-private-subnet", resource_prefix, network_id)
     }
 
+    fn get_application_gateway_subnet_name(
+        &self,
+        resource_prefix: &str,
+        network_id: &str,
+    ) -> String {
+        format!("{}-{}-appgw-subnet", resource_prefix, network_id)
+    }
+
     fn get_nat_gateway_name(&self, resource_prefix: &str, network_id: &str) -> String {
         format!("{}-{}-nat", resource_prefix, network_id)
     }
@@ -164,36 +175,53 @@ impl AzureNetworkController {
     }
 
     fn calculate_public_subnet_cidr(cidr: &str) -> String {
-        let parts: Vec<&str> = cidr.split('/').collect();
-        if parts.len() == 2 {
-            let prefix_len: u8 = parts[1].parse().unwrap_or(16);
-            format!("{}/{}", parts[0], prefix_len + 1)
-        } else {
-            cidr.to_string()
-        }
+        Self::calculate_subnet_cidr(cidr, 0)
     }
 
     fn calculate_private_subnet_cidr(cidr: &str) -> String {
-        let parts: Vec<&str> = cidr.split('/').collect();
-        if parts.len() == 2 {
-            let addr_parts: Vec<&str> = parts[0].split('.').collect();
-            if addr_parts.len() == 4 {
-                let third_octet: u8 = addr_parts[2].parse().unwrap_or(0);
-                let prefix_len: u8 = parts[1].parse().unwrap_or(16);
-                format!(
-                    "{}.{}.{}.{}/{}",
-                    addr_parts[0],
-                    addr_parts[1],
-                    third_octet + 128,
-                    addr_parts[3],
-                    prefix_len + 1
-                )
-            } else {
-                cidr.to_string()
-            }
-        } else {
-            cidr.to_string()
+        Self::calculate_subnet_cidr(cidr, 1)
+    }
+
+    fn calculate_application_gateway_subnet_cidr(cidr: &str) -> String {
+        Self::calculate_subnet_cidr(cidr, 2)
+    }
+
+    fn calculate_subnet_cidr(cidr: &str, subnet_index: u32) -> String {
+        let Some((addr, prefix)) = cidr.split_once('/') else {
+            return cidr.to_string();
+        };
+        let Ok(prefix_len) = prefix.parse::<u8>() else {
+            return cidr.to_string();
+        };
+        let new_prefix_len = prefix_len.saturating_add(8);
+        if new_prefix_len > 32 {
+            return cidr.to_string();
         }
+
+        let octets = addr
+            .split('.')
+            .map(str::parse::<u8>)
+            .collect::<std::result::Result<Vec<_>, _>>();
+        let Ok(octets) = octets else {
+            return cidr.to_string();
+        };
+        let Ok([a, b, c, d]) = <[u8; 4]>::try_from(octets.as_slice()) else {
+            return cidr.to_string();
+        };
+
+        let base = u32::from_be_bytes([a, b, c, d]);
+        let parent_mask = if prefix_len == 0 {
+            0
+        } else {
+            u32::MAX << (32 - prefix_len)
+        };
+        let subnet_size = 1_u32 << (32 - new_prefix_len);
+        let network = (base & parent_mask) + subnet_index * subnet_size;
+        let addr = network.to_be_bytes();
+        format!(
+            "{}.{}.{}.{}/{}",
+            addr[0], addr[1], addr[2], addr[3], new_prefix_len
+        )
     }
 }
 
@@ -215,6 +243,7 @@ impl AzureNetworkController {
             )),
             public_subnet_name: Some(format!("test-{}-public-subnet", network_id)),
             private_subnet_name: Some(format!("test-{}-private-subnet", network_id)),
+            application_gateway_subnet_name: Some(format!("test-{}-appgw-subnet", network_id)),
             nat_gateway_name: Some(format!("test-{}-nat", network_id)),
             nat_gateway_id: Some(format!(
                 "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/natGateways/test-{}-nat",
@@ -290,6 +319,7 @@ impl AzureNetworkController {
                 vnet_resource_id,
                 public_subnet_name,
                 private_subnet_name,
+                application_gateway_subnet_name,
             } => {
                 info!(
                     vnet_resource_id = %vnet_resource_id,
@@ -324,6 +354,9 @@ impl AzureNetworkController {
                 self.vnet_resource_id = Some(vnet_resource_id.clone());
                 self.public_subnet_name = Some(public_subnet_name.clone());
                 self.private_subnet_name = Some(private_subnet_name.clone());
+                self.application_gateway_subnet_name = application_gateway_subnet_name
+                    .clone()
+                    .or_else(|| Some(public_subnet_name.clone()));
                 self.is_byo_vnet = true;
 
                 let azure_config = ctx.get_azure_config()?;
@@ -626,7 +659,7 @@ impl AzureNetworkController {
 
         match result {
             OperationResult::Completed(_) => Ok(HandlerAction::Continue {
-                state: CreatingPublicIp,
+                state: CreatingApplicationGatewaySubnet,
                 suggested_delay: None,
             }),
             OperationResult::LongRunning(_) => Ok(HandlerAction::Continue {
@@ -665,6 +698,96 @@ impl AzureNetworkController {
             })?;
 
         info!(subnet_name = %private_subnet_name, "Private subnet created");
+
+        Ok(HandlerAction::Continue {
+            state: CreatingApplicationGatewaySubnet,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
+        state = CreatingApplicationGatewaySubnet,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn creating_application_gateway_subnet(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<Network>()?;
+        let vnet_name = self.vnet_name.clone().unwrap();
+        let resource_group = self.resource_group.clone().unwrap();
+        let subnet_name = self.get_application_gateway_subnet_name(ctx.resource_prefix, &config.id);
+        let cidr_block = self.cidr_block.clone().unwrap();
+        let subnet_cidr = Self::calculate_application_gateway_subnet_cidr(&cidr_block);
+
+        info!(subnet_name = %subnet_name, cidr = %subnet_cidr, "Creating Application Gateway subnet");
+
+        let azure_config = ctx.get_azure_config()?;
+        let network_client = ctx
+            .service_provider
+            .get_azure_network_client(azure_config)?;
+
+        let subnet = Subnet {
+            properties: Some(SubnetPropertiesFormat {
+                address_prefix: Some(subnet_cidr),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let result = network_client
+            .create_or_update_subnet(&resource_group, &vnet_name, &subnet_name, &subnet)
+            .await
+            .context(ErrorData::InfrastructureError {
+                message: format!("Failed to create Application Gateway subnet '{}'", subnet_name),
+                operation: Some("create_or_update_subnet".to_string()),
+                resource_id: Some(config.id.clone()),
+            })?;
+
+        self.application_gateway_subnet_name = Some(subnet_name);
+
+        match result {
+            OperationResult::Completed(_) => Ok(HandlerAction::Continue {
+                state: CreatingPublicIp,
+                suggested_delay: None,
+            }),
+            OperationResult::LongRunning(_) => Ok(HandlerAction::Continue {
+                state: WaitingForApplicationGatewaySubnet,
+                suggested_delay: Some(std::time::Duration::from_secs(3)),
+            }),
+        }
+    }
+
+    #[handler(
+        state = WaitingForApplicationGatewaySubnet,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn waiting_for_application_gateway_subnet(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<Network>()?;
+        let vnet_name = self.vnet_name.clone().unwrap();
+        let resource_group = self.resource_group.clone().unwrap();
+        let subnet_name = self.application_gateway_subnet_name.clone().unwrap();
+
+        let azure_config = ctx.get_azure_config()?;
+        let network_client = ctx
+            .service_provider
+            .get_azure_network_client(azure_config)?;
+
+        let _ = network_client
+            .get_subnet(&resource_group, &vnet_name, &subnet_name)
+            .await
+            .context(ErrorData::InfrastructureError {
+                message: "Failed to check Application Gateway subnet creation status".to_string(),
+                operation: Some("get_subnet".to_string()),
+                resource_id: Some(config.id.clone()),
+            })?;
+
+        info!(subnet_name = %subnet_name, "Application Gateway subnet created");
 
         Ok(HandlerAction::Continue {
             state: CreatingPublicIp,
@@ -1663,4 +1786,25 @@ impl AzureNetworkController {
     }
 
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AzureNetworkController;
+
+    #[test]
+    fn azure_create_subnet_cidrs_do_not_overlap() {
+        assert_eq!(
+            AzureNetworkController::calculate_public_subnet_cidr("10.46.0.0/16"),
+            "10.46.0.0/24"
+        );
+        assert_eq!(
+            AzureNetworkController::calculate_private_subnet_cidr("10.46.0.0/16"),
+            "10.46.1.0/24"
+        );
+        assert_eq!(
+            AzureNetworkController::calculate_application_gateway_subnet_cidr("10.46.0.0/16"),
+            "10.46.2.0/24"
+        );
+    }
 }

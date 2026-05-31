@@ -238,6 +238,7 @@ fn parse_byo_settings(
                 vnet_resource_id,
                 public_subnet_name,
                 private_subnet_name,
+                application_gateway_subnet_name: None,
             }))
         }
         _ => Err(format!(
@@ -404,6 +405,7 @@ mod tests {
                 vnet_resource_id: "/subscriptions/.../vnet".to_string(),
                 public_subnet_name: "pub-subnet".to_string(),
                 private_subnet_name: "priv-subnet".to_string(),
+                application_gateway_subnet_name: None,
             }
         );
     }

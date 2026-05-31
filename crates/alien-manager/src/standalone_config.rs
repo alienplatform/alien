@@ -22,7 +22,7 @@ fn default_host() -> String {
     "0.0.0.0".to_string()
 }
 fn default_deployment_interval() -> u64 {
-    10
+    3
 }
 fn default_heartbeat_interval() -> u64 {
     60
@@ -322,7 +322,7 @@ impl ManagerTomlConfig {
 # port = 8080
 # host = "0.0.0.0"
 # base-url = "https://alien.example.com"
-# deployment-interval-secs = 10
+# deployment-interval-secs = 3
 # heartbeat-interval-secs = 60
 
 [database]

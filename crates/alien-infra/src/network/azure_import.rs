@@ -21,21 +21,33 @@ impl ResourceImporter for AzureNetworkImporter {
         data: AzureNetworkImportData,
         ctx: &ImportContext<'_>,
     ) -> Result<StackResourceState> {
-        // Azure splits subnets between public + private; the wire payload
-        // uses a flat list. The heartbeat path will rebuild the
-        // public/private split from the network config.
-        let _ = (
-            data.subscription_id,
-            data.subnet_ids,
-            data.network_security_group_id,
-        );
+        let public_subnet_name = data
+            .subnet_ids
+            .get(0)
+            .and_then(|id| subnet_name_from_id(id))
+            .map(str::to_string);
+        let private_subnet_name = data
+            .subnet_ids
+            .get(1)
+            .and_then(|id| subnet_name_from_id(id))
+            .map(str::to_string);
+        let application_gateway_subnet_name = data
+            .application_gateway_subnet_name
+            .or_else(|| {
+                data.application_gateway_subnet_id
+                    .as_deref()
+                    .and_then(subnet_name_from_id)
+                    .map(str::to_string)
+            });
+        let _ = (data.subscription_id, data.network_security_group_id);
         let controller = AzureNetworkController {
             state: AzureNetworkState::Ready,
             desired_settings: None,
             vnet_name: data.vnet_name,
             vnet_resource_id: data.vnet_id,
-            public_subnet_name: None,
-            private_subnet_name: None,
+            public_subnet_name,
+            private_subnet_name,
+            application_gateway_subnet_name,
             nat_gateway_name: None,
             nat_gateway_id: data.nat_gateway_id,
             public_ip_name: None,
@@ -51,4 +63,8 @@ impl ResourceImporter for AzureNetworkImporter {
         };
         make_imported_state(controller, ctx)
     }
+}
+
+fn subnet_name_from_id(id: &str) -> Option<&str> {
+    id.rsplit('/').next().filter(|name| !name.is_empty())
 }

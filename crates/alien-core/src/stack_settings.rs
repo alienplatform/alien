@@ -152,6 +152,9 @@ pub enum NetworkSettings {
         public_subnet_name: String,
         /// Name of the private subnet within the VNet
         private_subnet_name: String,
+        /// Name of the dedicated classic Application Gateway subnet within the VNet.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        application_gateway_subnet_name: Option<String>,
     },
 }
 
@@ -287,6 +290,8 @@ pub struct GcpCustomCertificateConfig {
 #[serde(rename_all = "camelCase")]
 pub struct AzureCustomCertificateConfig {
     pub key_vault_certificate_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_vault_resource_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

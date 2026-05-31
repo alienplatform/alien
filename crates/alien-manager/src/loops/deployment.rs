@@ -7,7 +7,7 @@
 //! 4. Reconciles the result (via `DeploymentStore::reconcile`)
 //! 5. Releases the lock (via `DeploymentStore::release`)
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -41,6 +41,7 @@ const MAX_STEPS_PER_TICK: usize = 100;
 const MAX_CONCURRENT_DEPLOYMENTS: usize = 4;
 /// Suggested delay threshold (ms) — if step suggests waiting longer, yield.
 const SUGGESTED_DELAY_THRESHOLD_MS: u64 = 500;
+const OTEL_RESOURCE_ATTRIBUTES: &str = "OTEL_RESOURCE_ATTRIBUTES";
 
 fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> &str {
     if let Some(message) = payload.downcast_ref::<&'static str>() {
@@ -566,7 +567,10 @@ impl DeploymentLoop {
         // or local log ingest is enabled on this manager instance.
         let base_url = self.config.base_url();
 
-        if self.config.otlp_endpoint.is_some() || self.config.enable_local_log_ingest() {
+        let otlp_enabled =
+            self.config.otlp_endpoint.is_some() || self.config.enable_local_log_ingest();
+
+        if otlp_enabled {
             vars.push(EnvironmentVariable {
                 name: "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT".to_string(),
                 value: format!("{}/v1/logs", base_url),
@@ -625,6 +629,28 @@ impl DeploymentLoop {
             vars.extend(user_vars.iter().cloned());
         }
 
+        if otlp_enabled {
+            let mut existing_resource_attributes = None;
+            vars.retain(|var| {
+                if var.name == OTEL_RESOURCE_ATTRIBUTES {
+                    existing_resource_attributes = Some(var.value.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+            vars.push(EnvironmentVariable {
+                name: OTEL_RESOURCE_ATTRIBUTES.to_string(),
+                value: deployment_otel_resource_attributes(
+                    existing_resource_attributes.as_deref(),
+                    deployment_id,
+                    deployment,
+                ),
+                var_type: EnvironmentVariableType::Plain,
+                target_resources: None,
+            });
+        }
+
         // Build deterministic hash from variable contents so the infra executor
         // only sees a change when the actual values change.
         use sha2::{Digest, Sha256};
@@ -643,6 +669,47 @@ impl DeploymentLoop {
             created_at: chrono::Utc::now().to_rfc3339(),
         })
     }
+}
+
+fn deployment_otel_resource_attributes(
+    existing: Option<&str>,
+    deployment_id: &str,
+    deployment: &DeploymentRecord,
+) -> String {
+    let mut attributes = parse_otel_resource_attributes(existing);
+    attributes.insert(
+        "alien.workspace_id".to_string(),
+        deployment.workspace_id.clone(),
+    );
+    attributes.insert(
+        "alien.project_id".to_string(),
+        deployment.project_id.clone(),
+    );
+    attributes.insert(
+        "alien.deployment_group_id".to_string(),
+        deployment.deployment_group_id.clone(),
+    );
+    attributes.insert("alien.deployment_id".to_string(), deployment_id.to_string());
+
+    attributes
+        .into_iter()
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn parse_otel_resource_attributes(existing: Option<&str>) -> BTreeMap<String, String> {
+    let mut attributes = BTreeMap::new();
+
+    if let Some(existing) = existing {
+        for attribute in existing.split(',') {
+            if let Some((key, value)) = attribute.split_once('=') {
+                attributes.insert(key.trim().to_string(), value.trim().to_string());
+            }
+        }
+    }
+
+    attributes
 }
 
 // Test ownership: Manager-specific behavior tests (status parsing, skip logic,

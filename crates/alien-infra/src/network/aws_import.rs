@@ -32,6 +32,11 @@ impl ResourceImporter for AwsNetworkImporter {
             ctx.stack_settings.network.as_ref(),
             Some(NetworkSettings::UseDefault)
         ) && data.vpc_id.is_none();
+        let is_setup_owned_vpc = data.is_byo_vpc
+            || matches!(
+                ctx.stack_settings.network.as_ref(),
+                Some(NetworkSettings::UseDefault | NetworkSettings::ByoVpcAws { .. })
+            );
 
         let controller = AwsNetworkController {
             state: if needs_default_vpc_discovery {
@@ -54,7 +59,7 @@ impl ResourceImporter for AwsNetworkImporter {
             route_table_association_ids: Vec::new(),
             security_group_id: data.security_group_id,
             availability_zones: data.availability_zones,
-            is_byo_vpc: data.is_byo_vpc,
+            is_byo_vpc: is_setup_owned_vpc,
             _internal_stay_count: None,
         };
         if needs_default_vpc_discovery {
@@ -144,6 +149,7 @@ mod tests {
             .internal_state
             .expect("imported network should have controller state");
         assert_eq!(internal["state"], "createStart");
+        assert_eq!(internal["isByoVpc"], true);
         assert!(imported.outputs.is_none());
     }
 
@@ -173,6 +179,35 @@ mod tests {
             .internal_state
             .expect("imported network should have controller state");
         assert_eq!(internal["state"], "ready");
+        assert_eq!(internal["isByoVpc"], true);
         assert!(imported.outputs.is_some());
+    }
+
+    #[test]
+    fn stack_settings_mark_byo_vpc_import_as_setup_owned_even_if_data_is_stale() {
+        let settings = StackSettings {
+            network: Some(NetworkSettings::ByoVpcAws {
+                vpc_id: "vpc-123".to_string(),
+                public_subnet_ids: vec!["subnet-public".to_string()],
+                private_subnet_ids: vec!["subnet-private".to_string()],
+                security_group_ids: vec!["sg-123".to_string()],
+            }),
+            ..StackSettings::default()
+        };
+        let mut data = empty_default_import_data();
+        data.vpc_id = Some("vpc-123".to_string());
+        data.public_subnet_ids = vec!["subnet-public".to_string()];
+        data.private_subnet_ids = vec!["subnet-private".to_string()];
+        data.security_group_id = Some("sg-123".to_string());
+        data.is_byo_vpc = false;
+        let entry = network_entry();
+        let imported = AwsNetworkImporter
+            .import(data, &import_context(&settings, &entry))
+            .expect("network import should succeed");
+
+        let internal = imported
+            .internal_state
+            .expect("imported network should have controller state");
+        assert_eq!(internal["isByoVpc"], true);
     }
 }

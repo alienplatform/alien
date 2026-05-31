@@ -86,7 +86,7 @@ impl Default for ManagerConfig {
             host: "0.0.0.0".to_string(),
             db_path: None,
             state_dir: Some(PathBuf::from("alien-data")),
-            deployment_interval_secs: 10,
+            deployment_interval_secs: 3,
             heartbeat_interval_secs: 60,
             self_heartbeat_interval_secs: 60,
             otlp_endpoint: None,
