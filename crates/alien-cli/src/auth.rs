@@ -312,8 +312,8 @@ mod oauth_flow {
 
     /// Explicit logout util
     pub fn logout() {
-        let _ = Entry::new(SERVICE, ACCESS_USER).and_then(|e| e.delete_password());
-        let _ = Entry::new(SERVICE, REFRESH_USER).and_then(|e| e.delete_password());
+        let _ = Entry::new(SERVICE, ACCESS_USER).and_then(|e| e.delete_credential());
+        let _ = Entry::new(SERVICE, REFRESH_USER).and_then(|e| e.delete_credential());
         let _ = std::fs::remove_file(cfg_path());
         with_cache(|cache| cache.clear());
     }
@@ -859,7 +859,7 @@ mod oauth_flow {
                     .ok_or_else(|| DebugKeyringError("No entry found".to_string()))
             }
 
-            pub fn delete_password(&self) -> Result<(), DebugKeyringError> {
+            pub fn delete_credential(&self) -> Result<(), DebugKeyringError> {
                 let mut store = self.load_store()?;
                 let key = format!("{}:{}", self.service, self.user);
                 store.remove(&key);
