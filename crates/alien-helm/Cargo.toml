@@ -21,3 +21,6 @@ tempfile = { workspace = true, optional = true }
 
 [dev-dependencies]
 insta = { workspace = true }
+# Activate the `test-utils` feature for unit tests so the gated `test_utils`
+# module compiles (it pulls in the optional `tempfile` dep).
+alien-helm = { path = ".", features = ["test-utils"] }

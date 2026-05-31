@@ -18,7 +18,17 @@ fn schema_accepts_manager_fetch_default_values() {
         .build();
     let chart = render(&stack, StackSettings::default());
     let files = chart.files;
-    alien_helm::test_utils::helm_template_and_validate(&files, None)
+    // The manager-fetch path requires `management.{url,name,token,deploymentId}`
+    // — the chart `required` guardrails reject installs missing them, so the
+    // test must pass a minimal values overlay.
+    let manager_fetch_values = r#"
+management:
+  url: "https://manager.example.com"
+  name: "test-manager"
+  token: "test-sync-token"
+  deploymentId: "test-deployment-id"
+"#;
+    alien_helm::test_utils::helm_template_and_validate(&files, Some(manager_fetch_values))
         .assert_ok("manager-fetch path");
 }
 

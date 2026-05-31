@@ -1,5 +1,6 @@
 ---
 source: crates/alien-helm/tests/generator/helpers.rs
+assertion_line: 35
 expression: buf
 ---
 === Chart.yaml ===
@@ -33,12 +34,18 @@ runtime:
   podAnnotations: {}
   automountServiceAccountToken: true
   encryption:
-    # Set this explicitly, or reference an existing Secret below.
-    key: "replace-me-with-a-stable-64-character-encryption-secret"
+    # Leave empty to let the chart generate a stable random 64-hex-char key
+    # on first install (preserved across upgrades via `lookup`). To pin the
+    # key explicitly, set it here (must be 64 hex chars = 256-bit AES). To
+    # source it from an external secret store, set `existingSecret.name`.
+    key: ""
     existingSecret:
       name: ""
       key: encryption-key
   replicas: 1
+  # Helm's --atomic --wait gives up after this many seconds if /readyz
+  # hasn't returned 200 — the revision is then rolled back automatically.
+  progressDeadlineSeconds: 120
   resources:
     requests:
       cpu: 100m
@@ -52,16 +59,20 @@ runtime:
     service:
       type: ClusterIP
   probes:
+    # /livez is process liveness; /readyz turns 200 only after the agent
+    # completes at least one /v1/sync round-trip with the manager — the
+    # gate Helm's --atomic --wait relies on so a freshly-rolled agent
+    # is not considered ready until it has actually reached the manager.
     liveness:
       enabled: true
-      path: /health
+      path: /livez
       initialDelaySeconds: 10
       periodSeconds: 10
       timeoutSeconds: 2
       failureThreshold: 3
     readiness:
       enabled: true
-      path: /health
+      path: /readyz
       initialDelaySeconds: 5
       periodSeconds: 10
       timeoutSeconds: 2
@@ -157,10 +168,25 @@ stackSettings: null
 infrastructure: null
 
 basePlatform: null
+basePlatformConfig:
+  gcp:
+    projectId: ""
+    region: ""
+  aws:
+    region: ""
+  azure:
+    location: ""
 serviceAccountPrefix: ""
 managerServiceAccount:
   annotations: {}
   labels: {}
+
+# Agent self-update. When the agent receives agent_target.helm on /v1/sync
+# it creates a short-lived Helm-runner Job that runs `helm upgrade --atomic`.
+# The Job runs as `alien-agent-upgrader`; we keep the SA optional so charts
+# that don't want self-update can disable it.
+upgrader:
+  enabled: true
 
 services:
   api:
@@ -248,6 +274,7 @@ ephemeralStorage:
           }
         },
         "replicas": { "type": "integer", "minimum": 1 },
+        "progressDeadlineSeconds": { "type": "integer", "minimum": 1 },
         "resources": { "type": "object" },
         "api": {
           "type": "object",
@@ -376,6 +403,34 @@ ephemeralStorage:
     },
     "infrastructure": { "type": ["object", "null"] },
     "basePlatform": { "type": ["string", "null"], "enum": ["aws", "gcp", "azure", null] },
+    "basePlatformConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "gcp": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "projectId": { "type": "string" },
+            "region": { "type": "string" }
+          }
+        },
+        "aws": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "region": { "type": "string" }
+          }
+        },
+        "azure": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "location": { "type": "string" }
+          }
+        }
+      }
+    },
     "heartbeat": {
       "type": "object",
       "additionalProperties": false,
@@ -481,6 +536,13 @@ ephemeralStorage:
       }
     },
     "serviceAccountPrefix": { "type": "string" },
+    "upgrader": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" }
+      }
+    },
     "services": {
       "type": "object",
       "additionalProperties": {
@@ -568,6 +630,18 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- regexReplaceAll "[^a-z0-9-]" $raw "-" | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{/*
+  ServiceAccount used by the Helm-runner Job the agent creates when it
+  acts on agent_target.helm. Held as a least-privilege boundary; bound
+  to the existing Role so the Job can mutate the Deployment + release
+  Secrets.
+*/}}
+{{- define "alien.upgraderServiceAccountName" -}}
+{{- $prefix := default (include "alien.fullname" .) .Values.serviceAccountPrefix -}}
+{{- $raw := printf "%s-upgrader-sa" $prefix | lower -}}
+{{- regexReplaceAll "[^a-z0-9-]" $raw "-" | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
 {{- define "alien.serviceAccountName" -}}
 {{- $prefix := default (include "alien.fullname" .root) .root.Values.serviceAccountPrefix -}}
 {{- $raw := printf "%s-%s-sa" $prefix .name | lower -}}
@@ -630,6 +704,22 @@ metadata:
   {{- end }}
 ---
 {{- end }}
+{{- if .Values.upgrader.enabled }}
+# alien-agent-upgrader is the ServiceAccount used by the Helm-runner Job
+# the agent creates when it acts on agent_target.helm. It exists as a
+# least-privilege boundary for the Job — the agent pod itself uses
+# `alien-agent-manager-sa` and only needs to create Jobs + stage
+# ConfigMaps/Secrets. Operators are not restricted by this — the
+# protection against bad helm upgrades is the chart's `required` values,
+# not RBAC.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "alien.upgraderServiceAccountName" . }}
+  labels:
+    {{- include "alien.labels" . | nindent 4 }}
+---
+{{- end }}
 
 === templates/role.yaml ===
 {{- $stackSettings := default dict .Values.stackSettings -}}
@@ -671,6 +761,9 @@ rules:
   - apiGroups: ["gateway.networking.k8s.io"]
     resources: ["gateways", "httproutes"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["networking.gke.io"]
+    resources: ["healthcheckpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   {{- end }}
 
 === templates/rolebinding.yaml ===
@@ -683,6 +776,18 @@ metadata:
 subjects:
   - kind: ServiceAccount
     name: {{ include "alien.managerServiceAccountName" . }}
+  {{- /* Execution ServiceAccounts (workers/daemons/containers) need RBAC to
+         read their own vault secrets (e.g. the injected ALIEN_COMMANDS_TOKEN).
+         Without this binding, the worker pod gets 403 reading any secret
+         provisioned by the KubernetesVaultController. */}}
+  {{- range $name, $account := .Values.serviceAccounts }}
+  - kind: ServiceAccount
+    name: {{ include "alien.serviceAccountName" (dict "root" $ "name" $name) }}
+  {{- end }}
+  {{- if .Values.upgrader.enabled }}
+  - kind: ServiceAccount
+    name: {{ include "alien.upgraderServiceAccountName" . }}
+  {{- end }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -728,6 +833,25 @@ roleRef:
 === templates/secret.yaml ===
 {{- $createManagementSecret := not .Values.management.existingSecret.name -}}
 {{- $createEncryptionSecret := not .Values.runtime.encryption.existingSecret.name -}}
+{{- $encryptionKey := "" -}}
+{{- if $createEncryptionSecret -}}
+  {{- $providedKey := .Values.runtime.encryption.key | default "" | trim -}}
+  {{- $existingKey := "" -}}
+  {{- $existingSecret := lookup "v1" "Secret" .Release.Namespace (include "alien.fullname" .) -}}
+  {{- if and $existingSecret $existingSecret.data -}}
+    {{- with index $existingSecret.data "encryption-key" -}}
+      {{- $existingKey = b64dec . -}}
+    {{- end -}}
+  {{- end -}}
+  {{- if $providedKey -}}
+    {{- $encryptionKey = $providedKey -}}
+  {{- else if $existingKey -}}
+    {{- $encryptionKey = $existingKey -}}
+  {{- else -}}
+    {{- /* sprig randBytes returns base64; b64dec to raw bytes then hex */ -}}
+    {{- $encryptionKey = printf "%x" (b64dec (randBytes 32)) -}}
+  {{- end -}}
+{{- end -}}
 {{- if or $createManagementSecret $createEncryptionSecret .Values.infrastructure }}
 apiVersion: v1
 kind: Secret
@@ -738,10 +862,10 @@ metadata:
 type: Opaque
 stringData:
   {{- if $createManagementSecret }}
-  sync-token: {{ .Values.management.token | quote }}
+  sync-token: {{ required "management.token or management.existingSecret.name is required — pass the full values document" .Values.management.token | quote }}
   {{- end }}
   {{- if $createEncryptionSecret }}
-  encryption-key: {{ required "runtime.encryption.key or runtime.encryption.existingSecret.name is required" .Values.runtime.encryption.key | quote }}
+  encryption-key: {{ $encryptionKey | quote }}
   {{- end }}
   {{- if .Values.infrastructure }}
   external-bindings.json: {{ toJson .Values.infrastructure | quote }}
@@ -772,6 +896,11 @@ metadata:
     {{- include "alien.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.runtime.replicas }}
+  # Recreate guarantees exactly one agent runs at any time, so the
+  # InstanceLock is never contended — even during a self-update.
+  strategy:
+    type: Recreate
+  progressDeadlineSeconds: {{ .Values.runtime.progressDeadlineSeconds | default 120 }}
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ include "alien.name" . }}
@@ -831,16 +960,39 @@ spec:
             - name: BASE_PLATFORM
               value: {{ .Values.basePlatform | quote }}
             {{- end }}
+            {{- if and (eq .Values.basePlatform "gcp") .Values.basePlatformConfig.gcp.projectId }}
+            - name: GCP_PROJECT_ID
+              value: {{ .Values.basePlatformConfig.gcp.projectId | quote }}
+            - name: GOOGLE_CLOUD_PROJECT
+              value: {{ .Values.basePlatformConfig.gcp.projectId | quote }}
+            {{- end }}
+            {{- if and (eq .Values.basePlatform "gcp") .Values.basePlatformConfig.gcp.region }}
+            - name: GCP_REGION
+              value: {{ .Values.basePlatformConfig.gcp.region | quote }}
+            {{- end }}
+            # `required` chart guardrail: any helm upgrade that does not
+            # carry the full values document fails to render (Helm aborts
+            # before touching the release). This is the protection against
+            # bare `helm upgrade` silently resetting the agent's manager
+            # config — manager-triggered, operator-triggered, or otherwise.
             - name: SYNC_URL
-              value: {{ .Values.management.url | quote }}
+              value: {{ required "management.url is required — pass the full values document" .Values.management.url | quote }}
             - name: AGENT_NAME
-              value: {{ .Values.management.name | quote }}
+              value: {{ required "management.name is required — pass the full values document" .Values.management.name | quote }}
             {{- if .Values.management.deploymentId }}
             - name: DEPLOYMENT_ID
               value: {{ .Values.management.deploymentId | quote }}
             {{- end }}
             - name: KUBERNETES_NAMESPACE
               value: {{ .Release.Namespace | quote }}
+            {{- if .Values.serviceAccountPrefix }}
+            # Pin the deployment's resource_prefix to the same value used for
+            # ServiceAccount naming, so Helm-created SAs and vault secret names
+            # stay aligned across agent restarts (pull-model storage is ephemeral
+            # and the agent would otherwise regenerate a random prefix each time).
+            - name: ALIEN_RESOURCE_PREFIX
+              value: {{ .Values.serviceAccountPrefix | quote }}
+            {{- end }}
             - name: SYNC_TOKEN_FILE
               value: /etc/alien/secrets/sync-token
             - name: AGENT_ENCRYPTION_KEY_FILE

@@ -214,6 +214,15 @@ pub struct ReconcileData {
     pub error: Option<serde_json::Value>,
     pub suggested_delay_ms: Option<u64>,
     pub heartbeats: Vec<ResourceHeartbeat>,
+    /// Agent self-update inventory the agent reported on this sync. Forwarded
+    /// by multi-tenant embedders into their platform-side reconcile request so
+    /// the SaaS dashboard can show fleet inventory. Each `None` means "leave
+    /// the existing column untouched" rather than "blank it" — important for
+    /// back-compat with agents that don't report these fields.
+    pub agent_version: Option<String>,
+    pub agent_os: Option<String>,
+    pub agent_arch: Option<String>,
+    pub regime: Option<String>,
 }
 
 /// Persistence for deployments and deployment groups.

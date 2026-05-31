@@ -349,6 +349,13 @@ async fn reconcile(
                 error: req.error,
                 suggested_delay_ms: req.suggested_delay_ms,
                 heartbeats: req.heartbeats,
+                // Non-agent reconcile path (push/platform-api) doesn't carry
+                // the agent self-update inventory; leave it out of the
+                // forwarded request.
+                agent_version: None,
+                agent_os: None,
+                agent_arch: None,
+                regime: None,
             },
         )
         .await
@@ -754,6 +761,14 @@ async fn agent_sync(
                                 heartbeats: vec![],
                                 error: None,
                                 suggested_delay_ms: None,
+                                // Forward the agent self-update inventory the
+                                // agent reported on this sync so multi-tenant
+                                // embedders can persist it in their own
+                                // deployment row.
+                                agent_version: req.agent_version.clone(),
+                                agent_os: req.agent_os.clone(),
+                                agent_arch: req.agent_arch.clone(),
+                                regime: req.regime.clone(),
                             },
                         )
                         .await

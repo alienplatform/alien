@@ -515,7 +515,6 @@ mod tests {
         }));
     }
 
-    #[test]
     fn kubernetes_gcp_base_environment_declares_gcp_identity() {
         let entries = kubernetes_base_platform_runtime_environment_plan(Some(Platform::Gcp));
 
@@ -532,12 +531,12 @@ mod tests {
     }
 
     #[test]
-    fn kubernetes_worker_environment_uses_http_proxy_transport() {
+    fn kubernetes_worker_environment_uses_local_transport() {
         let entries = worker_transport_runtime_environment_plan(Platform::Kubernetes);
 
         assert!(entries.iter().any(|entry| {
             entry.name == ENV_ALIEN_TRANSPORT
-                && entry.value == RuntimeEnvironmentValue::Literal("http")
+                && entry.value == RuntimeEnvironmentValue::Literal("local")
         }));
     }
 }

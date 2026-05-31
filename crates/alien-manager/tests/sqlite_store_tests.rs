@@ -598,6 +598,10 @@ async fn reconcile_succeeds_under_other_session_lock() {
                 heartbeats: vec![],
                 error: None,
                 suggested_delay_ms: None,
+                agent_version: None,
+                agent_os: None,
+                agent_arch: None,
+                regime: None,
             },
         )
         .await

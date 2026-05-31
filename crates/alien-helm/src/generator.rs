@@ -389,8 +389,11 @@ runtime:
   podAnnotations: {}
   automountServiceAccountToken: true
   encryption:
-    # Set this explicitly, or reference an existing Secret below.
-    key: "replace-me-with-a-stable-64-character-encryption-secret"
+    # Leave empty to let the chart generate a stable random 64-hex-char key
+    # on first install (preserved across upgrades via `lookup`). To pin the
+    # key explicitly, set it here (must be 64 hex chars = 256-bit AES). To
+    # source it from an external secret store, set `existingSecret.name`.
+    key: ""
     existingSecret:
       name: ""
       key: encryption-key
@@ -1428,8 +1431,40 @@ roleRef:
 }
 
 fn secret_tpl() -> String {
+    // Encryption key resolution order:
+    //   1. user-provided `runtime.encryption.key`
+    //   2. existing in-cluster Secret's encryption-key (preserves the key
+    //      across `helm upgrade` so previously-encrypted data stays readable)
+    //   3. freshly generated via `randBytes 32` — crypto/rand-backed in
+    //      sprig 3.2+; if your Helm bundles an older sprig, set the key
+    //      explicitly via `runtime.encryption.key` or
+    //      `runtime.encryption.existingSecret.name`.
+    //
+    // `lookup` returns nil during `helm template` (no cluster access), so
+    // a `helm template | kubectl apply -f -` workflow would generate a
+    // fresh key on each render — install via `helm install/upgrade` to
+    // keep the key stable, or always set `runtime.encryption.key`.
     r#"{{- $createManagementSecret := not .Values.management.existingSecret.name -}}
 {{- $createEncryptionSecret := not .Values.runtime.encryption.existingSecret.name -}}
+{{- $encryptionKey := "" -}}
+{{- if $createEncryptionSecret -}}
+  {{- $providedKey := .Values.runtime.encryption.key | default "" | trim -}}
+  {{- $existingKey := "" -}}
+  {{- $existingSecret := lookup "v1" "Secret" .Release.Namespace (include "alien.fullname" .) -}}
+  {{- if and $existingSecret $existingSecret.data -}}
+    {{- with index $existingSecret.data "encryption-key" -}}
+      {{- $existingKey = b64dec . -}}
+    {{- end -}}
+  {{- end -}}
+  {{- if $providedKey -}}
+    {{- $encryptionKey = $providedKey -}}
+  {{- else if $existingKey -}}
+    {{- $encryptionKey = $existingKey -}}
+  {{- else -}}
+    {{- /* sprig randBytes returns base64; b64dec to raw bytes then hex */ -}}
+    {{- $encryptionKey = printf "%x" (b64dec (randBytes 32)) -}}
+  {{- end -}}
+{{- end -}}
 {{- if or $createManagementSecret $createEncryptionSecret .Values.infrastructure }}
 apiVersion: v1
 kind: Secret
@@ -1443,7 +1478,7 @@ stringData:
   sync-token: {{ required "management.token or management.existingSecret.name is required — pass the full values document" .Values.management.token | quote }}
   {{- end }}
   {{- if $createEncryptionSecret }}
-  encryption-key: {{ required "runtime.encryption.key or runtime.encryption.existingSecret.name is required" .Values.runtime.encryption.key | quote }}
+  encryption-key: {{ $encryptionKey | quote }}
   {{- end }}
   {{- if .Values.infrastructure }}
   external-bindings.json: {{ toJson .Values.infrastructure | quote }}
@@ -2303,7 +2338,17 @@ mod tests {
 
         let files = chart.files.clone();
         crate::test_utils::helm_lint(&files).assert_ok("helm chart");
-        crate::test_utils::helm_template_and_validate(&files, None)
+        // Manager-fetch path: a token + deploymentId are required (the chart
+        // refuses to install without them — guards against half-configured
+        // values).
+        let manager_fetch_values = r#"
+management:
+  url: "https://manager.example.com"
+  name: "test-manager"
+  token: "test-sync-token"
+  deploymentId: "test-deployment-id"
+"#;
+        crate::test_utils::helm_template_and_validate(&files, Some(manager_fetch_values))
             .assert_ok("helm template manager-fetch path");
         crate::test_utils::helm_template_and_validate(&files, Some(&files["examples/onprem.yaml"]))
             .assert_ok("helm template external-bindings initialize path");
