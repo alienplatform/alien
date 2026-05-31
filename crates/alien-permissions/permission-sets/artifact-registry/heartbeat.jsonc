@@ -5,14 +5,25 @@
     "aws": [
       {
         "grant": {
+          "actions": ["ecr:DescribeRepositories"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/*"]
+          }
+        }
+      },
+      {
+        "grant": {
           "actions": [
-            "ecr:DescribeRepositories",
             "ecr:DescribeImages",
             "ecr:ListImages",
             "ecr:DescribeImageScanFindings",
             "ecr:GetRepositoryPolicy",
-            "ecr:ListTagsForResource",
-            "ecr:DescribeRegistry"
+            "ecr:ListTagsForResource"
           ]
         },
         "binding": {

@@ -24,6 +24,7 @@ pub fn render(stack: &Stack, target: TerraformTarget, settings: StackSettings) -
             stack_settings: settings,
             registration: None,
             helm_install: None,
+            supported_aws_regions: Vec::new(),
         },
     )
     .expect("module should render")

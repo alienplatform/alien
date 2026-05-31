@@ -65,6 +65,11 @@ variable "azure_subscription_id" {
   description = "Azure subscription ID hosting the stack."
 }
 
+variable "azure_tenant_id" {
+  type        = string
+  description = "Azure tenant ID hosting the target AKS Kubernetes API identities."
+}
+
 variable "azure_resource_group_name" {
   type        = string
   description = "Azure resource group name."

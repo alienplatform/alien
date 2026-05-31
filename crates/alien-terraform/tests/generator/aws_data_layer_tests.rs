@@ -7,7 +7,8 @@
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
-    Kv, LifecycleRule, Queue, ResourceLifecycle, Stack, StackSettings, Storage, Vault,
+    Kv, LifecycleRule, PermissionProfile, Queue, ResourceLifecycle, ServiceAccount, Stack,
+    StackSettings, Storage, Vault,
 };
 use alien_terraform::TerraformTarget;
 
@@ -93,6 +94,34 @@ fn aws_vault_emits_only_import_data() {
     let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
     snapshot_module("aws_vault_minimal", &module);
     assert_terraform_valid(&module, "aws_vault_minimal");
+}
+
+#[test]
+fn aws_vault_resource_permissions_attach_to_service_account_role() {
+    let stack = Stack::new("acme-vault".to_string())
+        .permission(
+            "execution",
+            PermissionProfile::new().resource("secrets", ["vault/data-read"]),
+        )
+        .add(
+            ServiceAccount::new("execution-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Vault::new("secrets".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
+    let rendered = module
+        .iter()
+        .map(|(_, contents)| contents)
+        .collect::<String>();
+
+    assert!(rendered.contains("aws_iam_role_policy\" \"execution_sa_vault_secrets_set_0\""));
+    assert!(rendered.contains("ssm:GetParameter"));
+    assert!(rendered.contains("parameter/${local.resource_prefix}-secrets-*"));
+    assert_terraform_valid(&module, "aws_vault_service_account_permissions");
 }
 
 #[test]

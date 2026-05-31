@@ -132,18 +132,14 @@ resource "random_id" "resource_prefix" {
 
 === locals.tf ===
 locals {
-  resource_prefix        = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
-  deployment_name        = var.name
-  gcp_custom_role_prefix = substr(replace(lower(var.gcp_custom_role_prefix == "" ? local.resource_prefix : var.gcp_custom_role_prefix), "-", "_"), 0, 18)
-  deployment_platform    = "gcp"
-  deployment_target      = "gcp"
-  deployment_region      = var.gcp_region
-  deployment_management_config = {
-    platform            = "gcp"
-    projectId           = var.gcp_project
-    serviceAccountEmail = var.managing_service_account_email
-  }
-  deployment_settings = merge(jsondecode(var.stack_settings_json), { network = jsondecode(var.network_mode == "create-new" ? jsonencode({ type = "create", cidr = var.network_cidr == "" ? null : var.network_cidr, availabilityZones = var.availability_zones }) : var.network_mode == "use-existing" ? jsonencode({ type = "byo-vpc-gcp", networkName = var.network_name, subnetName = var.subnet_name, region = var.network_region == "" ? var.gcp_region : var.network_region }) : jsonencode({ type = "use-default" })) })
+  resource_prefix              = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
+  deployment_name              = var.name
+  gcp_custom_role_prefix       = substr(replace(lower(var.gcp_custom_role_prefix == "" ? local.resource_prefix : var.gcp_custom_role_prefix), "-", "_"), 0, 18)
+  deployment_platform          = "gcp"
+  deployment_target            = "gcp"
+  deployment_region            = var.gcp_region
+  deployment_management_config = null
+  deployment_settings          = merge(jsondecode(var.stack_settings_json), { network = jsondecode(var.network_mode == "create-new" ? jsonencode({ type = "create", cidr = var.network_cidr == "" ? null : var.network_cidr, availabilityZones = var.availability_zones }) : var.network_mode == "use-existing" ? jsonencode({ type = "byo-vpc-gcp", networkName = var.network_name, subnetName = var.subnet_name, region = var.network_region == "" ? var.gcp_region : var.network_region }) : jsonencode({ type = "use-default" })) })
   deployment_resources = [
     {
       id   = "default-network"
@@ -178,7 +174,7 @@ data "google_compute_subnetwork" "default_network_existing_subnet" {
 
 resource "google_compute_network" "default_network" {
   count                   = var.network_mode == "create-new" ? 1 : 0
-  name                    = "${local.resource_prefix}-default_network"
+  name                    = trim(substr("${local.resource_prefix}-default-network", 0, 63), "-")
   project                 = var.gcp_project
   auto_create_subnetworks = false
   routing_mode            = "REGIONAL"
@@ -186,7 +182,7 @@ resource "google_compute_network" "default_network" {
 
 resource "google_compute_subnetwork" "default_network_workload" {
   count                    = var.network_mode == "create-new" ? 1 : 0
-  name                     = "${local.resource_prefix}-default_network-workload"
+  name                     = trim(substr("${local.resource_prefix}-default-network-workload", 0, 63), "-")
   project                  = var.gcp_project
   region                   = var.gcp_region
   ip_cidr_range            = "10.42.0.0/16"
@@ -196,7 +192,7 @@ resource "google_compute_subnetwork" "default_network_workload" {
 
 resource "google_compute_router" "default_network_router" {
   count   = var.network_mode == "create-new" ? 1 : 0
-  name    = "${local.resource_prefix}-default_network-router"
+  name    = trim(substr("${local.resource_prefix}-default-network-router", 0, 63), "-")
   project = var.gcp_project
   region  = var.gcp_region
   network = google_compute_network.default_network[0].id
@@ -204,7 +200,7 @@ resource "google_compute_router" "default_network_router" {
 
 resource "google_compute_router_nat" "default_network_nat" {
   count                              = var.network_mode == "create-new" ? 1 : 0
-  name                               = "${local.resource_prefix}-default_network-nat"
+  name                               = trim(substr("${local.resource_prefix}-default-network-nat", 0, 63), "-")
   project                            = var.gcp_project
   region                             = var.gcp_region
   router                             = google_compute_router.default_network_router[0].name
@@ -219,7 +215,7 @@ resource "google_compute_router_nat" "default_network_nat" {
 
 resource "google_compute_firewall" "default_network_internal" {
   count     = var.network_mode == "create-new" ? 1 : 0
-  name      = "${local.resource_prefix}-default_network-internal"
+  name      = trim(substr("${local.resource_prefix}-default-network-internal", 0, 63), "-")
   project   = var.gcp_project
   network   = google_compute_network.default_network[0].id
   direction = "INGRESS"
@@ -235,17 +231,18 @@ resource "google_compute_firewall" "default_network_internal" {
 === import.tf ===
 resource "terraform_data" "deployment_import" {
   input = {
-    platform                  = local.deployment_platform
-    token                     = var.token
-    name                      = var.name
-    resource_prefix           = local.resource_prefix
-    setup_target              = ""
-    setup_fingerprint         = ""
-    setup_fingerprint_version = 0
-    manager_url               = var.manager_url
-    management_config         = local.deployment_management_config
-    stack_settings            = local.deployment_settings
-    resources                 = local.deployment_resources
+    platform                    = local.deployment_platform
+    token                       = var.token
+    name                        = var.name
+    resource_prefix             = local.resource_prefix
+    setup_target                = ""
+    setup_import_format_version = 1
+    setup_fingerprint           = ""
+    setup_fingerprint_version   = 0
+    manager_url                 = var.manager_url
+    management_config           = local.deployment_management_config
+    stack_settings              = local.deployment_settings
+    resources                   = local.deployment_resources
   }
   depends_on = [
     google_compute_network.default_network,
@@ -280,6 +277,11 @@ output "deployment_region" {
 output "deployment_setup_target" {
   value       = ""
   description = "Setup target."
+}
+
+output "deployment_setup_import_format_version" {
+  value       = 1
+  description = "Setup import payload format version."
 }
 
 output "deployment_setup_fingerprint" {

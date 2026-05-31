@@ -9,9 +9,9 @@ use crate::kubernetes_cluster_heartbeat::{
 };
 use alien_azure_clients::long_running_operation::LongRunningOperation as AzureLongRunningOperation;
 use alien_core::{
-    KubernetesCluster, KubernetesClusterOutputs, KubernetesClusterOwnership,
-    KubernetesClusterProvider, KubernetesHeartbeatMode, Platform,
-    ResourceOutputs as CoreResourceOutputs, ResourceStatus,
+    import::data::AzureApplicationGatewayForContainersBootstrap, KubernetesCluster,
+    KubernetesClusterOutputs, KubernetesClusterOwnership, KubernetesClusterProvider,
+    KubernetesHeartbeatMode, Platform, ResourceOutputs as CoreResourceOutputs, ResourceStatus,
 };
 use alien_error::{AlienError, Context};
 use alien_macros::controller;
@@ -33,6 +33,8 @@ pub struct KubernetesClusterController {
     pub(crate) rbac_ready: Option<bool>,
     pub(crate) agent_ready: Option<bool>,
     pub(crate) cloud_metadata_ready: Option<bool>,
+    pub(crate) azure_application_gateway_for_containers:
+        Option<AzureApplicationGatewayForContainersBootstrap>,
     pub(crate) cloud_operation_id: Option<String>,
     pub(crate) cloud_cluster_status: Option<String>,
     pub(crate) azure_delete_operation: Option<AzureLongRunningOperation>,
@@ -230,6 +232,9 @@ impl KubernetesClusterController {
             rbac_ready: self.rbac_ready.unwrap_or(default_ready),
             agent_ready: self.agent_ready.unwrap_or(default_ready),
             cloud_metadata_ready: self.cloud_metadata_ready,
+            azure_application_gateway_for_containers: self
+                .azure_application_gateway_for_containers
+                .clone(),
             version: None,
             status_message: self.status_message.clone().or_else(|| {
                 self.cloud_cluster_status

@@ -142,17 +142,18 @@ resource "aws_iam_role_policy" "management_self_read" {
 === import.tf ===
 resource "terraform_data" "deployment_import" {
   input = {
-    platform                  = local.deployment_platform
-    token                     = var.token
-    name                      = var.name
-    resource_prefix           = local.resource_prefix
-    setup_target              = ""
-    setup_fingerprint         = ""
-    setup_fingerprint_version = 0
-    manager_url               = var.manager_url
-    management_config         = local.deployment_management_config
-    stack_settings            = local.deployment_settings
-    resources                 = local.deployment_resources
+    platform                    = local.deployment_platform
+    token                       = var.token
+    name                        = var.name
+    resource_prefix             = local.resource_prefix
+    setup_target                = ""
+    setup_import_format_version = 1
+    setup_fingerprint           = ""
+    setup_fingerprint_version   = 0
+    manager_url                 = var.manager_url
+    management_config           = local.deployment_management_config
+    stack_settings              = local.deployment_settings
+    resources                   = local.deployment_resources
   }
   depends_on = [
     aws_iam_role.management,
@@ -186,6 +187,11 @@ output "deployment_region" {
 output "deployment_setup_target" {
   value       = ""
   description = "Setup target."
+}
+
+output "deployment_setup_import_format_version" {
+  value       = 1
+  description = "Setup import payload format version."
 }
 
 output "deployment_setup_fingerprint" {

@@ -488,6 +488,12 @@ resource "aws_s3_bucket_versioning" "assets" {
   }
 }
 
+resource "aws_iam_role_policy" "assets_management_storage-heartbeat_0" {
+  name   = "assets-storage-heartbeat-0"
+  role   = aws_iam_role.management.id
+  policy = jsonencode({ Statement = [{ Action = ["s3:GetBucketLocation", "s3:GetBucketVersioning", "s3:GetLifecycleConfiguration", "s3:GetBucketPolicy", "s3:GetBucketAcl", "s3:GetEncryptionConfiguration", "s3:GetBucketPublicAccessBlock"], Effect = "Allow", Resource = ["arn:aws:s3:::${aws_s3_bucket.assets.bucket}"], Sid = "CheckS3BucketHealth" }], Version = "2012-10-17" })
+}
+
 === jobs.tf ===
 resource "aws_sqs_queue" "jobs" {
   name                       = "${local.resource_prefix}-jobs"
@@ -619,17 +625,18 @@ resource "aws_iam_role_policy" "registry_push_policy" {
 === import.tf ===
 resource "terraform_data" "deployment_import" {
   input = {
-    platform                  = local.deployment_platform
-    token                     = var.token
-    name                      = var.name
-    resource_prefix           = local.resource_prefix
-    setup_target              = ""
-    setup_fingerprint         = ""
-    setup_fingerprint_version = 0
-    manager_url               = var.manager_url
-    management_config         = local.deployment_management_config
-    stack_settings            = local.deployment_settings
-    resources                 = local.deployment_resources
+    platform                    = local.deployment_platform
+    token                       = var.token
+    name                        = var.name
+    resource_prefix             = local.resource_prefix
+    setup_target                = ""
+    setup_import_format_version = 1
+    setup_fingerprint           = ""
+    setup_fingerprint_version   = 0
+    manager_url                 = var.manager_url
+    management_config           = local.deployment_management_config
+    stack_settings              = local.deployment_settings
+    resources                   = local.deployment_resources
   }
   depends_on = [
     aws_vpc.default_network,
@@ -658,6 +665,7 @@ resource "terraform_data" "deployment_import" {
     aws_s3_bucket_public_access_block.assets,
     aws_s3_bucket_policy.assets,
     aws_s3_bucket_versioning.assets,
+    aws_iam_role_policy.assets_management_storage-heartbeat_0,
     aws_sqs_queue.jobs,
     aws_dynamodb_table.metadata,
     aws_iam_role_policy.management_vault_secrets_set_0,
@@ -694,6 +702,11 @@ output "deployment_region" {
 output "deployment_setup_target" {
   value       = ""
   description = "Setup target."
+}
+
+output "deployment_setup_import_format_version" {
+  value       = 1
+  description = "Setup import payload format version."
 }
 
 output "deployment_setup_fingerprint" {

@@ -130,16 +130,13 @@ resource "random_id" "resource_prefix" {
 
 === locals.tf ===
 locals {
-  resource_prefix     = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
-  deployment_name     = var.name
-  deployment_platform = "aws"
-  deployment_target   = "aws"
-  deployment_region   = data.aws_region.current.region
-  deployment_management_config = {
-    platform        = "aws"
-    managingRoleArn = var.managing_role_arn
-  }
-  deployment_settings = merge(jsondecode(var.stack_settings_json), { network = jsondecode(var.network_mode == "create-new" ? jsonencode({ type = "create", cidr = var.vpc_cidr == "" ? null : var.vpc_cidr, availabilityZones = var.availability_zones }) : var.network_mode == "use-existing" ? jsonencode({ type = "byo-vpc-aws", vpcId = var.vpc_id, publicSubnetIds = var.public_subnet_ids, privateSubnetIds = var.private_subnet_ids, securityGroupIds = var.security_group_ids }) : jsonencode({ type = "use-default" })) })
+  resource_prefix              = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
+  deployment_name              = var.name
+  deployment_platform          = "aws"
+  deployment_target            = "aws"
+  deployment_region            = data.aws_region.current.region
+  deployment_management_config = null
+  deployment_settings          = merge(jsondecode(var.stack_settings_json), { network = jsondecode(var.network_mode == "create-new" ? jsonencode({ type = "create", cidr = var.vpc_cidr == "" ? null : var.vpc_cidr, availabilityZones = var.availability_zones }) : var.network_mode == "use-existing" ? jsonencode({ type = "byo-vpc-aws", vpcId = var.vpc_id, publicSubnetIds = var.public_subnet_ids, privateSubnetIds = var.private_subnet_ids, securityGroupIds = var.security_group_ids }) : jsonencode({ type = "use-default" })) })
   deployment_resources = [
     {
       id   = "default-network"
@@ -313,17 +310,18 @@ resource "aws_security_group" "default_network_workload" {
 === import.tf ===
 resource "terraform_data" "deployment_import" {
   input = {
-    platform                  = local.deployment_platform
-    token                     = var.token
-    name                      = var.name
-    resource_prefix           = local.resource_prefix
-    setup_target              = ""
-    setup_fingerprint         = ""
-    setup_fingerprint_version = 0
-    manager_url               = var.manager_url
-    management_config         = local.deployment_management_config
-    stack_settings            = local.deployment_settings
-    resources                 = local.deployment_resources
+    platform                    = local.deployment_platform
+    token                       = var.token
+    name                        = var.name
+    resource_prefix             = local.resource_prefix
+    setup_target                = ""
+    setup_import_format_version = 1
+    setup_fingerprint           = ""
+    setup_fingerprint_version   = 0
+    manager_url                 = var.manager_url
+    management_config           = local.deployment_management_config
+    stack_settings              = local.deployment_settings
+    resources                   = local.deployment_resources
   }
   depends_on = [
     aws_vpc.default_network,
@@ -364,6 +362,11 @@ output "deployment_region" {
 output "deployment_setup_target" {
   value       = ""
   description = "Setup target."
+}
+
+output "deployment_setup_import_format_version" {
+  value       = 1
+  description = "Setup import payload format version."
 }
 
 output "deployment_setup_fingerprint" {

@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 use tracing::{debug, info};
 
-use crate::core::{EnvironmentVariableBuilder, ResourceControllerContext};
+use crate::core::{
+    kubernetes_runtime_pod_labels, EnvironmentVariableBuilder, ResourceControllerContext,
+};
 use crate::error::{ErrorData, Result};
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
@@ -740,6 +742,8 @@ impl KubernetesBuildController {
             ..Default::default()
         };
 
+        let pod_labels = kubernetes_runtime_pod_labels(ctx, labels.clone());
+
         let job = Job {
             metadata: ObjectMeta {
                 name: Some(job_name.to_string()),
@@ -750,7 +754,7 @@ impl KubernetesBuildController {
             spec: Some(JobSpec {
                 template: PodTemplateSpec {
                     metadata: Some(ObjectMeta {
-                        labels: Some(labels),
+                        labels: Some(pod_labels),
                         ..Default::default()
                     }),
                     spec: Some(pod_spec),

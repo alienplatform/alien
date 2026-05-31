@@ -367,6 +367,7 @@ fn eks_cluster_import_request(deployment_name: &str, region: &str) -> StackImpor
                 cluster_name: Some("alien-e2e".to_string()),
                 cluster_id: None,
                 cloud_metadata_ready: Some(true),
+                azure_application_gateway_for_containers: None,
             })
             .unwrap(),
         }],

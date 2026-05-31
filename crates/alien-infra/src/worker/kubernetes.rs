@@ -2,8 +2,9 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 use tracing::{debug, info};
 
-use crate::core::EnvironmentVariableBuilder;
-use crate::core::ResourceControllerContext;
+use crate::core::{
+    kubernetes_runtime_pod_labels, EnvironmentVariableBuilder, ResourceControllerContext,
+};
 use crate::error::{ErrorData, Result};
 use crate::kubernetes_public_endpoint::{
     delete_kubernetes_public_endpoint, reconcile_kubernetes_public_endpoint,
@@ -855,6 +856,7 @@ impl KubernetesWorkerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<Deployment> {
         let labels = self.build_labels(function_name);
+        let pod_labels = kubernetes_runtime_pod_labels(ctx, labels.clone());
 
         // Determine the container image
         let image = match &config.code {
@@ -1004,7 +1006,7 @@ impl KubernetesWorkerController {
                 },
                 template: PodTemplateSpec {
                     metadata: Some(ObjectMeta {
-                        labels: Some(labels),
+                        labels: Some(pod_labels),
                         ..Default::default()
                     }),
                     spec: Some(pod_spec),

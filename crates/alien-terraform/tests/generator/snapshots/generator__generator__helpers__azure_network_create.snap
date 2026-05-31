@@ -70,21 +70,6 @@ variable "azure_resource_group_name" {
   description = "Azure resource group name."
 }
 
-variable "azure_managing_tenant_id" {
-  type        = string
-  description = "Azure tenant ID the manager uses for cross-tenant access."
-}
-
-variable "azure_oidc_issuer" {
-  type        = string
-  description = "OIDC issuer URL for Azure Federated Identity Credential."
-}
-
-variable "azure_oidc_subject" {
-  type        = string
-  description = "OIDC subject claim for Azure Federated Identity Credential."
-}
-
 === providers.tf ===
 provider "azurerm" {
   resource_provider_registrations = "none"
@@ -99,18 +84,13 @@ resource "random_id" "resource_prefix" {
 
 === locals.tf ===
 locals {
-  resource_prefix     = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
-  deployment_name     = var.name
-  deployment_platform = "azure"
-  deployment_target   = "azure"
-  deployment_region   = var.azure_location
-  deployment_management_config = {
-    platform         = "azure"
-    managingTenantId = var.azure_managing_tenant_id
-    oidcIssuer       = var.azure_oidc_issuer
-    oidcSubject      = var.azure_oidc_subject
-  }
-  deployment_settings = jsondecode(var.stack_settings_json)
+  resource_prefix              = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
+  deployment_name              = var.name
+  deployment_platform          = "azure"
+  deployment_target            = "azure"
+  deployment_region            = var.azure_location
+  deployment_management_config = null
+  deployment_settings          = jsondecode(var.stack_settings_json)
   deployment_resources = [
     {
       id   = "default-resource-group"
@@ -191,6 +171,30 @@ resource "azurerm_subnet" "default_network_private" {
   address_prefixes = [
     cidrsubnet(tolist(azurerm_virtual_network.default_network.address_space)[0], 8, 1)
   ]
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_subnet" "default_network_alb" {
+  name                 = "${local.resource_prefix}-default_network-alb"
+  resource_group_name  = var.azure_resource_group_name
+  virtual_network_name = azurerm_virtual_network.default_network.name
+  address_prefixes = [
+    cidrsubnet(tolist(azurerm_virtual_network.default_network.address_space)[0], 8, 2)
+  ]
+
+  delegation {
+    name = "application-gateway-for-containers"
+
+    service_delegation {
+      name = "Microsoft.ServiceNetworking/trafficControllers"
+      actions = [
+        "Microsoft.Network/virtualNetworks/subnets/join/action"
+      ]
+    }
+  }
+
   depends_on = [
     azurerm_resource_group.default_resource_group
   ]
@@ -285,23 +289,25 @@ resource "azurerm_subnet_network_security_group_association" "default_network_pr
 === import.tf ===
 resource "terraform_data" "deployment_import" {
   input = {
-    platform                  = local.deployment_platform
-    token                     = var.token
-    name                      = var.name
-    resource_prefix           = local.resource_prefix
-    setup_target              = ""
-    setup_fingerprint         = ""
-    setup_fingerprint_version = 0
-    manager_url               = var.manager_url
-    management_config         = local.deployment_management_config
-    stack_settings            = local.deployment_settings
-    resources                 = local.deployment_resources
+    platform                    = local.deployment_platform
+    token                       = var.token
+    name                        = var.name
+    resource_prefix             = local.resource_prefix
+    setup_target                = ""
+    setup_import_format_version = 1
+    setup_fingerprint           = ""
+    setup_fingerprint_version   = 0
+    manager_url                 = var.manager_url
+    management_config           = local.deployment_management_config
+    stack_settings              = local.deployment_settings
+    resources                   = local.deployment_resources
   }
   depends_on = [
     azurerm_resource_group.default_resource_group,
     azurerm_virtual_network.default_network,
     azurerm_subnet.default_network_public,
     azurerm_subnet.default_network_private,
+    azurerm_subnet.default_network_alb,
     azurerm_public_ip.default_network_nat_pip,
     azurerm_nat_gateway.default_network_nat,
     azurerm_nat_gateway_public_ip_association.default_network_nat,
@@ -335,6 +341,11 @@ output "deployment_region" {
 output "deployment_setup_target" {
   value       = ""
   description = "Setup target."
+}
+
+output "deployment_setup_import_format_version" {
+  value       = 1
+  description = "Setup import payload format version."
 }
 
 output "deployment_setup_fingerprint" {

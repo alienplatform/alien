@@ -130,6 +130,9 @@ pub async fn stack_import(
     if !is_valid_resource_prefix(&resource_prefix) {
         return ErrorData::bad_request(RESOURCE_PREFIX_ERROR_MESSAGE).into_response();
     }
+    if let Err(e) = assert_supported_import_region(&state.config, &req) {
+        return e.into_response();
+    }
 
     let dg = match state
         .deployment_store
@@ -353,6 +356,30 @@ pub async fn stack_import(
         }),
     )
         .into_response()
+}
+
+fn assert_supported_import_region(
+    config: &crate::config::ManagerConfig,
+    req: &StackImportRequest,
+) -> crate::error::Result<()> {
+    let setup_platform = req.base_platform.unwrap_or(req.platform);
+    if setup_platform != Platform::Aws || config.supported_aws_regions.is_empty() {
+        return Ok(());
+    }
+
+    if config
+        .supported_aws_regions
+        .iter()
+        .any(|supported| supported == &req.region)
+    {
+        return Ok(());
+    }
+
+    Err(ErrorData::bad_request(format!(
+        "Unsupported AWS region '{}' for stack import. Supported regions: {}",
+        req.region,
+        config.supported_aws_regions.join(", ")
+    )))
 }
 
 fn parse_stack_import_request(raw: serde_json::Value) -> crate::error::Result<StackImportRequest> {

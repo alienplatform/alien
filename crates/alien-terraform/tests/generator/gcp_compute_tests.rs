@@ -148,6 +148,7 @@ fn gcp_container_cluster_without_platform_extension_errors_cleanly() {
             stack_settings: StackSettings::default(),
             registration: None,
             helm_install: None,
+            supported_aws_regions: Vec::new(),
         },
     )
     .expect_err("OSS registry should not register container_cluster");

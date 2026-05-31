@@ -266,7 +266,7 @@ resource "azurerm_resource_group" "default_resource_group" {
 
 resource "azurerm_role_definition" "setup_management_write_key_vault_secrets_0" {
   name               = "${local.resource_prefix}-Write Key Vault Secrets [mgmt]"
-  role_definition_id = uuidv5("oid", "deployment:azure:mgmt-res-role-def:${local.resource_prefix}:setup_management_write_key_vault_secrets_0")
+  role_definition_id = uuidv5("oid", "deployment:azure:mgmt-res-role-def:${local.resource_prefix}:vault/data-write:write-key-vault-secrets")
   scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
   description        = "Used by $${local.deployment_name}. Create, update, and delete application-owned Azure Key Vault secrets. Resource prefix: $${local.resource_prefix}."
 
@@ -288,7 +288,7 @@ resource "azurerm_role_definition" "setup_management_write_key_vault_secrets_0" 
 
 resource "azurerm_role_definition" "setup_management_manage_container_apps_0" {
   name               = "${local.resource_prefix}-Manage Container Apps [mgmt]"
-  role_definition_id = uuidv5("oid", "deployment:azure:mgmt-res-role-def:${local.resource_prefix}:setup_management_manage_container_apps_0")
+  role_definition_id = uuidv5("oid", "deployment:azure:mgmt-res-role-def:${local.resource_prefix}:worker/management:manage-container-apps")
   scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
   description        = "Used by $${local.deployment_name}. Update Azure Container Apps, queues, identities, certificates, and role assignments owned by this application. Resource prefix: $${local.resource_prefix}."
 
@@ -759,17 +759,18 @@ resource "azurerm_role_assignment" "registry_push_role" {
 === import.tf ===
 resource "terraform_data" "deployment_import" {
   input = {
-    platform                  = local.deployment_platform
-    token                     = var.token
-    name                      = var.name
-    resource_prefix           = local.resource_prefix
-    setup_target              = ""
-    setup_fingerprint         = ""
-    setup_fingerprint_version = 0
-    manager_url               = var.manager_url
-    management_config         = local.deployment_management_config
-    stack_settings            = local.deployment_settings
-    resources                 = local.deployment_resources
+    platform                    = local.deployment_platform
+    token                       = var.token
+    name                        = var.name
+    resource_prefix             = local.resource_prefix
+    setup_target                = ""
+    setup_import_format_version = 1
+    setup_fingerprint           = ""
+    setup_fingerprint_version   = 0
+    manager_url                 = var.manager_url
+    management_config           = local.deployment_management_config
+    stack_settings              = local.deployment_settings
+    resources                   = local.deployment_resources
   }
   depends_on = [
     azurerm_resource_group.default_resource_group,
@@ -831,6 +832,11 @@ output "deployment_region" {
 output "deployment_setup_target" {
   value       = ""
   description = "Setup target."
+}
+
+output "deployment_setup_import_format_version" {
+  value       = 1
+  description = "Setup import payload format version."
 }
 
 output "deployment_setup_fingerprint" {

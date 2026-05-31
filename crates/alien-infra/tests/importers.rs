@@ -27,20 +27,22 @@ use alien_core::import::{
         AwsKvImportData, AwsRemoteStackManagementImportData, AwsServiceAccountImportData,
         AwsStorageImportData, AzureContainerAppsEnvironmentImportData,
         AzureRemoteStackManagementImportData, AzureResourceGroupImportData,
-        AzureServiceAccountImportData, AzureStorageImportData, GcpBuildImportData, GcpKvImportData,
-        GcpServiceActivationImportData, GcpStorageImportData, KubernetesClusterImportData,
+        AzureServiceAccountImportData, AzureStorageAccountImportData, AzureStorageImportData,
+        GcpBuildImportData, GcpKvImportData, GcpServiceActivationImportData, GcpStorageImportData,
+        KubernetesClusterImportData,
     },
     ImportContext,
 };
 use alien_core::{
     ArtifactRegistry, AwsManagementConfig, AzureContainerAppsEnvironment,
     AzureContainerAppsEnvironmentOutputs, AzureManagementConfig, AzureResourceGroup,
-    AzureResourceGroupOutputs, AzureServiceBusNamespace, AzureStorageAccount, Build,
-    GcpManagementConfig, KubernetesCluster, KubernetesClusterOutputs, KubernetesClusterOwnership,
-    KubernetesClusterProvider, KubernetesHeartbeatMode, Kv, ManagementConfig, Network, Platform,
-    Queue, RemoteStackManagement, RemoteStackManagementOutputs, Resource, ResourceDefinition,
-    ResourceEntry, ResourceLifecycle, ResourceStatus, ResourceType, ServiceAccount,
-    ServiceActivation, StackSettings, Storage, Vault, Worker,
+    AzureResourceGroupOutputs, AzureServiceBusNamespace, AzureStorageAccount,
+    AzureStorageAccountOutputs, Build, GcpManagementConfig, KubernetesCluster,
+    KubernetesClusterOutputs, KubernetesClusterOwnership, KubernetesClusterProvider,
+    KubernetesHeartbeatMode, Kv, ManagementConfig, Network, Platform, Queue, RemoteStackManagement,
+    RemoteStackManagementOutputs, Resource, ResourceDefinition, ResourceEntry, ResourceLifecycle,
+    ResourceStatus, ResourceType, ServiceAccount, ServiceActivation, StackSettings, Storage, Vault,
+    Worker,
 };
 use alien_infra::ImporterRegistry;
 use serde_json::json;
@@ -176,6 +178,7 @@ fn kubernetes_cluster_handoff_imports_as_running() {
         cluster_name: Some("alien-e2e-a2591da2".to_string()),
         cluster_id: Some("alien-e2e-a2591da2".to_string()),
         cloud_metadata_ready: Some(true),
+        azure_application_gateway_for_containers: None,
     };
     let state = run_through_registry(
         &KubernetesCluster::RESOURCE_TYPE,
@@ -425,6 +428,42 @@ fn azure_storage_round_trip() {
         &azure_management_config(),
     );
     assert_running_with_internal_state(&state);
+}
+
+#[test]
+fn azure_storage_account_round_trip_includes_dependency_outputs() {
+    let entry = entry(AzureStorageAccount::new("default-storage-account".to_string()).build());
+    let data = AzureStorageAccountImportData {
+        subscription_id: "00000000-0000-0000-0000-000000000000".to_string(),
+        resource_group: "rg-alien".to_string(),
+        storage_account_name: "alienstg".to_string(),
+        resource_id: "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-alien/providers/Microsoft.Storage/storageAccounts/alienstg".to_string(),
+        blob_endpoint: "https://alienstg.blob.core.windows.net/".to_string(),
+        file_endpoint: "https://alienstg.file.core.windows.net/".to_string(),
+        queue_endpoint: "https://alienstg.queue.core.windows.net/".to_string(),
+        table_endpoint: "https://alienstg.table.core.windows.net/".to_string(),
+    };
+    let state = run_through_registry(
+        &AzureStorageAccount::RESOURCE_TYPE,
+        Platform::Azure,
+        serde_json::to_value(&data).unwrap(),
+        &entry,
+        "eastus",
+        &azure_management_config(),
+    );
+    assert_running_with_internal_state(&state);
+
+    let outputs = state
+        .outputs
+        .as_ref()
+        .and_then(|outputs| outputs.downcast_ref::<AzureStorageAccountOutputs>())
+        .expect("imported Azure storage account must expose dependency outputs");
+    assert_eq!(outputs.account_name, data.storage_account_name);
+    assert_eq!(outputs.resource_id, data.resource_id);
+    assert_eq!(outputs.primary_blob_endpoint, data.blob_endpoint);
+    assert_eq!(outputs.primary_file_endpoint, data.file_endpoint);
+    assert_eq!(outputs.primary_queue_endpoint, data.queue_endpoint);
+    assert_eq!(outputs.primary_table_endpoint, data.table_endpoint);
 }
 
 #[test]

@@ -10,9 +10,9 @@ use crate::{
     registry::HelmRegistry,
 };
 use alien_core::{
-    import::EmitContext, Container, ContainerCode, Daemon, DaemonCode, ErrorData, ExposeProtocol,
-    Ingress, Platform, RemoteStackManagementOutputs, ResourceLifecycle, Result, ServiceAccount,
-    ServiceAccountOutputs, Stack, StackSettings, Worker, WorkerCode,
+    import::EmitContext, AzureResourceGroupOutputs, Container, ContainerCode, Daemon, DaemonCode,
+    ErrorData, ExposeProtocol, Ingress, Platform, RemoteStackManagementOutputs, ResourceLifecycle,
+    Result, ServiceAccount, ServiceAccountOutputs, Stack, StackSettings, Worker, WorkerCode,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use indexmap::IndexMap;
@@ -205,18 +205,30 @@ pub fn render_manager_fetch_values(options: ManagerFetchHelmValuesOptions<'_>) -
         "    location: {}\n",
         yaml_string(options.azure_location.or(options.region).unwrap_or(""))
     ));
+    if let Some(azure_config) =
+        azure_base_platform_config(options.stack_state, options.base_platform)?
+    {
+        yaml.push_str(&format!(
+            "    subscriptionId: {}\n",
+            yaml_string(&azure_config.subscription_id)
+        ));
+        if let Some(tenant_id) = azure_config.tenant_id {
+            yaml.push_str(&format!("    tenantId: {}\n", yaml_string(&tenant_id)));
+        }
+    }
     yaml.push_str(&format!(
         "serviceAccountPrefix: {}\n",
         yaml_string(&options.stack_state.resource_prefix)
     ));
 
-    append_manager_service_account(&mut yaml, options.stack_state, options.base_platform);
+    append_manager_service_account(&mut yaml, options.stack_state, options.base_platform)?;
     append_imported_service_accounts(
         &mut yaml,
         &analysis,
         options.stack_state,
         options.base_platform,
     );
+    append_runtime_cloud_identity(&mut yaml, options.base_platform);
     append_cluster_bootstrap(&mut yaml, options.stack_state, options.base_platform);
     append_services(&mut yaml, &analysis);
     yaml.push_str("\npublicUrls: {}\n");
@@ -487,6 +499,12 @@ clusterBootstrap:
       controller: eks.amazonaws.com/alb
       scheme: internet-facing
       subnetIds: []
+    azureApplicationGatewayForContainers:
+      enabled: false
+      applicationLoadBalancer:
+        name: ""
+        namespace: ""
+        associationSubnetId: ""
   compute:
     eksAutoMode:
       arm64NodePool:
@@ -508,7 +526,7 @@ clusterBootstrap:
 
     append_service_accounts(&mut yaml, analysis);
     append_stack_settings(&mut yaml, stack_settings)?;
-    yaml.push_str("\ninfrastructure: null\n\nbasePlatform: null\nbasePlatformConfig:\n  gcp:\n    projectId: \"\"\n    region: \"\"\n  aws:\n    region: \"\"\n  azure:\n    location: \"\"\nserviceAccountPrefix: \"\"\nmanagerServiceAccount:\n  annotations: {}\n  labels: {}\n");
+    yaml.push_str("\ninfrastructure: null\n\nbasePlatform: null\nbasePlatformConfig:\n  gcp:\n    projectId: \"\"\n    region: \"\"\n  aws:\n    region: \"\"\n  azure:\n    location: \"\"\n    subscriptionId: \"\"\n    tenantId: \"\"\nserviceAccountPrefix: \"\"\nmanagerServiceAccount:\n  annotations: {}\n  labels: {}\n");
     append_services(&mut yaml, analysis);
     yaml.push_str("\npublicUrls: {}\n");
 
@@ -602,20 +620,90 @@ fn append_manager_service_account(
     yaml: &mut String,
     stack_state: &alien_core::StackState,
     base_platform: Option<Platform>,
-) {
+) -> Result<()> {
     yaml.push_str("managerServiceAccount:\n");
-    match remote_stack_management_identity(stack_state) {
+    match remote_stack_management_identity(stack_state, base_platform)? {
         Some(identity) => {
             yaml.push_str("  annotations:\n");
             yaml.push_str(&format!(
                 "    {}: {}\n",
                 yaml_key(identity_annotation_key(base_platform)),
-                yaml_string(identity)
+                yaml_string(&identity)
             ));
         }
         None => yaml.push_str("  annotations: {}\n"),
     }
     yaml.push_str("  labels: {}\n");
+    Ok(())
+}
+
+fn append_runtime_cloud_identity(yaml: &mut String, base_platform: Option<Platform>) {
+    if base_platform != Some(Platform::Azure) {
+        return;
+    }
+
+    yaml.push_str("runtime:\n");
+    yaml.push_str("  podLabels:\n");
+    yaml.push_str("    azure.workload.identity/use: 'true'\n");
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AzureBasePlatformConfig {
+    subscription_id: String,
+    tenant_id: Option<String>,
+}
+
+fn azure_base_platform_config(
+    stack_state: &alien_core::StackState,
+    base_platform: Option<Platform>,
+) -> Result<Option<AzureBasePlatformConfig>> {
+    if base_platform != Some(Platform::Azure) {
+        return Ok(None);
+    }
+
+    let subscription_id = stack_state
+        .resources
+        .values()
+        .find_map(|resource| {
+            resource
+                .outputs
+                .as_ref()
+                .and_then(|outputs| outputs.downcast_ref::<RemoteStackManagementOutputs>())
+                .and_then(|outputs| {
+                    azure_subscription_id_from_resource_id(&outputs.management_resource_id)
+                })
+        })
+        .or_else(|| {
+            stack_state.resources.values().find_map(|resource| {
+                resource
+                    .outputs
+                    .as_ref()
+                    .and_then(|outputs| outputs.downcast_ref::<AzureResourceGroupOutputs>())
+                    .and_then(|outputs| {
+                        azure_subscription_id_from_resource_id(&outputs.resource_id)
+                    })
+            })
+        });
+
+    let tenant_id = azure_remote_stack_management_access_config(stack_state)?
+        .and_then(|access_config| access_config.tenant_id);
+
+    Ok(
+        subscription_id.map(|subscription_id| AzureBasePlatformConfig {
+            subscription_id,
+            tenant_id,
+        }),
+    )
+}
+
+fn azure_subscription_id_from_resource_id(resource_id: &str) -> Option<String> {
+    let mut parts = resource_id.split('/').filter(|part| !part.is_empty());
+    while let Some(part) = parts.next() {
+        if part.eq_ignore_ascii_case("subscriptions") {
+            return parts.next().map(str::to_string);
+        }
+    }
+    None
 }
 
 fn append_cluster_bootstrap(
@@ -655,6 +743,32 @@ fn append_cluster_bootstrap(
     yaml.push_str("      controller: eks.amazonaws.com/alb\n");
     yaml.push_str("      scheme: internet-facing\n");
     yaml.push_str("      subnetIds: []\n");
+    yaml.push_str("    azureApplicationGatewayForContainers:\n");
+    match azure_application_gateway_for_containers_bootstrap(stack_state) {
+        Some(bootstrap) => {
+            yaml.push_str("      enabled: true\n");
+            yaml.push_str("      applicationLoadBalancer:\n");
+            yaml.push_str(&format!(
+                "        name: {}\n",
+                yaml_string(&bootstrap.alb_name)
+            ));
+            yaml.push_str(&format!(
+                "        namespace: {}\n",
+                yaml_string(&bootstrap.alb_namespace)
+            ));
+            yaml.push_str(&format!(
+                "        associationSubnetId: {}\n",
+                yaml_string(&bootstrap.association_subnet_id)
+            ));
+        }
+        None => {
+            yaml.push_str("      enabled: false\n");
+            yaml.push_str("      applicationLoadBalancer:\n");
+            yaml.push_str("        name: \"\"\n");
+            yaml.push_str("        namespace: \"\"\n");
+            yaml.push_str("        associationSubnetId: \"\"\n");
+        }
+    }
     yaml.push_str("  compute:\n");
     yaml.push_str("    eksAutoMode:\n");
     yaml.push_str("      arm64NodePool:\n");
@@ -670,6 +784,18 @@ fn append_cluster_bootstrap(
     yaml.push_str("        limits:\n");
     yaml.push_str("          cpu: \"1000\"\n");
     yaml.push_str("          memory: 1000Gi\n");
+}
+
+fn azure_application_gateway_for_containers_bootstrap(
+    stack_state: &alien_core::StackState,
+) -> Option<&alien_core::import::data::AzureApplicationGatewayForContainersBootstrap> {
+    stack_state.resources.values().find_map(|resource| {
+        resource
+            .outputs
+            .as_ref()
+            .and_then(|outputs| outputs.downcast_ref::<alien_core::KubernetesClusterOutputs>())
+            .and_then(|outputs| outputs.azure_application_gateway_for_containers.as_ref())
+    })
 }
 
 fn service_account_identity_for_profile<'a>(
@@ -692,14 +818,64 @@ fn service_account_identity_for_profile<'a>(
         })
 }
 
-fn remote_stack_management_identity(stack_state: &alien_core::StackState) -> Option<&str> {
-    stack_state.resources.values().find_map(|resource| {
+fn remote_stack_management_identity(
+    stack_state: &alien_core::StackState,
+    base_platform: Option<Platform>,
+) -> Result<Option<String>> {
+    let Some(outputs) = stack_state.resources.values().find_map(|resource| {
         resource
             .outputs
             .as_ref()
             .and_then(|outputs| outputs.downcast_ref::<RemoteStackManagementOutputs>())
-            .map(|outputs| outputs.management_resource_id.as_str())
-    })
+    }) else {
+        return Ok(None);
+    };
+
+    if base_platform == Some(Platform::Azure) {
+        let Some(access_config) = azure_remote_stack_management_access_config(stack_state)? else {
+            return Ok(None);
+        };
+        return Ok(Some(access_config.uami_client_id));
+    }
+
+    Ok(Some(outputs.management_resource_id.clone()))
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AzureRemoteStackManagementAccessConfig {
+    uami_client_id: String,
+    tenant_id: Option<String>,
+}
+
+fn azure_remote_stack_management_access_config(
+    stack_state: &alien_core::StackState,
+) -> Result<Option<AzureRemoteStackManagementAccessConfig>> {
+    let Some(outputs) = stack_state.resources.values().find_map(|resource| {
+        resource
+            .outputs
+            .as_ref()
+            .and_then(|outputs| outputs.downcast_ref::<RemoteStackManagementOutputs>())
+    }) else {
+        return Ok(None);
+    };
+
+    let access_config: AzureRemoteStackManagementAccessConfig =
+        serde_json::from_str(&outputs.access_configuration)
+            .into_alien_error()
+            .context(ErrorData::GenericError {
+                message: "Failed to parse Azure remote-stack-management access configuration"
+                    .to_string(),
+            })?;
+
+    if access_config.uami_client_id.is_empty() {
+        return Err(AlienError::new(ErrorData::GenericError {
+            message: "Azure remote-stack-management access configuration is missing uamiClientId"
+                .to_string(),
+        }));
+    }
+
+    Ok(Some(access_config))
 }
 
 fn identity_annotation_key(base_platform: Option<Platform>) -> &'static str {
@@ -994,7 +1170,9 @@ fn values_schema_json() -> String {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "location": { "type": "string" }
+            "location": { "type": "string" },
+            "subscriptionId": { "type": "string" },
+            "tenantId": { "type": "string" }
           }
         }
       }
@@ -1061,6 +1239,22 @@ fn values_schema_json() -> String {
                 "subnetIds": {
                   "type": "array",
                   "items": { "type": "string" }
+                }
+              }
+            },
+            "azureApplicationGatewayForContainers": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "applicationLoadBalancer": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": { "type": "string" },
+                    "namespace": { "type": "string" },
+                    "associationSubnetId": { "type": "string" }
+                  }
                 }
               }
             }
@@ -1306,6 +1500,9 @@ rules:
   - apiGroups: ["networking.gke.io"]
     resources: ["healthcheckpolicies"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["alb.networking.azure.io"]
+    resources: ["healthcheckpolicy"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   {{- end }}
 "#
     .to_string()
@@ -1493,6 +1690,18 @@ spec:
             {{- if and (eq .Values.basePlatform "gcp") .Values.basePlatformConfig.gcp.region }}
             - name: GCP_REGION
               value: {{ .Values.basePlatformConfig.gcp.region | quote }}
+            {{- end }}
+            {{- if and (eq .Values.basePlatform "azure") .Values.basePlatformConfig.azure.subscriptionId }}
+            - name: AZURE_SUBSCRIPTION_ID
+              value: {{ .Values.basePlatformConfig.azure.subscriptionId | quote }}
+            {{- end }}
+            {{- if and (eq .Values.basePlatform "azure") .Values.basePlatformConfig.azure.tenantId }}
+            - name: AZURE_TENANT_ID
+              value: {{ .Values.basePlatformConfig.azure.tenantId | quote }}
+            {{- end }}
+            {{- if and (eq .Values.basePlatform "azure") .Values.basePlatformConfig.azure.location }}
+            - name: AZURE_REGION
+              value: {{ .Values.basePlatformConfig.azure.location | quote }}
             {{- end }}
             - name: SYNC_URL
               value: {{ .Values.management.url | quote }}
@@ -1794,6 +2003,24 @@ spec:
     apiGroup: eks.amazonaws.com
     kind: IngressClassParams
     name: {{ $ingressClassName | quote }}
+{{ end }}
+{{- $azureAgc := dig "ingress" "azureApplicationGatewayForContainers" dict $bootstrap -}}
+{{- if dig "enabled" false $azureAgc }}
+{{- $azureAlb := required "clusterBootstrap.ingress.azureApplicationGatewayForContainers.applicationLoadBalancer is required when enabled" $azureAgc.applicationLoadBalancer -}}
+{{- $azureAlbName := required "clusterBootstrap.ingress.azureApplicationGatewayForContainers.applicationLoadBalancer.name is required when enabled" $azureAlb.name -}}
+{{- $azureAlbNamespace := required "clusterBootstrap.ingress.azureApplicationGatewayForContainers.applicationLoadBalancer.namespace is required when enabled" $azureAlb.namespace -}}
+{{- $azureAssociationSubnetId := required "clusterBootstrap.ingress.azureApplicationGatewayForContainers.applicationLoadBalancer.associationSubnetId is required when enabled" $azureAlb.associationSubnetId -}}
+---
+apiVersion: alb.networking.azure.io/v1
+kind: ApplicationLoadBalancer
+metadata:
+  name: {{ $azureAlbName | quote }}
+  namespace: {{ $azureAlbNamespace | quote }}
+  labels:
+    {{- include "alien.labels" . | nindent 4 }}
+spec:
+  associations:
+    - {{ $azureAssociationSubnetId | quote }}
 {{ end }}
 {{- $eksArm64NodePool := dig "compute" "eksAutoMode" "arm64NodePool" dict $bootstrap -}}
 {{- if dig "enabled" false $eksArm64NodePool }}
@@ -2188,7 +2415,10 @@ fn ensure_trailing_newline(mut value: String) -> String {
 mod tests {
     use super::*;
     use alien_core::{
-        PermissionProfile, Queue, ResourceLifecycle, Storage, WorkerCode, WorkerTrigger,
+        import::data::AzureApplicationGatewayForContainersBootstrap, KubernetesCluster,
+        KubernetesClusterOutputs, KubernetesClusterOwnership, KubernetesClusterProvider,
+        PermissionProfile, Queue, RemoteStackManagement, Resource, ResourceLifecycle,
+        ResourceOutputs, ResourceStatus, StackResourceState, Storage, WorkerCode, WorkerTrigger,
     };
 
     fn sample_stack() -> Stack {
@@ -2234,6 +2464,124 @@ mod tests {
             .assert_ok("helm template manager-fetch path");
         crate::test_utils::helm_template_and_validate(&files, Some(&files["examples/onprem.yaml"]))
             .assert_ok("helm template external-bindings initialize path");
+    }
+
+    #[test]
+    fn manager_fetch_values_use_azure_workload_identity_client_id() {
+        let mut stack_state =
+            alien_core::StackState::with_resource_prefix(Platform::Kubernetes, "e2e123".into());
+        let rsm = RemoteStackManagement::new("remote-stack-management".to_string()).build();
+        stack_state.resources.insert(
+            "remote-stack-management".to_string(),
+            StackResourceState::new_pending(
+                RemoteStackManagement::RESOURCE_TYPE.to_string(),
+                Resource::new(rsm),
+                Some(ResourceLifecycle::Frozen),
+                Vec::new(),
+            )
+            .with_updates(|state| {
+                state.status = ResourceStatus::Running;
+                state.outputs = Some(ResourceOutputs::new(RemoteStackManagementOutputs {
+                    management_resource_id: "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/manager".to_string(),
+                    access_configuration: serde_json::json!({
+                        "uamiClientId": "11111111-2222-3333-4444-555555555555",
+                        "tenantId": "tenant"
+                    })
+                    .to_string(),
+                }));
+            }),
+        );
+
+        let values = render_manager_fetch_values(ManagerFetchHelmValuesOptions {
+            deployment_id: "dep_123",
+            deployment_name: "deployment",
+            manager_url: "https://manager.example.com",
+            deployment_token: "token",
+            stack: &sample_stack(),
+            stack_state: &stack_state,
+            stack_settings: &StackSettings::default(),
+            base_platform: Some(Platform::Azure),
+            region: Some("eastus"),
+            gcp_project_id: None,
+            azure_location: Some("eastus"),
+        })
+        .expect("manager-fetch values should render");
+
+        assert!(values.contains(
+            "'azure.workload.identity/client-id': '11111111-2222-3333-4444-555555555555'"
+        ));
+        assert!(!values.contains("'azure.workload.identity/client-id': '/subscriptions/sub"));
+        assert!(values.contains("azure.workload.identity/use: 'true'"));
+        assert!(values.contains("subscriptionId: 'sub'"));
+        assert!(values.contains("tenantId: 'tenant'"));
+    }
+
+    #[test]
+    fn manager_fetch_values_include_azure_agc_cluster_bootstrap() {
+        let mut stack_state =
+            alien_core::StackState::with_resource_prefix(Platform::Kubernetes, "e2e123".into());
+        let cluster = KubernetesCluster::new("kubernetes".to_string())
+            .provider(KubernetesClusterProvider::Aks)
+            .ownership(KubernetesClusterOwnership::Managed)
+            .namespace("alien-test".to_string())
+            .heartbeat_mode(alien_core::KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+            .build();
+        stack_state.resources.insert(
+            "kubernetes".to_string(),
+            StackResourceState::new_pending(
+                KubernetesCluster::RESOURCE_TYPE.to_string(),
+                Resource::new(cluster),
+                Some(ResourceLifecycle::Frozen),
+                Vec::new(),
+            )
+            .with_updates(|state| {
+                state.status = ResourceStatus::Running;
+                state.outputs = Some(ResourceOutputs::new(KubernetesClusterOutputs {
+                    provider: KubernetesClusterProvider::Aks,
+                    ownership: KubernetesClusterOwnership::Managed,
+                    namespace: "alien-test".to_string(),
+                    cluster_name: Some("e2e-k8s".to_string()),
+                    cluster_id: Some("e2e-k8s".to_string()),
+                    kubernetes_api_reachable: true,
+                    namespace_ready: true,
+                    rbac_ready: true,
+                    agent_ready: false,
+                    cloud_metadata_ready: Some(true),
+                    azure_application_gateway_for_containers: Some(
+                        AzureApplicationGatewayForContainersBootstrap {
+                            alb_name: "e2e-alb".to_string(),
+                            alb_namespace: "alien-test".to_string(),
+                            association_subnet_id: "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/virtualNetworks/vnet/subnets/alb".to_string(),
+                        },
+                    ),
+                    version: None,
+                    status_message: None,
+                }));
+            }),
+        );
+
+        let values = render_manager_fetch_values(ManagerFetchHelmValuesOptions {
+            deployment_id: "dep_123",
+            deployment_name: "deployment",
+            manager_url: "https://manager.example.com",
+            deployment_token: "token",
+            stack: &sample_stack(),
+            stack_state: &stack_state,
+            stack_settings: &StackSettings::default(),
+            base_platform: Some(Platform::Azure),
+            region: Some("eastus"),
+            gcp_project_id: None,
+            azure_location: Some("eastus"),
+        })
+        .expect("manager-fetch values should render");
+
+        assert!(values.contains("azureApplicationGatewayForContainers:"));
+        assert!(values.contains("enabled: true"));
+        assert!(values.contains("name: 'e2e-alb'"));
+        assert!(values.contains("namespace: 'alien-test'"));
+        assert!(values.contains(
+            "associationSubnetId: '/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/virtualNetworks/vnet/subnets/alb'"
+        ));
     }
 
     #[test]

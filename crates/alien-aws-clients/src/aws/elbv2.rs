@@ -84,6 +84,10 @@ pub trait Elbv2Api: Send + Sync + std::fmt::Debug {
         &self,
         request: ModifyTargetGroupRequest,
     ) -> Result<ModifyTargetGroupResponse>;
+    async fn modify_target_group_attributes(
+        &self,
+        request: ModifyTargetGroupAttributesRequest,
+    ) -> Result<ModifyTargetGroupAttributesResponse>;
     async fn delete_target_group(&self, target_group_arn: &str) -> Result<()>;
 
     // Target Operations
@@ -734,6 +738,41 @@ impl Elbv2Api for Elbv2Client {
 
         self.send_form(form_data, "ModifyTargetGroup", &request.target_group_arn)
             .await
+    }
+
+    async fn modify_target_group_attributes(
+        &self,
+        request: ModifyTargetGroupAttributesRequest,
+    ) -> Result<ModifyTargetGroupAttributesResponse> {
+        let mut form_data = HashMap::new();
+        form_data.insert(
+            "Action".to_string(),
+            "ModifyTargetGroupAttributes".to_string(),
+        );
+        form_data.insert("Version".to_string(), "2015-12-01".to_string());
+        form_data.insert(
+            "TargetGroupArn".to_string(),
+            request.target_group_arn.clone(),
+        );
+
+        for (i, attribute) in request.attributes.iter().enumerate() {
+            let index = i + 1;
+            form_data.insert(
+                format!("Attributes.member.{index}.Key"),
+                attribute.key.clone(),
+            );
+            form_data.insert(
+                format!("Attributes.member.{index}.Value"),
+                attribute.value.clone(),
+            );
+        }
+
+        self.send_form(
+            form_data,
+            "ModifyTargetGroupAttributes",
+            &request.target_group_arn,
+        )
+        .await
     }
 
     async fn delete_target_group(&self, target_group_arn: &str) -> Result<()> {
@@ -1433,6 +1472,38 @@ pub struct ModifyTargetGroupResponse {
 #[serde(rename_all = "PascalCase")]
 pub struct ModifyTargetGroupResult {
     pub target_groups: Option<TargetGroupsWrapper>,
+}
+
+#[derive(Debug, Clone, Serialize, Builder)]
+pub struct ModifyTargetGroupAttributesRequest {
+    pub target_group_arn: String,
+    pub attributes: Vec<TargetGroupAttribute>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct TargetGroupAttribute {
+    pub key: String,
+    pub value: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ModifyTargetGroupAttributesResponse {
+    pub modify_target_group_attributes_result: ModifyTargetGroupAttributesResult,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ModifyTargetGroupAttributesResult {
+    pub attributes: Option<TargetGroupAttributesWrapper>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct TargetGroupAttributesWrapper {
+    #[serde(rename = "member")]
+    pub members: Vec<TargetGroupAttribute>,
 }
 
 /// A target group.

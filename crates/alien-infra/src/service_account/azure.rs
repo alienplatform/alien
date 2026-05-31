@@ -615,7 +615,10 @@ impl AzureServiceAccountController {
 
             // Check if identity ID matches what we expect
             if let Some(fetched_id) = &identity.id {
-                if fetched_id != identity_id {
+                if !crate::infra_requirements::azure_utils::azure_resource_ids_equal(
+                    identity_id,
+                    fetched_id,
+                ) {
                     return Err(AlienError::new(ErrorData::ResourceDrift {
                         resource_id: config.id.clone(),
                         message: format!(

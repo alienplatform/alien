@@ -1,5 +1,6 @@
 ---
 source: crates/alien-cloudformation/tests/generator/aws_full_stack_tests.rs
+assertion_line: 118
 expression: yaml
 ---
 AWSTemplateFormatVersion: 2010-09-09
@@ -120,7 +121,7 @@ Parameters:
     Default: ''
   DomainName:
     Type: String
-    Description: Optional custom domain for public endpoints. Leave unset to use an auto-generated domain with a managed TLS certificate.
+    Description: Optional custom domain for public endpoints. Leave unset to expose through the generated load balancer DNS name over HTTP.
     Default: ''
   HostedZoneId:
     Type: String
@@ -128,7 +129,7 @@ Parameters:
     Default: ''
   CertificateArn:
     Type: String
-    Description: ACM certificate ARN for the custom domain. Not needed for the auto-generated domain.
+    Description: ACM certificate ARN for the custom domain. Required when DomainName is set.
     Default: ''
   UpdatesMode:
     Type: String
@@ -971,6 +972,31 @@ Resources:
           Condition:
             Bool:
               aws:SecureTransport: 'false'
+  AssetsManagementRoleStoragePermission00:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName:
+        Fn::Sub: ${AWS::StackName}-assets-storage-0-0
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Action:
+          - s3:GetBucketAcl
+          - s3:GetBucketLocation
+          - s3:GetBucketPolicy
+          - s3:GetBucketPublicAccessBlock
+          - s3:GetBucketVersioning
+          - s3:GetEncryptionConfiguration
+          - s3:GetLifecycleConfiguration
+          Effect: Allow
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:s3:::${AWS::StackName}-assets
+          Sid: CheckS3BucketHealth
+      Roles:
+      - Ref: ManagementRole
+    DependsOn:
+    - Assets
+    - ManagementRole
   Jobs:
     Type: AWS::SQS::Queue
     Properties:
@@ -1020,6 +1046,23 @@ Resources:
         Value: kv
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
+  SecretsManagementVaultPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName:
+        Fn::Sub: alien-mgmt-secrets-vault-policy
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Action:
+          - ssm:DeleteParameter
+          - ssm:PutParameter
+          Effect: Allow
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}-secrets-*
+          Sid: WriteSsmParameters
+      Roles:
+      - Ref: ManagementRole
   RegistryRepository:
     Type: AWS::ECR::Repository
     Properties:
@@ -1463,8 +1506,10 @@ Resources:
     - ManagementRoleManagementPolicy2
     - Assets
     - AssetsBucketPolicy
+    - AssetsManagementRoleStoragePermission00
     - Jobs
     - Metadata
+    - SecretsManagementVaultPolicy
     - RegistryRepository
     - RegistryPullRole
     - RegistryPushRole

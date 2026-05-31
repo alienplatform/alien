@@ -30,6 +30,7 @@ impl ResourceImporter for KubernetesClusterImporter {
             rbac_ready: Some(true),
             agent_ready: Some(false),
             cloud_metadata_ready: data.cloud_metadata_ready,
+            azure_application_gateway_for_containers: data.azure_application_gateway_for_containers,
             cloud_operation_id: None,
             cloud_cluster_status: None,
             azure_delete_operation: None,

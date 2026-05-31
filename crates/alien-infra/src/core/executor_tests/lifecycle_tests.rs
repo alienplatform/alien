@@ -94,6 +94,114 @@ async fn test_filtered_executor_can_skip_running_ready_handlers() -> Result<()> 
     Ok(())
 }
 
+/// Tests that filtered executors still run Ready handlers for already-running
+/// managed resources outside the filter.
+#[tokio::test]
+async fn test_filtered_executor_steps_out_of_scope_running_resources() -> Result<()> {
+    let store1 = test_storage("store1");
+    let func1 = test_function("func1");
+
+    let stack = Stack::new("out-of-scope-ready-test".to_owned())
+        .add(store1.clone(), ResourceLifecycle::Frozen)
+        .add_with_dependencies(
+            func1,
+            ResourceLifecycle::Live,
+            vec![ResourceRef::new(Storage::RESOURCE_TYPE, "store1")],
+        )
+        .build();
+
+    let state_after_frozen = run_to_synced(
+        &new_executor_with_filter(&stack, vec![ResourceLifecycle::Frozen])?,
+        new_test_state(),
+    )
+    .await?;
+
+    let executor = StackExecutor::builder(&stack, alien_core::ClientConfig::Test)
+        .deployment_config(
+            &alien_core::DeploymentConfig::builder()
+                .stack_settings(alien_core::StackSettings::default())
+                .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                    variables: vec![],
+                    hash: String::new(),
+                    created_at: String::new(),
+                })
+                .external_bindings(alien_core::ExternalBindings::default())
+                .allow_frozen_changes(false)
+                .build(),
+        )
+        .lifecycle_filter(vec![ResourceLifecycle::Live])
+        .build()?;
+
+    let step_result = executor.step(state_after_frozen).await?;
+
+    let storage_controller: TestStorageController = step_result
+        .next_state
+        .resources
+        .get("store1")
+        .and_then(|resource| resource.get_internal_controller_typed().ok())
+        .expect("storage controller should remain available");
+
+    assert_eq!(
+        get_status(&step_result.next_state, "store1"),
+        Some(ResourceStatus::Running)
+    );
+    assert_eq!(
+        storage_controller.ready_checks, 1,
+        "Out-of-scope running resources should run Ready handlers when enabled"
+    );
+
+    Ok(())
+}
+
+/// Tests that filtered executors can finish already-started management work
+/// for out-of-scope resources before provisioning dependents.
+#[tokio::test]
+async fn test_filtered_executor_steps_out_of_scope_updating_dependency() -> Result<()> {
+    let store1 = test_storage_with_public_read("store1", false);
+    let func1 = test_function("func1");
+
+    let stack = Stack::new("out-of-scope-updating-test".to_owned())
+        .add(store1.clone(), ResourceLifecycle::Frozen)
+        .add_with_dependencies(
+            func1.clone(),
+            ResourceLifecycle::Live,
+            vec![ResourceRef::new(Storage::RESOURCE_TYPE, "store1")],
+        )
+        .build();
+
+    let state_after_frozen = run_to_synced(
+        &new_executor_with_filter(&stack, vec![ResourceLifecycle::Frozen])?,
+        new_test_state(),
+    )
+    .await?;
+
+    let updated_store1 = test_storage_with_public_read("store1", true);
+    let updated_stack = Stack::new("out-of-scope-updating-test".to_owned())
+        .add(updated_store1, ResourceLifecycle::Frozen)
+        .add_with_dependencies(
+            func1,
+            ResourceLifecycle::Live,
+            vec![ResourceRef::new(Storage::RESOURCE_TYPE, "store1")],
+        )
+        .build();
+
+    let frozen_executor =
+        new_executor_with_filter(&updated_stack, vec![ResourceLifecycle::Frozen])?;
+    let state_with_updating_frozen = frozen_executor.step(state_after_frozen).await?.next_state;
+
+    assert_eq!(
+        get_status(&state_with_updating_frozen, "store1"),
+        Some(ResourceStatus::Updating)
+    );
+
+    let live_executor = new_executor_with_filter(&updated_stack, vec![ResourceLifecycle::Live])?;
+    let final_state = run_steps(&live_executor, state_with_updating_frozen, 8).await?;
+
+    assert_all_running(&final_state, &["store1", "func1"]);
+
+    Ok(())
+}
+
 /// Tests incremental deployment: Frozen first, then Live.
 #[tokio::test]
 async fn test_incremental_deployment_frozen_then_live() -> Result<()> {

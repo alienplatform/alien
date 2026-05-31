@@ -68,7 +68,7 @@ Parameters:
     - use-default
   DomainName:
     Type: String
-    Description: Optional custom domain for public endpoints. Leave unset to use an auto-generated domain with a managed TLS certificate.
+    Description: Optional custom domain for public endpoints. Leave unset to expose through the generated load balancer DNS name over HTTP.
     Default: ''
   HostedZoneId:
     Type: String
@@ -76,7 +76,7 @@ Parameters:
     Default: ''
   CertificateArn:
     Type: String
-    Description: ACM certificate ARN for the custom domain. Not needed for the auto-generated domain.
+    Description: ACM certificate ARN for the custom domain. Required when DomainName is set.
     Default: ''
   UpdatesMode:
     Type: String
@@ -112,6 +112,15 @@ Conditions:
     - Fn::Equals:
       - Ref: DomainName
       - ''
+Rules:
+  SupportedAwsRegion:
+    Assertions:
+    - Assert:
+        Fn::Contains:
+        - - us-east-1
+          - eu-west-1
+        - Ref: AWS::Region
+      AssertDescription: 'This template can only be launched in AWS regions supported by this Alien environment: us-east-1, eu-west-1.'
 Resources:
   LogsBucket:
     Type: AWS::S3::Bucket

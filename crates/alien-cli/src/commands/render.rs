@@ -271,6 +271,7 @@ fn render_terraform(
             stack_settings: stack_settings.clone(),
             registration: None,
             helm_install: None,
+            supported_aws_regions: Vec::new(),
         },
     )
     .map_err(render_error)?;

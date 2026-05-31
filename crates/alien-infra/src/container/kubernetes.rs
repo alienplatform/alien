@@ -2,7 +2,10 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 use tracing::{debug, info};
 
-use crate::core::{EnvironmentVariableBuilder, ResourceController, ResourceControllerContext};
+use crate::core::{
+    kubernetes_runtime_pod_labels, EnvironmentVariableBuilder, ResourceController,
+    ResourceControllerContext,
+};
 use crate::error::{ErrorData, Result};
 use crate::kubernetes_public_endpoint::{
     container_public_endpoint_target, delete_kubernetes_public_endpoint,
@@ -1448,6 +1451,7 @@ impl KubernetesContainerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<Deployment> {
         let labels = self.build_labels(container_name);
+        let pod_labels = kubernetes_runtime_pod_labels(ctx, labels.clone());
         let pod_spec = self
             .build_pod_spec(
                 config,
@@ -1479,7 +1483,7 @@ impl KubernetesContainerController {
                 },
                 template: PodTemplateSpec {
                     metadata: Some(ObjectMeta {
-                        labels: Some(labels),
+                        labels: Some(pod_labels),
                         annotations: pod_annotations,
                         ..Default::default()
                     }),
@@ -1505,6 +1509,7 @@ impl KubernetesContainerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<StatefulSet> {
         let labels = self.build_labels(container_name);
+        let pod_labels = kubernetes_runtime_pod_labels(ctx, labels.clone());
         let pod_spec = self
             .build_pod_spec(
                 config,
@@ -1565,7 +1570,7 @@ impl KubernetesContainerController {
                 service_name: Some(container_name.to_string()),
                 template: PodTemplateSpec {
                     metadata: Some(ObjectMeta {
-                        labels: Some(labels),
+                        labels: Some(pod_labels),
                         annotations: pod_annotations,
                         ..Default::default()
                     }),

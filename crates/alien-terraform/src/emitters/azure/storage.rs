@@ -21,13 +21,21 @@
 use crate::{
     block::{attr, block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
-    emitters::azure::helpers::{downcast, required_label},
+    emitters::azure::helpers::{
+        downcast, permission_context, required_label, service_account_principal_id,
+        setup_execution_role_label, setup_management_role_label,
+    },
     expr,
 };
 use alien_core::{
-    import::EmitContext, AzureStorageAccount, ErrorData, LifecycleRule, Result, Storage,
+    import::EmitContext, AzureStorageAccount, ErrorData, LifecycleRule, PermissionProfile,
+    PermissionSetReference, RemoteStackManagement, Result, Storage,
 };
-use alien_error::AlienError;
+use alien_error::{AlienError, Context};
+use alien_permissions::{
+    generators::{AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator},
+    BindingTarget,
+};
 use hcl::expr::Expression;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -70,6 +78,8 @@ impl TfEmitter for AzureStorageEmitter {
                 &storage.lifecycle_rules,
             ));
         }
+
+        emit_storage_permissions(ctx, label, &parent_label, &mut fragment)?;
 
         Ok(fragment)
     }
@@ -158,6 +168,269 @@ fn lifecycle_policy(
     body.extend(rule_blocks);
 
     resource_block("azurerm_storage_management_policy", storage_label, body)
+}
+
+fn emit_storage_permissions(
+    ctx: &EmitContext<'_>,
+    storage_label: &str,
+    parent_label: &str,
+    fragment: &mut TfFragment,
+) -> Result<()> {
+    for (profile_name, permission_set_refs) in storage_permission_owners(ctx) {
+        let Some(principal_id_expr) = service_account_principal_id(ctx, &profile_name) else {
+            continue;
+        };
+
+        for permission_set_ref in permission_set_refs {
+            let Some(permission_set) = permission_set_ref
+                .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+            else {
+                continue;
+            };
+            if permission_set.id.ends_with("/provision") || permission_set.platforms.azure.is_none()
+            {
+                continue;
+            }
+
+            let generator = AzureRuntimePermissionsGenerator::new();
+            let permission_context = permission_context(storage_label)
+                .with_resource_name(container_name_expr_string(ctx.resource_id))
+                .with_storage_account_name(storage_account_name_expr_string(parent_label));
+            let grant_plan = generator
+                .generate_grant_plan(
+                    &permission_set,
+                    BindingTarget::Resource,
+                    &permission_context,
+                )
+                .context(ErrorData::GenericError {
+                    message: format!(
+                        "failed to generate Azure storage grants for '{}'",
+                        permission_set.id
+                    ),
+                })?;
+
+            for (binding_index, binding) in grant_plan.bindings.iter().enumerate() {
+                let role_definition_id = match &binding.role_definition {
+                    AzureRoleDefinitionRef::Predefined { role_definition_id } => {
+                        expr::template(role_definition_id.clone())
+                    }
+                    AzureRoleDefinitionRef::Custom { key } => {
+                        let index = grant_plan
+                            .custom_roles
+                            .iter()
+                            .position(|role| role.key == *key)
+                            .unwrap_or(0);
+                        let role_label =
+                            setup_execution_role_label(&profile_name, &binding.role_name, index);
+                        expr::traversal([
+                            "azurerm_role_definition",
+                            role_label.as_str(),
+                            "role_definition_resource_id",
+                        ])
+                    }
+                };
+                emit_role_assignment(
+                    fragment,
+                    ctx.resource_id,
+                    storage_label,
+                    parent_label,
+                    &profile_name,
+                    binding_index,
+                    &binding.role_name,
+                    role_definition_id,
+                    principal_id_expr.clone(),
+                );
+            }
+        }
+    }
+
+    let Some(management_label) = remote_stack_management_label(ctx) else {
+        return Ok(());
+    };
+
+    let principal_id_expr = expr::traversal([
+        "azurerm_user_assigned_identity",
+        management_label,
+        "principal_id",
+    ]);
+
+    for permission_set_ref in management_permission_refs(ctx) {
+        let Some(permission_set) =
+            permission_set_ref.resolve(|name| alien_permissions::get_permission_set(name).cloned())
+        else {
+            continue;
+        };
+        if permission_set.id.ends_with("/provision") || permission_set.platforms.azure.is_none() {
+            continue;
+        }
+
+        let generator = AzureRuntimePermissionsGenerator::new();
+        let permission_context = permission_context(storage_label)
+            .with_resource_name(container_name_expr_string(ctx.resource_id))
+            .with_storage_account_name(storage_account_name_expr_string(parent_label));
+        let grant_plan = generator
+            .generate_grant_plan(
+                &permission_set,
+                BindingTarget::Resource,
+                &permission_context,
+            )
+            .context(ErrorData::GenericError {
+                message: format!(
+                    "failed to generate Azure storage management grants for '{}'",
+                    permission_set.id
+                ),
+            })?;
+
+        for (binding_index, binding) in grant_plan.bindings.iter().enumerate() {
+            let role_definition_id = match &binding.role_definition {
+                AzureRoleDefinitionRef::Predefined { role_definition_id } => {
+                    expr::template(role_definition_id.clone())
+                }
+                AzureRoleDefinitionRef::Custom { key } => {
+                    let index = grant_plan
+                        .custom_roles
+                        .iter()
+                        .position(|role| role.key == *key)
+                        .unwrap_or(0);
+                    let role_label = setup_management_role_label(&binding.role_name, index);
+                    expr::traversal([
+                        "azurerm_role_definition",
+                        role_label.as_str(),
+                        "role_definition_resource_id",
+                    ])
+                }
+            };
+            emit_role_assignment(
+                fragment,
+                ctx.resource_id,
+                storage_label,
+                parent_label,
+                "management",
+                binding_index,
+                &binding.role_name,
+                role_definition_id,
+                principal_id_expr.clone(),
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn emit_role_assignment(
+    fragment: &mut TfFragment,
+    storage_id: &str,
+    storage_label: &str,
+    parent_label: &str,
+    principal_label: &str,
+    binding_index: usize,
+    role_name: &str,
+    role_definition_id: Expression,
+    principal_id_expr: Expression,
+) {
+    let role_label = sanitize_role_label(role_name);
+    fragment.resource_blocks.push(resource_block(
+        "azurerm_role_assignment",
+        &format!("{storage_label}_{role_label}_{principal_label}_assignment_{binding_index}"),
+        [
+            attr(
+                "name",
+                expr::raw(&format!(
+                    "uuidv5(\"oid\", \"deployment:azure:storage-role-assign:${{local.resource_prefix}}:{storage_id}:{role_label}:{principal_label}:{binding_index}\")"
+                )),
+            ),
+            attr("scope", storage_container_scope_expr(parent_label, storage_label)),
+            attr("role_definition_id", role_definition_id),
+            attr("principal_id", principal_id_expr),
+        ],
+    ));
+}
+
+fn storage_permission_owners<'a>(
+    ctx: &'a EmitContext<'_>,
+) -> Vec<(String, Vec<&'a PermissionSetReference>)> {
+    let mut owners = Vec::new();
+    for (profile_name, profile) in ctx.stack.permission_profiles() {
+        let refs = resource_permission_refs(profile, ctx.resource_id);
+        if refs.is_empty() {
+            continue;
+        }
+        owners.push((profile_name.clone(), refs));
+    }
+    owners
+}
+
+fn management_permission_refs<'a>(ctx: &'a EmitContext<'_>) -> Vec<&'a PermissionSetReference> {
+    let Some(profile) = ctx.stack.management().profile() else {
+        return Vec::new();
+    };
+    resource_permission_refs(profile, ctx.resource_id)
+}
+
+fn resource_permission_refs<'a>(
+    profile: &'a PermissionProfile,
+    resource_id: &str,
+) -> Vec<&'a PermissionSetReference> {
+    let mut refs = Vec::new();
+    let mut seen_ids = std::collections::HashSet::new();
+
+    if let Some(resource_refs) = profile.0.get(resource_id) {
+        for permission_ref in resource_refs {
+            if seen_ids.insert(permission_ref.id().to_string()) {
+                refs.push(permission_ref);
+            }
+        }
+    }
+
+    if let Some(wildcard_refs) = profile.0.get("*") {
+        for permission_ref in wildcard_refs
+            .iter()
+            .filter(|permission_ref| permission_ref.id().starts_with("storage/"))
+        {
+            if seen_ids.insert(permission_ref.id().to_string()) {
+                refs.push(permission_ref);
+            }
+        }
+    }
+
+    refs
+}
+
+fn remote_stack_management_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
+    ctx.stack.resources().find_map(|(id, entry)| {
+        if entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE {
+            ctx.name_for(id)
+        } else {
+            None
+        }
+    })
+}
+
+fn storage_container_scope_expr(parent_label: &str, storage_label: &str) -> Expression {
+    expr::raw(format!(
+        "\"${{azurerm_storage_account.{parent_label}.id}}/blobServices/default/containers/${{azurerm_storage_container.{storage_label}.name}}\""
+    ))
+}
+
+fn storage_account_name_expr_string(parent_label: &str) -> String {
+    format!("${{azurerm_storage_account.{parent_label}.name}}")
+}
+
+fn container_name_expr_string(storage_id: &str) -> String {
+    format!("${{replace(lower(\"${{local.resource_prefix}}-{storage_id}\"), \"_\", \"-\")}}")
+}
+
+fn sanitize_role_label(input: &str) -> String {
+    input
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 fn rule_block(storage_label: &str, index: usize, rule: &LifecycleRule) -> hcl::structure::Block {

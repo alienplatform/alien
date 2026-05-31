@@ -81,6 +81,10 @@ fn azure_remote_stack_management_emits_uami_with_federated_credential() {
                 "worker/provision",
                 "storage/provision",
                 "artifact-registry/provision",
+                "azure-resource-group/heartbeat",
+                "network/heartbeat",
+                "storage/heartbeat",
+                "service-account/heartbeat",
             ]),
         ))
         .add(resource_group(), ResourceLifecycle::Frozen)
@@ -103,6 +107,25 @@ fn azure_remote_stack_management_emits_uami_with_federated_credential() {
     assert!(
         !rendered.contains("hashicorp/time"),
         "Azure setup artifacts should not need the time provider"
+    );
+    assert_eq!(
+        rendered
+            .matches(
+                "resource \"azurerm_role_assignment\" \"management_management_uami_assignment_"
+            )
+            .count(),
+        2,
+        "Azure management should emit one combined custom role assignment plus one deduped Reader assignment"
+    );
+    assert!(
+        rendered.contains("Microsoft.Network/virtualNetworks/read"),
+        "network heartbeat read must be included in the management custom role"
+    );
+    assert!(
+        rendered.contains(
+            "/providers/Microsoft.Authorization/roleDefinitions/acdd72a7-3385-48ef-bd42-f606fba81ae7"
+        ),
+        "resource-group/storage/service-account heartbeat should emit a deduped Azure Reader assignment"
     );
     snapshot_module("azure_remote_stack_management", &module);
     assert_terraform_valid(&module, "azure_remote_stack_management");
@@ -143,6 +166,10 @@ fn azure_global_network_heartbeat_does_not_emit_resource_scoped_setup_role() {
     assert!(
         !rendered.contains("setup_management_network_heartbeat"),
         "network/heartbeat is stack-scoped for Azure and must not emit setup-owned resource roles"
+    );
+    assert!(
+        rendered.contains("Microsoft.Network/virtualNetworks/read"),
+        "network/heartbeat should still be compiled into the Azure management identity"
     );
 }
 

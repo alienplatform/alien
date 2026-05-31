@@ -208,6 +208,11 @@ resource "azurerm_role_definition" "management_management_role" {
       "Microsoft.ContainerRegistry/registries/updatePolicies/write",
       "Microsoft.ContainerRegistry/registries/write",
       "Microsoft.ManagedIdentity/userAssignedIdentities/assign/action",
+      "Microsoft.Network/loadBalancers/read",
+      "Microsoft.Network/networkSecurityGroups/read",
+      "Microsoft.Network/publicIPAddresses/read",
+      "Microsoft.Network/virtualNetworks/read",
+      "Microsoft.Network/virtualNetworks/subnets/read",
       "Microsoft.ServiceBus/namespaces/queues/delete",
       "Microsoft.ServiceBus/namespaces/queues/read",
       "Microsoft.ServiceBus/namespaces/queues/write",
@@ -240,20 +245,10 @@ resource "azurerm_role_assignment" "management_management_uami_assignment_0" {
   ]
 }
 
-resource "azurerm_role_assignment" "management_management_uami_assignment_1" {
-  name               = uuidv5("oid", "deployment:azure:mgmt-role-assign:${local.resource_prefix}:uami:1")
+resource "azurerm_role_assignment" "management_management_uami_assignment_3" {
+  name               = uuidv5("oid", "deployment:azure:mgmt-role-assign:${local.resource_prefix}:uami:3")
   scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
-  role_definition_id = azurerm_role_definition.management_management_role.role_definition_resource_id
-  principal_id       = azurerm_user_assigned_identity.management.principal_id
-  depends_on = [
-    azurerm_resource_group.default_resource_group
-  ]
-}
-
-resource "azurerm_role_assignment" "management_management_uami_assignment_2" {
-  name               = uuidv5("oid", "deployment:azure:mgmt-role-assign:${local.resource_prefix}:uami:2")
-  scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
-  role_definition_id = azurerm_role_definition.management_management_role.role_definition_resource_id
+  role_definition_id = "/subscriptions/${var.azure_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/acdd72a7-3385-48ef-bd42-f606fba81ae7"
   principal_id       = azurerm_user_assigned_identity.management.principal_id
   depends_on = [
     azurerm_resource_group.default_resource_group
@@ -288,25 +283,25 @@ resource "azurerm_federated_identity_credential" "management_fic" {
 === import.tf ===
 resource "terraform_data" "deployment_import" {
   input = {
-    platform                  = local.deployment_platform
-    token                     = var.token
-    name                      = var.name
-    resource_prefix           = local.resource_prefix
-    setup_target              = ""
-    setup_fingerprint         = ""
-    setup_fingerprint_version = 0
-    manager_url               = var.manager_url
-    management_config         = local.deployment_management_config
-    stack_settings            = local.deployment_settings
-    resources                 = local.deployment_resources
+    platform                    = local.deployment_platform
+    token                       = var.token
+    name                        = var.name
+    resource_prefix             = local.resource_prefix
+    setup_target                = ""
+    setup_import_format_version = 1
+    setup_fingerprint           = ""
+    setup_fingerprint_version   = 0
+    manager_url                 = var.manager_url
+    management_config           = local.deployment_management_config
+    stack_settings              = local.deployment_settings
+    resources                   = local.deployment_resources
   }
   depends_on = [
     azurerm_resource_group.default_resource_group,
     azurerm_user_assigned_identity.management,
     azurerm_role_definition.management_management_role,
     azurerm_role_assignment.management_management_uami_assignment_0,
-    azurerm_role_assignment.management_management_uami_assignment_1,
-    azurerm_role_assignment.management_management_uami_assignment_2,
+    azurerm_role_assignment.management_management_uami_assignment_3,
     azurerm_role_assignment.management_existing_vnet_reader_uami,
     azurerm_federated_identity_credential.management_fic
   ]
@@ -336,6 +331,11 @@ output "deployment_region" {
 output "deployment_setup_target" {
   value       = ""
   description = "Setup target."
+}
+
+output "deployment_setup_import_format_version" {
+  value       = 1
+  description = "Setup import payload format version."
 }
 
 output "deployment_setup_fingerprint" {

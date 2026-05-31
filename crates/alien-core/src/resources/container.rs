@@ -295,14 +295,6 @@ impl Container {
 
     /// Validates the ports configuration.
     fn validate_ports(&self) -> Result<()> {
-        // Ports cannot be empty
-        if self.ports.is_empty() {
-            return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
-                resource_id: self.id.clone(),
-                reason: "at least one port must be specified".to_string(),
-            }));
-        }
-
         // At most one HTTP port is allowed
         let http_ports: Vec<_> = self
             .ports
@@ -843,8 +835,7 @@ mod tests {
 
     #[test]
     fn test_container_empty_ports_validation() {
-        // Build container with at least one port, then manually clear for testing
-        let mut container = Container::new("no-ports".to_string())
+        let container = Container::new("no-ports".to_string())
             .cluster("compute".to_string())
             .code(ContainerCode::Image {
                 image: "test:latest".to_string(),
@@ -857,13 +848,10 @@ mod tests {
                 min: "1Gi".to_string(),
                 desired: "1Gi".to_string(),
             })
-            .port(8080) // Need at least one port to build
             .replicas(1)
             .permissions("test".to_string())
             .build();
 
-        // Clear ports to test validation
-        container.ports.clear();
-        assert!(container.validate_ports().is_err());
+        assert!(container.validate_ports().is_ok());
     }
 }

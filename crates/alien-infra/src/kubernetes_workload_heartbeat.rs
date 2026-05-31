@@ -868,9 +868,15 @@ mod tests {
 
         assert!(event_related_to_workload(&event, "api", &runtime_units));
         let heartbeat = kubernetes_event_snapshot(&event).unwrap();
-        assert_eq!(heartbeat.kind, "BackOff");
-        assert_eq!(heartbeat.severity, HeartbeatIssueSeverity::Warning);
-        assert_eq!(heartbeat.source.as_deref(), Some("kubelet"));
+        assert_eq!(heartbeat.reason, "BackOff");
+        assert_eq!(heartbeat.type_.as_deref(), Some("Warning"));
+        assert_eq!(
+            heartbeat
+                .source
+                .as_ref()
+                .and_then(|source| source.component.as_deref()),
+            Some("kubelet")
+        );
     }
 
     #[test]

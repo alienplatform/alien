@@ -86,8 +86,8 @@ pub async fn handle_provisioning(
         info!("Secrets synced to vault successfully");
     }
 
-    // Create executor for live resources. Setup-owned Frozen resources are
-    // created or imported before this phase.
+    // Create executor for live resources. Lifecycle filtering limits mutation
+    // scope; already-running managed dependencies still run Ready handlers.
     let executor = StackExecutor::builder(&target_stack, client_config)
         .deployment_config(&config)
         .lifecycle_filter(vec![ResourceLifecycle::Live])

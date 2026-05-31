@@ -500,7 +500,7 @@ impl StackExecutor {
                         if matches!(
                             view.status,
                             ResourceStatus::Running | ResourceStatus::Deleted
-                        ) => {}
+                        ) || self.should_step_out_of_scope_resource(dep_id, view) => {}
                     _ => {
                         return Err(AlienError::new(ErrorData::DependencyNotReady {
                             resource_id: res_id.to_string(),
@@ -842,6 +842,25 @@ impl StackExecutor {
         Ok(plan_result)
     }
 
+    fn should_step_out_of_scope_resource(
+        &self,
+        resource_id: &str,
+        resource_view: &StackResourceState,
+    ) -> bool {
+        if self.lifecycle_filter.is_none()
+            || self.resources.contains_key(resource_id)
+            || self.is_external_binding_resource(resource_id)
+        {
+            return false;
+        }
+
+        if resource_view.status == ResourceStatus::Running {
+            return self.step_running_resources;
+        }
+
+        resource_view.status != ResourceStatus::Pending && !resource_view.status.is_terminal()
+    }
+
     /// Performs one *incremental* reconciliation iteration.
     ///
     /// 1. Runs [`plan`] to identify high-level transitions and inject them into
@@ -982,6 +1001,7 @@ impl StackExecutor {
                     // so we can interrupt a mid-provisioning resource when its config changed.
                     ResourceStatus::Running
                     | ResourceStatus::Provisioning
+                    | ResourceStatus::Updating
                     | ResourceStatus::ProvisionFailed
                     | ResourceStatus::UpdateFailed
                     | ResourceStatus::DeleteFailed => {
@@ -1085,7 +1105,6 @@ impl StackExecutor {
                             resource_state.status
                         );
                     }
-                    // Updating - let the current operation finish or fail first.
                     _ => {
                         warn!(
                             "Planned delete for resource in {:?} status, waiting for stabilization",
@@ -1242,17 +1261,19 @@ impl StackExecutor {
                 }
             }
 
-            // When a lifecycle filter is active, only step resources in that scope.
-            // Live-only deletes must not continue a frozen resource delete that was
-            // started by a previous full cleanup attempt; the current credentials may
-            // not have access to that resource.
+            // Lifecycle filters define mutation scope. Already-running managed
+            // resources can still run Ready handlers because their health and
+            // management work may be required by in-scope dependents.
+            let should_step_out_of_scope_resource =
+                self.should_step_out_of_scope_resource(resource_id, current_resource_view);
+
             if let Some(filter_set) = &self.lifecycle_filter {
                 let resource_in_scope = self.resources.contains_key(resource_id)
                     || current_resource_view
                         .lifecycle
                         .is_some_and(|lifecycle| filter_set.contains(&lifecycle));
 
-                if !resource_in_scope {
+                if !resource_in_scope && !should_step_out_of_scope_resource {
                     continue;
                 }
             }
@@ -1274,6 +1295,8 @@ impl StackExecutor {
                 // This is important for local platform where ephemeral state (ports, URLs)
                 // needs to be refreshed after restart, even if config hasn't changed.
                 self.step_running_resources
+            } else if should_step_out_of_scope_resource {
+                true
             } else {
                 // Check dependencies only if the resource is defined in the target graph
                 if let Some(node_index) = self.id_to_node_index.get(resource_id) {
@@ -1914,7 +1937,7 @@ impl StackExecutor {
                 Some(filter_set) => {
                     if !filter_set.contains(&lifecycle) {
                         // Resource outside filter – executor not responsible.
-                        true
+                        !self.should_step_out_of_scope_resource(res_id, view)
                     } else if view.status == ResourceStatus::Deleted
                         || view.status == ResourceStatus::DeleteFailed
                     {

@@ -3,7 +3,8 @@
 use super::helpers::render_built_ins;
 use alien_cloudformation::RegistrationMode;
 use alien_core::{
-    Kv, LifecycleRule, Queue, ResourceLifecycle, Stack, StackSettings, Storage, Vault,
+    Kv, LifecycleRule, PermissionProfile, Queue, ResourceLifecycle, ServiceAccount, Stack,
+    StackSettings, Storage, Vault,
 };
 
 #[test]
@@ -65,4 +66,34 @@ fn aws_storage_minimal_uses_safe_defaults() {
         "aws storage minimal",
     );
     insta::assert_snapshot!("aws_storage_minimal", yaml);
+}
+
+#[test]
+fn aws_vault_resource_permissions_attach_to_service_account_role() {
+    let stack = Stack::new("vault-permissions".to_string())
+        .permission(
+            "execution",
+            PermissionProfile::new().resource("secrets", ["vault/data-read"]),
+        )
+        .add(
+            ServiceAccount::new("execution-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Vault::new("secrets".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    let yaml = render_built_ins(
+        &stack,
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        "aws vault service account permissions",
+    );
+
+    assert!(yaml.contains("ExecutionSaRoleVaultPermission00"));
+    assert!(yaml.contains("ssm:GetParameter"));
+    assert!(yaml.contains("parameter/${AWS::StackName}-secrets-*"));
+    assert!(yaml.contains("Ref: ExecutionSaRole"));
 }

@@ -239,6 +239,7 @@ async fn setup() -> TestSetup {
         base_url: Some(manager_url.clone()),
         releases_url: None,
         targets: vec![],
+        supported_aws_regions: Vec::new(),
         disable_deployment_loop: true,
         disable_heartbeat_loop: true,
         enable_local_log_ingest: false,

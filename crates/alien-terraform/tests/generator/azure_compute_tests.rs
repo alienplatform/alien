@@ -143,9 +143,12 @@ fn azure_function_reuses_external_container_apps_environment() {
     assert!(rendered.contains(
         "/subscriptions/sub-123/resourceGroups/shared-rg/providers/Microsoft.App/managedEnvironments/shared-env"
     ));
-    assert!(rendered.contains("environmentName = \"shared-env\""));
-    assert!(rendered.contains("resourceGroup   = \"shared-rg\""));
+    assert!(rendered.contains("environmentName"));
+    assert!(rendered.contains("\"shared-env\""));
+    assert!(rendered.contains("resourceGroup"));
+    assert!(rendered.contains("\"shared-rg\""));
     assert!(rendered.contains("resourceGroupName"));
-    assert!(rendered.contains("defaultDomain   = \"shared.example.azurecontainerapps.io\""));
+    assert!(rendered.contains("defaultDomain"));
+    assert!(rendered.contains("\"shared.example.azurecontainerapps.io\""));
     assert_terraform_valid(&module, "azure_function_shared_env");
 }

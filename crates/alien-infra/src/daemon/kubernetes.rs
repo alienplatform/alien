@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 use tracing::{debug, info};
 
-use crate::core::{EnvironmentVariableBuilder, ResourceControllerContext};
+use crate::core::{
+    kubernetes_runtime_pod_labels, EnvironmentVariableBuilder, ResourceControllerContext,
+};
 use crate::error::{ErrorData, Result};
 use crate::kubernetes_workload_heartbeat::{
     emit_kubernetes_workload_heartbeat, label_selector, KubernetesWorkload,
@@ -568,6 +570,8 @@ impl KubernetesDaemonController {
             ..Default::default()
         };
 
+        let pod_labels = kubernetes_runtime_pod_labels(ctx, labels.clone());
+
         Ok(DaemonSet {
             metadata: ObjectMeta {
                 name: Some(daemon_set_name.to_string()),
@@ -582,7 +586,7 @@ impl KubernetesDaemonController {
                 },
                 template: PodTemplateSpec {
                     metadata: Some(ObjectMeta {
-                        labels: Some(labels),
+                        labels: Some(pod_labels),
                         ..Default::default()
                     }),
                     spec: Some(pod_spec),

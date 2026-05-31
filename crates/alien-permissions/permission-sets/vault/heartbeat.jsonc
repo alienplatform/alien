@@ -9,12 +9,10 @@
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-*"]
+            "resources": ["*"]
           },
           "resource": {
-            "resources": [
-              "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${resourceName}-*"
-            ]
+            "resources": ["*"]
           }
         }
       }

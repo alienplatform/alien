@@ -81,12 +81,24 @@ impl TfEmitter for AzureStorageAccountEmitter {
                 expr::traversal(["azurerm_storage_account", label, "name"]),
             ),
             (
+                "resourceId",
+                expr::traversal(["azurerm_storage_account", label, "id"]),
+            ),
+            (
                 "blobEndpoint",
                 expr::traversal(["azurerm_storage_account", label, "primary_blob_endpoint"]),
             ),
             (
+                "fileEndpoint",
+                expr::traversal(["azurerm_storage_account", label, "primary_file_endpoint"]),
+            ),
+            (
                 "queueEndpoint",
                 expr::traversal(["azurerm_storage_account", label, "primary_queue_endpoint"]),
+            ),
+            (
+                "tableEndpoint",
+                expr::traversal(["azurerm_storage_account", label, "primary_table_endpoint"]),
             ),
         ]))
     }

@@ -74,7 +74,7 @@ const AWS_IMDS_CREDENTIALS_TIMEOUT: Duration = Duration::from_secs(5);
 impl AwsClientConfigExt for AwsClientConfig {
     /// Create a new `AwsClientConfig` from environment variables.
     async fn from_env(environment_variables: &HashMap<String, String>) -> Result<Self> {
-        let region = resolve_region(environment_variables)?;
+        let region = resolve_region(environment_variables).await?;
         let credentials = resolve_credentials(environment_variables).await?;
         let service_overrides =
             parse_service_overrides(environment_variables.get("AWS_SERVICE_OVERRIDES_ENDPOINTS"))?;
@@ -288,7 +288,7 @@ impl AwsClientConfigExt for AwsClientConfig {
     }
 }
 
-fn resolve_region(environment_variables: &HashMap<String, String>) -> Result<String> {
+async fn resolve_region(environment_variables: &HashMap<String, String>) -> Result<String> {
     if let Some(region) = environment_variables.get("AWS_REGION") {
         return Ok(region.clone());
     }
@@ -297,9 +297,31 @@ fn resolve_region(environment_variables: &HashMap<String, String>) -> Result<Str
         return Ok(region.clone());
     }
 
+    let imds_error = if !metadata_disabled(environment_variables) {
+        match load_imds_region(environment_variables).await {
+            Ok(region) => return Ok(region),
+            Err(error) => Some(error),
+        }
+    } else {
+        None
+    };
+
     let profile = profile_name(environment_variables);
-    if let Some(region) = load_profile_region(&profile)? {
-        return Ok(region);
+    match load_profile_region(&profile) {
+        Ok(Some(region)) => return Ok(region),
+        Ok(None) => {}
+        Err(profile_error) => {
+            if let Some(imds_error) = imds_error {
+                return Err(AlienError::new(ErrorData::InvalidClientConfig {
+                    message: format!(
+                        "Failed to resolve AWS region from IMDS and fallback profile '{}': {}; IMDS error: {}",
+                        profile, profile_error, imds_error
+                    ),
+                    errors: None,
+                }));
+            }
+            return Err(profile_error);
+        }
     }
 
     Err(AlienError::new(ErrorData::InvalidClientConfig {
@@ -346,14 +368,31 @@ async fn resolve_credentials(
         return load_profile_credentials(&profile);
     }
 
-    if !metadata_disabled(environment_variables) {
-        if let Ok(credentials) = load_imds_credentials(environment_variables).await {
-            return Ok(credentials);
+    let imds_error = if !metadata_disabled(environment_variables) {
+        match load_imds_credentials(environment_variables).await {
+            Ok(credentials) => return Ok(credentials),
+            Err(error) => Some(error),
         }
-    }
+    } else {
+        None
+    };
 
     let profile = profile_name(environment_variables);
-    load_profile_credentials(&profile)
+    match load_profile_credentials(&profile) {
+        Ok(credentials) => Ok(credentials),
+        Err(profile_error) => {
+            if let Some(imds_error) = imds_error {
+                return Err(AlienError::new(ErrorData::InvalidClientConfig {
+                    message: format!(
+                        "Failed to resolve AWS credentials from IMDS and fallback profile '{}': {}; IMDS error: {}",
+                        profile, profile_error, imds_error
+                    ),
+                    errors: None,
+                }));
+            }
+            Err(profile_error)
+        }
+    }
 }
 
 fn profile_is_explicit(environment_variables: &HashMap<String, String>) -> bool {
@@ -487,6 +526,84 @@ async fn load_imds_credentials(
         secret_access_key: credentials.secret_access_key,
         session_token: Some(credentials.token),
     })
+}
+
+async fn load_imds_region(environment_variables: &HashMap<String, String>) -> Result<String> {
+    let endpoint = environment_variables
+        .get("AWS_EC2_METADATA_SERVICE_ENDPOINT")
+        .map(String::as_str)
+        .unwrap_or(AWS_IMDS_ENDPOINT)
+        .trim_end_matches('/');
+
+    let client = reqwest::Client::builder()
+        .build()
+        .into_alien_error()
+        .context(ErrorData::InvalidClientConfig {
+            message: "Failed to create AWS IMDS HTTP client".to_string(),
+            errors: None,
+        })?;
+
+    let token_url = format!("{endpoint}/latest/api/token");
+    let token = client
+        .put(&token_url)
+        .timeout(AWS_IMDS_DISCOVERY_TIMEOUT)
+        .header("X-aws-ec2-metadata-token-ttl-seconds", "21600")
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::InvalidClientConfig {
+            message: "Failed to request AWS IMDSv2 token".to_string(),
+            errors: None,
+        })?
+        .error_for_status()
+        .into_alien_error()
+        .context(ErrorData::InvalidClientConfig {
+            message: "AWS IMDSv2 token request failed".to_string(),
+            errors: None,
+        })?
+        .text()
+        .await
+        .into_alien_error()
+        .context(ErrorData::InvalidClientConfig {
+            message: "Failed to read AWS IMDSv2 token".to_string(),
+            errors: None,
+        })?;
+
+    let region_url = format!("{endpoint}/latest/meta-data/placement/region");
+    let region = client
+        .get(&region_url)
+        .timeout(AWS_IMDS_DISCOVERY_TIMEOUT)
+        .header("X-aws-ec2-metadata-token", token.trim())
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::InvalidClientConfig {
+            message: "Failed to request AWS IMDS region".to_string(),
+            errors: None,
+        })?
+        .error_for_status()
+        .into_alien_error()
+        .context(ErrorData::InvalidClientConfig {
+            message: "AWS IMDS region request failed".to_string(),
+            errors: None,
+        })?
+        .text()
+        .await
+        .into_alien_error()
+        .context(ErrorData::InvalidClientConfig {
+            message: "Failed to read AWS IMDS region".to_string(),
+            errors: None,
+        })?;
+
+    let region = region.trim();
+    if region.is_empty() {
+        return Err(AlienError::new(ErrorData::InvalidClientConfig {
+            message: "AWS IMDS did not return a region".to_string(),
+            errors: None,
+        }));
+    }
+
+    Ok(region.to_string())
 }
 
 fn parse_service_overrides(endpoints_json: Option<&String>) -> Result<Option<ServiceOverrides>> {
@@ -674,6 +791,10 @@ fn extract_account_id_from_role_arn(role_arn: &str) -> Option<String> {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
 
     #[test]
     fn test_extract_account_id_from_role_arn() {
@@ -715,12 +836,12 @@ mod tests {
         assert_eq!(profile_name(&env), "fallback".to_string());
     }
 
-    #[test]
-    fn test_resolve_region_uses_default_region_fallback() {
+    #[tokio::test]
+    async fn test_resolve_region_uses_default_region_fallback() {
         let mut env = HashMap::new();
         env.insert("AWS_DEFAULT_REGION".to_string(), "us-west-2".to_string());
 
-        assert_eq!(resolve_region(&env).unwrap(), "us-west-2");
+        assert_eq!(resolve_region(&env).await.unwrap(), "us-west-2");
     }
 
     #[test]
@@ -771,5 +892,74 @@ mod tests {
                 session_token: None,
             }
         );
+    }
+
+    #[tokio::test]
+    async fn test_from_env_uses_imds_for_region_and_credentials() {
+        let endpoint = start_mock_imds().await;
+        let mut env = HashMap::new();
+        env.insert("AWS_ACCOUNT_ID".to_string(), "123456789012".to_string());
+        env.insert("AWS_EC2_METADATA_SERVICE_ENDPOINT".to_string(), endpoint);
+
+        let config = AwsClientConfig::from_env(&env).await.unwrap();
+
+        assert_eq!(config.region, "us-east-1");
+        assert_eq!(
+            config.credentials,
+            AwsCredentials::AccessKeys {
+                access_key_id: "AKIAIMDS".to_string(),
+                secret_access_key: "secret".to_string(),
+                session_token: Some("session".to_string()),
+            }
+        );
+    }
+
+    async fn start_mock_imds() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+
+                tokio::spawn(async move {
+                    let mut buffer = [0u8; 2048];
+                    let Ok(n) = stream.read(&mut buffer).await else {
+                        return;
+                    };
+                    let request = String::from_utf8_lossy(&buffer[..n]);
+                    let body = if request.starts_with("PUT /latest/api/token ") {
+                        "token".to_string()
+                    } else if request.starts_with("GET /latest/meta-data/placement/region ") {
+                        "us-east-1".to_string()
+                    } else if request
+                        .starts_with("GET /latest/meta-data/iam/security-credentials/ ")
+                    {
+                        "test-role".to_string()
+                    } else if request
+                        .starts_with("GET /latest/meta-data/iam/security-credentials/test-role ")
+                    {
+                        r#"{"AccessKeyId":"AKIAIMDS","SecretAccessKey":"secret","Token":"session"}"#
+                            .to_string()
+                    } else {
+                        let response =
+                            "HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\n\r\n".to_string();
+                        let _ = stream.write_all(response.as_bytes()).await;
+                        return;
+                    };
+
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-length: {}\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = stream.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+
+        format!("http://{}", addr)
     }
 }

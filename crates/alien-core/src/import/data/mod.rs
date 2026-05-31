@@ -26,7 +26,9 @@ pub use gcp::{
     GcpServiceAccountImportData, GcpServiceActivationImportData, GcpStorageImportData,
     GcpVaultImportData, GcpWorkerImportData,
 };
-pub use kubernetes_cluster::KubernetesClusterImportData;
+pub use kubernetes_cluster::{
+    AzureApplicationGatewayForContainersBootstrap, KubernetesClusterImportData,
+};
 
 pub(crate) fn deserialize_bool_from_bool_or_string<'de, D>(
     deserializer: D,

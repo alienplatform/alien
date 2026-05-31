@@ -120,7 +120,7 @@ Parameters:
     Default: ''
   DomainName:
     Type: String
-    Description: Optional custom domain for public endpoints. Leave unset to use an auto-generated domain with a managed TLS certificate.
+    Description: Optional custom domain for public endpoints. Leave unset to expose through the generated load balancer DNS name over HTTP.
     Default: ''
   HostedZoneId:
     Type: String
@@ -128,7 +128,7 @@ Parameters:
     Default: ''
   CertificateArn:
     Type: String
-    Description: ACM certificate ARN for the custom domain. Not needed for the auto-generated domain.
+    Description: ACM certificate ARN for the custom domain. Required when DomainName is set.
     Default: ''
   UpdatesMode:
     Type: String

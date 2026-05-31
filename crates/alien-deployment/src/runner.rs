@@ -93,11 +93,22 @@ pub async fn run_step_loop(
 ) -> Result<RunnerResult> {
     for step_count in 1..=policy.max_steps {
         // Pre-step terminal check
-        if let Some(result) = classify_status(&state.status, policy.operation) {
-            return Ok(RunnerResult {
-                loop_result: result,
-                steps_executed: step_count - 1,
-            });
+        if !should_step_retryable_failure(state) {
+            if let Some(result) = classify_status(&state.status, policy.operation) {
+                return Ok(RunnerResult {
+                    loop_result: result,
+                    steps_executed: step_count - 1,
+                });
+            }
+        }
+
+        if should_step_retryable_failure(state) {
+            info!(
+                step = step_count,
+                status = ?state.status,
+                deployment_id = %deployment_id,
+                "Retry requested for failed deployment; running failed-status handler"
+            );
         }
 
         info!(
@@ -225,13 +236,17 @@ pub async fn run_step_loop(
     })
 }
 
+fn should_step_retryable_failure(state: &DeploymentState) -> bool {
+    state.retry_requested && state.status.is_failed()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::transport::{DeploymentLoopTransport, StepReconcileResult};
     use alien_core::{
         EnvironmentVariablesSnapshot, Platform, ReleaseInfo, ResourceEntry, ResourceLifecycle,
-        Stack, StackSettings, Worker, WorkerCode, DEPLOYMENT_PROTOCOL_VERSION,
+        Stack, StackSettings, StackState, Worker, WorkerCode, DEPLOYMENT_PROTOCOL_VERSION,
     };
     use alien_error::GenericError;
     use async_trait::async_trait;
@@ -395,5 +410,79 @@ mod tests {
             ],
             "checkpoint retry must persist the same produced state, not run another step"
         );
+    }
+
+    #[tokio::test]
+    async fn retry_requested_failed_status_runs_one_step() {
+        let transport = FailFirstCheckpointTransport::default();
+        let mut state = test_state();
+        state.status = DeploymentStatus::ProvisioningFailed;
+        state.retry_requested = true;
+        state.stack_state = Some(StackState::new(Platform::Test));
+        let mut config = test_config();
+        let policy = RunnerPolicy {
+            max_steps: 1,
+            operation: LoopOperation::Deploy,
+            delay_threshold: None,
+        };
+
+        let result = run_step_loop(
+            &mut state,
+            &mut config,
+            &ClientConfig::Test,
+            "dep_test",
+            &policy,
+            &transport,
+            None,
+            None,
+        )
+        .await
+        .expect("runner should step failed status when retry is requested");
+
+        assert_eq!(result.steps_executed, 1);
+        assert_eq!(state.status, DeploymentStatus::Provisioning);
+        assert!(!state.retry_requested);
+        assert_eq!(
+            transport
+                .checkpointed_statuses
+                .lock()
+                .expect("statuses lock poisoned")
+                .as_slice(),
+            &[
+                DeploymentStatus::Provisioning,
+                DeploymentStatus::Provisioning
+            ],
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_status_without_retry_stops_before_step() {
+        let transport = FailFirstCheckpointTransport::default();
+        let mut state = test_state();
+        state.status = DeploymentStatus::ProvisioningFailed;
+        state.stack_state = Some(StackState::new(Platform::Test));
+        let mut config = test_config();
+        let policy = RunnerPolicy {
+            max_steps: 1,
+            operation: LoopOperation::Deploy,
+            delay_threshold: None,
+        };
+
+        let result = run_step_loop(
+            &mut state,
+            &mut config,
+            &ClientConfig::Test,
+            "dep_test",
+            &policy,
+            &transport,
+            None,
+            None,
+        )
+        .await
+        .expect("runner should classify failed status without stepping");
+
+        assert_eq!(result.steps_executed, 0);
+        assert_eq!(state.status, DeploymentStatus::ProvisioningFailed);
+        assert_eq!(transport.attempts.load(Ordering::SeqCst), 0);
     }
 }

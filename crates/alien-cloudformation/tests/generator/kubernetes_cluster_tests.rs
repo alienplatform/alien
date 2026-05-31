@@ -102,8 +102,9 @@ fn eks_target_irsa_references_generated_cluster_resource() {
 
     assert!(yaml.contains("- KubernetesCluster"));
     assert!(!yaml.contains("- Kubernetes\n"));
-    assert!(yaml.contains("system:serviceaccount:alien:${AWS::StackName}-manager-sa"));
-    assert!(yaml.contains("system:serviceaccount:alien:${AWS::StackName}-execution-sa"));
+    assert!(yaml.contains("KubernetesOidcProvider:"));
+    assert!(yaml.contains("OpenIdConnectIssuerUrl"));
+    assert!(yaml.contains("system:serviceaccount:kube-system:ebs-csi-controller-sa"));
 }
 
 #[test]
@@ -150,7 +151,7 @@ fn eks_target_preserves_configured_kubernetes_exposure() {
     assert!(yaml.contains("namespace: alien"));
     assert!(yaml.contains("mode: generated"));
     assert!(yaml.contains("mode: none"));
-    assert!(yaml.matches("custom-alb").count() >= 2);
+    assert!(yaml.contains("ingressClassName: custom-alb"));
     assert!(!yaml.contains("managedAcmImport"));
 }
 

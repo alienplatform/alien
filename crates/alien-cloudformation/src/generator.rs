@@ -1,6 +1,9 @@
 use crate::{
     registry::CfRegistry,
-    template::{CfExpression, CfMapping, CfOutput, CfParameter, CfResource, CfTemplate},
+    template::{
+        CfExpression, CfMapping, CfOutput, CfParameter, CfResource, CfRule, CfRuleAssertion,
+        CfTemplate,
+    },
 };
 use alien_core::{
     import::{EmitContext, CURRENT_SETUP_IMPORT_FORMAT_VERSION},
@@ -60,6 +63,7 @@ const STANDARD_OUTPUT_COUNT: usize = 12;
 const CLOUDFORMATION_MAX_OUTPUTS: usize = 200;
 const MAPPING_REGIONAL_CUSTOM_RESOURCE_SERVICE_TOKENS: &str = "RegionalCustomResourceServiceTokens";
 const MAPPING_SERVICE_TOKEN_KEY: &str = "ServiceToken";
+const RULE_SUPPORTED_AWS_REGION: &str = "SupportedAwsRegion";
 
 /// Registration behavior for the generated CloudFormation template.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -123,6 +127,22 @@ impl RegistrationMode {
             | RegistrationMode::Both { callback_url, .. }
             | RegistrationMode::RegionalBoth { callback_url, .. } => callback_url.as_deref(),
             RegistrationMode::OutputsFallback => None,
+        }
+    }
+
+    pub fn supported_regions(&self) -> Vec<String> {
+        match self {
+            RegistrationMode::RegionalCustomResource {
+                lambda_arns_by_region,
+                ..
+            }
+            | RegistrationMode::RegionalBoth {
+                lambda_arns_by_region,
+                ..
+            } => lambda_arns_by_region.keys().cloned().collect(),
+            RegistrationMode::CustomResource { .. }
+            | RegistrationMode::Both { .. }
+            | RegistrationMode::OutputsFallback => Vec::new(),
         }
     }
 }
@@ -214,11 +234,13 @@ pub fn generate_cloudformation_template(
         parameters: IndexMap::new(),
         mappings: IndexMap::new(),
         conditions: IndexMap::new(),
+        rules: IndexMap::new(),
         resources: IndexMap::new(),
         outputs: IndexMap::new(),
     };
 
     add_standard_parameters(&mut template, &stack_settings);
+    add_supported_region_rule(&mut template, &options.registration);
     add_standard_conditions(&mut template, stack, &stack_settings);
     add_console_interface_metadata(&mut template, &stack_settings);
 
@@ -721,6 +743,29 @@ fn add_network_parameters(template: &mut CfTemplate, network: Option<&NetworkSet
         }
         None | Some(NetworkSettings::ByoVpcGcp { .. } | NetworkSettings::ByoVnetAzure { .. }) => {}
     }
+}
+
+fn add_supported_region_rule(template: &mut CfTemplate, registration: &RegistrationMode) {
+    let supported_regions = registration.supported_regions();
+    if supported_regions.is_empty() {
+        return;
+    }
+
+    let regions = supported_regions.join(", ");
+    template.rules.insert(
+        RULE_SUPPORTED_AWS_REGION.to_string(),
+        CfRule {
+            assertions: vec![CfRuleAssertion {
+                assertion: CfExpression::contains(
+                    CfExpression::list(supported_regions.into_iter().map(CfExpression::from)),
+                    CfExpression::ref_("AWS::Region"),
+                ),
+                assert_description: format!(
+                    "This template can only be launched in AWS regions supported by this Alien environment: {regions}."
+                ),
+            }],
+        },
+    );
 }
 
 fn add_standard_conditions(template: &mut CfTemplate, stack: &Stack, settings: &StackSettings) {

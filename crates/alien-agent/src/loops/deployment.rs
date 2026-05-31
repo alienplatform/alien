@@ -30,6 +30,8 @@ use tracing::{debug, error, info};
 
 use crate::error::{ErrorData, Result};
 
+const SUGGESTED_DELAY_YIELD_THRESHOLD: Duration = Duration::from_millis(500);
+
 /// Transport implementation that persists state to the agent's local DB
 /// and re-reads config each step to pick up sync loop changes.
 struct AgentTransport {
@@ -205,7 +207,7 @@ async fn run_deployment_continuously(state: &AgentState) -> Result<usize> {
     let policy = RunnerPolicy {
         max_steps: 100,
         operation,
-        delay_threshold: None,
+        delay_threshold: Some(SUGGESTED_DELAY_YIELD_THRESHOLD),
     };
 
     let transport = AgentTransport {
@@ -234,7 +236,14 @@ async fn run_deployment_continuously(state: &AgentState) -> Result<usize> {
         steps_executed,
     } = result;
 
-    if loop_result.stop_reason != LoopStopReason::Handoff {
+    if loop_result.outcome == LoopOutcome::Neutral {
+        debug!(
+            status = ?loop_result.final_status,
+            stop_reason = ?loop_result.stop_reason,
+            steps = steps_executed,
+            "Deployment step loop yielded"
+        );
+    } else if loop_result.stop_reason != LoopStopReason::Handoff {
         if loop_result.outcome == LoopOutcome::Success {
             debug!("Deployment synced, clearing deployment config");
             state.db.clear_deployment_config().await?;

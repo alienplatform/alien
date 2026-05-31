@@ -13,8 +13,9 @@
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
-    AzureResourceGroup, AzureServiceBusNamespace, AzureStorageAccount, Kv, LifecycleRule, Queue,
-    ResourceLifecycle, ResourceRef, Stack, StackSettings, Storage, Vault,
+    AzureResourceGroup, AzureServiceBusNamespace, AzureStorageAccount, Kv, LifecycleRule,
+    PermissionProfile, Queue, ResourceLifecycle, ResourceRef, ServiceAccount, Stack, StackSettings,
+    Storage, Vault,
 };
 use alien_terraform::TerraformTarget;
 
@@ -66,6 +67,39 @@ fn azure_storage_minimal_renders_idiomatic_module() {
     let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
     snapshot_module("azure_storage_minimal", &module);
     assert_terraform_valid(&module, "azure_storage_minimal");
+}
+
+#[test]
+fn azure_storage_profile_permissions_emit_container_role_assignment() {
+    let stack = Stack::new("acme-storage-permissions".to_string())
+        .permissions(alien_core::PermissionsConfig::new().with_profile(
+            "app",
+            PermissionProfile::new().resource("files", ["storage/data-write"]),
+        ))
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add(storage_account(), ResourceLifecycle::Frozen)
+        .add(
+            Storage::new("files".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            ServiceAccount::new("app-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    let rendered = module
+        .iter()
+        .map(|(_, contents)| contents.as_ref())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("ba92f5b4-2d11-453d-a403-e96b0029c9fe"));
+    assert!(rendered.contains("azurerm_storage_container.files.name"));
+    assert!(rendered.contains("azurerm_user_assigned_identity.app_sa.principal_id"));
+    assert!(rendered.contains("blobServices/default/containers"));
+    assert_terraform_valid(&module, "azure_storage_profile_permissions");
 }
 
 #[test]
@@ -146,6 +180,35 @@ fn azure_vault_renders_key_vault() {
     let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
     snapshot_module("azure_vault_minimal", &module);
     assert_terraform_valid(&module, "azure_vault_minimal");
+}
+
+#[test]
+fn azure_vault_resource_permissions_attach_to_service_account() {
+    let stack = Stack::new("acme-vault".to_string())
+        .permission(
+            "execution",
+            PermissionProfile::new().resource("secrets", ["vault/data-read"]),
+        )
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add(
+            ServiceAccount::new("execution-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Vault::new("secrets".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    let rendered = module
+        .iter()
+        .map(|(_, contents)| contents)
+        .collect::<String>();
+
+    assert!(rendered.contains("4633458b-17de-408a-b874-0445c86b69e6"));
+    assert!(rendered.contains("azurerm_user_assigned_identity.execution_sa.principal_id"));
+    assert!(rendered.contains("secrets_user_execution"));
+    assert_terraform_valid(&module, "azure_vault_service_account_permissions");
 }
 
 #[test]

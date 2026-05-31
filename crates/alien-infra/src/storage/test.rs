@@ -8,6 +8,13 @@ use tracing::info;
 pub struct TestStorageController {
     /// The name of the created storage bucket.
     pub(crate) bucket_name: Option<String>,
+    /// Number of Ready checks executed for this controller.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(crate) ready_checks: u32,
+}
+
+fn is_zero(value: &u32) -> bool {
+    *value == 0
 }
 
 #[controller]
@@ -65,6 +72,7 @@ impl TestStorageController {
         status = ResourceStatus::Running,
     )]
     async fn ready(&mut self, _ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        self.ready_checks += 1;
         // The system will automatically know if config changed and transition to update
         Ok(HandlerAction::Continue {
             state: Ready,

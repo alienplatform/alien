@@ -384,6 +384,8 @@ fn build_capacity_group_for_id(
 ) -> Result<CapacityGroup> {
     let requirements = if containers.is_empty() {
         WorkloadRequirements {
+            total_cpu_at_desired: 1.0,
+            total_memory_bytes_at_desired: 2 * 1024 * 1024 * 1024,
             total_cpu_at_max: 1.0,
             total_memory_bytes_at_max: 2 * 1024 * 1024 * 1024,
             max_cpu_per_container: 1.0,
@@ -424,8 +426,10 @@ fn build_capacity_group_for_id(
 
 /// Aggregate resource requirements from all containers into a single WorkloadRequirements.
 fn aggregate_workload_requirements(containers: &[&Container]) -> Result<WorkloadRequirements> {
-    let mut total_cpu: f64 = 0.0;
-    let mut total_memory: u64 = 0;
+    let mut total_cpu_at_desired: f64 = 0.0;
+    let mut total_memory_bytes_at_desired: u64 = 0;
+    let mut total_cpu_at_max: f64 = 0.0;
+    let mut total_memory_bytes_at_max: u64 = 0;
     let mut max_cpu_per_container: f64 = 0.0;
     let mut max_memory_per_container: u64 = 0;
     let mut max_ephemeral: u64 = 0;
@@ -436,6 +440,12 @@ fn aggregate_workload_requirements(containers: &[&Container]) -> Result<Workload
             .autoscaling
             .as_ref()
             .map(|a| a.max)
+            .or(container.replicas)
+            .unwrap_or(1) as f64;
+        let desired_replicas = container
+            .autoscaling
+            .as_ref()
+            .map(|a| a.desired)
             .or(container.replicas)
             .unwrap_or(1) as f64;
 
@@ -463,8 +473,10 @@ fn aggregate_workload_requirements(containers: &[&Container]) -> Result<Workload
                 })
             })?;
 
-        total_cpu += cpu_per_replica * max_replicas;
-        total_memory += (mem_per_replica as f64 * max_replicas) as u64;
+        total_cpu_at_desired += cpu_per_replica * desired_replicas;
+        total_memory_bytes_at_desired += (mem_per_replica as f64 * desired_replicas) as u64;
+        total_cpu_at_max += cpu_per_replica * max_replicas;
+        total_memory_bytes_at_max += (mem_per_replica as f64 * max_replicas) as u64;
 
         // Track the largest single container (for instance sizing)
         if cpu_per_replica > max_cpu_per_container {
@@ -502,8 +514,10 @@ fn aggregate_workload_requirements(containers: &[&Container]) -> Result<Workload
     }
 
     Ok(WorkloadRequirements {
-        total_cpu_at_max: total_cpu,
-        total_memory_bytes_at_max: total_memory,
+        total_cpu_at_desired,
+        total_memory_bytes_at_desired,
+        total_cpu_at_max,
+        total_memory_bytes_at_max,
         max_cpu_per_container,
         max_memory_per_container,
         max_ephemeral_storage_bytes: max_ephemeral,
@@ -515,8 +529,8 @@ fn aggregate_workload_requirements(containers: &[&Container]) -> Result<Workload
 mod tests {
     use super::*;
     use alien_core::{
-        ContainerCode, EnvironmentVariablesSnapshot, ExternalBindings, NetworkSettings,
-        ResourceSpec, StackSettings,
+        ContainerAutoscaling, ContainerCode, EnvironmentVariablesSnapshot, ExternalBindings,
+        NetworkSettings, ResourceSpec, StackSettings,
     };
     use indexmap::IndexMap;
 
@@ -525,6 +539,66 @@ mod tests {
             variables: Vec::new(),
             hash: String::new(),
             created_at: "2024-01-01T00:00:00Z".to_string(),
+        }
+    }
+
+    fn test_container(id: &str, cpu: &str, memory: &str) -> Container {
+        Container::new(id.to_string())
+            .code(ContainerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: cpu.to_string(),
+                desired: cpu.to_string(),
+            })
+            .memory(ResourceSpec {
+                min: memory.to_string(),
+                desired: memory.to_string(),
+            })
+            .permissions("test".to_string())
+            .build()
+    }
+
+    #[test]
+    fn test_production_sized_workload_selects_small_ha_fleet() {
+        let mut api = test_container("api", "1", "2Gi");
+        api.replicas = Some(2);
+        let mut ingest = test_container("ingest", "0.75", "2Gi");
+        ingest.autoscaling = Some(ContainerAutoscaling {
+            min: 2,
+            desired: 2,
+            max: 4,
+            target_cpu_percent: Some(60.0),
+            target_memory_percent: Some(80.0),
+            target_http_in_flight_per_replica: Some(50),
+            max_http_p95_latency_ms: None,
+        });
+        let mut query = test_container("query", "1", "4Gi");
+        query.autoscaling = Some(ContainerAutoscaling {
+            min: 2,
+            desired: 2,
+            max: 4,
+            target_cpu_percent: Some(60.0),
+            target_memory_percent: Some(75.0),
+            target_http_in_flight_per_replica: Some(10),
+            max_http_p95_latency_ms: None,
+        });
+        let mut index = test_container("index-worker", "1", "4Gi");
+        index.replicas = Some(1);
+        index.ephemeral_storage = Some("20Gi".to_string());
+
+        let containers = vec![api, ingest, query, index];
+        let refs: Vec<&Container> = containers.iter().collect();
+
+        for (platform, expected_instance) in [
+            (Platform::Aws, "m7g.xlarge"),
+            (Platform::Gcp, "n2-standard-4"),
+            (Platform::Azure, "Standard_D4s_v5"),
+        ] {
+            let group = build_capacity_group_for_id("general", &refs, platform).unwrap();
+            assert_eq!(group.instance_type.as_deref(), Some(expected_instance));
+            assert_eq!(group.min_size, 2);
+            assert_eq!(group.max_size, 4);
         }
     }
 

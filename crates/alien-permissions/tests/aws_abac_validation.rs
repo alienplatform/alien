@@ -266,6 +266,7 @@ fn aws_resource_arns_are_stack_or_resource_scoped_unless_documented_external() {
                         || resource.contains("${resourceName}")
                         || binding.condition.is_some()
                         || documented_external_resource_scope(resource)
+                        || documented_same_account_ecr_metadata_scope(actions, resource)
                         || documented_run_instances_companion_resource(actions, resource)
                         || documented_create_security_group_vpc_resource(actions, resource)
                     {
@@ -291,6 +292,13 @@ fn documented_external_resource_scope(resource: &str) -> bool {
     // Runtime compute pulls images from the manager-owned artifact registry. Target-account
     // isolation is enforced by the repository resource policy that grants this role access.
     resource == "arn:aws:ecr:*:${managingAccountId}:repository/*"
+}
+
+fn documented_same_account_ecr_metadata_scope(actions: &[String], resource: &str) -> bool {
+    resource == "arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/*"
+        && actions
+            .iter()
+            .all(|action| matches!(action.as_str(), "ecr:DescribeRepositories"))
 }
 
 fn documented_run_instances_companion_resource(actions: &[String], resource: &str) -> bool {

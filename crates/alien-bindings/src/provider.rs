@@ -1658,6 +1658,45 @@ mod tests {
         ])
     }
 
+    fn kubernetes_azure_env() -> HashMap<String, String> {
+        HashMap::from([
+            (
+                ENV_ALIEN_DEPLOYMENT_TYPE.to_string(),
+                Platform::Kubernetes.as_str().to_string(),
+            ),
+            (
+                ENV_ALIEN_BASE_PLATFORM.to_string(),
+                Platform::Azure.as_str().to_string(),
+            ),
+            (
+                "KUBERNETES_SERVICE_HOST".to_string(),
+                "10.0.0.1".to_string(),
+            ),
+            ("KUBERNETES_SERVICE_PORT".to_string(), "443".to_string()),
+            (
+                "AZURE_SUBSCRIPTION_ID".to_string(),
+                "00000000-0000-0000-0000-000000000000".to_string(),
+            ),
+            (
+                "AZURE_TENANT_ID".to_string(),
+                "11111111-1111-1111-1111-111111111111".to_string(),
+            ),
+            ("AZURE_REGION".to_string(), "eastus".to_string()),
+            (
+                "AZURE_CLIENT_ID".to_string(),
+                "22222222-2222-2222-2222-222222222222".to_string(),
+            ),
+            (
+                "AZURE_FEDERATED_TOKEN_FILE".to_string(),
+                "/var/run/secrets/azure/tokens/azure-identity-token".to_string(),
+            ),
+            (
+                "AZURE_AUTHORITY_HOST".to_string(),
+                "https://login.microsoftonline.com/".to_string(),
+            ),
+        ])
+    }
+
     #[tokio::test]
     async fn from_env_builds_kubernetes_cloud_config_when_base_platform_is_set() {
         let provider = BindingsProvider::from_env(kubernetes_aws_env())
@@ -1666,6 +1705,20 @@ mod tests {
 
         assert!(provider.client_config.kubernetes_config().is_some());
         assert!(provider.client_config.aws_config().is_some());
+        assert!(matches!(
+            provider.client_config,
+            ClientConfig::KubernetesCloud { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn from_env_builds_kubernetes_cloud_config_for_azure_workload_identity() {
+        let provider = BindingsProvider::from_env(kubernetes_azure_env())
+            .await
+            .unwrap();
+
+        assert!(provider.client_config.kubernetes_config().is_some());
+        assert!(provider.client_config.azure_config().is_some());
         assert!(matches!(
             provider.client_config,
             ClientConfig::KubernetesCloud { .. }

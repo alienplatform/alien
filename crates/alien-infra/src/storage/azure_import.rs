@@ -89,15 +89,14 @@ impl ResourceImporter for AzureStorageAccountImporter {
         // them on demand from the storage account.
         let _ = data.subscription_id;
         let _ = data.resource_group;
-        let _ = data.queue_endpoint;
         let controller = AzureStorageAccountController {
             state: AzureStorageAccountState::Ready,
             account_name: Some(data.storage_account_name),
-            resource_id: None,
+            resource_id: Some(data.resource_id),
             primary_blob_endpoint: Some(data.blob_endpoint),
-            primary_file_endpoint: None,
-            primary_queue_endpoint: None,
-            primary_table_endpoint: None,
+            primary_file_endpoint: Some(data.file_endpoint),
+            primary_queue_endpoint: Some(data.queue_endpoint),
+            primary_table_endpoint: Some(data.table_endpoint),
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)

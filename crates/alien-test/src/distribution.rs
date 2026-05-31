@@ -49,6 +49,7 @@ use crate::{
 const DEFAULT_DEPLOYMENT_RUNNING_TIMEOUT: Duration = Duration::from_secs(600);
 const AZURE_DEPLOYMENT_RUNNING_TIMEOUT: Duration = Duration::from_secs(1_800);
 const KUBERNETES_DEPLOYMENT_RUNNING_TIMEOUT: Duration = Duration::from_secs(1_800);
+const KUBERNETES_FULL_STACK_DEPLOYMENT_RUNNING_TIMEOUT: Duration = Duration::from_secs(3_600);
 
 /// Artifact cleanup that sits outside the manager's normal destroy flow.
 pub enum DistributionArtifactCleanup {
@@ -1424,7 +1425,9 @@ async fn run_terraform_k8s(
         None => kubernetes_helm_target_from_outputs(&result.outputs, namespace)?,
     };
     materialize_kubeconfig_for_helm(&mut helm_target, &result.cleanup).await?;
-    let kubernetes_command_env = result.cleanup.command_env().to_vec();
+    let mut kubernetes_command_env = result.cleanup.command_env().to_vec();
+    configure_kubeconfig_auth_for_helm(prepared, target, &helm_target, &mut kubernetes_command_env)
+        .await?;
     if terraform_handoff_debug_enabled() {
         return stop_before_helm_for_terraform_handoff_debug(
             prepared,
@@ -1625,6 +1628,7 @@ async fn apply_terraform_and_import(
             stack_settings,
             registration: None,
             helm_install: None,
+            supported_aws_regions: Vec::new(),
         },
     )
     .map_err(|error| anyhow::anyhow!("Terraform render failed: {error}"))?;
@@ -1866,7 +1870,7 @@ async fn write_manager_fetch_values_from_base(
         }),
     );
     values_object.insert("infrastructure".to_string(), Value::Null);
-    values_object.insert("runtime".to_string(), runtime_values()?);
+    merge_runtime_values(values_object, runtime_values()?)?;
     if helm_target.is_some() {
         let chart_values = fs::read_to_string(chart_dir.path().join("values.yaml"))
             .await
@@ -1881,6 +1885,26 @@ async fn write_manager_fetch_values_from_base(
         .await
         .context("Failed to write Helm distribution values")?;
     Ok(values_path)
+}
+
+fn merge_runtime_values(
+    values_object: &mut serde_json::Map<String, Value>,
+    runtime: Value,
+) -> anyhow::Result<()> {
+    let runtime_object = runtime
+        .as_object()
+        .context("runtime override values must be a JSON object")?;
+    match values_object.get_mut("runtime") {
+        Some(Value::Object(existing_runtime)) => {
+            for (key, value) in runtime_object {
+                existing_runtime.insert(key.clone(), value.clone());
+            }
+        }
+        Some(_) | None => {
+            values_object.insert("runtime".to_string(), runtime);
+        }
+    }
+    Ok(())
 }
 
 fn runtime_values() -> anyhow::Result<Value> {
@@ -2053,6 +2077,43 @@ async fn materialize_kubeconfig_for_helm(
     Ok(())
 }
 
+async fn configure_kubeconfig_auth_for_helm(
+    prepared: &DistributionPrepared,
+    target: alien_terraform::TerraformTarget,
+    helm_target: &KubernetesHelmTarget,
+    env: &mut Vec<(String, String)>,
+) -> anyhow::Result<()> {
+    if target != alien_terraform::TerraformTarget::Aks {
+        return Ok(());
+    }
+    if prepared.config.kubernetes_cluster_mode != KubernetesClusterMode::Create {
+        return Ok(());
+    }
+
+    let azure = prepared
+        .config
+        .azure_target
+        .as_ref()
+        .context("Terraform AKS Helm distribution requires Azure target credentials")?;
+    upsert_env(env, "AZURE_CLIENT_ID", azure.client_id.clone());
+    upsert_env(env, "AZURE_CLIENT_SECRET", azure.client_secret.clone());
+    upsert_env(env, "AZURE_TENANT_ID", azure.tenant_id.clone());
+
+    let mut cmd = Command::new("kubelogin");
+    cmd.args(["convert-kubeconfig", "-l", "spn"]);
+    cmd.env("KUBECONFIG", &helm_target.runtime.kubeconfig);
+    apply_env(&mut cmd, env);
+    run_command(cmd, "kubelogin convert-kubeconfig").await
+}
+
+fn upsert_env(env: &mut Vec<(String, String)>, key: &str, value: String) {
+    if let Some((_, existing)) = env.iter_mut().find(|(existing, _)| existing == key) {
+        *existing = value;
+    } else {
+        env.push((key.to_string(), value));
+    }
+}
+
 async fn write_kubeconfig_file(path: &Path, contents: &str) -> anyhow::Result<()> {
     fs::write(path, contents).await.with_context(|| {
         format!(
@@ -2168,7 +2229,7 @@ fn context_from_deployment(
 }
 
 async fn wait_and_finalize(ctx: &mut TestContext) -> anyhow::Result<()> {
-    let timeout = deployment_running_timeout(ctx.platform);
+    let timeout = deployment_running_timeout(ctx.platform, ctx.app);
     ctx.deployment
         .wait_until_running(timeout)
         .await
@@ -2186,10 +2247,13 @@ async fn wait_and_finalize(ctx: &mut TestContext) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn deployment_running_timeout(platform: Platform) -> Duration {
-    match platform {
-        Platform::Azure => AZURE_DEPLOYMENT_RUNNING_TIMEOUT,
-        Platform::Kubernetes => KUBERNETES_DEPLOYMENT_RUNNING_TIMEOUT,
+fn deployment_running_timeout(platform: Platform, app: TestApp) -> Duration {
+    match (platform, app) {
+        (Platform::Kubernetes, TestApp::FullStackMicroservices) => {
+            KUBERNETES_FULL_STACK_DEPLOYMENT_RUNNING_TIMEOUT
+        }
+        (Platform::Azure, _) => AZURE_DEPLOYMENT_RUNNING_TIMEOUT,
+        (Platform::Kubernetes, _) => KUBERNETES_DEPLOYMENT_RUNNING_TIMEOUT,
         _ => DEFAULT_DEPLOYMENT_RUNNING_TIMEOUT,
     }
 }
@@ -3033,6 +3097,12 @@ fn insert_azure_tfvars(
         "azure_subscription_id".to_string(),
         Value::String(azure_target.subscription_id.clone()),
     );
+    if target == alien_terraform::TerraformTarget::Aks {
+        vars.insert(
+            "azure_tenant_id".to_string(),
+            Value::String(azure_target.tenant_id.clone()),
+        );
+    }
     vars.insert(
         "azure_location".to_string(),
         Value::String(azure_target.region.clone()),
@@ -3295,19 +3365,23 @@ mod tests {
     #[test]
     fn distribution_wait_budget_accounts_for_slow_cloud_control_planes() {
         assert_eq!(
-            deployment_running_timeout(Platform::Azure),
+            deployment_running_timeout(Platform::Azure, TestApp::ComprehensiveRust),
             Duration::from_secs(1_800)
         );
         assert_eq!(
-            deployment_running_timeout(Platform::Kubernetes),
+            deployment_running_timeout(Platform::Kubernetes, TestApp::ComprehensiveRust),
             Duration::from_secs(1_800)
         );
         assert_eq!(
-            deployment_running_timeout(Platform::Aws),
+            deployment_running_timeout(Platform::Kubernetes, TestApp::FullStackMicroservices),
+            Duration::from_secs(3_600)
+        );
+        assert_eq!(
+            deployment_running_timeout(Platform::Aws, TestApp::ComprehensiveRust),
             Duration::from_secs(600)
         );
         assert_eq!(
-            deployment_running_timeout(Platform::Gcp),
+            deployment_running_timeout(Platform::Gcp, TestApp::ComprehensiveRust),
             Duration::from_secs(600)
         );
     }
@@ -3459,6 +3533,7 @@ mod tests {
                 stack_settings,
                 registration: None,
                 helm_install: None,
+                supported_aws_regions: Vec::new(),
             },
         )
         .expect("Terraform generation should succeed");
@@ -3570,6 +3645,7 @@ mod tests {
                 stack_settings,
                 registration: None,
                 helm_install: None,
+                supported_aws_regions: Vec::new(),
             },
         )
         .expect("Terraform generation should not require a compute-cluster emitter");
@@ -3627,6 +3703,7 @@ mod tests {
                 stack_settings,
                 registration: None,
                 helm_install: None,
+                supported_aws_regions: Vec::new(),
             },
         )
         .expect("Terraform generation should succeed");
@@ -3664,6 +3741,7 @@ mod tests {
                 stack_settings,
                 registration: None,
                 helm_install: None,
+                supported_aws_regions: Vec::new(),
             },
         )
         .expect("Terraform generation should succeed");
@@ -3717,6 +3795,7 @@ mod tests {
             vars.get("azure_subscription_id").and_then(Value::as_str),
             Some("target-sub")
         );
+        assert!(vars.get("azure_tenant_id").is_none());
         assert_eq!(
             vars.get("azure_managing_tenant_id").and_then(Value::as_str),
             Some("mgmt-tenant")
@@ -3730,6 +3809,24 @@ mod tests {
             Some("system:serviceaccount:alien:manager")
         );
         assert!(vars.get("azure_management_principal_id").is_none());
+    }
+
+    #[test]
+    fn azure_tfvars_include_target_tenant_for_aks() {
+        let azure_target = azure_config("target-sub", "target-tenant", "eastus", None, None);
+        let mut vars = serde_json::Map::new();
+
+        insert_azure_tfvars(
+            &mut vars,
+            &azure_target,
+            None,
+            alien_terraform::TerraformTarget::Aks,
+        );
+
+        assert_eq!(
+            vars.get("azure_tenant_id").and_then(Value::as_str),
+            Some("target-tenant")
+        );
     }
 
     #[test]
@@ -3782,6 +3879,7 @@ mod tests {
                 stack_settings,
                 registration: None,
                 helm_install: None,
+                supported_aws_regions: Vec::new(),
             },
         )
         .expect("Terraform generation should succeed");
@@ -3805,6 +3903,41 @@ mod tests {
 
         assert_eq!(key.len(), 64);
         assert!(key.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn runtime_values_preserve_existing_pod_labels() {
+        let mut values = serde_json::json!({
+            "runtime": {
+                "podLabels": {
+                    "azure.workload.identity/use": "true"
+                }
+            }
+        });
+        let values_object = values.as_object_mut().expect("values object");
+        merge_runtime_values(
+            values_object,
+            serde_json::json!({
+                "image": {
+                    "repository": "ghcr.io/alienplatform/alien-agent",
+                    "tag": "test",
+                    "pullPolicy": "IfNotPresent"
+                },
+                "encryption": {
+                    "key": "abcd"
+                }
+            }),
+        )
+        .expect("runtime values should merge");
+
+        assert_eq!(
+            values.pointer("/runtime/podLabels/azure.workload.identity~1use"),
+            Some(&Value::from("true"))
+        );
+        assert_eq!(
+            values.pointer("/runtime/image/tag"),
+            Some(&Value::from("test"))
+        );
     }
 
     #[test]

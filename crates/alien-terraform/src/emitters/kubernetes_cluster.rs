@@ -5,7 +5,8 @@ use crate::{
 };
 use alien_core::{
     import::EmitContext, Container, ErrorData, ExposeProtocol, Ingress, KubernetesCluster,
-    KubernetesClusterOwnership, KubernetesClusterProvider, Network, Result, Stack, Worker,
+    KubernetesClusterOwnership, KubernetesClusterProvider, Network, ResourceLifecycle, Result,
+    Stack, Worker,
 };
 use alien_error::AlienError;
 use hcl::expr::Expression;
@@ -18,6 +19,20 @@ pub struct GcpKubernetesClusterEmitter;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AzureKubernetesClusterEmitter;
+
+const AKS_DEFAULT_VM_SIZE: &str = "Standard_D2s_v3";
+const AKS_SINGLE_NODE_VM_SIZE: &str = "Standard_D4s_v3";
+const AKS_D2S_V3_ALLOCATABLE_MCPU: u32 = 1_900;
+const AKS_D4S_V3_ALLOCATABLE_MCPU: u32 = 3_900;
+const AKS_BASE_SYSTEM_MCPU: u32 = 1_800;
+const AKS_SINGLE_NODE_SYSTEM_MCPU: u32 = 1_500;
+const AKS_MANAGER_AGENT_MCPU: u32 = 100;
+const KUBERNETES_WORKER_MCPU: u32 = 100;
+
+struct AksNodePoolDefaults {
+    node_count: u32,
+    vm_size: &'static str,
+}
 
 impl TfEmitter for AwsKubernetesClusterEmitter {
     fn emit(&self, ctx: &EmitContext<'_>) -> Result<TfFragment> {
@@ -771,7 +786,7 @@ fn add_eks_workload_identity_data(fragment: &mut TfFragment, label: &str) {
 
 fn generated_kubernetes_exposure_count_expr(cluster_mode_condition: &str) -> Expression {
     expr::raw(format!(
-        "{cluster_mode_condition} && try(jsondecode(var.stack_settings_json).kubernetes.exposure.mode, \"generated\") == \"generated\" ? 1 : 0"
+        "({cluster_mode_condition}) && try(jsondecode(var.stack_settings_json).kubernetes.exposure.mode, \"generated\") == \"generated\" ? 1 : 0"
     ))
 }
 
@@ -793,6 +808,85 @@ fn stack_has_public_https_endpoint(stack: &Stack) -> bool {
                 })
                 .unwrap_or(false)
     })
+}
+
+fn aks_default_node_pool(stack: &Stack) -> AksNodePoolDefaults {
+    let workload_mcpu = stack
+        .resources()
+        .filter(|(_, entry)| entry.lifecycle == ResourceLifecycle::Live)
+        .map(|(_, entry)| {
+            entry
+                .config
+                .downcast_ref::<Container>()
+                .and_then(|container| cpu_to_millicores(&container.cpu.min))
+                .or_else(|| {
+                    entry
+                        .config
+                        .downcast_ref::<Worker>()
+                        .map(|_| KUBERNETES_WORKER_MCPU)
+                })
+                .unwrap_or(0)
+        })
+        .sum::<u32>();
+
+    let required_mcpu = workload_mcpu + AKS_BASE_SYSTEM_MCPU + AKS_MANAGER_AGENT_MCPU;
+    if required_mcpu <= AKS_D2S_V3_ALLOCATABLE_MCPU * 2 {
+        return AksNodePoolDefaults {
+            node_count: 2,
+            vm_size: AKS_DEFAULT_VM_SIZE,
+        };
+    }
+
+    let single_node_required_mcpu =
+        workload_mcpu + AKS_SINGLE_NODE_SYSTEM_MCPU + AKS_MANAGER_AGENT_MCPU;
+    if single_node_required_mcpu <= AKS_D4S_V3_ALLOCATABLE_MCPU {
+        return AksNodePoolDefaults {
+            node_count: 1,
+            vm_size: AKS_SINGLE_NODE_VM_SIZE,
+        };
+    }
+
+    let node_count =
+        (required_mcpu + AKS_D2S_V3_ALLOCATABLE_MCPU - 1) / AKS_D2S_V3_ALLOCATABLE_MCPU;
+    AksNodePoolDefaults {
+        node_count: node_count.max(2),
+        vm_size: AKS_DEFAULT_VM_SIZE,
+    }
+}
+
+fn cpu_to_millicores(value: &str) -> Option<u32> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    if let Some(millicores) = value.strip_suffix('m') {
+        return millicores.trim().parse::<u32>().ok();
+    }
+
+    let (whole, fractional) = value.split_once('.').unwrap_or((value, ""));
+    let whole_mcpu = whole.trim().parse::<u32>().ok()?.checked_mul(1_000)?;
+    if fractional.is_empty() {
+        return Some(whole_mcpu);
+    }
+
+    let mut fractional_digits = fractional
+        .chars()
+        .take_while(|character| character.is_ascii_digit())
+        .collect::<String>();
+    if fractional_digits.is_empty() {
+        return None;
+    }
+    let round_up = fractional_digits.len() > 3
+        && fractional_digits
+            .as_bytes()
+            .get(3..)
+            .is_some_and(|extra| extra.iter().any(|digit| *digit != b'0'));
+    fractional_digits.truncate(3);
+    while fractional_digits.len() < 3 {
+        fractional_digits.push('0');
+    }
+    let fractional_mcpu = fractional_digits.parse::<u32>().ok()? + u32::from(round_up);
+    whole_mcpu.checked_add(fractional_mcpu)
 }
 
 impl TfEmitter for GcpKubernetesClusterEmitter {
@@ -968,10 +1062,15 @@ impl TfEmitter for GcpKubernetesClusterEmitter {
 impl TfEmitter for AzureKubernetesClusterEmitter {
     fn emit(&self, ctx: &EmitContext<'_>) -> Result<TfFragment> {
         let label = required_label(ctx)?;
+        let node_pool = aks_default_node_pool(ctx.stack);
+        let managed_alb_network_label = azure_managed_alb_network_label(ctx);
         let mut default_node_pool = vec![
             attr("name", Expression::String("default".to_string())),
-            attr("node_count", Expression::Number(hcl::Number::from(3))),
-            attr("vm_size", Expression::String("Standard_D2s_v3".to_string())),
+            attr(
+                "node_count",
+                Expression::Number(hcl::Number::from(node_pool.node_count)),
+            ),
+            attr("vm_size", Expression::String(node_pool.vm_size.to_string())),
         ];
         if let Some(network_label) = default_network_label(ctx) {
             default_node_pool.push(attr(
@@ -988,7 +1087,9 @@ impl TfEmitter for AzureKubernetesClusterEmitter {
             )
             .with_local(
                 "kubernetes_kube_context".to_string(),
-                expr::raw(format!("local.{label}_cluster_name")),
+                expr::raw(format!(
+                    r#"var.kubernetes_cluster_mode == "create" ? nonsensitive(try(yamldecode(azurerm_kubernetes_cluster.{label}[0].kube_config_raw)["current-context"], local.{label}_cluster_name)) : local.{label}_cluster_name"#
+                )),
             )
             .with_local(
                 "kubernetes_kubeconfig".to_string(),
@@ -1007,10 +1108,15 @@ impl TfEmitter for AzureKubernetesClusterEmitter {
     gatewayClassName = "azure-alb-external"
     listenerPort     = 80
     labels           = {}
-    annotations      = {}
+    annotations      = {
+      "alb.networking.azure.io/alb-namespace" = var.kubernetes_namespace
+      "alb.networking.azure.io/alb-name"      = "${local.resource_prefix}-alb"
+    }
     provider = {
-      provider = "azureApplicationGatewayForContainers"
-      frontend = "public"
+      provider     = "azureApplicationGatewayForContainers"
+      frontend     = "public"
+      albNamespace = var.kubernetes_namespace
+      albName      = "${local.resource_prefix}-alb"
     }
   }
   certificate = {
@@ -1019,6 +1125,11 @@ impl TfEmitter for AzureKubernetesClusterEmitter {
 }"#,
                 ),
             )
+            .with_data(data_block(
+                "azurerm_client_config",
+                &format!("{label}_current"),
+                [],
+            ))
             .with_data(data_block(
                 "azurerm_kubernetes_cluster",
                 "target",
@@ -1074,7 +1185,7 @@ impl TfEmitter for AzureKubernetesClusterEmitter {
                         "azure_active_directory_role_based_access_control",
                         [
                             attr("azure_rbac_enabled", Expression::Bool(true)),
-                            attr("tenant_id", expr::raw("var.azure_managing_tenant_id")),
+                            attr("tenant_id", expr::raw("var.azure_tenant_id")),
                         ],
                     )),
                     nested(block(
@@ -1087,8 +1198,57 @@ impl TfEmitter for AzureKubernetesClusterEmitter {
                     attr("sku_tier", Expression::String("Standard".to_string())),
                 ],
             ));
+        fragment.resource_blocks.push(resource_block(
+            "azurerm_role_assignment",
+            &format!("{label}_current_client_kubernetes_rbac_cluster_admin"),
+            [
+                attr(
+                    "count",
+                    expr::raw("var.kubernetes_cluster_mode == \"create\" ? 1 : 0"),
+                ),
+                attr(
+                    "name",
+                    expr::raw(format!(
+                        "uuidv5(\"dns\", \"${{local.resource_prefix}}-aks-rbac-cluster-admin-${{data.azurerm_client_config.{label}_current.object_id}}\")"
+                    )),
+                ),
+                attr("scope", expr::raw(format!("azurerm_kubernetes_cluster.{label}[0].id"))),
+                attr(
+                    "role_definition_name",
+                    Expression::String("Azure Kubernetes Service RBAC Cluster Admin".to_string()),
+                ),
+                attr(
+                    "principal_id",
+                    expr::raw(format!("data.azurerm_client_config.{label}_current.object_id")),
+                ),
+            ],
+        ));
         let has_public_https_endpoint = stack_has_public_https_endpoint(ctx.stack);
         if has_public_https_endpoint {
+            fragment.resource_blocks.push(resource_block(
+                "azapi_resource_action",
+                &format!("{label}_service_networking_provider_registration"),
+                [
+                    attr(
+                        "count",
+                        generated_kubernetes_exposure_count_expr(
+                            "var.kubernetes_cluster_mode == \"create\" || var.kubernetes_cluster_mode == \"existing\"",
+                        ),
+                    ),
+                    attr(
+                        "type",
+                        Expression::String("Microsoft.Resources/providers@2021-04-01".to_string()),
+                    ),
+                    attr(
+                        "resource_id",
+                        expr::raw(
+                            "\"/subscriptions/${var.azure_subscription_id}/providers/Microsoft.ServiceNetworking\"",
+                        ),
+                    ),
+                    attr("action", Expression::String("register".to_string())),
+                    attr("method", Expression::String("POST".to_string())),
+                ],
+            ));
             fragment.resource_blocks.push(resource_block(
                 "azapi_update_resource",
                 &format!("{label}_alb_controller"),
@@ -1137,9 +1297,69 @@ impl TfEmitter for AzureKubernetesClusterEmitter {
 }"#,
                         ),
                     ),
-                    attr("depends_on", expr::raw(format!("[azurerm_kubernetes_cluster.{label}]"))),
+                    attr(
+                        "depends_on",
+                        expr::raw(format!(
+                            "[azurerm_kubernetes_cluster.{label}, azapi_resource_action.{label}_service_networking_provider_registration]"
+                        )),
+                    ),
                 ],
             ));
+            if let Some(network_label) = managed_alb_network_label {
+                fragment.data_blocks.push(data_block(
+                    "azurerm_user_assigned_identity",
+                    &format!("{label}_alb_controller"),
+                    [
+                        attr(
+                            "count",
+                            generated_kubernetes_exposure_count_expr(
+                                "var.kubernetes_cluster_mode == \"create\"",
+                            ),
+                        ),
+                        attr(
+                            "name",
+                            expr::raw(format!(
+                                "\"applicationloadbalancer-${{local.{label}_cluster_name}}\""
+                            )),
+                        ),
+                        attr(
+                            "resource_group_name",
+                            expr::raw("data.azurerm_kubernetes_cluster.target.node_resource_group"),
+                        ),
+                        attr(
+                            "depends_on",
+                            expr::raw(format!("[azapi_update_resource.{label}_alb_controller]")),
+                        ),
+                    ],
+                ));
+                fragment.resource_blocks.push(resource_block(
+                    "azurerm_role_assignment",
+                    &format!("{label}_alb_controller_association_subnet_network_contributor"),
+                    [
+                        attr(
+                            "count",
+                            generated_kubernetes_exposure_count_expr(
+                                "var.kubernetes_cluster_mode == \"create\"",
+                            ),
+                        ),
+                        attr(
+                            "scope",
+                            expr::raw(azure_alb_association_subnet_id_expr(network_label)),
+                        ),
+                        attr(
+                            "role_definition_name",
+                            Expression::String("Network Contributor".to_string()),
+                        ),
+                        attr(
+                            "principal_id",
+                            expr::raw(format!(
+                                "data.azurerm_user_assigned_identity.{label}_alb_controller[0].principal_id"
+                            )),
+                        ),
+                        attr("skip_service_principal_aad_check", Expression::Bool(true)),
+                    ],
+                ));
+            }
         }
         Ok(fragment)
     }
@@ -1187,7 +1407,7 @@ fn kubernetes_import_ref(
         KubernetesClusterOwnership::Existing => "existing",
         KubernetesClusterOwnership::External => "external",
     };
-    Ok(expr::object([
+    let mut fields = vec![
         (
             "provider",
             Expression::String(provider_string(provider).to_string()),
@@ -1208,7 +1428,25 @@ fn kubernetes_import_ref(
             expr::raw(format!("{local_prefix}{label}_cluster_name")),
         ),
         ("cloudMetadataReady", Expression::Bool(true)),
-    ]))
+    ];
+
+    if provider == KubernetesClusterProvider::Aks {
+        let azure_agc = azure_managed_alb_network_label(ctx)
+            .map(|network_label| {
+                expr::raw(format!(
+                    r#"var.kubernetes_cluster_mode == "create" ? {{
+  albName = "${{local.resource_prefix}}-alb"
+  albNamespace = var.kubernetes_namespace
+  associationSubnetId = {association_subnet_id}
+}} : null"#,
+                    association_subnet_id = azure_alb_association_subnet_id_expr(network_label),
+                ))
+            })
+            .unwrap_or(Expression::Null);
+        fields.push(("azureApplicationGatewayForContainers", azure_agc));
+    }
+
+    Ok(expr::object(fields))
 }
 
 fn provider_string(provider: KubernetesClusterProvider) -> &'static str {
@@ -1253,6 +1491,18 @@ fn default_network_label<'a>(ctx: &EmitContext<'a>) -> Option<&'a str> {
     })
 }
 
+fn azure_managed_alb_network_label<'a>(ctx: &EmitContext<'a>) -> Option<&'a str> {
+    ctx.stack.resources().find_map(|(resource_id, entry)| {
+        let network = entry.config.downcast_ref::<Network>()?;
+        matches!(
+            network.settings,
+            alien_core::NetworkSettings::UseDefault | alien_core::NetworkSettings::Create { .. }
+        )
+        .then(|| ctx.name_for(resource_id))
+        .flatten()
+    })
+}
+
 fn gcp_network_self_link_expr(label: &str) -> String {
     format!(
         "var.network_mode == \"create-new\" ? google_compute_network.{label}[0].self_link : var.network_mode == \"use-existing\" ? data.google_compute_network.{label}[0].self_link : null"
@@ -1267,4 +1517,8 @@ fn gcp_subnetwork_self_link_expr(label: &str) -> String {
 
 fn azure_private_subnet_id_expr(label: &str) -> String {
     format!("azurerm_subnet.{label}_private.id")
+}
+
+fn azure_alb_association_subnet_id_expr(label: &str) -> String {
+    format!("azurerm_subnet.{label}_alb.id")
 }

@@ -10,12 +10,12 @@
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
-    AzureResourceGroup, Ingress, KubernetesCertificateMode, KubernetesCluster,
-    KubernetesClusterOwnership, KubernetesClusterProvider, KubernetesExposureSettings,
-    KubernetesHeartbeatMode, KubernetesIngressRouteProfile, KubernetesRouteProfile,
-    KubernetesSettings, ManagementPermissions, Network, NetworkSettings, PermissionProfile,
-    PermissionsConfig, RemoteStackManagement, ResourceLifecycle, ServiceAccount, Stack,
-    StackSettings, Storage, Worker, WorkerCode,
+    AzureResourceGroup, Container, ContainerCode, Ingress, KubernetesCertificateMode,
+    KubernetesCluster, KubernetesClusterOwnership, KubernetesClusterProvider,
+    KubernetesExposureSettings, KubernetesHeartbeatMode, KubernetesIngressRouteProfile,
+    KubernetesRouteProfile, KubernetesSettings, ManagementPermissions, Network, NetworkSettings,
+    PermissionProfile, PermissionsConfig, RemoteStackManagement, ResourceLifecycle, ResourceSpec,
+    ServiceAccount, Stack, StackSettings, Storage, Worker, WorkerCode,
 };
 use alien_terraform::{
     generate_terraform_module, TerraformHelmInstall, TerraformOptions, TerraformRegistration,
@@ -223,7 +223,15 @@ fn managed_kubernetes_cluster_emitters_export_runtime_metadata() {
                 assert!(main.contains("routeApi         = \"gateway\""));
                 assert!(main.contains("gatewayClassName = \"azure-alb-external\""));
                 assert!(main.contains("listenerPort     = 80"));
-                assert!(main.contains("provider = \"azureApplicationGatewayForContainers\""));
+                assert!(main.contains(
+                    "\"alb.networking.azure.io/alb-namespace\" = var.kubernetes_namespace"
+                ));
+                assert!(main.contains(
+                    "\"alb.networking.azure.io/alb-name\"      = \"${local.resource_prefix}-alb\""
+                ));
+                assert!(main.contains("provider     = \"azureApplicationGatewayForContainers\""));
+                assert!(main.contains("albNamespace = var.kubernetes_namespace"));
+                assert!(main.contains("albName      = \"${local.resource_prefix}-alb\""));
                 assert!(main.contains("mode = \"none\""));
             }
             _ => unreachable!("only managed Kubernetes targets are tested here"),
@@ -242,7 +250,7 @@ fn managed_kubernetes_clusters_install_generated_public_endpoint_support() {
         (TerraformTarget::Eks, KubernetesClusterProvider::Eks),
         (TerraformTarget::Aks, KubernetesClusterProvider::Aks),
     ] {
-        let stack = Stack::new(format!("{}-public-endpoint", target.name()))
+        let stack_builder = Stack::new(format!("{}-public-endpoint", target.name()))
             .add(
                 KubernetesCluster::new("kubernetes".to_string())
                     .provider(provider)
@@ -261,8 +269,22 @@ fn managed_kubernetes_clusters_install_generated_public_endpoint_support() {
                     .ingress(Ingress::Public)
                     .build(),
                 ResourceLifecycle::Live,
-            )
-            .build();
+            );
+        let stack = if target == TerraformTarget::Aks {
+            stack_builder
+                .add(
+                    Network::new("default-network".to_string())
+                        .settings(NetworkSettings::Create {
+                            cidr: None,
+                            availability_zones: 2,
+                        })
+                        .build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build()
+        } else {
+            stack_builder.build()
+        };
 
         let module = render(&stack, target, StackSettings::default());
         let cluster = module
@@ -277,14 +299,103 @@ fn managed_kubernetes_clusters_install_generated_public_endpoint_support() {
             assert!(!cluster.contains(r#"resource "kubernetes_manifest" "kubernetes_alb"#));
         }
         if target == TerraformTarget::Aks {
+            assert!(cluster.contains(
+                r#"resource "azapi_resource_action" "kubernetes_service_networking_provider_registration""#
+            ));
+            assert!(cluster.contains(
+                r#""/subscriptions/${var.azure_subscription_id}/providers/Microsoft.ServiceNetworking""#
+            ));
+            assert!(cluster.contains(r#"action      = "register""#));
             assert!(
                 cluster.contains(r#"resource "azapi_update_resource" "kubernetes_alb_controller""#)
             );
+            assert!(cluster.contains(
+                "azapi_resource_action.kubernetes_service_networking_provider_registration"
+            ));
+            assert!(cluster.contains("node_count     = 2"));
+            assert!(cluster.contains(
+                r#"resource "azurerm_role_assignment" "kubernetes_current_client_kubernetes_rbac_cluster_admin""#
+            ));
+            assert!(cluster.contains(r#""Azure Kubernetes Service RBAC Cluster Admin""#));
+            assert!(cluster.contains("tenant_id          = var.azure_tenant_id"));
             assert!(cluster.contains(r#"applicationLoadBalancer = {"#));
             assert!(cluster.contains(r#"installation = "Standard""#));
+            assert!(cluster
+                .contains(r#"data "azurerm_user_assigned_identity" "kubernetes_alb_controller""#));
+            assert!(cluster.contains("applicationloadbalancer-${local.kubernetes_cluster_name}"));
+            assert!(cluster.contains(
+                r#"resource "azurerm_role_assignment" "kubernetes_alb_controller_association_subnet_network_contributor""#
+            ));
+            assert!(cluster.contains("azurerm_subnet.default_network_alb.id"));
+            assert!(cluster.contains(r#""Network Contributor""#));
+            let locals = module.get("locals.tf").expect("locals should render");
+            assert!(locals.contains(
+                r#"nonsensitive(try(yamldecode(azurerm_kubernetes_cluster.kubernetes[0].kube_config_raw)["current-context"]"#
+            ));
+            assert!(locals.contains("azureApplicationGatewayForContainers"));
+            assert!(locals.contains("associationSubnetId = azurerm_subnet.default_network_alb.id"));
         }
         assert_terraform_valid(&module, &format!("{}_public_endpoint", target.name()));
     }
+}
+
+#[test]
+fn aks_managed_cluster_sizes_node_pool_for_kubernetes_workload_requests() {
+    fn app_container(id: &str, cpu: &str, memory: &str) -> Container {
+        Container::new(id.to_string())
+            .code(ContainerCode::Image {
+                image: format!("example.com/{id}:latest"),
+            })
+            .cpu(ResourceSpec {
+                min: cpu.to_string(),
+                desired: cpu.to_string(),
+            })
+            .memory(ResourceSpec {
+                min: memory.to_string(),
+                desired: memory.to_string(),
+            })
+            .permissions("app".to_string())
+            .build()
+    }
+
+    let stack_builder = Stack::new("aks-full-stack-capacity".to_string())
+        .permission("app", PermissionProfile::new())
+        .add(
+            KubernetesCluster::new("kubernetes".to_string())
+                .provider(KubernetesClusterProvider::Aks)
+                .ownership(KubernetesClusterOwnership::Managed)
+                .namespace("default".to_string())
+                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                .build(),
+            ResourceLifecycle::Frozen,
+        );
+
+    let stack = [
+        ("postgres", "0.5", "512Mi"),
+        ("redis", "250m", "256Mi"),
+        ("api", "0.5", "512Mi"),
+        ("worker", "0.25", "512Mi"),
+        ("scheduler", "0.25", "256Mi"),
+        ("dashboard", "0.25", "256Mi"),
+        ("gateway", "0.25", "128Mi"),
+    ]
+    .into_iter()
+    .fold(stack_builder, |builder, (id, cpu, memory)| {
+        builder.add(app_container(id, cpu, memory), ResourceLifecycle::Live)
+    })
+    .build();
+
+    let module = render(&stack, TerraformTarget::Aks, StackSettings::default());
+    let cluster = module
+        .get("kubernetes.tf")
+        .expect("cluster resource file should render");
+
+    assert!(cluster.contains("vm_size    = \"Standard_D4s_v3\""));
+    assert!(
+        cluster.contains("node_count = 1"),
+        "AKS create-mode should fit the full-stack workload within a 4-vCPU node pool"
+    );
+    assert_terraform_valid(&module, "aks_full_stack_capacity");
 }
 
 #[test]
@@ -444,6 +555,7 @@ fn registered_kubernetes_module_installs_provider_rendered_helm_values() {
             helm_install: Some(TerraformHelmInstall {
                 chart_ref: "oci://pkg.example.com/acme/app/helm".to_string(),
             }),
+            supported_aws_regions: Vec::new(),
         },
     )
     .expect("module should render");
@@ -506,6 +618,7 @@ fn registered_gke_kubernetes_module_declares_dynamic_network_inputs() {
             helm_install: Some(TerraformHelmInstall {
                 chart_ref: "oci://pkg.example.com/acme/app/helm".to_string(),
             }),
+            supported_aws_regions: Vec::new(),
         },
     )
     .expect("module should render");

@@ -78,6 +78,9 @@ pub struct TerraformOptions<'a> {
     /// self-registration can install the chart because the chart needs the
     /// manager deployment id and deployment token.
     pub helm_install: Option<TerraformHelmInstall>,
+    /// AWS regions supported by the Alien environment that produced this
+    /// module. Empty means no generated region validation.
+    pub supported_aws_regions: Vec<String>,
 }
 
 /// Terraform provider dependency used by self-registering modules.
@@ -260,7 +263,8 @@ pub fn generate_terraform_module(
         target.is_kubernetes() && has_resource_type(&per_resource, "kubernetes_manifest");
     let include_helm_provider =
         target.is_kubernetes() && options.registration.is_some() && options.helm_install.is_some();
-    let include_azapi_provider = has_resource_type(&per_resource, "azapi_update_resource");
+    let include_azapi_provider = has_resource_type(&per_resource, "azapi_update_resource")
+        || has_resource_type(&per_resource, "azapi_resource_action");
     let has_remote_management =
         stack_has_resource_type(stack, RemoteStackManagement::RESOURCE_TYPE);
     let needs_azure_management_inputs = has_remote_management || target == TerraformTarget::Aks;
@@ -293,6 +297,7 @@ pub fn generate_terraform_module(
             options.helm_install.as_ref(),
             &deployment_name_default,
             needs_azure_management_inputs,
+            &options.supported_aws_regions,
         )?)?,
     );
     files.insert(
@@ -796,6 +801,7 @@ fn variables_body(
     helm_install: Option<&TerraformHelmInstall>,
     deployment_name_default: &str,
     needs_azure_management_inputs: bool,
+    supported_aws_regions: &[String],
 ) -> Result<Body> {
     let mut blocks: Vec<Structure> = Vec::new();
     let stack_settings_default = serde_json::to_string(stack_settings)
@@ -849,12 +855,7 @@ fn variables_body(
     )));
 
     if matches!(target.cloud_platform(), alien_core::Platform::Aws) {
-        blocks.push(nested(variable_block(
-            "aws_region",
-            "AWS region used by the AWS provider.",
-            Some(Expression::String("us-east-1".to_string())),
-            false,
-        )));
+        blocks.push(nested(aws_region_variable_block(supported_aws_regions)));
         blocks.push(nested(variable_block(
             "managing_role_arn",
             "ARN of the manager IAM identity allowed to assume management roles.",
@@ -991,6 +992,14 @@ fn variables_body(
             None,
             false,
         )));
+        if target == TerraformTarget::Aks {
+            blocks.push(nested(variable_block(
+                "azure_tenant_id",
+                "Azure tenant ID hosting the target AKS Kubernetes API identities.",
+                None,
+                false,
+            )));
+        }
         blocks.push(nested(variable_block(
             "azure_resource_group_name",
             "Azure resource group name.",
@@ -1142,6 +1151,58 @@ fn resource_prefix_variable_block() -> Block {
     Block {
         identifier: Identifier::sanitized("variable"),
         labels: vec![BlockLabel::String("resource_prefix".to_string())],
+        body: Body::from(body),
+    }
+}
+
+fn aws_region_variable_block(supported_aws_regions: &[String]) -> Block {
+    let default_region = supported_aws_regions
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "us-east-1".to_string());
+    let mut body: Vec<Structure> = vec![
+        attr("type", expr::raw("string")),
+        attr(
+            "description",
+            Expression::String("AWS region used by the AWS provider.".to_string()),
+        ),
+        attr("default", Expression::String(default_region)),
+    ];
+
+    if !supported_aws_regions.is_empty() {
+        let supported = Expression::Array(
+            supported_aws_regions
+                .iter()
+                .cloned()
+                .map(Expression::String)
+                .collect(),
+        );
+        let regions = supported_aws_regions.join(", ");
+        body.push(nested(block(
+            "validation",
+            [
+                attr(
+                    "condition",
+                    Expression::FuncCall(Box::new(
+                        hcl::expr::FuncCall::builder(Identifier::sanitized("contains"))
+                            .arg(supported)
+                            .arg(expr::raw("var.aws_region"))
+                            .build(),
+                    )),
+                ),
+                attr(
+                    "error_message",
+                    Expression::String(format!(
+                        "aws_region must be one of the AWS regions supported by this Alien environment: {regions}."
+                    )),
+                ),
+            ],
+        )));
+    }
+
+    Block {
+        identifier: Identifier::sanitized("variable"),
+        labels: vec![BlockLabel::String("aws_region".to_string())],
         body: Body::from(body),
     }
 }

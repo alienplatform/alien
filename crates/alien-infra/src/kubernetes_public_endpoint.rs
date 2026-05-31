@@ -35,6 +35,7 @@ pub(crate) struct KubernetesPublicEndpointState {
     pub(crate) gateway_name: Option<String>,
     pub(crate) http_route_name: Option<String>,
     pub(crate) gke_health_check_policy_name: Option<String>,
+    pub(crate) azure_health_check_policy_name: Option<String>,
     pub(crate) managed_tls_secret_name: Option<String>,
     pub(crate) managed_acm_certificate_arn: Option<String>,
     pub(crate) public_url: Option<String>,
@@ -142,6 +143,7 @@ pub(crate) async fn reconcile_kubernetes_public_endpoint(
     let previous_gateway_name = state.gateway_name.clone();
     let previous_http_route_name = state.http_route_name.clone();
     let previous_gke_health_check_policy_name = state.gke_health_check_policy_name.clone();
+    let previous_azure_health_check_policy_name = state.azure_health_check_policy_name.clone();
     let previous_managed_tls_secret_name = state.managed_tls_secret_name.clone();
 
     let kubernetes_config = ctx.get_kubernetes_config()?;
@@ -285,6 +287,7 @@ pub(crate) async fn reconcile_kubernetes_public_endpoint(
             state.gateway_name = None;
             state.http_route_name = None;
             state.gke_health_check_policy_name = None;
+            state.azure_health_check_policy_name = None;
             observe_ingress_endpoint(&route_client, target.namespace, &ingress_name, profile)
                 .await?
         }
@@ -296,6 +299,8 @@ pub(crate) async fn reconcile_kubernetes_public_endpoint(
                 build_http_route(&target, &plan, &service_name, &gateway_name, &route_name);
             let health_check_policy_name =
                 gke_health_check_policy_name(&target, &plan, &service_name);
+            let azure_health_check_policy_name =
+                azure_health_check_policy_name(&target, &plan, &service_name);
             upsert_gateway(
                 &route_client,
                 target.namespace,
@@ -331,9 +336,29 @@ pub(crate) async fn reconcile_kubernetes_public_endpoint(
                 )
                 .await?;
             }
+            if let Some((policy_name, health_check_path)) = azure_health_check_policy_name
+                .as_deref()
+                .zip(target.health_check_path.as_deref())
+            {
+                let policy = build_azure_health_check_policy(
+                    &target,
+                    &service_name,
+                    policy_name,
+                    health_check_path,
+                );
+                upsert_azure_health_check_policy(
+                    &route_client,
+                    target.namespace,
+                    policy_name,
+                    policy,
+                    target.resource_id,
+                )
+                .await?;
+            }
             state.gateway_name = Some(gateway_name.clone());
             state.http_route_name = Some(route_name);
             state.gke_health_check_policy_name = health_check_policy_name;
+            state.azure_health_check_policy_name = azure_health_check_policy_name;
             state.ingress_name = None;
             observe_gateway_endpoint(&route_client, target.namespace, &gateway_name).await?
         }
@@ -349,6 +374,7 @@ pub(crate) async fn reconcile_kubernetes_public_endpoint(
             gateway_name: previous_gateway_name,
             http_route_name: previous_http_route_name,
             gke_health_check_policy_name: previous_gke_health_check_policy_name,
+            azure_health_check_policy_name: previous_azure_health_check_policy_name,
             managed_tls_secret_name: previous_managed_tls_secret_name,
         },
         ActiveEndpointObjects {
@@ -356,6 +382,7 @@ pub(crate) async fn reconcile_kubernetes_public_endpoint(
             gateway_name: state.gateway_name.clone(),
             http_route_name: state.http_route_name.clone(),
             gke_health_check_policy_name: state.gke_health_check_policy_name.clone(),
+            azure_health_check_policy_name: state.azure_health_check_policy_name.clone(),
             managed_tls_secret_name: active_managed_tls_secret_name,
             managed_acm_certificate: active_managed_acm_certificate,
         },
@@ -412,6 +439,14 @@ pub(crate) async fn delete_kubernetes_public_endpoint(
             &policy_name,
         )?;
     }
+    if let Some(policy_name) = state.azure_health_check_policy_name.take() {
+        delete_not_found_ok(
+            route_client
+                .delete_azure_health_check_policy(namespace, &policy_name)
+                .await,
+            &policy_name,
+        )?;
+    }
     if let Some(gateway_name) = state.gateway_name.take() {
         delete_not_found_ok(
             route_client.delete_gateway(namespace, &gateway_name).await,
@@ -452,6 +487,7 @@ struct PreviousEndpointObjects {
     gateway_name: Option<String>,
     http_route_name: Option<String>,
     gke_health_check_policy_name: Option<String>,
+    azure_health_check_policy_name: Option<String>,
     managed_tls_secret_name: Option<String>,
 }
 
@@ -460,6 +496,7 @@ struct ActiveEndpointObjects {
     gateway_name: Option<String>,
     http_route_name: Option<String>,
     gke_health_check_policy_name: Option<String>,
+    azure_health_check_policy_name: Option<String>,
     managed_tls_secret_name: Option<String>,
     managed_acm_certificate: bool,
 }
@@ -486,6 +523,16 @@ async fn cleanup_stale_endpoint_objects(
             delete_not_found_ok(
                 route_client
                     .delete_gke_health_check_policy(namespace, &policy_name)
+                    .await,
+                &policy_name,
+            )?;
+        }
+    }
+    if let Some(policy_name) = previous.azure_health_check_policy_name {
+        if Some(policy_name.as_str()) != active.azure_health_check_policy_name.as_deref() {
+            delete_not_found_ok(
+                route_client
+                    .delete_azure_health_check_policy(namespace, &policy_name)
                     .await,
                 &policy_name,
             )?;
@@ -523,6 +570,7 @@ async fn cleanup_stale_endpoint_objects(
     }
     state.managed_tls_secret_name = active.managed_tls_secret_name;
     state.gke_health_check_policy_name = active.gke_health_check_policy_name;
+    state.azure_health_check_policy_name = active.azure_health_check_policy_name;
 
     if !active.managed_acm_certificate {
         delete_managed_acm_certificate(ctx, resource_id, state).await?;
@@ -1043,7 +1091,24 @@ fn build_gateway(
     }
 
     let labels = merge_labels(endpoint_labels(target, gateway_name), &profile.labels);
-    let annotations = btree_from_hash(&profile.annotations);
+    let mut annotations = btree_from_hash(&profile.annotations);
+    if let Some(KubernetesRouteProviderOptions::AzureApplicationGatewayForContainers {
+        alb_namespace,
+        alb_name,
+        ..
+    }) = &profile.provider
+    {
+        if let Some(alb_namespace) = alb_namespace {
+            annotations
+                .entry("alb.networking.azure.io/alb-namespace".to_string())
+                .or_insert_with(|| alb_namespace.clone());
+        }
+        if let Some(alb_name) = alb_name {
+            annotations
+                .entry("alb.networking.azure.io/alb-name".to_string())
+                .or_insert_with(|| alb_name.clone());
+        }
+    }
     let uses_tls = tls_ref.is_some();
     let mut listener = json!({
         "name": if uses_tls { "https" } else { "http" },
@@ -1172,6 +1237,68 @@ fn build_gke_health_check_policy(
                 "group": "",
                 "kind": "Service",
                 "name": service_name,
+            },
+        },
+    })
+}
+
+fn azure_health_check_policy_name(
+    target: &KubernetesPublicEndpointTarget<'_>,
+    plan: &EndpointPlan,
+    service_name: &str,
+) -> Option<String> {
+    let is_azure_agc_gateway = matches!(
+        &plan.route,
+        KubernetesRouteProfile::Gateway(KubernetesGatewayRouteProfile {
+            provider: Some(
+                KubernetesRouteProviderOptions::AzureApplicationGatewayForContainers { .. }
+            ),
+            ..
+        })
+    );
+    if is_azure_agc_gateway && target.health_check_path.is_some() {
+        Some(format!("{service_name}-health-check"))
+    } else {
+        None
+    }
+}
+
+fn build_azure_health_check_policy(
+    target: &KubernetesPublicEndpointTarget<'_>,
+    service_name: &str,
+    policy_name: &str,
+    health_check_path: &str,
+) -> Value {
+    json!({
+        "apiVersion": "alb.networking.azure.io/v1",
+        "kind": "HealthCheckPolicy",
+        "metadata": {
+            "name": policy_name,
+            "namespace": target.namespace,
+            "labels": endpoint_labels(target, policy_name),
+        },
+        "spec": {
+            "targetRef": {
+                "group": "",
+                "kind": "Service",
+                "name": service_name,
+            },
+            "default": {
+                "interval": "5s",
+                "timeout": "3s",
+                "healthyThreshold": 1,
+                "unhealthyThreshold": 1,
+                "port": target.service_port,
+                "http": {
+                    "host": "localhost",
+                    "path": health_check_path,
+                    "match": {
+                        "statusCodes": [{
+                            "start": 200,
+                            "end": 299,
+                        }],
+                    },
+                },
             },
         },
     })
@@ -1413,6 +1540,46 @@ async fn upsert_gke_health_check_policy(
         }
         Err(e) => Err(e.context(ErrorData::CloudPlatformError {
             message: format!("Failed to create GKE HealthCheckPolicy '{}'", name),
+            resource_id: Some(resource_id.to_string()),
+        })),
+    }
+}
+
+async fn upsert_azure_health_check_policy(
+    client: &std::sync::Arc<dyn alien_k8s_clients::RouteApi>,
+    namespace: &str,
+    name: &str,
+    mut policy: Value,
+    resource_id: &str,
+) -> Result<()> {
+    match client
+        .create_azure_health_check_policy(namespace, &policy)
+        .await
+    {
+        Ok(_) => Ok(()),
+        Err(e) if is_already_exists(&e) => {
+            let existing = client
+                .get_azure_health_check_policy(namespace, name)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to get Azure HealthCheckPolicy '{}' before update",
+                        name
+                    ),
+                    resource_id: Some(resource_id.to_string()),
+                })?;
+            copy_resource_version(&mut policy, &existing);
+            client
+                .update_azure_health_check_policy(namespace, name, &policy)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to update Azure HealthCheckPolicy '{}'", name),
+                    resource_id: Some(resource_id.to_string()),
+                })?;
+            Ok(())
+        }
+        Err(e) => Err(e.context(ErrorData::CloudPlatformError {
+            message: format!("Failed to create Azure HealthCheckPolicy '{}'", name),
             resource_id: Some(resource_id.to_string()),
         })),
     }
@@ -1757,6 +1924,88 @@ mod tests {
         assert_eq!(
             policy.pointer("/spec/default/config/httpHealthCheck/requestPath"),
             Some(&json!("/ready"))
+        );
+        assert_eq!(
+            policy.pointer("/spec/targetRef/name"),
+            Some(&json!("api-public"))
+        );
+    }
+
+    #[test]
+    fn azure_gateway_provider_sets_alb_reference_annotations() {
+        let target = endpoint_target();
+        let plan = EndpointPlan {
+            hostname: None,
+            public_url: None,
+            route: KubernetesRouteProfile::Gateway(KubernetesGatewayRouteProfile {
+                gateway_class_name: "azure-alb-external".to_string(),
+                listener_port: 80,
+                provider: Some(
+                    KubernetesRouteProviderOptions::AzureApplicationGatewayForContainers {
+                        alb_namespace: Some("alien-test".to_string()),
+                        alb_name: Some("alien-alb".to_string()),
+                        frontend: "public".to_string(),
+                    },
+                ),
+                ..Default::default()
+            }),
+            certificate: EndpointCertificate::None,
+        };
+        let KubernetesRouteProfile::Gateway(profile) = &plan.route else {
+            panic!("expected gateway profile");
+        };
+
+        let gateway = build_gateway(&target, &plan, profile, "api-gateway", None)
+            .expect("gateway should render");
+
+        assert_eq!(
+            gateway.pointer("/metadata/annotations/alb.networking.azure.io~1alb-namespace"),
+            Some(&json!("alien-test"))
+        );
+        assert_eq!(
+            gateway.pointer("/metadata/annotations/alb.networking.azure.io~1alb-name"),
+            Some(&json!("alien-alb"))
+        );
+    }
+
+    #[test]
+    fn azure_gateway_uses_declared_health_check_policy_path() {
+        let mut target = endpoint_target();
+        target.health_check_path = Some("/ready".to_string());
+        let plan = EndpointPlan {
+            hostname: None,
+            public_url: None,
+            route: KubernetesRouteProfile::Gateway(KubernetesGatewayRouteProfile {
+                gateway_class_name: "azure-alb-external".to_string(),
+                listener_port: 80,
+                provider: Some(
+                    KubernetesRouteProviderOptions::AzureApplicationGatewayForContainers {
+                        alb_namespace: Some("alien-test".to_string()),
+                        alb_name: Some("alien-alb".to_string()),
+                        frontend: "public".to_string(),
+                    },
+                ),
+                ..Default::default()
+            }),
+            certificate: EndpointCertificate::None,
+        };
+
+        let policy_name = azure_health_check_policy_name(&target, &plan, "api-public")
+            .expect("health check policy");
+        let policy = build_azure_health_check_policy(&target, "api-public", &policy_name, "/ready");
+
+        assert_eq!(policy_name, "api-public-health-check");
+        assert_eq!(
+            policy.pointer("/spec/default/http/path"),
+            Some(&json!("/ready"))
+        );
+        assert_eq!(
+            policy.pointer("/spec/default/http/match/statusCodes/0/start"),
+            Some(&json!(200))
+        );
+        assert_eq!(
+            policy.pointer("/spec/default/port"),
+            Some(&json!(target.service_port))
         );
         assert_eq!(
             policy.pointer("/spec/targetRef/name"),

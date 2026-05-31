@@ -537,7 +537,7 @@ impl AzureRemoteStackManagementController {
                 })?;
 
             if let Some(fetched_id) = &identity.id {
-                if fetched_id != uami_resource_id {
+                if !azure_utils::azure_resource_ids_equal(uami_resource_id, fetched_id) {
                     return Err(AlienError::new(ErrorData::ResourceDrift {
                         resource_id: config.id.clone(),
                         message: format!(

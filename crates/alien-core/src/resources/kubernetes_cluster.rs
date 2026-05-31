@@ -1,8 +1,11 @@
 //! KubernetesCluster resource for Kubernetes runtime substrates.
 
-use crate::error::{ErrorData, Result};
-use crate::resource::{ResourceDefinition, ResourceOutputsDefinition, ResourceRef};
-use crate::ResourceType;
+use crate::{
+    error::{ErrorData, Result},
+    import::data::AzureApplicationGatewayForContainersBootstrap,
+    resource::{ResourceDefinition, ResourceOutputsDefinition, ResourceRef},
+    ResourceType,
+};
 use alien_error::AlienError;
 use bon::Builder;
 use serde::{Deserialize, Serialize};
@@ -108,6 +111,9 @@ pub struct KubernetesClusterOutputs {
     pub agent_ready: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cloud_metadata_ready: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub azure_application_gateway_for_containers:
+        Option<AzureApplicationGatewayForContainersBootstrap>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

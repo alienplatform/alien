@@ -139,6 +139,8 @@ fn chart_role_rbac_is_selected_by_kubernetes_route_api() {
     assert!(role.contains("resources: [\"gateways\", \"httproutes\"]"));
     assert!(role.contains("networking.gke.io"));
     assert!(role.contains("resources: [\"healthcheckpolicies\"]"));
+    assert!(role.contains("alb.networking.azure.io"));
+    assert!(role.contains("resources: [\"healthcheckpolicy\"]"));
     assert!(role.contains("eq $routeApi \"ingress\""));
     assert!(role.contains("eq $routeApi \"gateway\""));
 
@@ -160,6 +162,12 @@ fn chart_role_rbac_is_selected_by_kubernetes_route_api() {
             assert!(rendered
                 .stdout
                 .contains(r#"resources: ["healthcheckpolicies"]"#));
+            assert!(rendered
+                .stdout
+                .contains(r#"apiGroups: ["alb.networking.azure.io"]"#));
+            assert!(rendered
+                .stdout
+                .contains(r#"resources: ["healthcheckpolicy"]"#));
             assert!(!rendered.stdout.contains(r#"resources: ["ingresses"]"#));
         }
         LinterStatus::Skipped(reason) => {

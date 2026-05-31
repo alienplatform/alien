@@ -154,6 +154,15 @@ pub fn is_azure_authorization_propagation_error(error: &AlienError<ErrorData>) -
     false
 }
 
+/// Azure ARM resource IDs are case-insensitive. Azure APIs may return provider
+/// path segments with different casing than Terraform/import data, for example
+/// `resourceGroups` vs `resourcegroups`.
+pub(crate) fn azure_resource_ids_equal(expected: &str, actual: &str) -> bool {
+    expected
+        .trim_end_matches('/')
+        .eq_ignore_ascii_case(actual.trim_end_matches('/'))
+}
+
 pub(crate) fn azure_resource_group_resource_id(
     subscription_id: &str,
     resource_group: &str,
@@ -223,5 +232,21 @@ mod tests {
             azure_service_bus_namespace_resource_id(subscription_id, resource_group, "alien-bus"),
             "/subscriptions/sub-123/resourceGroups/alien-e2e-rg/providers/Microsoft.ServiceBus/namespaces/alien-bus"
         );
+    }
+
+    #[test]
+    fn azure_resource_ids_equal_ignores_arm_path_casing() {
+        let expected = "/subscriptions/sub-id/resourceGroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/app-sa";
+        let actual = "/subscriptions/sub-id/resourcegroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/app-sa";
+
+        assert!(azure_resource_ids_equal(expected, actual));
+    }
+
+    #[test]
+    fn azure_resource_ids_equal_rejects_different_resource_names() {
+        let expected = "/subscriptions/sub-id/resourceGroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/app-sa";
+        let actual = "/subscriptions/sub-id/resourceGroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/other-sa";
+
+        assert!(!azure_resource_ids_equal(expected, actual));
     }
 }

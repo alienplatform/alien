@@ -16,7 +16,7 @@ use crate::{
 };
 use alien_core::{
     import::EmitContext, PermissionProfile, PermissionSetReference, RemoteStackManagement, Result,
-    Vault,
+    ServiceAccount, Vault,
 };
 use alien_permissions::BindingTarget;
 use hcl::expr::Expression;
@@ -27,35 +27,60 @@ pub struct AwsVaultEmitter;
 impl TfEmitter for AwsVaultEmitter {
     fn emit(&self, ctx: &EmitContext<'_>) -> Result<TfFragment> {
         let vault = downcast::<Vault>(ctx, Vault::RESOURCE_TYPE)?;
-        let Some(management_label) = remote_stack_management_label(ctx) else {
-            return Ok(TfFragment::empty());
-        };
-
         let mut fragment = TfFragment::default();
         let context = aws_terraform_permission_context()
             .with_resource_name(format!("${{local.resource_prefix}}-{}", vault.id()));
 
-        for (idx, permission_set_ref) in management_permission_refs(ctx).into_iter().enumerate() {
-            if let Some(permission_set) = permission_set_ref
-                .resolve(|name| alien_permissions::get_permission_set(name).cloned())
-            {
-                if permission_set.id.ends_with("/provision") {
-                    continue;
+        for (owner_label, permission_set_refs) in vault_permission_owners(ctx) {
+            for (idx, permission_set_ref) in permission_set_refs.iter().enumerate() {
+                if let Some(permission_set) = permission_set_ref
+                    .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+                {
+                    if permission_set.id.ends_with("/provision") {
+                        continue;
+                    }
+                    let vault_label_segment = sanitize_label_segment(vault.id());
+                    emit_iam_role_policy_for_target_with_label(
+                        &mut fragment,
+                        &owner_label,
+                        &permission_set,
+                        &format!("{owner_label}_vault_{vault_label_segment}_set_{idx}"),
+                        &format!(
+                            "alien-{}-{}",
+                            vault.id(),
+                            iam_policy_name_sanitize(&permission_set.id)
+                        ),
+                        &context,
+                        BindingTarget::Resource,
+                    )?;
                 }
-                let vault_label_segment = sanitize_label_segment(vault.id());
-                emit_iam_role_policy_for_target_with_label(
-                    &mut fragment,
-                    management_label,
-                    &permission_set,
-                    &format!("{management_label}_vault_{vault_label_segment}_set_{idx}"),
-                    &format!(
-                        "alien-mgmt-{}-{}",
-                        vault.id(),
-                        iam_policy_name_sanitize(&permission_set.id)
-                    ),
-                    &context,
-                    BindingTarget::Resource,
-                )?;
+            }
+        }
+
+        if let Some(management_label) = remote_stack_management_label(ctx) {
+            for (idx, permission_set_ref) in management_permission_refs(ctx).into_iter().enumerate()
+            {
+                if let Some(permission_set) = permission_set_ref
+                    .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+                {
+                    if permission_set.id.ends_with("/provision") {
+                        continue;
+                    }
+                    let vault_label_segment = sanitize_label_segment(vault.id());
+                    emit_iam_role_policy_for_target_with_label(
+                        &mut fragment,
+                        management_label,
+                        &permission_set,
+                        &format!("{management_label}_vault_{vault_label_segment}_set_{idx}"),
+                        &format!(
+                            "alien-mgmt-{}-{}",
+                            vault.id(),
+                            iam_policy_name_sanitize(&permission_set.id)
+                        ),
+                        &context,
+                        BindingTarget::Resource,
+                    )?;
+                }
             }
         }
 
@@ -90,27 +115,63 @@ impl TfEmitter for AwsVaultEmitter {
     }
 }
 
-fn sanitize_label_segment(input: &str) -> String {
-    input
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() {
-                ch.to_ascii_lowercase()
-            } else {
-                '_'
-            }
-        })
-        .collect()
+fn vault_permission_owners(ctx: &EmitContext<'_>) -> Vec<(String, Vec<PermissionSetReference>)> {
+    let mut owners = Vec::new();
+    for (profile_name, profile) in ctx.stack.permission_profiles() {
+        let refs = vault_permission_refs(profile, ctx.resource_id);
+        if refs.is_empty() {
+            continue;
+        }
+
+        let service_account_id = format!("{profile_name}-sa");
+        if let Some((label, _service_account)) = service_account_for_id(ctx, &service_account_id) {
+            owners.push((label.to_string(), refs));
+        }
+    }
+
+    owners
 }
 
-fn remote_stack_management_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
-    ctx.stack.resources().find_map(|(id, entry)| {
-        if entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE {
-            ctx.name_for(id)
-        } else {
-            None
+fn vault_permission_refs(
+    profile: &PermissionProfile,
+    resource_id: &str,
+) -> Vec<PermissionSetReference> {
+    let mut refs = Vec::new();
+    let mut seen_ids = std::collections::HashSet::new();
+
+    if let Some(resource_refs) = profile.0.get(resource_id) {
+        for permission_ref in resource_refs {
+            if seen_ids.insert(permission_ref.id().to_string()) {
+                refs.push(permission_ref.clone());
+            }
         }
-    })
+    }
+
+    if let Some(wildcard_refs) = profile.0.get("*") {
+        for permission_ref in wildcard_refs
+            .iter()
+            .filter(|permission_ref| permission_ref.id().starts_with("vault/"))
+        {
+            if seen_ids.insert(permission_ref.id().to_string()) {
+                refs.push(permission_ref.clone());
+            }
+        }
+    }
+
+    refs
+}
+
+fn service_account_for_id<'a>(
+    ctx: &'a EmitContext<'_>,
+    service_account_id: &str,
+) -> Option<(&'a str, &'a ServiceAccount)> {
+    let (_id, entry) = ctx
+        .stack
+        .resources()
+        .find(|(id, _entry)| id.as_str() == service_account_id)?;
+    let service_account = entry.config.downcast_ref::<ServiceAccount>()?;
+    let label = ctx.name_for(service_account_id)?;
+    Some((label, service_account))
 }
 
 fn management_permission_refs<'a>(ctx: &'a EmitContext<'_>) -> Vec<&'a PermissionSetReference> {
@@ -139,4 +200,27 @@ fn resource_permission_refs<'a>(
         .get(resource_id)
         .map(|refs| refs.iter().collect())
         .unwrap_or_default()
+}
+
+fn remote_stack_management_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
+    ctx.stack.resources().find_map(|(id, entry)| {
+        if entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE {
+            ctx.name_for(id)
+        } else {
+            None
+        }
+    })
+}
+
+fn sanitize_label_segment(input: &str) -> String {
+    input
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }

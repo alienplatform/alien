@@ -6,8 +6,8 @@
 //! 1. `azurerm_user_assigned_identity` for the management identity
 //!    living in the customer's subscription / resource group.
 //! 2. Predefined Azure role assignments plus, when needed, one combined
-//!    residual custom management role built from global `/provision`
-//!    permission sets.
+//!    residual custom management role built from the materialized global
+//!    management permission profile.
 //! 3. Role assignments to the management identity.
 //! 4. `azurerm_federated_identity_credential` trusting the manager OIDC
 //!    issuer and subject.
@@ -239,7 +239,12 @@ fn emit_management_assignments(
     label: &str,
     grant_plan: &AzureGrantPlan,
 ) {
+    let mut seen_assignments = BTreeSet::new();
     for (binding_index, binding) in grant_plan.bindings.iter().enumerate() {
+        if !seen_assignments.insert(management_assignment_key(binding)) {
+            continue;
+        }
+
         let role_definition_id = management_role_definition_id(label, &binding.role_definition);
         let assignment_name = format!(
             "deployment:azure:mgmt-role-assign:${{local.resource_prefix}}:uami:{binding_index}"
@@ -263,6 +268,16 @@ fn emit_management_assignments(
     }
 }
 
+fn management_assignment_key(binding: &alien_permissions::generators::AzureRoleBinding) -> String {
+    let role_key = match &binding.role_definition {
+        AzureRoleDefinitionRef::Predefined { role_definition_id } => {
+            format!("predefined:{role_definition_id}")
+        }
+        AzureRoleDefinitionRef::Custom { .. } => "combined-custom-management-role".to_string(),
+    };
+    format!("{}:{role_key}", binding.scope)
+}
+
 fn generate_management_grant_plan(
     label: &str,
     global_refs: &[&PermissionSetReference],
@@ -273,10 +288,7 @@ fn generate_management_grant_plan(
     let context = permission_context(label);
     let generator = AzureRuntimePermissionsGenerator::new();
 
-    for permission_set in global_refs
-        .iter()
-        .filter_map(resolve_provision_permission_set)
-    {
+    for permission_set in global_refs.iter().filter_map(resolve_permission_set) {
         if permission_set.platforms.azure.is_none() {
             continue;
         }
@@ -361,10 +373,7 @@ fn combined_management_role_definition(
     })
 }
 
-fn resolve_provision_permission_set(reference: &&PermissionSetReference) -> Option<PermissionSet> {
-    if !reference.id().ends_with("/provision") {
-        return None;
-    }
+fn resolve_permission_set(reference: &&PermissionSetReference) -> Option<PermissionSet> {
     reference.resolve(|name| alien_permissions::get_permission_set(name).cloned())
 }
 

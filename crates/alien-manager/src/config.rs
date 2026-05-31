@@ -35,6 +35,9 @@ pub struct ManagerConfig {
     pub releases_url: Option<String>,
     /// Target platforms this manager handles (platform mode).
     pub targets: Vec<Platform>,
+    /// AWS regions supported by this Alien environment for setup imports.
+    /// Empty means the manager does not enforce an allowlist.
+    pub supported_aws_regions: Vec<String>,
     /// Disable the deployment loop.
     pub disable_deployment_loop: bool,
     /// Disable the heartbeat loop.
@@ -90,6 +93,7 @@ impl Default for ManagerConfig {
             base_url: None,
             releases_url: None,
             targets: Vec::new(),
+            supported_aws_regions: Vec::new(),
             disable_deployment_loop: false,
             disable_heartbeat_loop: false,
             enable_local_log_ingest: false,

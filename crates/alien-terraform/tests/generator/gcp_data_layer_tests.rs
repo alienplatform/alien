@@ -7,8 +7,8 @@
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
-    Kv, LifecycleRule, PermissionProfile, PermissionsConfig, Queue, ResourceLifecycle,
-    ServiceAccount, Stack, StackSettings, Storage, Vault,
+    Kv, LifecycleRule, ManagementPermissions, PermissionProfile, PermissionsConfig, Queue,
+    RemoteStackManagement, ResourceLifecycle, ServiceAccount, Stack, StackSettings, Storage, Vault,
 };
 use alien_terraform::TerraformTarget;
 
@@ -124,6 +124,64 @@ fn gcp_vault_emits_only_import_data() {
     let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
     snapshot_module("gcp_vault_minimal", &module);
     assert_terraform_valid(&module, "gcp_vault_minimal");
+}
+
+#[test]
+fn gcp_vault_resource_permissions_attach_to_service_account() {
+    let stack = Stack::new("acme-vault".to_string())
+        .permission(
+            "execution",
+            PermissionProfile::new().resource("secrets", ["vault/data-read"]),
+        )
+        .add(
+            ServiceAccount::new("execution-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Vault::new("secrets".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
+    let rendered = module
+        .iter()
+        .map(|(_, contents)| contents)
+        .collect::<String>();
+
+    assert!(rendered.contains("roles/secretmanager.secretAccessor"));
+    assert!(rendered.contains("google_service_account.execution_sa.email"));
+    assert!(rendered.contains("local.resource_prefix}-secrets-"));
+    assert_terraform_valid(&module, "gcp_vault_service_account_permissions");
+}
+
+#[test]
+fn gcp_vault_management_permissions_disambiguate_iam_member_labels() {
+    let stack = Stack::new("acme-vault".to_string())
+        .management(ManagementPermissions::extend(
+            PermissionProfile::new().resource("secrets", ["vault/heartbeat", "vault/management"]),
+        ))
+        .add(
+            RemoteStackManagement::new("remote-stack-management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Vault::new("secrets".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
+    let rendered = module
+        .iter()
+        .map(|(_, contents)| contents)
+        .collect::<String>();
+
+    assert!(rendered.contains(
+        "secretmanager_viewer_remote_stack_management_secrets_vault_heartbeat_binding_0"
+    ));
+    assert!(rendered.contains(
+        "secretmanager_viewer_remote_stack_management_secrets_vault_management_binding_0"
+    ));
+    assert_terraform_valid(&module, "gcp_vault_management_permission_labels");
 }
 
 #[test]

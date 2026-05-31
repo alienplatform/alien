@@ -20,8 +20,7 @@
             "ecr:ListImages",
             "ecr:DescribeImageScanFindings",
             "ecr:GetRepositoryPolicy",
-            "ecr:ListTagsForResource",
-            "ecr:DescribeRegistry"
+            "ecr:ListTagsForResource"
           ]
         },
         "binding": {
@@ -30,6 +29,19 @@
           },
           "resource": {
             "resources": ["arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/${resourceName}-*"]
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["ecr:DescribeRegistry"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
           }
         }
       },

@@ -557,7 +557,7 @@ fn role_definition_block(
     )
 }
 
-fn setup_execution_role_label(profile_name: &str, role_name: &str, index: usize) -> String {
+pub fn setup_execution_role_label(profile_name: &str, role_name: &str, index: usize) -> String {
     format!(
         "setup_{}_{}_{}",
         sanitize_role_label(profile_name),
