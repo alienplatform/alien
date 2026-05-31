@@ -7753,6 +7753,24 @@ export type DataLocal5 = {
   backend: "local";
 };
 
+export const Category3 = {
+  Quota: "quota",
+  Capacity: "capacity",
+  Allocation: "allocation",
+  Other: "other",
+} as const;
+export type Category3 = ClosedEnum<typeof Category3>;
+
+export type CapacityBlocker3 = {
+  category: Category3;
+  message: string;
+  observedAt: Date;
+  providerCode?: string | null | undefined;
+  providerReference?: string | null | undefined;
+};
+
+export type CapacityBlockerUnion3 = CapacityBlocker3 | any;
+
 export const UtilizationUnit3 = {
   Count: "count",
   Percent: "percent",
@@ -7780,6 +7798,7 @@ export type Recommendation3 = {
 export type RecommendationUnion3 = Recommendation3 | any;
 
 export type CapacityGroup3 = {
+  capacityBlocker?: CapacityBlocker3 | any | null | undefined;
   currentMachines: number;
   desiredMachines: number;
   groupId: string;
@@ -7906,6 +7925,24 @@ export type DataAzure2 = {
   backend: "azure";
 };
 
+export const Category2 = {
+  Quota: "quota",
+  Capacity: "capacity",
+  Allocation: "allocation",
+  Other: "other",
+} as const;
+export type Category2 = ClosedEnum<typeof Category2>;
+
+export type CapacityBlocker2 = {
+  category: Category2;
+  message: string;
+  observedAt: Date;
+  providerCode?: string | null | undefined;
+  providerReference?: string | null | undefined;
+};
+
+export type CapacityBlockerUnion2 = CapacityBlocker2 | any;
+
 export const UtilizationUnit2 = {
   Count: "count",
   Percent: "percent",
@@ -7933,6 +7970,7 @@ export type Recommendation2 = {
 export type RecommendationUnion2 = Recommendation2 | any;
 
 export type CapacityGroup2 = {
+  capacityBlocker?: CapacityBlocker2 | any | null | undefined;
   currentMachines: number;
   desiredMachines: number;
   groupId: string;
@@ -8059,6 +8097,24 @@ export type DataGcp2 = {
   backend: "gcp";
 };
 
+export const Category1 = {
+  Quota: "quota",
+  Capacity: "capacity",
+  Allocation: "allocation",
+  Other: "other",
+} as const;
+export type Category1 = ClosedEnum<typeof Category1>;
+
+export type CapacityBlocker1 = {
+  category: Category1;
+  message: string;
+  observedAt: Date;
+  providerCode?: string | null | undefined;
+  providerReference?: string | null | undefined;
+};
+
+export type CapacityBlockerUnion1 = CapacityBlocker1 | any;
+
 export const UtilizationUnit1 = {
   Count: "count",
   Percent: "percent",
@@ -8086,6 +8142,7 @@ export type Recommendation1 = {
 export type RecommendationUnion1 = Recommendation1 | any;
 
 export type CapacityGroup1 = {
+  capacityBlocker?: CapacityBlocker1 | any | null | undefined;
   currentMachines: number;
   desiredMachines: number;
   groupId: string;
@@ -25523,6 +25580,57 @@ export function dataLocal5ToJSON(dataLocal5: DataLocal5): string {
 }
 
 /** @internal */
+export const Category3$outboundSchema: z.ZodEnum<typeof Category3> = z.enum(
+  Category3,
+);
+
+/** @internal */
+export type CapacityBlocker3$Outbound = {
+  category: string;
+  message: string;
+  observedAt: string;
+  providerCode?: string | null | undefined;
+  providerReference?: string | null | undefined;
+};
+
+/** @internal */
+export const CapacityBlocker3$outboundSchema: z.ZodType<
+  CapacityBlocker3$Outbound,
+  CapacityBlocker3
+> = z.object({
+  category: Category3$outboundSchema,
+  message: z.string(),
+  observedAt: z.date().transform(v => v.toISOString()),
+  providerCode: z.nullable(z.string()).optional(),
+  providerReference: z.nullable(z.string()).optional(),
+});
+
+export function capacityBlocker3ToJSON(
+  capacityBlocker3: CapacityBlocker3,
+): string {
+  return JSON.stringify(
+    CapacityBlocker3$outboundSchema.parse(capacityBlocker3),
+  );
+}
+
+/** @internal */
+export type CapacityBlockerUnion3$Outbound = CapacityBlocker3$Outbound | any;
+
+/** @internal */
+export const CapacityBlockerUnion3$outboundSchema: z.ZodType<
+  CapacityBlockerUnion3$Outbound,
+  CapacityBlockerUnion3
+> = z.union([z.lazy(() => CapacityBlocker3$outboundSchema), z.any()]);
+
+export function capacityBlockerUnion3ToJSON(
+  capacityBlockerUnion3: CapacityBlockerUnion3,
+): string {
+  return JSON.stringify(
+    CapacityBlockerUnion3$outboundSchema.parse(capacityBlockerUnion3),
+  );
+}
+
+/** @internal */
 export const UtilizationUnit3$outboundSchema: z.ZodEnum<
   typeof UtilizationUnit3
 > = z.enum(UtilizationUnit3);
@@ -25609,6 +25717,7 @@ export function recommendationUnion3ToJSON(
 
 /** @internal */
 export type CapacityGroup3$Outbound = {
+  capacityBlocker?: CapacityBlocker3$Outbound | any | null | undefined;
   currentMachines: number;
   desiredMachines: number;
   groupId: string;
@@ -25623,6 +25732,9 @@ export const CapacityGroup3$outboundSchema: z.ZodType<
   CapacityGroup3$Outbound,
   CapacityGroup3
 > = z.object({
+  capacityBlocker: z.nullable(
+    z.union([z.lazy(() => CapacityBlocker3$outboundSchema), z.any()]),
+  ).optional(),
   currentMachines: z.int(),
   desiredMachines: z.int(),
   groupId: z.string(),
@@ -25867,6 +25979,57 @@ export function dataAzure2ToJSON(dataAzure2: DataAzure2): string {
 }
 
 /** @internal */
+export const Category2$outboundSchema: z.ZodEnum<typeof Category2> = z.enum(
+  Category2,
+);
+
+/** @internal */
+export type CapacityBlocker2$Outbound = {
+  category: string;
+  message: string;
+  observedAt: string;
+  providerCode?: string | null | undefined;
+  providerReference?: string | null | undefined;
+};
+
+/** @internal */
+export const CapacityBlocker2$outboundSchema: z.ZodType<
+  CapacityBlocker2$Outbound,
+  CapacityBlocker2
+> = z.object({
+  category: Category2$outboundSchema,
+  message: z.string(),
+  observedAt: z.date().transform(v => v.toISOString()),
+  providerCode: z.nullable(z.string()).optional(),
+  providerReference: z.nullable(z.string()).optional(),
+});
+
+export function capacityBlocker2ToJSON(
+  capacityBlocker2: CapacityBlocker2,
+): string {
+  return JSON.stringify(
+    CapacityBlocker2$outboundSchema.parse(capacityBlocker2),
+  );
+}
+
+/** @internal */
+export type CapacityBlockerUnion2$Outbound = CapacityBlocker2$Outbound | any;
+
+/** @internal */
+export const CapacityBlockerUnion2$outboundSchema: z.ZodType<
+  CapacityBlockerUnion2$Outbound,
+  CapacityBlockerUnion2
+> = z.union([z.lazy(() => CapacityBlocker2$outboundSchema), z.any()]);
+
+export function capacityBlockerUnion2ToJSON(
+  capacityBlockerUnion2: CapacityBlockerUnion2,
+): string {
+  return JSON.stringify(
+    CapacityBlockerUnion2$outboundSchema.parse(capacityBlockerUnion2),
+  );
+}
+
+/** @internal */
 export const UtilizationUnit2$outboundSchema: z.ZodEnum<
   typeof UtilizationUnit2
 > = z.enum(UtilizationUnit2);
@@ -25953,6 +26116,7 @@ export function recommendationUnion2ToJSON(
 
 /** @internal */
 export type CapacityGroup2$Outbound = {
+  capacityBlocker?: CapacityBlocker2$Outbound | any | null | undefined;
   currentMachines: number;
   desiredMachines: number;
   groupId: string;
@@ -25967,6 +26131,9 @@ export const CapacityGroup2$outboundSchema: z.ZodType<
   CapacityGroup2$Outbound,
   CapacityGroup2
 > = z.object({
+  capacityBlocker: z.nullable(
+    z.union([z.lazy(() => CapacityBlocker2$outboundSchema), z.any()]),
+  ).optional(),
   currentMachines: z.int(),
   desiredMachines: z.int(),
   groupId: z.string(),
@@ -26209,6 +26376,57 @@ export function dataGcp2ToJSON(dataGcp2: DataGcp2): string {
 }
 
 /** @internal */
+export const Category1$outboundSchema: z.ZodEnum<typeof Category1> = z.enum(
+  Category1,
+);
+
+/** @internal */
+export type CapacityBlocker1$Outbound = {
+  category: string;
+  message: string;
+  observedAt: string;
+  providerCode?: string | null | undefined;
+  providerReference?: string | null | undefined;
+};
+
+/** @internal */
+export const CapacityBlocker1$outboundSchema: z.ZodType<
+  CapacityBlocker1$Outbound,
+  CapacityBlocker1
+> = z.object({
+  category: Category1$outboundSchema,
+  message: z.string(),
+  observedAt: z.date().transform(v => v.toISOString()),
+  providerCode: z.nullable(z.string()).optional(),
+  providerReference: z.nullable(z.string()).optional(),
+});
+
+export function capacityBlocker1ToJSON(
+  capacityBlocker1: CapacityBlocker1,
+): string {
+  return JSON.stringify(
+    CapacityBlocker1$outboundSchema.parse(capacityBlocker1),
+  );
+}
+
+/** @internal */
+export type CapacityBlockerUnion1$Outbound = CapacityBlocker1$Outbound | any;
+
+/** @internal */
+export const CapacityBlockerUnion1$outboundSchema: z.ZodType<
+  CapacityBlockerUnion1$Outbound,
+  CapacityBlockerUnion1
+> = z.union([z.lazy(() => CapacityBlocker1$outboundSchema), z.any()]);
+
+export function capacityBlockerUnion1ToJSON(
+  capacityBlockerUnion1: CapacityBlockerUnion1,
+): string {
+  return JSON.stringify(
+    CapacityBlockerUnion1$outboundSchema.parse(capacityBlockerUnion1),
+  );
+}
+
+/** @internal */
 export const UtilizationUnit1$outboundSchema: z.ZodEnum<
   typeof UtilizationUnit1
 > = z.enum(UtilizationUnit1);
@@ -26295,6 +26513,7 @@ export function recommendationUnion1ToJSON(
 
 /** @internal */
 export type CapacityGroup1$Outbound = {
+  capacityBlocker?: CapacityBlocker1$Outbound | any | null | undefined;
   currentMachines: number;
   desiredMachines: number;
   groupId: string;
@@ -26309,6 +26528,9 @@ export const CapacityGroup1$outboundSchema: z.ZodType<
   CapacityGroup1$Outbound,
   CapacityGroup1
 > = z.object({
+  capacityBlocker: z.nullable(
+    z.union([z.lazy(() => CapacityBlocker1$outboundSchema), z.any()]),
+  ).optional(),
   currentMachines: z.int(),
   desiredMachines: z.int(),
   groupId: z.string(),

@@ -14,12 +14,13 @@ let value: CapacityGroup1 = {
 
 ## Fields
 
-| Field                             | Type                              | Required                          | Description                       |
-| --------------------------------- | --------------------------------- | --------------------------------- | --------------------------------- |
-| `currentMachines`                 | *number*                          | :heavy_check_mark:                | N/A                               |
-| `desiredMachines`                 | *number*                          | :heavy_check_mark:                | N/A                               |
-| `groupId`                         | *string*                          | :heavy_check_mark:                | N/A                               |
-| `instanceType`                    | *string*                          | :heavy_minus_sign:                | N/A                               |
-| `maxMachines`                     | *number*                          | :heavy_minus_sign:                | N/A                               |
-| `minMachines`                     | *number*                          | :heavy_minus_sign:                | N/A                               |
-| `recommendation`                  | *operations.RecommendationUnion1* | :heavy_minus_sign:                | N/A                               |
+| Field                              | Type                               | Required                           | Description                        |
+| ---------------------------------- | ---------------------------------- | ---------------------------------- | ---------------------------------- |
+| `capacityBlocker`                  | *operations.CapacityBlockerUnion1* | :heavy_minus_sign:                 | N/A                                |
+| `currentMachines`                  | *number*                           | :heavy_check_mark:                 | N/A                                |
+| `desiredMachines`                  | *number*                           | :heavy_check_mark:                 | N/A                                |
+| `groupId`                          | *string*                           | :heavy_check_mark:                 | N/A                                |
+| `instanceType`                     | *string*                           | :heavy_minus_sign:                 | N/A                                |
+| `maxMachines`                      | *number*                           | :heavy_minus_sign:                 | N/A                                |
+| `minMachines`                      | *number*                           | :heavy_minus_sign:                 | N/A                                |
+| `recommendation`                   | *operations.RecommendationUnion1*  | :heavy_minus_sign:                 | N/A                                |

@@ -3366,6 +3366,24 @@ export type DataLocal5 = {
   backend: "local";
 };
 
+export const Category3 = {
+  Quota: "quota",
+  Capacity: "capacity",
+  Allocation: "allocation",
+  Other: "other",
+} as const;
+export type Category3 = ClosedEnum<typeof Category3>;
+
+export type CapacityBlocker3 = {
+  category: Category3;
+  message: string;
+  observedAt: Date;
+  providerCode?: string | null | undefined;
+  providerReference?: string | null | undefined;
+};
+
+export type CapacityBlockerUnion3 = CapacityBlocker3 | any;
+
 export const UtilizationUnit3 = {
   Count: "count",
   Percent: "percent",
@@ -3393,6 +3411,7 @@ export type Recommendation3 = {
 export type RecommendationUnion3 = Recommendation3 | any;
 
 export type CapacityGroup3 = {
+  capacityBlocker?: CapacityBlocker3 | any | null | undefined;
   currentMachines: number;
   desiredMachines: number;
   groupId: string;
@@ -3519,6 +3538,24 @@ export type DataAzure2 = {
   backend: "azure";
 };
 
+export const Category2 = {
+  Quota: "quota",
+  Capacity: "capacity",
+  Allocation: "allocation",
+  Other: "other",
+} as const;
+export type Category2 = ClosedEnum<typeof Category2>;
+
+export type CapacityBlocker2 = {
+  category: Category2;
+  message: string;
+  observedAt: Date;
+  providerCode?: string | null | undefined;
+  providerReference?: string | null | undefined;
+};
+
+export type CapacityBlockerUnion2 = CapacityBlocker2 | any;
+
 export const UtilizationUnit2 = {
   Count: "count",
   Percent: "percent",
@@ -3546,6 +3583,7 @@ export type Recommendation2 = {
 export type RecommendationUnion2 = Recommendation2 | any;
 
 export type CapacityGroup2 = {
+  capacityBlocker?: CapacityBlocker2 | any | null | undefined;
   currentMachines: number;
   desiredMachines: number;
   groupId: string;
@@ -3672,6 +3710,24 @@ export type DataGcp2 = {
   backend: "gcp";
 };
 
+export const Category1 = {
+  Quota: "quota",
+  Capacity: "capacity",
+  Allocation: "allocation",
+  Other: "other",
+} as const;
+export type Category1 = ClosedEnum<typeof Category1>;
+
+export type CapacityBlocker1 = {
+  category: Category1;
+  message: string;
+  observedAt: Date;
+  providerCode?: string | null | undefined;
+  providerReference?: string | null | undefined;
+};
+
+export type CapacityBlockerUnion1 = CapacityBlocker1 | any;
+
 export const UtilizationUnit1 = {
   Count: "count",
   Percent: "percent",
@@ -3699,6 +3755,7 @@ export type Recommendation1 = {
 export type RecommendationUnion1 = Recommendation1 | any;
 
 export type CapacityGroup1 = {
+  capacityBlocker?: CapacityBlocker1 | any | null | undefined;
   currentMachines: number;
   desiredMachines: number;
   groupId: string;
@@ -11376,6 +11433,49 @@ export function dataLocal5FromJSON(
 }
 
 /** @internal */
+export const Category3$inboundSchema: z.ZodEnum<typeof Category3> = z.enum(
+  Category3,
+);
+
+/** @internal */
+export const CapacityBlocker3$inboundSchema: z.ZodType<
+  CapacityBlocker3,
+  unknown
+> = z.object({
+  category: Category3$inboundSchema,
+  message: z.string(),
+  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  providerCode: z.nullable(z.string()).optional(),
+  providerReference: z.nullable(z.string()).optional(),
+});
+
+export function capacityBlocker3FromJSON(
+  jsonString: string,
+): SafeParseResult<CapacityBlocker3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CapacityBlocker3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CapacityBlocker3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CapacityBlockerUnion3$inboundSchema: z.ZodType<
+  CapacityBlockerUnion3,
+  unknown
+> = z.union([z.lazy(() => CapacityBlocker3$inboundSchema), z.any()]);
+
+export function capacityBlockerUnion3FromJSON(
+  jsonString: string,
+): SafeParseResult<CapacityBlockerUnion3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CapacityBlockerUnion3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CapacityBlockerUnion3' from JSON`,
+  );
+}
+
+/** @internal */
 export const UtilizationUnit3$inboundSchema: z.ZodEnum<
   typeof UtilizationUnit3
 > = z.enum(UtilizationUnit3);
@@ -11455,6 +11555,9 @@ export function recommendationUnion3FromJSON(
 /** @internal */
 export const CapacityGroup3$inboundSchema: z.ZodType<CapacityGroup3, unknown> =
   z.object({
+    capacityBlocker: z.nullable(
+      z.union([z.lazy(() => CapacityBlocker3$inboundSchema), z.any()]),
+    ).optional(),
     currentMachines: z.int(),
     desiredMachines: z.int(),
     groupId: z.string(),
@@ -11675,6 +11778,49 @@ export function dataAzure2FromJSON(
 }
 
 /** @internal */
+export const Category2$inboundSchema: z.ZodEnum<typeof Category2> = z.enum(
+  Category2,
+);
+
+/** @internal */
+export const CapacityBlocker2$inboundSchema: z.ZodType<
+  CapacityBlocker2,
+  unknown
+> = z.object({
+  category: Category2$inboundSchema,
+  message: z.string(),
+  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  providerCode: z.nullable(z.string()).optional(),
+  providerReference: z.nullable(z.string()).optional(),
+});
+
+export function capacityBlocker2FromJSON(
+  jsonString: string,
+): SafeParseResult<CapacityBlocker2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CapacityBlocker2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CapacityBlocker2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CapacityBlockerUnion2$inboundSchema: z.ZodType<
+  CapacityBlockerUnion2,
+  unknown
+> = z.union([z.lazy(() => CapacityBlocker2$inboundSchema), z.any()]);
+
+export function capacityBlockerUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<CapacityBlockerUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CapacityBlockerUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CapacityBlockerUnion2' from JSON`,
+  );
+}
+
+/** @internal */
 export const UtilizationUnit2$inboundSchema: z.ZodEnum<
   typeof UtilizationUnit2
 > = z.enum(UtilizationUnit2);
@@ -11754,6 +11900,9 @@ export function recommendationUnion2FromJSON(
 /** @internal */
 export const CapacityGroup2$inboundSchema: z.ZodType<CapacityGroup2, unknown> =
   z.object({
+    capacityBlocker: z.nullable(
+      z.union([z.lazy(() => CapacityBlocker2$inboundSchema), z.any()]),
+    ).optional(),
     currentMachines: z.int(),
     desiredMachines: z.int(),
     groupId: z.string(),
@@ -11973,6 +12122,49 @@ export function dataGcp2FromJSON(
 }
 
 /** @internal */
+export const Category1$inboundSchema: z.ZodEnum<typeof Category1> = z.enum(
+  Category1,
+);
+
+/** @internal */
+export const CapacityBlocker1$inboundSchema: z.ZodType<
+  CapacityBlocker1,
+  unknown
+> = z.object({
+  category: Category1$inboundSchema,
+  message: z.string(),
+  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  providerCode: z.nullable(z.string()).optional(),
+  providerReference: z.nullable(z.string()).optional(),
+});
+
+export function capacityBlocker1FromJSON(
+  jsonString: string,
+): SafeParseResult<CapacityBlocker1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CapacityBlocker1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CapacityBlocker1' from JSON`,
+  );
+}
+
+/** @internal */
+export const CapacityBlockerUnion1$inboundSchema: z.ZodType<
+  CapacityBlockerUnion1,
+  unknown
+> = z.union([z.lazy(() => CapacityBlocker1$inboundSchema), z.any()]);
+
+export function capacityBlockerUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<CapacityBlockerUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CapacityBlockerUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CapacityBlockerUnion1' from JSON`,
+  );
+}
+
+/** @internal */
 export const UtilizationUnit1$inboundSchema: z.ZodEnum<
   typeof UtilizationUnit1
 > = z.enum(UtilizationUnit1);
@@ -12052,6 +12244,9 @@ export function recommendationUnion1FromJSON(
 /** @internal */
 export const CapacityGroup1$inboundSchema: z.ZodType<CapacityGroup1, unknown> =
   z.object({
+    capacityBlocker: z.nullable(
+      z.union([z.lazy(() => CapacityBlocker1$inboundSchema), z.any()]),
+    ).optional(),
     currentMachines: z.int(),
     desiredMachines: z.int(),
     groupId: z.string(),

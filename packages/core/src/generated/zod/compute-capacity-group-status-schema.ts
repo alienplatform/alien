@@ -4,10 +4,14 @@
 */
 
 import * as z from "zod";
+import { ComputeCapacityBlockerSchema } from "./compute-capacity-blocker-schema.js";
 import { ComputeCapacityRecommendationSchema } from "./compute-capacity-recommendation-schema.js";
 
 export const ComputeCapacityGroupStatusSchema = z.object({
-    "currentMachines": z.int().min(0),
+    get "capacityBlocker"(){
+                return z.union([ComputeCapacityBlockerSchema, z.null()]).optional()
+              },
+"currentMachines": z.int().min(0),
 "desiredMachines": z.int().min(0),
 "groupId": z.string(),
 "instanceType": z.string().nullish(),

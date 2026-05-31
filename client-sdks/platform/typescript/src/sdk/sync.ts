@@ -44,7 +44,7 @@ export class Sync extends ClientSDK {
    * Reconcile deployment state. Push model (with session) verifies lock ownership. Pull model (no session) verifies the deployment is unlocked. Accepts full DeploymentState after step() execution.
    */
   async reconcile(
-    request?: operations.SyncReconcileRequest | undefined,
+    request: operations.SyncReconcileRequest,
     options?: RequestOptions,
   ): Promise<models.SyncReconcileResponse> {
     return unwrapAsync(syncReconcile(
@@ -58,7 +58,7 @@ export class Sync extends ClientSDK {
    * Release a deployment lock. Must be called after processing an acquired deployment, even if processing failed. This is critical to avoid deadlocks.
    */
   async release(
-    request?: operations.SyncReleaseRequest | undefined,
+    request: operations.SyncReleaseRequest,
     options?: RequestOptions,
   ): Promise<operations.SyncReleaseResponse> {
     return unwrapAsync(syncRelease(

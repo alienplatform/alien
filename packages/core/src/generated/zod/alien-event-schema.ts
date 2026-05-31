@@ -40,7 +40,8 @@ get "progress"(){
               },
 "type": z.enum(["PushingImage"])
     }), z.object({
-    "platform": z.string().describe("Target platform"),
+    "destination": z.string().describe("Human-readable destination for pushed images").nullish(),
+"platform": z.string().describe("Target platform"),
 "stack": z.string().describe("Name of the stack being pushed"),
 "type": z.enum(["PushingStack"])
     }), z.object({

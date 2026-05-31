@@ -988,6 +988,10 @@ export type DataPushingResource = {
 
 export type DataPushingStack = {
   /**
+   * Human-readable destination for pushed images
+   */
+  destination?: string | null | undefined;
+  /**
    * Target platform
    */
   platform: string;
@@ -2378,6 +2382,7 @@ export const DataPushingStack$inboundSchema: z.ZodType<
   DataPushingStack,
   unknown
 > = z.object({
+  destination: z.nullable(z.string()).optional(),
   platform: z.string(),
   stack: z.string(),
   type: z.literal("PushingStack"),

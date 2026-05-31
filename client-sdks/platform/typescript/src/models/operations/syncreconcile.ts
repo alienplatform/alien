@@ -11,13 +11,13 @@ export type SyncReconcileRequest = {
    * Workspace name. Defaults to your last workspace (user auth) or your API key's workspace (token auth). When using an API key, if provided, must match the key's workspace.
    */
   workspace?: string | undefined;
-  syncReconcileRequest?: models.SyncReconcileRequest | undefined;
+  syncReconcileRequest: models.SyncReconcileRequest;
 };
 
 /** @internal */
 export type SyncReconcileRequest$Outbound = {
   workspace?: string | undefined;
-  SyncReconcileRequest?: models.SyncReconcileRequest$Outbound | undefined;
+  SyncReconcileRequest: models.SyncReconcileRequest$Outbound;
 };
 
 /** @internal */
@@ -26,7 +26,7 @@ export const SyncReconcileRequest$outboundSchema: z.ZodType<
   SyncReconcileRequest
 > = z.object({
   workspace: z.string().optional(),
-  syncReconcileRequest: models.SyncReconcileRequest$outboundSchema.optional(),
+  syncReconcileRequest: models.SyncReconcileRequest$outboundSchema,
 }).transform((v) => {
   return remap$(v, {
     syncReconcileRequest: "SyncReconcileRequest",

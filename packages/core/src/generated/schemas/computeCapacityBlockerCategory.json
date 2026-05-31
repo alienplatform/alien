@@ -1,0 +1,1 @@
+{"type":"string","enum":["quota","capacity","allocation","other"],"x-readme-ref-name":"ComputeCapacityBlockerCategory"}
