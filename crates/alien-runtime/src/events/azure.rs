@@ -323,6 +323,7 @@ pub fn azure_storage_cloudevent_to_storage_events(event: Event) -> Result<Storag
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{DateTime, Utc};
     use cloudevents::{EventBuilder as _, EventBuilderV10};
     use serde_json::json;
 
