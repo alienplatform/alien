@@ -11,6 +11,10 @@ use alien_terraform::{
 };
 use indexmap::IndexMap;
 
+#[allow(dead_code)]
+#[path = "../../src/test_utils.rs"]
+mod test_utils;
+
 /// Render `stack` for `target` against the built-in registry with the given
 /// settings. Panics on render failure so test bodies stay short.
 pub fn render(stack: &Stack, target: TerraformTarget, settings: StackSettings) -> ModuleFiles {
@@ -61,8 +65,7 @@ pub fn snapshot_module(name: &str, module: &ModuleFiles) {
 /// module. Pass the test scenario as `context` for diagnostics.
 pub fn assert_terraform_valid(module: &ModuleFiles, context: &str) {
     let files = linter_files(module);
-    alien_terraform::test_utils::terraform_fmt_check(&files)
-        .assert_ok(format!("{context} terraform fmt -check"));
-    alien_terraform::test_utils::terraform_validate(&files)
+    test_utils::terraform_fmt_check(&files).assert_ok(format!("{context} terraform fmt -check"));
+    test_utils::terraform_validate(&files)
         .assert_ok(format!("{context} terraform validate"));
 }
