@@ -9,15 +9,13 @@ let value: ResourceHeartbeatDataContainer = {
   data: {
     events: [
       {
-        kind: "<value>",
         message: "<value>",
-        observedAt: new Date("2024-02-23T02:52:34.144Z"),
-        severity: "info",
+        reason: "<value>",
       },
     ],
-    instances: [],
     name: "<value>",
     namespace: "<value>",
+    pods: [],
     replicas: {},
     status: {
       collectionIssues: [],

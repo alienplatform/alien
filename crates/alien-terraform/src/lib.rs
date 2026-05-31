@@ -28,7 +28,8 @@ pub mod test_utils;
 
 pub use emitter::{TfEmitter, TfFragment};
 pub use generator::{
-    generate_terraform_module, ModuleFiles, TerraformOptions, TerraformRegistration,
+    generate_terraform_module, ModuleFiles, TerraformHelmInstall, TerraformOptions,
+    TerraformRegistration,
 };
 pub use registry::TfRegistry;
 pub use target::TerraformTarget;

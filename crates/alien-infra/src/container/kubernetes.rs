@@ -24,12 +24,19 @@ use alien_macros::controller;
 use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec, StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
     Container as K8sContainer, ContainerPort, EnvVar, LocalObjectReference, PersistentVolumeClaim,
-    PersistentVolumeClaimSpec, PodSpec, PodTemplateSpec, ResourceRequirements, Secret, Volume,
-    VolumeMount,
+    PersistentVolumeClaimSpec, PodSpec, PodTemplateSpec, ResourceRequirements, Secret, Service,
+    ServicePort, ServiceSpec, Volume, VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
+use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 use k8s_openapi::ByteString;
+
+// Cold Kubernetes nodes can spend several minutes pulling application images,
+// especially when the registry endpoint is a remote proxy. Treat that as a
+// legitimate provisioning phase; terminal pull failures still surface through
+// workload heartbeats and events.
+const KUBERNETES_WORKLOAD_READY_MAX_POLLS: u32 = 360; // 360 * 5s = 30 minutes
 
 async fn create_registry_pull_secret(
     secrets_client: &std::sync::Arc<dyn alien_k8s_clients::SecretsApi>,
@@ -141,6 +148,23 @@ fn secret_checksum(secret_vars: &[&EnvironmentVariable]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+fn first_declared_container_port(config: &Container) -> Option<u16> {
+    config.ports.first().map(|port| port.port)
+}
+
+fn kubernetes_port_name(port: &alien_core::ContainerPort) -> String {
+    if port.expose == Some(alien_core::ExposeProtocol::Http) {
+        "http".to_string()
+    } else {
+        format!("tcp-{}", port.port)
+    }
+}
+
+fn is_already_exists(error: &alien_client_core::Error) -> bool {
+    let text = error.to_string();
+    text.contains("AlreadyExists") || text.contains("409")
+}
+
 #[controller]
 pub struct KubernetesContainerController {
     /// The name of the created Kubernetes Deployment or StatefulSet.
@@ -151,6 +175,8 @@ pub struct KubernetesContainerController {
     pub(crate) namespace: Option<String>,
     /// The service name for the container (for binding construction)
     pub(crate) service_name: Option<String>,
+    /// The first declared service port for binding construction.
+    pub(crate) service_port: Option<u16>,
     /// The container ID (for binding construction)
     pub(crate) container_id: Option<String>,
     /// Public endpoint route/certificate state.
@@ -178,6 +204,7 @@ impl KubernetesContainerController {
         // Store data needed for binding construction
         self.container_id = Some(config.id.clone());
         self.service_name = Some(container_name.clone());
+        self.service_port = first_declared_container_port(config);
         self.namespace = Some(namespace.clone());
         // Generate ServiceAccount name following Helm naming convention
         let service_account_name =
@@ -215,6 +242,8 @@ impl KubernetesContainerController {
         };
         let env_secret_plan = self
             .reconcile_environment_secret(config, &container_name, &namespace, ctx)
+            .await?;
+        self.reconcile_internal_service(config, &container_name, &namespace, ctx)
             .await?;
 
         self.is_stateful = config.stateful;
@@ -393,7 +422,7 @@ impl KubernetesContainerController {
         }
 
         Ok(HandlerAction::Stay {
-            max_times: 60, // 60 attempts * 5 seconds = 5 minutes max wait
+            max_times: KUBERNETES_WORKLOAD_READY_MAX_POLLS,
             suggested_delay: Some(Duration::from_secs(5)),
         })
     }
@@ -429,6 +458,10 @@ impl KubernetesContainerController {
                 namespace,
                 labels,
                 &config.ports,
+                config
+                    .health_check
+                    .as_ref()
+                    .map(|check| check.path.as_str()),
             )?,
             &mut self.public_endpoint,
         )
@@ -549,6 +582,10 @@ impl KubernetesContainerController {
                     namespace,
                     labels,
                     &config.ports,
+                    config
+                        .health_check
+                        .as_ref()
+                        .map(|check| check.path.as_str()),
                 )?,
                 &mut self.public_endpoint,
             )
@@ -636,6 +673,9 @@ impl KubernetesContainerController {
         };
         let env_secret_plan = self
             .reconcile_environment_secret(config, workload_name, namespace, ctx)
+            .await?;
+        self.service_port = first_declared_container_port(config);
+        self.reconcile_internal_service(config, workload_name, namespace, ctx)
             .await?;
         let deployment_client = ctx
             .service_provider
@@ -813,7 +853,7 @@ impl KubernetesContainerController {
         }
 
         Ok(HandlerAction::Stay {
-            max_times: 60,
+            max_times: KUBERNETES_WORKLOAD_READY_MAX_POLLS,
             suggested_delay: Some(Duration::from_secs(5)),
         })
     }
@@ -849,6 +889,10 @@ impl KubernetesContainerController {
                 namespace,
                 labels,
                 &config.ports,
+                config
+                    .health_check
+                    .as_ref()
+                    .map(|check| check.path.as_str()),
             )?,
             &mut self.public_endpoint,
         )
@@ -888,6 +932,10 @@ impl KubernetesContainerController {
 
         delete_kubernetes_public_endpoint(ctx, &config.id, namespace, &mut self.public_endpoint)
             .await?;
+        if let Some(service_name) = &self.service_name {
+            self.delete_internal_service(namespace, service_name, ctx)
+                .await?;
+        }
 
         // Delete Deployment or StatefulSet
         if let Some(workload_name) = &self.workload_name {
@@ -1044,7 +1092,7 @@ impl KubernetesContainerController {
                 current_replicas: 0, // Will be updated by runtime
                 desired_replicas: 0, // Will be updated by runtime
                 internal_dns: format!("{}.svc.cluster.local", workload_name),
-                url: self.public_endpoint.public_url.clone(),
+                url: self.public_endpoint.effective_public_url(),
                 replicas: Vec::new(), // Replica details tracked separately
                 load_balancer_endpoint: self.public_endpoint.load_balancer_endpoint.clone(),
             }))
@@ -1064,12 +1112,11 @@ impl KubernetesContainerController {
                 name: BindingValue::Value(container_id.clone()),
                 namespace: BindingValue::Value(namespace.clone()),
                 service_name: BindingValue::Value(service_name.clone()),
-                service_port: BindingValue::Value(80),
+                service_port: BindingValue::Value(self.service_port.unwrap_or(80)),
                 public_url: self
                     .public_endpoint
-                    .public_url
-                    .as_ref()
-                    .map(|url| BindingValue::Value(url.clone())),
+                    .effective_public_url()
+                    .map(BindingValue::Value),
             };
 
             // Serialize to JSON
@@ -1107,6 +1154,7 @@ mod output_tests {
             is_stateful: false,
             namespace: Some("test-namespace".to_string()),
             service_name: Some("test-container".to_string()),
+            service_port: Some(3000),
             container_id: Some("container".to_string()),
             public_endpoint,
             _internal_stay_count: None,
@@ -1122,6 +1170,38 @@ mod output_tests {
             Some("https://container.example.test")
         );
     }
+
+    #[test]
+    fn build_outputs_derives_public_url_from_load_balancer_endpoint() {
+        let public_endpoint = KubernetesPublicEndpointState {
+            load_balancer_endpoint: Some(alien_core::LoadBalancerEndpoint {
+                dns_name: "k8s-container.example.elb.amazonaws.com".to_string(),
+                hosted_zone_id: None,
+            }),
+            ..Default::default()
+        };
+        let controller = KubernetesContainerController {
+            state: KubernetesContainerState::Ready,
+            workload_name: Some("test-container".to_string()),
+            is_stateful: false,
+            namespace: Some("test-namespace".to_string()),
+            service_name: Some("test-container".to_string()),
+            service_port: Some(3000),
+            container_id: Some("container".to_string()),
+            public_endpoint,
+            _internal_stay_count: None,
+        };
+
+        let outputs = controller.build_outputs().expect("outputs");
+        let container_outputs = outputs
+            .downcast_ref::<ContainerOutputs>()
+            .expect("container outputs");
+
+        assert_eq!(
+            container_outputs.url.as_deref(),
+            Some("http://k8s-container.example.elb.amazonaws.com")
+        );
+    }
 }
 
 impl KubernetesContainerController {
@@ -1134,6 +1214,7 @@ impl KubernetesContainerController {
             is_stateful,
             namespace: Some(namespace.to_string()),
             service_name: Some(container_name.to_string()),
+            service_port: Some(80),
             container_id: Some("test-container".to_string()),
             public_endpoint: KubernetesPublicEndpointState::default(),
             _internal_stay_count: None,
@@ -1235,6 +1316,124 @@ impl KubernetesContainerController {
             checksum,
             keys,
         }))
+    }
+
+    async fn reconcile_internal_service(
+        &self,
+        config: &Container,
+        service_name: &str,
+        namespace: &str,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<()> {
+        let kubernetes_config = ctx.get_kubernetes_config()?;
+        let service_client = ctx
+            .service_provider
+            .get_kubernetes_service_client(kubernetes_config)
+            .await?;
+
+        let Some(mut service) = self.build_internal_service(config, service_name, namespace) else {
+            self.delete_internal_service(namespace, service_name, ctx)
+                .await?;
+            return Ok(());
+        };
+
+        match service_client.create_service(namespace, &service).await {
+            Ok(_) => Ok(()),
+            Err(e) if is_already_exists(&e) => {
+                let existing = service_client
+                    .get_service(namespace, service_name)
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to get internal Service '{}' before update",
+                            service_name
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    })?;
+                service.metadata.resource_version = existing.metadata.resource_version;
+                service_client
+                    .update_service(namespace, service_name, &service)
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to update internal Service '{}'", service_name),
+                        resource_id: Some(config.id.clone()),
+                    })?;
+                Ok(())
+            }
+            Err(e) => Err(e.context(ErrorData::CloudPlatformError {
+                message: format!("Failed to create internal Service '{}'", service_name),
+                resource_id: Some(config.id.clone()),
+            })),
+        }
+    }
+
+    async fn delete_internal_service(
+        &self,
+        namespace: &str,
+        service_name: &str,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<()> {
+        let kubernetes_config = ctx.get_kubernetes_config()?;
+        let service_client = ctx
+            .service_provider
+            .get_kubernetes_service_client(kubernetes_config)
+            .await?;
+
+        match service_client.delete_service(namespace, service_name).await {
+            Ok(()) => Ok(()),
+            Err(e)
+                if matches!(
+                    e.error,
+                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
+                Ok(())
+            }
+            Err(e) => Err(e.context(ErrorData::CloudPlatformError {
+                message: format!("Failed to delete internal Service '{}'", service_name),
+                resource_id: Some(service_name.to_string()),
+            })),
+        }
+    }
+
+    fn build_internal_service(
+        &self,
+        config: &Container,
+        service_name: &str,
+        namespace: &str,
+    ) -> Option<Service> {
+        if config.ports.is_empty() {
+            return None;
+        }
+
+        let labels = self.build_labels(service_name);
+        Some(Service {
+            metadata: ObjectMeta {
+                name: Some(service_name.to_string()),
+                namespace: Some(namespace.to_string()),
+                labels: Some(labels.clone()),
+                ..Default::default()
+            },
+            spec: Some(ServiceSpec {
+                type_: Some("ClusterIP".to_string()),
+                selector: Some(labels),
+                ports: Some(
+                    config
+                        .ports
+                        .iter()
+                        .map(|port| ServicePort {
+                            name: Some(kubernetes_port_name(port)),
+                            port: port.port as i32,
+                            protocol: Some("TCP".to_string()),
+                            target_port: Some(IntOrString::Int(port.port as i32)),
+                            ..Default::default()
+                        })
+                        .collect(),
+                ),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
     }
 
     /// Builds a Kubernetes Deployment for stateless containers.
@@ -1522,7 +1721,7 @@ impl KubernetesContainerController {
                     .iter()
                     .map(|p| ContainerPort {
                         container_port: p.port as i32,
-                        name: Some("http".to_string()),
+                        name: Some(kubernetes_port_name(p)),
                         protocol: Some("TCP".to_string()),
                         ..Default::default()
                     })
@@ -1711,5 +1910,47 @@ mod tests {
 
         let dashboard_vars = applicable_secret_environment_variables("dashboard", &vars);
         assert!(dashboard_vars.is_empty());
+    }
+
+    #[test]
+    fn internal_service_uses_declared_container_ports() {
+        let config = Container::new("api".to_string())
+            .code(ContainerCode::Image {
+                image: "registry.example.com/api:1".to_string(),
+            })
+            .cpu(alien_core::ResourceSpec {
+                min: "100m".to_string(),
+                desired: "500m".to_string(),
+            })
+            .memory(alien_core::ResourceSpec {
+                min: "128Mi".to_string(),
+                desired: "512Mi".to_string(),
+            })
+            .port(3000)
+            .permissions("runtime".to_string())
+            .build();
+        let controller = KubernetesContainerController {
+            state: KubernetesContainerState::Ready,
+            workload_name: Some("api".to_string()),
+            is_stateful: false,
+            namespace: Some("test-ns".to_string()),
+            service_name: Some("api".to_string()),
+            service_port: Some(3000),
+            container_id: Some("api".to_string()),
+            public_endpoint: KubernetesPublicEndpointState::default(),
+            _internal_stay_count: None,
+        };
+
+        let service = controller
+            .build_internal_service(&config, "api", "test-ns")
+            .expect("internal service");
+        let spec = service.spec.expect("service spec");
+
+        assert_eq!(service.metadata.name.as_deref(), Some("api"));
+        assert_eq!(spec.type_.as_deref(), Some("ClusterIP"));
+        let ports = spec.ports.expect("service ports");
+        assert_eq!(ports.len(), 1);
+        assert_eq!(ports[0].port, 3000);
+        assert_eq!(ports[0].target_port, Some(IntOrString::Int(3000)));
     }
 }

@@ -392,7 +392,7 @@ CMD ["cat", "hello.txt"]
             cache_store: None,
             cache_prefix: "test".to_string(),
             build_target: BinaryTarget::linux_container_target(),
-            platform_name: "aws".to_string(),
+            runtime_platform_name: "aws".to_string(),
             debug_mode: false,
             is_container: true,
         };
@@ -471,7 +471,7 @@ RUN echo "Version: $VERSION" > version.txt
             cache_store: None,
             cache_prefix: "test".to_string(),
             build_target: BinaryTarget::linux_container_target(),
-            platform_name: "aws".to_string(),
+            runtime_platform_name: "aws".to_string(),
             debug_mode: false,
             is_container: true,
         };
@@ -510,7 +510,7 @@ RUN echo "Version: $VERSION" > version.txt
             cache_store: None,
             cache_prefix: "test".to_string(),
             build_target: BinaryTarget::linux_container_target(),
-            platform_name: "aws".to_string(),
+            runtime_platform_name: "aws".to_string(),
             debug_mode: false,
             is_container: true,
         };
@@ -559,7 +559,7 @@ WORKDIR /app
             cache_store: None,
             cache_prefix: "test".to_string(),
             build_target: BinaryTarget::linux_container_target(),
-            platform_name: "aws".to_string(),
+            runtime_platform_name: "aws".to_string(),
             debug_mode: false,
             is_container: true,
         };

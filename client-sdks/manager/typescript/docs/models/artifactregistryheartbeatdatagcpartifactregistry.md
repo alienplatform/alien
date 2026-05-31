@@ -7,27 +7,23 @@ import { ArtifactRegistryHeartbeatDataGcpArtifactRegistry } from "@alienplatform
 
 let value: ArtifactRegistryHeartbeatDataGcpArtifactRegistry = {
   cleanupPolicyCount: 419391,
-  events: [],
-  iamBindingCount: 807373,
+  iamBindingCount: 128533,
   iamPolicyEtagPresent: false,
-  iamRoles: [],
+  iamRoles: [
+    "<value 1>",
+    "<value 2>",
+    "<value 3>",
+  ],
   kmsKeyNamePresent: true,
-  labelCount: 648484,
+  labelCount: 439989,
   location: "<value>",
   projectId: "<id>",
   repositoryId: "<id>",
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "forbidden",
-        severity: "info",
-        source: "<value>",
-      },
-    ],
-    health: "healthy",
-    lifecycle: "stopped",
-    partial: false,
+    collectionIssues: [],
+    health: "unknown",
+    lifecycle: "scaling",
+    partial: true,
     stale: false,
   },
   backend: "gcpArtifactRegistry",
@@ -42,7 +38,6 @@ let value: ArtifactRegistryHeartbeatDataGcpArtifactRegistry = {
 | `cleanupPolicyDryRun`                                                                  | *boolean*                                                                              | :heavy_minus_sign:                                                                     | N/A                                                                                    |
 | `createTime`                                                                           | *string*                                                                               | :heavy_minus_sign:                                                                     | N/A                                                                                    |
 | `description`                                                                          | *string*                                                                               | :heavy_minus_sign:                                                                     | N/A                                                                                    |
-| `events`                                                                               | [models.HeartbeatEvent](../models/heartbeatevent.md)[]                                 | :heavy_check_mark:                                                                     | N/A                                                                                    |
 | `format`                                                                               | *string*                                                                               | :heavy_minus_sign:                                                                     | N/A                                                                                    |
 | `iamBindingCount`                                                                      | *number*                                                                               | :heavy_check_mark:                                                                     | N/A                                                                                    |
 | `iamPolicyEtagPresent`                                                                 | *boolean*                                                                              | :heavy_check_mark:                                                                     | N/A                                                                                    |

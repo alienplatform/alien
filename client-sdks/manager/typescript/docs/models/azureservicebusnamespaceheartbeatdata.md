@@ -6,14 +6,13 @@
 import { AzureServiceBusNamespaceHeartbeatData } from "@alienplatform/manager-api/models";
 
 let value: AzureServiceBusNamespaceHeartbeatData = {
-  events: [],
   name: "<value>",
-  privateEndpointConnectionCount: 992899,
+  privateEndpointConnectionCount: 246233,
   status: {
     collectionIssues: [],
-    health: "unhealthy",
-    lifecycle: "updating",
-    partial: false,
+    health: "healthy",
+    lifecycle: "deleted",
+    partial: true,
     stale: false,
   },
 };
@@ -25,7 +24,6 @@ let value: AzureServiceBusNamespaceHeartbeatData = {
 | ---------------------------------------------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------- |
 | `createdAt`                                                      | *string*                                                         | :heavy_minus_sign:                                               | N/A                                                              |
 | `disableLocalAuth`                                               | *boolean*                                                        | :heavy_minus_sign:                                               | N/A                                                              |
-| `events`                                                         | [models.HeartbeatEvent](../models/heartbeatevent.md)[]           | :heavy_check_mark:                                               | N/A                                                              |
 | `location`                                                       | *string*                                                         | :heavy_minus_sign:                                               | N/A                                                              |
 | `metricId`                                                       | *string*                                                         | :heavy_minus_sign:                                               | N/A                                                              |
 | `minimumTlsVersion`                                              | *string*                                                         | :heavy_minus_sign:                                               | N/A                                                              |

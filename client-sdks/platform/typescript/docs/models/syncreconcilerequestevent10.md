@@ -8,8 +8,8 @@ import { SyncReconcileRequestEvent10 } from "@alienplatform/platform-api/models"
 let value: SyncReconcileRequestEvent10 = {
   kind: "<value>",
   message: "<value>",
-  observedAt: new Date("2026-03-03T01:13:26.716Z"),
-  severity: "warning",
+  severity: "error",
+  timestamp: new Date("2025-09-17T11:35:20.279Z"),
 };
 ```
 
@@ -19,6 +19,7 @@ let value: SyncReconcileRequestEvent10 = {
 | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | `kind`                                                                                        | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
 | `message`                                                                                     | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
-| `observedAt`                                                                                  | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |
-| `severity`                                                                                    | [models.EventSeverity10](../models/eventseverity10.md)                                        | :heavy_check_mark:                                                                            | N/A                                                                                           |
-| `source`                                                                                      | *string*                                                                                      | :heavy_minus_sign:                                                                            | N/A                                                                                           |
+| `raw`                                                                                         | *any*                                                                                         | :heavy_minus_sign:                                                                            | N/A                                                                                           |
+| `severity`                                                                                    | [models.EventSeverity3](../models/eventseverity3.md)                                          | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| `subject`                                                                                     | *models.SyncReconcileRequestSubjectUnion3*                                                    | :heavy_minus_sign:                                                                            | N/A                                                                                           |
+| `timestamp`                                                                                   | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |

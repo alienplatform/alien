@@ -23,6 +23,7 @@ pub fn render(stack: &Stack, target: TerraformTarget, settings: StackSettings) -
             registry: &registry,
             stack_settings: settings,
             registration: None,
+            helm_install: None,
         },
     )
     .expect("module should render")

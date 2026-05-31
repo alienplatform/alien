@@ -103,7 +103,6 @@ fn emit_aws_network_heartbeat(
                 route_table_count,
                 security_group_id: controller.security_group_id.clone(),
                 is_byo_vpc: controller.is_byo_vpc,
-                events: vec![],
             },
         )),
         raw: vec![],

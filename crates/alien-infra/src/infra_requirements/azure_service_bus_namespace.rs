@@ -481,7 +481,6 @@ fn emit_azure_service_bus_namespace_heartbeat(
                 zone_redundant: properties.and_then(|p| p.zone_redundant),
                 created_at: properties.and_then(|p| p.created_at.clone()),
                 updated_at: properties.and_then(|p| p.updated_at.clone()),
-                events: vec![],
             },
         ),
         raw: vec![],

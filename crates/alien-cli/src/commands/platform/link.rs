@@ -7,6 +7,7 @@ use crate::project_link::{
     suggest_project_name, ProjectLink, ProjectLinkStatus,
 };
 use crate::ui::{accent, contextual_heading, dim_label, success_line};
+use alien_platform_api::types;
 use clap::Parser;
 use serde::Serialize;
 
@@ -25,6 +26,10 @@ pub struct LinkArgs {
     #[arg(long)]
     pub name: Option<String>,
 
+    /// Do not attach detected git repository metadata when creating a project
+    #[arg(long)]
+    pub no_git: bool,
+
     /// Emit structured JSON output
     #[arg(long)]
     pub json: bool,
@@ -41,6 +46,7 @@ struct LinkOutput {
     project_id: String,
     project_name: String,
     path: String,
+    git_repository_warning: Option<types::ApiError>,
 }
 
 pub async fn link_task(args: LinkArgs, ctx: ExecutionMode) -> Result<()> {
@@ -48,7 +54,7 @@ pub async fn link_task(args: LinkArgs, ctx: ExecutionMode) -> Result<()> {
 
     match get_project_link_status(&current_dir) {
         ProjectLinkStatus::Linked(link) if !args.force => {
-            return print_link_result(&link, &current_dir.display().to_string(), args.json);
+            return print_link_result(&link, &current_dir.display().to_string(), args.json, None);
         }
         ProjectLinkStatus::Linked(link) if args.force && !args.json => {
             println!(
@@ -62,17 +68,22 @@ pub async fn link_task(args: LinkArgs, ctx: ExecutionMode) -> Result<()> {
     let http = ctx.auth_http().await?;
     let workspace_name = ctx.resolve_workspace_with_bootstrap(!args.json).await?;
 
+    let mut git_repository_warning = None;
+
     let link = if let Some(project_name) = ctx.project_override() {
         get_project_by_name(&http, &workspace_name, project_name).await?
     } else if let Some(name) = args.name.as_deref() {
-        let project = crate::project_link::create_new_project(
+        let selection = crate::project_link::create_new_project(
             http.sdk_client(),
             &workspace_name,
             Some(name),
             &current_dir,
             false,
+            !args.no_git,
         )
         .await?;
+        let project = selection.project;
+        git_repository_warning = selection.git_repository_warning;
 
         ProjectLink::new(
             workspace_name.clone(),
@@ -81,7 +92,7 @@ pub async fn link_task(args: LinkArgs, ctx: ExecutionMode) -> Result<()> {
         )
     } else {
         let allow_prompt = !args.json && can_prompt();
-        let project = choose_or_create_project(
+        let selection = choose_or_create_project(
             &http,
             &workspace_name,
             Some(&suggest_project_name(&current_dir)),
@@ -89,6 +100,8 @@ pub async fn link_task(args: LinkArgs, ctx: ExecutionMode) -> Result<()> {
             allow_prompt,
         )
         .await?;
+        let project = selection.project;
+        git_repository_warning = selection.git_repository_warning;
 
         ProjectLink::new(
             workspace_name.clone(),
@@ -98,16 +111,27 @@ pub async fn link_task(args: LinkArgs, ctx: ExecutionMode) -> Result<()> {
     };
 
     save_project_link(&current_dir, &link)?;
-    print_link_result(&link, &current_dir.display().to_string(), args.json)
+    print_link_result(
+        &link,
+        &current_dir.display().to_string(),
+        args.json,
+        git_repository_warning,
+    )
 }
 
-fn print_link_result(link: &ProjectLink, path: &str, json: bool) -> Result<()> {
+fn print_link_result(
+    link: &ProjectLink,
+    path: &str,
+    json: bool,
+    git_repository_warning: Option<types::ApiError>,
+) -> Result<()> {
     if json {
         print_json(&LinkOutput {
             workspace: link.workspace.clone(),
             project_id: link.project_id.clone(),
             project_name: link.project_name.clone(),
             path: path.to_string(),
+            git_repository_warning,
         })?;
     } else {
         println!(
@@ -122,6 +146,9 @@ fn print_link_result(link: &ProjectLink, path: &str, json: bool) -> Result<()> {
             accent(".alien/project.json")
         );
         println!("{}", success_line("Project link saved."));
+        if let Some(warning) = git_repository_warning {
+            println!("Warning: {}", warning.message.as_str());
+        }
     }
 
     Ok(())

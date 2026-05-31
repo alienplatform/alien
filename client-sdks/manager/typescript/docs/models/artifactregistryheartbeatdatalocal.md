@@ -6,21 +6,13 @@
 import { ArtifactRegistryHeartbeatDataLocal } from "@alienplatform/manager-api/models";
 
 let value: ArtifactRegistryHeartbeatDataLocal = {
-  events: [],
-  reachable: false,
-  registryUrl: "https://excited-armoire.net",
+  reachable: true,
+  registryUrl: "https://which-devastation.com",
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "forbidden",
-        severity: "info",
-        source: "<value>",
-      },
-    ],
-    health: "healthy",
-    lifecycle: "stopped",
-    partial: false,
+    collectionIssues: [],
+    health: "unknown",
+    lifecycle: "scaling",
+    partial: true,
     stale: false,
   },
   backend: "local",
@@ -31,7 +23,6 @@ let value: ArtifactRegistryHeartbeatDataLocal = {
 
 | Field                                                                                  | Type                                                                                   | Required                                                                               | Description                                                                            |
 | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| `events`                                                                               | [models.HeartbeatEvent](../models/heartbeatevent.md)[]                                 | :heavy_check_mark:                                                                     | N/A                                                                                    |
 | `reachable`                                                                            | *boolean*                                                                              | :heavy_check_mark:                                                                     | N/A                                                                                    |
 | `registryUrl`                                                                          | *string*                                                                               | :heavy_check_mark:                                                                     | N/A                                                                                    |
 | `status`                                                                               | [models.ArtifactRegistryHeartbeatStatus](../models/artifactregistryheartbeatstatus.md) | :heavy_check_mark:                                                                     | N/A                                                                                    |

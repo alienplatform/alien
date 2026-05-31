@@ -14,25 +14,18 @@ let value: ServiceAccountHeartbeatDataAwsIamRole = {
     "<value 3>",
   ],
   createDate: "<value>",
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-02-23T02:52:34.144Z"),
-      severity: "info",
-    },
-  ],
-  inlinePolicyCount: 792146,
+  inlinePolicyCount: 840219,
   inlinePolicyNames: [
     "<value 1>",
     "<value 2>",
+    "<value 3>",
   ],
-  managedTagCount: 874935,
-  path: "/var/log",
+  managedTagCount: 681671,
+  path: "/usr/share",
   roleArn: "<value>",
   roleId: "<id>",
   roleName: "<value>",
-  stackPermissionsApplied: true,
+  stackPermissionsApplied: false,
   status: {
     collectionIssues: [
       {
@@ -42,12 +35,12 @@ let value: ServiceAccountHeartbeatDataAwsIamRole = {
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "deleting",
-    partial: true,
-    stale: false,
+    health: "unhealthy",
+    lifecycle: "stopped",
+    partial: false,
+    stale: true,
   },
-  tagCount: 961527,
+  tagCount: 317385,
   backend: "awsIamRole",
 };
 ```
@@ -61,7 +54,6 @@ let value: ServiceAccountHeartbeatDataAwsIamRole = {
 | `attachedPolicyNames`                                                              | *string*[]                                                                         | :heavy_check_mark:                                                                 | N/A                                                                                |
 | `createDate`                                                                       | *string*                                                                           | :heavy_check_mark:                                                                 | N/A                                                                                |
 | `description`                                                                      | *string*                                                                           | :heavy_minus_sign:                                                                 | N/A                                                                                |
-| `events`                                                                           | [models.HeartbeatEvent](../models/heartbeatevent.md)[]                             | :heavy_check_mark:                                                                 | N/A                                                                                |
 | `inlinePolicyCount`                                                                | *number*                                                                           | :heavy_check_mark:                                                                 | N/A                                                                                |
 | `inlinePolicyNames`                                                                | *string*[]                                                                         | :heavy_check_mark:                                                                 | N/A                                                                                |
 | `lastUsedDate`                                                                     | *string*                                                                           | :heavy_minus_sign:                                                                 | N/A                                                                                |

@@ -831,7 +831,6 @@ fn emit_gcp_storage_heartbeat(
                 public_access_prevention,
                 encryption_config_present,
                 default_kms_key_name,
-                events: vec![],
             },
         )),
         raw: vec![],

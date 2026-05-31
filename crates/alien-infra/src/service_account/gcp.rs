@@ -812,7 +812,6 @@ fn emit_gcp_service_account_heartbeat(
                 project_roles,
                 service_account_binding_count: service_account_roles.len() as u32,
                 service_account_roles,
-                events: vec![],
             }),
         ),
         raw: vec![],

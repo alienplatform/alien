@@ -230,7 +230,6 @@ fn emit_local_queue_heartbeat(
             name: resource_id.to_string(),
             path: queue_path.map(ToString::to_string),
             service_status: Some("reachable".to_string()),
-            events: vec![],
         })),
         raw: vec![],
     });

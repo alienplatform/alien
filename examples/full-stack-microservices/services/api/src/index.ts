@@ -17,31 +17,64 @@ const databaseUrl = required("DATABASE_URL")
 const redisUrl = required("REDIS_URL")
 const filesBucket = process.env.FILES_BUCKET ?? "files"
 const port = Number(process.env.PORT ?? "3000")
+const startupTimeoutMs = Number(process.env.STARTUP_TIMEOUT_SECONDS ?? "180") * 1000
 
 const db = new pg.Pool({ connectionString: databaseUrl })
 const redis = new Redis(redisUrl, { maxRetriesPerRequest: 3 })
 const files = await storage(filesBucket)
 
-await db.query(`
-  create table if not exists issues (
-    id text primary key,
-    title text not null,
-    body text not null,
-    status text not null,
-    created_at timestamptz not null default now(),
-    updated_at timestamptz not null default now()
-  )
-`)
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
-await db.query(`
-  create table if not exists issue_files (
-    id text primary key,
-    issue_id text not null references issues(id) on delete cascade,
-    object_key text not null,
-    filename text not null,
-    created_at timestamptz not null default now()
-  )
-`)
+async function waitForStartupDependency(name: string, check: () => Promise<void>) {
+  const deadline = Date.now() + startupTimeoutMs
+  let attempt = 0
+  while (true) {
+    attempt += 1
+    try {
+      await check()
+      return
+    } catch (error) {
+      if (Date.now() >= deadline) {
+        throw new Error(`${name} did not become ready within ${startupTimeoutMs}ms`, {
+          cause: error,
+        })
+      }
+      console.warn(`${name} is not ready yet; retrying`, { attempt, error })
+      await sleep(Math.min(1000 * attempt, 5000))
+    }
+  }
+}
+
+async function initializeSchema() {
+  await db.query(`
+    create table if not exists issues (
+      id text primary key,
+      title text not null,
+      body text not null,
+      status text not null,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    )
+  `)
+
+  await db.query(`
+    create table if not exists issue_files (
+      id text primary key,
+      issue_id text not null references issues(id) on delete cascade,
+      object_key text not null,
+      filename text not null,
+      created_at timestamptz not null default now()
+    )
+  `)
+}
+
+await waitForStartupDependency("postgres", async () => {
+  await db.query("select 1")
+})
+await initializeSchema()
+await waitForStartupDependency("redis", async () => {
+  await redis.ping()
+})
 
 const app = new Hono()
 
@@ -147,9 +180,13 @@ app.post("/internal/maintenance", async c => {
   return c.json({ created: true, issueId: id })
 })
 
-Bun.serve({
-  port,
-  fetch: app.fetch,
-})
+if (import.meta.main) {
+  Bun.serve({
+    port,
+    fetch: app.fetch,
+  })
 
-console.log(`api listening on ${port}`)
+  console.log(`api listening on ${port}`)
+}
+
+export default app

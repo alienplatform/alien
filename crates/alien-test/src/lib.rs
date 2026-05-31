@@ -27,6 +27,7 @@ pub mod deployment;
 pub mod distribution;
 pub mod e2e;
 pub mod helm_values;
+pub mod managed_secret;
 pub mod manager;
 pub mod ngrok;
 pub mod setup;

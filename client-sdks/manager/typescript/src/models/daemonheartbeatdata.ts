@@ -4,25 +4,40 @@
 
 import * as z from "zod/v4";
 import {
-  HeartbeatEvent,
-  HeartbeatEvent$Outbound,
-  HeartbeatEvent$outboundSchema,
-} from "./heartbeatevent.js";
+  KubernetesEventSnapshot,
+  KubernetesEventSnapshot$Outbound,
+  KubernetesEventSnapshot$outboundSchema,
+} from "./kuberneteseventsnapshot.js";
 import {
-  HorizonDaemonInstanceStatus,
-  HorizonDaemonInstanceStatus$Outbound,
-  HorizonDaemonInstanceStatus$outboundSchema,
-} from "./horizondaemoninstancestatus.js";
-import {
-  KubernetesPodInstanceStatus,
-  KubernetesPodInstanceStatus$Outbound,
-  KubernetesPodInstanceStatus$outboundSchema,
-} from "./kubernetespodinstancestatus.js";
+  KubernetesPodRuntimeUnitStatus,
+  KubernetesPodRuntimeUnitStatus$Outbound,
+  KubernetesPodRuntimeUnitStatus$outboundSchema,
+} from "./kubernetespodruntimeunitstatus.js";
 import {
   KubernetesWorkloadStatus,
   KubernetesWorkloadStatus$Outbound,
   KubernetesWorkloadStatus$outboundSchema,
 } from "./kubernetesworkloadstatus.js";
+import {
+  LocalRuntimeEventSnapshot,
+  LocalRuntimeEventSnapshot$Outbound,
+  LocalRuntimeEventSnapshot$outboundSchema,
+} from "./localruntimeeventsnapshot.js";
+import {
+  LocalRuntimeUnitStatus,
+  LocalRuntimeUnitStatus$Outbound,
+  LocalRuntimeUnitStatus$outboundSchema,
+} from "./localruntimeunitstatus.js";
+import {
+  ManagedRuntimeEventSnapshot,
+  ManagedRuntimeEventSnapshot$Outbound,
+  ManagedRuntimeEventSnapshot$outboundSchema,
+} from "./managedruntimeeventsnapshot.js";
+import {
+  ManagedRuntimeUnitStatus,
+  ManagedRuntimeUnitStatus$Outbound,
+  ManagedRuntimeUnitStatus$outboundSchema,
+} from "./managedruntimeunitstatus.js";
 import {
   MetricSample,
   MetricSample$Outbound,
@@ -41,8 +56,9 @@ import {
 
 export type DaemonHeartbeatDataLocal = {
   commandSupported: boolean;
+  daemonInstance?: LocalRuntimeUnitStatus | null | undefined;
   daemonName: string;
-  events: Array<HeartbeatEvent>;
+  events: Array<LocalRuntimeEventSnapshot>;
   exitReason?: string | null | undefined;
   imagePathPresent: boolean;
   pid?: number | null | undefined;
@@ -55,11 +71,11 @@ export type DaemonHeartbeatDataLocal = {
 export type DaemonHeartbeatDataKubernetes = {
   commandSupported: boolean;
   cpu?: MetricSample | null | undefined;
-  events: Array<HeartbeatEvent>;
-  instances: Array<KubernetesPodInstanceStatus>;
+  events: Array<KubernetesEventSnapshot>;
   memory?: MetricSample | null | undefined;
   name: string;
   namespace: string;
+  pods: Array<KubernetesPodRuntimeUnitStatus>;
   replicas: WorkloadReplicaStatus;
   restarts?: number | null | undefined;
   status: WorkloadHeartbeatStatus;
@@ -71,15 +87,15 @@ export type DaemonHeartbeatDataAzure = {
   assignedMachines: number;
   capacityGroup: string;
   commandSupported: boolean;
+  daemonInstances: Array<ManagedRuntimeUnitStatus>;
   daemonName: string;
   desiredMachines: number;
-  events: Array<HeartbeatEvent>;
+  events: Array<ManagedRuntimeEventSnapshot>;
   healthyInstances: number;
   horizonClusterId: string;
   horizonStatus: string;
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
-  instances: Array<HorizonDaemonInstanceStatus>;
   latestUpdateTimestamp: string;
   status: WorkloadHeartbeatStatus;
   unavailableInstances: number;
@@ -90,15 +106,15 @@ export type DaemonHeartbeatDataGcp = {
   assignedMachines: number;
   capacityGroup: string;
   commandSupported: boolean;
+  daemonInstances: Array<ManagedRuntimeUnitStatus>;
   daemonName: string;
   desiredMachines: number;
-  events: Array<HeartbeatEvent>;
+  events: Array<ManagedRuntimeEventSnapshot>;
   healthyInstances: number;
   horizonClusterId: string;
   horizonStatus: string;
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
-  instances: Array<HorizonDaemonInstanceStatus>;
   latestUpdateTimestamp: string;
   status: WorkloadHeartbeatStatus;
   unavailableInstances: number;
@@ -109,15 +125,15 @@ export type DaemonHeartbeatDataAws = {
   assignedMachines: number;
   capacityGroup: string;
   commandSupported: boolean;
+  daemonInstances: Array<ManagedRuntimeUnitStatus>;
   daemonName: string;
   desiredMachines: number;
-  events: Array<HeartbeatEvent>;
+  events: Array<ManagedRuntimeEventSnapshot>;
   healthyInstances: number;
   horizonClusterId: string;
   horizonStatus: string;
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
-  instances: Array<HorizonDaemonInstanceStatus>;
   latestUpdateTimestamp: string;
   status: WorkloadHeartbeatStatus;
   unavailableInstances: number;
@@ -134,8 +150,9 @@ export type DaemonHeartbeatData =
 /** @internal */
 export type DaemonHeartbeatDataLocal$Outbound = {
   commandSupported: boolean;
+  daemonInstance?: LocalRuntimeUnitStatus$Outbound | null | undefined;
   daemonName: string;
-  events: Array<HeartbeatEvent$Outbound>;
+  events: Array<LocalRuntimeEventSnapshot$Outbound>;
   exitReason?: string | null | undefined;
   imagePathPresent: boolean;
   pid?: number | null | undefined;
@@ -151,8 +168,9 @@ export const DaemonHeartbeatDataLocal$outboundSchema: z.ZodType<
   DaemonHeartbeatDataLocal
 > = z.object({
   commandSupported: z.boolean(),
+  daemonInstance: z.nullable(LocalRuntimeUnitStatus$outboundSchema).optional(),
   daemonName: z.string(),
-  events: z.array(HeartbeatEvent$outboundSchema),
+  events: z.array(LocalRuntimeEventSnapshot$outboundSchema),
   exitReason: z.nullable(z.string()).optional(),
   imagePathPresent: z.boolean(),
   pid: z.nullable(z.int()).optional(),
@@ -174,11 +192,11 @@ export function daemonHeartbeatDataLocalToJSON(
 export type DaemonHeartbeatDataKubernetes$Outbound = {
   commandSupported: boolean;
   cpu?: MetricSample$Outbound | null | undefined;
-  events: Array<HeartbeatEvent$Outbound>;
-  instances: Array<KubernetesPodInstanceStatus$Outbound>;
+  events: Array<KubernetesEventSnapshot$Outbound>;
   memory?: MetricSample$Outbound | null | undefined;
   name: string;
   namespace: string;
+  pods: Array<KubernetesPodRuntimeUnitStatus$Outbound>;
   replicas: WorkloadReplicaStatus$Outbound;
   restarts?: number | null | undefined;
   status: WorkloadHeartbeatStatus$Outbound;
@@ -193,11 +211,11 @@ export const DaemonHeartbeatDataKubernetes$outboundSchema: z.ZodType<
 > = z.object({
   commandSupported: z.boolean(),
   cpu: z.nullable(MetricSample$outboundSchema).optional(),
-  events: z.array(HeartbeatEvent$outboundSchema),
-  instances: z.array(KubernetesPodInstanceStatus$outboundSchema),
+  events: z.array(KubernetesEventSnapshot$outboundSchema),
   memory: z.nullable(MetricSample$outboundSchema).optional(),
   name: z.string(),
   namespace: z.string(),
+  pods: z.array(KubernetesPodRuntimeUnitStatus$outboundSchema),
   replicas: WorkloadReplicaStatus$outboundSchema,
   restarts: z.nullable(z.int()).optional(),
   status: WorkloadHeartbeatStatus$outboundSchema,
@@ -220,15 +238,15 @@ export type DaemonHeartbeatDataAzure$Outbound = {
   assignedMachines: number;
   capacityGroup: string;
   commandSupported: boolean;
+  daemonInstances: Array<ManagedRuntimeUnitStatus$Outbound>;
   daemonName: string;
   desiredMachines: number;
-  events: Array<HeartbeatEvent$Outbound>;
+  events: Array<ManagedRuntimeEventSnapshot$Outbound>;
   healthyInstances: number;
   horizonClusterId: string;
   horizonStatus: string;
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
-  instances: Array<HorizonDaemonInstanceStatus$Outbound>;
   latestUpdateTimestamp: string;
   status: WorkloadHeartbeatStatus$Outbound;
   unavailableInstances: number;
@@ -243,15 +261,15 @@ export const DaemonHeartbeatDataAzure$outboundSchema: z.ZodType<
   assignedMachines: z.int(),
   capacityGroup: z.string(),
   commandSupported: z.boolean(),
+  daemonInstances: z.array(ManagedRuntimeUnitStatus$outboundSchema),
   daemonName: z.string(),
   desiredMachines: z.int(),
-  events: z.array(HeartbeatEvent$outboundSchema),
+  events: z.array(ManagedRuntimeEventSnapshot$outboundSchema),
   healthyInstances: z.int(),
   horizonClusterId: z.string(),
   horizonStatus: z.string(),
   horizonStatusMessage: z.nullable(z.string()).optional(),
   horizonStatusReason: z.nullable(z.string()).optional(),
-  instances: z.array(HorizonDaemonInstanceStatus$outboundSchema),
   latestUpdateTimestamp: z.string(),
   status: WorkloadHeartbeatStatus$outboundSchema,
   unavailableInstances: z.int(),
@@ -271,15 +289,15 @@ export type DaemonHeartbeatDataGcp$Outbound = {
   assignedMachines: number;
   capacityGroup: string;
   commandSupported: boolean;
+  daemonInstances: Array<ManagedRuntimeUnitStatus$Outbound>;
   daemonName: string;
   desiredMachines: number;
-  events: Array<HeartbeatEvent$Outbound>;
+  events: Array<ManagedRuntimeEventSnapshot$Outbound>;
   healthyInstances: number;
   horizonClusterId: string;
   horizonStatus: string;
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
-  instances: Array<HorizonDaemonInstanceStatus$Outbound>;
   latestUpdateTimestamp: string;
   status: WorkloadHeartbeatStatus$Outbound;
   unavailableInstances: number;
@@ -294,15 +312,15 @@ export const DaemonHeartbeatDataGcp$outboundSchema: z.ZodType<
   assignedMachines: z.int(),
   capacityGroup: z.string(),
   commandSupported: z.boolean(),
+  daemonInstances: z.array(ManagedRuntimeUnitStatus$outboundSchema),
   daemonName: z.string(),
   desiredMachines: z.int(),
-  events: z.array(HeartbeatEvent$outboundSchema),
+  events: z.array(ManagedRuntimeEventSnapshot$outboundSchema),
   healthyInstances: z.int(),
   horizonClusterId: z.string(),
   horizonStatus: z.string(),
   horizonStatusMessage: z.nullable(z.string()).optional(),
   horizonStatusReason: z.nullable(z.string()).optional(),
-  instances: z.array(HorizonDaemonInstanceStatus$outboundSchema),
   latestUpdateTimestamp: z.string(),
   status: WorkloadHeartbeatStatus$outboundSchema,
   unavailableInstances: z.int(),
@@ -322,15 +340,15 @@ export type DaemonHeartbeatDataAws$Outbound = {
   assignedMachines: number;
   capacityGroup: string;
   commandSupported: boolean;
+  daemonInstances: Array<ManagedRuntimeUnitStatus$Outbound>;
   daemonName: string;
   desiredMachines: number;
-  events: Array<HeartbeatEvent$Outbound>;
+  events: Array<ManagedRuntimeEventSnapshot$Outbound>;
   healthyInstances: number;
   horizonClusterId: string;
   horizonStatus: string;
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
-  instances: Array<HorizonDaemonInstanceStatus$Outbound>;
   latestUpdateTimestamp: string;
   status: WorkloadHeartbeatStatus$Outbound;
   unavailableInstances: number;
@@ -345,15 +363,15 @@ export const DaemonHeartbeatDataAws$outboundSchema: z.ZodType<
   assignedMachines: z.int(),
   capacityGroup: z.string(),
   commandSupported: z.boolean(),
+  daemonInstances: z.array(ManagedRuntimeUnitStatus$outboundSchema),
   daemonName: z.string(),
   desiredMachines: z.int(),
-  events: z.array(HeartbeatEvent$outboundSchema),
+  events: z.array(ManagedRuntimeEventSnapshot$outboundSchema),
   healthyInstances: z.int(),
   horizonClusterId: z.string(),
   horizonStatus: z.string(),
   horizonStatusMessage: z.nullable(z.string()).optional(),
   horizonStatusReason: z.nullable(z.string()).optional(),
-  instances: z.array(HorizonDaemonInstanceStatus$outboundSchema),
   latestUpdateTimestamp: z.string(),
   status: WorkloadHeartbeatStatus$outboundSchema,
   unavailableInstances: z.int(),

@@ -11,5 +11,5 @@ let value: DomainWithUsageStatus = "pending-verification";
 ## Values
 
 ```typescript
-"pending-zone-creation" | "pending-verification" | "verified" | "failed" | "deleting"
+"pending-zone-creation" | "pending-verification" | "verified" | "lost-verification" | "failed" | "deleting"
 ```

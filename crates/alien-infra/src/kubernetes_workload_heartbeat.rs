@@ -1,9 +1,10 @@
 use std::collections::{BTreeMap, HashMap};
 
 use alien_core::{
-    HeartbeatBackend, HeartbeatCollectionIssue, HeartbeatCollectionIssueReason, HeartbeatEvent,
+    HeartbeatBackend, HeartbeatCollectionIssue, HeartbeatCollectionIssueReason,
     HeartbeatIssueSeverity, KubernetesContainerHeartbeatData, KubernetesDaemonHeartbeatData,
-    KubernetesOwnerReference, KubernetesPodInstanceStatus, KubernetesWorkerHeartbeatData,
+    KubernetesEventInvolvedObject, KubernetesEventSnapshot, KubernetesEventSource,
+    KubernetesOwnerReference, KubernetesPodRuntimeUnitStatus, KubernetesWorkerHeartbeatData,
     KubernetesWorkloadCondition, KubernetesWorkloadKind, KubernetesWorkloadStatus, MetricSample,
     MetricUnit, ObservedHealth, Platform, ProviderLifecycleState, ResourceHeartbeat,
     ResourceHeartbeatData, ResourceType, WorkloadHeartbeatStatus, WorkloadReplicaStatus,
@@ -18,7 +19,7 @@ use k8s_openapi::api::apps::v1::{
 };
 use k8s_openapi::api::core::v1::{Event, Pod};
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
-use k8s_openapi::chrono::{DateTime, Utc};
+use k8s_openapi::chrono::Utc;
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
@@ -217,7 +218,7 @@ pub async fn emit_kubernetes_workload_heartbeat(
         })
         .unwrap_or_default();
 
-    let instances = pods
+    let pod_statuses = pods
         .items
         .iter()
         .map(|pod| {
@@ -228,14 +229,16 @@ pub async fn emit_kubernetes_workload_heartbeat(
         })
         .collect::<Vec<_>>();
 
-    let heartbeat_events = events
+    let kubernetes_event_snapshots = events
         .value
         .as_ref()
         .map(|list| {
             list.items
                 .iter()
-                .filter(|event| event_related_to_workload(event, &input.workload_name, &instances))
-                .filter_map(heartbeat_event)
+                .filter(|event| {
+                    event_related_to_workload(event, &input.workload_name, &pod_statuses)
+                })
+                .filter_map(kubernetes_event_snapshot)
                 .take(MAX_EVENTS)
                 .collect::<Vec<_>>()
         })
@@ -245,7 +248,7 @@ pub async fn emit_kubernetes_workload_heartbeat(
     let snapshot = workload_snapshot(
         &input.workload,
         workload_status.as_ref(),
-        &instances,
+        &pod_statuses,
         &metrics.status,
         &events.status,
     );
@@ -261,8 +264,8 @@ pub async fn emit_kubernetes_workload_heartbeat(
                 cpu: snapshot.cpu,
                 memory: snapshot.memory,
                 workload: workload_status,
-                instances,
-                events: heartbeat_events,
+                pods: pod_statuses,
+                events: kubernetes_event_snapshots,
             }),
         ),
         KubernetesWorkloadDataKind::Worker => ResourceHeartbeatData::Worker(
@@ -276,9 +279,9 @@ pub async fn emit_kubernetes_workload_heartbeat(
                 cpu: snapshot.cpu,
                 memory: snapshot.memory,
                 workload: workload_status,
-                instances,
+                pods: pod_statuses,
                 trigger_count: 0,
-                events: heartbeat_events,
+                events: kubernetes_event_snapshots,
             }),
         ),
         KubernetesWorkloadDataKind::Daemon => ResourceHeartbeatData::Daemon(
@@ -292,8 +295,8 @@ pub async fn emit_kubernetes_workload_heartbeat(
                 cpu: snapshot.cpu,
                 memory: snapshot.memory,
                 workload: workload_status,
-                instances,
-                events: heartbeat_events,
+                pods: pod_statuses,
+                events: kubernetes_event_snapshots,
             }),
         ),
     };
@@ -429,7 +432,7 @@ fn daemonset_rollout_reason(
 fn workload_snapshot(
     workload: &KubernetesWorkload,
     status: Option<&KubernetesWorkloadStatus>,
-    instances: &[KubernetesPodInstanceStatus],
+    runtime_units: &[KubernetesPodRuntimeUnitStatus],
     metrics_status: &OptionalKubernetesReadStatus,
     events_status: &OptionalKubernetesReadStatus,
 ) -> KubernetesWorkloadSnapshot {
@@ -477,13 +480,13 @@ fn workload_snapshot(
             misscheduled: workload.misscheduled_replicas(),
         },
         restarts: Some(
-            instances
+            runtime_units
                 .iter()
                 .map(|instance| instance.restart_count)
                 .sum(),
         ),
-        cpu: metric_sum(instances.iter().filter_map(|instance| instance.cpu)),
-        memory: metric_sum(instances.iter().filter_map(|instance| instance.memory)),
+        cpu: metric_sum(runtime_units.iter().filter_map(|instance| instance.cpu)),
+        memory: metric_sum(runtime_units.iter().filter_map(|instance| instance.memory)),
     }
 }
 
@@ -511,7 +514,7 @@ fn push_collection_issue(
 fn pod_instance_status(
     pod: &Pod,
     metrics: Option<&(Option<MetricSample>, Option<MetricSample>)>,
-) -> KubernetesPodInstanceStatus {
+) -> KubernetesPodRuntimeUnitStatus {
     let container_statuses = pod
         .status
         .as_ref()
@@ -539,7 +542,7 @@ fn pod_instance_status(
     });
     let (cpu, memory) = metrics.cloned().unwrap_or((None, None));
 
-    KubernetesPodInstanceStatus {
+    KubernetesPodRuntimeUnitStatus {
         name: pod.metadata.name.clone().unwrap_or_default(),
         uid: pod.metadata.uid.clone(),
         phase: pod.status.as_ref().and_then(|status| status.phase.clone()),
@@ -643,43 +646,45 @@ fn metric_sum(metrics: impl Iterator<Item = MetricSample>) -> Option<MetricSampl
 fn event_related_to_workload(
     event: &Event,
     workload_name: &str,
-    instances: &[KubernetesPodInstanceStatus],
+    runtime_units: &[KubernetesPodRuntimeUnitStatus],
 ) -> bool {
     event
         .involved_object
         .name
         .as_deref()
-        .map(|name| name == workload_name || instances.iter().any(|instance| instance.name == name))
+        .map(|name| {
+            name == workload_name || runtime_units.iter().any(|instance| instance.name == name)
+        })
         .unwrap_or(false)
 }
 
-fn heartbeat_event(event: &Event) -> Option<HeartbeatEvent> {
-    Some(HeartbeatEvent {
-        observed_at: event_time(event)?,
-        kind: event
+fn kubernetes_event_snapshot(event: &Event) -> Option<KubernetesEventSnapshot> {
+    Some(KubernetesEventSnapshot {
+        reason: event
             .reason
             .clone()
             .unwrap_or_else(|| "KubernetesEvent".to_string()),
-        severity: if event.type_.as_deref() == Some("Warning") {
-            HeartbeatIssueSeverity::Warning
-        } else {
-            HeartbeatIssueSeverity::Info
-        },
+        type_: event.type_.clone(),
         message: event.message.clone().unwrap_or_default(),
-        source: event
-            .source
-            .as_ref()
-            .and_then(|source| source.component.clone()),
+        count: event.count,
+        first_timestamp: event.first_timestamp.as_ref().map(|time| time.0),
+        last_timestamp: event.last_timestamp.as_ref().map(|time| time.0),
+        event_time: event.event_time.as_ref().map(|time| time.0),
+        source: event.source.as_ref().map(|source| KubernetesEventSource {
+            component: source.component.clone(),
+            host: source.host.clone(),
+        }),
+        involved_object: Some(KubernetesEventInvolvedObject {
+            kind: event.involved_object.kind.clone(),
+            namespace: event.involved_object.namespace.clone(),
+            name: event.involved_object.name.clone(),
+            uid: event.involved_object.uid.clone(),
+            api_version: event.involved_object.api_version.clone(),
+            resource_version: event.involved_object.resource_version.clone(),
+            field_path: event.involved_object.field_path.clone(),
+        }),
+        raw: serde_json::to_value(event).ok(),
     })
-}
-
-fn event_time(event: &Event) -> Option<DateTime<Utc>> {
-    event
-        .event_time
-        .as_ref()
-        .map(|time| time.0)
-        .or_else(|| event.last_timestamp.as_ref().map(|time| time.0))
-        .or_else(|| event.first_timestamp.as_ref().map(|time| time.0))
 }
 
 pub fn label_selector(labels: &BTreeMap<String, String>) -> Result<String> {
@@ -784,7 +789,7 @@ mod tests {
             ..Default::default()
         });
         let status = workload.workload_status();
-        let instances = vec![
+        let runtime_units = vec![
             test_instance("api-a", true, 1, Some(0.25), Some(128.0)),
             test_instance("api-b", true, 2, Some(0.5), Some(256.0)),
         ];
@@ -792,7 +797,7 @@ mod tests {
         let snapshot = workload_snapshot(
             &workload,
             status.as_ref(),
-            &instances,
+            &runtime_units,
             &OptionalKubernetesReadStatus::unavailable(
                 HeartbeatCollectionIssueReason::NotInstalled,
                 "metrics.k8s.io API is not installed",
@@ -842,8 +847,8 @@ mod tests {
     }
 
     #[test]
-    fn heartbeat_event_maps_related_warning_event() {
-        let instances = vec![test_instance("api-a", true, 0, None, None)];
+    fn kubernetes_event_snapshot_maps_related_warning_event() {
+        let runtime_units = vec![test_instance("api-a", true, 0, None, None)];
         let event = Event {
             involved_object: ObjectReference {
                 name: Some("api-a".to_string()),
@@ -861,8 +866,8 @@ mod tests {
             ..Default::default()
         };
 
-        assert!(event_related_to_workload(&event, "api", &instances));
-        let heartbeat = heartbeat_event(&event).unwrap();
+        assert!(event_related_to_workload(&event, "api", &runtime_units));
+        let heartbeat = kubernetes_event_snapshot(&event).unwrap();
         assert_eq!(heartbeat.kind, "BackOff");
         assert_eq!(heartbeat.severity, HeartbeatIssueSeverity::Warning);
         assert_eq!(heartbeat.source.as_deref(), Some("kubelet"));
@@ -942,8 +947,8 @@ mod tests {
         restart_count: u32,
         cpu: Option<f64>,
         memory: Option<f64>,
-    ) -> KubernetesPodInstanceStatus {
-        KubernetesPodInstanceStatus {
+    ) -> KubernetesPodRuntimeUnitStatus {
+        KubernetesPodRuntimeUnitStatus {
             name: name.to_string(),
             uid: None,
             phase: Some("Running".to_string()),

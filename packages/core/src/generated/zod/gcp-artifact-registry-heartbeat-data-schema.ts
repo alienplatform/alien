@@ -5,16 +5,12 @@
 
 import * as z from "zod";
 import { ArtifactRegistryHeartbeatStatusSchema } from "./artifact-registry-heartbeat-status-schema.js";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 
 export const GcpArtifactRegistryHeartbeatDataSchema = z.object({
     "cleanupPolicyCount": z.int().min(0),
 "cleanupPolicyDryRun": z.boolean().nullish(),
 "createTime": z.string().nullish(),
 "description": z.string().nullish(),
-get "events"(){
-                return z.array(HeartbeatEventSchema)
-              },
 "format": z.string().nullish(),
 "iamBindingCount": z.int().min(0),
 "iamPolicyEtagPresent": z.boolean(),

@@ -4,7 +4,6 @@
 */
 
 import * as z from "zod";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 import { QueueHeartbeatStatusSchema } from "./queue-heartbeat-status-schema.js";
 
 export const AwsSqsQueueHeartbeatDataSchema = z.object({
@@ -15,9 +14,6 @@ export const AwsSqsQueueHeartbeatDataSchema = z.object({
 "contentBasedDeduplication": z.boolean().nullish(),
 "deduplicationScope": z.string().nullish(),
 "delaySeconds": z.int().min(0).nullish(),
-get "events"(){
-                return z.array(HeartbeatEventSchema)
-              },
 "fifoQueue": z.boolean().nullish(),
 "fifoThroughputLimit": z.string().nullish(),
 "kmsDataKeyReusePeriodSeconds": z.int().min(0).nullish(),

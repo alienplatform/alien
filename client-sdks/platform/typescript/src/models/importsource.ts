@@ -34,6 +34,24 @@ export type ImportSourcePlatformEnum = ClosedEnum<
 >;
 
 /**
+ * Base cloud platform for cloud-backed Kubernetes imports.
+ */
+export const ImportSourceBasePlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Base cloud platform for cloud-backed Kubernetes imports.
+ */
+export type ImportSourceBasePlatform = ClosedEnum<
+  typeof ImportSourceBasePlatform
+>;
+
+/**
  * Deployment model: how updates are delivered to the remote environment.
  */
 export const ImportSourceDeploymentModel = {
@@ -1101,6 +1119,10 @@ export type ImportSource = {
    */
   platform: ImportSourcePlatformEnum;
   /**
+   * Base cloud platform for cloud-backed Kubernetes imports.
+   */
+  basePlatform?: ImportSourceBasePlatform | undefined;
+  /**
    * Region or location reported by the setup artifact
    */
   region: string;
@@ -1144,6 +1166,11 @@ export type ImportSource = {
 export const ImportSourcePlatformEnum$outboundSchema: z.ZodEnum<
   typeof ImportSourcePlatformEnum
 > = z.enum(ImportSourcePlatformEnum);
+
+/** @internal */
+export const ImportSourceBasePlatform$outboundSchema: z.ZodEnum<
+  typeof ImportSourceBasePlatform
+> = z.enum(ImportSourceBasePlatform);
 
 /** @internal */
 export const ImportSourceDeploymentModel$outboundSchema: z.ZodEnum<
@@ -3273,6 +3300,7 @@ export type ImportSource$Outbound = {
   sourceKind?: string | undefined;
   releaseId?: string | undefined;
   platform: string;
+  basePlatform?: string | undefined;
   region: string;
   setupTarget: string;
   setupImportFormatVersion: number;
@@ -3297,6 +3325,7 @@ export const ImportSource$outboundSchema: z.ZodType<
   sourceKind: ImportSourceKind$outboundSchema.optional(),
   releaseId: z.string().optional(),
   platform: ImportSourcePlatformEnum$outboundSchema,
+  basePlatform: ImportSourceBasePlatform$outboundSchema.optional(),
   region: z.string(),
   setupTarget: z.string(),
   setupImportFormatVersion: z.int(),

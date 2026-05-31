@@ -6,26 +6,27 @@
 import { ArtifactRegistryHeartbeatDataAwsEcr } from "@alienplatform/manager-api/models";
 
 let value: ArtifactRegistryHeartbeatDataAwsEcr = {
-  events: [],
   region: "<value>",
   registryId: "<id>",
-  registryUri: "https://burdensome-best-seller.net",
-  repositories: [],
+  registryUri: "https://unlined-bowler.com/",
+  repositories: [
+    {
+      createdAt: 781.7,
+      kmsKeyPresent: true,
+      registryId: "<id>",
+      repositoryArn: "<value>",
+      repositoryName: "<value>",
+      repositoryUri: "https://wavy-eggplant.org",
+    },
+  ],
   repositoriesTruncated: true,
-  repositoryCount: 717377,
+  repositoryCount: 952265,
   repositoryPrefix: "<value>",
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "forbidden",
-        severity: "info",
-        source: "<value>",
-      },
-    ],
-    health: "healthy",
-    lifecycle: "stopped",
-    partial: false,
+    collectionIssues: [],
+    health: "unknown",
+    lifecycle: "scaling",
+    partial: true,
     stale: false,
   },
   backend: "awsEcr",
@@ -36,7 +37,6 @@ let value: ArtifactRegistryHeartbeatDataAwsEcr = {
 
 | Field                                                                                  | Type                                                                                   | Required                                                                               | Description                                                                            |
 | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| `events`                                                                               | [models.HeartbeatEvent](../models/heartbeatevent.md)[]                                 | :heavy_check_mark:                                                                     | N/A                                                                                    |
 | `pullRoleArn`                                                                          | *string*                                                                               | :heavy_minus_sign:                                                                     | N/A                                                                                    |
 | `pushRoleArn`                                                                          | *string*                                                                               | :heavy_minus_sign:                                                                     | N/A                                                                                    |
 | `region`                                                                               | *string*                                                                               | :heavy_check_mark:                                                                     | N/A                                                                                    |

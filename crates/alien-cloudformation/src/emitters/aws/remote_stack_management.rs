@@ -8,7 +8,8 @@ use crate::{
     emitter::CfEmitter,
     emitters::aws::{
         helpers::{
-            cf_from_json, required_logical_id, resource_config, tags, PARAM_MANAGING_ROLE_ARN,
+            cf_from_json, required_logical_id, resource_config, tags, uniquify_iam_statement_sids,
+            PARAM_MANAGING_ROLE_ARN,
         },
         service_account::permission_context,
     },
@@ -188,7 +189,7 @@ fn remote_management_policy_documents(ctx: &EmitContext<'_>) -> Result<Vec<CfExp
         ),
     ]));
 
-    chunk_policy_statements(statements)
+    chunk_policy_statements(uniquify_iam_statement_sids(statements))
 }
 
 fn policy_document(statements: Vec<CfExpression>) -> CfExpression {

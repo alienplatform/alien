@@ -6,17 +6,22 @@
 use std::net::{SocketAddr, TcpListener as StdTcpListener};
 use std::sync::Arc;
 
-use alien_core::Platform;
+use alien_core::{ClientConfig, ManagementConfig, Platform};
+use alien_error::AlienError;
 use sha2::{Digest, Sha256};
 use tracing::info;
 
 use alien_manager::{
     stores::sqlite::{SqliteDatabase, SqliteTokenStore},
-    traits::{CreateTokenParams, TokenStore, TokenType},
+    traits::{
+        CreateTokenParams, CredentialResolver, DeploymentRecord, ResolvedCredentials, TokenStore,
+        TokenType,
+    },
     AlienManagerBuilder, ManagerTomlConfig,
 };
+use async_trait::async_trait;
 
-use crate::config::TestConfig;
+use crate::config::{AzureConfig, TestConfig};
 
 /// Find a free TCP port by binding to port 0 and reading back the assigned port.
 fn find_free_port() -> u16 {
@@ -24,6 +29,46 @@ fn find_free_port() -> u16 {
     let port = listener.local_addr().expect("no local addr").port();
     drop(listener);
     port
+}
+
+struct LocalAzureTargetCredentialResolver {
+    target: AzureConfig,
+    management_config: Option<ManagementConfig>,
+}
+
+#[async_trait]
+impl CredentialResolver for LocalAzureTargetCredentialResolver {
+    async fn resolve(&self, _deployment: &DeploymentRecord) -> Result<ClientConfig, AlienError> {
+        Ok(ClientConfig::Azure(Box::new(
+            alien_core::AzureClientConfig {
+                subscription_id: self.target.subscription_id.clone(),
+                tenant_id: self.target.tenant_id.clone(),
+                region: Some(self.target.region.clone()),
+                credentials: alien_core::AzureCredentials::ServicePrincipal {
+                    client_id: self.target.client_id.clone(),
+                    client_secret: self.target.client_secret.clone(),
+                },
+                service_overrides: None,
+            },
+        )))
+    }
+
+    async fn resolve_with_capability(
+        &self,
+        deployment: &DeploymentRecord,
+    ) -> Result<ResolvedCredentials, AlienError> {
+        Ok(ResolvedCredentials {
+            client_config: self.resolve(deployment).await?,
+            has_provision_capability: true,
+        })
+    }
+
+    async fn resolve_management_config(
+        &self,
+        _platform: Platform,
+    ) -> Result<Option<ManagementConfig>, AlienError> {
+        Ok(self.management_config.clone())
+    }
 }
 
 /// A running alien-manager instance for E2E tests.
@@ -175,8 +220,14 @@ impl TestManager {
         // 6b. Build ManagementConfig (used by setup_target to simulate alien-deploy).
         //     The manager itself does not need ManagementConfig at init time —
         //     it resolves per-deployment via the CredentialResolver trait.
-        let management_config =
+        let mut management_config =
             config.and_then(|cfg| Self::build_management_config(cfg, platforms.first().copied()?));
+        let local_azure_resolver = config.and_then(|cfg| {
+            Self::build_local_azure_target_resolver(cfg, platforms, management_config.clone())
+        });
+        if local_azure_resolver.is_some() {
+            management_config = None;
+        }
 
         // 6c. Build typed bindings for the TOML config from test resources.
         //     This replaces the old env var injection pattern — all binding
@@ -229,8 +280,11 @@ impl TestManager {
         // 7. Build the server (reuses the pre-created token store).
         //    with_standalone_defaults() reads typed bindings from toml_config
         //    and starts an embedded local registry when no cloud AR is configured.
-        let server = AlienManagerBuilder::new(manager_config)
-            .token_store(token_store.clone())
+        let mut builder = AlienManagerBuilder::new(manager_config).token_store(token_store.clone());
+        if let Some(resolver) = local_azure_resolver {
+            builder = builder.credential_resolver(Arc::new(resolver));
+        }
+        let server = builder
             .with_standalone_defaults(&toml_config)
             .await?
             .build()
@@ -402,6 +456,27 @@ impl TestManager {
             }
             _ => None,
         }
+    }
+
+    fn build_local_azure_target_resolver(
+        config: &TestConfig,
+        platforms: &[Platform],
+        management_config: Option<ManagementConfig>,
+    ) -> Option<LocalAzureTargetCredentialResolver> {
+        if platforms != [Platform::Azure] {
+            return None;
+        }
+        if std::env::var("AZURE_FEDERATED_TOKEN_FILE").is_ok()
+            || (std::env::var("IDENTITY_ENDPOINT").is_ok()
+                && std::env::var("IDENTITY_HEADER").is_ok())
+        {
+            return None;
+        }
+
+        Some(LocalAzureTargetCredentialResolver {
+            target: config.azure_target.clone()?,
+            management_config,
+        })
     }
 
     /// Build artifact registry config section from test resources.
@@ -603,12 +678,8 @@ impl TestManager {
                 std::env::set_var("AWS_ACCESS_KEY_ID", &mgmt.access_key_id);
                 std::env::set_var("AWS_SECRET_ACCESS_KEY", &mgmt.secret_access_key);
                 std::env::set_var("AWS_REGION", &mgmt.region);
-                if let Some(ref token) = mgmt.session_token {
-                    std::env::set_var("AWS_SESSION_TOKEN", token);
-                }
-                if let Some(ref account_id) = mgmt.account_id {
-                    std::env::set_var("AWS_ACCOUNT_ID", account_id);
-                }
+                Self::set_optional_env("AWS_SESSION_TOKEN", mgmt.session_token.as_deref());
+                Self::set_optional_env("AWS_ACCOUNT_ID", mgmt.account_id.as_deref());
             }
         }
 
@@ -619,12 +690,8 @@ impl TestManager {
                         std::env::set_var("AWS_ACCESS_KEY_ID", &mgmt.access_key_id);
                         std::env::set_var("AWS_SECRET_ACCESS_KEY", &mgmt.secret_access_key);
                         std::env::set_var("AWS_REGION", &mgmt.region);
-                        if let Some(ref token) = mgmt.session_token {
-                            std::env::set_var("AWS_SESSION_TOKEN", token);
-                        }
-                        if let Some(ref account_id) = mgmt.account_id {
-                            std::env::set_var("AWS_ACCOUNT_ID", account_id);
-                        }
+                        Self::set_optional_env("AWS_SESSION_TOKEN", mgmt.session_token.as_deref());
+                        Self::set_optional_env("AWS_ACCOUNT_ID", mgmt.account_id.as_deref());
                     }
                 }
                 Platform::Gcp => {
@@ -656,6 +723,13 @@ impl TestManager {
                 }
                 _ => {}
             }
+        }
+    }
+
+    fn set_optional_env(name: &str, value: Option<&str>) {
+        match value.filter(|v| !v.trim().is_empty()) {
+            Some(value) => std::env::set_var(name, value),
+            None => std::env::remove_var(name),
         }
     }
 }

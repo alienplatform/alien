@@ -1071,7 +1071,6 @@ fn emit_aws_service_account_heartbeat(
                     .role_last_used
                     .as_ref()
                     .and_then(|last_used| last_used.region.clone()),
-                events: vec![],
             },
         )),
         raw: vec![],

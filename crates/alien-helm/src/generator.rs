@@ -11,7 +11,8 @@ use crate::{
 };
 use alien_core::{
     import::EmitContext, Container, ContainerCode, Daemon, DaemonCode, ErrorData, ExposeProtocol,
-    Ingress, Platform, ResourceLifecycle, Result, Stack, StackSettings, Worker, WorkerCode,
+    Ingress, Platform, RemoteStackManagementOutputs, ResourceLifecycle, Result, ServiceAccount,
+    ServiceAccountOutputs, Stack, StackSettings, Worker, WorkerCode,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use indexmap::IndexMap;
@@ -32,6 +33,21 @@ pub struct HelmOptions<'a> {
     pub registry: &'a HelmRegistry,
     pub stack_settings: StackSettings,
     pub chart_name: String,
+}
+
+/// Inputs for rendering the manager-fetch `values.yaml` used after setup import.
+pub struct ManagerFetchHelmValuesOptions<'a> {
+    pub deployment_id: &'a str,
+    pub deployment_name: &'a str,
+    pub manager_url: &'a str,
+    pub deployment_token: &'a str,
+    pub stack: &'a Stack,
+    pub stack_state: &'a alien_core::StackState,
+    pub stack_settings: &'a StackSettings,
+    pub base_platform: Option<Platform>,
+    pub region: Option<&'a str>,
+    pub gcp_project_id: Option<&'a str>,
+    pub azure_location: Option<&'a str>,
 }
 
 /// Generate a Helm chart for `stack`.
@@ -75,6 +91,10 @@ pub fn generate_helm_chart(stack: &Stack, options: HelmOptions<'_>) -> Result<He
     files.insert("templates/pvc.yaml".to_string(), pvc_tpl());
     files.insert("templates/service.yaml".to_string(), service_tpl());
     files.insert("templates/app-service.yaml".to_string(), app_service_tpl());
+    files.insert(
+        "templates/cluster-bootstrap.yaml".to_string(),
+        cluster_bootstrap_tpl(),
+    );
     files.insert(
         "templates/poddisruptionbudget.yaml".to_string(),
         poddisruptionbudget_tpl(),
@@ -120,6 +140,88 @@ pub fn generate_helm_chart(stack: &Stack, options: HelmOptions<'_>) -> Result<He
         name: chart_name,
         files,
     })
+}
+
+/// Render one complete manager-fetch values file from imported deployment state.
+pub fn render_manager_fetch_values(options: ManagerFetchHelmValuesOptions<'_>) -> Result<String> {
+    let registry = HelmRegistry::built_in();
+    let analysis = ChartAnalysis::from_stack(options.stack, &registry)?;
+    let mut yaml = String::new();
+
+    yaml.push_str("management:\n");
+    yaml.push_str(&format!(
+        "  token: {}\n",
+        yaml_string(options.deployment_token)
+    ));
+    yaml.push_str(&format!(
+        "  name: {}\n",
+        yaml_string(options.deployment_name)
+    ));
+    yaml.push_str(&format!("  url: {}\n", yaml_string(options.manager_url)));
+    yaml.push_str(&format!(
+        "  deploymentId: {}\n",
+        yaml_string(options.deployment_id)
+    ));
+    yaml.push_str(&format!(
+        "  updates: {}\n",
+        yaml_string(updates_mode_value(options.stack_settings.updates))
+    ));
+    yaml.push_str(&format!(
+        "  telemetry: {}\n",
+        yaml_string(telemetry_mode_value(options.stack_settings.telemetry))
+    ));
+    yaml.push_str(&format!(
+        "  healthChecks: {}\n\n",
+        yaml_string(heartbeats_mode_value(options.stack_settings.heartbeats))
+    ));
+
+    append_stack_settings(&mut yaml, options.stack_settings)?;
+    yaml.push_str("\ninfrastructure: null\n\n");
+
+    match options.base_platform {
+        Some(platform) => yaml.push_str(&format!(
+            "basePlatform: {}\n",
+            yaml_string(platform.as_str())
+        )),
+        None => yaml.push_str("basePlatform: null\n"),
+    }
+    yaml.push_str("basePlatformConfig:\n");
+    yaml.push_str("  gcp:\n");
+    yaml.push_str(&format!(
+        "    projectId: {}\n",
+        yaml_string(options.gcp_project_id.unwrap_or(""))
+    ));
+    yaml.push_str(&format!(
+        "    region: {}\n",
+        yaml_string(options.region.unwrap_or(""))
+    ));
+    yaml.push_str("  aws:\n");
+    yaml.push_str(&format!(
+        "    region: {}\n",
+        yaml_string(options.region.unwrap_or(""))
+    ));
+    yaml.push_str("  azure:\n");
+    yaml.push_str(&format!(
+        "    location: {}\n",
+        yaml_string(options.azure_location.or(options.region).unwrap_or(""))
+    ));
+    yaml.push_str(&format!(
+        "serviceAccountPrefix: {}\n",
+        yaml_string(&options.stack_state.resource_prefix)
+    ));
+
+    append_manager_service_account(&mut yaml, options.stack_state, options.base_platform);
+    append_imported_service_accounts(
+        &mut yaml,
+        &analysis,
+        options.stack_state,
+        options.base_platform,
+    );
+    append_cluster_bootstrap(&mut yaml, options.stack_state, options.base_platform);
+    append_services(&mut yaml, &analysis);
+    yaml.push_str("\npublicUrls: {}\n");
+
+    Ok(yaml)
 }
 
 /// Result of dispatching every stack resource through the
@@ -375,12 +477,45 @@ heartbeat:
     nodes:
       enabled: true
 
+clusterBootstrap:
+  metricsServer:
+    enabled: false
+    image: registry.k8s.io/metrics-server/metrics-server:v0.8.1
+  storageClass:
+    default:
+      enabled: false
+      name: ""
+      provisioner: ""
+      parameters: {}
+  ingress:
+    eksAutoMode:
+      enabled: false
+      name: alb
+      controller: eks.amazonaws.com/alb
+      scheme: internet-facing
+      subnetIds: []
+  compute:
+    eksAutoMode:
+      arm64NodePool:
+        enabled: false
+        name: general-purpose-arm64
+        nodeClassName: default
+        capacityType: on-demand
+        instanceCategories:
+          - c
+          - m
+          - r
+        minInstanceGeneration: "5"
+        limits:
+          cpu: "1000"
+          memory: 1000Gi
+
 "#,
     );
 
     append_service_accounts(&mut yaml, analysis);
     append_stack_settings(&mut yaml, stack_settings)?;
-    yaml.push_str("\ninfrastructure: null\n\nbasePlatform: null\nserviceAccountPrefix: \"\"\nmanagerServiceAccount:\n  annotations: {}\n  labels: {}\n\n# Agent self-update. When the agent receives agent_target.helm on /v1/sync\n# it creates a short-lived Helm-runner Job that runs `helm upgrade --atomic`.\n# The Job runs as `alien-agent-upgrader`; we keep the SA optional so charts\n# that don't want self-update can disable it.\nupgrader:\n  enabled: true\n");
+    yaml.push_str("\ninfrastructure: null\n\nbasePlatform: null\nbasePlatformConfig:\n  gcp:\n    projectId: \"\"\n    region: \"\"\n  aws:\n    region: \"\"\n  azure:\n    location: \"\"\nserviceAccountPrefix: \"\"\nmanagerServiceAccount:\n  annotations: {}\n  labels: {}\n\n# Agent self-update. When the agent receives agent_target.helm on /v1/sync\n# it creates a short-lived Helm-runner Job that runs `helm upgrade --atomic`.\n# The Job runs as `alien-agent-upgrader`; we keep the SA optional so charts\n# that don't want self-update can disable it.\nupgrader:\n  enabled: true\n");
     append_services(&mut yaml, analysis);
     yaml.push_str("\npublicUrls: {}\n");
 
@@ -438,6 +573,169 @@ fn append_service_accounts(yaml: &mut String, analysis: &ChartAnalysis) {
                 yaml_key(name)
             ));
         }
+    }
+}
+
+fn append_imported_service_accounts(
+    yaml: &mut String,
+    analysis: &ChartAnalysis,
+    stack_state: &alien_core::StackState,
+    base_platform: Option<Platform>,
+) {
+    yaml.push_str("serviceAccounts:\n");
+    if analysis.service_accounts.is_empty() {
+        yaml.push_str("  {}\n");
+        return;
+    }
+
+    for name in &analysis.service_accounts {
+        yaml.push_str(&format!("  {}:\n", yaml_key(name)));
+        match service_account_identity_for_profile(stack_state, name) {
+            Some(identity) => {
+                yaml.push_str("    annotations:\n");
+                yaml.push_str(&format!(
+                    "      {}: {}\n",
+                    yaml_key(identity_annotation_key(base_platform)),
+                    yaml_string(identity)
+                ));
+            }
+            None => yaml.push_str("    annotations: {}\n"),
+        }
+        yaml.push_str("    labels: {}\n");
+    }
+}
+
+fn append_manager_service_account(
+    yaml: &mut String,
+    stack_state: &alien_core::StackState,
+    base_platform: Option<Platform>,
+) {
+    yaml.push_str("managerServiceAccount:\n");
+    match remote_stack_management_identity(stack_state) {
+        Some(identity) => {
+            yaml.push_str("  annotations:\n");
+            yaml.push_str(&format!(
+                "    {}: {}\n",
+                yaml_key(identity_annotation_key(base_platform)),
+                yaml_string(identity)
+            ));
+        }
+        None => yaml.push_str("  annotations: {}\n"),
+    }
+    yaml.push_str("  labels: {}\n");
+}
+
+fn append_cluster_bootstrap(
+    yaml: &mut String,
+    stack_state: &alien_core::StackState,
+    base_platform: Option<Platform>,
+) {
+    let eks_managed = base_platform == Some(Platform::Aws)
+        && stack_state.resources.values().any(|resource| {
+            resource
+                .outputs
+                .as_ref()
+                .and_then(|outputs| outputs.downcast_ref::<alien_core::KubernetesClusterOutputs>())
+                .is_some_and(|outputs| {
+                    outputs.provider == alien_core::KubernetesClusterProvider::Eks
+                        && outputs.ownership == alien_core::KubernetesClusterOwnership::Managed
+                })
+        });
+
+    yaml.push_str("clusterBootstrap:\n");
+    yaml.push_str("  metricsServer:\n");
+    yaml.push_str(&format!("    enabled: {}\n", eks_managed));
+    yaml.push_str("    image: registry.k8s.io/metrics-server/metrics-server:v0.8.1\n");
+    yaml.push_str("  storageClass:\n");
+    yaml.push_str("    default:\n");
+    yaml.push_str(&format!("      enabled: {}\n", eks_managed));
+    yaml.push_str("      name: \"gp3\"\n");
+    yaml.push_str("      provisioner: \"ebs.csi.aws.com\"\n");
+    yaml.push_str("      parameters:\n");
+    yaml.push_str("        type: \"gp3\"\n");
+    yaml.push_str("        fsType: \"ext4\"\n");
+    yaml.push_str("        encrypted: \"true\"\n");
+    yaml.push_str("  ingress:\n");
+    yaml.push_str("    eksAutoMode:\n");
+    yaml.push_str(&format!("      enabled: {}\n", eks_managed));
+    yaml.push_str("      name: alb\n");
+    yaml.push_str("      controller: eks.amazonaws.com/alb\n");
+    yaml.push_str("      scheme: internet-facing\n");
+    yaml.push_str("      subnetIds: []\n");
+    yaml.push_str("  compute:\n");
+    yaml.push_str("    eksAutoMode:\n");
+    yaml.push_str("      arm64NodePool:\n");
+    yaml.push_str(&format!("        enabled: {}\n", eks_managed));
+    yaml.push_str("        name: general-purpose-arm64\n");
+    yaml.push_str("        nodeClassName: default\n");
+    yaml.push_str("        capacityType: on-demand\n");
+    yaml.push_str("        instanceCategories:\n");
+    yaml.push_str("          - c\n");
+    yaml.push_str("          - m\n");
+    yaml.push_str("          - r\n");
+    yaml.push_str("        minInstanceGeneration: \"5\"\n");
+    yaml.push_str("        limits:\n");
+    yaml.push_str("          cpu: \"1000\"\n");
+    yaml.push_str("          memory: 1000Gi\n");
+}
+
+fn service_account_identity_for_profile<'a>(
+    stack_state: &'a alien_core::StackState,
+    profile: &str,
+) -> Option<&'a str> {
+    stack_state
+        .resources
+        .iter()
+        .find_map(|(resource_id, resource)| {
+            let outputs = resource
+                .outputs
+                .as_ref()
+                .and_then(|outputs| outputs.downcast_ref::<ServiceAccountOutputs>())?;
+            let service_account = resource.config.downcast_ref::<ServiceAccount>()?;
+            let account_profile =
+                alien_core::permission_profile_from_service_account_id(service_account.id());
+            (account_profile == profile || resource_id == profile)
+                .then_some(outputs.identity.as_str())
+        })
+}
+
+fn remote_stack_management_identity(stack_state: &alien_core::StackState) -> Option<&str> {
+    stack_state.resources.values().find_map(|resource| {
+        resource
+            .outputs
+            .as_ref()
+            .and_then(|outputs| outputs.downcast_ref::<RemoteStackManagementOutputs>())
+            .map(|outputs| outputs.management_resource_id.as_str())
+    })
+}
+
+fn identity_annotation_key(base_platform: Option<Platform>) -> &'static str {
+    match base_platform {
+        Some(Platform::Gcp) => "iam.gke.io/gcp-service-account",
+        Some(Platform::Azure) => "azure.workload.identity/client-id",
+        _ => "eks.amazonaws.com/role-arn",
+    }
+}
+
+fn updates_mode_value(mode: alien_core::UpdatesMode) -> &'static str {
+    match mode {
+        alien_core::UpdatesMode::Auto => "auto",
+        alien_core::UpdatesMode::ApprovalRequired => "approval-required",
+    }
+}
+
+fn telemetry_mode_value(mode: alien_core::TelemetryMode) -> &'static str {
+    match mode {
+        alien_core::TelemetryMode::Off => "off",
+        alien_core::TelemetryMode::Auto => "auto",
+        alien_core::TelemetryMode::ApprovalRequired => "approval-required",
+    }
+}
+
+fn heartbeats_mode_value(mode: alien_core::HeartbeatsMode) -> &'static str {
+    match mode {
+        alien_core::HeartbeatsMode::Off => "off",
+        alien_core::HeartbeatsMode::On => "on",
     }
 }
 
@@ -681,6 +979,34 @@ fn values_schema_json() -> String {
     },
     "infrastructure": { "type": ["object", "null"] },
     "basePlatform": { "type": ["string", "null"], "enum": ["aws", "gcp", "azure", null] },
+    "basePlatformConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "gcp": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "projectId": { "type": "string" },
+            "region": { "type": "string" }
+          }
+        },
+        "aws": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "region": { "type": "string" }
+          }
+        },
+        "azure": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "location": { "type": "string" }
+          }
+        }
+      }
+    },
     "heartbeat": {
       "type": "object",
       "additionalProperties": false,
@@ -694,6 +1020,91 @@ fn values_schema_json() -> String {
               "additionalProperties": false,
               "properties": {
                 "enabled": { "type": "boolean" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "clusterBootstrap": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "metricsServer": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "image": { "type": "string" }
+          }
+        },
+        "storageClass": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "default": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "name": { "type": "string" },
+                "provisioner": { "type": "string" },
+                "parameters": { "type": "object", "additionalProperties": { "type": "string" } }
+              }
+            }
+          }
+        },
+        "ingress": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "eksAutoMode": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "name": { "type": "string" },
+                "controller": { "type": "string" },
+                "scheme": { "type": "string" },
+                "subnetIds": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "compute": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "eksAutoMode": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "arm64NodePool": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "enabled": { "type": "boolean" },
+                    "name": { "type": "string" },
+                    "nodeClassName": { "type": "string" },
+                    "capacityType": { "type": "string" },
+                    "instanceCategories": {
+                      "type": "array",
+                      "items": { "type": "string" }
+                    },
+                    "minInstanceGeneration": { "type": "string" },
+                    "limits": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "cpu": { "type": "string" },
+                        "memory": { "type": "string" }
+                      }
+                    }
+                  }
+                }
               }
             }
           }
@@ -935,6 +1346,9 @@ rules:
   - apiGroups: ["gateway.networking.k8s.io"]
     resources: ["gateways", "httproutes"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["networking.gke.io"]
+    resources: ["healthcheckpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   {{- end }}
 "#
     .to_string()
@@ -1129,6 +1543,16 @@ spec:
             {{- if .Values.basePlatform }}
             - name: BASE_PLATFORM
               value: {{ .Values.basePlatform | quote }}
+            {{- end }}
+            {{- if and (eq .Values.basePlatform "gcp") .Values.basePlatformConfig.gcp.projectId }}
+            - name: GCP_PROJECT_ID
+              value: {{ .Values.basePlatformConfig.gcp.projectId | quote }}
+            - name: GOOGLE_CLOUD_PROJECT
+              value: {{ .Values.basePlatformConfig.gcp.projectId | quote }}
+            {{- end }}
+            {{- if and (eq .Values.basePlatform "gcp") .Values.basePlatformConfig.gcp.region }}
+            - name: GCP_REGION
+              value: {{ .Values.basePlatformConfig.gcp.region | quote }}
             {{- end }}
             # `required` chart guardrail: any helm upgrade that does not
             # carry the full values document fails to render (Helm aborts
@@ -1380,6 +1804,299 @@ spec:
       port: {{ default 80 $service.port }}
       targetPort: {{ default 8080 $service.targetPort }}
 ---
+{{- end }}
+"#
+    .to_string()
+}
+
+fn cluster_bootstrap_tpl() -> String {
+    r#"{{- $bootstrap := default dict .Values.clusterBootstrap -}}
+{{- $storage := dig "storageClass" "default" dict $bootstrap -}}
+{{- if dig "enabled" false $storage }}
+{{- $storageName := required "clusterBootstrap.storageClass.default.name is required when enabled" $storage.name -}}
+{{- $provisioner := required "clusterBootstrap.storageClass.default.provisioner is required when enabled" $storage.provisioner -}}
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ $storageName | quote }}
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+  labels:
+    {{- include "alien.labels" . | nindent 4 }}
+provisioner: {{ $provisioner | quote }}
+{{ with $storage.parameters }}
+parameters:
+  {{ range $key, $value := . }}
+  {{ $key }}: {{ $value | quote }}
+  {{ end }}
+{{ end }}
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+{{ end }}
+{{- $eksAlb := dig "ingress" "eksAutoMode" dict $bootstrap -}}
+{{- if dig "enabled" false $eksAlb }}
+{{- $ingressClassName := required "clusterBootstrap.ingress.eksAutoMode.name is required when enabled" $eksAlb.name -}}
+{{- $controller := required "clusterBootstrap.ingress.eksAutoMode.controller is required when enabled" $eksAlb.controller -}}
+---
+apiVersion: eks.amazonaws.com/v1
+kind: IngressClassParams
+metadata:
+  name: {{ $ingressClassName | quote }}
+  labels:
+    {{- include "alien.labels" . | nindent 4 }}
+spec:
+  scheme: {{ default "internet-facing" $eksAlb.scheme | quote }}
+  {{ with $eksAlb.subnetIds }}
+  subnets:
+    ids:
+      {{ range . }}
+      - {{ . | quote }}
+      {{ end }}
+  {{ end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  name: {{ $ingressClassName | quote }}
+  labels:
+    {{- include "alien.labels" . | nindent 4 }}
+spec:
+  controller: {{ $controller | quote }}
+  parameters:
+    apiGroup: eks.amazonaws.com
+    kind: IngressClassParams
+    name: {{ $ingressClassName | quote }}
+{{ end }}
+{{- $eksArm64NodePool := dig "compute" "eksAutoMode" "arm64NodePool" dict $bootstrap -}}
+{{- if dig "enabled" false $eksArm64NodePool }}
+{{- $nodePoolName := required "clusterBootstrap.compute.eksAutoMode.arm64NodePool.name is required when enabled" $eksArm64NodePool.name -}}
+{{- $nodeClassName := required "clusterBootstrap.compute.eksAutoMode.arm64NodePool.nodeClassName is required when enabled" $eksArm64NodePool.nodeClassName -}}
+---
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: {{ $nodePoolName | quote }}
+  labels:
+    {{- include "alien.labels" . | nindent 4 }}
+spec:
+  template:
+    spec:
+      nodeClassRef:
+        group: eks.amazonaws.com
+        kind: NodeClass
+        name: {{ $nodeClassName | quote }}
+      requirements:
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values:
+            - {{ default "on-demand" $eksArm64NodePool.capacityType | quote }}
+        - key: kubernetes.io/arch
+          operator: In
+          values:
+            - "arm64"
+        - key: eks.amazonaws.com/instance-category
+          operator: In
+          values:
+            {{ range (default (list "c" "m" "r") $eksArm64NodePool.instanceCategories) }}
+            - {{ . | quote }}
+            {{ end }}
+        - key: eks.amazonaws.com/instance-generation
+          operator: Gt
+          values:
+            - {{ default "5" $eksArm64NodePool.minInstanceGeneration | quote }}
+  {{ with $eksArm64NodePool.limits }}
+  limits:
+    {{ with .cpu }}
+    cpu: {{ . | quote }}
+    {{ end }}
+    {{ with .memory }}
+    memory: {{ . | quote }}
+    {{ end }}
+  {{ end }}
+{{ end }}
+{{- $metrics := dig "metricsServer" dict $bootstrap -}}
+{{- if dig "enabled" false $metrics }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: metrics-server
+  namespace: kube-system
+  labels:
+    k8s-app: metrics-server
+    {{- include "alien.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: system:aggregated-metrics-reader
+  labels:
+    k8s-app: metrics-server
+    rbac.authorization.k8s.io/aggregate-to-admin: "true"
+    rbac.authorization.k8s.io/aggregate-to-edit: "true"
+    rbac.authorization.k8s.io/aggregate-to-view: "true"
+    {{- include "alien.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods", "nodes"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: system:metrics-server
+  labels:
+    k8s-app: metrics-server
+    {{- include "alien.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["nodes/metrics"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["pods", "nodes"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: metrics-server-auth-reader
+  namespace: kube-system
+  labels:
+    k8s-app: metrics-server
+    {{- include "alien.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: extension-apiserver-authentication-reader
+subjects:
+  - kind: ServiceAccount
+    name: metrics-server
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: metrics-server:system:auth-delegator
+  labels:
+    k8s-app: metrics-server
+    {{- include "alien.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+  - kind: ServiceAccount
+    name: metrics-server
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: system:metrics-server
+  labels:
+    k8s-app: metrics-server
+    {{- include "alien.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:metrics-server
+subjects:
+  - kind: ServiceAccount
+    name: metrics-server
+    namespace: kube-system
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: metrics-server
+  namespace: kube-system
+  labels:
+    k8s-app: metrics-server
+    {{- include "alien.labels" . | nindent 4 }}
+spec:
+  selector:
+    k8s-app: metrics-server
+  ports:
+    - name: https
+      port: 443
+      protocol: TCP
+      targetPort: https
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: metrics-server
+  namespace: kube-system
+  labels:
+    k8s-app: metrics-server
+    {{- include "alien.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      k8s-app: metrics-server
+  template:
+    metadata:
+      labels:
+        k8s-app: metrics-server
+    spec:
+      serviceAccountName: metrics-server
+      containers:
+        - name: metrics-server
+          image: {{ default "registry.k8s.io/metrics-server/metrics-server:v0.8.1" $metrics.image | quote }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - --cert-dir=/tmp
+            - --secure-port=10250
+            - --kubelet-preferred-address-types=InternalIP,ExternalIP,Hostname
+            - --kubelet-use-node-status-port
+            - --metric-resolution=15s
+          ports:
+            - name: https
+              containerPort: 10250
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1000
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata:
+  name: v1beta1.metrics.k8s.io
+  labels:
+    k8s-app: metrics-server
+    {{- include "alien.labels" . | nindent 4 }}
+spec:
+  service:
+    name: metrics-server
+    namespace: kube-system
+  group: metrics.k8s.io
+  version: v1beta1
+  insecureSkipTLSVerify: true
+  groupPriorityMinimum: 100
+  versionPriority: 100
 {{- end }}
 "#
     .to_string()

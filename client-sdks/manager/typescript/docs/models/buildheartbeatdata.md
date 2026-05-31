@@ -9,22 +9,21 @@
 const value: models.BuildHeartbeatDataAwsCodeBuild = {
   encryptionKeyPresent: false,
   environmentVariableCount: 168577,
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-02-23T02:52:34.144Z"),
-      severity: "info",
-    },
-  ],
   projectName: "<value>",
-  serviceRolePresent: true,
+  serviceRolePresent: false,
   status: {
-    collectionIssues: [],
-    health: "unknown",
-    lifecycle: "stopped",
-    partial: true,
-    stale: false,
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "forbidden",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
+    health: "healthy",
+    lifecycle: "creating",
+    partial: false,
+    stale: true,
   },
   backend: "awsCodeBuild",
 };
@@ -36,15 +35,21 @@ const value: models.BuildHeartbeatDataAwsCodeBuild = {
 const value: models.BuildHeartbeatDataGcpCloudBuild = {
   buildConfigId: "<id>",
   environmentVariableCount: 770056,
-  events: [],
   location: "<value>",
   projectId: "<id>",
   status: {
-    collectionIssues: [],
-    health: "unknown",
-    lifecycle: "stopped",
-    partial: true,
-    stale: false,
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "forbidden",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
+    health: "healthy",
+    lifecycle: "creating",
+    partial: false,
+    stale: true,
   },
   backend: "gcpCloudBuild",
 };
@@ -55,15 +60,21 @@ const value: models.BuildHeartbeatDataGcpCloudBuild = {
 ```typescript
 const value: models.BuildHeartbeatDataAzureContainerApps = {
   environmentVariableCount: 180128,
-  events: [],
   managedEnvironmentId: "<id>",
   resourceGroupName: "<value>",
   status: {
-    collectionIssues: [],
-    health: "unknown",
-    lifecycle: "stopped",
-    partial: true,
-    stale: false,
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "forbidden",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
+    health: "healthy",
+    lifecycle: "creating",
+    partial: false,
+    stale: true,
   },
   backend: "azureContainerApps",
 };
@@ -76,20 +87,25 @@ const value: models.BuildHeartbeatDataKubernetesJob = {
   conditionCount: 199682,
   events: [
     {
-      kind: "<value>",
       message: "<value>",
-      observedAt: new Date("2024-02-23T02:52:34.144Z"),
-      severity: "info",
+      reason: "<value>",
     },
   ],
   jobName: "<value>",
   namespace: "<value>",
   status: {
-    collectionIssues: [],
-    health: "unknown",
-    lifecycle: "stopped",
-    partial: true,
-    stale: false,
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "forbidden",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
+    health: "healthy",
+    lifecycle: "creating",
+    partial: false,
+    stale: true,
   },
   backend: "kubernetesJob",
 };

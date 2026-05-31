@@ -7,15 +7,14 @@ import { DataAwsParameterStore } from "@alienplatform/platform-api/models";
 
 let value: DataAwsParameterStore = {
   accountId: "<id>",
-  events: [],
   parameterMetadataSampled: true,
   prefix: "<value>",
   region: "<value>",
   status: {
     collectionIssues: [],
     health: "unknown",
-    lifecycle: "creating",
-    partial: false,
+    lifecycle: "unknown",
+    partial: true,
     stale: false,
   },
   backend: "awsParameterStore",
@@ -27,7 +26,6 @@ let value: DataAwsParameterStore = {
 | Field                                                                                         | Type                                                                                          | Required                                                                                      | Description                                                                                   |
 | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | `accountId`                                                                                   | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
-| `events`                                                                                      | [models.SyncReconcileRequestEvent31](../models/syncreconcilerequestevent31.md)[]              | :heavy_check_mark:                                                                            | N/A                                                                                           |
 | `hasMoreParameters`                                                                           | *boolean*                                                                                     | :heavy_minus_sign:                                                                            | N/A                                                                                           |
 | `latestModifiedAt`                                                                            | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_minus_sign:                                                                            | N/A                                                                                           |
 | `parameterMetadataSampled`                                                                    | *boolean*                                                                                     | :heavy_check_mark:                                                                            | N/A                                                                                           |

@@ -499,7 +499,6 @@ fn emit_gcp_pubsub_queue_heartbeat(
                     .and_then(|policy| policy.dead_letter_topic.clone()),
                 subscription_dead_letter_max_delivery_attempts: dead_letter_policy
                     .and_then(|policy| nonnegative_i32_to_u32(policy.max_delivery_attempts)),
-                events: vec![],
             },
         )),
         raw: vec![],

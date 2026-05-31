@@ -7,23 +7,15 @@ import { ResourceHeartbeatDataServiceActivation } from "@alienplatform/manager-a
 
 let value: ResourceHeartbeatDataServiceActivation = {
   data: {
-    events: [],
     namespace: "<value>",
     registered: true,
-    resourceTypeCount: 440272,
+    resourceTypeCount: 100188,
     status: {
-      collectionIssues: [
-        {
-          message: "<value>",
-          reason: "forbidden",
-          severity: "info",
-          source: "<value>",
-        },
-      ],
-      health: "unknown",
-      lifecycle: "stopping",
-      partial: true,
-      stale: false,
+      collectionIssues: [],
+      health: "degraded",
+      lifecycle: "unknown",
+      partial: false,
+      stale: true,
     },
     backend: "azureResourceProvider",
   },

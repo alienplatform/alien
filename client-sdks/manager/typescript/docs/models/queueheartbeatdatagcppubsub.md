@@ -6,30 +6,27 @@
 import { QueueHeartbeatDataGcpPubSub } from "@alienplatform/manager-api/models";
 
 let value: QueueHeartbeatDataGcpPubSub = {
-  events: [],
   messageStorageAllowedPersistenceRegions: [
     "<value 1>",
-    "<value 2>",
-    "<value 3>",
   ],
   status: {
     collectionIssues: [],
-    health: "unhealthy",
-    lifecycle: "updating",
-    partial: false,
+    health: "healthy",
+    lifecycle: "deleted",
+    partial: true,
     stale: false,
   },
   subscriptionLabels: {
     "key": "<value>",
+    "key1": "<value>",
+    "key2": "<value>",
   },
   subscriptionPushAttributes: {
     "key": "<value>",
-    "key1": "<value>",
   },
   topicLabels: {
     "key": "<value>",
     "key1": "<value>",
-    "key2": "<value>",
   },
   topicName: "<value>",
   backend: "gcpPubSub",
@@ -41,7 +38,6 @@ let value: QueueHeartbeatDataGcpPubSub = {
 | Field                                                            | Type                                                             | Required                                                         | Description                                                      |
 | ---------------------------------------------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------- |
 | `endpoint`                                                       | *string*                                                         | :heavy_minus_sign:                                               | N/A                                                              |
-| `events`                                                         | [models.HeartbeatEvent](../models/heartbeatevent.md)[]           | :heavy_check_mark:                                               | N/A                                                              |
 | `kmsKeyName`                                                     | *string*                                                         | :heavy_minus_sign:                                               | N/A                                                              |
 | `messageStorageAllowedPersistenceRegions`                        | *string*[]                                                       | :heavy_check_mark:                                               | N/A                                                              |
 | `messageStorageEnforceInTransit`                                 | *boolean*                                                        | :heavy_minus_sign:                                               | N/A                                                              |

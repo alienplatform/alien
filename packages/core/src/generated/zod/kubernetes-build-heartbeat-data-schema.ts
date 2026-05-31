@@ -5,14 +5,14 @@
 
 import * as z from "zod";
 import { BuildHeartbeatStatusSchema } from "./build-heartbeat-status-schema.js";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
+import { KubernetesEventSnapshotSchema } from "./kubernetes-event-snapshot-schema.js";
 
 export const KubernetesBuildHeartbeatDataSchema = z.object({
     "active": z.int().nullish(),
 "completionTime": z.iso.datetime().nullish(),
 "conditionCount": z.int().min(0),
 get "events"(){
-                return z.array(HeartbeatEventSchema)
+                return z.array(KubernetesEventSnapshotSchema)
               },
 "failed": z.int().nullish(),
 "imageDigest": z.string().nullish(),

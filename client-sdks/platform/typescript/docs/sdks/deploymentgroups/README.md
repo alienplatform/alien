@@ -425,10 +425,6 @@ async function run() {
           allowedSetupMethods: [
             "manual",
           ],
-          release: {
-            mode: "fixed",
-            releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
-          },
         },
         environmentVariables: [],
       },
@@ -473,10 +469,6 @@ async function run() {
           allowedSetupMethods: [
             "manual",
           ],
-          release: {
-            mode: "fixed",
-            releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
-          },
         },
         environmentVariables: [],
       },

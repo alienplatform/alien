@@ -7,33 +7,26 @@ import { DataQueue } from "@alienplatform/platform-api/models/operations";
 
 let value: DataQueue = {
   data: {
-    events: [
-      {
-        kind: "<value>",
-        message: "<value>",
-        observedAt: new Date("2024-08-12T10:51:43.799Z"),
-        severity: "warning",
-      },
-    ],
     messageStorageAllowedPersistenceRegions: [
       "<value 1>",
+      "<value 2>",
     ],
     status: {
       collectionIssues: [],
       health: "healthy",
-      lifecycle: "updating",
+      lifecycle: "failed",
       partial: true,
-      stale: false,
+      stale: true,
     },
     subscriptionLabels: {
+      "key": "<value>",
+    },
+    subscriptionPushAttributes: {
       "key": "<value>",
       "key1": "<value>",
       "key2": "<value>",
     },
-    subscriptionPushAttributes: {},
-    topicLabels: {
-      "key": "<value>",
-    },
+    topicLabels: {},
     topicName: "<value>",
     backend: "gcpPubSub",
   },

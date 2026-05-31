@@ -7,24 +7,22 @@ import { ResourceHeartbeatDataQueue } from "@alienplatform/manager-api/models";
 
 let value: ResourceHeartbeatDataQueue = {
   data: {
-    events: [],
     messageStorageAllowedPersistenceRegions: [
       "<value 1>",
-      "<value 2>",
-      "<value 3>",
     ],
     status: {
       collectionIssues: [],
-      health: "unhealthy",
-      lifecycle: "updating",
-      partial: false,
+      health: "healthy",
+      lifecycle: "deleted",
+      partial: true,
       stale: false,
     },
-    subscriptionLabels: {},
-    subscriptionPushAttributes: {
+    subscriptionLabels: {
       "key": "<value>",
       "key1": "<value>",
+      "key2": "<value>",
     },
+    subscriptionPushAttributes: {},
     topicLabels: {
       "key": "<value>",
       "key1": "<value>",

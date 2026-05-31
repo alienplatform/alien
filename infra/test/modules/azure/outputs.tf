@@ -3,8 +3,18 @@ output "target_client_id" {
   sensitive = true
 }
 
+output "target_principal_id" {
+  value     = data.azurerm_client_config.target.object_id
+  sensitive = true
+}
+
 output "target_client_secret" {
   value     = var.target_client_secret
+  sensitive = true
+}
+
+output "management_principal_id" {
+  value     = data.azurerm_client_config.management.object_id
   sensitive = true
 }
 

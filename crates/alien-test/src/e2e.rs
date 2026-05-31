@@ -15,6 +15,7 @@ use crate::build_push::build_and_push_stack;
 use crate::config::TestConfig;
 use crate::deployment::TestDeployment;
 use crate::helm_values::{runtime_image_pull_secrets, to_helm_values_yaml};
+use crate::managed_secret::provision_managed_test_secret;
 use crate::manager::TestManager;
 
 // ---------------------------------------------------------------------------
@@ -35,6 +36,8 @@ pub enum DeploymentModel {
 pub enum DistributionFlow {
     /// CloudFormation creates AWS infrastructure and registers the stack.
     CloudFormationAwsPush,
+    /// CloudFormation creates AWS-side infra, Helm installs the K8s runtime on EKS.
+    CloudFormationEksHelmPull,
     /// Terraform creates AWS infrastructure and registers the stack.
     TerraformAwsPush,
     /// Terraform creates GCP infrastructure and registers the stack.
@@ -60,10 +63,30 @@ impl DistributionFlow {
             }
             DistributionFlow::TerraformGcpPush => Platform::Gcp,
             DistributionFlow::TerraformAzurePush => Platform::Azure,
-            DistributionFlow::TerraformEksHelmPull
+            DistributionFlow::CloudFormationEksHelmPull
+            | DistributionFlow::TerraformEksHelmPull
             | DistributionFlow::TerraformGkeHelmPull
             | DistributionFlow::TerraformAksHelmPull
             | DistributionFlow::TerraformOnpremHelmPull => Platform::Kubernetes,
+        }
+    }
+
+    /// Base cloud for managed Kubernetes setup targets.
+    ///
+    /// This is not the runtime platform. The runtime platform remains
+    /// Kubernetes; the base cloud only selects cloud setup emitters, registry
+    /// access, credentials, and managed-cluster architecture defaults.
+    pub fn kubernetes_base_platform(self) -> Option<Platform> {
+        match self {
+            DistributionFlow::CloudFormationEksHelmPull
+            | DistributionFlow::TerraformEksHelmPull => Some(Platform::Aws),
+            DistributionFlow::TerraformGkeHelmPull => Some(Platform::Gcp),
+            DistributionFlow::TerraformAksHelmPull => Some(Platform::Azure),
+            DistributionFlow::CloudFormationAwsPush
+            | DistributionFlow::TerraformAwsPush
+            | DistributionFlow::TerraformGcpPush
+            | DistributionFlow::TerraformAzurePush
+            | DistributionFlow::TerraformOnpremHelmPull => None,
         }
     }
 
@@ -74,7 +97,8 @@ impl DistributionFlow {
             | DistributionFlow::TerraformAwsPush
             | DistributionFlow::TerraformGcpPush
             | DistributionFlow::TerraformAzurePush => DeploymentModel::Push,
-            DistributionFlow::TerraformEksHelmPull
+            DistributionFlow::CloudFormationEksHelmPull
+            | DistributionFlow::TerraformEksHelmPull
             | DistributionFlow::TerraformGkeHelmPull
             | DistributionFlow::TerraformAksHelmPull
             | DistributionFlow::TerraformOnpremHelmPull => DeploymentModel::Pull,
@@ -84,6 +108,7 @@ impl DistributionFlow {
     pub fn name(self) -> &'static str {
         match self {
             DistributionFlow::CloudFormationAwsPush => "cloudformation_aws_push",
+            DistributionFlow::CloudFormationEksHelmPull => "cloudformation_eks_helm_pull",
             DistributionFlow::TerraformAwsPush => "terraform_aws_push",
             DistributionFlow::TerraformGcpPush => "terraform_gcp_push",
             DistributionFlow::TerraformAzurePush => "terraform_azure_push",
@@ -586,6 +611,7 @@ async fn start_generated_helm_agent(
         "alien-test",
         None,
         None,
+        &[],
     )
     .await
     .map_err(|error| {
@@ -1323,57 +1349,34 @@ pub fn is_platform_available(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Managed test secret provisioning
-// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-/// Provision the `MANAGED_TEST_SECRET` in the deployment's preflight-managed
-/// `secrets` vault via the manager's vault API. This is an Alien-managed test
-/// secret, not a customer-owned external vault secret.
-async fn provision_managed_test_secret(
-    manager: &Arc<TestManager>,
-    deployment: &TestDeployment,
-) -> anyhow::Result<()> {
-    let http = manager.http_client();
-    let vault_name = "secrets";
-    let secret_key = "MANAGED_TEST_SECRET";
-    let secret_value = "e2e-test-managed-secret-value";
-
-    let url = format!(
-        "{}/v1/deployments/{}/vault/{}/secrets/{}",
-        manager.url, deployment.id, vault_name, secret_key,
-    );
-
-    info!(
-        deployment_id = %deployment.id,
-        vault_name,
-        secret_key,
-        "Provisioning managed test secret via manager vault API"
-    );
-
-    let resp = http
-        .put(&url)
-        .json(&serde_json::json!({ "value": secret_value }))
-        .send()
-        .await
-        .context("Failed to call vault set secret API")?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!(
-            "Failed to provision managed test secret ({}): {}",
-            status,
-            body
-        );
+    #[test]
+    fn managed_kubernetes_flows_use_kubernetes_runtime_with_cloud_base() {
+        for (flow, base_platform) in [
+            (DistributionFlow::CloudFormationEksHelmPull, Platform::Aws),
+            (DistributionFlow::TerraformEksHelmPull, Platform::Aws),
+            (DistributionFlow::TerraformGkeHelmPull, Platform::Gcp),
+            (DistributionFlow::TerraformAksHelmPull, Platform::Azure),
+        ] {
+            assert_eq!(flow.platform(), Platform::Kubernetes);
+            assert_eq!(flow.kubernetes_base_platform(), Some(base_platform));
+        }
     }
 
-    info!(
-        deployment_id = %deployment.id,
-        "Managed test secret provisioned"
-    );
-
-    Ok(())
+    #[test]
+    fn onprem_kubernetes_flow_has_no_managed_cloud_base() {
+        assert_eq!(
+            DistributionFlow::TerraformOnpremHelmPull.platform(),
+            Platform::Kubernetes
+        );
+        assert_eq!(
+            DistributionFlow::TerraformOnpremHelmPull.kubernetes_base_platform(),
+            None
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -9,20 +9,25 @@ let value: BuildHeartbeatDataKubernetesJob = {
   conditionCount: 199682,
   events: [
     {
-      kind: "<value>",
       message: "<value>",
-      observedAt: new Date("2024-02-23T02:52:34.144Z"),
-      severity: "info",
+      reason: "<value>",
     },
   ],
   jobName: "<value>",
   namespace: "<value>",
   status: {
-    collectionIssues: [],
-    health: "unknown",
-    lifecycle: "stopped",
-    partial: true,
-    stale: false,
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "forbidden",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
+    health: "healthy",
+    lifecycle: "creating",
+    partial: false,
+    stale: true,
   },
   backend: "kubernetesJob",
 };
@@ -35,7 +40,7 @@ let value: BuildHeartbeatDataKubernetesJob = {
 | `active`                                                                                      | *number*                                                                                      | :heavy_minus_sign:                                                                            | N/A                                                                                           |
 | `completionTime`                                                                              | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_minus_sign:                                                                            | N/A                                                                                           |
 | `conditionCount`                                                                              | *number*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
-| `events`                                                                                      | [models.HeartbeatEvent](../models/heartbeatevent.md)[]                                        | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| `events`                                                                                      | [models.KubernetesEventSnapshot](../models/kuberneteseventsnapshot.md)[]                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
 | `failed`                                                                                      | *number*                                                                                      | :heavy_minus_sign:                                                                            | N/A                                                                                           |
 | `imageDigest`                                                                                 | *string*                                                                                      | :heavy_minus_sign:                                                                            | N/A                                                                                           |
 | `jobName`                                                                                     | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |

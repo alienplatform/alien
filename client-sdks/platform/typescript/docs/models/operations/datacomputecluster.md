@@ -8,16 +8,22 @@ import { DataComputeCluster } from "@alienplatform/platform-api/models/operation
 let value: DataComputeCluster = {
   data: {
     dockerAvailable: true,
-    events: [],
     name: "<value>",
     networkAvailable: true,
     nodes: {},
     status: {
-      collectionIssues: [],
-      health: "healthy",
-      lifecycle: "stopped",
-      partial: true,
-      stale: false,
+      collectionIssues: [
+        {
+          message: "<value>",
+          reason: "forbidden",
+          severity: "error",
+          source: "<value>",
+        },
+      ],
+      health: "unknown",
+      lifecycle: "running",
+      partial: false,
+      stale: true,
     },
     backend: "local",
   },

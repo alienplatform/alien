@@ -38,11 +38,7 @@ const value: models.OutputsHelm = {
 
 ```typescript
 const value: models.OutputsCloudformation = {
-  launchStackUrl: "https://weird-newsprint.info/",
-  sha256: "<value>",
-  size: 243114,
-  stackPolicyUrl: "https://teeming-legging.biz/",
-  templateUrl: "https://similar-petticoat.name",
+  targets: {},
   type: "cloudformation",
 };
 ```

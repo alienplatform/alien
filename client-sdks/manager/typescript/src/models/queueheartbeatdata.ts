@@ -4,18 +4,12 @@
 
 import * as z from "zod/v4";
 import {
-  HeartbeatEvent,
-  HeartbeatEvent$Outbound,
-  HeartbeatEvent$outboundSchema,
-} from "./heartbeatevent.js";
-import {
   QueueHeartbeatStatus,
   QueueHeartbeatStatus$Outbound,
   QueueHeartbeatStatus$outboundSchema,
 } from "./queueheartbeatstatus.js";
 
 export type QueueHeartbeatDataLocal = {
-  events: Array<HeartbeatEvent>;
   name: string;
   path?: string | null | undefined;
   serviceStatus?: string | null | undefined;
@@ -36,7 +30,6 @@ export type QueueHeartbeatDataAzureServiceBus = {
   enableExpress?: boolean | null | undefined;
   enablePartitioning?: boolean | null | undefined;
   endpoint?: string | null | undefined;
-  events: Array<HeartbeatEvent>;
   forwardDeadLetteredMessagesTo?: string | null | undefined;
   forwardTo?: string | null | undefined;
   lockDuration?: string | null | undefined;
@@ -62,7 +55,6 @@ export type QueueHeartbeatDataAzureServiceBus = {
 
 export type QueueHeartbeatDataGcpPubSub = {
   endpoint?: string | null | undefined;
-  events: Array<HeartbeatEvent>;
   kmsKeyName?: string | null | undefined;
   messageStorageAllowedPersistenceRegions: Array<string>;
   messageStorageEnforceInTransit?: boolean | null | undefined;
@@ -107,7 +99,6 @@ export type QueueHeartbeatDataAwsSqs = {
   contentBasedDeduplication?: boolean | null | undefined;
   deduplicationScope?: string | null | undefined;
   delaySeconds?: number | null | undefined;
-  events: Array<HeartbeatEvent>;
   fifoQueue?: boolean | null | undefined;
   fifoThroughputLimit?: string | null | undefined;
   kmsDataKeyReusePeriodSeconds?: number | null | undefined;
@@ -136,7 +127,6 @@ export type QueueHeartbeatData =
 
 /** @internal */
 export type QueueHeartbeatDataLocal$Outbound = {
-  events: Array<HeartbeatEvent$Outbound>;
   name: string;
   path?: string | null | undefined;
   serviceStatus?: string | null | undefined;
@@ -149,7 +139,6 @@ export const QueueHeartbeatDataLocal$outboundSchema: z.ZodType<
   QueueHeartbeatDataLocal$Outbound,
   QueueHeartbeatDataLocal
 > = z.object({
-  events: z.array(HeartbeatEvent$outboundSchema),
   name: z.string(),
   path: z.nullable(z.string()).optional(),
   serviceStatus: z.nullable(z.string()).optional(),
@@ -179,7 +168,6 @@ export type QueueHeartbeatDataAzureServiceBus$Outbound = {
   enableExpress?: boolean | null | undefined;
   enablePartitioning?: boolean | null | undefined;
   endpoint?: string | null | undefined;
-  events: Array<HeartbeatEvent$Outbound>;
   forwardDeadLetteredMessagesTo?: string | null | undefined;
   forwardTo?: string | null | undefined;
   lockDuration?: string | null | undefined;
@@ -220,7 +208,6 @@ export const QueueHeartbeatDataAzureServiceBus$outboundSchema: z.ZodType<
   enableExpress: z.nullable(z.boolean()).optional(),
   enablePartitioning: z.nullable(z.boolean()).optional(),
   endpoint: z.nullable(z.string()).optional(),
-  events: z.array(HeartbeatEvent$outboundSchema),
   forwardDeadLetteredMessagesTo: z.nullable(z.string()).optional(),
   forwardTo: z.nullable(z.string()).optional(),
   lockDuration: z.nullable(z.string()).optional(),
@@ -257,7 +244,6 @@ export function queueHeartbeatDataAzureServiceBusToJSON(
 /** @internal */
 export type QueueHeartbeatDataGcpPubSub$Outbound = {
   endpoint?: string | null | undefined;
-  events: Array<HeartbeatEvent$Outbound>;
   kmsKeyName?: string | null | undefined;
   messageStorageAllowedPersistenceRegions: Array<string>;
   messageStorageEnforceInTransit?: boolean | null | undefined;
@@ -300,7 +286,6 @@ export const QueueHeartbeatDataGcpPubSub$outboundSchema: z.ZodType<
   QueueHeartbeatDataGcpPubSub
 > = z.object({
   endpoint: z.nullable(z.string()).optional(),
-  events: z.array(HeartbeatEvent$outboundSchema),
   kmsKeyName: z.nullable(z.string()).optional(),
   messageStorageAllowedPersistenceRegions: z.array(z.string()),
   messageStorageEnforceInTransit: z.nullable(z.boolean()).optional(),
@@ -357,7 +342,6 @@ export type QueueHeartbeatDataAwsSqs$Outbound = {
   contentBasedDeduplication?: boolean | null | undefined;
   deduplicationScope?: string | null | undefined;
   delaySeconds?: number | null | undefined;
-  events: Array<HeartbeatEvent$Outbound>;
   fifoQueue?: boolean | null | undefined;
   fifoThroughputLimit?: string | null | undefined;
   kmsDataKeyReusePeriodSeconds?: number | null | undefined;
@@ -390,7 +374,6 @@ export const QueueHeartbeatDataAwsSqs$outboundSchema: z.ZodType<
   contentBasedDeduplication: z.nullable(z.boolean()).optional(),
   deduplicationScope: z.nullable(z.string()).optional(),
   delaySeconds: z.nullable(z.int()).optional(),
-  events: z.array(HeartbeatEvent$outboundSchema),
   fifoQueue: z.nullable(z.boolean()).optional(),
   fifoThroughputLimit: z.nullable(z.string()).optional(),
   kmsDataKeyReusePeriodSeconds: z.nullable(z.int()).optional(),

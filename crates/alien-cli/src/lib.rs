@@ -16,7 +16,7 @@ pub mod ui;
 pub mod test_utils;
 
 #[cfg(feature = "platform")]
-use crate::commands::manager::{manager_task, ManagerArgs};
+use crate::commands::manager::{managers_task, ManagersArgs};
 #[cfg(feature = "platform")]
 use crate::commands::platform::{
     link_task, login_task, logout_task, project_task, unlink_task, workspace_task, PlatformCommand,
@@ -100,7 +100,7 @@ impl Cli {
             #[cfg(feature = "platform")]
             Some(Commands::Platform(PlatformCommand::Projects(args))) => args.json,
             #[cfg(feature = "platform")]
-            Some(Commands::Manager(args)) => args.json,
+            Some(Commands::Managers(args)) => args.json,
             _ => false,
         }
     }
@@ -143,7 +143,7 @@ pub enum Commands {
 
     /// Manage private managers deployed to your cloud
     #[cfg(feature = "platform")]
-    Manager(ManagerArgs),
+    Managers(ManagersArgs),
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -295,7 +295,7 @@ pub fn setup_tracing() {
     }
 }
 
-fn parse_env_and_secret_vars(
+pub(crate) fn parse_env_and_secret_vars(
     env_vars: &[String],
     secret_vars: &[String],
 ) -> Result<Vec<CliEnvVar>> {
@@ -309,7 +309,7 @@ fn parse_env_and_secret_vars(
     Ok(parsed)
 }
 
-fn parse_single_env_var(input: &str, is_secret: bool) -> Result<CliEnvVar> {
+pub(crate) fn parse_single_env_var(input: &str, is_secret: bool) -> Result<CliEnvVar> {
     let parts: Vec<&str> = input.splitn(2, '=').collect();
     if parts.len() != 2 {
         return Err(AlienError::new(ErrorData::ConfigurationError {
@@ -361,7 +361,9 @@ fn parse_single_env_var(input: &str, is_secret: bool) -> Result<CliEnvVar> {
     })
 }
 
-fn cli_env_vars_to_core(cli_vars: &[CliEnvVar]) -> Option<Vec<alien_core::EnvironmentVariable>> {
+pub(crate) fn cli_env_vars_to_core(
+    cli_vars: &[CliEnvVar],
+) -> Option<Vec<alien_core::EnvironmentVariable>> {
     if cli_vars.is_empty() {
         return None;
     }
@@ -1451,7 +1453,7 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
                 PlatformCommand::Unlink(args) => unlink_task(args).await?,
             },
             #[cfg(feature = "platform")]
-            Some(Commands::Manager(args)) => manager_task(args, ctx).await?,
+            Some(Commands::Managers(args)) => managers_task(args, ctx).await?,
         }
 
         Ok(())

@@ -399,7 +399,6 @@ fn emit_azure_service_activation_heartbeat(
                     registration_policy: provider.registration_policy.clone(),
                     resource_type_count: provider.resource_types.len() as u32,
                     registered,
-                    events: vec![],
                 },
             ),
         ),

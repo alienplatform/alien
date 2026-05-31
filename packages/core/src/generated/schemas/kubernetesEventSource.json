@@ -1,0 +1,1 @@
+{"type":"object","properties":{"component":{"type":["string","null"]},"host":{"type":["string","null"]}},"x-readme-ref-name":"KubernetesEventSource"}

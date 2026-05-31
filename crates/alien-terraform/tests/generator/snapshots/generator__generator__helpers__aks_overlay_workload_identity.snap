@@ -91,12 +91,6 @@ variable "kubernetes_cluster_mode" {
   default     = "create"
 }
 
-variable "install_metrics_server" {
-  type        = bool
-  description = "Whether to install metrics-server into Kubernetes clusters created by this module."
-  default     = true
-}
-
 variable "kubernetes_namespace" {
   type        = string
   description = "Kubernetes namespace for runtime resources."
@@ -129,22 +123,17 @@ resource "random_id" "resource_prefix" {
 
 === locals.tf ===
 locals {
-  resource_prefix          = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
-  deployment_name          = var.name
-  deployment_platform      = "kubernetes"
-  deployment_base_platform = "azure"
-  deployment_target        = "aks"
-  deployment_region        = var.azure_location
-  deployment_management_config = {
-    platform         = "azure"
-    managingTenantId = var.azure_managing_tenant_id
-    oidcIssuer       = var.azure_oidc_issuer
-    oidcSubject      = var.azure_oidc_subject
-  }
+  resource_prefix              = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
+  deployment_name              = var.name
+  deployment_platform          = "kubernetes"
+  deployment_base_platform     = "azure"
+  deployment_target            = "aks"
+  deployment_region            = var.azure_location
+  deployment_management_config = null
   kubernetes_exposure = {
     mode = "disabled"
   }
-  deployment_kubernetes_settings = merge(try(jsondecode(var.stack_settings_json).kubernetes, {}), { exposure = coalesce(try(jsondecode(var.stack_settings_json).kubernetes.exposure, null), local.kubernetes_exposure) })
+  deployment_kubernetes_settings = merge(try(jsondecode(var.stack_settings_json).kubernetes, {}), { exposure = jsondecode(try(jsondecode(var.stack_settings_json).kubernetes.exposure, null) == null ? jsonencode(local.kubernetes_exposure) : jsonencode(jsondecode(var.stack_settings_json).kubernetes.exposure)) })
   deployment_settings            = merge(jsondecode(var.stack_settings_json), { kubernetes = local.deployment_kubernetes_settings })
   deployment_resources = [
     {
@@ -185,20 +174,6 @@ locals {
   helm_manager_service_account = {
     annotations = {}
     labels      = {}
-  }
-  helm_values = {
-    serviceAccounts       = local.helm_service_accounts
-    managerServiceAccount = local.helm_manager_service_account
-    stackSettings         = local.deployment_settings
-    basePlatform          = local.deployment_base_platform
-    serviceAccountPrefix  = local.resource_prefix
-    heartbeat = {
-      collection = {
-        nodes = {
-          enabled = true
-        }
-      }
-    }
   }
 }
 
@@ -355,12 +330,6 @@ output "kubernetes_kubeconfig" {
 output "kubernetes_kube_context" {
   value       = local.kubernetes_kube_context
   description = "Kube context for managed Kubernetes clusters created by this module."
-}
-
-output "helm_values" {
-  value       = jsonencode(local.helm_values)
-  description = "Helm values JSON for the manager-fetch Kubernetes install."
-  sensitive   = true
 }
 
 === README.md ===

@@ -260,7 +260,6 @@ fn emit_local_storage_heartbeat(
                 is_directory,
                 readonly,
                 modified_at,
-                events: vec![],
             },
         )),
         raw: vec![],

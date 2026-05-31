@@ -7,13 +7,22 @@
 
 use crate::{
     emitter::CfEmitter,
-    emitters::aws::helpers::{
-        required_logical_id, resource_config, stack_name, storage_notification_configuration,
-        storage_notification_dependencies, tags,
+    emitters::aws::{
+        helpers::{
+            cf_from_json, required_logical_id, resource_config, service_account_role_id,
+            stack_name, storage_notification_configuration, storage_notification_dependencies,
+            tags, uniquify_iam_statement_sids,
+        },
+        service_account::permission_context,
     },
     template::{CfExpression, CfResource},
 };
-use alien_core::{import::EmitContext, Result, Storage};
+use alien_core::{
+    import::EmitContext, ErrorData, PermissionProfile, PermissionSetReference,
+    RemoteStackManagement, Result, ServiceAccount, Storage,
+};
+use alien_error::{AlienError, Context, IntoAlienError};
+use alien_permissions::{generators::AwsCloudFormationPermissionsGenerator, BindingTarget};
 use indexmap::IndexMap;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -113,7 +122,10 @@ impl CfEmitter for AwsStorageEmitter {
             bucket_policy_document(bucket_id, storage.public_read),
         );
 
-        Ok(vec![bucket, policy])
+        let mut resources = vec![bucket, policy];
+        resources.extend(storage_iam_policies(ctx, storage, bucket_id)?);
+
+        Ok(resources)
     }
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<CfExpression> {
@@ -182,4 +194,168 @@ fn bucket_policy_document(bucket_id: &str, public_read: bool) -> CfExpression {
         ("Version", CfExpression::from("2012-10-17")),
         ("Statement", CfExpression::list(statements)),
     ])
+}
+
+fn storage_iam_policies(
+    ctx: &EmitContext<'_>,
+    storage: &Storage,
+    bucket_id: &str,
+) -> Result<Vec<CfResource>> {
+    let mut resources = Vec::new();
+    let generator = AwsCloudFormationPermissionsGenerator::new();
+    let context =
+        permission_context().with_resource_name(format!("${{AWS::StackName}}-{}", storage.id()));
+
+    for (owner_index, (role_id, permission_refs)) in storage_permission_owners(ctx) {
+        for (permission_index, permission_ref) in permission_refs.iter().enumerate() {
+            let Some(permission_set) =
+                permission_ref.resolve(|name| alien_permissions::get_permission_set(name).cloned())
+            else {
+                continue;
+            };
+            if !permission_set.id.starts_with("storage/") {
+                continue;
+            }
+
+            let policy = generator
+                .generate_policy(&permission_set, BindingTarget::Resource, &context)
+                .context(ErrorData::GenericError {
+                    message: format!(
+                        "failed to generate AWS CloudFormation storage IAM policy for '{}'",
+                        storage.id()
+                    ),
+                })?;
+            let policy_value = serde_json::to_value(policy).into_alien_error().context(
+                ErrorData::TemplateSerializationFailed {
+                    format: "CloudFormation IAM policy".to_string(),
+                    reason: "Failed to serialize IAM policy".to_string(),
+                },
+            )?;
+            let CfExpression::Object(mut policy_object) = cf_from_json(policy_value)? else {
+                return Err(AlienError::new(ErrorData::TemplateSerializationFailed {
+                    format: "CloudFormation IAM policy".to_string(),
+                    reason: "policy did not serialize to a JSON object".to_string(),
+                }));
+            };
+            let Some(CfExpression::List(policy_statements)) =
+                policy_object.shift_remove("Statement")
+            else {
+                continue;
+            };
+
+            let policy_id =
+                format!("{bucket_id}{role_id}StoragePermission{owner_index}{permission_index}");
+            let mut policy_resource = CfResource::new(policy_id, "AWS::IAM::Policy".to_string());
+            policy_resource.properties.insert(
+                "PolicyName".to_string(),
+                CfExpression::sub(format!(
+                    "${{AWS::StackName}}-{}-storage-{owner_index}-{permission_index}",
+                    storage.id()
+                )),
+            );
+            policy_resource.properties.insert(
+                "PolicyDocument".to_string(),
+                CfExpression::object([
+                    ("Version", CfExpression::from("2012-10-17")),
+                    (
+                        "Statement",
+                        CfExpression::list(uniquify_iam_statement_sids(policy_statements)),
+                    ),
+                ]),
+            );
+            policy_resource.properties.insert(
+                "Roles".to_string(),
+                CfExpression::list([CfExpression::ref_(&role_id)]),
+            );
+            policy_resource.depends_on.push(bucket_id.to_string());
+            policy_resource.depends_on.push(role_id.clone());
+            resources.push(policy_resource);
+        }
+    }
+
+    Ok(resources)
+}
+
+fn storage_permission_owners(
+    ctx: &EmitContext<'_>,
+) -> Vec<(usize, (String, Vec<PermissionSetReference>))> {
+    let mut owners = Vec::new();
+    for (profile_name, profile) in ctx.stack.permission_profiles() {
+        let refs = storage_permission_refs(profile, ctx.resource_id);
+        if refs.is_empty() {
+            continue;
+        }
+
+        let service_account_id = format!("{profile_name}-sa");
+        if service_account_for_id(ctx, &service_account_id).is_some() {
+            if let Some(role_id) = service_account_role_id(ctx, profile_name) {
+                owners.push((role_id, refs));
+            }
+        }
+    }
+
+    if let Some(profile) = ctx.stack.management().profile() {
+        let refs = storage_permission_refs(profile, ctx.resource_id);
+        if !refs.is_empty() {
+            if let Some(role_id) = remote_stack_management_role_id(ctx) {
+                owners.push((role_id, refs));
+            }
+        }
+    }
+
+    owners.into_iter().enumerate().collect()
+}
+
+fn storage_permission_refs(
+    profile: &PermissionProfile,
+    resource_id: &str,
+) -> Vec<PermissionSetReference> {
+    let mut refs = Vec::new();
+    let mut seen_ids = std::collections::HashSet::new();
+
+    if let Some(resource_refs) = profile.0.get(resource_id) {
+        for permission_ref in resource_refs {
+            if seen_ids.insert(permission_ref.id().to_string()) {
+                refs.push(permission_ref.clone());
+            }
+        }
+    }
+
+    if let Some(wildcard_refs) = profile.0.get("*") {
+        for permission_ref in wildcard_refs
+            .iter()
+            .filter(|permission_ref| permission_ref.id().starts_with("storage/"))
+        {
+            if seen_ids.insert(permission_ref.id().to_string()) {
+                refs.push(permission_ref.clone());
+            }
+        }
+    }
+
+    refs
+}
+
+fn service_account_for_id<'a>(
+    ctx: &'a EmitContext<'_>,
+    service_account_id: &str,
+) -> Option<&'a ServiceAccount> {
+    let (_id, entry) = ctx
+        .stack
+        .resources()
+        .find(|(id, _entry)| id.as_str() == service_account_id)?;
+    entry.config.downcast_ref::<ServiceAccount>()
+}
+
+fn remote_stack_management_role_id(ctx: &EmitContext<'_>) -> Option<String> {
+    ctx.stack.resources().find_map(|(id, entry)| {
+        if entry.config.resource_type() != RemoteStackManagement::RESOURCE_TYPE {
+            return None;
+        }
+        let logical_id = ctx.name_for(id)?;
+        if logical_id == "Management" {
+            Some("ManagementRole".to_string())
+        } else {
+            Some(format!("{logical_id}Role"))
+        }
+    })
 }

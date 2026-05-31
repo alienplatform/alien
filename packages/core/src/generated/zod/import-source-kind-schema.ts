@@ -8,6 +8,6 @@ import * as z from "zod";
 /**
  * @description Package source that produced an import request. Observability label\nonly — the manager does not branch on this value, and any new deployment\npathway can omit it without affecting import behavior.
  */
-export const ImportSourceKindSchema = z.enum(["cloud-formation", "terraform", "helm"]).describe("Package source that produced an import request. Observability label\nonly — the manager does not branch on this value, and any new deployment\npathway can omit it without affecting import behavior.")
+export const ImportSourceKindSchema = z.enum(["cloudformation", "terraform", "helm"]).describe("Package source that produced an import request. Observability label\nonly — the manager does not branch on this value, and any new deployment\npathway can omit it without affecting import behavior.")
 
 export type ImportSourceKind = z.infer<typeof ImportSourceKindSchema>

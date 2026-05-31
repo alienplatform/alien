@@ -93,8 +93,8 @@ async function $do(
 
   const query = encodeFormQuery({
     "deploymentGroup": payload?.deploymentGroup,
+    "environment": payload?.environment,
     "managerId": payload?.managerId,
-    "platform": payload?.platform,
     "project": payload?.project,
     "search": payload?.search,
     "status": payload?.status,

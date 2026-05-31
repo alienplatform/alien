@@ -6,15 +6,11 @@
 import * as z from "zod";
 import { AzureContainerAppsEnvironmentHeartbeatStatusSchema } from "./azure-container-apps-environment-heartbeat-status-schema.js";
 import { AzureContainerAppsEnvironmentWorkloadProfileSchema } from "./azure-container-apps-environment-workload-profile-schema.js";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 
 export const AzureContainerAppsEnvironmentHeartbeatDataSchema = z.object({
     "customDomainVerificationId": z.string().nullish(),
 "defaultDomain": z.string().nullish(),
 "eventStreamEndpoint": z.string().nullish(),
-get "events"(){
-                return z.array(HeartbeatEventSchema)
-              },
 "infrastructureResourceGroup": z.string().nullish(),
 "kind": z.string().nullish(),
 "location": z.string().nullish(),

@@ -251,7 +251,17 @@ async fn sync_with_manager(
                 });
 
             // Update target_release in state
+            let target_release_id = target_deployment.release_info.release_id.clone();
+            let current_release_id = deployment_state
+                .current_release
+                .as_ref()
+                .map(|release| release.release_id.clone());
             deployment_state.target_release = Some(target_deployment.release_info.clone());
+            if deployment_state.status == alien_core::DeploymentStatus::Running
+                && current_release_id.as_deref() != Some(target_release_id.as_str())
+            {
+                deployment_state.status = alien_core::DeploymentStatus::UpdatePending;
+            }
 
             // Save state and config
             state.db.set_deployment_state(&deployment_state).await?;

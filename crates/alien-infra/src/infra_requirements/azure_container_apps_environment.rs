@@ -754,7 +754,6 @@ fn emit_azure_container_apps_environment_heartbeat(
                 zone_redundant: properties.and_then(|p| p.zone_redundant),
                 workload_profile_count: workload_profiles.len() as u32,
                 workload_profiles,
-                events: vec![],
             },
         ),
         raw: vec![],

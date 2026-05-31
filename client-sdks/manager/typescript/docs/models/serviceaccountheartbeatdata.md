@@ -15,25 +15,18 @@ const value: models.ServiceAccountHeartbeatDataAwsIamRole = {
     "<value 3>",
   ],
   createDate: "<value>",
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-02-23T02:52:34.144Z"),
-      severity: "info",
-    },
-  ],
-  inlinePolicyCount: 792146,
+  inlinePolicyCount: 840219,
   inlinePolicyNames: [
     "<value 1>",
     "<value 2>",
+    "<value 3>",
   ],
-  managedTagCount: 874935,
-  path: "/var/log",
+  managedTagCount: 681671,
+  path: "/usr/share",
   roleArn: "<value>",
   roleId: "<id>",
   roleName: "<value>",
-  stackPermissionsApplied: true,
+  stackPermissionsApplied: false,
   status: {
     collectionIssues: [
       {
@@ -43,12 +36,12 @@ const value: models.ServiceAccountHeartbeatDataAwsIamRole = {
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "deleting",
-    partial: true,
-    stale: false,
+    health: "unhealthy",
+    lifecycle: "stopped",
+    partial: false,
+    stale: true,
   },
-  tagCount: 961527,
+  tagCount: 317385,
   backend: "awsIamRole",
 };
 ```
@@ -58,23 +51,15 @@ const value: models.ServiceAccountHeartbeatDataAwsIamRole = {
 ```typescript
 const value: models.ServiceAccountHeartbeatDataGcpServiceAccount = {
   email: "Kraig_Jast-Koss80@yahoo.com",
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-02-23T02:52:34.144Z"),
-      severity: "info",
-    },
-  ],
-  projectBindingCount: 541422,
+  projectBindingCount: 864516,
   projectRoles: [
     "<value 1>",
+    "<value 2>",
   ],
-  serviceAccountBindingCount: 635399,
+  serviceAccountBindingCount: 255611,
   serviceAccountRoles: [
     "<value 1>",
     "<value 2>",
-    "<value 3>",
   ],
   status: {
     collectionIssues: [
@@ -85,10 +70,10 @@ const value: models.ServiceAccountHeartbeatDataGcpServiceAccount = {
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "deleting",
-    partial: true,
-    stale: false,
+    health: "unhealthy",
+    lifecycle: "stopped",
+    partial: false,
+    stale: true,
   },
   backend: "gcpServiceAccount",
 };
@@ -103,13 +88,12 @@ const value: models.ServiceAccountHeartbeatDataAzureManagedIdentity = {
     "<value 1>",
     "<value 2>",
   ],
-  events: [],
   location: "<value>",
-  managedTagCount: 826820,
+  managedTagCount: 375916,
   name: "<value>",
   resourceGroup: "<value>",
   resourceId: "<id>",
-  roleAssignmentCount: 359064,
+  roleAssignmentCount: 826820,
   roleAssignmentIds: [
     "<value 1>",
   ],
@@ -123,10 +107,10 @@ const value: models.ServiceAccountHeartbeatDataAzureManagedIdentity = {
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "deleting",
-    partial: true,
-    stale: false,
+    health: "unhealthy",
+    lifecycle: "stopped",
+    partial: false,
+    stale: true,
   },
   backend: "azureManagedIdentity",
 };
@@ -137,14 +121,6 @@ const value: models.ServiceAccountHeartbeatDataAzureManagedIdentity = {
 ```typescript
 const value: models.ServiceAccountHeartbeatDataLocal = {
   configured: false,
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-02-23T02:52:34.144Z"),
-      severity: "info",
-    },
-  ],
   identity: "<value>",
   status: {
     collectionIssues: [
@@ -155,10 +131,10 @@ const value: models.ServiceAccountHeartbeatDataLocal = {
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "deleting",
-    partial: true,
-    stale: false,
+    health: "unhealthy",
+    lifecycle: "stopped",
+    partial: false,
+    stale: true,
   },
   backend: "local",
 };

@@ -1,6 +1,6 @@
 # GetResourceDeploymentDetailResponse
 
-Projected deployment detail for one resource.
+Latest heartbeat detail for one compute resource deployment.
 
 ## Example Usage
 
@@ -28,21 +28,12 @@ let value: GetResourceDeploymentDetailResponse = {
     readyCount: 601933,
     observedAt: new Date("2026-03-21T07:30:12.263Z"),
   },
-  instances: [
-    {
-      instanceId: "<id>",
-      name: "<value>",
-      ready: false,
-      phase: "<value>",
-      nodeName: "<value>",
-      restartCount: 691312,
-      waitingReason: "<value>",
-      terminatedReason: "<value>",
-      observedAt: new Date("2026-02-11T20:30:55.689Z"),
-      platformStale: true,
-    },
-  ],
-  events: [],
+  heartbeat: {
+    status: "missing",
+    deploymentId: "<id>",
+    resourceId: "<id>",
+    resourceType: "<value>",
+  },
 };
 ```
 
@@ -51,5 +42,4 @@ let value: GetResourceDeploymentDetailResponse = {
 | Field                                                                                                                | Type                                                                                                                 | Required                                                                                                             | Description                                                                                                          |
 | -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | `deployment`                                                                                                         | [operations.GetResourceDeploymentDetailDeployment](../../models/operations/getresourcedeploymentdetaildeployment.md) | :heavy_check_mark:                                                                                                   | N/A                                                                                                                  |
-| `instances`                                                                                                          | [operations.GetResourceDeploymentDetailInstance](../../models/operations/getresourcedeploymentdetailinstance.md)[]   | :heavy_check_mark:                                                                                                   | N/A                                                                                                                  |
-| `events`                                                                                                             | [operations.GetResourceDeploymentDetailEvent](../../models/operations/getresourcedeploymentdetailevent.md)[]         | :heavy_check_mark:                                                                                                   | N/A                                                                                                                  |
+| `heartbeat`                                                                                                          | *operations.HeartbeatUnion*                                                                                          | :heavy_check_mark:                                                                                                   | N/A                                                                                                                  |

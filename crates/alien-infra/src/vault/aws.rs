@@ -298,7 +298,6 @@ fn emit_aws_parameter_store_vault_heartbeat(
                 ),
                 latest_modified_at,
                 has_more_parameters: Some(has_more_parameters),
-                events: vec![],
             },
         )),
         raw: vec![],

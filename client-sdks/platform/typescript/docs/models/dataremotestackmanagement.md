@@ -7,7 +7,6 @@ import { DataRemoteStackManagement } from "@alienplatform/platform-api/models";
 
 let value: DataRemoteStackManagement = {
   data: {
-    events: [],
     managementPermissionsApplied: true,
     status: {
       collectionIssues: [
@@ -19,9 +18,9 @@ let value: DataRemoteStackManagement = {
         },
       ],
       health: "degraded",
-      lifecycle: "unknown",
-      partial: false,
-      stale: true,
+      lifecycle: "stopping",
+      partial: true,
+      stale: false,
     },
     backend: "awsIamRole",
   },

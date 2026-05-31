@@ -4,16 +4,12 @@
 */
 
 import * as z from "zod";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 import { ServiceAccountHeartbeatStatusSchema } from "./service-account-heartbeat-status-schema.js";
 
 export const AzureManagedIdentityServiceAccountHeartbeatDataSchema = z.object({
     "clientId": z.string().nullish(),
 "customRoleDefinitionCount": z.int().min(0),
 "customRoleDefinitionIds": z.array(z.string()),
-get "events"(){
-                return z.array(HeartbeatEventSchema)
-              },
 "isolationScope": z.string().nullish(),
 "location": z.string(),
 "managedTagCount": z.int().min(0),

@@ -8,14 +8,8 @@ import {
   AzureResourceGroupHeartbeatStatus$Outbound,
   AzureResourceGroupHeartbeatStatus$outboundSchema,
 } from "./azureresourcegroupheartbeatstatus.js";
-import {
-  HeartbeatEvent,
-  HeartbeatEvent$Outbound,
-  HeartbeatEvent$outboundSchema,
-} from "./heartbeatevent.js";
 
 export type AzureResourceGroupHeartbeatData = {
-  events: Array<HeartbeatEvent>;
   location?: string | null | undefined;
   managedTags: { [k: string]: string };
   name: string;
@@ -26,7 +20,6 @@ export type AzureResourceGroupHeartbeatData = {
 
 /** @internal */
 export type AzureResourceGroupHeartbeatData$Outbound = {
-  events: Array<HeartbeatEvent$Outbound>;
   location?: string | null | undefined;
   managedTags: { [k: string]: string };
   name: string;
@@ -40,7 +33,6 @@ export const AzureResourceGroupHeartbeatData$outboundSchema: z.ZodType<
   AzureResourceGroupHeartbeatData$Outbound,
   AzureResourceGroupHeartbeatData
 > = z.object({
-  events: z.array(HeartbeatEvent$outboundSchema),
   location: z.nullable(z.string()).optional(),
   managedTags: z.record(z.string(), z.string()),
   name: z.string(),

@@ -41,6 +41,24 @@ export type CloudFormationCallbackRequestPlatformEnum = ClosedEnum<
 >;
 
 /**
+ * Base cloud platform for cloud-backed Kubernetes imports.
+ */
+export const CloudFormationCallbackRequestBasePlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Base cloud platform for cloud-backed Kubernetes imports.
+ */
+export type CloudFormationCallbackRequestBasePlatform = ClosedEnum<
+  typeof CloudFormationCallbackRequestBasePlatform
+>;
+
+/**
  * Deployment model: how updates are delivered to the remote environment.
  */
 export const CloudFormationCallbackRequestDeploymentModel = {
@@ -1145,7 +1163,7 @@ export type CloudFormationCallbackRequestManagementConfigUnion =
 /**
  * Resolved setup import payload
  */
-export type Source = {
+export type CloudFormationCallbackRequestSource = {
   /**
    * User-chosen deployment name. Must be unique within the deployment group; the manager returns 409 on collision.
    */
@@ -1163,6 +1181,10 @@ export type Source = {
    * Cloud platform of the imported stack
    */
   platform: CloudFormationCallbackRequestPlatformEnum;
+  /**
+   * Base cloud platform for cloud-backed Kubernetes imports.
+   */
+  basePlatform?: CloudFormationCallbackRequestBasePlatform | undefined;
   /**
    * Region or location reported by the setup artifact
    */
@@ -1210,7 +1232,7 @@ export type CloudFormationCallbackRequest = {
   requestType: RequestType;
   responseUrl: string;
   physicalResourceId?: string | null | undefined;
-  source?: Source | null | undefined;
+  source?: CloudFormationCallbackRequestSource | null | undefined;
   serviceTimeoutSeconds?: number | undefined;
 };
 
@@ -1223,6 +1245,12 @@ export const RequestType$outboundSchema: z.ZodEnum<typeof RequestType> = z.enum(
 export const CloudFormationCallbackRequestPlatformEnum$outboundSchema:
   z.ZodEnum<typeof CloudFormationCallbackRequestPlatformEnum> = z.enum(
     CloudFormationCallbackRequestPlatformEnum,
+  );
+
+/** @internal */
+export const CloudFormationCallbackRequestBasePlatform$outboundSchema:
+  z.ZodEnum<typeof CloudFormationCallbackRequestBasePlatform> = z.enum(
+    CloudFormationCallbackRequestBasePlatform,
   );
 
 /** @internal */
@@ -3708,12 +3736,13 @@ export function cloudFormationCallbackRequestManagementConfigUnionToJSON(
 }
 
 /** @internal */
-export type Source$Outbound = {
+export type CloudFormationCallbackRequestSource$Outbound = {
   deploymentName: string;
   resourcePrefix: string;
   sourceKind?: string | undefined;
   releaseId?: string | undefined;
   platform: string;
+  basePlatform?: string | undefined;
   region: string;
   setupTarget: string;
   setupImportFormatVersion: number;
@@ -3729,40 +3758,50 @@ export type Source$Outbound = {
 };
 
 /** @internal */
-export const Source$outboundSchema: z.ZodType<Source$Outbound, Source> = z
-  .object({
-    deploymentName: z.string(),
-    resourcePrefix: z.string(),
-    sourceKind: ImportSourceKind$outboundSchema.optional(),
-    releaseId: z.string().optional(),
-    platform: CloudFormationCallbackRequestPlatformEnum$outboundSchema,
-    region: z.string(),
-    setupTarget: z.string(),
-    setupImportFormatVersion: z.int(),
-    setupFingerprint: z.string(),
-    setupFingerprintVersion: z.int(),
-    stackSettings: z.lazy(() =>
-      CloudFormationCallbackRequestStackSettings$outboundSchema
+export const CloudFormationCallbackRequestSource$outboundSchema: z.ZodType<
+  CloudFormationCallbackRequestSource$Outbound,
+  CloudFormationCallbackRequestSource
+> = z.object({
+  deploymentName: z.string(),
+  resourcePrefix: z.string(),
+  sourceKind: ImportSourceKind$outboundSchema.optional(),
+  releaseId: z.string().optional(),
+  platform: CloudFormationCallbackRequestPlatformEnum$outboundSchema,
+  basePlatform: CloudFormationCallbackRequestBasePlatform$outboundSchema
+    .optional(),
+  region: z.string(),
+  setupTarget: z.string(),
+  setupImportFormatVersion: z.int(),
+  setupFingerprint: z.string(),
+  setupFingerprintVersion: z.int(),
+  stackSettings: z.lazy(() =>
+    CloudFormationCallbackRequestStackSettings$outboundSchema
+  ),
+  managementConfig: z.union([
+    z.lazy(() =>
+      CloudFormationCallbackRequestManagementConfigAws$outboundSchema
     ),
-    managementConfig: z.union([
-      z.lazy(() =>
-        CloudFormationCallbackRequestManagementConfigAws$outboundSchema
-      ),
-      z.lazy(() =>
-        CloudFormationCallbackRequestManagementConfigGcp$outboundSchema
-      ),
-      z.lazy(() =>
-        CloudFormationCallbackRequestManagementConfigAzure$outboundSchema
-      ),
-      z.lazy(() =>
-        CloudFormationCallbackRequestManagementConfigKubernetes$outboundSchema
-      ),
-    ]),
-    resources: z.array(ImportedResource$outboundSchema),
-  });
+    z.lazy(() =>
+      CloudFormationCallbackRequestManagementConfigGcp$outboundSchema
+    ),
+    z.lazy(() =>
+      CloudFormationCallbackRequestManagementConfigAzure$outboundSchema
+    ),
+    z.lazy(() =>
+      CloudFormationCallbackRequestManagementConfigKubernetes$outboundSchema
+    ),
+  ]),
+  resources: z.array(ImportedResource$outboundSchema),
+});
 
-export function sourceToJSON(source: Source): string {
-  return JSON.stringify(Source$outboundSchema.parse(source));
+export function cloudFormationCallbackRequestSourceToJSON(
+  cloudFormationCallbackRequestSource: CloudFormationCallbackRequestSource,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestSource$outboundSchema.parse(
+      cloudFormationCallbackRequestSource,
+    ),
+  );
 }
 
 /** @internal */
@@ -3773,7 +3812,7 @@ export type CloudFormationCallbackRequest$Outbound = {
   requestType: string;
   responseUrl: string;
   physicalResourceId?: string | null | undefined;
-  source?: Source$Outbound | null | undefined;
+  source?: CloudFormationCallbackRequestSource$Outbound | null | undefined;
   serviceTimeoutSeconds: number;
 };
 
@@ -3788,7 +3827,9 @@ export const CloudFormationCallbackRequest$outboundSchema: z.ZodType<
   requestType: RequestType$outboundSchema,
   responseUrl: z.string(),
   physicalResourceId: z.nullable(z.string()).optional(),
-  source: z.nullable(z.lazy(() => Source$outboundSchema)).optional(),
+  source: z.nullable(
+    z.lazy(() => CloudFormationCallbackRequestSource$outboundSchema),
+  ).optional(),
   serviceTimeoutSeconds: z.int().default(3300),
 });
 

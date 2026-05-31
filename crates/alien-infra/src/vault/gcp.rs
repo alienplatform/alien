@@ -255,7 +255,6 @@ fn emit_gcp_secret_manager_vault_heartbeat(
                 location: location.to_string(),
                 prefix: prefix.to_string(),
                 secret_metadata_listed: false,
-                events: vec![],
             },
         )),
         raw: vec![],

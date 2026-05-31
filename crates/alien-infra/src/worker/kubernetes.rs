@@ -247,6 +247,10 @@ impl KubernetesWorkerController {
                 namespace,
                 labels,
                 &config.ingress,
+                config
+                    .readiness_probe
+                    .as_ref()
+                    .map(|probe| probe.path.as_str()),
             ),
             &mut self.public_endpoint,
         )
@@ -331,6 +335,10 @@ impl KubernetesWorkerController {
                     namespace,
                     labels,
                     &config.ingress,
+                    config
+                        .readiness_probe
+                        .as_ref()
+                        .map(|probe| probe.path.as_str()),
                 ),
                 &mut self.public_endpoint,
             )
@@ -540,6 +548,10 @@ impl KubernetesWorkerController {
                 namespace,
                 labels,
                 &config.ingress,
+                config
+                    .readiness_probe
+                    .as_ref()
+                    .map(|probe| probe.path.as_str()),
             ),
             &mut self.public_endpoint,
         )
@@ -710,7 +722,7 @@ impl KubernetesWorkerController {
         if let Some(deployment_name) = &self.deployment_name {
             Some(ResourceOutputs::new(WorkerOutputs {
                 worker_name: deployment_name.clone(),
-                url: self.public_endpoint.public_url.clone(),
+                url: self.public_endpoint.effective_public_url(),
                 identifier: Some(format!("deployment/{}", deployment_name)),
                 load_balancer_endpoint: self.public_endpoint.load_balancer_endpoint.clone(),
                 commands_push_target: None, // Kubernetes uses polling
@@ -734,9 +746,8 @@ impl KubernetesWorkerController {
                 service_port: BindingValue::Value(80),
                 public_url: self
                     .public_endpoint
-                    .public_url
-                    .as_ref()
-                    .map(|url| BindingValue::Value(url.clone())),
+                    .effective_public_url()
+                    .map(BindingValue::Value),
             };
 
             // Serialize to JSON
@@ -784,6 +795,36 @@ mod output_tests {
         assert_eq!(
             worker_outputs.url.as_deref(),
             Some("https://worker.example.test")
+        );
+    }
+
+    #[test]
+    fn build_outputs_derives_public_url_from_load_balancer_endpoint() {
+        let public_endpoint = KubernetesPublicEndpointState {
+            load_balancer_endpoint: Some(alien_core::LoadBalancerEndpoint {
+                dns_name: "k8s-worker.example.elb.amazonaws.com".to_string(),
+                hosted_zone_id: None,
+            }),
+            ..Default::default()
+        };
+        let controller = KubernetesWorkerController {
+            state: KubernetesWorkerState::Ready,
+            deployment_name: Some("test-worker".to_string()),
+            namespace: Some("test-namespace".to_string()),
+            service_name: Some("test-worker".to_string()),
+            worker_id: Some("worker".to_string()),
+            public_endpoint,
+            _internal_stay_count: None,
+        };
+
+        let outputs = controller.build_outputs().expect("outputs");
+        let worker_outputs = outputs
+            .downcast_ref::<WorkerOutputs>()
+            .expect("worker outputs");
+
+        assert_eq!(
+            worker_outputs.url.as_deref(),
+            Some("http://k8s-worker.example.elb.amazonaws.com")
         );
     }
 }

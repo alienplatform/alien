@@ -4,14 +4,10 @@
 */
 
 import * as z from "zod";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 import { WorkloadHeartbeatStatusSchema } from "./workload-heartbeat-status-schema.js";
 
 export const AwsLambdaWorkerHeartbeatDataSchema = z.object({
     "codeSha256": z.string().nullish(),
-get "events"(){
-                return z.array(HeartbeatEventSchema)
-              },
 "functionName": z.string(),
 "functionUrlAuthType": z.string().nullish(),
 "functionUrlCorsPresent": z.boolean(),

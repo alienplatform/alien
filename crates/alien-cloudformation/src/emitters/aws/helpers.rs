@@ -14,6 +14,7 @@ use alien_core::{
 use alien_error::AlienError;
 use indexmap::IndexMap;
 use serde_json::Value as JsonValue;
+use std::collections::BTreeSet;
 
 pub const PARAM_MANAGING_ROLE_ARN: &str = "ManagingRoleArn";
 pub const PARAM_MANAGING_ACCOUNT_ID: &str = "ManagingAccountId";
@@ -130,6 +131,37 @@ where
     ])
 }
 
+pub fn uniquify_iam_statement_sids(statements: Vec<CfExpression>) -> Vec<CfExpression> {
+    let mut used_sids = BTreeSet::new();
+
+    statements
+        .into_iter()
+        .map(|statement| {
+            let CfExpression::Object(mut statement_object) = statement else {
+                return statement;
+            };
+            let Some(CfExpression::String(sid)) = statement_object.get_mut("Sid") else {
+                return CfExpression::Object(statement_object);
+            };
+
+            let base_sid = sid.clone();
+            if used_sids.insert(base_sid.clone()) {
+                return CfExpression::Object(statement_object);
+            }
+
+            let mut suffix = 2usize;
+            loop {
+                let candidate = format!("{base_sid}{suffix}");
+                if used_sids.insert(candidate.clone()) {
+                    *sid = candidate;
+                    return CfExpression::Object(statement_object);
+                }
+                suffix += 1;
+            }
+        })
+        .collect()
+}
+
 /// `Fn::GetAZs` → list of availability zones for the active region.
 pub fn get_azs() -> CfExpression {
     CfExpression::object([("Fn::GetAZs", CfExpression::ref_("AWS::Region"))])
@@ -235,6 +267,29 @@ pub fn private_subnet_ids_expr(ctx: &EmitContext<'_>) -> CfExpression {
         | NetworkSettings::ByoVpcAws { .. }
         | NetworkSettings::ByoVpcGcp { .. }
         | NetworkSettings::ByoVnetAzure { .. } => CfExpression::ref_(PARAM_PRIVATE_SUBNET_IDS),
+    }
+}
+
+/// Public subnet IDs expression — uses created VPC subnets when this
+/// stack creates the VPC, existing subnet parameter otherwise.
+pub fn public_subnet_ids_expr(ctx: &EmitContext<'_>) -> CfExpression {
+    let Some((network_id, network)) = default_network(ctx) else {
+        return CfExpression::ref_(PARAM_PUBLIC_SUBNET_IDS);
+    };
+    match &network.settings {
+        NetworkSettings::Create { .. } => CfExpression::if_(
+            CONDITION_NETWORK_MODE_CREATE,
+            subnet_refs(network_id, "PublicSubnet"),
+            CfExpression::if_(
+                CONDITION_NETWORK_MODE_USE_EXISTING,
+                CfExpression::ref_(PARAM_PUBLIC_SUBNET_IDS),
+                CfExpression::no_value(),
+            ),
+        ),
+        NetworkSettings::UseDefault
+        | NetworkSettings::ByoVpcAws { .. }
+        | NetworkSettings::ByoVpcGcp { .. }
+        | NetworkSettings::ByoVnetAzure { .. } => CfExpression::ref_(PARAM_PUBLIC_SUBNET_IDS),
     }
 }
 
@@ -378,6 +433,34 @@ pub fn cf_from_json(value: JsonValue) -> Result<CfExpression> {
                 .collect::<Result<IndexMap<_, _>>>()?,
         ),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn uniquify_iam_statement_sids_suffixes_duplicates_without_colliding() {
+        let statements = uniquify_iam_statement_sids(vec![
+            CfExpression::object([("Sid", CfExpression::from("Read"))]),
+            CfExpression::object([("Sid", CfExpression::from("Read"))]),
+            CfExpression::object([("Sid", CfExpression::from("Read2"))]),
+            CfExpression::object([("Sid", CfExpression::from("Read"))]),
+        ]);
+
+        let sids: Vec<String> = statements
+            .into_iter()
+            .map(|statement| match statement {
+                CfExpression::Object(object) => match object.get("Sid") {
+                    Some(CfExpression::String(sid)) => sid.clone(),
+                    _ => panic!("statement should have a Sid"),
+                },
+                _ => panic!("statement should be an object"),
+            })
+            .collect();
+
+        assert_eq!(sids, ["Read", "Read2", "Read22", "Read3"]);
+    }
 }
 
 /// Notification configuration for a storage resource based on the

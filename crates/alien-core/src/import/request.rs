@@ -12,10 +12,9 @@ pub const CURRENT_SETUP_IMPORT_FORMAT_VERSION: u32 = 1;
 /// pathway can omit it without affecting import behavior.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "lowercase")]
 pub enum ImportSourceKind {
     /// CloudFormation Custom Resource or Stack Outputs.
-    #[serde(alias = "cloudformation")]
     CloudFormation,
     /// Terraform provider resource.
     Terraform,
@@ -68,8 +67,10 @@ pub struct StackImportRequest {
     pub setup_fingerprint_version: u32,
     /// Resolved stack settings supplied by the setup artifact.
     pub stack_settings: StackSettings,
-    /// Platform-derived management configuration.
-    pub management_config: ManagementConfig,
+    /// Platform-derived management configuration, when this setup creates a
+    /// cross-account/cross-tenant management identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub management_config: Option<ManagementConfig>,
     /// Imported resources with typed per-resource payloads.
     pub resources: Vec<ImportedResource>,
 }
@@ -96,8 +97,25 @@ pub struct ImportedResource {
 pub struct StackImportResponse {
     /// Deployment created.
     pub deployment_id: String,
+    /// Deployment bearer token for the imported deployment, when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deployment_token: Option<String>,
     /// Stack settings persisted for the deployment.
     pub stack_settings: StackSettings,
     /// Fully populated imported stack state.
     pub stack_state: StackState,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ImportSourceKind;
+
+    #[test]
+    fn import_source_kind_serializes_cloudformation_without_separator() {
+        let value = serde_json::to_value(ImportSourceKind::CloudFormation).unwrap();
+        assert_eq!(value, "cloudformation");
+
+        let source: ImportSourceKind = serde_json::from_value(value).unwrap();
+        assert_eq!(source, ImportSourceKind::CloudFormation);
+    }
 }

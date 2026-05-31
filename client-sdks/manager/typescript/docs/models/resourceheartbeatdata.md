@@ -8,22 +8,14 @@
 ```typescript
 const value: models.ResourceHeartbeatDataStorage = {
   data: {
-    events: [],
-    path: "/dev",
+    path: "/Library",
     pathExists: true,
     status: {
-      collectionIssues: [
-        {
-          message: "<value>",
-          reason: "forbidden",
-          severity: "info",
-          source: "<value>",
-        },
-      ],
+      collectionIssues: [],
       health: "degraded",
-      lifecycle: "updating",
+      lifecycle: "stopping",
       partial: true,
-      stale: false,
+      stale: true,
     },
     backend: "local",
   },
@@ -37,14 +29,6 @@ const value: models.ResourceHeartbeatDataStorage = {
 const value: models.ResourceHeartbeatDataWorker = {
   data: {
     appName: "<value>",
-    events: [
-      {
-        kind: "<value>",
-        message: "<value>",
-        observedAt: new Date("2024-02-23T02:52:34.144Z"),
-        severity: "info",
-      },
-    ],
     status: {
       collectionIssues: [],
       health: "unknown",
@@ -65,15 +49,13 @@ const value: models.ResourceHeartbeatDataContainer = {
   data: {
     events: [
       {
-        kind: "<value>",
         message: "<value>",
-        observedAt: new Date("2024-02-23T02:52:34.144Z"),
-        severity: "info",
+        reason: "<value>",
       },
     ],
-    instances: [],
     name: "<value>",
     namespace: "<value>",
+    pods: [],
     replicas: {},
     status: {
       collectionIssues: [],
@@ -97,20 +79,24 @@ const value: models.ResourceHeartbeatDataDaemon = {
     assignedMachines: 351239,
     capacityGroup: "<value>",
     commandSupported: true,
-    daemonName: "<value>",
-    desiredMachines: 723101,
-    events: [
+    daemonInstances: [
       {
-        kind: "<value>",
-        message: "<value>",
-        observedAt: new Date("2024-02-23T02:52:34.144Z"),
-        severity: "info",
+        name: "<value>",
+        ready: true,
+        replicaId: "<id>",
       },
     ],
-    healthyInstances: 920664,
+    daemonName: "<value>",
+    desiredMachines: 633734,
+    events: [
+      {
+        message: "<value>",
+        reason: "<value>",
+      },
+    ],
+    healthyInstances: 102281,
     horizonClusterId: "<id>",
     horizonStatus: "<value>",
-    instances: [],
     latestUpdateTimestamp: "<value>",
     status: {
       collectionIssues: [],
@@ -132,29 +118,14 @@ const value: models.ResourceHeartbeatDataDaemon = {
 const value: models.ResourceHeartbeatDataComputeCluster = {
   data: {
     dockerAvailable: true,
-    events: [
-      {
-        kind: "<value>",
-        message: "<value>",
-        observedAt: new Date("2024-02-23T02:52:34.144Z"),
-        severity: "info",
-      },
-    ],
     name: "<value>",
-    networkAvailable: true,
+    networkAvailable: false,
     nodes: {},
     status: {
-      collectionIssues: [
-        {
-          message: "<value>",
-          reason: "forbidden",
-          severity: "info",
-          source: "<value>",
-        },
-      ],
-      health: "degraded",
-      lifecycle: "deleted",
-      partial: true,
+      collectionIssues: [],
+      health: "unhealthy",
+      lifecycle: "stopped",
+      partial: false,
       stale: true,
     },
     backend: "local",
@@ -189,24 +160,22 @@ const value: models.ResourceHeartbeatDataKubernetesCluster = {
 ```typescript
 const value: models.ResourceHeartbeatDataQueue = {
   data: {
-    events: [],
     messageStorageAllowedPersistenceRegions: [
       "<value 1>",
-      "<value 2>",
-      "<value 3>",
     ],
     status: {
       collectionIssues: [],
-      health: "unhealthy",
-      lifecycle: "updating",
-      partial: false,
+      health: "healthy",
+      lifecycle: "deleted",
+      partial: true,
       stale: false,
     },
-    subscriptionLabels: {},
-    subscriptionPushAttributes: {
+    subscriptionLabels: {
       "key": "<value>",
       "key1": "<value>",
+      "key2": "<value>",
     },
+    subscriptionPushAttributes: {},
     topicLabels: {
       "key": "<value>",
       "key1": "<value>",
@@ -223,13 +192,7 @@ const value: models.ResourceHeartbeatDataQueue = {
 ```typescript
 const value: models.ResourceHeartbeatDataKv = {
   data: {
-    events: [],
-    keySchema: [
-      {
-        attributeName: "<value>",
-        keyType: "<value>",
-      },
-    ],
+    keySchema: [],
     name: "<value>",
     status: {
       collectionIssues: [
@@ -240,8 +203,8 @@ const value: models.ResourceHeartbeatDataKv = {
           source: "<value>",
         },
       ],
-      health: "unknown",
-      lifecycle: "stopped",
+      health: "degraded",
+      lifecycle: "creating",
       partial: false,
       stale: false,
     },
@@ -256,10 +219,9 @@ const value: models.ResourceHeartbeatDataKv = {
 ```typescript
 const value: models.ResourceHeartbeatDataVault = {
   data: {
-    events: [],
     namespace: "<value>",
     prefix: "<value>",
-    secretMetadataListed: false,
+    secretMetadataListed: true,
     status: {
       collectionIssues: [
         {
@@ -269,8 +231,8 @@ const value: models.ResourceHeartbeatDataVault = {
           source: "<value>",
         },
       ],
-      health: "healthy",
-      lifecycle: "updating",
+      health: "unhealthy",
+      lifecycle: "scaling",
       partial: true,
       stale: true,
     },
@@ -289,15 +251,18 @@ const value: models.ResourceHeartbeatDataServiceAccount = {
     customRoleDefinitionIds: [
       "<value 1>",
     ],
-    events: [],
     location: "<value>",
-    managedTagCount: 127599,
+    managedTagCount: 22826,
     name: "<value>",
     resourceGroup: "<value>",
     resourceId: "<id>",
-    roleAssignmentCount: 916453,
-    roleAssignmentIds: [],
-    stackPermissionsApplied: false,
+    roleAssignmentCount: 127599,
+    roleAssignmentIds: [
+      "<value 1>",
+      "<value 2>",
+      "<value 3>",
+    ],
+    stackPermissionsApplied: true,
     status: {
       collectionIssues: [
         {
@@ -307,10 +272,10 @@ const value: models.ResourceHeartbeatDataServiceAccount = {
           source: "<value>",
         },
       ],
-      health: "degraded",
-      lifecycle: "deleting",
-      partial: true,
-      stale: false,
+      health: "unhealthy",
+      lifecycle: "stopped",
+      partial: false,
+      stale: true,
     },
     backend: "azureManagedIdentity",
   },
@@ -323,12 +288,11 @@ const value: models.ResourceHeartbeatDataServiceAccount = {
 ```typescript
 const value: models.ResourceHeartbeatDataNetwork = {
   data: {
-    events: [],
     isByoVpc: true,
     status: {
       collectionIssues: [],
-      health: "degraded",
-      lifecycle: "scaling",
+      health: "healthy",
+      lifecycle: "stopped",
       partial: true,
       stale: true,
     },
@@ -343,21 +307,13 @@ const value: models.ResourceHeartbeatDataNetwork = {
 ```typescript
 const value: models.ResourceHeartbeatDataRemoteStackManagement = {
   data: {
-    events: [],
     managementPermissionsApplied: true,
     status: {
-      collectionIssues: [
-        {
-          message: "<value>",
-          reason: "forbidden",
-          severity: "info",
-          source: "<value>",
-        },
-      ],
-      health: "healthy",
-      lifecycle: "creating",
+      collectionIssues: [],
+      health: "unhealthy",
+      lifecycle: "running",
       partial: true,
-      stale: false,
+      stale: true,
     },
     backend: "awsIamRole",
   },
@@ -370,35 +326,18 @@ const value: models.ResourceHeartbeatDataRemoteStackManagement = {
 ```typescript
 const value: models.ResourceHeartbeatDataArtifactRegistry = {
   data: {
-    events: [],
     region: "<value>",
     registryId: "<id>",
-    registryUri: "https://orange-halt.biz/",
-    repositories: [
-      {
-        createdAt: 2948.54,
-        kmsKeyPresent: true,
-        registryId: "<id>",
-        repositoryArn: "<value>",
-        repositoryName: "<value>",
-        repositoryUri: "https://impolite-bran.name/",
-      },
-    ],
+    registryUri: "https://dead-minor.info/",
+    repositories: [],
     repositoriesTruncated: false,
-    repositoryCount: 16580,
+    repositoryCount: 294854,
     repositoryPrefix: "<value>",
     status: {
-      collectionIssues: [
-        {
-          message: "<value>",
-          reason: "forbidden",
-          severity: "info",
-          source: "<value>",
-        },
-      ],
-      health: "healthy",
-      lifecycle: "stopped",
-      partial: false,
+      collectionIssues: [],
+      health: "unknown",
+      lifecycle: "scaling",
+      partial: true,
       stale: false,
     },
     backend: "awsEcr",
@@ -413,22 +352,21 @@ const value: models.ResourceHeartbeatDataArtifactRegistry = {
 const value: models.ResourceHeartbeatDataBuild = {
   data: {
     environmentVariableCount: 816046,
-    events: [
-      {
-        kind: "<value>",
-        message: "<value>",
-        observedAt: new Date("2024-02-23T02:52:34.144Z"),
-        severity: "info",
-      },
-    ],
     managedEnvironmentId: "<id>",
     resourceGroupName: "<value>",
     status: {
-      collectionIssues: [],
-      health: "unknown",
-      lifecycle: "stopped",
-      partial: true,
-      stale: false,
+      collectionIssues: [
+        {
+          message: "<value>",
+          reason: "forbidden",
+          severity: "info",
+          source: "<value>",
+        },
+      ],
+      health: "healthy",
+      lifecycle: "creating",
+      partial: false,
+      stale: true,
     },
     backend: "azureContainerApps",
   },
@@ -441,23 +379,15 @@ const value: models.ResourceHeartbeatDataBuild = {
 ```typescript
 const value: models.ResourceHeartbeatDataServiceActivation = {
   data: {
-    events: [],
     namespace: "<value>",
     registered: true,
-    resourceTypeCount: 440272,
+    resourceTypeCount: 100188,
     status: {
-      collectionIssues: [
-        {
-          message: "<value>",
-          reason: "forbidden",
-          severity: "info",
-          source: "<value>",
-        },
-      ],
-      health: "unknown",
-      lifecycle: "stopping",
-      partial: true,
-      stale: false,
+      collectionIssues: [],
+      health: "degraded",
+      lifecycle: "unknown",
+      partial: false,
+      stale: true,
     },
     backend: "azureResourceProvider",
   },
@@ -470,29 +400,18 @@ const value: models.ResourceHeartbeatDataServiceActivation = {
 ```typescript
 const value: models.ResourceHeartbeatDataAzureResourceGroup = {
   data: {
-    events: [
-      {
-        kind: "<value>",
-        message: "<value>",
-        observedAt: new Date("2024-02-23T02:52:34.144Z"),
-        severity: "info",
-      },
-    ],
-    managedTags: {},
+    managedTags: {
+      "key": "<value>",
+      "key1": "<value>",
+      "key2": "<value>",
+    },
     name: "<value>",
     status: {
-      collectionIssues: [
-        {
-          message: "<value>",
-          reason: "forbidden",
-          severity: "info",
-          source: "<value>",
-        },
-      ],
-      health: "unknown",
-      lifecycle: "deleted",
-      partial: true,
-      stale: false,
+      collectionIssues: [],
+      health: "unhealthy",
+      lifecycle: "updating",
+      partial: false,
+      stale: true,
     },
   },
   resourceType: "azure_resource_group",
@@ -504,23 +423,15 @@ const value: models.ResourceHeartbeatDataAzureResourceGroup = {
 ```typescript
 const value: models.ResourceHeartbeatDataAzureStorageAccount = {
   data: {
-    events: [],
     name: "<value>",
     primaryEndpoints: {},
     secondaryEndpoints: {},
     status: {
-      collectionIssues: [
-        {
-          message: "<value>",
-          reason: "forbidden",
-          severity: "info",
-          source: "<value>",
-        },
-      ],
+      collectionIssues: [],
       health: "degraded",
-      lifecycle: "updating",
+      lifecycle: "stopping",
       partial: true,
-      stale: false,
+      stale: true,
     },
   },
   resourceType: "azure_storage_account",
@@ -532,14 +443,6 @@ const value: models.ResourceHeartbeatDataAzureStorageAccount = {
 ```typescript
 const value: models.ResourceHeartbeatDataAzureContainerAppsEnvironment = {
   data: {
-    events: [
-      {
-        kind: "<value>",
-        message: "<value>",
-        observedAt: new Date("2024-02-23T02:52:34.144Z"),
-        severity: "info",
-      },
-    ],
     name: "<value>",
     status: {
       collectionIssues: [
@@ -551,12 +454,17 @@ const value: models.ResourceHeartbeatDataAzureContainerAppsEnvironment = {
         },
       ],
       health: "unhealthy",
-      lifecycle: "stopping",
-      partial: false,
+      lifecycle: "creating",
+      partial: true,
       stale: false,
     },
-    workloadProfileCount: 762670,
-    workloadProfiles: [],
+    workloadProfileCount: 511598,
+    workloadProfiles: [
+      {
+        name: "<value>",
+        workloadProfileType: "<value>",
+      },
+    ],
   },
   resourceType: "azure_container_apps_environment",
 };
@@ -567,14 +475,13 @@ const value: models.ResourceHeartbeatDataAzureContainerAppsEnvironment = {
 ```typescript
 const value: models.ResourceHeartbeatDataAzureServiceBusNamespace = {
   data: {
-    events: [],
     name: "<value>",
-    privateEndpointConnectionCount: 297212,
+    privateEndpointConnectionCount: 24724,
     status: {
       collectionIssues: [],
-      health: "unhealthy",
-      lifecycle: "updating",
-      partial: false,
+      health: "healthy",
+      lifecycle: "deleted",
+      partial: true,
       stale: false,
     },
   },

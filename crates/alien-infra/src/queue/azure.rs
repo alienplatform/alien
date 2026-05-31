@@ -354,7 +354,6 @@ fn emit_azure_service_bus_queue_heartbeat(
                 accessed_at: properties.accessed_at,
                 created_at: properties.created_at,
                 updated_at: properties.updated_at,
-                events: vec![],
             },
         )),
         raw: vec![],

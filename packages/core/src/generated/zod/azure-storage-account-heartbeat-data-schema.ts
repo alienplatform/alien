@@ -5,16 +5,12 @@
 
 import * as z from "zod";
 import { AzureStorageAccountEndpointsSchema } from "./azure-storage-account-endpoints-schema.js";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 import { StorageHeartbeatStatusSchema } from "./storage-heartbeat-status-schema.js";
 
 export const AzureStorageAccountHeartbeatDataSchema = z.object({
     "allowBlobPublicAccess": z.boolean().nullish(),
 "allowSharedKeyAccess": z.boolean().nullish(),
 "encryptionKeySource": z.string().nullish(),
-get "events"(){
-                return z.array(HeartbeatEventSchema)
-              },
 "kind": z.string().nullish(),
 "location": z.string().nullish(),
 "minimumTlsVersion": z.string().nullish(),

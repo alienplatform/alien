@@ -4,16 +4,12 @@
 */
 
 import * as z from "zod";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 import { StorageHeartbeatStatusSchema } from "./storage-heartbeat-status-schema.js";
 
 export const GcpCloudStorageHeartbeatDataSchema = z.object({
     "bucketId": z.string().nullish(),
 "defaultKmsKeyName": z.string().nullish(),
 "encryptionConfigPresent": z.boolean(),
-get "events"(){
-                return z.array(HeartbeatEventSchema)
-              },
 "lifecyclePresent": z.boolean(),
 "lifecycleRuleCount": z.int().min(0).nullish(),
 "location": z.string().nullish(),

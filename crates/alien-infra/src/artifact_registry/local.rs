@@ -314,7 +314,6 @@ fn emit_local_artifact_registry_heartbeat(
                 },
                 registry_url: registry_url.to_string(),
                 reachable: true,
-                events: vec![],
             },
         )),
         raw: vec![],

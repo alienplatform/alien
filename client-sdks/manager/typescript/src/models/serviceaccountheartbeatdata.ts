@@ -4,11 +4,6 @@
 
 import * as z from "zod/v4";
 import {
-  HeartbeatEvent,
-  HeartbeatEvent$Outbound,
-  HeartbeatEvent$outboundSchema,
-} from "./heartbeatevent.js";
-import {
   ServiceAccountHeartbeatStatus,
   ServiceAccountHeartbeatStatus$Outbound,
   ServiceAccountHeartbeatStatus$outboundSchema,
@@ -16,7 +11,6 @@ import {
 
 export type ServiceAccountHeartbeatDataLocal = {
   configured: boolean;
-  events: Array<HeartbeatEvent>;
   identity: string;
   status: ServiceAccountHeartbeatStatus;
   backend: "local";
@@ -26,7 +20,6 @@ export type ServiceAccountHeartbeatDataAzureManagedIdentity = {
   clientId?: string | null | undefined;
   customRoleDefinitionCount: number;
   customRoleDefinitionIds: Array<string>;
-  events: Array<HeartbeatEvent>;
   isolationScope?: string | null | undefined;
   location: string;
   managedTagCount: number;
@@ -49,7 +42,6 @@ export type ServiceAccountHeartbeatDataGcpServiceAccount = {
   displayName?: string | null | undefined;
   email: string;
   etag?: string | null | undefined;
-  events: Array<HeartbeatEvent>;
   name?: string | null | undefined;
   oauth2ClientId?: string | null | undefined;
   projectBindingCount: number;
@@ -68,7 +60,6 @@ export type ServiceAccountHeartbeatDataAwsIamRole = {
   attachedPolicyNames: Array<string>;
   createDate: string;
   description?: string | null | undefined;
-  events: Array<HeartbeatEvent>;
   inlinePolicyCount: number;
   inlinePolicyNames: Array<string>;
   lastUsedDate?: string | null | undefined;
@@ -96,7 +87,6 @@ export type ServiceAccountHeartbeatData =
 /** @internal */
 export type ServiceAccountHeartbeatDataLocal$Outbound = {
   configured: boolean;
-  events: Array<HeartbeatEvent$Outbound>;
   identity: string;
   status: ServiceAccountHeartbeatStatus$Outbound;
   backend: "local";
@@ -108,7 +98,6 @@ export const ServiceAccountHeartbeatDataLocal$outboundSchema: z.ZodType<
   ServiceAccountHeartbeatDataLocal
 > = z.object({
   configured: z.boolean(),
-  events: z.array(HeartbeatEvent$outboundSchema),
   identity: z.string(),
   status: ServiceAccountHeartbeatStatus$outboundSchema,
   backend: z.literal("local"),
@@ -129,7 +118,6 @@ export type ServiceAccountHeartbeatDataAzureManagedIdentity$Outbound = {
   clientId?: string | null | undefined;
   customRoleDefinitionCount: number;
   customRoleDefinitionIds: Array<string>;
-  events: Array<HeartbeatEvent$Outbound>;
   isolationScope?: string | null | undefined;
   location: string;
   managedTagCount: number;
@@ -155,7 +143,6 @@ export const ServiceAccountHeartbeatDataAzureManagedIdentity$outboundSchema:
     clientId: z.nullable(z.string()).optional(),
     customRoleDefinitionCount: z.int(),
     customRoleDefinitionIds: z.array(z.string()),
-    events: z.array(HeartbeatEvent$outboundSchema),
     isolationScope: z.nullable(z.string()).optional(),
     location: z.string(),
     managedTagCount: z.int(),
@@ -190,7 +177,6 @@ export type ServiceAccountHeartbeatDataGcpServiceAccount$Outbound = {
   displayName?: string | null | undefined;
   email: string;
   etag?: string | null | undefined;
-  events: Array<HeartbeatEvent$Outbound>;
   name?: string | null | undefined;
   oauth2ClientId?: string | null | undefined;
   projectBindingCount: number;
@@ -214,7 +200,6 @@ export const ServiceAccountHeartbeatDataGcpServiceAccount$outboundSchema:
     displayName: z.nullable(z.string()).optional(),
     email: z.string(),
     etag: z.nullable(z.string()).optional(),
-    events: z.array(HeartbeatEvent$outboundSchema),
     name: z.nullable(z.string()).optional(),
     oauth2ClientId: z.nullable(z.string()).optional(),
     projectBindingCount: z.int(),
@@ -245,7 +230,6 @@ export type ServiceAccountHeartbeatDataAwsIamRole$Outbound = {
   attachedPolicyNames: Array<string>;
   createDate: string;
   description?: string | null | undefined;
-  events: Array<HeartbeatEvent$Outbound>;
   inlinePolicyCount: number;
   inlinePolicyNames: Array<string>;
   lastUsedDate?: string | null | undefined;
@@ -274,7 +258,6 @@ export const ServiceAccountHeartbeatDataAwsIamRole$outboundSchema: z.ZodType<
   attachedPolicyNames: z.array(z.string()),
   createDate: z.string(),
   description: z.nullable(z.string()).optional(),
-  events: z.array(HeartbeatEvent$outboundSchema),
   inlinePolicyCount: z.int(),
   inlinePolicyNames: z.array(z.string()),
   lastUsedDate: z.nullable(z.string()).optional(),

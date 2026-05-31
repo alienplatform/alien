@@ -5,6 +5,7 @@
 ### Available Operations
 
 * [listAuditLog](#listauditlog) - List billing activity entries for the current workspace.
+* [getPlan](#getplan) - Get the active plan id for the current workspace. Reads a cached value on the workspace row updated via the Autumn customer.products.updated webhook; falls back to a one-shot Autumn sync if the cache is empty.
 
 ## listAuditLog
 
@@ -72,6 +73,79 @@ run();
 ### Response
 
 **Promise\<[operations.ListBillingAuditLogResponse](../../models/operations/listbillingauditlogresponse.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
+## getPlan
+
+Get the active plan id for the current workspace. Reads a cached value on the workspace row updated via the Autumn customer.products.updated webhook; falls back to a one-shot Autumn sync if the cache is empty.
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="getWorkspacePlan" method="get" path="/v1/billing/plan" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.billing.getPlan({
+    workspace: "my-workspace",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { billingGetPlan } from "@alienplatform/platform-api/funcs/billingGetPlan.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await billingGetPlan(alien, {
+    workspace: "my-workspace",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("billingGetPlan failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.GetWorkspacePlanRequest](../../models/operations/getworkspaceplanrequest.md)                                                                                       | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[operations.GetWorkspacePlanResponse](../../models/operations/getworkspaceplanresponse.md)\>**
 
 ### Errors
 

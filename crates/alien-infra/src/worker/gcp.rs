@@ -218,7 +218,6 @@ fn emit_gcp_cloud_run_worker_heartbeat(
                 container_image: container.map(|container| container.image.clone()),
                 cpu_limit: limits.and_then(|limits| limits.get("cpu").cloned()),
                 memory_limit: limits.and_then(|limits| limits.get("memory").cloned()),
-                events: vec![],
             },
         )),
         raw: vec![],

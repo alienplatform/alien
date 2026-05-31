@@ -13,17 +13,11 @@ import {
   AzureContainerAppsEnvironmentWorkloadProfile$Outbound,
   AzureContainerAppsEnvironmentWorkloadProfile$outboundSchema,
 } from "./azurecontainerappsenvironmentworkloadprofile.js";
-import {
-  HeartbeatEvent,
-  HeartbeatEvent$Outbound,
-  HeartbeatEvent$outboundSchema,
-} from "./heartbeatevent.js";
 
 export type AzureContainerAppsEnvironmentHeartbeatData = {
   customDomainVerificationId?: string | null | undefined;
   defaultDomain?: string | null | undefined;
   eventStreamEndpoint?: string | null | undefined;
-  events: Array<HeartbeatEvent>;
   infrastructureResourceGroup?: string | null | undefined;
   kind?: string | null | undefined;
   location?: string | null | undefined;
@@ -43,7 +37,6 @@ export type AzureContainerAppsEnvironmentHeartbeatData$Outbound = {
   customDomainVerificationId?: string | null | undefined;
   defaultDomain?: string | null | undefined;
   eventStreamEndpoint?: string | null | undefined;
-  events: Array<HeartbeatEvent$Outbound>;
   infrastructureResourceGroup?: string | null | undefined;
   kind?: string | null | undefined;
   location?: string | null | undefined;
@@ -69,7 +62,6 @@ export const AzureContainerAppsEnvironmentHeartbeatData$outboundSchema:
     customDomainVerificationId: z.nullable(z.string()).optional(),
     defaultDomain: z.nullable(z.string()).optional(),
     eventStreamEndpoint: z.nullable(z.string()).optional(),
-    events: z.array(HeartbeatEvent$outboundSchema),
     infrastructureResourceGroup: z.nullable(z.string()).optional(),
     kind: z.nullable(z.string()).optional(),
     location: z.nullable(z.string()).optional(),

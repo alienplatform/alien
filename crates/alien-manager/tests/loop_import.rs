@@ -94,7 +94,7 @@ fn make_imported_state(resource_id: &str, bucket: &str) -> StackState {
         resource: &resource_entry,
         platform: Platform::Aws,
         region: "us-east-1",
-        management_config: &management_config,
+        management_config: Some(&management_config),
         stack_settings: &stack_settings,
     };
 

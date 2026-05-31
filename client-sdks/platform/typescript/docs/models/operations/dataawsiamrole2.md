@@ -6,21 +6,20 @@
 import { DataAwsIamRole2 } from "@alienplatform/platform-api/models/operations";
 
 let value: DataAwsIamRole2 = {
-  events: [],
-  managementPermissionsApplied: false,
+  managementPermissionsApplied: true,
   status: {
     collectionIssues: [
       {
         message: "<value>",
         reason: "api-unavailable",
-        severity: "info",
+        severity: "warning",
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "unknown",
+    health: "unknown",
+    lifecycle: "stopping",
     partial: true,
-    stale: false,
+    stale: true,
   },
   backend: "awsIamRole",
 };
@@ -28,11 +27,10 @@ let value: DataAwsIamRole2 = {
 
 ## Fields
 
-| Field                                                                                                    | Type                                                                                                     | Required                                                                                                 | Description                                                                                              |
-| -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `events`                                                                                                 | [operations.GetRawResourceHeartbeatEvent43](../../models/operations/getrawresourceheartbeatevent43.md)[] | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
-| `managementPermissionsApplied`                                                                           | *boolean*                                                                                                | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
-| `roleArn`                                                                                                | *string*                                                                                                 | :heavy_minus_sign:                                                                                       | N/A                                                                                                      |
-| `roleName`                                                                                               | *string*                                                                                                 | :heavy_minus_sign:                                                                                       | N/A                                                                                                      |
-| `status`                                                                                                 | [operations.DataStatus43](../../models/operations/datastatus43.md)                                       | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
-| `backend`                                                                                                | *"awsIamRole"*                                                                                           | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
+| Field                                                              | Type                                                               | Required                                                           | Description                                                        |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| `managementPermissionsApplied`                                     | *boolean*                                                          | :heavy_check_mark:                                                 | N/A                                                                |
+| `roleArn`                                                          | *string*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
+| `roleName`                                                         | *string*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
+| `status`                                                           | [operations.DataStatus43](../../models/operations/datastatus43.md) | :heavy_check_mark:                                                 | N/A                                                                |
+| `backend`                                                          | *"awsIamRole"*                                                     | :heavy_check_mark:                                                 | N/A                                                                |

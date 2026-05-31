@@ -160,8 +160,7 @@ pub async fn stack_import(
         },
     };
 
-    let import_platform = req.base_platform.unwrap_or(req.platform);
-    let source_stack = match resolve_stack(&release, import_platform) {
+    let source_stack = match resolve_stack(&release, req.platform) {
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
@@ -270,6 +269,7 @@ pub async fn stack_import(
                 StatusCode::OK,
                 Json(StackImportResponse {
                     deployment_id: updated.id,
+                    deployment_token: updated.deployment_token,
                     stack_settings: updated.stack_settings,
                     stack_state,
                 }),
@@ -317,7 +317,7 @@ pub async fn stack_import(
         setup_fingerprint: req.setup_fingerprint.clone(),
         setup_fingerprint_version: req.setup_fingerprint_version,
         deployment_token: Some(raw_token.clone()),
-        management_config: Some(req.management_config.clone()),
+        management_config: req.management_config.clone(),
     };
 
     let created = match state
@@ -347,6 +347,7 @@ pub async fn stack_import(
         StatusCode::CREATED,
         Json(StackImportResponse {
             deployment_id: created.id,
+            deployment_token: Some(raw_token),
             stack_settings: created.stack_settings,
             stack_state,
         }),
@@ -535,7 +536,7 @@ async fn prepare_import_stack(
     let config = DeploymentConfig {
         deployment_name: Some(req.deployment_name.clone()),
         stack_settings: req.stack_settings.clone(),
-        management_config: Some(req.management_config.clone()),
+        management_config: req.management_config.clone(),
         environment_variables: EnvironmentVariablesSnapshot {
             variables: Vec::new(),
             hash: "empty".to_string(),
@@ -660,10 +661,9 @@ fn parse_aws_account_id_from_arn(value: &str) -> Option<String> {
     }
 }
 
-/// Look up the stack for the platform being imported. Releases carry
-/// per-platform stacks (the AWS+GCP+Azure rendering of a single `alien
-/// release`); the importer can only land on whichever one the artifact
-/// produced.
+/// Look up the stack for the runtime platform being imported. For managed
+/// Kubernetes, `basePlatform` selects the setup cloud and importers, but the
+/// release stack is still keyed by `kubernetes`.
 fn resolve_stack(
     release: &ReleaseRecord,
     platform: alien_core::Platform,
@@ -722,7 +722,7 @@ fn build_stack_state(
                     platform: import_platform,
                     region: &req.region,
                     stack_settings: &req.stack_settings,
-                    management_config: &req.management_config,
+                    management_config: req.management_config.as_ref(),
                     resource: entry,
                 },
             )

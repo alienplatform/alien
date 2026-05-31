@@ -38,7 +38,7 @@ export type ProjectListItemResponseType = ClosedEnum<
 >;
 
 /**
- * The Git Repository that will be connected to the project. When this is defined, any pushes to the specified connected Git Repository will be automatically deployed
+ * Verified source repository connected to the project. Alien uses this for GitHub Actions setup and source-aware features; releases are still created explicitly by CI or `alien release`.
  */
 export type ProjectListItemResponseGitRepository = {
   /**
@@ -213,6 +213,14 @@ export type ProjectListItemResponseDefaultManagers = {
    * Unique identifier for a default private manager.
    */
   azure?: string | null | undefined;
+  /**
+   * Unique identifier for a default private manager.
+   */
+  kubernetes?: string | null | undefined;
+  /**
+   * Unique identifier for a default private manager.
+   */
+  local?: string | null | undefined;
 };
 
 export type ProjectListItemResponse = {
@@ -225,7 +233,7 @@ export type ProjectListItemResponse = {
    */
   name: string;
   /**
-   * The Git Repository that will be connected to the project. When this is defined, any pushes to the specified connected Git Repository will be automatically deployed
+   * Verified source repository connected to the project. Alien uses this for GitHub Actions setup and source-aware features; releases are still created explicitly by CI or `alien release`.
    */
   gitRepository?: ProjectListItemResponseGitRepository | null | undefined;
   /**
@@ -453,6 +461,8 @@ export const ProjectListItemResponseDefaultManagers$inboundSchema: z.ZodType<
   aws: z.nullable(z.string()).optional(),
   gcp: z.nullable(z.string()).optional(),
   azure: z.nullable(z.string()).optional(),
+  kubernetes: z.nullable(z.string()).optional(),
+  local: z.nullable(z.string()).optional(),
 });
 
 export function projectListItemResponseDefaultManagersFromJSON(

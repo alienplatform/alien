@@ -10,26 +10,18 @@ let value: DataDaemon = {
     assignedMachines: 489905,
     capacityGroup: "<value>",
     commandSupported: true,
+    daemonInstances: [],
     daemonName: "<value>",
-    desiredMachines: 300440,
+    desiredMachines: 665477,
     events: [
       {
-        kind: "<value>",
         message: "<value>",
-        observedAt: new Date("2025-12-12T10:53:03.618Z"),
-        severity: "error",
+        reason: "<value>",
       },
     ],
-    healthyInstances: 431179,
+    healthyInstances: 921353,
     horizonClusterId: "<id>",
     horizonStatus: "<value>",
-    instances: [
-      {
-        name: "<value>",
-        ready: true,
-        replicaId: "<id>",
-      },
-    ],
     latestUpdateTimestamp: "<value>",
     status: {
       collectionIssues: [
@@ -45,7 +37,7 @@ let value: DataDaemon = {
       partial: false,
       stale: true,
     },
-    unavailableInstances: 833736,
+    unavailableInstances: 431179,
     backend: "gcp",
   },
   resourceType: "daemon",

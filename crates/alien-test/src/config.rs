@@ -115,6 +115,9 @@ pub struct AzureConfig {
     pub client_id: String,
     pub client_secret: String,
     pub region: String,
+    /// Azure service principal object ID. Role assignments require this
+    /// principal ID; the application/client ID is not sufficient.
+    pub principal_id: Option<String>,
     /// OIDC issuer for production and CI token exchange.
     pub oidc_issuer: Option<String>,
     /// OIDC subject for production and CI token exchange.
@@ -361,7 +364,8 @@ impl TestConfig {
             region,
             credentials_json: env::var("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY")
                 .ok()
-                .map(|s| s.trim().to_string()),
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
             management_identity_email: env::var("GOOGLE_MANAGEMENT_IDENTITY_EMAIL")
                 .ok()
                 .filter(|s| !s.is_empty()),
@@ -379,7 +383,8 @@ impl TestConfig {
             region,
             credentials_json: env::var("GOOGLE_TARGET_SERVICE_ACCOUNT_KEY")
                 .ok()
-                .map(|s| s.trim().to_string()),
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
             management_identity_email: None,
             management_identity_unique_id: None,
         })
@@ -399,6 +404,9 @@ impl TestConfig {
             client_id,
             client_secret,
             region,
+            principal_id: env::var("AZURE_MANAGEMENT_PRINCIPAL_ID")
+                .ok()
+                .filter(|s| !s.is_empty()),
             oidc_issuer: env::var("AZURE_MANAGEMENT_OIDC_ISSUER")
                 .ok()
                 .filter(|s| !s.is_empty()),
@@ -423,6 +431,9 @@ impl TestConfig {
             client_id,
             client_secret,
             region,
+            principal_id: env::var("AZURE_TARGET_PRINCIPAL_ID")
+                .ok()
+                .filter(|s| !s.is_empty()),
             oidc_issuer: None,
             oidc_subject: None,
         })
@@ -654,6 +665,7 @@ impl TestConfig {
             mask(&az.tenant_id);
             mask(&az.client_id);
             mask(&az.client_secret);
+            mask_opt(&az.principal_id);
         }
         let azr = &self.azure_resources;
         mask_opt(&azr.resource_group);

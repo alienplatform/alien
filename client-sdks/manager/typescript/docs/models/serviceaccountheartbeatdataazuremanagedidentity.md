@@ -11,13 +11,12 @@ let value: ServiceAccountHeartbeatDataAzureManagedIdentity = {
     "<value 1>",
     "<value 2>",
   ],
-  events: [],
   location: "<value>",
-  managedTagCount: 826820,
+  managedTagCount: 375916,
   name: "<value>",
   resourceGroup: "<value>",
   resourceId: "<id>",
-  roleAssignmentCount: 359064,
+  roleAssignmentCount: 826820,
   roleAssignmentIds: [
     "<value 1>",
   ],
@@ -31,10 +30,10 @@ let value: ServiceAccountHeartbeatDataAzureManagedIdentity = {
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "deleting",
-    partial: true,
-    stale: false,
+    health: "unhealthy",
+    lifecycle: "stopped",
+    partial: false,
+    stale: true,
   },
   backend: "azureManagedIdentity",
 };
@@ -47,7 +46,6 @@ let value: ServiceAccountHeartbeatDataAzureManagedIdentity = {
 | `clientId`                                                                         | *string*                                                                           | :heavy_minus_sign:                                                                 | N/A                                                                                |
 | `customRoleDefinitionCount`                                                        | *number*                                                                           | :heavy_check_mark:                                                                 | N/A                                                                                |
 | `customRoleDefinitionIds`                                                          | *string*[]                                                                         | :heavy_check_mark:                                                                 | N/A                                                                                |
-| `events`                                                                           | [models.HeartbeatEvent](../models/heartbeatevent.md)[]                             | :heavy_check_mark:                                                                 | N/A                                                                                |
 | `isolationScope`                                                                   | *string*                                                                           | :heavy_minus_sign:                                                                 | N/A                                                                                |
 | `location`                                                                         | *string*                                                                           | :heavy_check_mark:                                                                 | N/A                                                                                |
 | `managedTagCount`                                                                  | *number*                                                                           | :heavy_check_mark:                                                                 | N/A                                                                                |

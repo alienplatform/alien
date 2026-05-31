@@ -8,23 +8,15 @@
 ```typescript
 const value: models.DataAws2 = {
   capacityGroups: [],
-  events: [],
   name: "<value>",
   nodes: {},
   providerFleets: [],
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "not-installed",
-        severity: "info",
-        source: "<value>",
-      },
-    ],
-    health: "unknown",
-    lifecycle: "deleting",
+    collectionIssues: [],
+    health: "degraded",
+    lifecycle: "updating",
     partial: true,
-    stale: false,
+    stale: true,
   },
   backend: "aws",
 };
@@ -41,21 +33,20 @@ const value: models.DataGcp2 = {
       groupId: "<id>",
     },
   ],
-  events: [],
   name: "<value>",
   nodes: {},
-  providerFleets: [
-    {
-      currentMachines: 22022,
-      desiredMachines: 972056,
-      groupId: "<id>",
-      providerId: "<id>",
-    },
-  ],
+  providerFleets: [],
   status: {
-    collectionIssues: [],
-    health: "unhealthy",
-    lifecycle: "deleting",
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "api-unavailable",
+        severity: "warning",
+        source: "<value>",
+      },
+    ],
+    health: "unknown",
+    lifecycle: "failed",
     partial: true,
     stale: false,
   },
@@ -74,21 +65,20 @@ const value: models.DataAzure2 = {
       groupId: "<id>",
     },
   ],
-  events: [],
   name: "<value>",
   nodes: {},
-  providerFleets: [
-    {
-      currentMachines: 567819,
-      desiredMachines: 375470,
-      groupId: "<id>",
-      providerId: "<id>",
-    },
-  ],
+  providerFleets: [],
   status: {
-    collectionIssues: [],
-    health: "degraded",
-    lifecycle: "running",
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "api-unavailable",
+        severity: "warning",
+        source: "<value>",
+      },
+    ],
+    health: "healthy",
+    lifecycle: "deleting",
     partial: true,
     stale: true,
   },
@@ -101,23 +91,22 @@ const value: models.DataAzure2 = {
 ```typescript
 const value: models.DataLocal5 = {
   dockerAvailable: false,
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2026-09-24T00:42:05.626Z"),
-      severity: "info",
-    },
-  ],
   name: "<value>",
   networkAvailable: false,
   nodes: {},
   status: {
-    collectionIssues: [],
-    health: "healthy",
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "collection-failed",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
+    health: "unknown",
     lifecycle: "stopped",
     partial: true,
-    stale: false,
+    stale: true,
   },
   backend: "local",
 };

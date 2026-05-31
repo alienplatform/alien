@@ -7,14 +7,6 @@ import { ResourceHeartbeatDataAzureContainerAppsEnvironment } from "@alienplatfo
 
 let value: ResourceHeartbeatDataAzureContainerAppsEnvironment = {
   data: {
-    events: [
-      {
-        kind: "<value>",
-        message: "<value>",
-        observedAt: new Date("2024-02-23T02:52:34.144Z"),
-        severity: "info",
-      },
-    ],
     name: "<value>",
     status: {
       collectionIssues: [
@@ -26,12 +18,17 @@ let value: ResourceHeartbeatDataAzureContainerAppsEnvironment = {
         },
       ],
       health: "unhealthy",
-      lifecycle: "stopping",
-      partial: false,
+      lifecycle: "creating",
+      partial: true,
       stale: false,
     },
-    workloadProfileCount: 762670,
-    workloadProfiles: [],
+    workloadProfileCount: 511598,
+    workloadProfiles: [
+      {
+        name: "<value>",
+        workloadProfileType: "<value>",
+      },
+    ],
   },
   resourceType: "azure_container_apps_environment",
 };

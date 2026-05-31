@@ -11,15 +11,18 @@ let value: ResourceHeartbeatDataServiceAccount = {
     customRoleDefinitionIds: [
       "<value 1>",
     ],
-    events: [],
     location: "<value>",
-    managedTagCount: 127599,
+    managedTagCount: 22826,
     name: "<value>",
     resourceGroup: "<value>",
     resourceId: "<id>",
-    roleAssignmentCount: 916453,
-    roleAssignmentIds: [],
-    stackPermissionsApplied: false,
+    roleAssignmentCount: 127599,
+    roleAssignmentIds: [
+      "<value 1>",
+      "<value 2>",
+      "<value 3>",
+    ],
+    stackPermissionsApplied: true,
     status: {
       collectionIssues: [
         {
@@ -29,10 +32,10 @@ let value: ResourceHeartbeatDataServiceAccount = {
           source: "<value>",
         },
       ],
-      health: "degraded",
-      lifecycle: "deleting",
-      partial: true,
-      stale: false,
+      health: "unhealthy",
+      lifecycle: "stopped",
+      partial: false,
+      stale: true,
     },
     backend: "azureManagedIdentity",
   },

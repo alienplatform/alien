@@ -37,7 +37,7 @@ export type ListDeploymentsStatus = ClosedEnum<typeof ListDeploymentsStatus>;
 /**
  * Represents the target cloud platform.
  */
-export const ListDeploymentsPlatform = {
+export const ListDeploymentsEnvironment = {
   Aws: "aws",
   Gcp: "gcp",
   Azure: "azure",
@@ -48,8 +48,8 @@ export const ListDeploymentsPlatform = {
 /**
  * Represents the target cloud platform.
  */
-export type ListDeploymentsPlatform = ClosedEnum<
-  typeof ListDeploymentsPlatform
+export type ListDeploymentsEnvironment = ClosedEnum<
+  typeof ListDeploymentsEnvironment
 >;
 
 export const ListDeploymentsInclude = {
@@ -85,9 +85,9 @@ export type ListDeploymentsRequest = {
    */
   status?: Array<ListDeploymentsStatus> | undefined;
   /**
-   * Filter deployments by platform
+   * Filter deployments by effective environment
    */
-  platform?: Array<ListDeploymentsPlatform> | undefined;
+  environment?: Array<ListDeploymentsEnvironment> | undefined;
   /**
    * Optional fields to include: release, deploymentGroup, project
    */
@@ -122,9 +122,9 @@ export const ListDeploymentsStatus$outboundSchema: z.ZodEnum<
 > = z.enum(ListDeploymentsStatus);
 
 /** @internal */
-export const ListDeploymentsPlatform$outboundSchema: z.ZodEnum<
-  typeof ListDeploymentsPlatform
-> = z.enum(ListDeploymentsPlatform);
+export const ListDeploymentsEnvironment$outboundSchema: z.ZodEnum<
+  typeof ListDeploymentsEnvironment
+> = z.enum(ListDeploymentsEnvironment);
 
 /** @internal */
 export const ListDeploymentsInclude$outboundSchema: z.ZodEnum<
@@ -139,7 +139,7 @@ export type ListDeploymentsRequest$Outbound = {
   workspace?: string | undefined;
   search?: string | undefined;
   status?: Array<string> | undefined;
-  platform?: Array<string> | undefined;
+  environment?: Array<string> | undefined;
   include?: Array<string> | undefined;
   limit: number;
   cursor?: string | undefined;
@@ -156,7 +156,7 @@ export const ListDeploymentsRequest$outboundSchema: z.ZodType<
   workspace: z.string().optional(),
   search: z.string().optional(),
   status: z.array(ListDeploymentsStatus$outboundSchema).optional(),
-  platform: z.array(ListDeploymentsPlatform$outboundSchema).optional(),
+  environment: z.array(ListDeploymentsEnvironment$outboundSchema).optional(),
   include: z.array(ListDeploymentsInclude$outboundSchema).optional(),
   limit: z.int().default(20),
   cursor: z.string().optional(),

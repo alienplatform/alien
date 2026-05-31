@@ -11,15 +11,10 @@ const value: models.DataAwsVpc = {
     "<value 1>",
     "<value 2>",
   ],
-  events: [],
   isByoVpc: true,
   privateSubnetIds: [],
-  publicSubnetIds: [
-    "<value 1>",
-    "<value 2>",
-    "<value 3>",
-  ],
-  routeTableCount: 642691,
+  publicSubnetIds: [],
+  routeTableCount: 759318,
   status: {
     collectionIssues: [
       {
@@ -29,8 +24,8 @@ const value: models.DataAwsVpc = {
         source: "<value>",
       },
     ],
-    health: "healthy",
-    lifecycle: "creating",
+    health: "unhealthy",
+    lifecycle: "scaling",
     partial: true,
     stale: true,
   },
@@ -42,21 +37,13 @@ const value: models.DataAwsVpc = {
 
 ```typescript
 const value: models.DataGcpVpc = {
-  events: [],
   isByoVpc: true,
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "collection-failed",
-        severity: "warning",
-        source: "<value>",
-      },
-    ],
+    collectionIssues: [],
     health: "degraded",
-    lifecycle: "updating",
-    partial: false,
-    stale: true,
+    lifecycle: "deleting",
+    partial: true,
+    stale: false,
   },
   backend: "gcpVpc",
 };
@@ -66,21 +53,13 @@ const value: models.DataGcpVpc = {
 
 ```typescript
 const value: models.DataAzureVnet = {
-  events: [],
   isByoVnet: true,
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "forbidden",
-        severity: "warning",
-        source: "<value>",
-      },
-    ],
-    health: "unknown",
-    lifecycle: "deleting",
-    partial: false,
-    stale: false,
+    collectionIssues: [],
+    health: "unhealthy",
+    lifecycle: "unknown",
+    partial: true,
+    stale: true,
   },
   backend: "azureVnet",
 };

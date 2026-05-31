@@ -4,27 +4,27 @@
 */
 
 import * as z from "zod";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
-import { HorizonDaemonInstanceStatusSchema } from "./horizon-daemon-instance-status-schema.js";
+import { ManagedRuntimeEventSnapshotSchema } from "./managed-runtime-event-snapshot-schema.js";
+import { ManagedRuntimeUnitStatusSchema } from "./managed-runtime-unit-status-schema.js";
 import { WorkloadHeartbeatStatusSchema } from "./workload-heartbeat-status-schema.js";
 
 export const AzureDaemonHeartbeatDataSchema = z.object({
     "assignedMachines": z.int().min(0),
 "capacityGroup": z.string(),
 "commandSupported": z.boolean(),
+get "daemonInstances"(){
+                return z.array(ManagedRuntimeUnitStatusSchema)
+              },
 "daemonName": z.string(),
 "desiredMachines": z.int().min(0),
 get "events"(){
-                return z.array(HeartbeatEventSchema)
+                return z.array(ManagedRuntimeEventSnapshotSchema)
               },
 "healthyInstances": z.int().min(0),
 "horizonClusterId": z.string(),
 "horizonStatus": z.string(),
 "horizonStatusMessage": z.string().nullish(),
 "horizonStatusReason": z.string().nullish(),
-get "instances"(){
-                return z.array(HorizonDaemonInstanceStatusSchema)
-              },
 "latestUpdateTimestamp": z.string(),
 get "status"(){
                 return WorkloadHeartbeatStatusSchema

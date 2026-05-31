@@ -85,7 +85,6 @@ fn emit_gcp_network_heartbeat(
                 cloud_nat_name: controller.cloud_nat_name.clone(),
                 firewall_name: controller.firewall_name.clone(),
                 is_byo_vpc: controller.is_byo_vpc,
-                events: vec![],
             },
         )),
         raw: vec![],

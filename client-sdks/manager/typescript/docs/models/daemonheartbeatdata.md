@@ -10,20 +10,19 @@ const value: models.DaemonHeartbeatDataAws = {
   assignedMachines: 818243,
   capacityGroup: "<value>",
   commandSupported: true,
-  daemonName: "<value>",
-  desiredMachines: 655722,
-  events: [
+  daemonInstances: [
     {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-02-23T02:52:34.144Z"),
-      severity: "info",
+      name: "<value>",
+      ready: true,
+      replicaId: "<id>",
     },
   ],
-  healthyInstances: 188895,
+  daemonName: "<value>",
+  desiredMachines: 915980,
+  events: [],
+  healthyInstances: 401388,
   horizonClusterId: "<id>",
   horizonStatus: "<value>",
-  instances: [],
   latestUpdateTimestamp: "<value>",
   status: {
     collectionIssues: [],
@@ -44,20 +43,19 @@ const value: models.DaemonHeartbeatDataGcp = {
   assignedMachines: 629305,
   capacityGroup: "<value>",
   commandSupported: false,
-  daemonName: "<value>",
-  desiredMachines: 976582,
-  events: [
+  daemonInstances: [
     {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-02-23T02:52:34.144Z"),
-      severity: "info",
+      name: "<value>",
+      ready: true,
+      replicaId: "<id>",
     },
   ],
-  healthyInstances: 396125,
+  daemonName: "<value>",
+  desiredMachines: 550789,
+  events: [],
+  healthyInstances: 289674,
   horizonClusterId: "<id>",
   horizonStatus: "<value>",
-  instances: [],
   latestUpdateTimestamp: "<value>",
   status: {
     collectionIssues: [],
@@ -78,19 +76,24 @@ const value: models.DaemonHeartbeatDataAzure = {
   assignedMachines: 950576,
   capacityGroup: "<value>",
   commandSupported: true,
-  daemonName: "<value>",
-  desiredMachines: 587230,
-  events: [],
-  healthyInstances: 564532,
-  horizonClusterId: "<id>",
-  horizonStatus: "<value>",
-  instances: [
+  daemonInstances: [
     {
       name: "<value>",
       ready: true,
       replicaId: "<id>",
     },
   ],
+  daemonName: "<value>",
+  desiredMachines: 469652,
+  events: [
+    {
+      message: "<value>",
+      reason: "<value>",
+    },
+  ],
+  healthyInstances: 926835,
+  horizonClusterId: "<id>",
+  horizonStatus: "<value>",
   latestUpdateTimestamp: "<value>",
   status: {
     collectionIssues: [],
@@ -111,15 +114,13 @@ const value: models.DaemonHeartbeatDataKubernetes = {
   commandSupported: false,
   events: [
     {
-      kind: "<value>",
       message: "<value>",
-      observedAt: new Date("2024-02-23T02:52:34.144Z"),
-      severity: "info",
+      reason: "<value>",
     },
   ],
-  instances: [],
   name: "<value>",
   namespace: "<value>",
+  pods: [],
   replicas: {},
   status: {
     collectionIssues: [],

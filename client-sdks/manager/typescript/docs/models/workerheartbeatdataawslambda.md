@@ -6,10 +6,9 @@
 import { WorkerHeartbeatDataAwsLambda } from "@alienplatform/manager-api/models";
 
 let value: WorkerHeartbeatDataAwsLambda = {
-  events: [],
   functionName: "<value>",
-  functionUrlCorsPresent: false,
-  layerCount: 109377,
+  functionUrlCorsPresent: true,
+  layerCount: 637035,
   status: {
     collectionIssues: [],
     health: "unknown",
@@ -17,7 +16,7 @@ let value: WorkerHeartbeatDataAwsLambda = {
     partial: false,
     stale: true,
   },
-  triggerCount: 947900,
+  triggerCount: 109377,
   backend: "awsLambda",
 };
 ```
@@ -27,7 +26,6 @@ let value: WorkerHeartbeatDataAwsLambda = {
 | Field                                                                  | Type                                                                   | Required                                                               | Description                                                            |
 | ---------------------------------------------------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------- |
 | `codeSha256`                                                           | *string*                                                               | :heavy_minus_sign:                                                     | N/A                                                                    |
-| `events`                                                               | [models.HeartbeatEvent](../models/heartbeatevent.md)[]                 | :heavy_check_mark:                                                     | N/A                                                                    |
 | `functionName`                                                         | *string*                                                               | :heavy_check_mark:                                                     | N/A                                                                    |
 | `functionUrlAuthType`                                                  | *string*                                                               | :heavy_minus_sign:                                                     | N/A                                                                    |
 | `functionUrlCorsPresent`                                               | *boolean*                                                              | :heavy_check_mark:                                                     | N/A                                                                    |

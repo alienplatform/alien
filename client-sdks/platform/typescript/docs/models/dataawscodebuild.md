@@ -8,15 +8,21 @@ import { DataAwsCodeBuild } from "@alienplatform/platform-api/models";
 let value: DataAwsCodeBuild = {
   encryptionKeyPresent: true,
   environmentVariableCount: 879452,
-  events: [],
   projectName: "<value>",
-  serviceRolePresent: false,
+  serviceRolePresent: true,
   status: {
-    collectionIssues: [],
-    health: "unhealthy",
-    lifecycle: "stopped",
-    partial: true,
-    stale: false,
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "api-unavailable",
+        severity: "error",
+        source: "<value>",
+      },
+    ],
+    health: "degraded",
+    lifecycle: "unknown",
+    partial: false,
+    stale: true,
   },
   backend: "awsCodeBuild",
 };
@@ -24,28 +30,27 @@ let value: DataAwsCodeBuild = {
 
 ## Fields
 
-| Field                                                                            | Type                                                                             | Required                                                                         | Description                                                                      |
-| -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `artifactsEncryptionDisabled`                                                    | *boolean*                                                                        | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `artifactsType`                                                                  | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `cloudWatchLogsStatus`                                                           | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `computeType`                                                                    | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `created`                                                                        | *number*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `description`                                                                    | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `encryptionKeyPresent`                                                           | *boolean*                                                                        | :heavy_check_mark:                                                               | N/A                                                                              |
-| `environmentImage`                                                               | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `environmentType`                                                                | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `environmentVariableCount`                                                       | *number*                                                                         | :heavy_check_mark:                                                               | N/A                                                                              |
-| `events`                                                                         | [models.SyncReconcileRequestEvent50](../models/syncreconcilerequestevent50.md)[] | :heavy_check_mark:                                                               | N/A                                                                              |
-| `imagePullCredentialsType`                                                       | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `lastModified`                                                                   | *number*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `privilegedMode`                                                                 | *boolean*                                                                        | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `projectArn`                                                                     | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `projectName`                                                                    | *string*                                                                         | :heavy_check_mark:                                                               | N/A                                                                              |
-| `queuedTimeoutInMinutes`                                                         | *number*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `s3LogsStatus`                                                                   | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `serviceRolePresent`                                                             | *boolean*                                                                        | :heavy_check_mark:                                                               | N/A                                                                              |
-| `sourceType`                                                                     | *string*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `status`                                                                         | [models.HeartbeatStatus50](../models/heartbeatstatus50.md)                       | :heavy_check_mark:                                                               | N/A                                                                              |
-| `timeoutInMinutes`                                                               | *number*                                                                         | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `backend`                                                                        | *"awsCodeBuild"*                                                                 | :heavy_check_mark:                                                               | N/A                                                                              |
+| Field                                                      | Type                                                       | Required                                                   | Description                                                |
+| ---------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- |
+| `artifactsEncryptionDisabled`                              | *boolean*                                                  | :heavy_minus_sign:                                         | N/A                                                        |
+| `artifactsType`                                            | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
+| `cloudWatchLogsStatus`                                     | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
+| `computeType`                                              | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
+| `created`                                                  | *number*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
+| `description`                                              | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
+| `encryptionKeyPresent`                                     | *boolean*                                                  | :heavy_check_mark:                                         | N/A                                                        |
+| `environmentImage`                                         | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
+| `environmentType`                                          | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
+| `environmentVariableCount`                                 | *number*                                                   | :heavy_check_mark:                                         | N/A                                                        |
+| `imagePullCredentialsType`                                 | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
+| `lastModified`                                             | *number*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
+| `privilegedMode`                                           | *boolean*                                                  | :heavy_minus_sign:                                         | N/A                                                        |
+| `projectArn`                                               | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
+| `projectName`                                              | *string*                                                   | :heavy_check_mark:                                         | N/A                                                        |
+| `queuedTimeoutInMinutes`                                   | *number*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
+| `s3LogsStatus`                                             | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
+| `serviceRolePresent`                                       | *boolean*                                                  | :heavy_check_mark:                                         | N/A                                                        |
+| `sourceType`                                               | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
+| `status`                                                   | [models.HeartbeatStatus50](../models/heartbeatstatus50.md) | :heavy_check_mark:                                         | N/A                                                        |
+| `timeoutInMinutes`                                         | *number*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
+| `backend`                                                  | *"awsCodeBuild"*                                           | :heavy_check_mark:                                         | N/A                                                        |

@@ -71,6 +71,12 @@ pub struct ReleaseArgs {
     #[arg(long)]
     pub experimental: bool,
 
+    /// Base cloud platform for Kubernetes auto-builds. This keeps the release
+    /// stack under Kubernetes while using the managed cluster's default
+    /// architecture when auto-building missing artifacts.
+    #[arg(long)]
+    pub base_platform: Option<String>,
+
     /// Use pre-built and pre-pushed images. Skips both build and push steps.
     /// Requires that stack.json already contains remote image URIs.
     #[arg(long)]
@@ -231,6 +237,12 @@ async fn load_release_config(
         }
     };
 
+    let has_kubernetes_platform = target_platforms
+        .iter()
+        .any(|platform| platform.eq_ignore_ascii_case(Platform::Kubernetes.as_str()));
+    let kubernetes_base_platform =
+        parse_kubernetes_base_platform(has_kubernetes_platform, args.base_platform.as_deref())?;
+
     // Build for every platform unless --prebuilt is set.
     // Content-hash dedup in the build layer makes this fast when nothing changed.
     if !args.prebuilt {
@@ -241,6 +253,7 @@ async fn load_release_config(
                 &output_dir,
                 show_human_output,
                 args.override_base_image.clone(),
+                kubernetes_base_platform,
             )
             .await?;
         }
@@ -634,6 +647,7 @@ async fn auto_build_for_platform(
     output_dir: &PathBuf,
     _show_human_output: bool,
     override_base_image: Option<String>,
+    kubernetes_base_platform: Option<Platform>,
 ) -> Result<()> {
     let platform = Platform::from_str(platform_str).map_err(|e| {
         AlienError::new(ErrorData::ValidationError {
@@ -648,7 +662,9 @@ async fn auto_build_for_platform(
         },
         Platform::Gcp => alien_build::settings::PlatformBuildSettings::Gcp {},
         Platform::Azure => alien_build::settings::PlatformBuildSettings::Azure {},
-        Platform::Kubernetes => alien_build::settings::PlatformBuildSettings::Kubernetes {},
+        Platform::Kubernetes => alien_build::settings::PlatformBuildSettings::Kubernetes {
+            base_platform: kubernetes_base_platform,
+        },
         Platform::Local => alien_build::settings::PlatformBuildSettings::Local {},
         Platform::Test => alien_build::settings::PlatformBuildSettings::Test {},
     };
@@ -753,6 +769,7 @@ fn create_manual_push_settings(args: &ReleaseArgs, image_repo: &str) -> Result<P
 
     Ok(PushSettings {
         repository: image_repo.to_string(),
+        destination_label: Some(format!("custom registry {}", image_repo)),
         options: dockdash::PushOptions {
             auth,
             protocol,
@@ -857,6 +874,7 @@ async fn build_proxy_push_settings(
 
     Ok(PushSettings {
         repository,
+        destination_label: Some(manager_push_destination_label(manager)),
         options: dockdash::PushOptions {
             auth,
             protocol,
@@ -867,6 +885,20 @@ async fn build_proxy_push_settings(
             ..Default::default()
         },
     })
+}
+
+fn manager_push_destination_label(manager: &ManagerContext) -> String {
+    match (
+        manager.manager_name.as_deref(),
+        manager.manager_is_system,
+        manager.manager_cloud.as_deref(),
+    ) {
+        (Some(name), Some(true), _) => format!("{name} (Alien-hosted)"),
+        (Some(name), Some(false), Some(cloud)) => format!("{name} private manager ({cloud})"),
+        (Some(name), Some(false), None) => format!("{name} private manager"),
+        (Some(name), _, _) => name.to_string(),
+        (None, _, _) => manager.manager_url.clone(),
+    }
 }
 
 /// Translate registry URL for CLI access.
@@ -974,6 +1006,40 @@ fn validate_platforms_against_stack(platforms: &[String], stack: &Stack) -> Resu
     }
 
     Ok(())
+}
+
+fn parse_kubernetes_base_platform(
+    has_kubernetes_platform: bool,
+    base_platform: Option<&str>,
+) -> Result<Option<Platform>> {
+    let Some(base_platform) = base_platform else {
+        return Ok(None);
+    };
+
+    let parsed = Platform::from_str(base_platform).map_err(|e| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "base-platform".to_string(),
+            message: e,
+        })
+    })?;
+
+    if !has_kubernetes_platform {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "base-platform".to_string(),
+            message: "--base-platform is only supported when releasing --platforms kubernetes"
+                .to_string(),
+        }));
+    }
+
+    match parsed {
+        Platform::Aws | Platform::Gcp | Platform::Azure => Ok(Some(parsed)),
+        Platform::Kubernetes | Platform::Local | Platform::Test => {
+            Err(AlienError::new(ErrorData::ValidationError {
+                field: "base-platform".to_string(),
+                message: "--base-platform must be one of: aws, gcp, azure".to_string(),
+            }))
+        }
+    }
 }
 
 /// Validate that all compute resources in the stack have remote image URIs (not local paths).
@@ -1192,5 +1258,37 @@ fn collect_push_cache_entries(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_kubernetes_base_platform_accepts_clouds_for_kubernetes_releases() {
+        assert_eq!(
+            parse_kubernetes_base_platform(true, Some("aws")).unwrap(),
+            Some(Platform::Aws)
+        );
+        assert_eq!(
+            parse_kubernetes_base_platform(true, Some("gcp")).unwrap(),
+            Some(Platform::Gcp)
+        );
+        assert_eq!(
+            parse_kubernetes_base_platform(true, Some("azure")).unwrap(),
+            Some(Platform::Azure)
+        );
+    }
+
+    #[test]
+    fn parse_kubernetes_base_platform_rejects_releases_without_kubernetes() {
+        assert!(parse_kubernetes_base_platform(false, Some("aws")).is_err());
+    }
+
+    #[test]
+    fn parse_kubernetes_base_platform_rejects_non_cloud_platforms() {
+        assert!(parse_kubernetes_base_platform(true, Some("kubernetes")).is_err());
+        assert!(parse_kubernetes_base_platform(true, Some("local")).is_err());
     }
 }

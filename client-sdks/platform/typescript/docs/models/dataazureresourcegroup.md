@@ -7,12 +7,7 @@ import { DataAzureResourceGroup } from "@alienplatform/platform-api/models";
 
 let value: DataAzureResourceGroup = {
   data: {
-    events: [],
-    managedTags: {
-      "key": "<value>",
-      "key1": "<value>",
-      "key2": "<value>",
-    },
+    managedTags: {},
     name: "<value>",
     status: {
       collectionIssues: [
@@ -24,9 +19,9 @@ let value: DataAzureResourceGroup = {
         },
       ],
       health: "unhealthy",
-      lifecycle: "updating",
-      partial: true,
-      stale: true,
+      lifecycle: "failed",
+      partial: false,
+      stale: false,
     },
   },
   resourceType: "azure_resource_group",

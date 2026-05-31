@@ -9,15 +9,21 @@ let value: DataBuild = {
   data: {
     encryptionKeyPresent: false,
     environmentVariableCount: 19119,
-    events: [],
     projectName: "<value>",
-    serviceRolePresent: false,
+    serviceRolePresent: true,
     status: {
-      collectionIssues: [],
-      health: "unhealthy",
-      lifecycle: "stopped",
-      partial: true,
-      stale: false,
+      collectionIssues: [
+        {
+          message: "<value>",
+          reason: "timed-out",
+          severity: "warning",
+          source: "<value>",
+        },
+      ],
+      health: "healthy",
+      lifecycle: "failed",
+      partial: false,
+      stale: true,
     },
     backend: "awsCodeBuild",
   },

@@ -8,21 +8,17 @@
 ```typescript
 const value: models.NetworkHeartbeatDataAwsVpc = {
   availabilityZones: [],
-  events: [],
   isByoVpc: true,
-  privateSubnetIds: [
-    "<value 1>",
-    "<value 2>",
-  ],
+  privateSubnetIds: [],
   publicSubnetIds: [
     "<value 1>",
     "<value 2>",
   ],
-  routeTableCount: 501979,
+  routeTableCount: 704849,
   status: {
     collectionIssues: [],
-    health: "degraded",
-    lifecycle: "scaling",
+    health: "healthy",
+    lifecycle: "stopped",
     partial: true,
     stale: true,
   },
@@ -34,19 +30,11 @@ const value: models.NetworkHeartbeatDataAwsVpc = {
 
 ```typescript
 const value: models.NetworkHeartbeatDataGcpVpc = {
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-02-23T02:52:34.144Z"),
-      severity: "info",
-    },
-  ],
-  isByoVpc: true,
+  isByoVpc: false,
   status: {
     collectionIssues: [],
-    health: "degraded",
-    lifecycle: "scaling",
+    health: "healthy",
+    lifecycle: "stopped",
     partial: true,
     stale: true,
   },
@@ -58,12 +46,11 @@ const value: models.NetworkHeartbeatDataGcpVpc = {
 
 ```typescript
 const value: models.NetworkHeartbeatDataAzureVnet = {
-  events: [],
   isByoVnet: true,
   status: {
     collectionIssues: [],
-    health: "degraded",
-    lifecycle: "scaling",
+    health: "healthy",
+    lifecycle: "stopped",
     partial: true,
     stale: true,
   },

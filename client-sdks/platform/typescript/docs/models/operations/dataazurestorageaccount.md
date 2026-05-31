@@ -7,30 +7,15 @@ import { DataAzureStorageAccount } from "@alienplatform/platform-api/models/oper
 
 let value: DataAzureStorageAccount = {
   data: {
-    events: [
-      {
-        kind: "<value>",
-        message: "<value>",
-        observedAt: new Date("2024-05-16T02:06:58.117Z"),
-        severity: "warning",
-      },
-    ],
     name: "<value>",
     primaryEndpoints: {},
     secondaryEndpoints: {},
     status: {
-      collectionIssues: [
-        {
-          message: "<value>",
-          reason: "timed-out",
-          severity: "warning",
-          source: "<value>",
-        },
-      ],
-      health: "degraded",
-      lifecycle: "deleted",
+      collectionIssues: [],
+      health: "unhealthy",
+      lifecycle: "stopped",
       partial: false,
-      stale: true,
+      stale: false,
     },
   },
   resourceType: "azure_storage_account",

@@ -4,11 +4,6 @@
 
 import * as z from "zod/v4";
 import {
-  HeartbeatEvent,
-  HeartbeatEvent$Outbound,
-  HeartbeatEvent$outboundSchema,
-} from "./heartbeatevent.js";
-import {
   NetworkHeartbeatStatus,
   NetworkHeartbeatStatus$Outbound,
   NetworkHeartbeatStatus$outboundSchema,
@@ -16,7 +11,6 @@ import {
 
 export type NetworkHeartbeatDataAzureVnet = {
   cidrBlock?: string | null | undefined;
-  events: Array<HeartbeatEvent>;
   isByoVnet: boolean;
   lastByoVnetVerificationErrorCode?: string | null | undefined;
   location?: string | null | undefined;
@@ -35,7 +29,6 @@ export type NetworkHeartbeatDataAzureVnet = {
 export type NetworkHeartbeatDataGcpVpc = {
   cidrBlock?: string | null | undefined;
   cloudNatName?: string | null | undefined;
-  events: Array<HeartbeatEvent>;
   firewallName?: string | null | undefined;
   isByoVpc: boolean;
   networkName?: string | null | undefined;
@@ -51,7 +44,6 @@ export type NetworkHeartbeatDataGcpVpc = {
 export type NetworkHeartbeatDataAwsVpc = {
   availabilityZones: Array<string>;
   cidrBlock?: string | null | undefined;
-  events: Array<HeartbeatEvent>;
   internetGatewayId?: string | null | undefined;
   isByoVpc: boolean;
   natGatewayId?: string | null | undefined;
@@ -73,7 +65,6 @@ export type NetworkHeartbeatData =
 /** @internal */
 export type NetworkHeartbeatDataAzureVnet$Outbound = {
   cidrBlock?: string | null | undefined;
-  events: Array<HeartbeatEvent$Outbound>;
   isByoVnet: boolean;
   lastByoVnetVerificationErrorCode?: string | null | undefined;
   location?: string | null | undefined;
@@ -95,7 +86,6 @@ export const NetworkHeartbeatDataAzureVnet$outboundSchema: z.ZodType<
   NetworkHeartbeatDataAzureVnet
 > = z.object({
   cidrBlock: z.nullable(z.string()).optional(),
-  events: z.array(HeartbeatEvent$outboundSchema),
   isByoVnet: z.boolean(),
   lastByoVnetVerificationErrorCode: z.nullable(z.string()).optional(),
   location: z.nullable(z.string()).optional(),
@@ -125,7 +115,6 @@ export function networkHeartbeatDataAzureVnetToJSON(
 export type NetworkHeartbeatDataGcpVpc$Outbound = {
   cidrBlock?: string | null | undefined;
   cloudNatName?: string | null | undefined;
-  events: Array<HeartbeatEvent$Outbound>;
   firewallName?: string | null | undefined;
   isByoVpc: boolean;
   networkName?: string | null | undefined;
@@ -145,7 +134,6 @@ export const NetworkHeartbeatDataGcpVpc$outboundSchema: z.ZodType<
 > = z.object({
   cidrBlock: z.nullable(z.string()).optional(),
   cloudNatName: z.nullable(z.string()).optional(),
-  events: z.array(HeartbeatEvent$outboundSchema),
   firewallName: z.nullable(z.string()).optional(),
   isByoVpc: z.boolean(),
   networkName: z.nullable(z.string()).optional(),
@@ -170,7 +158,6 @@ export function networkHeartbeatDataGcpVpcToJSON(
 export type NetworkHeartbeatDataAwsVpc$Outbound = {
   availabilityZones: Array<string>;
   cidrBlock?: string | null | undefined;
-  events: Array<HeartbeatEvent$Outbound>;
   internetGatewayId?: string | null | undefined;
   isByoVpc: boolean;
   natGatewayId?: string | null | undefined;
@@ -191,7 +178,6 @@ export const NetworkHeartbeatDataAwsVpc$outboundSchema: z.ZodType<
 > = z.object({
   availabilityZones: z.array(z.string()),
   cidrBlock: z.nullable(z.string()).optional(),
-  events: z.array(HeartbeatEvent$outboundSchema),
   internetGatewayId: z.nullable(z.string()).optional(),
   isByoVpc: z.boolean(),
   natGatewayId: z.nullable(z.string()).optional(),

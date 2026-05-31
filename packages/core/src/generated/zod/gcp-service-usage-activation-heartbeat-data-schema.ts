@@ -4,14 +4,10 @@
 */
 
 import * as z from "zod";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 import { ServiceActivationHeartbeatStatusSchema } from "./service-activation-heartbeat-status-schema.js";
 
 export const GcpServiceUsageActivationHeartbeatDataSchema = z.object({
     "enabled": z.boolean(),
-get "events"(){
-                return z.array(HeartbeatEventSchema)
-              },
 "lastOperationName": z.string().nullish(),
 "projectId": z.string(),
 "serviceName": z.string(),

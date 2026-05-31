@@ -7,22 +7,14 @@ import { ComputeClusterHeartbeatDataLocal } from "@alienplatform/manager-api/mod
 
 let value: ComputeClusterHeartbeatDataLocal = {
   dockerAvailable: true,
-  events: [],
   name: "<value>",
-  networkAvailable: false,
+  networkAvailable: true,
   nodes: {},
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "forbidden",
-        severity: "info",
-        source: "<value>",
-      },
-    ],
-    health: "degraded",
-    lifecycle: "deleted",
-    partial: true,
+    collectionIssues: [],
+    health: "unhealthy",
+    lifecycle: "stopped",
+    partial: false,
     stale: true,
   },
   backend: "local",
@@ -38,7 +30,6 @@ let value: ComputeClusterHeartbeatDataLocal = {
 | `dockerAvailable`                                                                  | *boolean*                                                                          | :heavy_check_mark:                                                                 | N/A                                                                                |
 | `dockerOs`                                                                         | *string*                                                                           | :heavy_minus_sign:                                                                 | N/A                                                                                |
 | `dockerVersion`                                                                    | *string*                                                                           | :heavy_minus_sign:                                                                 | N/A                                                                                |
-| `events`                                                                           | [models.HeartbeatEvent](../models/heartbeatevent.md)[]                             | :heavy_check_mark:                                                                 | N/A                                                                                |
 | `hostIdentifier`                                                                   | *string*                                                                           | :heavy_minus_sign:                                                                 | N/A                                                                                |
 | `name`                                                                             | *string*                                                                           | :heavy_check_mark:                                                                 | N/A                                                                                |
 | `networkAvailable`                                                                 | *boolean*                                                                          | :heavy_check_mark:                                                                 | N/A                                                                                |

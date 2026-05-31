@@ -4,19 +4,19 @@
 
 import * as z from "zod/v4";
 import {
-  HeartbeatEvent,
-  HeartbeatEvent$Outbound,
-  HeartbeatEvent$outboundSchema,
-} from "./heartbeatevent.js";
-import {
   HorizonWorkloadSchedulingMode,
   HorizonWorkloadSchedulingMode$outboundSchema,
 } from "./horizonworkloadschedulingmode.js";
 import {
-  KubernetesPodInstanceStatus,
-  KubernetesPodInstanceStatus$Outbound,
-  KubernetesPodInstanceStatus$outboundSchema,
-} from "./kubernetespodinstancestatus.js";
+  KubernetesEventSnapshot,
+  KubernetesEventSnapshot$Outbound,
+  KubernetesEventSnapshot$outboundSchema,
+} from "./kuberneteseventsnapshot.js";
+import {
+  KubernetesPodRuntimeUnitStatus,
+  KubernetesPodRuntimeUnitStatus$Outbound,
+  KubernetesPodRuntimeUnitStatus$outboundSchema,
+} from "./kubernetespodruntimeunitstatus.js";
 import {
   KubernetesWorkloadKind,
   KubernetesWorkloadKind$outboundSchema,
@@ -26,6 +26,26 @@ import {
   KubernetesWorkloadStatus$Outbound,
   KubernetesWorkloadStatus$outboundSchema,
 } from "./kubernetesworkloadstatus.js";
+import {
+  LocalRuntimeEventSnapshot,
+  LocalRuntimeEventSnapshot$Outbound,
+  LocalRuntimeEventSnapshot$outboundSchema,
+} from "./localruntimeeventsnapshot.js";
+import {
+  LocalRuntimeUnitStatus,
+  LocalRuntimeUnitStatus$Outbound,
+  LocalRuntimeUnitStatus$outboundSchema,
+} from "./localruntimeunitstatus.js";
+import {
+  ManagedRuntimeEventSnapshot,
+  ManagedRuntimeEventSnapshot$Outbound,
+  ManagedRuntimeEventSnapshot$outboundSchema,
+} from "./managedruntimeeventsnapshot.js";
+import {
+  ManagedRuntimeUnitStatus,
+  ManagedRuntimeUnitStatus$Outbound,
+  ManagedRuntimeUnitStatus$outboundSchema,
+} from "./managedruntimeunitstatus.js";
 import {
   MetricSample,
   MetricSample$Outbound,
@@ -45,8 +65,9 @@ import {
 export type ContainerHeartbeatDataLocal = {
   bindMountCount: number;
   containerId?: string | null | undefined;
+  containerUnit?: LocalRuntimeUnitStatus | null | undefined;
   cpu?: MetricSample | null | undefined;
-  events: Array<HeartbeatEvent>;
+  events: Array<LocalRuntimeEventSnapshot>;
   image?: string | null | undefined;
   localUrl?: string | null | undefined;
   memory?: MetricSample | null | undefined;
@@ -61,11 +82,11 @@ export type ContainerHeartbeatDataLocal = {
 
 export type ContainerHeartbeatDataKubernetes = {
   cpu?: MetricSample | null | undefined;
-  events: Array<HeartbeatEvent>;
-  instances: Array<KubernetesPodInstanceStatus>;
+  events: Array<KubernetesEventSnapshot>;
   memory?: MetricSample | null | undefined;
   name: string;
   namespace: string;
+  pods: Array<KubernetesPodRuntimeUnitStatus>;
   replicas: WorkloadReplicaStatus;
   restarts?: number | null | undefined;
   status: WorkloadHeartbeatStatus;
@@ -78,9 +99,10 @@ export type ContainerHeartbeatDataHorizonPlatform = {
   attentionCount: number;
   containerId: string;
   cpu?: MetricSample | null | undefined;
-  events: Array<HeartbeatEvent>;
+  events: Array<ManagedRuntimeEventSnapshot>;
   image?: string | null | undefined;
   memory?: MetricSample | null | undefined;
+  replicaUnits: Array<ManagedRuntimeUnitStatus>;
   replicas: WorkloadReplicaStatus;
   schedulingMode: HorizonWorkloadSchedulingMode;
   status: WorkloadHeartbeatStatus;
@@ -96,8 +118,9 @@ export type ContainerHeartbeatData =
 export type ContainerHeartbeatDataLocal$Outbound = {
   bindMountCount: number;
   containerId?: string | null | undefined;
+  containerUnit?: LocalRuntimeUnitStatus$Outbound | null | undefined;
   cpu?: MetricSample$Outbound | null | undefined;
-  events: Array<HeartbeatEvent$Outbound>;
+  events: Array<LocalRuntimeEventSnapshot$Outbound>;
   image?: string | null | undefined;
   localUrl?: string | null | undefined;
   memory?: MetricSample$Outbound | null | undefined;
@@ -117,8 +140,9 @@ export const ContainerHeartbeatDataLocal$outboundSchema: z.ZodType<
 > = z.object({
   bindMountCount: z.int(),
   containerId: z.nullable(z.string()).optional(),
+  containerUnit: z.nullable(LocalRuntimeUnitStatus$outboundSchema).optional(),
   cpu: z.nullable(MetricSample$outboundSchema).optional(),
-  events: z.array(HeartbeatEvent$outboundSchema),
+  events: z.array(LocalRuntimeEventSnapshot$outboundSchema),
   image: z.nullable(z.string()).optional(),
   localUrl: z.nullable(z.string()).optional(),
   memory: z.nullable(MetricSample$outboundSchema).optional(),
@@ -144,11 +168,11 @@ export function containerHeartbeatDataLocalToJSON(
 /** @internal */
 export type ContainerHeartbeatDataKubernetes$Outbound = {
   cpu?: MetricSample$Outbound | null | undefined;
-  events: Array<HeartbeatEvent$Outbound>;
-  instances: Array<KubernetesPodInstanceStatus$Outbound>;
+  events: Array<KubernetesEventSnapshot$Outbound>;
   memory?: MetricSample$Outbound | null | undefined;
   name: string;
   namespace: string;
+  pods: Array<KubernetesPodRuntimeUnitStatus$Outbound>;
   replicas: WorkloadReplicaStatus$Outbound;
   restarts?: number | null | undefined;
   status: WorkloadHeartbeatStatus$Outbound;
@@ -163,11 +187,11 @@ export const ContainerHeartbeatDataKubernetes$outboundSchema: z.ZodType<
   ContainerHeartbeatDataKubernetes
 > = z.object({
   cpu: z.nullable(MetricSample$outboundSchema).optional(),
-  events: z.array(HeartbeatEvent$outboundSchema),
-  instances: z.array(KubernetesPodInstanceStatus$outboundSchema),
+  events: z.array(KubernetesEventSnapshot$outboundSchema),
   memory: z.nullable(MetricSample$outboundSchema).optional(),
   name: z.string(),
   namespace: z.string(),
+  pods: z.array(KubernetesPodRuntimeUnitStatus$outboundSchema),
   replicas: WorkloadReplicaStatus$outboundSchema,
   restarts: z.nullable(z.int()).optional(),
   status: WorkloadHeartbeatStatus$outboundSchema,
@@ -191,9 +215,10 @@ export type ContainerHeartbeatDataHorizonPlatform$Outbound = {
   attentionCount: number;
   containerId: string;
   cpu?: MetricSample$Outbound | null | undefined;
-  events: Array<HeartbeatEvent$Outbound>;
+  events: Array<ManagedRuntimeEventSnapshot$Outbound>;
   image?: string | null | undefined;
   memory?: MetricSample$Outbound | null | undefined;
+  replicaUnits: Array<ManagedRuntimeUnitStatus$Outbound>;
   replicas: WorkloadReplicaStatus$Outbound;
   schedulingMode: string;
   status: WorkloadHeartbeatStatus$Outbound;
@@ -208,9 +233,10 @@ export const ContainerHeartbeatDataHorizonPlatform$outboundSchema: z.ZodType<
   attentionCount: z.int(),
   containerId: z.string(),
   cpu: z.nullable(MetricSample$outboundSchema).optional(),
-  events: z.array(HeartbeatEvent$outboundSchema),
+  events: z.array(ManagedRuntimeEventSnapshot$outboundSchema),
   image: z.nullable(z.string()).optional(),
   memory: z.nullable(MetricSample$outboundSchema).optional(),
+  replicaUnits: z.array(ManagedRuntimeUnitStatus$outboundSchema),
   replicas: WorkloadReplicaStatus$outboundSchema,
   schedulingMode: HorizonWorkloadSchedulingMode$outboundSchema,
   status: WorkloadHeartbeatStatus$outboundSchema,

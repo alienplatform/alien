@@ -5,7 +5,6 @@
 
 import * as z from "zod";
 import { BuildHeartbeatStatusSchema } from "./build-heartbeat-status-schema.js";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 
 export const AwsCodeBuildHeartbeatDataSchema = z.object({
     "artifactsEncryptionDisabled": z.boolean().nullish(),
@@ -18,9 +17,6 @@ export const AwsCodeBuildHeartbeatDataSchema = z.object({
 "environmentImage": z.string().nullish(),
 "environmentType": z.string().nullish(),
 "environmentVariableCount": z.int().min(0),
-get "events"(){
-                return z.array(HeartbeatEventSchema)
-              },
 "imagePullCredentialsType": z.string().nullish(),
 "lastModified": z.number().nullish(),
 "privilegedMode": z.boolean().nullish(),

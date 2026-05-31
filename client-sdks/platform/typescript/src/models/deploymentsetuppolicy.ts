@@ -7,22 +7,10 @@ import { safeParse } from "../lib/schemas.js";
 import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import {
-  DeploymentSetupDeploymentNamePolicy,
-  DeploymentSetupDeploymentNamePolicy$inboundSchema,
-  DeploymentSetupDeploymentNamePolicy$Outbound,
-  DeploymentSetupDeploymentNamePolicy$outboundSchema,
-} from "./deploymentsetupdeploymentnamepolicy.js";
-import {
   DeploymentSetupMethod,
   DeploymentSetupMethod$inboundSchema,
   DeploymentSetupMethod$outboundSchema,
 } from "./deploymentsetupmethod.js";
-import {
-  DeploymentSetupReleasePolicy,
-  DeploymentSetupReleasePolicy$inboundSchema,
-  DeploymentSetupReleasePolicy$Outbound,
-  DeploymentSetupReleasePolicy$outboundSchema,
-} from "./deploymentsetupreleasepolicy.js";
 import {
   DeploymentSetupStackSettingsPolicy,
   DeploymentSetupStackSettingsPolicy$inboundSchema,
@@ -50,8 +38,6 @@ export type AllowedPlatform = ClosedEnum<typeof AllowedPlatform>;
 export type DeploymentSetupPolicy = {
   allowedPlatforms: Array<AllowedPlatform>;
   allowedSetupMethods: Array<DeploymentSetupMethod>;
-  deploymentName?: DeploymentSetupDeploymentNamePolicy | undefined;
-  release?: DeploymentSetupReleasePolicy | undefined;
   stackSettings?: DeploymentSetupStackSettingsPolicy | undefined;
 };
 
@@ -69,16 +55,12 @@ export const DeploymentSetupPolicy$inboundSchema: z.ZodType<
 > = z.object({
   allowedPlatforms: z.array(AllowedPlatform$inboundSchema),
   allowedSetupMethods: z.array(DeploymentSetupMethod$inboundSchema),
-  deploymentName: DeploymentSetupDeploymentNamePolicy$inboundSchema.optional(),
-  release: DeploymentSetupReleasePolicy$inboundSchema.optional(),
   stackSettings: DeploymentSetupStackSettingsPolicy$inboundSchema.optional(),
 });
 /** @internal */
 export type DeploymentSetupPolicy$Outbound = {
   allowedPlatforms: Array<string>;
   allowedSetupMethods: Array<string>;
-  deploymentName?: DeploymentSetupDeploymentNamePolicy$Outbound | undefined;
-  release?: DeploymentSetupReleasePolicy$Outbound | undefined;
   stackSettings?: DeploymentSetupStackSettingsPolicy$Outbound | undefined;
 };
 
@@ -89,8 +71,6 @@ export const DeploymentSetupPolicy$outboundSchema: z.ZodType<
 > = z.object({
   allowedPlatforms: z.array(AllowedPlatform$outboundSchema),
   allowedSetupMethods: z.array(DeploymentSetupMethod$outboundSchema),
-  deploymentName: DeploymentSetupDeploymentNamePolicy$outboundSchema.optional(),
-  release: DeploymentSetupReleasePolicy$outboundSchema.optional(),
   stackSettings: DeploymentSetupStackSettingsPolicy$outboundSchema.optional(),
 });
 

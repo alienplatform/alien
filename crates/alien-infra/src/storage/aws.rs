@@ -1018,7 +1018,6 @@ fn emit_aws_s3_storage_heartbeat(
                     .and_then(|configuration| configuration.restrict_public_buckets),
                 bucket_policy_present,
                 bucket_acl_present,
-                events: vec![],
             },
         )),
         raw: vec![],

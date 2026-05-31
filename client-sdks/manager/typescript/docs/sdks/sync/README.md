@@ -277,7 +277,6 @@ async function run() {
         data: {
           data: {
             enabled: false,
-            events: [],
             projectId: "<id>",
             serviceName: "<value>",
             status: {
@@ -406,7 +405,6 @@ async function run() {
         data: {
           data: {
             enabled: false,
-            events: [],
             projectId: "<id>",
             serviceName: "<value>",
             status: {

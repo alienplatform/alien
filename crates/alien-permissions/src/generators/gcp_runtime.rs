@@ -9,6 +9,9 @@ use crate::{
 use alien_core::{GcpBindingSpec, PermissionGrant, PermissionSet};
 use serde::{Deserialize, Serialize};
 
+const GCP_CUSTOM_ROLE_ID_MAX_LEN: usize = 64;
+const ROLE_ID_HASH_LEN: usize = 8;
+
 /// GCP IAM binding condition.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -488,12 +491,18 @@ fn generate_role_id(
     let namespace = custom_role_namespace(context);
     if has_explicit_label(explicit_label) {
         let suffix = suffix.unwrap_or("custom");
-        return format!("role_{namespace}_{suffix}");
+        let prefix = format!("role_{namespace}_");
+        let suffix = fit_role_suffix(suffix, GCP_CUSTOM_ROLE_ID_MAX_LEN - prefix.len());
+        return format!("{prefix}{suffix}");
     }
 
     let permission_set_slug = sanitize_role_segment(&permission_set.id.replace('/', "_"), 28);
     match suffix {
-        Some(suffix) => format!("role_{namespace}_{permission_set_slug}_{suffix}"),
+        Some(suffix) => {
+            let prefix = format!("role_{namespace}_{permission_set_slug}_");
+            let suffix = fit_role_suffix(suffix, GCP_CUSTOM_ROLE_ID_MAX_LEN - prefix.len());
+            format!("{prefix}{suffix}")
+        }
         None => format!("role_{namespace}_{permission_set_slug}"),
     }
 }
@@ -643,6 +652,39 @@ fn sanitize_role_segment(value: &str, max_len: usize) -> String {
     } else {
         segment
     }
+}
+
+fn fit_role_suffix(value: &str, max_len: usize) -> String {
+    if value.len() <= max_len {
+        return value.to_string();
+    }
+
+    let hash = stable_role_hash(value);
+    if max_len <= ROLE_ID_HASH_LEN {
+        return hash[..max_len].to_string();
+    }
+
+    let prefix_len = max_len - ROLE_ID_HASH_LEN - 1;
+    let mut prefix = value.to_string();
+    prefix.truncate(prefix_len);
+    while prefix.ends_with('_') {
+        prefix.pop();
+    }
+
+    if prefix.is_empty() {
+        hash[..max_len].to_string()
+    } else {
+        format!("{prefix}_{hash}")
+    }
+}
+
+fn stable_role_hash(value: &str) -> String {
+    let mut hash = 0x811c9dc5_u32;
+    for byte in value.bytes() {
+        hash ^= u32::from(byte);
+        hash = hash.wrapping_mul(0x01000193);
+    }
+    format!("{hash:08x}")
 }
 
 fn binding_target_scope(binding_spec: &GcpBindingSpec) -> GcpBindingTargetScope {

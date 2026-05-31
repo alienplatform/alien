@@ -4,14 +4,10 @@
 */
 
 import * as z from "zod";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 import { NetworkHeartbeatStatusSchema } from "./network-heartbeat-status-schema.js";
 
 export const AzureVnetNetworkHeartbeatDataSchema = z.object({
     "cidrBlock": z.string().nullish(),
-get "events"(){
-                return z.array(HeartbeatEventSchema)
-              },
 "isByoVnet": z.boolean(),
 "lastByoVnetVerificationErrorCode": z.string().nullish(),
 "location": z.string().nullish(),

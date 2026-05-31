@@ -4,18 +4,12 @@
 
 import * as z from "zod/v4";
 import {
-  HeartbeatEvent,
-  HeartbeatEvent$Outbound,
-  HeartbeatEvent$outboundSchema,
-} from "./heartbeatevent.js";
-import {
   ServiceActivationHeartbeatStatus,
   ServiceActivationHeartbeatStatus$Outbound,
   ServiceActivationHeartbeatStatus$outboundSchema,
 } from "./serviceactivationheartbeatstatus.js";
 
 export type ServiceActivationHeartbeatDataAzureResourceProvider = {
-  events: Array<HeartbeatEvent>;
   namespace: string;
   providerId?: string | null | undefined;
   registered: boolean;
@@ -28,7 +22,6 @@ export type ServiceActivationHeartbeatDataAzureResourceProvider = {
 
 export type ServiceActivationHeartbeatDataGcpServiceUsage = {
   enabled: boolean;
-  events: Array<HeartbeatEvent>;
   lastOperationName?: string | null | undefined;
   projectId: string;
   serviceName: string;
@@ -45,7 +38,6 @@ export type ServiceActivationHeartbeatData =
 
 /** @internal */
 export type ServiceActivationHeartbeatDataAzureResourceProvider$Outbound = {
-  events: Array<HeartbeatEvent$Outbound>;
   namespace: string;
   providerId?: string | null | undefined;
   registered: boolean;
@@ -62,7 +54,6 @@ export const ServiceActivationHeartbeatDataAzureResourceProvider$outboundSchema:
     ServiceActivationHeartbeatDataAzureResourceProvider$Outbound,
     ServiceActivationHeartbeatDataAzureResourceProvider
   > = z.object({
-    events: z.array(HeartbeatEvent$outboundSchema),
     namespace: z.string(),
     providerId: z.nullable(z.string()).optional(),
     registered: z.boolean(),
@@ -87,7 +78,6 @@ export function serviceActivationHeartbeatDataAzureResourceProviderToJSON(
 /** @internal */
 export type ServiceActivationHeartbeatDataGcpServiceUsage$Outbound = {
   enabled: boolean;
-  events: Array<HeartbeatEvent$Outbound>;
   lastOperationName?: string | null | undefined;
   projectId: string;
   serviceName: string;
@@ -105,7 +95,6 @@ export const ServiceActivationHeartbeatDataGcpServiceUsage$outboundSchema:
     ServiceActivationHeartbeatDataGcpServiceUsage
   > = z.object({
     enabled: z.boolean(),
-    events: z.array(HeartbeatEvent$outboundSchema),
     lastOperationName: z.nullable(z.string()).optional(),
     projectId: z.string(),
     serviceName: z.string(),

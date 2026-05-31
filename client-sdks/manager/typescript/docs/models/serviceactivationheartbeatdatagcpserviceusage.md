@@ -7,29 +7,14 @@ import { ServiceActivationHeartbeatDataGcpServiceUsage } from "@alienplatform/ma
 
 let value: ServiceActivationHeartbeatDataGcpServiceUsage = {
   enabled: false,
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-02-23T02:52:34.144Z"),
-      severity: "info",
-    },
-  ],
   projectId: "<id>",
   serviceName: "<value>",
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "forbidden",
-        severity: "info",
-        source: "<value>",
-      },
-    ],
-    health: "unknown",
-    lifecycle: "stopping",
-    partial: true,
-    stale: false,
+    collectionIssues: [],
+    health: "degraded",
+    lifecycle: "unknown",
+    partial: false,
+    stale: true,
   },
   backend: "gcpServiceUsage",
 };
@@ -40,7 +25,6 @@ let value: ServiceActivationHeartbeatDataGcpServiceUsage = {
 | Field                                                                                    | Type                                                                                     | Required                                                                                 | Description                                                                              |
 | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
 | `enabled`                                                                                | *boolean*                                                                                | :heavy_check_mark:                                                                       | N/A                                                                                      |
-| `events`                                                                                 | [models.HeartbeatEvent](../models/heartbeatevent.md)[]                                   | :heavy_check_mark:                                                                       | N/A                                                                                      |
 | `lastOperationName`                                                                      | *string*                                                                                 | :heavy_minus_sign:                                                                       | N/A                                                                                      |
 | `projectId`                                                                              | *string*                                                                                 | :heavy_check_mark:                                                                       | N/A                                                                                      |
 | `serviceName`                                                                            | *string*                                                                                 | :heavy_check_mark:                                                                       | N/A                                                                                      |

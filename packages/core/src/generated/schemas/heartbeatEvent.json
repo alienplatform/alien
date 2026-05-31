@@ -1,1 +1,0 @@
-{"type":"object","required":["observedAt","kind","severity","message"],"properties":{"kind":{"type":"string"},"message":{"type":"string"},"observedAt":{"type":"string","format":"date-time"},"severity":{"type":"string","enum":["info","warning","error"],"x-readme-ref-name":"HeartbeatIssueSeverity"},"source":{"type":["string","null"]}},"x-readme-ref-name":"HeartbeatEvent"}

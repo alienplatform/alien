@@ -14,11 +14,6 @@ import {
   ComputeClusterHeartbeatStatus$outboundSchema,
 } from "./computeclusterheartbeatstatus.js";
 import {
-  HeartbeatEvent,
-  HeartbeatEvent$Outbound,
-  HeartbeatEvent$outboundSchema,
-} from "./heartbeatevent.js";
-import {
   MetricSample,
   MetricSample$Outbound,
   MetricSample$outboundSchema,
@@ -40,7 +35,6 @@ export type ComputeClusterHeartbeatDataLocal = {
   dockerAvailable: boolean;
   dockerOs?: string | null | undefined;
   dockerVersion?: string | null | undefined;
-  events: Array<HeartbeatEvent>;
   hostIdentifier?: string | null | undefined;
   name: string;
   networkAvailable: boolean;
@@ -56,7 +50,6 @@ export type ComputeClusterHeartbeatDataAzure = {
   backendClusterId?: string | null | undefined;
   capacityGroups: Array<ComputeCapacityGroupStatus>;
   cpu?: MetricSample | null | undefined;
-  events: Array<HeartbeatEvent>;
   memory?: MetricSample | null | undefined;
   name: string;
   nodes: ObservedCounts;
@@ -70,7 +63,6 @@ export type ComputeClusterHeartbeatDataGcp = {
   backendClusterId?: string | null | undefined;
   capacityGroups: Array<ComputeCapacityGroupStatus>;
   cpu?: MetricSample | null | undefined;
-  events: Array<HeartbeatEvent>;
   memory?: MetricSample | null | undefined;
   name: string;
   nodes: ObservedCounts;
@@ -84,7 +76,6 @@ export type ComputeClusterHeartbeatDataAws = {
   backendClusterId?: string | null | undefined;
   capacityGroups: Array<ComputeCapacityGroupStatus>;
   cpu?: MetricSample | null | undefined;
-  events: Array<HeartbeatEvent>;
   memory?: MetricSample | null | undefined;
   name: string;
   nodes: ObservedCounts;
@@ -107,7 +98,6 @@ export type ComputeClusterHeartbeatDataLocal$Outbound = {
   dockerAvailable: boolean;
   dockerOs?: string | null | undefined;
   dockerVersion?: string | null | undefined;
-  events: Array<HeartbeatEvent$Outbound>;
   hostIdentifier?: string | null | undefined;
   name: string;
   networkAvailable: boolean;
@@ -129,7 +119,6 @@ export const ComputeClusterHeartbeatDataLocal$outboundSchema: z.ZodType<
   dockerAvailable: z.boolean(),
   dockerOs: z.nullable(z.string()).optional(),
   dockerVersion: z.nullable(z.string()).optional(),
-  events: z.array(HeartbeatEvent$outboundSchema),
   hostIdentifier: z.nullable(z.string()).optional(),
   name: z.string(),
   networkAvailable: z.boolean(),
@@ -156,7 +145,6 @@ export type ComputeClusterHeartbeatDataAzure$Outbound = {
   backendClusterId?: string | null | undefined;
   capacityGroups: Array<ComputeCapacityGroupStatus$Outbound>;
   cpu?: MetricSample$Outbound | null | undefined;
-  events: Array<HeartbeatEvent$Outbound>;
   memory?: MetricSample$Outbound | null | undefined;
   name: string;
   nodes: ObservedCounts$Outbound;
@@ -174,7 +162,6 @@ export const ComputeClusterHeartbeatDataAzure$outboundSchema: z.ZodType<
   backendClusterId: z.nullable(z.string()).optional(),
   capacityGroups: z.array(ComputeCapacityGroupStatus$outboundSchema),
   cpu: z.nullable(MetricSample$outboundSchema).optional(),
-  events: z.array(HeartbeatEvent$outboundSchema),
   memory: z.nullable(MetricSample$outboundSchema).optional(),
   name: z.string(),
   nodes: ObservedCounts$outboundSchema,
@@ -199,7 +186,6 @@ export type ComputeClusterHeartbeatDataGcp$Outbound = {
   backendClusterId?: string | null | undefined;
   capacityGroups: Array<ComputeCapacityGroupStatus$Outbound>;
   cpu?: MetricSample$Outbound | null | undefined;
-  events: Array<HeartbeatEvent$Outbound>;
   memory?: MetricSample$Outbound | null | undefined;
   name: string;
   nodes: ObservedCounts$Outbound;
@@ -217,7 +203,6 @@ export const ComputeClusterHeartbeatDataGcp$outboundSchema: z.ZodType<
   backendClusterId: z.nullable(z.string()).optional(),
   capacityGroups: z.array(ComputeCapacityGroupStatus$outboundSchema),
   cpu: z.nullable(MetricSample$outboundSchema).optional(),
-  events: z.array(HeartbeatEvent$outboundSchema),
   memory: z.nullable(MetricSample$outboundSchema).optional(),
   name: z.string(),
   nodes: ObservedCounts$outboundSchema,
@@ -242,7 +227,6 @@ export type ComputeClusterHeartbeatDataAws$Outbound = {
   backendClusterId?: string | null | undefined;
   capacityGroups: Array<ComputeCapacityGroupStatus$Outbound>;
   cpu?: MetricSample$Outbound | null | undefined;
-  events: Array<HeartbeatEvent$Outbound>;
   memory?: MetricSample$Outbound | null | undefined;
   name: string;
   nodes: ObservedCounts$Outbound;
@@ -260,7 +244,6 @@ export const ComputeClusterHeartbeatDataAws$outboundSchema: z.ZodType<
   backendClusterId: z.nullable(z.string()).optional(),
   capacityGroups: z.array(ComputeCapacityGroupStatus$outboundSchema),
   cpu: z.nullable(MetricSample$outboundSchema).optional(),
-  events: z.array(HeartbeatEvent$outboundSchema),
   memory: z.nullable(MetricSample$outboundSchema).optional(),
   name: z.string(),
   nodes: ObservedCounts$outboundSchema,

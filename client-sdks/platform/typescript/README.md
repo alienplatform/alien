@@ -160,6 +160,7 @@ run();
 ### [Billing](docs/sdks/billing/README.md)
 
 * [listAuditLog](docs/sdks/billing/README.md#listauditlog) - List billing activity entries for the current workspace.
+* [getPlan](docs/sdks/billing/README.md#getplan) - Get the active plan id for the current workspace. Reads a cached value on the workspace row updated via the Autumn customer.products.updated webhook; falls back to a one-shot Autumn sync if the cache is empty.
 
 ### [Commands](docs/sdks/commands/README.md)
 
@@ -189,7 +190,7 @@ run();
 * [list](docs/sdks/deployments/README.md#list) - Retrieve all deployments.
 * [create](docs/sdks/deployments/README.md#create) - Create a new deployment. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId.
 * [getStats](docs/sdks/deployments/README.md#getstats) - Get aggregated deployment statistics. Returns total count and breakdown by status.
-* [listFilterPlatforms](docs/sdks/deployments/README.md#listfilterplatforms) - List distinct platforms used by deployments. Used for filter dropdowns.
+* [listFilterEnvironments](docs/sdks/deployments/README.md#listfilterenvironments) - List distinct effective environments used by deployments. Used for filter dropdowns.
 * [listFilterDeploymentGroups](docs/sdks/deployments/README.md#listfilterdeploymentgroups) - List deployment groups with deployment counts. Used for filter dropdowns.
 * [get](docs/sdks/deployments/README.md#get) - Retrieve a deployment by ID.
 * [delete](docs/sdks/deployments/README.md#delete) - Delete a deployment by ID. Non-force deletes enqueue cleanup; force deletes only remove the record.
@@ -249,9 +250,6 @@ run();
 * [getGcpOAuthProvider](docs/sdks/projects/README.md#getgcpoauthprovider) - Retrieve redacted project-level Google Cloud OAuth provider settings.
 * [updateGcpOAuthProvider](docs/sdks/projects/README.md#updategcpoauthprovider) - Update project-level Google Cloud OAuth provider settings.
 * [getDeploymentPortalDomain](docs/sdks/projects/README.md#getdeploymentportaldomain) - Get the deployment portal domain binding for a project.
-* [putDeploymentPortalDomain](docs/sdks/projects/README.md#putdeploymentportaldomain) - Attach or replace the deployment portal domain binding for a project.
-* [deleteDeploymentPortalDomain](docs/sdks/projects/README.md#deletedeploymentportaldomain) - Remove the deployment portal domain binding from a project.
-* [refreshDeploymentPortalDomain](docs/sdks/projects/README.md#refreshdeploymentportaldomain) - Refresh the deployment portal domain controller state for a project.
 * [createFromTemplate](docs/sdks/projects/README.md#createfromtemplate) - Create a project by forking alienplatform/alien into your namespace, then configuring GitHub Actions.
 * [getTemplateUrls](docs/sdks/projects/README.md#gettemplateurls) - Get template URLs for deploying setup stacks in this project.
 * [getActiveRelease](docs/sdks/projects/README.md#getactiverelease) - Get the active release for this project. Returns the latest release, or the pinned release if deploymentId is provided and that deployment has a pinned release.
@@ -273,7 +271,6 @@ run();
 * [listOverview](docs/sdks/resources/README.md#listoverview)
 * [listDeployments](docs/sdks/resources/README.md#listdeployments)
 * [getDeploymentDetail](docs/sdks/resources/README.md#getdeploymentdetail)
-* [getRawHeartbeat](docs/sdks/resources/README.md#getrawheartbeat)
 
 ### [Sync](docs/sdks/sync/README.md)
 
@@ -330,6 +327,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`apiKeysRevoke`](docs/sdks/apikeys/README.md#revoke) - Revoke (soft delete) an API key.
 - [`apiKeysUpdate`](docs/sdks/apikeys/README.md#update) - Update an API key (enable/disable, change description).
 - [`authWhoami`](docs/sdks/auth/README.md#whoami) - Get the current authenticated principal (user or service account). Works with both session cookies and API keys.
+- [`billingGetPlan`](docs/sdks/billing/README.md#getplan) - Get the active plan id for the current workspace. Reads a cached value on the workspace row updated via the Autumn customer.products.updated webhook; falls back to a one-shot Autumn sync if the cache is empty.
 - [`billingListAuditLog`](docs/sdks/billing/README.md#listauditlog) - List billing activity entries for the current workspace.
 - [`commandsCreate`](docs/sdks/commands/README.md#create) - Create command metadata. Called by manager when processing commands. Returns project info for routing decisions.
 - [`commandsGet`](docs/sdks/commands/README.md#get) - Retrieve a command by ID.
@@ -355,7 +353,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`deploymentsImport`](docs/sdks/deployments/README.md#import) - Import a deployment from resolved setup infrastructure such as CloudFormation, Terraform, or Helm.
 - [`deploymentsList`](docs/sdks/deployments/README.md#list) - Retrieve all deployments.
 - [`deploymentsListFilterDeploymentGroups`](docs/sdks/deployments/README.md#listfilterdeploymentgroups) - List deployment groups with deployment counts. Used for filter dropdowns.
-- [`deploymentsListFilterPlatforms`](docs/sdks/deployments/README.md#listfilterplatforms) - List distinct platforms used by deployments. Used for filter dropdowns.
+- [`deploymentsListFilterEnvironments`](docs/sdks/deployments/README.md#listfilterenvironments) - List distinct effective environments used by deployments. Used for filter dropdowns.
 - [`deploymentsPinRelease`](docs/sdks/deployments/README.md#pinrelease) - Pin or unpin deployment to a specific release. Only works for running deployments. Controller will automatically trigger update to target release.
 - [`deploymentsRedeploy`](docs/sdks/deployments/README.md#redeploy) - Redeploy a running deployment with the same release and fresh environment variables. Sets status to update-pending.
 - [`deploymentsRetry`](docs/sdks/deployments/README.md#retry) - Retry a failed deployment operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
@@ -388,15 +386,12 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`projectsCreate`](docs/sdks/projects/README.md#create) - Create a new project.
 - [`projectsCreateFromTemplate`](docs/sdks/projects/README.md#createfromtemplate) - Create a project by forking alienplatform/alien into your namespace, then configuring GitHub Actions.
 - [`projectsDelete`](docs/sdks/projects/README.md#delete) - Delete a project. The project must have no deployments.
-- [`projectsDeleteDeploymentPortalDomain`](docs/sdks/projects/README.md#deletedeploymentportaldomain) - Remove the deployment portal domain binding from a project.
 - [`projectsGet`](docs/sdks/projects/README.md#get) - Retrieve a project by ID or name.
 - [`projectsGetActiveRelease`](docs/sdks/projects/README.md#getactiverelease) - Get the active release for this project. Returns the latest release, or the pinned release if deploymentId is provided and that deployment has a pinned release.
 - [`projectsGetDeploymentPortalDomain`](docs/sdks/projects/README.md#getdeploymentportaldomain) - Get the deployment portal domain binding for a project.
 - [`projectsGetGcpOAuthProvider`](docs/sdks/projects/README.md#getgcpoauthprovider) - Retrieve redacted project-level Google Cloud OAuth provider settings.
 - [`projectsGetTemplateUrls`](docs/sdks/projects/README.md#gettemplateurls) - Get template URLs for deploying setup stacks in this project.
 - [`projectsList`](docs/sdks/projects/README.md#list) - Retrieve all projects.
-- [`projectsPutDeploymentPortalDomain`](docs/sdks/projects/README.md#putdeploymentportaldomain) - Attach or replace the deployment portal domain binding for a project.
-- [`projectsRefreshDeploymentPortalDomain`](docs/sdks/projects/README.md#refreshdeploymentportaldomain) - Refresh the deployment portal domain controller state for a project.
 - [`projectsUpdate`](docs/sdks/projects/README.md#update) - Update a project.
 - [`projectsUpdateGcpOAuthProvider`](docs/sdks/projects/README.md#updategcpoauthprovider) - Update project-level Google Cloud OAuth provider settings.
 - [`releasesCreate`](docs/sdks/releases/README.md#create) - Create a new release.
@@ -406,7 +401,6 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`releasesListBranches`](docs/sdks/releases/README.md#listbranches) - List distinct git branches across releases. Used for filter dropdowns.
 - [`resolveResolve`](docs/sdks/resolve/README.md#resolve) - Resolve manager for a project and platform
 - [`resourcesGetDeploymentDetail`](docs/sdks/resources/README.md#getdeploymentdetail)
-- [`resourcesGetRawHeartbeat`](docs/sdks/resources/README.md#getrawheartbeat)
 - [`resourcesListDeployments`](docs/sdks/resources/README.md#listdeployments)
 - [`resourcesListOverview`](docs/sdks/resources/README.md#listoverview)
 - [`syncAcquire`](docs/sdks/sync/README.md#acquire) - Acquire a batch of deployments for processing. Used by Manager to atomically lock deployments matching filters. Each deployment in the batch must be released after processing.

@@ -4,14 +4,10 @@
 */
 
 import * as z from "zod";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 import { VaultHeartbeatStatusSchema } from "./vault-heartbeat-status-schema.js";
 
 export const AzureKeyVaultHeartbeatDataSchema = z.object({
     "accessPolicyCount": z.int().min(0),
-get "events"(){
-                return z.array(HeartbeatEventSchema)
-              },
 "location": z.string().nullish(),
 "name": z.string(),
 "privateEndpointConnectionCount": z.int().min(0),

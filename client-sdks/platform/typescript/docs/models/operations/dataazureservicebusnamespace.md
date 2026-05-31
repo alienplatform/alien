@@ -7,15 +7,21 @@ import { DataAzureServiceBusNamespace } from "@alienplatform/platform-api/models
 
 let value: DataAzureServiceBusNamespace = {
   data: {
-    events: [],
     name: "<value>",
-    privateEndpointConnectionCount: 700227,
+    privateEndpointConnectionCount: 152029,
     status: {
-      collectionIssues: [],
+      collectionIssues: [
+        {
+          message: "<value>",
+          reason: "forbidden",
+          severity: "warning",
+          source: "<value>",
+        },
+      ],
       health: "healthy",
-      lifecycle: "unknown",
+      lifecycle: "running",
       partial: true,
-      stale: false,
+      stale: true,
     },
   },
   resourceType: "azure_service_bus_namespace",

@@ -8,15 +8,14 @@
 ```typescript
 const value: models.DataAwsParameterStore = {
   accountId: "<id>",
-  events: [],
   parameterMetadataSampled: true,
   prefix: "<value>",
   region: "<value>",
   status: {
     collectionIssues: [],
     health: "unknown",
-    lifecycle: "creating",
-    partial: false,
+    lifecycle: "unknown",
+    partial: true,
     stale: false,
   },
   backend: "awsParameterStore",
@@ -27,22 +26,14 @@ const value: models.DataAwsParameterStore = {
 
 ```typescript
 const value: models.DataGcpSecretManager = {
-  events: [],
   location: "<value>",
   prefix: "<value>",
   projectId: "<id>",
   secretMetadataListed: true,
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "api-unavailable",
-        severity: "info",
-        source: "<value>",
-      },
-    ],
-    health: "unhealthy",
-    lifecycle: "updating",
+    collectionIssues: [],
+    health: "degraded",
+    lifecycle: "stopping",
     partial: true,
     stale: false,
   },
@@ -55,27 +46,19 @@ const value: models.DataGcpSecretManager = {
 ```typescript
 const value: models.DataAzureKeyVault = {
   accessPolicyCount: 923246,
-  events: [],
   name: "<value>",
-  privateEndpointConnectionCount: 363497,
+  privateEndpointConnectionCount: 319306,
   publicNetworkAccess: "<value>",
-  rbacAuthorizationEnabled: false,
+  rbacAuthorizationEnabled: true,
   secretMetadataListed: false,
-  softDeleteEnabled: true,
-  softDeleteRetentionDays: 24015,
+  softDeleteEnabled: false,
+  softDeleteRetentionDays: 497787,
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "forbidden",
-        severity: "info",
-        source: "<value>",
-      },
-    ],
+    collectionIssues: [],
     health: "degraded",
     lifecycle: "creating",
     partial: true,
-    stale: true,
+    stale: false,
   },
   backend: "azureKeyVault",
 };
@@ -85,14 +68,6 @@ const value: models.DataAzureKeyVault = {
 
 ```typescript
 const value: models.DataKubernetesSecret = {
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2026-12-05T01:04:58.637Z"),
-      severity: "info",
-    },
-  ],
   namespace: "<value>",
   prefix: "<value>",
   secretMetadataListed: false,
@@ -105,7 +80,7 @@ const value: models.DataKubernetesSecret = {
         source: "<value>",
       },
     ],
-    health: "degraded",
+    health: "unknown",
     lifecycle: "deleting",
     partial: false,
     stale: false,
@@ -118,23 +93,22 @@ const value: models.DataKubernetesSecret = {
 
 ```typescript
 const value: models.DataLocal8 = {
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-07-08T01:45:59.103Z"),
-      severity: "error",
-    },
-  ],
   path: "/usr/local/src",
   pathExists: true,
   secretMetadataListed: false,
   status: {
-    collectionIssues: [],
-    health: "unhealthy",
-    lifecycle: "deleting",
-    partial: true,
-    stale: false,
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "not-installed",
+        severity: "error",
+        source: "<value>",
+      },
+    ],
+    health: "unknown",
+    lifecycle: "failed",
+    partial: false,
+    stale: true,
   },
   backend: "local",
 };

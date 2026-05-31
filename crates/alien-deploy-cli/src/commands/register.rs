@@ -145,6 +145,7 @@ async fn register_cloudformation(args: RegisterArgs) -> Result<()> {
 struct CfnOutputs {
     source_kind: Option<String>,
     platform: Option<String>,
+    base_platform: Option<String>,
     region: Option<String>,
     resource_prefix: Option<String>,
     setup_target: Option<String>,
@@ -207,6 +208,7 @@ async fn fetch_cloudformation_outputs(region: &str, stack_name: &str) -> Result<
                     outputs.resource_prefix = Some(value.to_string());
                 }
                 "DeploymentPlatform" => outputs.platform = Some(value.to_string()),
+                "DeploymentBasePlatform" => outputs.base_platform = Some(value.to_string()),
                 "DeploymentRegion" => outputs.region = Some(value.to_string()),
                 "DeploymentSetupTarget" => outputs.setup_target = Some(value.to_string()),
                 "DeploymentSetupImportFormatVersion" => {
@@ -291,6 +293,17 @@ fn build_import_request(
             }));
         }
     };
+    let base_platform = outputs
+        .base_platform
+        .as_deref()
+        .map(|p| {
+            p.parse().map_err(|reason| {
+                AlienError::new(ErrorData::ConfigurationError {
+                    message: format!("DeploymentBasePlatform output '{p}' is invalid: {reason}"),
+                })
+            })
+        })
+        .transpose()?;
 
     let region = outputs.region.clone().ok_or_else(|| {
         AlienError::new(ErrorData::ConfigurationError {
@@ -379,13 +392,13 @@ fn build_import_request(
         source_kind: Some(source_kind),
         release_id: None,
         platform,
-        base_platform: None,
+        base_platform,
         region,
         setup_target,
         setup_fingerprint,
         setup_fingerprint_version,
         stack_settings,
-        management_config,
+        management_config: Some(management_config),
         resources,
     })
 }
@@ -397,4 +410,44 @@ struct ImportedResourceWire {
     #[serde(rename = "type")]
     resource_type: String,
     import_data: JsonValue,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::AwsManagementConfig;
+
+    fn base_outputs() -> CfnOutputs {
+        CfnOutputs {
+            source_kind: Some("cloudformation".to_string()),
+            platform: Some("kubernetes".to_string()),
+            base_platform: Some("aws".to_string()),
+            region: Some("us-east-1".to_string()),
+            resource_prefix: Some("e2e-cfn-eks".to_string()),
+            setup_target: Some("eks".to_string()),
+            setup_import_format_version: Some(1),
+            setup_fingerprint: Some("test".to_string()),
+            setup_fingerprint_version: Some(1),
+            management_config: Some(
+                serde_json::to_value(ManagementConfig::Aws(AwsManagementConfig {
+                    managing_role_arn: "arn:aws:iam::123456789012:role/manager".to_string(),
+                }))
+                .expect("management config"),
+            ),
+            stack_settings: Some(
+                serde_json::to_value(StackSettings::default()).expect("stack settings"),
+            ),
+            resources_chunks: vec![JsonValue::Array(Vec::new())],
+        }
+    }
+
+    #[test]
+    fn cloudformation_import_request_preserves_base_platform() {
+        let request =
+            build_import_request(&base_outputs(), "dg_token", "app", "stack").expect("request");
+
+        assert_eq!(request.platform, Platform::Kubernetes);
+        assert_eq!(request.base_platform, Some(Platform::Aws));
+        assert_eq!(request.setup_target, "eks");
+    }
 }

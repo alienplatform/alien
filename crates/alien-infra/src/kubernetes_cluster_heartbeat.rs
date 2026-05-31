@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
 use alien_core::{
-    HeartbeatBackend, HeartbeatCollectionIssue, HeartbeatCollectionIssueReason, HeartbeatEvent,
+    HeartbeatBackend, HeartbeatCollectionIssue, HeartbeatCollectionIssueReason,
     HeartbeatIssueSeverity, KubernetesCluster, KubernetesClusterHeartbeatData,
-    KubernetesClusterNodeStatus, KubernetesNodeConditionStatus, KubernetesNodeResources,
+    KubernetesClusterNodeStatus, KubernetesEventInvolvedObject, KubernetesEventSnapshot,
+    KubernetesEventSource, KubernetesNodeConditionStatus, KubernetesNodeResources,
     KubernetesNodeUsage, MetricSample, MetricUnit, ObservedCounts, ObservedHealth, Platform,
     ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, WorkloadHeartbeatStatus,
 };
@@ -170,7 +171,7 @@ pub async fn emit_kubernetes_cluster_heartbeat(
         .map(|list| {
             list.items
                 .iter()
-                .filter_map(heartbeat_event)
+                .filter_map(kubernetes_event_snapshot)
                 .take(20)
                 .collect::<Vec<_>>()
         })
@@ -214,7 +215,7 @@ fn cluster_data(
     pods: &[Pod],
     nodes: &[KubernetesClusterNodeStatus],
     version: Option<String>,
-    events: Vec<HeartbeatEvent>,
+    events: Vec<KubernetesEventSnapshot>,
     metrics_status: &OptionalKubernetesReadStatus,
     events_status: &OptionalKubernetesReadStatus,
     nodes_status: &OptionalKubernetesReadStatus,
@@ -421,28 +422,32 @@ fn pod_ready(pod: &Pod) -> bool {
     !statuses.is_empty() && statuses.iter().all(|status| status.ready)
 }
 
-fn heartbeat_event(event: &Event) -> Option<HeartbeatEvent> {
-    Some(HeartbeatEvent {
-        observed_at: event
-            .event_time
-            .as_ref()
-            .map(|time| time.0)
-            .or_else(|| event.last_timestamp.as_ref().map(|time| time.0))
-            .or_else(|| event.first_timestamp.as_ref().map(|time| time.0))?,
-        kind: event
+fn kubernetes_event_snapshot(event: &Event) -> Option<KubernetesEventSnapshot> {
+    Some(KubernetesEventSnapshot {
+        reason: event
             .reason
             .clone()
             .unwrap_or_else(|| "KubernetesEvent".to_string()),
-        severity: if event.type_.as_deref() == Some("Warning") {
-            HeartbeatIssueSeverity::Warning
-        } else {
-            HeartbeatIssueSeverity::Info
-        },
+        type_: event.type_.clone(),
         message: event.message.clone().unwrap_or_default(),
-        source: event
-            .source
-            .as_ref()
-            .and_then(|source| source.component.clone()),
+        count: event.count,
+        first_timestamp: event.first_timestamp.as_ref().map(|time| time.0),
+        last_timestamp: event.last_timestamp.as_ref().map(|time| time.0),
+        event_time: event.event_time.as_ref().map(|time| time.0),
+        source: event.source.as_ref().map(|source| KubernetesEventSource {
+            component: source.component.clone(),
+            host: source.host.clone(),
+        }),
+        involved_object: Some(KubernetesEventInvolvedObject {
+            kind: event.involved_object.kind.clone(),
+            namespace: event.involved_object.namespace.clone(),
+            name: event.involved_object.name.clone(),
+            uid: event.involved_object.uid.clone(),
+            api_version: event.involved_object.api_version.clone(),
+            resource_version: event.involved_object.resource_version.clone(),
+            field_path: event.involved_object.field_path.clone(),
+        }),
+        raw: serde_json::to_value(event).ok(),
     })
 }
 

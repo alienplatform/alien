@@ -9,6 +9,7 @@ const required = (name: string): string => {
 const apiUrl = required("API_URL")
 const appSecret = process.env.APP_SECRET
 const intervalSeconds = Number(process.env.SCHEDULE_INTERVAL_SECONDS ?? "60")
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 async function enqueueMaintenance() {
   const headers = appSecret ? { "x-app-secret": appSecret } : undefined
@@ -22,12 +23,13 @@ async function enqueueMaintenance() {
   console.log(await response.text())
 }
 
-await enqueueMaintenance()
-setInterval(() => {
-  enqueueMaintenance().catch(error => {
-    console.error(error)
-    process.exitCode = 1
-  })
-}, intervalSeconds * 1000)
+while (true) {
+  try {
+    await enqueueMaintenance()
+  } catch (error) {
+    console.warn("maintenance enqueue failed; retrying", error)
+  }
+  await sleep(intervalSeconds * 1000)
+}
 
 export {}

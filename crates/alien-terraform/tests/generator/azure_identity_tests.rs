@@ -109,6 +109,44 @@ fn azure_remote_stack_management_emits_uami_with_federated_credential() {
 }
 
 #[test]
+fn azure_global_network_heartbeat_does_not_emit_resource_scoped_setup_role() {
+    let settings = StackSettings {
+        network: Some(NetworkSettings::Create {
+            cidr: Some("10.46.0.0/16".to_string()),
+            availability_zones: 1,
+        }),
+        ..StackSettings::default()
+    };
+    let stack = Stack::new("acme-network-heartbeat".to_string())
+        .management(ManagementPermissions::extend(
+            PermissionProfile::new().global(["network/heartbeat"]),
+        ))
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add(
+            Network::new("default-network".to_string())
+                .settings(settings.network.clone().expect("network settings"))
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Azure, settings);
+    let rendered = module
+        .iter()
+        .map(|(_, contents)| contents)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(
+        !rendered.contains("setup_management_network_heartbeat"),
+        "network/heartbeat is stack-scoped for Azure and must not emit setup-owned resource roles"
+    );
+}
+
+#[test]
 fn azure_network_create_emits_vnet_subnets_nat() {
     let settings = StackSettings {
         network: Some(NetworkSettings::Create {

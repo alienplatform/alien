@@ -288,7 +288,6 @@ fn emit_aws_lambda_worker_heartbeat(
                 function_url_auth_type: None,
                 function_url_cors_present: false,
                 trigger_count: worker_config.triggers.len() as u32,
-                events: vec![],
             },
         )),
         raw: vec![],

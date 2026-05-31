@@ -970,7 +970,6 @@ fn emit_azure_remote_stack_management_heartbeat(
                     fic_name: controller.fic_name.clone(),
                     role_definition_id: controller.role_definition_id.clone(),
                     role_assignment_ids: controller.role_assignment_ids.clone(),
-                    events: vec![],
                 },
             ),
         ),

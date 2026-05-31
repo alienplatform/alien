@@ -4,14 +4,10 @@
 */
 
 import * as z from "zod";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 import { RemoteStackManagementHeartbeatStatusSchema } from "./remote-stack-management-heartbeat-status-schema.js";
 
 export const AzureRemoteStackManagementHeartbeatDataSchema = z.object({
-    get "events"(){
-                return z.array(HeartbeatEventSchema)
-              },
-"ficName": z.string().nullish(),
+    "ficName": z.string().nullish(),
 "roleAssignmentIds": z.array(z.string()),
 "roleDefinitionId": z.string().nullish(),
 get "status"(){

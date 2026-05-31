@@ -16,19 +16,24 @@ let value: ReconcileRequest = {
           assignedMachines: 656017,
           capacityGroup: "<value>",
           commandSupported: false,
-          daemonName: "<value>",
-          desiredMachines: 546242,
-          events: [],
-          healthyInstances: 8454,
-          horizonClusterId: "<id>",
-          horizonStatus: "<value>",
-          instances: [
+          daemonInstances: [
             {
               name: "<value>",
               ready: true,
               replicaId: "<id>",
             },
           ],
+          daemonName: "<value>",
+          desiredMachines: 8454,
+          events: [
+            {
+              message: "<value>",
+              reason: "<value>",
+            },
+          ],
+          healthyInstances: 215687,
+          horizonClusterId: "<id>",
+          horizonStatus: "<value>",
           latestUpdateTimestamp: "<value>",
           status: {
             collectionIssues: [],

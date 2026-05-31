@@ -4,7 +4,6 @@
 */
 
 import * as z from "zod";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 import { StorageHeartbeatStatusSchema } from "./storage-heartbeat-status-schema.js";
 
 export const AwsS3StorageHeartbeatDataSchema = z.object({
@@ -15,9 +14,6 @@ export const AwsS3StorageHeartbeatDataSchema = z.object({
 "bucketPolicyPresent": z.boolean().nullish(),
 "encryptionConfigPresent": z.boolean(),
 "encryptionEnabled": z.boolean().nullish(),
-get "events"(){
-                return z.array(HeartbeatEventSchema)
-              },
 "ignorePublicAcls": z.boolean().nullish(),
 "lifecyclePresent": z.boolean(),
 "lifecycleRuleCount": z.int().min(0).nullish(),

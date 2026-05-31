@@ -27,7 +27,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::{debug, error, info, warn};
 
 use crate::core::EnvironmentVariableBuilder;
-use crate::core::{ResourceController, ResourceControllerContext};
+use crate::core::{AzurePermissionsHelper, ResourceController, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
 use crate::infra_requirements::azure_utils;
 use crate::infra_requirements::azure_utils::{
@@ -237,7 +237,6 @@ fn emit_azure_container_apps_worker_heartbeat(
                 max_replicas: scale.map(|scale| scale.max_replicas),
                 cpu: resources.and_then(|resources| resources.cpu),
                 memory: resources.and_then(|resources| resources.memory.clone()),
-                events: vec![],
             },
         )),
         raw: vec![],
@@ -3336,15 +3335,85 @@ impl AzureWorkerController {
     async fn assign_commands_sender_role(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
-        _azure_config: &alien_azure_clients::AzureClientConfig,
-        _resource_group_name: &str,
-        _namespace_name: &str,
+        azure_config: &alien_azure_clients::AzureClientConfig,
+        resource_group_name: &str,
+        namespace_name: &str,
         func_cfg: &alien_core::Worker,
     ) -> Result<()> {
         if !management_profile_dispatches_commands(ctx, &func_cfg.id) {
             info!(
                 worker = %func_cfg.id,
                 "Skipping management command sender role because worker/dispatch-command is not granted"
+            );
+            return Ok(());
+        }
+
+        if AzurePermissionsHelper::get_management_uami_principal_id(ctx)?.is_none() {
+            if self.commands_sender_role_assignment_id.is_some() {
+                return Ok(());
+            }
+
+            let queue_name = self.commands_queue_name.as_ref().ok_or_else(|| {
+                AlienError::new(ErrorData::DependencyNotReady {
+                    resource_id: func_cfg.id.clone(),
+                    dependency_id: "commands-queue".to_string(),
+                })
+            })?;
+            let authorization_client = ctx
+                .service_provider
+                .get_azure_authorization_client(azure_config)?;
+            let principal_id = ctx
+                .service_provider
+                .get_azure_caller_principal_id(azure_config)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to resolve Azure command sender principal".to_string(),
+                    resource_id: Some(func_cfg.id.clone()),
+                })?;
+            let queue_scope = alien_azure_clients::authorization::Scope::Resource {
+                resource_group_name: resource_group_name.to_string(),
+                resource_provider: "Microsoft.ServiceBus".to_string(),
+                parent_resource_path: Some(format!("namespaces/{namespace_name}")),
+                resource_type: "queues".to_string(),
+                resource_name: queue_name.clone(),
+            };
+            let role_assignment_id = uuid::Uuid::new_v5(
+                &uuid::Uuid::NAMESPACE_OID,
+                format!(
+                    "deployment:azure:commands-sender:{}:{}:{}:{}:{}",
+                    ctx.resource_prefix, func_cfg.id, principal_id, namespace_name, queue_name
+                )
+                .as_bytes(),
+            )
+            .to_string();
+            let full_assignment_id = authorization_client
+                .build_role_assignment_id(&queue_scope, role_assignment_id.clone());
+            let role_definition_id = format!(
+                "/subscriptions/{}/providers/Microsoft.Authorization/roleDefinitions/69a216fc-b8fb-44d8-bc22-1f3c2cd27a39",
+                azure_config.subscription_id
+            );
+
+            AzurePermissionsHelper::create_role_assignment(
+                &authorization_client,
+                azure_config,
+                &queue_scope,
+                &role_assignment_id,
+                &principal_id,
+                &role_definition_id,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to grant Azure command sender role".to_string(),
+                resource_id: Some(func_cfg.id.clone()),
+            })?;
+
+            self.commands_sender_role_assignment_id = Some(full_assignment_id);
+            info!(
+                worker = %func_cfg.id,
+                principal_id = %principal_id,
+                namespace = %namespace_name,
+                queue = %queue_name,
+                "Granted direct-manager Azure Service Bus command sender role"
             );
             return Ok(());
         }

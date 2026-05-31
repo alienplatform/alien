@@ -13,23 +13,22 @@ let value: DataAzure2 = {
       groupId: "<id>",
     },
   ],
-  events: [],
   name: "<value>",
   nodes: {},
-  providerFleets: [
-    {
-      currentMachines: 567819,
-      desiredMachines: 375470,
-      groupId: "<id>",
-      providerId: "<id>",
-    },
-  ],
+  providerFleets: [],
   status: {
-    collectionIssues: [],
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "collection-failed",
+        severity: "warning",
+        source: "<value>",
+      },
+    ],
     health: "degraded",
     lifecycle: "running",
     partial: true,
-    stale: true,
+    stale: false,
   },
   backend: "azure",
 };
@@ -37,16 +36,15 @@ let value: DataAzure2 = {
 
 ## Fields
 
-| Field                                                                                                    | Type                                                                                                     | Required                                                                                                 | Description                                                                                              |
-| -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `backendClusterId`                                                                                       | *string*                                                                                                 | :heavy_minus_sign:                                                                                       | N/A                                                                                                      |
-| `capacityGroups`                                                                                         | [operations.CapacityGroup3](../../models/operations/capacitygroup3.md)[]                                 | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
-| `cpu`                                                                                                    | *operations.CpuUnion9*                                                                                   | :heavy_minus_sign:                                                                                       | N/A                                                                                                      |
-| `events`                                                                                                 | [operations.GetRawResourceHeartbeatEvent20](../../models/operations/getrawresourceheartbeatevent20.md)[] | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
-| `memory`                                                                                                 | *operations.MemoryUnion9*                                                                                | :heavy_minus_sign:                                                                                       | N/A                                                                                                      |
-| `name`                                                                                                   | *string*                                                                                                 | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
-| `nodes`                                                                                                  | [operations.Nodes3](../../models/operations/nodes3.md)                                                   | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
-| `providerFleets`                                                                                         | [operations.ProviderFleet3](../../models/operations/providerfleet3.md)[]                                 | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
-| `region`                                                                                                 | *string*                                                                                                 | :heavy_minus_sign:                                                                                       | N/A                                                                                                      |
-| `status`                                                                                                 | [operations.DataStatus20](../../models/operations/datastatus20.md)                                       | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
-| `backend`                                                                                                | *"azure"*                                                                                                | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
+| Field                                                                    | Type                                                                     | Required                                                                 | Description                                                              |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------------ | ------------------------------------------------------------------------ | ------------------------------------------------------------------------ |
+| `backendClusterId`                                                       | *string*                                                                 | :heavy_minus_sign:                                                       | N/A                                                                      |
+| `capacityGroups`                                                         | [operations.CapacityGroup3](../../models/operations/capacitygroup3.md)[] | :heavy_check_mark:                                                       | N/A                                                                      |
+| `cpu`                                                                    | *operations.CpuUnion9*                                                   | :heavy_minus_sign:                                                       | N/A                                                                      |
+| `memory`                                                                 | *operations.MemoryUnion9*                                                | :heavy_minus_sign:                                                       | N/A                                                                      |
+| `name`                                                                   | *string*                                                                 | :heavy_check_mark:                                                       | N/A                                                                      |
+| `nodes`                                                                  | [operations.Nodes3](../../models/operations/nodes3.md)                   | :heavy_check_mark:                                                       | N/A                                                                      |
+| `providerFleets`                                                         | [operations.ProviderFleet3](../../models/operations/providerfleet3.md)[] | :heavy_check_mark:                                                       | N/A                                                                      |
+| `region`                                                                 | *string*                                                                 | :heavy_minus_sign:                                                       | N/A                                                                      |
+| `status`                                                                 | [operations.DataStatus20](../../models/operations/datastatus20.md)       | :heavy_check_mark:                                                       | N/A                                                                      |
+| `backend`                                                                | *"azure"*                                                                | :heavy_check_mark:                                                       | N/A                                                                      |

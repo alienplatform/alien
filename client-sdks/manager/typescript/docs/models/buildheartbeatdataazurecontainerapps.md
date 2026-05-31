@@ -7,15 +7,21 @@ import { BuildHeartbeatDataAzureContainerApps } from "@alienplatform/manager-api
 
 let value: BuildHeartbeatDataAzureContainerApps = {
   environmentVariableCount: 180128,
-  events: [],
   managedEnvironmentId: "<id>",
   resourceGroupName: "<value>",
   status: {
-    collectionIssues: [],
-    health: "unknown",
-    lifecycle: "stopped",
-    partial: true,
-    stale: false,
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "forbidden",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
+    health: "healthy",
+    lifecycle: "creating",
+    partial: false,
+    stale: true,
   },
   backend: "azureContainerApps",
 };
@@ -26,7 +32,6 @@ let value: BuildHeartbeatDataAzureContainerApps = {
 | Field                                                            | Type                                                             | Required                                                         | Description                                                      |
 | ---------------------------------------------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------- |
 | `environmentVariableCount`                                       | *number*                                                         | :heavy_check_mark:                                               | N/A                                                              |
-| `events`                                                         | [models.HeartbeatEvent](../models/heartbeatevent.md)[]           | :heavy_check_mark:                                               | N/A                                                              |
 | `managedEnvironmentId`                                           | *string*                                                         | :heavy_check_mark:                                               | N/A                                                              |
 | `managedIdentityId`                                              | *string*                                                         | :heavy_minus_sign:                                               | N/A                                                              |
 | `resourceGroupName`                                              | *string*                                                         | :heavy_check_mark:                                               | N/A                                                              |

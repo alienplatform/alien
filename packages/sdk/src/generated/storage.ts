@@ -274,6 +274,14 @@ export interface StorageAttributeKeyValuePair {
   value: string;
 }
 
+/** Represents a single HTTP header required by a signed URL request. */
+export interface StorageHttpHeader {
+  /** Header name. */
+  key: string;
+  /** Header value. */
+  value: string;
+}
+
 /**
  * A collection of storage attributes.
  * Maps to object_store::Attributes.
@@ -352,15 +360,6 @@ export interface StorageGetRequest {
    * Maps to object_store::GetOptions.
    */
   options?: StorageGetOptions | undefined;
-}
-
-/** A chunk of data from a storage object stream. */
-export interface StorageChunkResponse {
-  /**
-   * Bytes of the object chunk.
-   * Corresponds to Bytes from the object_store::GetResult stream.
-   */
-  chunkData: Uint8Array;
 }
 
 /** New message for Get RPC stream */
@@ -659,6 +658,8 @@ export interface StorageSignedUrlRequest {
 export interface StorageSignedUrlResponse {
   /** The generated signed URL. */
   url: string;
+  /** Headers that must be included when executing the signed request. */
+  headers: StorageHttpHeader[];
 }
 
 function createBaseStorageRange(): StorageRange {
@@ -1283,6 +1284,82 @@ export const StorageAttributeKeyValuePair: MessageFns<StorageAttributeKeyValuePa
   },
 };
 
+function createBaseStorageHttpHeader(): StorageHttpHeader {
+  return { key: "", value: "" };
+}
+
+export const StorageHttpHeader: MessageFns<StorageHttpHeader> = {
+  encode(message: StorageHttpHeader, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.key !== "") {
+      writer.uint32(10).string(message.key);
+    }
+    if (message.value !== "") {
+      writer.uint32(18).string(message.value);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): StorageHttpHeader {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseStorageHttpHeader();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.key = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.value = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): StorageHttpHeader {
+    return {
+      key: isSet(object.key) ? globalThis.String(object.key) : "",
+      value: isSet(object.value) ? globalThis.String(object.value) : "",
+    };
+  },
+
+  toJSON(message: StorageHttpHeader): unknown {
+    const obj: any = {};
+    if (message.key !== "") {
+      obj.key = message.key;
+    }
+    if (message.value !== "") {
+      obj.value = message.value;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<StorageHttpHeader>): StorageHttpHeader {
+    return StorageHttpHeader.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<StorageHttpHeader>): StorageHttpHeader {
+    const message = createBaseStorageHttpHeader();
+    message.key = object.key ?? "";
+    message.value = object.value ?? "";
+    return message;
+  },
+};
+
 function createBaseStorageAttributesMap(): StorageAttributesMap {
   return { pairs: [] };
 }
@@ -1631,64 +1708,6 @@ export const StorageGetRequest: MessageFns<StorageGetRequest> = {
     message.options = (object.options !== undefined && object.options !== null)
       ? StorageGetOptions.fromPartial(object.options)
       : undefined;
-    return message;
-  },
-};
-
-function createBaseStorageChunkResponse(): StorageChunkResponse {
-  return { chunkData: new Uint8Array(0) };
-}
-
-export const StorageChunkResponse: MessageFns<StorageChunkResponse> = {
-  encode(message: StorageChunkResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.chunkData.length !== 0) {
-      writer.uint32(10).bytes(message.chunkData);
-    }
-    return writer;
-  },
-
-  decode(input: BinaryReader | Uint8Array, length?: number): StorageChunkResponse {
-    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
-    const end = length === undefined ? reader.len : reader.pos + length;
-    const message = createBaseStorageChunkResponse();
-    while (reader.pos < end) {
-      const tag = reader.uint32();
-      switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 10) {
-            break;
-          }
-
-          message.chunkData = reader.bytes();
-          continue;
-        }
-      }
-      if ((tag & 7) === 4 || tag === 0) {
-        break;
-      }
-      reader.skip(tag & 7);
-    }
-    return message;
-  },
-
-  fromJSON(object: any): StorageChunkResponse {
-    return { chunkData: isSet(object.chunkData) ? bytesFromBase64(object.chunkData) : new Uint8Array(0) };
-  },
-
-  toJSON(message: StorageChunkResponse): unknown {
-    const obj: any = {};
-    if (message.chunkData.length !== 0) {
-      obj.chunkData = base64FromBytes(message.chunkData);
-    }
-    return obj;
-  },
-
-  create(base?: DeepPartial<StorageChunkResponse>): StorageChunkResponse {
-    return StorageChunkResponse.fromPartial(base ?? {});
-  },
-  fromPartial(object: DeepPartial<StorageChunkResponse>): StorageChunkResponse {
-    const message = createBaseStorageChunkResponse();
-    message.chunkData = object.chunkData ?? new Uint8Array(0);
     return message;
   },
 };
@@ -3221,13 +3240,16 @@ export const StorageSignedUrlRequest: MessageFns<StorageSignedUrlRequest> = {
 };
 
 function createBaseStorageSignedUrlResponse(): StorageSignedUrlResponse {
-  return { url: "" };
+  return { url: "", headers: [] };
 }
 
 export const StorageSignedUrlResponse: MessageFns<StorageSignedUrlResponse> = {
   encode(message: StorageSignedUrlResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     if (message.url !== "") {
       writer.uint32(10).string(message.url);
+    }
+    for (const v of message.headers) {
+      StorageHttpHeader.encode(v!, writer.uint32(18).fork()).join();
     }
     return writer;
   },
@@ -3247,6 +3269,14 @@ export const StorageSignedUrlResponse: MessageFns<StorageSignedUrlResponse> = {
           message.url = reader.string();
           continue;
         }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.headers.push(StorageHttpHeader.decode(reader, reader.uint32()));
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -3257,13 +3287,21 @@ export const StorageSignedUrlResponse: MessageFns<StorageSignedUrlResponse> = {
   },
 
   fromJSON(object: any): StorageSignedUrlResponse {
-    return { url: isSet(object.url) ? globalThis.String(object.url) : "" };
+    return {
+      url: isSet(object.url) ? globalThis.String(object.url) : "",
+      headers: globalThis.Array.isArray(object?.headers)
+        ? object.headers.map((e: any) => StorageHttpHeader.fromJSON(e))
+        : [],
+    };
   },
 
   toJSON(message: StorageSignedUrlResponse): unknown {
     const obj: any = {};
     if (message.url !== "") {
       obj.url = message.url;
+    }
+    if (message.headers?.length) {
+      obj.headers = message.headers.map((e) => StorageHttpHeader.toJSON(e));
     }
     return obj;
   },
@@ -3274,6 +3312,7 @@ export const StorageSignedUrlResponse: MessageFns<StorageSignedUrlResponse> = {
   fromPartial(object: DeepPartial<StorageSignedUrlResponse>): StorageSignedUrlResponse {
     const message = createBaseStorageSignedUrlResponse();
     message.url = object.url ?? "";
+    message.headers = object.headers?.map((e) => StorageHttpHeader.fromPartial(e)) || [];
     return message;
   },
 };

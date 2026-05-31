@@ -110,7 +110,7 @@ fn run_through_registry(
         platform,
         region,
         stack_settings: &settings,
-        management_config: management,
+        management_config: Some(management),
         resource: entry,
     };
     registry
@@ -648,7 +648,7 @@ fn missing_importer_returns_typed_error() {
         platform: Platform::Kubernetes,
         region: "n/a",
         stack_settings: &settings,
-        management_config: &mgmt,
+        management_config: Some(&mgmt),
         resource: &entry,
     };
     // Storage is registered for AWS/GCP/Azure but not for Kubernetes —

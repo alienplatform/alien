@@ -4,13 +4,13 @@ use crate::{
 };
 use alien_core::{
     import::{EmitContext, CURRENT_SETUP_IMPORT_FORMAT_VERSION},
-    ownership_policy_for_resource_type, DomainSettings, ErrorData, HeartbeatsMode, Network,
-    NetworkSettings, Platform, Result, Stack, StackSettings, TelemetryMode, UpdatesMode, Worker,
-    WorkerCode,
+    ownership_policy_for_resource_type, DomainSettings, ErrorData, HeartbeatsMode,
+    KubernetesCluster, KubernetesSettings, Network, NetworkSettings, Platform, Result, Stack,
+    StackSettings, TelemetryMode, UpdatesMode, Worker, WorkerCode,
 };
 use alien_error::AlienError;
 use indexmap::{indexmap, IndexMap};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::collections::HashSet;
 
 const TEMPLATE_VERSION: &str = "2010-09-09";
@@ -43,8 +43,10 @@ const CONDITION_HAS_VPC_CIDR: &str = "HasVpcCidr";
 const CONDITION_HAS_DOMAIN_NAME: &str = "HasDomainName";
 
 const OUTPUT_SOURCE_KIND: &str = "DeploymentSourceKind";
+const OUTPUT_DEPLOYMENT_ID: &str = "DeploymentId";
 const OUTPUT_RESOURCE_PREFIX: &str = "DeploymentResourcePrefix";
 const OUTPUT_PLATFORM: &str = "DeploymentPlatform";
+const OUTPUT_BASE_PLATFORM: &str = "DeploymentBasePlatform";
 const OUTPUT_REGION: &str = "DeploymentRegion";
 const OUTPUT_SETUP_TARGET: &str = "DeploymentSetupTarget";
 const OUTPUT_SETUP_IMPORT_FORMAT_VERSION: &str = "DeploymentSetupImportFormatVersion";
@@ -54,7 +56,7 @@ const OUTPUT_MANAGEMENT_CONFIG: &str = "DeploymentManagementConfig";
 const OUTPUT_STACK_SETTINGS: &str = "DeploymentStackSettings";
 const OUTPUT_RESOURCES: &str = "DeploymentResources";
 const OUTPUT_RESOURCES_CHUNK_BYTES: usize = 3_500;
-const STANDARD_OUTPUT_COUNT: usize = 10;
+const STANDARD_OUTPUT_COUNT: usize = 12;
 const CLOUDFORMATION_MAX_OUTPUTS: usize = 200;
 const MAPPING_REGIONAL_CUSTOM_RESOURCE_SERVICE_TOKENS: &str = "RegionalCustomResourceServiceTokens";
 const MAPPING_SERVICE_TOKEN_KEY: &str = "ServiceToken";
@@ -131,12 +133,55 @@ pub struct CloudFormationOptions<'a> {
     /// [`CfRegistry::built_in()`]; plugin-aware callers extend it before
     /// passing.
     pub registry: &'a CfRegistry,
+    pub target: CloudFormationTarget,
     pub stack_settings: StackSettings,
     pub setup_target: String,
     pub setup_fingerprint: String,
     pub setup_fingerprint_version: u32,
     pub registration: RegistrationMode,
     pub description: Option<String>,
+}
+
+/// CloudFormation setup target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloudFormationTarget {
+    Aws,
+    Eks,
+}
+
+impl CloudFormationTarget {
+    /// The cloud platform whose CloudFormation emitters back this target.
+    pub fn cloud_platform(self) -> Platform {
+        match self {
+            CloudFormationTarget::Aws | CloudFormationTarget::Eks => Platform::Aws,
+        }
+    }
+
+    /// Stable target name used in setup metadata and package outputs.
+    pub fn name(self) -> &'static str {
+        match self {
+            CloudFormationTarget::Aws => "aws",
+            CloudFormationTarget::Eks => "eks",
+        }
+    }
+
+    fn deployment_platform(self) -> Platform {
+        match self {
+            CloudFormationTarget::Aws => Platform::Aws,
+            CloudFormationTarget::Eks => Platform::Kubernetes,
+        }
+    }
+
+    fn base_platform(self) -> Option<Platform> {
+        match self {
+            CloudFormationTarget::Aws => None,
+            CloudFormationTarget::Eks => Some(Platform::Aws),
+        }
+    }
+
+    fn is_kubernetes(self) -> bool {
+        matches!(self, CloudFormationTarget::Eks)
+    }
 }
 
 /// Generate a CloudFormation template for a stack.
@@ -146,6 +191,14 @@ pub fn generate_cloudformation_template(
 ) -> Result<CfTemplate> {
     validate_stack_for_cloudformation(stack)?;
     validate_stack_settings(&options.stack_settings)?;
+
+    let mut stack_settings = options.stack_settings.clone();
+    if options.target.is_kubernetes() && stack_settings.network.is_none() {
+        stack_settings.network = Some(NetworkSettings::Create {
+            cidr: None,
+            availability_zones: 2,
+        });
+    }
 
     let names = logical_names(stack)?;
     let mut template = CfTemplate {
@@ -165,9 +218,9 @@ pub fn generate_cloudformation_template(
         outputs: IndexMap::new(),
     };
 
-    add_standard_parameters(&mut template, &options.stack_settings);
-    add_standard_conditions(&mut template, stack, &options.stack_settings);
-    add_console_interface_metadata(&mut template, &options.stack_settings);
+    add_standard_parameters(&mut template, &stack_settings);
+    add_standard_conditions(&mut template, stack, &stack_settings);
+    add_console_interface_metadata(&mut template, &stack_settings);
 
     let mut imported_resources = Vec::new();
     let mut emitted_resource_ids: IndexMap<String, Vec<String>> = IndexMap::new();
@@ -178,14 +231,16 @@ pub fn generate_cloudformation_template(
         if !ownership.should_emit_in_setup(resource.lifecycle) {
             continue;
         }
-        let emitter = options.registry.require(&resource_type, Platform::Aws)?;
+        let emitter = options
+            .registry
+            .require(&resource_type, options.target.cloud_platform())?;
 
         let ctx = EmitContext {
             stack,
             resource,
             resource_id,
-            platform: Platform::Aws,
-            stack_settings: &options.stack_settings,
+            platform: options.target.cloud_platform(),
+            stack_settings: &stack_settings,
             names: &names,
         };
 
@@ -210,8 +265,18 @@ pub fn generate_cloudformation_template(
         ]));
     }
 
-    let management_config = management_config_expression();
-    let stack_settings = stack_settings_expression(&options.stack_settings);
+    let kubernetes_namespace = if options.target.is_kubernetes() {
+        kubernetes_cluster_namespace(stack).map(CfExpression::from)
+    } else {
+        None
+    };
+
+    let management_config = management_config_expression(options.target);
+    let stack_settings = stack_settings_expression(
+        options.target,
+        &stack_settings,
+        kubernetes_namespace.clone(),
+    );
     let resources = CfExpression::list(imported_resources);
 
     apply_resource_dependencies(stack, &emitted_resource_ids, &mut template);
@@ -520,7 +585,7 @@ fn add_standard_parameters(template: &mut CfTemplate, settings: &StackSettings) 
     template.parameters.insert(
         PARAM_DOMAIN_NAME.to_string(),
         string_parameter(
-            "Optional custom domain for public endpoints. Leave unset to use an auto-generated domain with a managed TLS certificate.",
+            "Optional custom domain for public endpoints. Leave unset to expose through the generated load balancer DNS name over HTTP.",
             Some(domain_defaults.domain_name.unwrap_or_default()),
             None,
             false,
@@ -538,7 +603,7 @@ fn add_standard_parameters(template: &mut CfTemplate, settings: &StackSettings) 
     template.parameters.insert(
         PARAM_CERTIFICATE_ARN.to_string(),
         string_parameter(
-            "ACM certificate ARN for the custom domain. Not needed for the auto-generated domain.",
+            "ACM certificate ARN for the custom domain. Required when DomainName is set.",
             Some(domain_defaults.certificate_arn.unwrap_or_default()),
             None,
             false,
@@ -865,7 +930,7 @@ fn add_custom_resource(
         "DeploymentName".to_string() => CfExpression::ref_("AWS::StackName"),
         "ResourcePrefix".to_string() => CfExpression::ref_("AWS::StackName"),
         "SourceKind".to_string() => CfExpression::from("cloudformation"),
-        "Platform".to_string() => CfExpression::from(Platform::Aws.as_str()),
+        "Platform".to_string() => CfExpression::from(options.target.deployment_platform().as_str()),
         "Region".to_string() => CfExpression::ref_("AWS::Region"),
         "SetupTarget".to_string() => CfExpression::from(options.setup_target.clone()),
         "SetupImportFormatVersion".to_string() => CfExpression::from(CURRENT_SETUP_IMPORT_FORMAT_VERSION),
@@ -875,6 +940,12 @@ fn add_custom_resource(
         "StackSettings".to_string() => stack_settings,
         "Resources".to_string() => resources,
     };
+    if let Some(base_platform) = options.target.base_platform() {
+        resource.properties.insert(
+            "BasePlatform".to_string(),
+            CfExpression::from(base_platform.as_str()),
+        );
+    }
     if let Some(callback_url) = callback_url.filter(|value| !value.is_empty()) {
         resource.properties.insert(
             "CallbackUrl".to_string(),
@@ -897,6 +968,15 @@ fn add_outputs(
         OUTPUT_SOURCE_KIND.to_string(),
         output("Setup source kind.", CfExpression::from("cloudformation")),
     );
+    if !matches!(options.registration, RegistrationMode::OutputsFallback) {
+        template.outputs.insert(
+            OUTPUT_DEPLOYMENT_ID.to_string(),
+            output(
+                "Imported deployment ID.",
+                CfExpression::get_att("DeploymentStackImport", "DeploymentId"),
+            ),
+        );
+    }
     template.outputs.insert(
         OUTPUT_RESOURCE_PREFIX.to_string(),
         output(
@@ -908,9 +988,18 @@ fn add_outputs(
         OUTPUT_PLATFORM.to_string(),
         output(
             "Target platform.",
-            CfExpression::from(Platform::Aws.as_str()),
+            CfExpression::from(options.target.deployment_platform().as_str()),
         ),
     );
+    if let Some(base_platform) = options.target.base_platform() {
+        template.outputs.insert(
+            OUTPUT_BASE_PLATFORM.to_string(),
+            output(
+                "Base cloud platform for a Kubernetes deployment.",
+                CfExpression::from(base_platform.as_str()),
+            ),
+        );
+    }
     template.outputs.insert(
         OUTPUT_REGION.to_string(),
         output("AWS region.", CfExpression::ref_("AWS::Region")),
@@ -1000,6 +1089,19 @@ fn add_resource_outputs(template: &mut CfTemplate, resources: CfExpression) -> R
     Ok(())
 }
 
+fn empty_object() -> CfExpression {
+    CfExpression::Object(IndexMap::new())
+}
+
+fn kubernetes_cluster_namespace(stack: &Stack) -> Option<String> {
+    stack.resources().find_map(|(_resource_id, entry)| {
+        entry
+            .config
+            .downcast_ref::<KubernetesCluster>()
+            .map(|cluster| cluster.namespace.clone())
+    })
+}
+
 fn chunk_resource_expression(resources: CfExpression) -> Result<Vec<CfExpression>> {
     let CfExpression::List(items) = resources else {
         return Ok(vec![resources]);
@@ -1042,15 +1144,186 @@ fn chunk_resource_expression(resources: CfExpression) -> Result<Vec<CfExpression
     Ok(chunks)
 }
 
-fn stack_settings_expression(settings: &StackSettings) -> CfExpression {
-    CfExpression::object([
+fn stack_settings_expression(
+    target: CloudFormationTarget,
+    settings: &StackSettings,
+    kubernetes_namespace: Option<CfExpression>,
+) -> CfExpression {
+    let mut values = vec![
         ("deploymentModel", CfExpression::from("push")),
         ("updates", CfExpression::ref_(PARAM_UPDATES_MODE)),
         ("telemetry", CfExpression::ref_(PARAM_TELEMETRY_MODE)),
         ("heartbeats", CfExpression::ref_(PARAM_HEARTBEATS_MODE)),
         ("network", network_expression(settings.network.as_ref())),
         ("domains", domains_expression()),
+    ];
+    if target.is_kubernetes() {
+        values[0] = ("deploymentModel", CfExpression::from("pull"));
+        values.push((
+            "kubernetes",
+            kubernetes_settings_expression(settings.kubernetes.as_ref(), kubernetes_namespace),
+        ));
+    }
+    CfExpression::object(values)
+}
+
+fn kubernetes_settings_expression(
+    settings: Option<&KubernetesSettings>,
+    namespace: Option<CfExpression>,
+) -> CfExpression {
+    let mut expression = default_kubernetes_settings_expression();
+
+    if let Some(settings) = settings {
+        let value = serde_json::to_value(settings)
+            .expect("serializing Kubernetes stack settings should not fail");
+        merge_cf_expression(&mut expression, cf_expression_from_json(value));
+    }
+
+    if let Some(namespace) = namespace {
+        set_kubernetes_namespace_expression(&mut expression, namespace);
+    }
+
+    expression
+}
+
+fn default_kubernetes_settings_expression() -> CfExpression {
+    CfExpression::object([
+        (
+            "cluster",
+            CfExpression::object([
+                ("ownership", CfExpression::from("managed")),
+                ("namespace", CfExpression::from("default")),
+            ]),
+        ),
+        (
+            "exposure",
+            CfExpression::if_(
+                CONDITION_HAS_DOMAIN_NAME,
+                custom_domain_kubernetes_exposure_expression(),
+                generated_load_balancer_kubernetes_exposure_expression(),
+            ),
+        ),
     ])
+}
+
+fn generated_load_balancer_kubernetes_exposure_expression() -> CfExpression {
+    CfExpression::object([
+        ("mode", CfExpression::from("generated")),
+        ("route", aws_alb_kubernetes_route_expression()),
+        (
+            "certificate",
+            CfExpression::object([("mode", CfExpression::from("none"))]),
+        ),
+    ])
+}
+
+fn custom_domain_kubernetes_exposure_expression() -> CfExpression {
+    CfExpression::object([
+        ("mode", CfExpression::from("custom")),
+        ("domain", CfExpression::ref_(PARAM_DOMAIN_NAME)),
+        ("route", aws_alb_kubernetes_route_expression()),
+        (
+            "certificate",
+            CfExpression::object([
+                ("mode", CfExpression::from("awsAcmArn")),
+                ("certificateArn", CfExpression::ref_(PARAM_CERTIFICATE_ARN)),
+            ]),
+        ),
+    ])
+}
+
+fn aws_alb_kubernetes_route_expression() -> CfExpression {
+    CfExpression::object([
+        ("routeApi", CfExpression::from("ingress")),
+        ("controller", CfExpression::from("eks.amazonaws.com/alb")),
+        ("ingressClassName", CfExpression::from("alb")),
+        ("labels", empty_object()),
+        ("annotations", empty_object()),
+        (
+            "provider",
+            CfExpression::object([
+                ("provider", CfExpression::from("awsAlb")),
+                ("scheme", CfExpression::from("internet-facing")),
+                ("targetType", CfExpression::from("ip")),
+                ("subnetIds", CfExpression::list([])),
+            ]),
+        ),
+    ])
+}
+
+fn set_kubernetes_namespace_expression(expression: &mut CfExpression, namespace: CfExpression) {
+    let CfExpression::Object(root) = expression else {
+        return;
+    };
+    let cluster = root
+        .entry("cluster".to_string())
+        .or_insert_with(|| CfExpression::object([("ownership", CfExpression::from("managed"))]));
+    let CfExpression::Object(cluster) = cluster else {
+        *cluster = CfExpression::object([
+            ("ownership", CfExpression::from("managed")),
+            ("namespace", namespace),
+        ]);
+        return;
+    };
+    cluster.insert("namespace".to_string(), namespace);
+}
+
+fn merge_cf_expression(base: &mut CfExpression, overlay: CfExpression) {
+    if is_cloudformation_intrinsic(base) || is_cloudformation_intrinsic(&overlay) {
+        *base = overlay;
+        return;
+    }
+
+    match (base, overlay) {
+        (CfExpression::Object(base), CfExpression::Object(overlay)) => {
+            for (key, value) in overlay {
+                match base.get_mut(&key) {
+                    Some(existing) => merge_cf_expression(existing, value),
+                    None => {
+                        base.insert(key, value);
+                    }
+                }
+            }
+        }
+        (base, overlay) => *base = overlay,
+    }
+}
+
+fn is_cloudformation_intrinsic(expression: &CfExpression) -> bool {
+    let CfExpression::Object(values) = expression else {
+        return false;
+    };
+    values
+        .keys()
+        .any(|key| key == "Ref" || key.starts_with("Fn::"))
+}
+
+fn cf_expression_from_json(value: Value) -> CfExpression {
+    match value {
+        Value::Null => CfExpression::Null,
+        Value::Bool(value) => CfExpression::Bool(value),
+        Value::Number(number) => {
+            if let Some(value) = number.as_i64() {
+                CfExpression::Integer(value)
+            } else {
+                CfExpression::Number(
+                    number
+                        .as_f64()
+                        .expect("serde_json numbers should be representable as f64"),
+                )
+            }
+        }
+        Value::String(value) => CfExpression::String(value),
+        Value::Array(values) => {
+            CfExpression::List(values.into_iter().map(cf_expression_from_json).collect())
+        }
+        Value::Object(values) => CfExpression::Object(
+            values
+                .into_iter()
+                .map(|(key, value)| (key, cf_expression_from_json(value)))
+                .collect(),
+        ),
+    }
 }
 
 fn network_expression(network: Option<&NetworkSettings>) -> CfExpression {
@@ -1130,7 +1403,7 @@ fn domains_expression() -> CfExpression {
     )
 }
 
-fn management_config_expression() -> CfExpression {
+fn management_config_expression(_target: CloudFormationTarget) -> CfExpression {
     CfExpression::object([
         ("platform", CfExpression::from("aws")),
         (
@@ -1314,5 +1587,78 @@ impl DomainParameterDefaults {
             domain_name: None,
             certificate_arn: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn merge_replaces_intrinsic_expression_with_structured_overlay() {
+        let mut base = CfExpression::object([(
+            "exposure",
+            CfExpression::if_(
+                CONDITION_HAS_DOMAIN_NAME,
+                CfExpression::object([("mode", CfExpression::from("custom"))]),
+                CfExpression::object([("mode", CfExpression::from("generated"))]),
+            ),
+        )]);
+        let overlay = CfExpression::object([(
+            "exposure",
+            CfExpression::object([
+                ("mode", CfExpression::from("generated")),
+                (
+                    "certificate",
+                    CfExpression::object([("mode", CfExpression::from("none"))]),
+                ),
+            ]),
+        )]);
+
+        merge_cf_expression(&mut base, overlay);
+
+        let CfExpression::Object(root) = base else {
+            panic!("merged expression should remain an object");
+        };
+        let exposure = root
+            .get("exposure")
+            .expect("merged settings should keep exposure");
+        let CfExpression::Object(exposure) = exposure else {
+            panic!("exposure should be the structured overlay");
+        };
+        assert_eq!(exposure.get("mode"), Some(&CfExpression::from("generated")));
+        assert!(
+            !exposure.contains_key("Fn::If"),
+            "intrinsic and structured object keys must not be merged"
+        );
+    }
+
+    #[test]
+    fn merge_replaces_structured_expression_with_intrinsic_overlay() {
+        let mut base = CfExpression::object([(
+            "network",
+            CfExpression::object([("type", CfExpression::from("use-default"))]),
+        )]);
+        let overlay = CfExpression::object([(
+            "network",
+            CfExpression::if_(
+                CONDITION_NETWORK_MODE_CREATE,
+                CfExpression::object([("type", CfExpression::from("create"))]),
+                CfExpression::no_value(),
+            ),
+        )]);
+
+        merge_cf_expression(&mut base, overlay);
+
+        let CfExpression::Object(root) = base else {
+            panic!("merged expression should remain an object");
+        };
+        let network = root
+            .get("network")
+            .expect("merged settings should keep network");
+        assert!(
+            is_cloudformation_intrinsic(network),
+            "intrinsic overlay should replace the structured base"
+        );
     }
 }

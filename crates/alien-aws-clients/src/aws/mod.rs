@@ -334,7 +334,10 @@ async fn resolve_credentials(
         return Ok(AwsCredentials::AccessKeys {
             access_key_id: access_key_id.clone(),
             secret_access_key: secret_access_key.clone(),
-            session_token: environment_variables.get("AWS_SESSION_TOKEN").cloned(),
+            session_token: environment_variables
+                .get("AWS_SESSION_TOKEN")
+                .filter(|token| !token.trim().is_empty())
+                .cloned(),
         });
     }
 
@@ -748,6 +751,24 @@ mod tests {
                 access_key_id: "AKIA123".to_string(),
                 secret_access_key: "secret".to_string(),
                 session_token: Some("token".to_string()),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn test_resolve_credentials_ignores_empty_session_token() {
+        let mut env = HashMap::new();
+        env.insert("AWS_ACCESS_KEY_ID".to_string(), "AKIA123".to_string());
+        env.insert("AWS_SECRET_ACCESS_KEY".to_string(), "secret".to_string());
+        env.insert("AWS_SESSION_TOKEN".to_string(), "".to_string());
+
+        let credentials = resolve_credentials(&env).await.unwrap();
+        assert_eq!(
+            credentials,
+            AwsCredentials::AccessKeys {
+                access_key_id: "AKIA123".to_string(),
+                secret_access_key: "secret".to_string(),
+                session_token: None,
             }
         );
     }

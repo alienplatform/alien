@@ -8,23 +8,15 @@
 ```typescript
 const value: operations.DataAws2 = {
   capacityGroups: [],
-  events: [],
   name: "<value>",
   nodes: {},
   providerFleets: [],
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "forbidden",
-        severity: "info",
-        source: "<value>",
-      },
-    ],
-    health: "unknown",
-    lifecycle: "unknown",
+    collectionIssues: [],
+    health: "degraded",
+    lifecycle: "updating",
     partial: true,
-    stale: false,
+    stale: true,
   },
   backend: "aws",
 };
@@ -41,23 +33,22 @@ const value: operations.DataGcp2 = {
       groupId: "<id>",
     },
   ],
-  events: [],
   name: "<value>",
   nodes: {},
-  providerFleets: [
-    {
-      currentMachines: 22022,
-      desiredMachines: 972056,
-      groupId: "<id>",
-      providerId: "<id>",
-    },
-  ],
+  providerFleets: [],
   status: {
-    collectionIssues: [],
-    health: "unhealthy",
-    lifecycle: "deleting",
-    partial: true,
-    stale: false,
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "forbidden",
+        severity: "error",
+        source: "<value>",
+      },
+    ],
+    health: "healthy",
+    lifecycle: "deleted",
+    partial: false,
+    stale: true,
   },
   backend: "gcp",
 };
@@ -74,23 +65,22 @@ const value: operations.DataAzure2 = {
       groupId: "<id>",
     },
   ],
-  events: [],
   name: "<value>",
   nodes: {},
-  providerFleets: [
-    {
-      currentMachines: 567819,
-      desiredMachines: 375470,
-      groupId: "<id>",
-      providerId: "<id>",
-    },
-  ],
+  providerFleets: [],
   status: {
-    collectionIssues: [],
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "collection-failed",
+        severity: "warning",
+        source: "<value>",
+      },
+    ],
     health: "degraded",
     lifecycle: "running",
     partial: true,
-    stale: true,
+    stale: false,
   },
   backend: "azure",
 };
@@ -101,23 +91,22 @@ const value: operations.DataAzure2 = {
 ```typescript
 const value: operations.DataLocal5 = {
   dockerAvailable: false,
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2026-09-24T00:42:05.626Z"),
-      severity: "info",
-    },
-  ],
   name: "<value>",
   networkAvailable: false,
   nodes: {},
   status: {
-    collectionIssues: [],
-    health: "healthy",
-    lifecycle: "stopped",
-    partial: true,
-    stale: false,
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "forbidden",
+        severity: "error",
+        source: "<value>",
+      },
+    ],
+    health: "unknown",
+    lifecycle: "running",
+    partial: false,
+    stale: true,
   },
   backend: "local",
 };

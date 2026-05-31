@@ -920,7 +920,6 @@ fn emit_gcp_artifact_registry_heartbeat(
                 iam_roles,
                 pull_service_account_email,
                 push_service_account_email,
-                events: vec![],
             }),
         ),
         raw: vec![],

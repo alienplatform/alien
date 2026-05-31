@@ -6,8 +6,9 @@ use crate::core::{environment_variables::EnvironmentVariableBuilder, ResourceCon
 use crate::error::{ErrorData, Result};
 use alien_core::{
     Daemon, DaemonCode, DaemonHeartbeatData, DaemonOutputs, HeartbeatBackend,
-    LocalDaemonHeartbeatData, ObservedHealth, Platform, ProviderLifecycleState, ResourceHeartbeat,
-    ResourceHeartbeatData, ResourceOutputs, ResourceStatus, WorkloadHeartbeatStatus,
+    LocalDaemonHeartbeatData, LocalRuntimeUnitKind, LocalRuntimeUnitStatus, ObservedHealth,
+    Platform, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
+    ResourceStatus, WorkloadHeartbeatStatus,
 };
 use alien_error::{AlienError, Context};
 use alien_macros::controller;
@@ -283,6 +284,19 @@ fn emit_local_daemon_heartbeat(
                 .unwrap_or(false),
             restart_count: None,
             exit_reason: None,
+            daemon_instance: Some(LocalRuntimeUnitStatus {
+                unit_id: config.id.clone(),
+                name: config.id.clone(),
+                kind: LocalRuntimeUnitKind::Daemon,
+                ready: extracted_image_path
+                    .map(|path| path.exists())
+                    .unwrap_or(false),
+                phase: Some("running".to_string()),
+                pid: None,
+                restart_count: None,
+                cpu: None,
+                memory: None,
+            }),
             events: vec![],
         })),
         raw: vec![],

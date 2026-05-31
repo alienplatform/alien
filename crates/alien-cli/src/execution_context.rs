@@ -27,6 +27,12 @@ use crate::commands::platform::workspace::prompt_workspace;
 pub struct ManagerContext {
     /// Base URL of the manager (e.g. "http://localhost:8090").
     pub manager_url: String,
+    /// Display name of the resolved manager, when provided by the platform.
+    pub manager_name: Option<String>,
+    /// Whether the resolved manager is Alien-hosted.
+    pub manager_is_system: Option<bool>,
+    /// Hosting cloud for private managers.
+    pub manager_cloud: Option<String>,
     /// Authenticated manager SDK client.
     pub client: ServerSdkClient,
     /// Underlying reqwest client (carries auth headers, useful for non-SDK endpoints).
@@ -241,6 +247,15 @@ impl ExecutionMode {
         }
     }
 
+    /// Whether commands should avoid opening a browser.
+    pub fn no_browser(&self) -> bool {
+        match self {
+            #[cfg(feature = "platform")]
+            Self::Platform { no_browser, .. } => *no_browser,
+            Self::Standalone { .. } | Self::Dev { .. } => true,
+        }
+    }
+
     /// Get workspace and project for this mode (non-interactive, fails if not set).
     pub fn get_workspace_project(&self) -> Result<(String, Option<String>)> {
         match self {
@@ -322,6 +337,9 @@ impl ExecutionMode {
 
                 Ok(ManagerContext {
                     manager_url: server_url.clone(),
+                    manager_name: None,
+                    manager_is_system: None,
+                    manager_cloud: None,
                     client,
                     http_client,
                     auth_token: Some(api_key.clone()),
@@ -337,6 +355,9 @@ impl ExecutionMode {
 
                 Ok(ManagerContext {
                     manager_url: manager_url.clone(),
+                    manager_name: Some("local manager".to_string()),
+                    manager_is_system: None,
+                    manager_cloud: None,
                     client,
                     http_client,
                     auth_token: None,
@@ -461,6 +482,9 @@ impl ExecutionMode {
 
                 Ok(ManagerContext {
                     manager_url: resolved.manager_url,
+                    manager_name: resolved.manager_name,
+                    manager_is_system: resolved.manager_is_system,
+                    manager_cloud: resolved.manager_cloud,
                     client: manager_client,
                     http_client: manager_http_client,
                     auth_token,
@@ -569,6 +593,12 @@ async fn check_server_health(port: u16) -> bool {
 #[serde(rename_all = "camelCase")]
 struct ResolveResponse {
     manager_url: String,
+    #[serde(default)]
+    manager_name: Option<String>,
+    #[serde(default)]
+    manager_is_system: Option<bool>,
+    #[serde(default)]
+    manager_cloud: Option<String>,
     project_id: String,
 }
 

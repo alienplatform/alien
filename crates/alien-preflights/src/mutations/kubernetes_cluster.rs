@@ -58,12 +58,21 @@ impl StackMutation for KubernetesClusterMutation {
                 .heartbeat_mode(heartbeat_mode(provider))
                 .build();
 
+            let dependencies = if stack.resources.contains_key("default-network") {
+                vec![ResourceRef::new(
+                    alien_core::Network::RESOURCE_TYPE,
+                    "default-network",
+                )]
+            } else {
+                Vec::new()
+            };
+
             stack.resources.insert(
                 DEFAULT_CLUSTER_ID.to_string(),
                 ResourceEntry {
                     config: alien_core::Resource::new(cluster),
                     lifecycle: ResourceLifecycle::Frozen,
-                    dependencies: Vec::new(),
+                    dependencies,
                     remote_access: false,
                 },
             );

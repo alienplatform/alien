@@ -90,7 +90,7 @@ mod tests {
             platform: Platform::Aws,
             region: "us-east-2",
             stack_settings: settings,
-            management_config: &MANAGEMENT,
+            management_config: Some(&MANAGEMENT),
             resource: entry,
         }
     }

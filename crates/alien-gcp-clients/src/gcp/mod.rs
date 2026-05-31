@@ -214,8 +214,19 @@ impl GcpClientConfigExt for GcpClientConfig {
             Self::parse_credentials_json(&credential_data, &json, environment_variables).await?
         } else {
             // Fallback to metadata server authentication for GCP instances
-            let project_id = Self::fetch_metadata_project_id().await?;
-            let region = Self::fetch_metadata_region().await?;
+            let project_id = if let Some(project_id) = environment_variables
+                .get("GCP_PROJECT_ID")
+                .or_else(|| environment_variables.get("GOOGLE_CLOUD_PROJECT"))
+            {
+                project_id.clone()
+            } else {
+                Self::fetch_metadata_project_id().await?
+            };
+            let region = if let Some(region) = environment_variables.get("GCP_REGION") {
+                region.clone()
+            } else {
+                Self::fetch_metadata_region().await?
+            };
             (GcpCredentials::ServiceMetadata, project_id, region)
         };
 
@@ -490,13 +501,17 @@ impl GcpClientConfigExt for GcpClientConfig {
         Ok(project_id.trim().to_string())
     }
 
-    /// Fetches the region from the GCP metadata server
+    /// Fetches the region from the GCP metadata server.
+    ///
+    /// Compute Engine exposes `/instance/region`; GKE's metadata server may only
+    /// expose `/instance/zone`, so fall back to deriving the region from zone.
     async fn fetch_metadata_region() -> Result<String> {
         use reqwest::Client;
 
         let client = Client::new();
+        let region_url = "http://metadata.google.internal/computeMetadata/v1/instance/region";
         let response = client
-            .get("http://metadata.google.internal/computeMetadata/v1/instance/region")
+            .get(region_url)
             .header("Metadata-Flavor", "Google")
             .send()
             .await
@@ -505,7 +520,61 @@ impl GcpClientConfigExt for GcpClientConfig {
                 message: "Failed to fetch region from GCP metadata server".to_string(),
             })?;
 
-        if !response.status().is_success() {
+        let region_response = if response.status().is_success() {
+            response
+                .text()
+                .await
+                .into_alien_error()
+                .context(ErrorData::SerializationError {
+                    message: "Failed to parse region response from GCP metadata server".to_string(),
+                })?
+        } else if response.status() == reqwest::StatusCode::NOT_FOUND {
+            let zone_url = "http://metadata.google.internal/computeMetadata/v1/instance/zone";
+            let zone_response = client
+                .get(zone_url)
+                .header("Metadata-Flavor", "Google")
+                .send()
+                .await
+                .into_alien_error()
+                .context(ErrorData::HttpRequestFailed {
+                    message: "Failed to fetch zone from GCP metadata server".to_string(),
+                })?;
+
+            if !zone_response.status().is_success() {
+                let status = zone_response.status();
+                let error_text = zone_response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "Unknown error".to_string());
+                return Err(AlienError::new(ErrorData::HttpResponseError {
+                    message: format!("Metadata server returned error {}: {}", status, error_text),
+                    url: zone_url.to_string(),
+                    http_status: status.as_u16(),
+                    http_request_text: None,
+                    http_response_text: Some(error_text),
+                }));
+            }
+
+            let zone_response = zone_response.text().await.into_alien_error().context(
+                ErrorData::SerializationError {
+                    message: "Failed to parse zone response from GCP metadata server".to_string(),
+                },
+            )?;
+            let zone_full_path = zone_response.trim();
+            let zone = zone_full_path.split('/').last().ok_or_else(|| {
+                AlienError::new(ErrorData::InvalidClientConfig {
+                    message: format!("Invalid zone format from metadata server: {zone_full_path}"),
+                    errors: None,
+                })
+            })?;
+
+            gcp_region_from_zone(zone).ok_or_else(|| {
+                AlienError::new(ErrorData::InvalidClientConfig {
+                    message: format!("Invalid zone format from metadata server: {zone_full_path}"),
+                    errors: None,
+                })
+            })?
+        } else {
             let status = response.status();
             let error_text = response
                 .text()
@@ -513,22 +582,12 @@ impl GcpClientConfigExt for GcpClientConfig {
                 .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(AlienError::new(ErrorData::HttpResponseError {
                 message: format!("Metadata server returned error {}: {}", status, error_text),
-                url: "http://metadata.google.internal/computeMetadata/v1/instance/region"
-                    .to_string(),
+                url: region_url.to_string(),
                 http_status: status.as_u16(),
                 http_request_text: None,
                 http_response_text: Some(error_text),
             }));
-        }
-
-        let region_response =
-            response
-                .text()
-                .await
-                .into_alien_error()
-                .context(ErrorData::SerializationError {
-                    message: "Failed to parse region response from GCP metadata server".to_string(),
-                })?;
+        };
 
         // Region response format is: "projects/123456789012/regions/us-central1"
         // We need to extract just the region name
@@ -796,5 +855,36 @@ impl GcpClientConfigExt for GcpClientConfig {
             service_overrides: None,
             project_number: None,
         }
+    }
+}
+
+fn gcp_region_from_zone(zone: &str) -> Option<String> {
+    let (region, zone_suffix) = zone.rsplit_once('-')?;
+    if zone_suffix.len() != 1 || !zone_suffix.as_bytes()[0].is_ascii_lowercase() {
+        return None;
+    }
+    if region.is_empty() {
+        None
+    } else {
+        Some(region.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::gcp_region_from_zone;
+
+    #[test]
+    fn derives_region_from_zone() {
+        assert_eq!(
+            gcp_region_from_zone("us-east4-a").as_deref(),
+            Some("us-east4")
+        );
+        assert_eq!(
+            gcp_region_from_zone("europe-west1-b").as_deref(),
+            Some("europe-west1")
+        );
+        assert_eq!(gcp_region_from_zone("us-east4"), None);
+        assert_eq!(gcp_region_from_zone(""), None);
     }
 }

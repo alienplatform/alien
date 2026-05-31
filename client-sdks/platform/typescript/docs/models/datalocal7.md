@@ -7,16 +7,15 @@ import { DataLocal7 } from "@alienplatform/platform-api/models";
 
 let value: DataLocal7 = {
   cloudMetadataSupported: false,
-  events: [],
   name: "<value>",
-  path: "/usr/src",
-  pathExists: true,
+  path: "/dev",
+  pathExists: false,
   status: {
     collectionIssues: [],
-    health: "unhealthy",
-    lifecycle: "running",
+    health: "healthy",
+    lifecycle: "deleted",
     partial: true,
-    stale: false,
+    stale: true,
   },
   backend: "local",
 };
@@ -24,13 +23,12 @@ let value: DataLocal7 = {
 
 ## Fields
 
-| Field                                                                            | Type                                                                             | Required                                                                         | Description                                                                      |
-| -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `cloudMetadataSupported`                                                         | *boolean*                                                                        | :heavy_check_mark:                                                               | N/A                                                                              |
-| `events`                                                                         | [models.SyncReconcileRequestEvent30](../models/syncreconcilerequestevent30.md)[] | :heavy_check_mark:                                                               | N/A                                                                              |
-| `isDirectory`                                                                    | *boolean*                                                                        | :heavy_minus_sign:                                                               | N/A                                                                              |
-| `name`                                                                           | *string*                                                                         | :heavy_check_mark:                                                               | N/A                                                                              |
-| `path`                                                                           | *string*                                                                         | :heavy_check_mark:                                                               | N/A                                                                              |
-| `pathExists`                                                                     | *boolean*                                                                        | :heavy_check_mark:                                                               | N/A                                                                              |
-| `status`                                                                         | [models.HeartbeatStatus30](../models/heartbeatstatus30.md)                       | :heavy_check_mark:                                                               | N/A                                                                              |
-| `backend`                                                                        | *"local"*                                                                        | :heavy_check_mark:                                                               | N/A                                                                              |
+| Field                                                      | Type                                                       | Required                                                   | Description                                                |
+| ---------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- |
+| `cloudMetadataSupported`                                   | *boolean*                                                  | :heavy_check_mark:                                         | N/A                                                        |
+| `isDirectory`                                              | *boolean*                                                  | :heavy_minus_sign:                                         | N/A                                                        |
+| `name`                                                     | *string*                                                   | :heavy_check_mark:                                         | N/A                                                        |
+| `path`                                                     | *string*                                                   | :heavy_check_mark:                                         | N/A                                                        |
+| `pathExists`                                               | *boolean*                                                  | :heavy_check_mark:                                         | N/A                                                        |
+| `status`                                                   | [models.HeartbeatStatus30](../models/heartbeatstatus30.md) | :heavy_check_mark:                                         | N/A                                                        |
+| `backend`                                                  | *"local"*                                                  | :heavy_check_mark:                                         | N/A                                                        |

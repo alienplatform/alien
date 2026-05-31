@@ -7,21 +7,20 @@
 
 ```typescript
 const value: operations.DataAwsIamRole2 = {
-  events: [],
-  managementPermissionsApplied: false,
+  managementPermissionsApplied: true,
   status: {
     collectionIssues: [
       {
         message: "<value>",
         reason: "api-unavailable",
-        severity: "info",
+        severity: "warning",
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "unknown",
+    health: "unknown",
+    lifecycle: "stopping",
     partial: true,
-    stale: false,
+    stale: true,
   },
   backend: "awsIamRole",
 };
@@ -31,29 +30,21 @@ const value: operations.DataAwsIamRole2 = {
 
 ```typescript
 const value: operations.DataGcpServiceAccount2 = {
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2026-09-28T13:47:01.596Z"),
-      severity: "error",
-    },
-  ],
-  impersonationGranted: true,
+  impersonationGranted: false,
   roleBound: false,
   status: {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "api-unavailable",
-        severity: "info",
+        reason: "not-installed",
+        severity: "error",
         source: "<value>",
       },
     ],
-    health: "unknown",
-    lifecycle: "deleting",
-    partial: false,
-    stale: false,
+    health: "degraded",
+    lifecycle: "stopping",
+    partial: true,
+    stale: true,
   },
   backend: "gcpServiceAccount",
 };
@@ -63,21 +54,17 @@ const value: operations.DataGcpServiceAccount2 = {
 
 ```typescript
 const value: operations.DataAzureManagedIdentity2 = {
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-06-15T03:37:32.834Z"),
-      severity: "info",
-    },
+  roleAssignmentIds: [
+    "<value 1>",
+    "<value 2>",
+    "<value 3>",
   ],
-  roleAssignmentIds: [],
   status: {
     collectionIssues: [],
-    health: "degraded",
-    lifecycle: "updating",
-    partial: false,
-    stale: true,
+    health: "healthy",
+    lifecycle: "creating",
+    partial: true,
+    stale: false,
   },
   backend: "azureManagedIdentity",
 };

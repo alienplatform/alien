@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use crate::{Platform, ResourceType};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -135,12 +136,99 @@ pub enum HeartbeatIssueSeverity {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
-pub struct HeartbeatEvent {
-    pub observed_at: DateTime<Utc>,
-    pub kind: String,
-    pub severity: HeartbeatIssueSeverity,
+pub struct KubernetesEventSnapshot {
+    pub reason: String,
+    #[serde(rename = "type")]
+    pub type_: Option<String>,
     pub message: String,
-    pub source: Option<String>,
+    pub count: Option<i32>,
+    pub first_timestamp: Option<DateTime<Utc>>,
+    pub last_timestamp: Option<DateTime<Utc>>,
+    pub event_time: Option<DateTime<Utc>>,
+    pub source: Option<KubernetesEventSource>,
+    pub involved_object: Option<KubernetesEventInvolvedObject>,
+    pub raw: Option<JsonValue>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct KubernetesEventSource {
+    pub component: Option<String>,
+    pub host: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct KubernetesEventInvolvedObject {
+    pub kind: Option<String>,
+    pub namespace: Option<String>,
+    pub name: Option<String>,
+    pub uid: Option<String>,
+    pub api_version: Option<String>,
+    pub resource_version: Option<String>,
+    pub field_path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedRuntimeEventSnapshot {
+    pub event_id: Option<String>,
+    pub reason: String,
+    #[serde(rename = "type")]
+    pub type_: Option<String>,
+    pub message: String,
+    pub count: Option<i32>,
+    pub first_timestamp: Option<DateTime<Utc>>,
+    pub last_timestamp: Option<DateTime<Utc>>,
+    pub event_time: Option<DateTime<Utc>>,
+    pub source: Option<ManagedRuntimeEventSource>,
+    pub involved_object: Option<ManagedRuntimeEventInvolvedObject>,
+    pub details: Option<JsonValue>,
+    pub raw: Option<JsonValue>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedRuntimeEventSource {
+    pub component: Option<String>,
+    pub host: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedRuntimeEventInvolvedObject {
+    pub kind: Option<String>,
+    pub id: Option<String>,
+    pub name: Option<String>,
+    pub replica_id: Option<String>,
+    pub machine_id: Option<String>,
+    pub details: Option<JsonValue>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct LocalRuntimeEventSnapshot {
+    pub timestamp: DateTime<Utc>,
+    pub severity: HeartbeatIssueSeverity,
+    pub kind: String,
+    pub message: String,
+    pub subject: Option<LocalRuntimeEventSubject>,
+    pub raw: Option<JsonValue>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct LocalRuntimeEventSubject {
+    pub kind: String,
+    pub id: Option<String>,
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -235,7 +323,6 @@ pub struct AwsS3StorageHeartbeatData {
     pub restrict_public_buckets: Option<bool>,
     pub bucket_policy_present: Option<bool>,
     pub bucket_acl_present: Option<bool>,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -271,7 +358,6 @@ pub struct AzureBlobStorageHeartbeatData {
     pub change_feed_enabled: Option<bool>,
     pub change_feed_retention_days: Option<u64>,
     pub container_public_access: Option<String>,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -297,7 +383,6 @@ pub struct GcpCloudStorageHeartbeatData {
     pub public_access_prevention: Option<String>,
     pub encryption_config_present: bool,
     pub default_kms_key_name: Option<String>,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -310,7 +395,6 @@ pub struct LocalStorageHeartbeatData {
     pub is_directory: Option<bool>,
     pub readonly: Option<bool>,
     pub modified_at: Option<DateTime<Utc>>,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -392,7 +476,6 @@ pub struct AwsLambdaWorkerHeartbeatData {
     pub function_url_auth_type: Option<String>,
     pub function_url_cors_present: bool,
     pub trigger_count: u32,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -414,7 +497,6 @@ pub struct GcpCloudRunWorkerHeartbeatData {
     pub container_image: Option<String>,
     pub cpu_limit: Option<String>,
     pub memory_limit: Option<String>,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -432,7 +514,6 @@ pub struct AzureContainerAppsWorkerHeartbeatData {
     pub max_replicas: Option<i32>,
     pub cpu: Option<f64>,
     pub memory: Option<String>,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -448,9 +529,9 @@ pub struct KubernetesWorkerHeartbeatData {
     pub cpu: Option<MetricSample>,
     pub memory: Option<MetricSample>,
     pub workload: Option<KubernetesWorkloadStatus>,
-    pub instances: Vec<KubernetesPodInstanceStatus>,
+    pub pods: Vec<KubernetesPodRuntimeUnitStatus>,
     pub trigger_count: u32,
-    pub events: Vec<HeartbeatEvent>,
+    pub events: Vec<KubernetesEventSnapshot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -465,7 +546,8 @@ pub struct LocalWorkerHeartbeatData {
     pub trigger_count: u32,
     pub cpu: Option<MetricSample>,
     pub memory: Option<MetricSample>,
-    pub events: Vec<HeartbeatEvent>,
+    pub process: Option<LocalRuntimeUnitStatus>,
+    pub events: Vec<LocalRuntimeEventSnapshot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -480,7 +562,8 @@ pub struct HorizonContainerHeartbeatData {
     pub cpu: Option<MetricSample>,
     pub memory: Option<MetricSample>,
     pub attention_count: u32,
-    pub events: Vec<HeartbeatEvent>,
+    pub replica_units: Vec<ManagedRuntimeUnitStatus>,
+    pub events: Vec<ManagedRuntimeEventSnapshot>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -505,8 +588,8 @@ pub struct KubernetesContainerHeartbeatData {
     pub cpu: Option<MetricSample>,
     pub memory: Option<MetricSample>,
     pub workload: Option<KubernetesWorkloadStatus>,
-    pub instances: Vec<KubernetesPodInstanceStatus>,
-    pub events: Vec<HeartbeatEvent>,
+    pub pods: Vec<KubernetesPodRuntimeUnitStatus>,
+    pub events: Vec<KubernetesEventSnapshot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -525,7 +608,8 @@ pub struct LocalContainerHeartbeatData {
     pub runtime_reachable: bool,
     pub cpu: Option<MetricSample>,
     pub memory: Option<MetricSample>,
-    pub events: Vec<HeartbeatEvent>,
+    pub container_unit: Option<LocalRuntimeUnitStatus>,
+    pub events: Vec<LocalRuntimeEventSnapshot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -545,8 +629,8 @@ pub struct AwsDaemonHeartbeatData {
     pub unavailable_instances: u32,
     pub command_supported: bool,
     pub latest_update_timestamp: String,
-    pub instances: Vec<HorizonDaemonInstanceStatus>,
-    pub events: Vec<HeartbeatEvent>,
+    pub daemon_instances: Vec<ManagedRuntimeUnitStatus>,
+    pub events: Vec<ManagedRuntimeEventSnapshot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -566,8 +650,8 @@ pub struct GcpDaemonHeartbeatData {
     pub unavailable_instances: u32,
     pub command_supported: bool,
     pub latest_update_timestamp: String,
-    pub instances: Vec<HorizonDaemonInstanceStatus>,
-    pub events: Vec<HeartbeatEvent>,
+    pub daemon_instances: Vec<ManagedRuntimeUnitStatus>,
+    pub events: Vec<ManagedRuntimeEventSnapshot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -587,14 +671,14 @@ pub struct AzureDaemonHeartbeatData {
     pub unavailable_instances: u32,
     pub command_supported: bool,
     pub latest_update_timestamp: String,
-    pub instances: Vec<HorizonDaemonInstanceStatus>,
-    pub events: Vec<HeartbeatEvent>,
+    pub daemon_instances: Vec<ManagedRuntimeUnitStatus>,
+    pub events: Vec<ManagedRuntimeEventSnapshot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
-pub struct HorizonDaemonInstanceStatus {
+pub struct ManagedRuntimeUnitStatus {
     pub replica_id: String,
     pub name: String,
     pub machine_id: Option<String>,
@@ -628,8 +712,8 @@ pub struct KubernetesDaemonHeartbeatData {
     pub cpu: Option<MetricSample>,
     pub memory: Option<MetricSample>,
     pub workload: Option<KubernetesWorkloadStatus>,
-    pub instances: Vec<KubernetesPodInstanceStatus>,
-    pub events: Vec<HeartbeatEvent>,
+    pub pods: Vec<KubernetesPodRuntimeUnitStatus>,
+    pub events: Vec<KubernetesEventSnapshot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -644,7 +728,32 @@ pub struct LocalDaemonHeartbeatData {
     pub image_path_present: bool,
     pub restart_count: Option<u32>,
     pub exit_reason: Option<String>,
-    pub events: Vec<HeartbeatEvent>,
+    pub daemon_instance: Option<LocalRuntimeUnitStatus>,
+    pub events: Vec<LocalRuntimeEventSnapshot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct LocalRuntimeUnitStatus {
+    pub unit_id: String,
+    pub name: String,
+    pub kind: LocalRuntimeUnitKind,
+    pub ready: bool,
+    pub phase: Option<String>,
+    pub pid: Option<u32>,
+    pub restart_count: Option<u32>,
+    pub cpu: Option<MetricSample>,
+    pub memory: Option<MetricSample>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum LocalRuntimeUnitKind {
+    Container,
+    Process,
+    Daemon,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -687,7 +796,7 @@ pub struct KubernetesWorkloadCondition {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
-pub struct KubernetesPodInstanceStatus {
+pub struct KubernetesPodRuntimeUnitStatus {
     pub name: String,
     pub uid: Option<String>,
     pub phase: Option<String>,
@@ -751,7 +860,6 @@ pub struct LocalComputeClusterHeartbeatData {
     pub network_available: bool,
     pub tracked_containers: Option<u32>,
     pub running_containers: Option<u32>,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -767,7 +875,6 @@ pub struct AwsComputeClusterHeartbeatData {
     pub backend_cluster_id: Option<String>,
     pub capacity_groups: Vec<ComputeCapacityGroupStatus>,
     pub provider_fleets: Vec<ProviderFleetStatus>,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -783,7 +890,6 @@ pub struct GcpComputeClusterHeartbeatData {
     pub backend_cluster_id: Option<String>,
     pub capacity_groups: Vec<ComputeCapacityGroupStatus>,
     pub provider_fleets: Vec<ProviderFleetStatus>,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -799,7 +905,6 @@ pub struct AzureComputeClusterHeartbeatData {
     pub backend_cluster_id: Option<String>,
     pub capacity_groups: Vec<ComputeCapacityGroupStatus>,
     pub provider_fleets: Vec<ProviderFleetStatus>,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -851,7 +956,7 @@ pub struct KubernetesClusterHeartbeatData {
     pub version: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub node_statuses: Vec<KubernetesClusterNodeStatus>,
-    pub events: Vec<HeartbeatEvent>,
+    pub events: Vec<KubernetesEventSnapshot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -942,7 +1047,6 @@ pub struct LocalQueueHeartbeatData {
     pub name: String,
     pub path: Option<String>,
     pub service_status: Option<String>,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -983,7 +1087,6 @@ pub struct GcpPubSubQueueHeartbeatData {
     pub subscription_push_no_wrapper_write_metadata: Option<bool>,
     pub subscription_dead_letter_topic: Option<String>,
     pub subscription_dead_letter_max_delivery_attempts: Option<u32>,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1022,7 +1125,6 @@ pub struct AzureServiceBusQueueHeartbeatData {
     pub accessed_at: Option<String>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1053,7 +1155,6 @@ pub struct AwsSqsQueueHeartbeatData {
     pub approximate_in_flight_messages: Option<u64>,
     pub approximate_delayed_messages: Option<u64>,
     pub approximate_counts: bool,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1116,7 +1217,6 @@ pub struct AwsDynamoDbKvHeartbeatData {
     pub table_class: Option<String>,
     pub replica_count: Option<u32>,
     pub restore_in_progress: Option<bool>,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1149,7 +1249,6 @@ pub struct GcpFirestoreKvHeartbeatData {
     pub database_edition: Option<String>,
     pub cmek_enabled: bool,
     pub source_info_present: bool,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1168,7 +1267,6 @@ pub struct AzureTableKvHeartbeatData {
     pub storage_account_primary_status: Option<String>,
     pub table_exists: bool,
     pub signed_identifier_count: Option<u32>,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1181,7 +1279,6 @@ pub struct LocalKvHeartbeatData {
     pub path_exists: bool,
     pub is_directory: Option<bool>,
     pub cloud_metadata_supported: bool,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1237,7 +1334,6 @@ pub struct AwsParameterStoreVaultHeartbeatData {
     pub sampled_kms_key_metadata_present_count: Option<u32>,
     pub latest_modified_at: Option<DateTime<Utc>>,
     pub has_more_parameters: Option<bool>,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1249,7 +1345,6 @@ pub struct GcpSecretManagerVaultHeartbeatData {
     pub location: String,
     pub prefix: String,
     pub secret_metadata_listed: bool,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1273,7 +1368,6 @@ pub struct AzureKeyVaultHeartbeatData {
     pub access_policy_count: u32,
     pub private_endpoint_connection_count: u32,
     pub secret_metadata_listed: bool,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1284,7 +1378,6 @@ pub struct KubernetesSecretVaultHeartbeatData {
     pub namespace: String,
     pub prefix: String,
     pub secret_metadata_listed: bool,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1298,7 +1391,6 @@ pub struct LocalVaultHeartbeatData {
     pub readonly: Option<bool>,
     pub modified_at: Option<DateTime<Utc>>,
     pub secret_metadata_listed: bool,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1347,7 +1439,6 @@ pub struct AwsIamRoleServiceAccountHeartbeatData {
     pub stack_permissions_applied: bool,
     pub last_used_date: Option<String>,
     pub last_used_region: Option<String>,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1368,7 +1459,6 @@ pub struct GcpServiceAccountHeartbeatData {
     pub project_roles: Vec<String>,
     pub service_account_binding_count: u32,
     pub service_account_roles: Vec<String>,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1391,7 +1481,6 @@ pub struct AzureManagedIdentityServiceAccountHeartbeatData {
     pub custom_role_definition_count: u32,
     pub custom_role_definition_ids: Vec<String>,
     pub stack_permissions_applied: bool,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1401,7 +1490,6 @@ pub struct LocalServiceAccountHeartbeatData {
     pub status: ServiceAccountHeartbeatStatus,
     pub identity: String,
     pub configured: bool,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1441,7 +1529,6 @@ pub struct AwsVpcNetworkHeartbeatData {
     pub route_table_count: u32,
     pub security_group_id: Option<String>,
     pub is_byo_vpc: bool,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1459,7 +1546,6 @@ pub struct GcpVpcNetworkHeartbeatData {
     pub cloud_nat_name: Option<String>,
     pub firewall_name: Option<String>,
     pub is_byo_vpc: bool,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1479,7 +1565,6 @@ pub struct AzureVnetNetworkHeartbeatData {
     pub nsg_id: Option<String>,
     pub is_byo_vnet: bool,
     pub last_byo_vnet_verification_error_code: Option<String>,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1511,7 +1596,6 @@ pub struct AwsRemoteStackManagementHeartbeatData {
     pub role_name: Option<String>,
     pub role_arn: Option<String>,
     pub management_permissions_applied: bool,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1523,7 +1607,6 @@ pub struct GcpRemoteStackManagementHeartbeatData {
     pub service_account_unique_id: Option<String>,
     pub role_bound: bool,
     pub impersonation_granted: bool,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1538,7 +1621,6 @@ pub struct AzureRemoteStackManagementHeartbeatData {
     pub fic_name: Option<String>,
     pub role_definition_id: Option<String>,
     pub role_assignment_ids: Vec<String>,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1577,7 +1659,6 @@ pub struct AwsEcrArtifactRegistryHeartbeatData {
     pub repository_count: u32,
     pub repositories_truncated: bool,
     pub repositories: Vec<AwsEcrRepositoryHeartbeatData>,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1620,7 +1701,6 @@ pub struct GcpArtifactRegistryHeartbeatData {
     pub iam_roles: Vec<String>,
     pub pull_service_account_email: Option<String>,
     pub push_service_account_email: Option<String>,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1654,7 +1734,6 @@ pub struct AzureContainerRegistryHeartbeatData {
     pub zone_redundancy: String,
     pub creation_date: Option<String>,
     pub managed_tag_count: u32,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1664,7 +1743,6 @@ pub struct LocalArtifactRegistryHeartbeatData {
     pub status: ArtifactRegistryHeartbeatStatus,
     pub registry_url: String,
     pub reachable: bool,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1714,7 +1792,6 @@ pub struct AwsCodeBuildHeartbeatData {
     pub queued_timeout_in_minutes: Option<i32>,
     pub created: Option<f64>,
     pub last_modified: Option<f64>,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1727,7 +1804,6 @@ pub struct GcpCloudBuildHeartbeatData {
     pub build_config_id: String,
     pub service_account: Option<String>,
     pub environment_variable_count: u32,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1740,7 +1816,6 @@ pub struct AzureContainerAppsBuildHeartbeatData {
     pub managed_identity_id: Option<String>,
     pub resource_prefix: Option<String>,
     pub environment_variable_count: u32,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1757,7 +1832,7 @@ pub struct KubernetesBuildHeartbeatData {
     pub completion_time: Option<DateTime<Utc>>,
     pub condition_count: u32,
     pub image_digest: Option<String>,
-    pub events: Vec<HeartbeatEvent>,
+    pub events: Vec<KubernetesEventSnapshot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1805,7 +1880,6 @@ pub struct GcpServiceUsageActivationHeartbeatData {
     pub state: Option<String>,
     pub enabled: bool,
     pub last_operation_name: Option<String>,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1819,7 +1893,6 @@ pub struct AzureResourceProviderActivationHeartbeatData {
     pub registration_policy: Option<String>,
     pub resource_type_count: u32,
     pub registered: bool,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1832,7 +1905,6 @@ pub struct AzureResourceGroupHeartbeatData {
     pub location: Option<String>,
     pub provisioning_state: Option<String>,
     pub managed_tags: BTreeMap<String, String>,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1887,7 +1959,6 @@ pub struct AzureStorageAccountHeartbeatData {
     pub network_ip_rule_count: Option<u32>,
     pub network_virtual_network_rule_count: Option<u32>,
     pub network_resource_access_rule_count: Option<u32>,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -1921,7 +1992,6 @@ pub struct AzureContainerAppsEnvironmentHeartbeatData {
     pub zone_redundant: Option<bool>,
     pub workload_profile_count: u32,
     pub workload_profiles: Vec<AzureContainerAppsEnvironmentWorkloadProfile>,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1970,7 +2040,6 @@ pub struct AzureServiceBusNamespaceHeartbeatData {
     pub zone_redundant: Option<bool>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
-    pub events: Vec<HeartbeatEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2049,7 +2118,7 @@ mod tests {
                     }),
                     memory: None,
                     workload: None,
-                    instances: vec![],
+                    pods: vec![],
                     events: vec![],
                 },
             )),
@@ -2080,7 +2149,7 @@ mod tests {
                 cpu: None,
                 memory: None,
                 workload: None,
-                instances: vec![],
+                pods: vec![],
                 events: vec![],
             }),
         ))

@@ -12,6 +12,7 @@ export const DomainWithUsageStatus = {
   PendingZoneCreation: "pending-zone-creation",
   PendingVerification: "pending-verification",
   Verified: "verified",
+  LostVerification: "lost-verification",
   Failed: "failed",
   Deleting: "deleting",
 } as const;
@@ -25,6 +26,7 @@ export type DeploymentUrlProject = {
 export type PortalBinding = {
   id: string;
   projectId: string;
+  projectName: string;
   hostname: string;
 };
 
@@ -44,11 +46,13 @@ export type DomainWithUsage = {
   workspaceId: string;
   domain: string;
   isSystem: boolean;
+  claimToken: string;
   hostedZoneId?: string | null | undefined;
   nameServers?: Array<string> | null | undefined;
   status: DomainWithUsageStatus;
   error?: any | null | undefined;
   createdAt: Date;
+  updatedAt: Date;
   verifiedAt?: Date | null | undefined;
   usage: DomainWithUsageUsage;
 };
@@ -82,6 +86,7 @@ export const PortalBinding$inboundSchema: z.ZodType<PortalBinding, unknown> = z
   .object({
     id: z.string(),
     projectId: z.string(),
+    projectName: z.string(),
     hostname: z.string(),
   });
 
@@ -125,11 +130,13 @@ export const DomainWithUsage$inboundSchema: z.ZodType<
   workspaceId: z.string(),
   domain: z.string(),
   isSystem: z.boolean(),
+  claimToken: z.string(),
   hostedZoneId: z.nullable(z.string()).optional(),
   nameServers: z.nullable(z.array(z.string())).optional(),
   status: DomainWithUsageStatus$inboundSchema,
   error: z.nullable(z.any()).optional(),
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  updatedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   verifiedAt: z.nullable(
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   ).optional(),

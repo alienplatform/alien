@@ -8,8 +8,8 @@ import { SyncReconcileRequestEvent5 } from "@alienplatform/platform-api/models";
 let value: SyncReconcileRequestEvent5 = {
   kind: "<value>",
   message: "<value>",
-  observedAt: new Date("2025-08-20T11:27:02.709Z"),
-  severity: "info",
+  severity: "warning",
+  timestamp: new Date("2024-01-30T15:46:55.202Z"),
 };
 ```
 
@@ -19,6 +19,7 @@ let value: SyncReconcileRequestEvent5 = {
 | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | `kind`                                                                                        | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
 | `message`                                                                                     | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
-| `observedAt`                                                                                  | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |
-| `severity`                                                                                    | [models.EventSeverity5](../models/eventseverity5.md)                                          | :heavy_check_mark:                                                                            | N/A                                                                                           |
-| `source`                                                                                      | *string*                                                                                      | :heavy_minus_sign:                                                                            | N/A                                                                                           |
+| `raw`                                                                                         | *any*                                                                                         | :heavy_minus_sign:                                                                            | N/A                                                                                           |
+| `severity`                                                                                    | [models.EventSeverity2](../models/eventseverity2.md)                                          | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| `subject`                                                                                     | *models.SyncReconcileRequestSubjectUnion2*                                                    | :heavy_minus_sign:                                                                            | N/A                                                                                           |
+| `timestamp`                                                                                   | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |

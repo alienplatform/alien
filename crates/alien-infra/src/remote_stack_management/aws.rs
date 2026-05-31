@@ -519,7 +519,6 @@ fn emit_aws_remote_stack_management_heartbeat(
                 role_name: controller.role_name.clone(),
                 role_arn: controller.role_arn.clone(),
                 management_permissions_applied: controller.management_permissions_applied,
-                events: vec![],
             }),
         ),
         raw: vec![],

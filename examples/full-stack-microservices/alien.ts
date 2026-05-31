@@ -29,7 +29,7 @@ const api = new alien.Container("api")
   .code({
     type: "source",
     src: "./services/api",
-    toolchain: { type: "docker", dockerfile: "Dockerfile" },
+    toolchain: { type: "typescript" },
   })
   .cpu(0.5)
   .memory("512Mi")
@@ -49,7 +49,7 @@ const worker = new alien.Container("worker")
   .code({
     type: "source",
     src: "./services/worker",
-    toolchain: { type: "docker", dockerfile: "Dockerfile" },
+    toolchain: { type: "typescript" },
   })
   .cpu(0.25)
   .memory("512Mi")
@@ -103,6 +103,7 @@ const gateway = new alien.Container("gateway")
   .memory("128Mi")
   .port(8080)
   .expose("http")
+  .healthCheck({ path: "/health", method: "GET", timeoutSeconds: 1, failureThreshold: 3 })
   .permissions("app")
   .build()
 

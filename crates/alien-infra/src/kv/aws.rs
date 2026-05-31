@@ -676,7 +676,6 @@ fn emit_aws_dynamodb_kv_heartbeat(
             restore_in_progress: table
                 .restore_summary
                 .and_then(|summary| summary.restore_in_progress),
-            events: vec![],
         })),
         raw: vec![],
     });

@@ -137,6 +137,8 @@ fn chart_role_rbac_is_selected_by_kubernetes_route_api() {
     assert!(role.contains("resources: [\"ingresses\"]"));
     assert!(role.contains("gateway.networking.k8s.io"));
     assert!(role.contains("resources: [\"gateways\", \"httproutes\"]"));
+    assert!(role.contains("networking.gke.io"));
+    assert!(role.contains("resources: [\"healthcheckpolicies\"]"));
     assert!(role.contains("eq $routeApi \"ingress\""));
     assert!(role.contains("eq $routeApi \"gateway\""));
 
@@ -152,6 +154,12 @@ fn chart_role_rbac_is_selected_by_kubernetes_route_api() {
             assert!(rendered
                 .stdout
                 .contains(r#"resources: ["gateways", "httproutes"]"#));
+            assert!(rendered
+                .stdout
+                .contains(r#"apiGroups: ["networking.gke.io"]"#));
+            assert!(rendered
+                .stdout
+                .contains(r#"resources: ["healthcheckpolicies"]"#));
             assert!(!rendered.stdout.contains(r#"resources: ["ingresses"]"#));
         }
         LinterStatus::Skipped(reason) => {
@@ -189,6 +197,104 @@ fn manager_chart_uses_explicit_secrets_and_restricted_defaults() {
     assert!(deployment.contains("securityContext:"));
     assert!(deployment.contains("mountPath: /tmp"));
     assert!(deployment.contains("mountPath: {{ .Values.runtime.data.mountPath | quote }}"));
+}
+
+#[test]
+fn gcp_base_platform_config_renders_agent_environment() {
+    let stack = Stack::new("gcp-runtime-config".to_string()).build();
+    let chart = render(&stack, StackSettings::default());
+    let files = chart.files.clone();
+    let values = files.get("values.yaml").expect("values.yaml");
+    let gcp_values = values
+        .replace("basePlatform: null", "basePlatform: gcp")
+        .replace("projectId: \"\"", "projectId: alien-test-target")
+        .replace("region: \"\"", "region: us-east4");
+
+    let rendered = alien_helm::test_utils::helm_template(&files, Some(&gcp_values));
+    match &rendered.status {
+        LinterStatus::Passed => {
+            assert!(rendered.stdout.contains("name: BASE_PLATFORM"));
+            assert!(rendered.stdout.contains("value: \"gcp\""));
+            assert!(rendered.stdout.contains("name: GCP_PROJECT_ID"));
+            assert!(rendered.stdout.contains("value: \"alien-test-target\""));
+            assert!(rendered.stdout.contains("name: GOOGLE_CLOUD_PROJECT"));
+            assert!(rendered.stdout.contains("name: GCP_REGION"));
+            assert!(rendered.stdout.contains("value: \"us-east4\""));
+        }
+        LinterStatus::Skipped(reason) => {
+            eprintln!("skipped GCP runtime config render assertions: {reason}");
+        }
+        LinterStatus::Failed(_) => rendered.assert_ok("GCP runtime config render"),
+    }
+}
+
+#[test]
+fn cluster_bootstrap_renders_only_when_enabled() {
+    let stack = Stack::new("cluster-bootstrap".to_string()).build();
+    let chart = render(&stack, StackSettings::default());
+    let files = chart.files.clone();
+
+    let values = files.get("values.yaml").expect("values.yaml");
+    assert!(values.contains("clusterBootstrap:"));
+    assert!(values.contains("metricsServer:"));
+    assert!(values.contains("storageClass:"));
+    assert!(values.contains("eksAutoMode:"));
+    assert!(values.contains("arm64NodePool:"));
+
+    let default_rendered = alien_helm::test_utils::helm_template(&files, None);
+    match &default_rendered.status {
+        LinterStatus::Passed => {
+            assert!(!default_rendered.stdout.contains("kind: StorageClass"));
+            assert!(!default_rendered.stdout.contains("kind: IngressClass"));
+            assert!(!default_rendered.stdout.contains("kind: IngressClassParams"));
+            assert!(!default_rendered.stdout.contains("kind: NodePool"));
+            assert!(!default_rendered.stdout.contains("metrics-server"));
+        }
+        LinterStatus::Skipped(reason) => {
+            eprintln!("skipped default cluster bootstrap assertions: {reason}");
+        }
+        LinterStatus::Failed(_) => default_rendered.assert_ok("default cluster bootstrap render"),
+    }
+
+    let enabled_values = values
+        .replace(
+        "clusterBootstrap:\n  metricsServer:\n    enabled: false\n    image: registry.k8s.io/metrics-server/metrics-server:v0.8.1\n  storageClass:\n    default:\n      enabled: false\n      name: \"\"\n      provisioner: \"\"\n      parameters: {}\n  ingress:\n    eksAutoMode:\n      enabled: false",
+        "clusterBootstrap:\n  metricsServer:\n    enabled: true\n    image: registry.k8s.io/metrics-server/metrics-server:v0.8.1\n  storageClass:\n    default:\n      enabled: true\n      name: gp3\n      provisioner: ebs.csi.eks.amazonaws.com\n      parameters:\n        type: gp3\n        fsType: ext4\n        encrypted: \"true\"\n  ingress:\n    eksAutoMode:\n      enabled: true",
+        )
+        .replace("arm64NodePool:\n        enabled: false", "arm64NodePool:\n        enabled: true");
+    let enabled_rendered = alien_helm::test_utils::helm_template(&files, Some(&enabled_values));
+    match &enabled_rendered.status {
+        LinterStatus::Passed => {
+            assert!(enabled_rendered.stdout.contains("kind: StorageClass"));
+            assert!(enabled_rendered.stdout.contains("name: \"gp3\""));
+            assert!(enabled_rendered
+                .stdout
+                .contains("storageclass.kubernetes.io/is-default-class: \"true\""));
+            assert!(enabled_rendered
+                .stdout
+                .contains("provisioner: \"ebs.csi.eks.amazonaws.com\""));
+            assert!(enabled_rendered.stdout.contains("kind: IngressClassParams"));
+            assert!(enabled_rendered.stdout.contains("kind: IngressClass"));
+            assert!(enabled_rendered
+                .stdout
+                .contains("controller: \"eks.amazonaws.com/alb\""));
+            assert!(enabled_rendered.stdout.contains("kind: NodePool"));
+            assert!(enabled_rendered
+                .stdout
+                .contains("name: \"general-purpose-arm64\""));
+            assert!(enabled_rendered.stdout.contains("kubernetes.io/arch"));
+            assert!(enabled_rendered.stdout.contains("\"arm64\""));
+            assert!(enabled_rendered.stdout.contains("name: metrics-server"));
+            assert!(enabled_rendered.stdout.contains("kind: APIService"));
+            assert!(enabled_rendered
+                .stdout
+                .contains("registry.k8s.io/metrics-server/metrics-server:v0.8.1"));
+        }
+        LinterStatus::Skipped(reason) => {
+            eprintln!("skipped enabled cluster bootstrap assertions: {reason}");
+        }
+        LinterStatus::Failed(_) => enabled_rendered.assert_ok("enabled cluster bootstrap render"),
+    }
 }
 
 #[test]

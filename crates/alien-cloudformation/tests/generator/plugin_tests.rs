@@ -4,7 +4,8 @@
 
 use super::helpers::{SampleEmitter, SampleResource};
 use alien_cloudformation::{
-    generate_cloudformation_template, to_yaml, CfRegistry, CloudFormationOptions, RegistrationMode,
+    generate_cloudformation_template, to_yaml, CfRegistry, CloudFormationOptions,
+    CloudFormationTarget, RegistrationMode,
 };
 use alien_core::{Platform, ResourceLifecycle, Stack, StackSettings, Storage};
 
@@ -30,6 +31,7 @@ fn plugin_can_extend_registry_alongside_built_ins() {
         &stack,
         CloudFormationOptions {
             registry: &registry,
+            target: CloudFormationTarget::Aws,
             stack_settings: StackSettings::default(),
             setup_target: "aws".to_string(),
             setup_fingerprint: "test".to_string(),

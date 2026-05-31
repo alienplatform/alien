@@ -9,19 +9,24 @@ let value: DataAws1 = {
   assignedMachines: 644340,
   capacityGroup: "<value>",
   commandSupported: true,
-  daemonName: "<value>",
-  desiredMachines: 753830,
-  events: [],
-  healthyInstances: 896332,
-  horizonClusterId: "<id>",
-  horizonStatus: "<value>",
-  instances: [
+  daemonInstances: [
     {
       name: "<value>",
-      ready: false,
+      ready: true,
       replicaId: "<id>",
     },
   ],
+  daemonName: "<value>",
+  desiredMachines: 896332,
+  events: [
+    {
+      message: "<value>",
+      reason: "<value>",
+    },
+  ],
+  healthyInstances: 510224,
+  horizonClusterId: "<id>",
+  horizonStatus: "<value>",
   latestUpdateTimestamp: "<value>",
   status: {
     collectionIssues: [
@@ -44,21 +49,21 @@ let value: DataAws1 = {
 
 ## Fields
 
-| Field                                                                                                        | Type                                                                                                         | Required                                                                                                     | Description                                                                                                  |
-| ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
-| `assignedMachines`                                                                                           | *number*                                                                                                     | :heavy_check_mark:                                                                                           | N/A                                                                                                          |
-| `capacityGroup`                                                                                              | *string*                                                                                                     | :heavy_check_mark:                                                                                           | N/A                                                                                                          |
-| `commandSupported`                                                                                           | *boolean*                                                                                                    | :heavy_check_mark:                                                                                           | N/A                                                                                                          |
-| `daemonName`                                                                                                 | *string*                                                                                                     | :heavy_check_mark:                                                                                           | N/A                                                                                                          |
-| `desiredMachines`                                                                                            | *number*                                                                                                     | :heavy_check_mark:                                                                                           | N/A                                                                                                          |
-| `events`                                                                                                     | [operations.GetRawResourceHeartbeatEvent13](../../models/operations/getrawresourceheartbeatevent13.md)[]     | :heavy_check_mark:                                                                                           | N/A                                                                                                          |
-| `healthyInstances`                                                                                           | *number*                                                                                                     | :heavy_check_mark:                                                                                           | N/A                                                                                                          |
-| `horizonClusterId`                                                                                           | *string*                                                                                                     | :heavy_check_mark:                                                                                           | N/A                                                                                                          |
-| `horizonStatus`                                                                                              | *string*                                                                                                     | :heavy_check_mark:                                                                                           | N/A                                                                                                          |
-| `horizonStatusMessage`                                                                                       | *string*                                                                                                     | :heavy_minus_sign:                                                                                           | N/A                                                                                                          |
-| `horizonStatusReason`                                                                                        | *string*                                                                                                     | :heavy_minus_sign:                                                                                           | N/A                                                                                                          |
-| `instances`                                                                                                  | [operations.GetRawResourceHeartbeatInstance3](../../models/operations/getrawresourceheartbeatinstance3.md)[] | :heavy_check_mark:                                                                                           | N/A                                                                                                          |
-| `latestUpdateTimestamp`                                                                                      | *string*                                                                                                     | :heavy_check_mark:                                                                                           | N/A                                                                                                          |
-| `status`                                                                                                     | [operations.DataStatus13](../../models/operations/datastatus13.md)                                           | :heavy_check_mark:                                                                                           | N/A                                                                                                          |
-| `unavailableInstances`                                                                                       | *number*                                                                                                     | :heavy_check_mark:                                                                                           | N/A                                                                                                          |
-| `backend`                                                                                                    | *"aws"*                                                                                                      | :heavy_check_mark:                                                                                           | N/A                                                                                                          |
+| Field                                                                      | Type                                                                       | Required                                                                   | Description                                                                |
+| -------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `assignedMachines`                                                         | *number*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
+| `capacityGroup`                                                            | *string*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
+| `commandSupported`                                                         | *boolean*                                                                  | :heavy_check_mark:                                                         | N/A                                                                        |
+| `daemonInstances`                                                          | [operations.DaemonInstance1](../../models/operations/daemoninstance1.md)[] | :heavy_check_mark:                                                         | N/A                                                                        |
+| `daemonName`                                                               | *string*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
+| `desiredMachines`                                                          | *number*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
+| `events`                                                                   | [operations.Event6](../../models/operations/event6.md)[]                   | :heavy_check_mark:                                                         | N/A                                                                        |
+| `healthyInstances`                                                         | *number*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
+| `horizonClusterId`                                                         | *string*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
+| `horizonStatus`                                                            | *string*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
+| `horizonStatusMessage`                                                     | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
+| `horizonStatusReason`                                                      | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
+| `latestUpdateTimestamp`                                                    | *string*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
+| `status`                                                                   | [operations.DataStatus13](../../models/operations/datastatus13.md)         | :heavy_check_mark:                                                         | N/A                                                                        |
+| `unavailableInstances`                                                     | *number*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
+| `backend`                                                                  | *"aws"*                                                                    | :heavy_check_mark:                                                         | N/A                                                                        |

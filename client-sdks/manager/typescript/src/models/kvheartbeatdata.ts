@@ -9,11 +9,6 @@ import {
   AwsDynamoDbKeySchemaElement$outboundSchema,
 } from "./awsdynamodbkeyschemaelement.js";
 import {
-  HeartbeatEvent,
-  HeartbeatEvent$Outbound,
-  HeartbeatEvent$outboundSchema,
-} from "./heartbeatevent.js";
-import {
   KvHeartbeatStatus,
   KvHeartbeatStatus$Outbound,
   KvHeartbeatStatus$outboundSchema,
@@ -21,7 +16,6 @@ import {
 
 export type KvHeartbeatDataLocal = {
   cloudMetadataSupported: boolean;
-  events: Array<HeartbeatEvent>;
   isDirectory?: boolean | null | undefined;
   name: string;
   path: string;
@@ -32,7 +26,6 @@ export type KvHeartbeatDataLocal = {
 
 export type KvHeartbeatDataAzureTable = {
   endpoint?: string | null | undefined;
-  events: Array<HeartbeatEvent>;
   resourceGroup?: string | null | undefined;
   signedIdentifierCount?: number | null | undefined;
   status: KvHeartbeatStatus;
@@ -59,7 +52,6 @@ export type KvHeartbeatDataGcpFirestore = {
   deleteTime?: string | null | undefined;
   earliestVersionTime?: string | null | undefined;
   endpoint?: string | null | undefined;
-  events: Array<HeartbeatEvent>;
   locationId?: string | null | undefined;
   pointInTimeRecoveryEnablement?: string | null | undefined;
   projectId?: string | null | undefined;
@@ -73,7 +65,6 @@ export type KvHeartbeatDataGcpFirestore = {
 export type KvHeartbeatDataAwsDynamoDb = {
   billingMode?: string | null | undefined;
   deletionProtectionEnabled?: boolean | null | undefined;
-  events: Array<HeartbeatEvent>;
   globalSecondaryIndexCount?: number | null | undefined;
   itemCount?: number | null | undefined;
   keySchema: Array<AwsDynamoDbKeySchemaElement>;
@@ -105,7 +96,6 @@ export type KvHeartbeatData =
 /** @internal */
 export type KvHeartbeatDataLocal$Outbound = {
   cloudMetadataSupported: boolean;
-  events: Array<HeartbeatEvent$Outbound>;
   isDirectory?: boolean | null | undefined;
   name: string;
   path: string;
@@ -120,7 +110,6 @@ export const KvHeartbeatDataLocal$outboundSchema: z.ZodType<
   KvHeartbeatDataLocal
 > = z.object({
   cloudMetadataSupported: z.boolean(),
-  events: z.array(HeartbeatEvent$outboundSchema),
   isDirectory: z.nullable(z.boolean()).optional(),
   name: z.string(),
   path: z.string(),
@@ -140,7 +129,6 @@ export function kvHeartbeatDataLocalToJSON(
 /** @internal */
 export type KvHeartbeatDataAzureTable$Outbound = {
   endpoint?: string | null | undefined;
-  events: Array<HeartbeatEvent$Outbound>;
   resourceGroup?: string | null | undefined;
   signedIdentifierCount?: number | null | undefined;
   status: KvHeartbeatStatus$Outbound;
@@ -161,7 +149,6 @@ export const KvHeartbeatDataAzureTable$outboundSchema: z.ZodType<
   KvHeartbeatDataAzureTable
 > = z.object({
   endpoint: z.nullable(z.string()).optional(),
-  events: z.array(HeartbeatEvent$outboundSchema),
   resourceGroup: z.nullable(z.string()).optional(),
   signedIdentifierCount: z.nullable(z.int()).optional(),
   status: KvHeartbeatStatus$outboundSchema,
@@ -197,7 +184,6 @@ export type KvHeartbeatDataGcpFirestore$Outbound = {
   deleteTime?: string | null | undefined;
   earliestVersionTime?: string | null | undefined;
   endpoint?: string | null | undefined;
-  events: Array<HeartbeatEvent$Outbound>;
   locationId?: string | null | undefined;
   pointInTimeRecoveryEnablement?: string | null | undefined;
   projectId?: string | null | undefined;
@@ -224,7 +210,6 @@ export const KvHeartbeatDataGcpFirestore$outboundSchema: z.ZodType<
   deleteTime: z.nullable(z.string()).optional(),
   earliestVersionTime: z.nullable(z.string()).optional(),
   endpoint: z.nullable(z.string()).optional(),
-  events: z.array(HeartbeatEvent$outboundSchema),
   locationId: z.nullable(z.string()).optional(),
   pointInTimeRecoveryEnablement: z.nullable(z.string()).optional(),
   projectId: z.nullable(z.string()).optional(),
@@ -249,7 +234,6 @@ export function kvHeartbeatDataGcpFirestoreToJSON(
 export type KvHeartbeatDataAwsDynamoDb$Outbound = {
   billingMode?: string | null | undefined;
   deletionProtectionEnabled?: boolean | null | undefined;
-  events: Array<HeartbeatEvent$Outbound>;
   globalSecondaryIndexCount?: number | null | undefined;
   itemCount?: number | null | undefined;
   keySchema: Array<AwsDynamoDbKeySchemaElement$Outbound>;
@@ -279,7 +263,6 @@ export const KvHeartbeatDataAwsDynamoDb$outboundSchema: z.ZodType<
 > = z.object({
   billingMode: z.nullable(z.string()).optional(),
   deletionProtectionEnabled: z.nullable(z.boolean()).optional(),
-  events: z.array(HeartbeatEvent$outboundSchema),
   globalSecondaryIndexCount: z.nullable(z.int()).optional(),
   itemCount: z.nullable(z.int()).optional(),
   keySchema: z.array(AwsDynamoDbKeySchemaElement$outboundSchema),

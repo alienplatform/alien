@@ -612,7 +612,6 @@ fn emit_aws_build_heartbeat(
                 queued_timeout_in_minutes: project.queued_timeout_in_minutes,
                 created: project.created,
                 last_modified: project.last_modified,
-                events: vec![],
             },
         )),
         raw: vec![],

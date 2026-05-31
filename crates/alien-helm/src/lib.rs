@@ -20,5 +20,8 @@ mod registry;
 pub mod test_utils;
 
 pub use emitter::{HelmEmitter, HelmFragment, InfrastructureValue, ServiceAccountIdentity};
-pub use generator::{generate_helm_chart, HelmChart, HelmOptions};
+pub use generator::{
+    generate_helm_chart, render_manager_fetch_values, HelmChart, HelmOptions,
+    ManagerFetchHelmValuesOptions,
+};
 pub use registry::HelmRegistry;

@@ -5,13 +5,9 @@
 
 import * as z from "zod";
 import { AzureResourceGroupHeartbeatStatusSchema } from "./azure-resource-group-heartbeat-status-schema.js";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 
 export const AzureResourceGroupHeartbeatDataSchema = z.object({
-    get "events"(){
-                return z.array(HeartbeatEventSchema)
-              },
-"location": z.string().nullish(),
+    "location": z.string().nullish(),
 "managedTags": z.object({
     
     }).catchall(z.string()),

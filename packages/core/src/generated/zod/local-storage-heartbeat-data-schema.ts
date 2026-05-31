@@ -4,14 +4,10 @@
 */
 
 import * as z from "zod";
-import { HeartbeatEventSchema } from "./heartbeat-event-schema.js";
 import { StorageHeartbeatStatusSchema } from "./storage-heartbeat-status-schema.js";
 
 export const LocalStorageHeartbeatDataSchema = z.object({
-    get "events"(){
-                return z.array(HeartbeatEventSchema)
-              },
-"isDirectory": z.boolean().nullish(),
+    "isDirectory": z.boolean().nullish(),
 "modifiedAt": z.iso.datetime().nullish(),
 "path": z.string(),
 "pathExists": z.boolean(),

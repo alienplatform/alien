@@ -141,6 +141,7 @@ fn aws_container_cluster_without_platform_extension_errors_cleanly() {
         &stack,
         alien_cloudformation::CloudFormationOptions {
             registry: &registry,
+            target: alien_cloudformation::CloudFormationTarget::Aws,
             stack_settings: settings,
             setup_target: "aws".to_string(),
             setup_fingerprint: "test".to_string(),

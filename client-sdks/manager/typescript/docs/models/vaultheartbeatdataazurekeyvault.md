@@ -7,14 +7,13 @@ import { VaultHeartbeatDataAzureKeyVault } from "@alienplatform/manager-api/mode
 
 let value: VaultHeartbeatDataAzureKeyVault = {
   accessPolicyCount: 590752,
-  events: [],
   name: "<value>",
-  privateEndpointConnectionCount: 929405,
+  privateEndpointConnectionCount: 62989,
   publicNetworkAccess: "<value>",
-  rbacAuthorizationEnabled: true,
+  rbacAuthorizationEnabled: false,
   secretMetadataListed: true,
-  softDeleteEnabled: false,
-  softDeleteRetentionDays: 926964,
+  softDeleteEnabled: true,
+  softDeleteRetentionDays: 839995,
   status: {
     collectionIssues: [
       {
@@ -24,8 +23,8 @@ let value: VaultHeartbeatDataAzureKeyVault = {
         source: "<value>",
       },
     ],
-    health: "healthy",
-    lifecycle: "updating",
+    health: "unhealthy",
+    lifecycle: "scaling",
     partial: true,
     stale: true,
   },
@@ -38,7 +37,6 @@ let value: VaultHeartbeatDataAzureKeyVault = {
 | Field                                                            | Type                                                             | Required                                                         | Description                                                      |
 | ---------------------------------------------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------- |
 | `accessPolicyCount`                                              | *number*                                                         | :heavy_check_mark:                                               | N/A                                                              |
-| `events`                                                         | [models.HeartbeatEvent](../models/heartbeatevent.md)[]           | :heavy_check_mark:                                               | N/A                                                              |
 | `location`                                                       | *string*                                                         | :heavy_minus_sign:                                               | N/A                                                              |
 | `name`                                                           | *string*                                                         | :heavy_check_mark:                                               | N/A                                                              |
 | `privateEndpointConnectionCount`                                 | *number*                                                         | :heavy_check_mark:                                               | N/A                                                              |

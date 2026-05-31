@@ -7,14 +7,6 @@ import { DataKv } from "@alienplatform/platform-api/models";
 
 let value: DataKv = {
   data: {
-    events: [
-      {
-        kind: "<value>",
-        message: "<value>",
-        observedAt: new Date("2025-06-08T10:49:40.534Z"),
-        severity: "warning",
-      },
-    ],
     status: {
       collectionIssues: [
         {
@@ -24,13 +16,13 @@ let value: DataKv = {
           source: "<value>",
         },
       ],
-      health: "unknown",
-      lifecycle: "updating",
+      health: "healthy",
+      lifecycle: "scaling",
       partial: false,
-      stale: false,
+      stale: true,
     },
     storageAccountName: "<value>",
-    tableExists: true,
+    tableExists: false,
     tableName: "<value>",
     backend: "azureTable",
   },

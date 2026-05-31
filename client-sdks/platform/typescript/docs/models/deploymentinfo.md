@@ -27,32 +27,13 @@ let value: DeploymentInfo = {
   installContext: {
     targets: {
       "key": {
-        platform: "kubernetes",
-        managerUrl: "https://excitable-drug.name/",
+        platform: "gcp",
+        managerUrl: "https://low-possession.com/",
         managementConfig: {
-          managingTenantId: "<id>",
-          oidcIssuer: "<value>",
-          oidcSubject: "<value>",
-          platform: "azure",
+          platform: "kubernetes",
         },
       },
     },
-  },
-  setupConfig: {
-    metadata: {
-      "key": "<value>",
-    },
-    policy: {
-      allowedPlatforms: [],
-      allowedSetupMethods: [
-        "google-oauth",
-      ],
-      release: {
-        mode: "fixed",
-        releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
-      },
-    },
-    environmentVariables: [],
   },
 };
 ```

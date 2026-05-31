@@ -237,12 +237,17 @@ pub async fn test_storage(
             operation: "presigned_put".to_string(),
         })?;
 
-    put_request
+    let put_response = put_request
         .execute(Some(presigned_test_data.clone()))
         .await
         .context(ErrorData::StorageOperationFailed {
             operation: "presigned_put_execute".to_string(),
         })?;
+    if !(200..300).contains(&put_response.status_code) {
+        return Err(AlienError::new(ErrorData::StorageOperationFailed {
+            operation: format!("presigned_put_status_{}", put_response.status_code),
+        }));
+    }
 
     // 6b. Presigned GET — download via presigned request and verify
     let get_request = storage_instance
@@ -259,6 +264,11 @@ pub async fn test_storage(
             .context(ErrorData::StorageOperationFailed {
                 operation: "presigned_get_execute".to_string(),
             })?;
+    if !(200..300).contains(&get_response.status_code) {
+        return Err(AlienError::new(ErrorData::StorageOperationFailed {
+            operation: format!("presigned_get_status_{}", get_response.status_code),
+        }));
+    }
 
     let presigned_retrieved = get_response.body.ok_or_else(|| {
         AlienError::new(ErrorData::StorageOperationFailed {

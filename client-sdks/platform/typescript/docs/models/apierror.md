@@ -1,7 +1,5 @@
 # APIError
 
-Error that occurred during context building
-
 ## Example Usage
 
 ```typescript

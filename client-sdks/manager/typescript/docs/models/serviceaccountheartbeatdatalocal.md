@@ -7,14 +7,6 @@ import { ServiceAccountHeartbeatDataLocal } from "@alienplatform/manager-api/mod
 
 let value: ServiceAccountHeartbeatDataLocal = {
   configured: false,
-  events: [
-    {
-      kind: "<value>",
-      message: "<value>",
-      observedAt: new Date("2024-02-23T02:52:34.144Z"),
-      severity: "info",
-    },
-  ],
   identity: "<value>",
   status: {
     collectionIssues: [
@@ -25,10 +17,10 @@ let value: ServiceAccountHeartbeatDataLocal = {
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "deleting",
-    partial: true,
-    stale: false,
+    health: "unhealthy",
+    lifecycle: "stopped",
+    partial: false,
+    stale: true,
   },
   backend: "local",
 };
@@ -39,7 +31,6 @@ let value: ServiceAccountHeartbeatDataLocal = {
 | Field                                                                              | Type                                                                               | Required                                                                           | Description                                                                        |
 | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | `configured`                                                                       | *boolean*                                                                          | :heavy_check_mark:                                                                 | N/A                                                                                |
-| `events`                                                                           | [models.HeartbeatEvent](../models/heartbeatevent.md)[]                             | :heavy_check_mark:                                                                 | N/A                                                                                |
 | `identity`                                                                         | *string*                                                                           | :heavy_check_mark:                                                                 | N/A                                                                                |
 | `status`                                                                           | [models.ServiceAccountHeartbeatStatus](../models/serviceaccountheartbeatstatus.md) | :heavy_check_mark:                                                                 | N/A                                                                                |
 | `backend`                                                                          | *"local"*                                                                          | :heavy_check_mark:                                                                 | N/A                                                                                |

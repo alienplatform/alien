@@ -553,9 +553,9 @@ impl ClientConfig {
 
     pub fn config_for_platform(&self, platform: Platform) -> Option<ClientConfig> {
         match self {
-            ClientConfig::KubernetesCloud { kubernetes, cloud } => {
+            ClientConfig::KubernetesCloud { cloud, .. } => {
                 if platform == Platform::Kubernetes {
-                    Some(ClientConfig::Kubernetes(kubernetes.clone()))
+                    Some(self.clone())
                 } else if cloud.platform() == platform {
                     Some((**cloud).clone())
                 } else {
@@ -635,6 +635,37 @@ mod tests {
         assert_eq!(config.aws_config().unwrap().region, "us-east-2");
         assert!(config.gcp_config().is_none());
         assert!(config.azure_config().is_none());
+    }
+
+    #[test]
+    fn kubernetes_cloud_preserves_cloud_config_for_kubernetes_controllers() {
+        let config = ClientConfig::KubernetesCloud {
+            kubernetes: Box::new(KubernetesClientConfig::InCluster {
+                namespace: Some("test".to_string()),
+                additional_headers: None,
+            }),
+            cloud: Box::new(ClientConfig::Aws(Box::new(AwsClientConfig {
+                account_id: "123456789012".to_string(),
+                region: "us-east-2".to_string(),
+                credentials: AwsCredentials::AccessKeys {
+                    access_key_id: "access".to_string(),
+                    secret_access_key: "secret".to_string(),
+                    session_token: None,
+                },
+                service_overrides: None,
+            }))),
+        };
+
+        let kubernetes_config = config
+            .config_for_platform(crate::Platform::Kubernetes)
+            .unwrap();
+
+        assert!(matches!(
+            kubernetes_config,
+            ClientConfig::KubernetesCloud { .. }
+        ));
+        assert!(kubernetes_config.kubernetes_config().is_some());
+        assert_eq!(kubernetes_config.aws_config().unwrap().region, "us-east-2");
     }
 
     #[test]

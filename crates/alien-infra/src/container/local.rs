@@ -11,9 +11,9 @@ use crate::core::{environment_variables::EnvironmentVariableBuilder, ResourceCon
 use crate::error::{ErrorData, Result};
 use alien_core::{
     Container, ContainerCode, ContainerHeartbeatData, ContainerOutputs, ContainerStatus,
-    HeartbeatBackend, Kv, LocalContainerHeartbeatData, ObservedHealth, Platform,
-    ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData,
-    ResourceOutputs as CoreResourceOutputs, ResourceStatus, Storage, Vault,
+    HeartbeatBackend, Kv, LocalContainerHeartbeatData, LocalRuntimeUnitKind,
+    LocalRuntimeUnitStatus, ObservedHealth, Platform, ProviderLifecycleState, ResourceHeartbeat,
+    ResourceHeartbeatData, ResourceOutputs as CoreResourceOutputs, ResourceStatus, Storage, Vault,
     WorkloadHeartbeatStatus,
 };
 use alien_error::{AlienError, Context, IntoAlienError as _};
@@ -472,6 +472,17 @@ fn emit_local_container_heartbeat(
                 runtime_reachable,
                 cpu: None,
                 memory: None,
+                container_unit: container_info.map(|info| LocalRuntimeUnitStatus {
+                    unit_id: info.docker_container_id.clone(),
+                    name: info.container_id.clone(),
+                    kind: LocalRuntimeUnitKind::Container,
+                    ready: runtime_reachable,
+                    phase: Some("running".to_string()),
+                    pid: None,
+                    restart_count: None,
+                    cpu: None,
+                    memory: None,
+                }),
                 events: vec![],
             },
         )),

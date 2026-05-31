@@ -9,6 +9,22 @@ import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 /**
+ * Cloud where the private manager is hosted. Null for Alien-hosted managers.
+ */
+export const ManagerCloud = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Cloud where the private manager is hosted. Null for Alien-hosted managers.
+ */
+export type ManagerCloud = ClosedEnum<typeof ManagerCloud>;
+
+/**
  * Represents the target cloud platform.
  */
 export const ResolveResponsePlatformEnum = {
@@ -114,9 +130,21 @@ export type ResolveResponse = {
    */
   managerId: string;
   /**
+   * Manager display name
+   */
+  managerName: string;
+  /**
    * Manager URL
    */
   managerUrl: string;
+  /**
+   * Whether the manager is Alien-hosted
+   */
+  managerIsSystem: boolean;
+  /**
+   * Cloud where the private manager is hosted. Null for Alien-hosted managers.
+   */
+  managerCloud?: ManagerCloud | null | undefined;
   /**
    * Resolved project ID
    */
@@ -126,6 +154,10 @@ export type ResolveResponse = {
    */
   installContext?: ResolveResponseInstallContext | undefined;
 };
+
+/** @internal */
+export const ManagerCloud$inboundSchema: z.ZodEnum<typeof ManagerCloud> = z
+  .enum(ManagerCloud);
 
 /** @internal */
 export const ResolveResponsePlatformEnum$inboundSchema: z.ZodEnum<
@@ -270,7 +302,10 @@ export const ResolveResponse$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   managerId: z.string(),
+  managerName: z.string(),
   managerUrl: z.string(),
+  managerIsSystem: z.boolean(),
+  managerCloud: z.nullable(ManagerCloud$inboundSchema).optional(),
   projectId: z.string(),
   installContext: z.lazy(() => ResolveResponseInstallContext$inboundSchema)
     .optional(),

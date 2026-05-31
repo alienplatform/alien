@@ -1,6 +1,7 @@
 //! Azure Resource Group mutation that adds the required resource group for Azure resources.
 
 use crate::error::Result;
+use crate::mutations::runs_on_platform_or_base;
 use crate::StackMutation;
 use alien_core::{
     AzureResourceGroup, DeploymentConfig, Platform, ResourceEntry, ResourceLifecycle, Stack,
@@ -25,20 +26,22 @@ impl StackMutation for AzureResourceGroupMutation {
         &self,
         stack: &Stack,
         stack_state: &StackState,
-        _config: &DeploymentConfig,
+        config: &DeploymentConfig,
     ) -> bool {
-        // Only add for Azure platform
-        if stack_state.platform != Platform::Azure {
+        if !runs_on_platform_or_base(stack_state, config, Platform::Azure) {
             return false;
         }
 
-        // Check if we have any user-defined resources (worker, storage, etc.)
+        let include_azure_workload_scaffolding = stack_state.platform == Platform::Azure;
+
+        // Check if we have any user-defined resources that require Azure setup.
         let has_user_resources = stack.resources.iter().any(|(_, entry)| {
             let resource_type = entry.config.resource_type();
-            matches!(
-                resource_type.as_ref(),
-                "worker" | "storage" | "vault" | "kv" | "artifact-registry" | "build"
-            )
+            match resource_type.as_ref() {
+                "worker" | "build" => include_azure_workload_scaffolding,
+                "storage" | "vault" | "kv" | "artifact-registry" | "queue" => true,
+                _ => false,
+            }
         });
 
         if !has_user_resources {

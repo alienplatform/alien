@@ -77,18 +77,18 @@ impl DedupeKey {
 pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<Stack> {
     info!(
         "Starting stack build process for platform: {:?}...",
-        settings.platform.platform()
+        settings.platform.runtime_platform()
     );
 
     // Run preflights (compile-time checks only)
     let preflight_runner = PreflightRunner::new();
     let preflight_summary = AlienEvent::RunningPreflights {
         stack: stack.id().to_string(),
-        platform: settings.platform.platform().as_str().to_string(),
+        platform: settings.platform.runtime_platform().as_str().to_string(),
     }
     .in_scope(|_| async {
         preflight_runner
-            .run_build_time_preflights(&stack, settings.platform.platform())
+            .run_build_time_preflights(&stack, settings.platform.runtime_platform())
             .await
             .context(ErrorData::StackProcessorFailed {
                 message: "Failed to run build-time preflights".to_string(),
@@ -109,7 +109,7 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
     );
 
     let base_output_dir = PathBuf::from(&settings.output_directory);
-    let platform_name = settings.platform.platform().as_str();
+    let platform_name = settings.platform.runtime_platform().as_str();
     let output_dir = base_output_dir.join("build").join(platform_name);
     info!("Target output directory: {}", output_dir.display());
 
@@ -770,14 +770,68 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
 
 /// A compute resource that has a locally-built image directory and needs to be pushed to a registry.
 struct ResourcePushTarget {
-    /// Stack resource key (used to locate the resource for updating after push)
-    resource_id: String,
-    /// The resource's own ID (e.g. `worker.id`) — used for logging and image tagging
-    resource_name: String,
+    /// Stack resource keys that should be updated with the pushed image URI.
+    resource_ids: Vec<String>,
+    /// Resource IDs sharing this push target. The first name is used for logging and image tagging.
+    resource_names: Vec<String>,
     /// Display name for events/logging ("worker", "container", etc.)
     resource_type: &'static str,
     /// Local directory containing OCI tarballs produced by `alien build`
     local_image_dir: PathBuf,
+}
+
+impl ResourcePushTarget {
+    fn resource_name(&self) -> &str {
+        self.resource_names
+            .first()
+            .expect("push target should have at least one resource name")
+    }
+
+    fn display_resource_name(&self) -> String {
+        if self.resource_names.len() > 1 {
+            format!("{} (shared)", self.resource_names.join(", "))
+        } else {
+            self.resource_name().to_string()
+        }
+    }
+
+    fn push_result_updates(&self, image_uri: String) -> Vec<(String, String)> {
+        self.resource_ids
+            .iter()
+            .map(|resource_id| (resource_id.clone(), image_uri.clone()))
+            .collect()
+    }
+}
+
+fn push_target_for_local_image<'a>(
+    targets: &'a mut Vec<ResourcePushTarget>,
+    resource_type: &'static str,
+    local_image_dir: &Path,
+) -> Option<&'a mut ResourcePushTarget> {
+    targets.iter_mut().find(|target| {
+        target.resource_type == resource_type && target.local_image_dir == local_image_dir
+    })
+}
+
+fn add_push_target_resource(
+    targets: &mut Vec<ResourcePushTarget>,
+    resource_id: String,
+    resource_name: String,
+    resource_type: &'static str,
+    local_image_dir: PathBuf,
+) {
+    if let Some(target) = push_target_for_local_image(targets, resource_type, &local_image_dir) {
+        target.resource_ids.push(resource_id);
+        target.resource_names.push(resource_name);
+        return;
+    }
+
+    targets.push(ResourcePushTarget {
+        resource_ids: vec![resource_id],
+        resource_names: vec![resource_name],
+        resource_type,
+        local_image_dir,
+    });
 }
 
 /// Scans all resources in the stack and returns those with locally-built images that need
@@ -801,12 +855,13 @@ fn collect_push_targets(stack: &Stack) -> Result<Vec<ResourcePushTarget>> {
                             "Worker '{}' has local image directory, queuing for push",
                             func.id
                         );
-                        targets.push(ResourcePushTarget {
-                            resource_id: resource_id.clone(),
-                            resource_name: func.id.clone(),
-                            resource_type: "worker",
-                            local_image_dir: path,
-                        });
+                        add_push_target_resource(
+                            &mut targets,
+                            resource_id.clone(),
+                            func.id.clone(),
+                            "worker",
+                            path,
+                        );
                     } else {
                         info!("Worker '{}' already has remote image: {}", func.id, image);
                     }
@@ -827,12 +882,13 @@ fn collect_push_targets(stack: &Stack) -> Result<Vec<ResourcePushTarget>> {
                             "Container '{}' has local image directory, queuing for push",
                             container.id
                         );
-                        targets.push(ResourcePushTarget {
-                            resource_id: resource_id.clone(),
-                            resource_name: container.id.clone(),
-                            resource_type: "container",
-                            local_image_dir: path,
-                        });
+                        add_push_target_resource(
+                            &mut targets,
+                            resource_id.clone(),
+                            container.id.clone(),
+                            "container",
+                            path,
+                        );
                     } else {
                         info!(
                             "Container '{}' already has remote image: {}",
@@ -875,6 +931,7 @@ fn apply_pushed_images(stack: &mut Stack, updates: Vec<(String, String)>) {
 #[alien_event(AlienEvent::PushingStack {
     stack: stack.id().to_string(),
     platform: platform.as_str().to_string(),
+    destination: push_settings.destination_label.clone(),
 })]
 pub async fn push_stack(
     mut stack: Stack,
@@ -888,7 +945,16 @@ pub async fn push_stack(
 
     let to_push = collect_push_targets(&stack)?;
 
-    info!("Pushing {} resource(s) to registry", to_push.len());
+    let resource_count = to_push
+        .iter()
+        .map(|target| target.resource_ids.len())
+        .sum::<usize>();
+
+    info!(
+        "Pushing {} artifact(s) for {} resource(s) to registry",
+        to_push.len(),
+        resource_count
+    );
 
     if to_push.is_empty() {
         info!("Image push process completed. No local images to push.");
@@ -902,7 +968,9 @@ pub async fn push_stack(
     let push_tasks: Vec<_> = to_push
         .into_iter()
         .map(|target| {
-            let resource_name = target.resource_name.clone();
+            let resource_name = target.resource_name().to_string();
+            let display_resource_name = target.display_resource_name();
+            let resource_names = target.resource_names.clone();
             let repository = push_settings.repository.clone();
             let push_opts = push_settings.options.clone();
             let bus = current_bus.clone();
@@ -912,16 +980,29 @@ pub async fn push_stack(
                 let resource_name_for_warning = resource_name.clone();
 
                 let push_work = async move {
-                    info!("Starting parallel push for {} '{}'", target.resource_type, resource_name);
+                    let target_resource_count = target.resource_ids.len();
+
+                    if resource_names.len() > 1 {
+                        info!(
+                            "Starting parallel push for shared {} artifact '{}': {:?}",
+                            target.resource_type, resource_name, resource_names
+                        );
+                    } else {
+                        info!(
+                            "Starting parallel push for {} '{}'",
+                            target.resource_type, resource_name
+                        );
+                    }
 
                     if cancel_token.is_cancelled() {
-                        return (target.resource_id, Err(AlienError::new(ErrorData::BuildCanceled {
+                        return Err(AlienError::new(ErrorData::BuildCanceled {
                             resource_name: resource_name.clone(),
-                        })));
+                        }));
                     }
 
                     let result = tokio::select! {
                         result = push_resource_images(
+                            &display_resource_name,
                             &resource_name,
                             target.resource_type,
                             &target.local_image_dir,
@@ -941,7 +1022,12 @@ pub async fn push_stack(
                         Err(e) => info!("Failed to push {} '{}': {}", target.resource_type, resource_name, e),
                     }
 
-                    (target.resource_id, result)
+                    result.map(|image_uri| {
+                        (
+                            target_resource_count,
+                            target.push_result_updates(image_uri),
+                        )
+                    })
                 };
 
                 match bus {
@@ -966,10 +1052,14 @@ pub async fn push_stack(
         remaining_tasks = rest;
 
         match result {
-            Ok((resource_id, push_result)) => match push_result {
-                Ok(image_uri) => {
-                    push_results.push((resource_id, image_uri));
+            Ok(push_result) => match push_result {
+                Ok((target_resource_count, updates)) => {
+                    push_results.extend(updates);
                     completed_tasks += 1;
+                    info!(
+                        "Applied pushed image to {} resource(s)",
+                        target_resource_count
+                    );
                 }
                 Err(e) => {
                     if first_error.is_none() {
@@ -1004,15 +1094,15 @@ pub async fn push_stack(
     }
 
     info!(
-        "Completed parallel pushing of {} resource(s)",
+        "Completed parallel pushing of {} artifact(s)",
         completed_tasks
     );
 
     apply_pushed_images(&mut stack, push_results);
 
     info!(
-        "Image push process completed. Stack updated with {} remote image URL(s).",
-        completed_tasks
+        "Image push process completed. Stack updated with {} resource image URL(s).",
+        resource_count
     );
 
     Ok(stack)
@@ -1020,10 +1110,11 @@ pub async fn push_stack(
 
 /// Push all OCI tarballs for a resource to the registry
 #[alien_event(AlienEvent::PushingResource {
-    resource_name: resource_name.to_string(),
+    resource_name: display_resource_name.to_string(),
     resource_type: resource_type.to_string(),
 })]
 async fn push_resource_images(
+    display_resource_name: &str,
     resource_name: &str,
     resource_type: &str,
     images_dir: &Path,
@@ -1032,7 +1123,7 @@ async fn push_resource_images(
 ) -> Result<String> {
     info!(
         "Pushing images for resource '{}' from {}",
-        resource_name,
+        display_resource_name,
         images_dir.display()
     );
 
@@ -1364,7 +1455,7 @@ async fn build_target_to_file(
             target.runtime_platform_id()
         ),
         build_target: *target,
-        platform_name: settings.platform.platform().as_str().to_string(),
+        runtime_platform_name: settings.platform.runtime_platform().as_str().to_string(),
         debug_mode: settings.debug_mode,
         is_container,
     };
@@ -1440,22 +1531,26 @@ async fn build_target_to_file(
                     // dockdash layers are consumed by the image builder.
                     let mut app_layer_builder = DockDashLayer::builder().map_dockdash_err()?;
 
-                    for (host_path, container_path) in files_to_package {
-                        let absolute_container_path = if container_path.starts_with("/") {
-                            container_path.clone()
-                        } else if container_path.starts_with("./") {
-                            format!("/app/{}", &container_path[2..])
+                    for file_spec in files_to_package {
+                        let absolute_container_path = if file_spec.container_path.starts_with("/") {
+                            file_spec.container_path.clone()
+                        } else if file_spec.container_path.starts_with("./") {
+                            format!("/app/{}", &file_spec.container_path[2..])
                         } else {
-                            format!("/app/{}", container_path)
+                            format!("/app/{}", file_spec.container_path)
                         };
 
-                        if host_path.is_dir() {
+                        if file_spec.host_path.is_dir() {
                             app_layer_builder = app_layer_builder
-                                .directory(host_path, &absolute_container_path)
+                                .directory(&file_spec.host_path, &absolute_container_path)
                                 .map_dockdash_err()?;
-                        } else if host_path.is_file() {
+                        } else if file_spec.host_path.is_file() {
                             app_layer_builder = app_layer_builder
-                                .file(host_path, &absolute_container_path, None)
+                                .file(
+                                    &file_spec.host_path,
+                                    &absolute_container_path,
+                                    file_spec.mode,
+                                )
                                 .map_dockdash_err()?;
                         }
                     }
@@ -1891,6 +1986,21 @@ mod tests {
             .unwrap_or(false)
     }
 
+    fn test_container(name: &str, image: String) -> Container {
+        Container::new(name.to_string())
+            .code(ContainerCode::Image { image })
+            .cpu(alien_core::ResourceSpec {
+                min: "0.5".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(alien_core::ResourceSpec {
+                min: "512Mi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .permissions("container-execution".to_string())
+            .build()
+    }
+
     #[test]
     fn retryable_image_pull_detects_oci_server_errors() {
         let error = dockdash::Error::ImagePull {
@@ -1931,6 +2041,85 @@ mod tests {
 
         assert!(!is_retryable_dockdash_image_pull_error(&auth_error));
         assert!(!is_retryable_dockdash_image_pull_error(&missing_error));
+    }
+
+    #[test]
+    fn collect_push_targets_groups_resources_that_share_local_image_directory() {
+        let temp_root = tempdir().unwrap();
+        let shared_dir = temp_root.path().join("shared-image");
+        let unique_dir = temp_root.path().join("unique-image");
+        std::fs::create_dir_all(&shared_dir).unwrap();
+        std::fs::create_dir_all(&unique_dir).unwrap();
+
+        let shared_image = shared_dir.to_string_lossy().into_owned();
+        let unique_image = unique_dir.to_string_lossy().into_owned();
+
+        let messaging_gateway = test_container("messaging-gateway", shared_image.clone());
+        let billing_worker = test_container("billing-worker", shared_image);
+        let postgres = test_container("postgres", unique_image);
+        let remote = test_container("remote", "registry.example.com/remote:latest".to_string());
+
+        let mut stack = Stack::new("push-dedupe".to_string())
+            .add(messaging_gateway, alien_core::ResourceLifecycle::Frozen)
+            .add(billing_worker, alien_core::ResourceLifecycle::Frozen)
+            .add(postgres, alien_core::ResourceLifecycle::Frozen)
+            .add(remote, alien_core::ResourceLifecycle::Frozen)
+            .build();
+
+        let targets = collect_push_targets(&stack).unwrap();
+
+        assert_eq!(targets.len(), 2);
+        assert_eq!(
+            targets[0].resource_names,
+            vec![
+                "messaging-gateway".to_string(),
+                "billing-worker".to_string()
+            ]
+        );
+        assert_eq!(
+            targets[0].resource_ids,
+            vec![
+                "messaging-gateway".to_string(),
+                "billing-worker".to_string()
+            ]
+        );
+        assert_eq!(targets[0].resource_type, "container");
+        assert_eq!(targets[0].local_image_dir, shared_dir);
+        assert_eq!(targets[1].resource_names, vec!["postgres".to_string()]);
+
+        let mut updates = targets[0].push_result_updates("registry.example.com/shared:tag".into());
+        updates.extend(targets[1].push_result_updates("registry.example.com/postgres:tag".into()));
+        apply_pushed_images(&mut stack, updates);
+
+        let images = stack
+            .resources()
+            .filter_map(|(id, entry)| {
+                entry
+                    .config
+                    .downcast_ref::<Container>()
+                    .and_then(|container| match &container.code {
+                        ContainerCode::Image { image } => Some((id.clone(), image.clone())),
+                        ContainerCode::Source { .. } => None,
+                    })
+            })
+            .collect::<HashMap<_, _>>();
+
+        assert_eq!(
+            images.get("messaging-gateway").unwrap(),
+            "registry.example.com/shared:tag"
+        );
+        assert_eq!(
+            images.get("billing-worker").unwrap(),
+            "registry.example.com/shared:tag"
+        );
+        assert_eq!(
+            images.get("postgres").unwrap(),
+            "registry.example.com/postgres:tag"
+        );
+        assert_eq!(
+            images.get("remote").unwrap(),
+            "registry.example.com/remote:latest"
+        );
     }
 
     #[tokio::test]
