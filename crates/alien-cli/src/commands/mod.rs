@@ -7,6 +7,7 @@ pub mod dev_helpers;
 pub mod init;
 pub mod onboard;
 pub mod release;
+pub mod releases;
 pub mod render;
 pub mod vault;
 pub mod whoami;
@@ -37,6 +38,7 @@ pub use dev_helpers::{
 pub use init::{init_task, InitArgs};
 pub use onboard::{onboard_task, OnboardArgs};
 pub use release::{release_command, ReleaseArgs};
+pub use releases::{releases_task, ReleasesArgs};
 pub use render::{render_task, RenderArgs};
 pub use vault::{vault_remote_task, vault_task, VaultArgs, VaultRemoteArgs};
 pub use whoami::{whoami_task, WhoamiArgs};

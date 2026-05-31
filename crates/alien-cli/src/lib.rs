@@ -26,9 +26,9 @@ use crate::commands::{
     commands_task_dev, deploy_task, deployments_task, destroy_task,
     ensure_server_running_for_dev_session, ensure_server_running_with_env,
     fetch_all_dev_deployment_live_states, init_task, onboard_task, prepare_dev_session_deployment,
-    release_command, render_task, vault_remote_task, vault_task, whoami_task, write_dev_status,
-    BuildArgs, CliEnvVar, CommandsArgs, DeployArgs, DeploymentsArgs, DestroyArgs, InitArgs,
-    OnboardArgs, ReleaseArgs, RenderArgs, WhoamiArgs,
+    release_command, releases_task, render_task, vault_remote_task, vault_task, whoami_task,
+    write_dev_status, BuildArgs, CliEnvVar, CommandsArgs, DeployArgs, DeploymentsArgs, DestroyArgs,
+    InitArgs, OnboardArgs, ReleaseArgs, ReleasesArgs, RenderArgs, WhoamiArgs,
 };
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
@@ -121,6 +121,8 @@ pub enum Commands {
     /// Deployment commands
     #[command(alias = "deployment")]
     Deployments(DeploymentsArgs),
+    /// Release commands
+    Releases(ReleasesArgs),
     /// Deploy to a cloud platform
     Deploy(DeployArgs),
     /// Destroy resources from a deployment
@@ -207,6 +209,8 @@ pub enum DevSubcommand {
     /// Deployment commands against the local manager
     #[command(alias = "deployment")]
     Deployments(DeploymentsArgs),
+    /// Release commands against the local manager
+    Releases(ReleasesArgs),
     /// Show local manager identity information
     Whoami(WhoamiArgs),
     /// Deploy to the local manager
@@ -857,6 +861,7 @@ async fn handle_dev_command(dev_cmd: DevCommand) -> Result<()> {
             run_dev_server_only(port, dev_cmd.status_file, parsed_env_vars).await?;
         }
         Some(DevSubcommand::Deployments(args)) => deployments_task(args, ctx).await?,
+        Some(DevSubcommand::Releases(args)) => releases_task(args, ctx).await?,
         Some(DevSubcommand::Whoami(args)) => whoami_task(args, ctx).await?,
         Some(DevSubcommand::Deploy(args)) => deploy_task(args, ctx).await?,
         Some(DevSubcommand::Destroy(args)) => destroy_task(args, ctx).await?,
@@ -1438,6 +1443,7 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
             Some(Commands::Release(args)) => release_command(args, ctx).await?,
             Some(Commands::Onboard(args)) => onboard_task(args, ctx).await?,
             Some(Commands::Deployments(args)) => deployments_task(args, ctx).await?,
+            Some(Commands::Releases(args)) => releases_task(args, ctx).await?,
             Some(Commands::Deploy(args)) => deploy_task(args, ctx).await?,
             Some(Commands::Destroy(args)) => destroy_task(args, ctx).await?,
             Some(Commands::Vault(args)) => vault_remote_task(args, ctx).await?,
