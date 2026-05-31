@@ -930,6 +930,32 @@
       }
     },
     "/v1/releases": {
+      "get": {
+        "tags": [
+          "releases"
+        ],
+        "operationId": "list_releases",
+        "responses": {
+          "200": {
+            "description": "Releases listed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListReleasesResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
       "post": {
         "tags": [
           "releases"
@@ -9170,6 +9196,20 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "ListReleasesResponse": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReleaseResponse"
+            }
           }
         }
       },
