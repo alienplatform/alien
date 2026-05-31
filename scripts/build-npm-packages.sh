@@ -26,6 +26,19 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
+publish_if_missing() {
+  local package_spec="$1"
+  local tarball="$2"
+  local tag="$3"
+
+  if npm view "$package_spec" version >/dev/null 2>&1; then
+    echo "Skipping $package_spec; already published"
+    return
+  fi
+
+  npm publish "$tarball" --tag "$tag"
+}
+
 # Platform definitions: npm_suffix target_triple os cpu binary_ext
 PLATFORMS=(
   "linux-x64    x86_64-unknown-linux-musl    linux   x64   "
@@ -72,7 +85,7 @@ EOF
 
   # Pack and publish with platform-specific tag
   (cd "$pkg_dir" && npm pack)
-  npm publish "${pkg_dir}/"*.tgz --tag "${npm_suffix}" || echo "WARN: publish of ${npm_suffix} variant may have already been published"
+  publish_if_missing "@alienplatform/cli@${VERSION}-${npm_suffix}" "${pkg_dir}/"*.tgz "${npm_suffix}"
 done
 
 # ── Step 2: Build the main package ───────────────────────────────────
@@ -119,7 +132,7 @@ cat > "${main_dir}/package.json" << EOF
 EOF
 
 (cd "$main_dir" && npm pack)
-npm publish "${main_dir}/"*.tgz --tag latest || echo "WARN: main package may have already been published"
+publish_if_missing "@alienplatform/cli@${VERSION}" "${main_dir}/"*.tgz latest
 
 echo ""
 echo "==> Done! Published @alienplatform/cli@${VERSION}"

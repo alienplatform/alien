@@ -704,7 +704,7 @@ async fn forward_request(
         .into_response();
 
     let upstream_host = upstream_endpoint.trim_end_matches('/');
-    let proxy_base = state.config.base_url();
+    let proxy_base = proxy_base_url(original_headers, &state.config.base_url());
     let proxy_host = proxy_base.trim_end_matches('/');
 
     for (key, value) in &resp_headers {
@@ -963,6 +963,70 @@ fn query_string(params: &HashMap<String, String>) -> String {
     }
 }
 
+fn proxy_base_url(original_headers: &HeaderMap, fallback_base_url: &str) -> String {
+    let host = first_header_value(original_headers, "x-forwarded-host")
+        .or_else(|| forwarded_header_param(original_headers, "host"))
+        .or_else(|| first_header_value(original_headers, "host"));
+
+    let Some(host) = host else {
+        return fallback_base_url.trim_end_matches('/').to_string();
+    };
+
+    let proto = first_header_value(original_headers, "x-forwarded-proto")
+        .or_else(|| forwarded_header_param(original_headers, "proto"))
+        .unwrap_or_else(|| {
+            if is_loopback_host(&host) {
+                fallback_base_url
+                    .split_once("://")
+                    .map(|(scheme, _)| scheme)
+                    .unwrap_or("http")
+                    .to_string()
+            } else {
+                "https".to_string()
+            }
+        });
+
+    format!("{}://{}", proto, host)
+        .trim_end_matches('/')
+        .to_string()
+}
+
+fn first_header_value(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(',').next())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn forwarded_header_param(headers: &HeaderMap, param: &str) -> Option<String> {
+    let header = headers.get("forwarded")?.to_str().ok()?;
+    header.split(',').next()?.split(';').find_map(|part| {
+        let (key, value) = part.trim().split_once('=')?;
+        if key.trim().eq_ignore_ascii_case(param) {
+            let value = value.trim().trim_matches('"');
+            if value.is_empty() {
+                None
+            } else {
+                Some(value.to_string())
+            }
+        } else {
+            None
+        }
+    })
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    let host_without_port = host
+        .strip_prefix('[')
+        .and_then(|h| h.split_once(']').map(|(h, _)| h))
+        .unwrap_or_else(|| host.split(':').next().unwrap_or(host));
+
+    matches!(host_without_port, "localhost" | "127.0.0.1" | "::1")
+}
+
 /// Load the artifact registry for a specific repository path.
 ///
 /// Uses the routing table to find the correct upstream registry based on the
@@ -1102,6 +1166,41 @@ mod tests {
         assert_eq!(
             extract_repo_name("alien-e2e/blobs/uploads/uuid-123"),
             "alien-e2e"
+        );
+    }
+
+    #[test]
+    fn proxy_base_url_prefers_forwarded_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert("host", "127.0.0.1:8080".parse().unwrap());
+        headers.insert("x-forwarded-host", "manager.example.com".parse().unwrap());
+        headers.insert("x-forwarded-proto", "https".parse().unwrap());
+
+        assert_eq!(
+            proxy_base_url(&headers, "http://localhost:8080"),
+            "https://manager.example.com"
+        );
+    }
+
+    #[test]
+    fn proxy_base_url_uses_request_host_for_public_requests() {
+        let mut headers = HeaderMap::new();
+        headers.insert("host", "alien-manager.example.com".parse().unwrap());
+
+        assert_eq!(
+            proxy_base_url(&headers, "http://localhost:8080"),
+            "https://alien-manager.example.com"
+        );
+    }
+
+    #[test]
+    fn proxy_base_url_keeps_localhost_http() {
+        let mut headers = HeaderMap::new();
+        headers.insert("host", "localhost:8080".parse().unwrap());
+
+        assert_eq!(
+            proxy_base_url(&headers, "http://localhost:8080"),
+            "http://localhost:8080"
         );
     }
 

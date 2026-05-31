@@ -31,14 +31,12 @@ impl ResourceImporter for AzureNetworkImporter {
             .get(1)
             .and_then(|id| subnet_name_from_id(id))
             .map(str::to_string);
-        let application_gateway_subnet_name = data
-            .application_gateway_subnet_name
-            .or_else(|| {
-                data.application_gateway_subnet_id
-                    .as_deref()
-                    .and_then(subnet_name_from_id)
-                    .map(str::to_string)
-            });
+        let application_gateway_subnet_name = data.application_gateway_subnet_name.or_else(|| {
+            data.application_gateway_subnet_id
+                .as_deref()
+                .and_then(subnet_name_from_id)
+                .map(str::to_string)
+        });
         let _ = (data.subscription_id, data.network_security_group_id);
         let controller = AzureNetworkController {
             state: AzureNetworkState::Ready,

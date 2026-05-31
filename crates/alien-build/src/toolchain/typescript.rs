@@ -1,4 +1,5 @@
 use super::{cache_utils, Toolchain, ToolchainContext, ToolchainOutput};
+use crate::command_output::wait_with_captured_output;
 use crate::dependencies::install_dependencies;
 use crate::error::{ErrorData, Result};
 use alien_core::AlienEvent;
@@ -8,7 +9,6 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tokio::fs;
-use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tracing::{error, info};
 
@@ -449,53 +449,39 @@ impl Toolchain for TypeScriptToolchain {
                     build_output: None,
                 })?;
 
-            // Read stderr for progress
-            let stderr = child.stderr.take().unwrap();
-            let mut stderr_reader = BufReader::new(stderr).lines();
-            let mut stderr_lines = Vec::new();
-
-            while let Some(line) = stderr_reader.next_line().await.into_alien_error().context(
-                ErrorData::ImageBuildFailed {
-                    resource_name: binary_name_clone.clone(),
-                    reason: "Failed to read bun build output".to_string(),
-                    build_output: None,
+            let (output, captured_output) = wait_with_captured_output(
+                &mut child,
+                &binary_name_clone,
+                "Failed to read bun build output",
+                "Failed to wait for bun build --compile",
+                |line| {
+                    let compilation_event = &compilation_event;
+                    async move {
+                        let trimmed_line = line.line.trim();
+                        if !trimmed_line.is_empty() {
+                            let _ = compilation_event
+                                .update(AlienEvent::CompilingCode {
+                                    language: "typescript".to_string(),
+                                    progress: Some(trimmed_line.to_string()),
+                                })
+                                .await;
+                        }
+                    }
                 },
-            )? {
-                stderr_lines.push(line.clone());
-
-                let trimmed_line = line.trim();
-                if !trimmed_line.is_empty() {
-                    let _ = compilation_event
-                        .update(AlienEvent::CompilingCode {
-                            language: "typescript".to_string(),
-                            progress: Some(trimmed_line.to_string()),
-                        })
-                        .await;
-                }
-            }
-
-            let output =
-                child
-                    .wait()
-                    .await
-                    .into_alien_error()
-                    .context(ErrorData::ImageBuildFailed {
-                        resource_name: binary_name_clone.clone(),
-                        reason: "Failed to wait for bun build --compile".to_string(),
-                        build_output: None,
-                    })?;
+            )
+            .await?;
 
             if !output.success() {
-                let stderr_output = stderr_lines.join("\n");
+                let build_output = captured_output.display();
                 error!(
                     binary = %binary_name_clone,
                     "bun build --compile failed. Build output:\n{}",
-                    stderr_output
+                    build_output
                 );
                 return Err(AlienError::new(ErrorData::ImageBuildFailed {
                     resource_name: binary_name_clone.clone(),
                     reason: "bun build --compile failed".to_string(),
-                    build_output: Some(stderr_output),
+                    build_output: Some(build_output),
                 }));
             }
 

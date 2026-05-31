@@ -740,7 +740,10 @@ impl AzureNetworkController {
             .create_or_update_subnet(&resource_group, &vnet_name, &subnet_name, &subnet)
             .await
             .context(ErrorData::InfrastructureError {
-                message: format!("Failed to create Application Gateway subnet '{}'", subnet_name),
+                message: format!(
+                    "Failed to create Application Gateway subnet '{}'",
+                    subnet_name
+                ),
                 operation: Some("create_or_update_subnet".to_string()),
                 resource_id: Some(config.id.clone()),
             })?;

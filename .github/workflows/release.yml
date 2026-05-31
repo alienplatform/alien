@@ -200,6 +200,11 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
 
+      - name: Validate npm auth
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm whoami
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -230,6 +235,11 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+
+      - name: Validate npm auth
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm whoami
 
       - name: Build and publish platform API SDK
         working-directory: client-sdks/platform/typescript
@@ -850,6 +860,11 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+
+      - name: Validate npm auth
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm whoami
 
       - name: Download all binary artifacts
         uses: actions/download-artifact@v4

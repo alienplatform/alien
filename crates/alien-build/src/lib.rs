@@ -1,3 +1,4 @@
+pub(crate) mod command_output;
 pub mod dependencies;
 pub mod error;
 pub mod settings;
@@ -9,6 +10,7 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_preflights::runner::PreflightRunner;
+use command_output::image_build_error_with_output;
 use dockdash::{Image as DockDashImage, Layer as DockDashLayer, PullPolicy};
 use error::{DockdashResultExt, ErrorData, Result};
 use rand::distr::Alphanumeric;
@@ -1850,12 +1852,11 @@ async fn pull_and_export_image(
             })?;
 
         if !pull_output.status.success() {
-            let stderr = String::from_utf8_lossy(&pull_output.stderr);
-            return Err(AlienError::new(ErrorData::ImageBuildFailed {
-                resource_name: container_name.to_string(),
-                reason: format!("docker pull failed for image '{}'", image),
-                build_output: Some(stderr.to_string()),
-            }));
+            return Err(image_build_error_with_output(
+                container_name,
+                format!("docker pull failed for image '{}'", image),
+                &pull_output,
+            ));
         }
 
         info!("Successfully pulled image '{}' for {}", image, platform_str);
@@ -1880,12 +1881,11 @@ async fn pull_and_export_image(
             })?;
 
         if !save_output.status.success() {
-            let stderr = String::from_utf8_lossy(&save_output.stderr);
-            return Err(AlienError::new(ErrorData::ImageBuildFailed {
-                resource_name: container_name.to_string(),
-                reason: "docker save failed".to_string(),
-                build_output: Some(stderr.to_string()),
-            }));
+            return Err(image_build_error_with_output(
+                container_name,
+                "docker save failed",
+                &save_output,
+            ));
         }
 
         info!(

@@ -10,7 +10,7 @@ use alien_core::{
     AlienEvent, DeploymentStatus, EventBus, EventChange, EventHandler, EventState, Platform,
     PushProgress, ResourceStatus, StackResourceState,
 };
-use alien_error::{AlienError, AlienErrorData};
+use alien_error::{AlienError, AlienErrorData, GenericError};
 use async_trait::async_trait;
 use comfy_table::{
     modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL_CONDENSED, Attribute, Cell, Color,
@@ -18,6 +18,7 @@ use comfy_table::{
 };
 use console::{measure_text_width, style, truncate_str, Term};
 use indexmap::IndexMap;
+use serde_json::Value;
 
 // ---------------------------------------------------------------------------
 // Shared utilities
@@ -202,6 +203,13 @@ where
         }
     }
 
+    if let Some(build_output) = find_build_output(error) {
+        rendered.push('\n');
+        rendered.push_str("Build output:");
+        rendered.push('\n');
+        rendered.push_str(&build_output);
+    }
+
     if let Some(hint) = report.hint {
         rendered.push('\n');
         rendered.push_str("Next:");
@@ -210,6 +218,92 @@ where
     }
 
     rendered
+}
+
+fn find_build_output<T>(error: &AlienError<T>) -> Option<String>
+where
+    T: AlienErrorData + Clone + std::fmt::Debug + serde::Serialize,
+{
+    build_output_from_context(error.context.as_ref())
+        .or_else(|| error.source.as_deref().and_then(find_build_output_generic))
+}
+
+fn find_build_output_generic(error: &AlienError<GenericError>) -> Option<String> {
+    build_output_from_context(error.context.as_ref())
+        .or_else(|| error.source.as_deref().and_then(find_build_output_generic))
+}
+
+fn build_output_from_context(context: Option<&Value>) -> Option<String> {
+    let context = context?;
+    context
+        .get("buildOutput")
+        .or_else(|| context.get("build_output"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .filter(|value| !value.trim().is_empty())
+        .map(ToString::to_string)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_error::Context;
+
+    #[test]
+    fn render_human_error_leaves_regular_errors_unchanged() {
+        let error = AlienError::new(crate::error::ErrorData::ValidationError {
+            field: "platform".to_string(),
+            message: "unknown platform".to_string(),
+        });
+
+        let rendered = render_human_error(&error);
+
+        assert_eq!(rendered, "Validation failed for platform: unknown platform");
+    }
+
+    #[test]
+    fn render_human_error_prints_build_output() {
+        let error = AlienError::new(alien_build::error::ErrorData::ImageBuildFailed {
+            resource_name: "api".to_string(),
+            reason: "cargo zigbuild failed".to_string(),
+            build_output: Some("error[E0308]: mismatched types".to_string()),
+        });
+
+        let rendered = render_human_error(&error);
+
+        assert!(rendered.contains("Failed to build container image for resource 'api'"));
+        assert!(rendered.contains("Build output:\nerror[E0308]: mismatched types"));
+    }
+
+    #[test]
+    fn render_human_error_prints_build_output_from_wrapped_source() {
+        let source = AlienError::new(alien_build::error::ErrorData::ImageBuildFailed {
+            resource_name: "api".to_string(),
+            reason: "cargo zigbuild failed".to_string(),
+            build_output: Some("compiler said no".to_string()),
+        });
+        let error = Err::<(), _>(source)
+            .context(crate::error::ErrorData::BuildFailed)
+            .unwrap_err();
+
+        let rendered = render_human_error(&error);
+
+        assert_eq!(rendered.matches("Build output:").count(), 1);
+        assert!(rendered.contains("Build output:\ncompiler said no"));
+    }
+
+    #[test]
+    fn render_human_error_skips_empty_build_output() {
+        let error = AlienError::new(alien_build::error::ErrorData::ImageBuildFailed {
+            resource_name: "api".to_string(),
+            reason: "cargo zigbuild failed".to_string(),
+            build_output: Some("   ".to_string()),
+        });
+
+        let rendered = render_human_error(&error);
+
+        assert!(!rendered.contains("Build output:"));
+    }
 }
 
 // ---------------------------------------------------------------------------
