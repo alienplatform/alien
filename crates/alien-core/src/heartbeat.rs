@@ -2198,7 +2198,6 @@ mod tests {
                 function_url_auth_type: None,
                 function_url_cors_present: false,
                 trigger_count: 0,
-                events: vec![],
             }),
         ))
         .unwrap();
@@ -2275,7 +2274,6 @@ mod tests {
                 approximate_in_flight_messages: Some(1),
                 approximate_delayed_messages: Some(0),
                 approximate_counts: true,
-                events: vec![],
             },
         )))
         .unwrap();
@@ -2305,7 +2303,6 @@ mod tests {
                 restrict_public_buckets: Some(true),
                 bucket_policy_present: Some(false),
                 bucket_acl_present: Some(true),
-                events: vec![],
             }),
         ))
         .unwrap();
@@ -2339,7 +2336,6 @@ mod tests {
                 default_kms_key_name: Some(
                     "projects/p/locations/l/keyRings/r/cryptoKeys/k".to_string(),
                 ),
-                events: vec![],
             }),
         ))
         .unwrap();
@@ -2376,7 +2372,6 @@ mod tests {
                 table_class: None,
                 replica_count: Some(0),
                 restore_in_progress: None,
-                events: vec![],
             },
         )))
         .unwrap();
