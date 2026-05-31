@@ -363,7 +363,10 @@ fn regional_service_token(
 
 /// Serialize a CloudFormation template to YAML.
 pub fn to_yaml(template: &CfTemplate) -> Result<String> {
-    let yaml = serde_yaml::to_string(template).map_err(|error| {
+    let mut template = template.clone();
+    sort_template_metadata(&mut template);
+
+    let yaml = serde_yaml::to_string(&template).map_err(|error| {
         AlienError::new(ErrorData::TemplateSerializationFailed {
             format: "CloudFormation YAML".to_string(),
             reason: error.to_string(),
@@ -371,6 +374,38 @@ pub fn to_yaml(template: &CfTemplate) -> Result<String> {
     })?;
 
     Ok(quote_yaml_1_1_mode_scalars(&yaml))
+}
+
+fn sort_template_metadata(template: &mut CfTemplate) {
+    for value in template.metadata.values_mut() {
+        sort_json_value(value);
+    }
+    for resource in template.resources.values_mut() {
+        for value in resource.metadata.values_mut() {
+            sort_json_value(value);
+        }
+    }
+}
+
+fn sort_json_value(value: &mut Value) {
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                sort_json_value(value);
+            }
+        }
+        Value::Object(values) => {
+            let mut entries = std::mem::take(values).into_iter().collect::<Vec<_>>();
+            entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+
+            for (_, value) in &mut entries {
+                sort_json_value(value);
+            }
+
+            values.extend(entries);
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+    }
 }
 
 fn quote_yaml_1_1_mode_scalars(yaml: &str) -> String {

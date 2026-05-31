@@ -426,12 +426,17 @@ pub fn cf_from_json(value: JsonValue) -> Result<CfExpression> {
                 .map(cf_from_json)
                 .collect::<Result<Vec<_>>>()?,
         ),
-        JsonValue::Object(values) => CfExpression::Object(
-            values
-                .into_iter()
-                .map(|(key, value)| Ok((key, cf_from_json(value)?)))
-                .collect::<Result<IndexMap<_, _>>>()?,
-        ),
+        JsonValue::Object(values) => {
+            let mut entries = values.into_iter().collect::<Vec<_>>();
+            entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+
+            CfExpression::Object(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| Ok((key, cf_from_json(value)?)))
+                    .collect::<Result<IndexMap<_, _>>>()?,
+            )
+        }
     })
 }
 
@@ -460,6 +465,23 @@ mod tests {
             .collect();
 
         assert_eq!(sids, ["Read", "Read2", "Read22", "Read3"]);
+    }
+
+    #[test]
+    fn cf_from_json_sorts_object_keys_for_stable_yaml() {
+        let expression = cf_from_json(serde_json::json!({
+            "Sid": "Read",
+            "Effect": "Allow",
+            "Action": ["s3:GetObject"]
+        }))
+        .expect("json should convert");
+
+        let CfExpression::Object(object) = expression else {
+            panic!("expression should be an object");
+        };
+
+        let keys = object.keys().map(String::as_str).collect::<Vec<_>>();
+        assert_eq!(keys, ["Action", "Effect", "Sid"]);
     }
 }
 
