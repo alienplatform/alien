@@ -5,6 +5,20 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorData {
+    /// Deployment protocol version is outside this binary's supported range.
+    #[error(
+        code = "INCOMPATIBLE_DEPLOYMENT_PROTOCOL",
+        message = "Deployment protocol version {found_version} is not supported; this binary supports {min_supported_version} through {current_version}. {repair}",
+        retryable = "false",
+        internal = "false"
+    )]
+    IncompatibleDeploymentProtocol {
+        found_version: u32,
+        min_supported_version: u32,
+        current_version: u32,
+        repair: String,
+    },
+
     /// Environment information collection failed.
     #[error(
         code = "ENVIRONMENT_INFO_COLLECTION_FAILED",
@@ -171,7 +185,7 @@ pub enum ErrorData {
 pub struct ResourceError {
     /// ID of the resource that failed
     pub resource_id: String,
-    /// Type of the resource (e.g., "function", "storage")
+    /// Type of the resource (e.g., "worker", "storage")
     pub resource_type: String,
     /// The error that occurred (if available)
     #[serde(skip_serializing_if = "Option::is_none")]

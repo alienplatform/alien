@@ -9,15 +9,20 @@ use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_azure_clients::long_running_operation::{LongRunningOperation, OperationResult};
 use alien_azure_clients::models::managed_environments::{
-    ManagedEnvironment, ManagedEnvironmentProperties, VnetConfiguration,
+    ManagedEnvironment, ManagedEnvironmentProperties,
+    ManagedEnvironmentPropertiesProvisioningState, VnetConfiguration,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    AzureContainerAppsEnvironment, AzureContainerAppsEnvironmentOutputs, Network, ResourceOutputs,
+    AzureContainerAppsEnvironment, AzureContainerAppsEnvironmentHeartbeatData,
+    AzureContainerAppsEnvironmentHeartbeatStatus, AzureContainerAppsEnvironmentOutputs,
+    AzureContainerAppsEnvironmentWorkloadProfile, HeartbeatBackend, Network, ObservedHealth,
+    Platform, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
     ResourceRef, ResourceStatus,
 };
 use alien_error::{AlienError, Context, ContextError};
 use alien_macros::controller;
+use chrono::Utc;
 
 #[controller]
 pub struct AzureContainerAppsEnvironmentController {
@@ -31,6 +36,8 @@ pub struct AzureContainerAppsEnvironmentController {
     pub(crate) default_domain: Option<String>,
     /// The static IP address of the environment (if applicable).
     pub(crate) static_ip: Option<String>,
+    /// Azure Container Apps custom domain verification ID.
+    pub(crate) custom_domain_verification_id: Option<String>,
     /// Long-running operation information for monitoring Azure operations.
     pub(crate) long_running_operation: Option<LongRunningOperation>,
 }
@@ -135,7 +142,6 @@ impl AzureContainerAppsEnvironmentController {
         debug!(environment_name=%environment_name, "Checking Azure long-running operation status");
 
         let azure_config = ctx.get_azure_config()?;
-        let resource_group_name = get_resource_group_name(ctx.state)?;
         let operation_client = ctx
             .service_provider
             .get_azure_long_running_operation_client(azure_config)?;
@@ -332,7 +338,14 @@ impl AzureContainerAppsEnvironmentController {
                     resource_id: Some(config.id.clone()),
                 })?;
 
-            if let Some(properties) = managed_env.properties {
+            emit_azure_container_apps_environment_heartbeat(
+                ctx,
+                &config.id,
+                &resource_group_name,
+                &managed_env,
+            );
+
+            if let Some(properties) = &managed_env.properties {
                 use alien_azure_clients::models::managed_environments::ManagedEnvironmentPropertiesProvisioningState::*;
                 match properties.provisioning_state {
                     Some(Succeeded) => {
@@ -535,7 +548,6 @@ impl AzureContainerAppsEnvironmentController {
         debug!(environment_name=%environment_name, "Checking Azure deletion long-running operation status");
 
         let azure_config = ctx.get_azure_config()?;
-        let resource_group_name = get_resource_group_name(ctx.state)?;
         let operation_client = ctx
             .service_provider
             .get_azure_long_running_operation_client(azure_config)?;
@@ -660,11 +672,92 @@ impl AzureContainerAppsEnvironmentController {
                 resource_group_name: resource_group_name.clone(),
                 default_domain: self.default_domain.clone().unwrap_or_default(),
                 static_ip: self.static_ip.clone(),
+                custom_domain_verification_id: self.custom_domain_verification_id.clone(),
             }))
         } else {
             None
         }
     }
+}
+
+fn emit_azure_container_apps_environment_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    resource_group_name: &str,
+    managed_env: &ManagedEnvironment,
+) {
+    let properties = managed_env.properties.as_ref();
+    let provisioning_state = properties.and_then(|p| p.provisioning_state.as_ref());
+    let (health, lifecycle) = match provisioning_state {
+        Some(ManagedEnvironmentPropertiesProvisioningState::Succeeded) => {
+            (ObservedHealth::Healthy, ProviderLifecycleState::Running)
+        }
+        Some(_) => (ObservedHealth::Unhealthy, ProviderLifecycleState::Failed),
+        None => (ObservedHealth::Unknown, ProviderLifecycleState::Unknown),
+    };
+    let name = managed_env
+        .name
+        .clone()
+        .unwrap_or_else(|| resource_id.to_string());
+    let workload_profiles = properties
+        .map(|p| {
+            p.workload_profiles
+                .iter()
+                .map(|profile| AzureContainerAppsEnvironmentWorkloadProfile {
+                    name: profile.name.to_string(),
+                    workload_profile_type: profile.workload_profile_type.to_string(),
+                    minimum_count: profile.minimum_count,
+                    maximum_count: profile.maximum_count,
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: AzureContainerAppsEnvironment::RESOURCE_TYPE,
+        controller_platform: Platform::Azure,
+        backend: HeartbeatBackend::Azure,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::AzureContainerAppsEnvironment(
+            AzureContainerAppsEnvironmentHeartbeatData {
+                status: AzureContainerAppsEnvironmentHeartbeatStatus {
+                    health,
+                    lifecycle,
+                    message: Some(format!(
+                        "Azure Container Apps environment '{}' provisioning state is {}",
+                        name,
+                        provisioning_state
+                            .map(ToString::to_string)
+                            .as_deref()
+                            .unwrap_or("unknown")
+                    )),
+                    stale: false,
+                    partial: false,
+                    collection_issues: vec![],
+                },
+                name,
+                resource_id: managed_env.id.clone(),
+                resource_group: Some(resource_group_name.to_string()),
+                location: Some(managed_env.location.clone()),
+                kind: managed_env.kind.clone(),
+                provisioning_state: provisioning_state.map(ToString::to_string),
+                default_domain: properties.and_then(|p| p.default_domain.clone()),
+                static_ip: properties.and_then(|p| p.static_ip.clone()),
+                custom_domain_verification_id: properties
+                    .and_then(|p| p.custom_domain_configuration.as_ref())
+                    .and_then(|c| c.custom_domain_verification_id.clone()),
+                infrastructure_resource_group: properties
+                    .and_then(|p| p.infrastructure_resource_group.clone()),
+                event_stream_endpoint: properties.and_then(|p| p.event_stream_endpoint.clone()),
+                zone_redundant: properties.and_then(|p| p.zone_redundant),
+                workload_profile_count: workload_profiles.len() as u32,
+                workload_profiles,
+            },
+        ),
+        raw: vec![],
+    });
 }
 
 // Separate impl block for helper methods
@@ -692,6 +785,11 @@ impl AzureContainerAppsEnvironmentController {
             .properties
             .as_ref()
             .and_then(|p| p.static_ip.clone());
+        self.custom_domain_verification_id = managed_env
+            .properties
+            .as_ref()
+            .and_then(|p| p.custom_domain_configuration.as_ref())
+            .and_then(|c| c.custom_domain_verification_id.clone());
     }
 
     fn clear_state(&mut self) {
@@ -700,6 +798,7 @@ impl AzureContainerAppsEnvironmentController {
         self.resource_group_name = None;
         self.default_domain = None;
         self.static_ip = None;
+        self.custom_domain_verification_id = None;
         self.long_running_operation = None;
     }
 
@@ -849,6 +948,7 @@ impl AzureContainerAppsEnvironmentController {
             resource_group_name: Some("mock-rg".to_string()),
             default_domain: Some(format!("{}.eastus.azurecontainerapps.io", environment_name)),
             static_ip: Some("20.1.2.3".to_string()),
+            custom_domain_verification_id: Some("mock-verification-id".to_string()),
             long_running_operation: None,
             _internal_stay_count: None,
         }

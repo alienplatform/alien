@@ -4,7 +4,7 @@ use alien_core::{Platform, Stack};
 
 /// Ensures that all permission profiles referenced by resources actually exist in the stack's permissions config.
 ///
-/// This check validates that Functions, Containers, and Builds reference existing permission profiles.
+/// This check validates that Workers, Containers, and Builds reference existing permission profiles.
 /// Running this BEFORE mutations ensures we catch typos and missing profiles early,
 /// rather than having them silently created by mutations.
 pub struct PermissionProfilesExistCheck;
@@ -20,7 +20,7 @@ impl CompileTimeCheck for PermissionProfilesExistCheck {
         stack.resources().any(|(_, resource_entry)| {
             resource_entry
                 .config
-                .downcast_ref::<alien_core::Function>()
+                .downcast_ref::<alien_core::Worker>()
                 .is_some()
                 || resource_entry
                     .config
@@ -38,12 +38,12 @@ impl CompileTimeCheck for PermissionProfilesExistCheck {
         let defined_profiles = &stack.permissions.profiles;
 
         for (resource_id, resource_entry) in stack.resources() {
-            // Check Functions
-            if let Some(function) = resource_entry.config.downcast_ref::<alien_core::Function>() {
-                let profile_name = &function.permissions;
+            // Check Workers
+            if let Some(worker) = resource_entry.config.downcast_ref::<alien_core::Worker>() {
+                let profile_name = &worker.permissions;
                 if !defined_profiles.contains_key(profile_name) {
                     errors.push(format!(
-                        "Function '{}' references permission profile '{}' which does not exist. \
+                        "Worker '{}' references permission profile '{}' which does not exist. \
                          Available profiles: {}",
                         resource_id,
                         profile_name,
@@ -120,15 +120,15 @@ impl CompileTimeCheck for PermissionProfilesExistCheck {
 mod tests {
     use super::*;
     use alien_core::{
-        Function, FunctionCode, Ingress, PermissionProfile, PermissionsConfig, ResourceEntry,
-        ResourceLifecycle,
+        Ingress, PermissionProfile, PermissionsConfig, ResourceEntry, ResourceLifecycle, Worker,
+        WorkerCode,
     };
     use indexmap::IndexMap;
 
     #[tokio::test]
     async fn test_permission_profile_exists_success() {
-        let function = Function::new("api".to_string())
-            .code(FunctionCode::Image {
+        let worker = Worker::new("api".to_string())
+            .code(WorkerCode::Image {
                 image: "api:latest".to_string(),
             })
             .permissions("api-profile".to_string())
@@ -139,7 +139,7 @@ mod tests {
         resources.insert(
             "api".to_string(),
             ResourceEntry {
-                config: alien_core::Resource::new(function),
+                config: alien_core::Resource::new(worker),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
@@ -169,8 +169,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_permission_profile_missing_fails() {
-        let function = Function::new("api".to_string())
-            .code(FunctionCode::Image {
+        let worker = Worker::new("api".to_string())
+            .code(WorkerCode::Image {
                 image: "api:latest".to_string(),
             })
             .permissions("nonexistent".to_string()) // Profile doesn't exist!
@@ -181,7 +181,7 @@ mod tests {
         resources.insert(
             "api".to_string(),
             ResourceEntry {
-                config: alien_core::Resource::new(function),
+                config: alien_core::Resource::new(worker),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
@@ -207,16 +207,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_multiple_profiles_some_missing() {
-        let api = Function::new("api".to_string())
-            .code(FunctionCode::Image {
+        let api = Worker::new("api".to_string())
+            .code(WorkerCode::Image {
                 image: "api:latest".to_string(),
             })
             .permissions("api-profile".to_string()) // Exists
             .ingress(Ingress::Private)
             .build();
 
-        let worker = Function::new("worker".to_string())
-            .code(FunctionCode::Image {
+        let worker = Worker::new("worker".to_string())
+            .code(WorkerCode::Image {
                 image: "worker:latest".to_string(),
             })
             .permissions("worker-profile".to_string()) // Doesn't exist!

@@ -1,14 +1,17 @@
 //! Bulk registration of GCP [`crate::ResourceImporter`] implementations.
 //!
-//! See [`crate::aws_importers`] for the parent doc. `container-cluster`
+//! See [`crate::aws_importers`] for the parent doc. `compute-cluster`
 //! intentionally lives in `alien-platform-controllers`.
 
-use alien_core::{ArtifactRegistry, Build, Function, Kv, Network, Platform, Queue, Storage, Vault};
+#[cfg(feature = "kubernetes")]
+use alien_core::KubernetesCluster;
+use alien_core::{ArtifactRegistry, Build, Kv, Network, Platform, Queue, Storage, Vault, Worker};
 use alien_core::{RemoteStackManagement, ServiceAccount, ServiceActivation};
 
 use crate::artifact_registry::GcpArtifactRegistryImporter;
 use crate::build::GcpBuildImporter;
-use crate::function::GcpFunctionImporter;
+#[cfg(feature = "kubernetes")]
+use crate::kubernetes_cluster::KubernetesClusterImporter;
 use crate::kv::GcpKvImporter;
 use crate::network::GcpNetworkImporter;
 use crate::queue::GcpQueueImporter;
@@ -17,6 +20,7 @@ use crate::service_account::GcpServiceAccountImporter;
 use crate::service_activation::GcpServiceActivationImporter;
 use crate::storage::GcpStorageImporter;
 use crate::vault::GcpVaultImporter;
+use crate::worker::GcpWorkerImporter;
 use crate::ImporterRegistry;
 
 /// Register every OSS GCP importer with `registry`.
@@ -43,10 +47,16 @@ pub fn register(registry: &mut ImporterRegistry) {
             Platform::Gcp,
             GcpArtifactRegistryImporter,
         )
-        .register(Function::RESOURCE_TYPE, Platform::Gcp, GcpFunctionImporter)
+        .register(Worker::RESOURCE_TYPE, Platform::Gcp, GcpWorkerImporter)
         .register(
             ServiceActivation::RESOURCE_TYPE,
             Platform::Gcp,
             GcpServiceActivationImporter,
         );
+    #[cfg(feature = "kubernetes")]
+    registry.register(
+        KubernetesCluster::RESOURCE_TYPE,
+        Platform::Gcp,
+        KubernetesClusterImporter,
+    );
 }

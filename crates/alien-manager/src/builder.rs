@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use alien_error::AlienError;
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::auth::Authz;
 use crate::config::ManagerConfig;
@@ -47,7 +47,7 @@ pub struct AlienManagerBuilder {
     /// Optional override for the `/v1/stack/import` dispatch registry.
     /// Defaults to [`alien_infra::ImporterRegistry::built_in`] (OSS resources
     /// only). Platform-mode embedders extend the OSS registry with
-    /// proprietary controllers (`container`, `container-cluster`) before
+    /// proprietary controllers (`container`, `compute-cluster`) before
     /// passing it in here.
     import_registry: Option<Arc<alien_infra::ImporterRegistry>>,
 }
@@ -166,7 +166,7 @@ impl AlienManagerBuilder {
     /// [`alien_infra::ImporterRegistry::built_in`].
     ///
     /// Platform-mode embedders use this to layer proprietary importers
-    /// (`container`, `container-cluster`) on top of the OSS resource set
+    /// (`container`, `compute-cluster`) on top of the OSS resource set
     /// without forking the OSS registration helpers:
     ///
     /// ```ignore
@@ -726,22 +726,25 @@ async fn finalize(
         // Platform)` pair across AWS / GCP / Azure (see
         // `alien_infra::ImporterRegistry::built_in`). Embedders that need
         // to layer platform-only resource importers (e.g. `container` /
-        // `container-cluster`) inject an extended registry through
+        // `compute-cluster`) inject an extended registry through
         // [`AlienManagerBuilder::import_registry`].
         import_registry: import_registry_override
             .unwrap_or_else(|| Arc::new(alien_infra::ImporterRegistry::built_in())),
     };
 
     // --- Router ---
-    let mut router = crate::routes::create_router_inner(app_state.clone(), router_options);
+    let mut router = crate::routes::create_router_inner(app_state.clone(), router_options)
+        .layer(crate::routes::cors_layer(&config));
     if let Some(platform) = platform_routes {
         router = router.merge(platform.with_state(app_state.clone()));
     }
     if let Some(extra) = extra_routes {
-        router = router.merge(extra.with_state(app_state));
+        router = router.merge(
+            extra
+                .with_state(app_state)
+                .layer(crate::routes::cors_layer(&config)),
+        );
     }
-    // Apply CORS after all routes are merged so it covers platform and extra routes too.
-    let router = router.layer(crate::routes::cors_layer(&config));
 
     info!(
         port = config.port,
@@ -755,7 +758,6 @@ async fn finalize(
         deployment_store,
         release_store,
         credential_resolver,
-        telemetry_backend,
         server_bindings,
         dev_status_tx,
         log_buffer,

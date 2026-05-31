@@ -1,0 +1,134 @@
+{
+  "id": "worker/execute",
+  "description": "Runtime permissions that workers need when executing (pulling images, accessing logs, etc.)",
+  "platforms": {
+    "aws": [
+      {
+        "label": "write-lambda-logs",
+        "description": "Write Lambda execution logs to CloudWatch Logs for this application.",
+        "grant": {
+          "actions": ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/lambda/${stackPrefix}-*",
+              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/lambda/${stackPrefix}-*:*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/lambda/${resourceName}",
+              "arn:aws:logs:${awsRegion}:${awsAccountId}:log-group:/aws/lambda/${resourceName}:*"
+            ]
+          }
+        }
+      },
+      // TODO: Only add this if worker ingress == public
+      {
+        "label": "read-lambda-function-url-config",
+        "description": "Read Lambda function URL configuration for public endpoint handling.",
+        "grant": {
+          "actions": ["lambda:GetFunctionUrlConfig"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${stackPrefix}-*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${resourceName}"]
+          }
+        }
+      },
+      {
+        "label": "get-ecr-login-token",
+        "description": "Get an ECR authorization token so Lambda can pull deployment container images.",
+        "grant": {
+          "actions": ["ecr:GetAuthorizationToken"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
+          }
+        }
+      },
+      {
+        "label": "read-deployment-container-images",
+        "description": "Read deployment container images from ECR at runtime.",
+        "grant": {
+          "actions": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ecr:*:${managingAccountId}:repository/*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:ecr:*:${managingAccountId}:repository/*"]
+          }
+        }
+      },
+      {
+        "label": "manage-lambda-vpc-network-interfaces",
+        "description": "Create and manage Lambda VPC network interfaces required for private networking.",
+        "grant": {
+          "actions": [
+            "ec2:CreateNetworkInterface",
+            "ec2:DescribeNetworkInterfaces",
+            "ec2:DeleteNetworkInterface",
+            "ec2:AssignPrivateIpAddresses",
+            "ec2:UnassignPrivateIpAddresses"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "label": "run-cloud-run-services",
+        "description": "Read deployment images, write runtime logs, and inspect Cloud Run services used by this application.",
+        "grant": {
+          "predefinedRoles": [
+            "roles/artifactregistry.reader",
+            "roles/logging.logWriter",
+            "roles/run.viewer"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${managingProjectId}"
+          },
+          "resource": {
+            "scope": "projects/${managingProjectId}"
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "label": "run-container-apps",
+        "description": "Pull deployment images and read runtime resources used by Azure Container Apps.",
+        "grant": {
+          "predefinedRoles": ["AcrPull", "Reader"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${managingSubscriptionId}/resourceGroups/${managingResourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${managingSubscriptionId}/resourceGroups/${managingResourceGroup}"
+          }
+        }
+      }
+    ]
+  }
+}

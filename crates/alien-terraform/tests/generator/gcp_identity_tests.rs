@@ -31,10 +31,46 @@ fn gcp_service_account_with_permission_set() {
 }
 
 #[test]
+fn gcp_service_account_disambiguates_stack_and_resource_role_bindings() {
+    let sa = ServiceAccount::new("execution-sa".to_string())
+        .stack_permission_set(
+            alien_permissions::get_permission_set("vault/data-read")
+                .expect("vault/data-read permission set")
+                .clone(),
+        )
+        .build();
+    let stack = Stack::new("acme-iam".to_string())
+        .permission(
+            "execution",
+            PermissionProfile::new()
+                .global(["vault/data-read"])
+                .resource("alien-vault", ["vault/data-read"]),
+        )
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(sa, ResourceLifecycle::Frozen)
+        .build();
+    let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
+    let rendered = module
+        .iter()
+        .map(|(_, contents)| contents)
+        .collect::<String>();
+
+    assert!(rendered
+        .contains("google_project_iam_member\" \"secretmanager_viewer_execution_sa_binding_0\""));
+    assert!(rendered.contains(
+        "google_project_iam_member\" \"secretmanager_viewer_alien_vault_vault_data_read_execution_sa_binding_0\""
+    ));
+    assert_terraform_valid(&module, "gcp_service_account_duplicate_vault_bindings");
+}
+
+#[test]
 fn gcp_remote_stack_management_role() {
     let stack = Stack::new("acme-mgmt".to_string())
         .management(ManagementPermissions::extend(
-            PermissionProfile::new().global(["function/management", "storage/heartbeat"]),
+            PermissionProfile::new().global(["worker/management", "storage/heartbeat"]),
         ))
         .add(
             RemoteStackManagement::new("management".to_string()).build(),
@@ -50,7 +86,7 @@ fn gcp_remote_stack_management_role() {
 fn gcp_remote_stack_management_function_provision_role() {
     let stack = Stack::new("acme-mgmt".to_string())
         .management(ManagementPermissions::extend(
-            PermissionProfile::new().global(["function/provision"]),
+            PermissionProfile::new().global(["worker/provision"]),
         ))
         .add(
             RemoteStackManagement::new("management".to_string()).build(),
@@ -66,7 +102,13 @@ fn gcp_remote_stack_management_function_provision_role() {
     assert!(rendered.contains("\"run.services.create\""));
     assert!(rendered.contains("\"pubsub.topics.create\""));
     assert!(rendered.contains("\"storage.buckets.update\""));
-    assert!(rendered.contains("google_project_iam_custom_role.management_functionprovision"));
+    assert!(rendered
+        .contains("google_project_iam_custom_role\" \"gcp_role_manage_cloud_run_services\""));
+    assert!(rendered.contains(
+        "role_id     = format(\"role_%s_manage_cloud_run_services\", local.gcp_custom_role_prefix)"
+    ));
+    assert!(rendered.contains("gcp_manage_custom_roles"));
+    assert!(!rendered.contains("roles/run.admin"));
     assert_terraform_valid(&module, "gcp_remote_stack_management_function_provision");
 }
 

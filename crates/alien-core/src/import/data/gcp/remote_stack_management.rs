@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct GcpRemoteStackManagementImportData {
     /// Project ID containing the management service account.
     pub project_id: String,
@@ -18,5 +18,6 @@ pub struct GcpRemoteStackManagementImportData {
     pub service_account_unique_id: String,
     /// Whether the management role binding was attached by the
     /// generated stack.
+    #[serde(deserialize_with = "crate::import::data::deserialize_bool_from_bool_or_string")]
     pub management_permissions_applied: bool,
 }

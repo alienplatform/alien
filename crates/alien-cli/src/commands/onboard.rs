@@ -2,7 +2,7 @@ use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::output::{can_prompt, print_json, prompt_text};
 use crate::ui::{accent, command, contextual_heading, dim_label, success_line, FixedSteps};
-use alien_error::{AlienError, Context};
+use alien_error::{AlienError, Context, IntoAlienError};
 use clap::Parser;
 
 #[derive(Parser, Debug, Clone)]
@@ -22,6 +22,14 @@ pub struct OnboardArgs {
     /// Output in JSON format (for scripting)
     #[arg(long)]
     pub json: bool,
+
+    /// Plain environment variables for deployments created from this link (KEY=VALUE or KEY=VALUE:target1,target2)
+    #[arg(long = "env")]
+    pub env_vars: Vec<String>,
+
+    /// Secret environment variables for deployments created from this link (KEY=VALUE or KEY=VALUE:target1,target2)
+    #[arg(long = "secret")]
+    pub secret_vars: Vec<String>,
 }
 
 pub async fn onboard_task(args: OnboardArgs, ctx: ExecutionMode) -> Result<()> {
@@ -48,6 +56,10 @@ pub async fn onboard_task(args: OnboardArgs, ctx: ExecutionMode) -> Result<()> {
 #[cfg(feature = "platform")]
 async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -> Result<()> {
     use alien_platform_api::SdkResultExt;
+
+    let setup_environment_variables = platform_setup_environment_variables(
+        &crate::parse_env_and_secret_vars(&args.env_vars, &args.secret_vars)?,
+    )?;
 
     let (project_id, _project_link) = ctx.resolve_project(None, !args.json).await?;
     let workspace = ctx.resolve_workspace_with_bootstrap(!args.json).await?;
@@ -134,7 +146,15 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
         .create_deployment_group_token()
         .id(&dg_id_param)
         .workspace(&token_workspace_param)
-        .body(alien_platform_api::types::CreateDeploymentGroupTokenRequest { description: None })
+        .body(
+            alien_platform_api::types::CreateDeploymentGroupTokenRequest {
+                description: None,
+                expires_at: None,
+                deployment_setup_config: platform_onboard_deployment_setup_config(
+                    setup_environment_variables,
+                ),
+            },
+        )
         .send()
         .await
         .into_sdk_error()
@@ -178,10 +198,152 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
     Ok(())
 }
 
+#[cfg(feature = "platform")]
+fn platform_onboard_deployment_setup_config(
+    environment_variables: Vec<alien_platform_api::types::EnvironmentVariableConfig>,
+) -> alien_platform_api::types::DeploymentSetupConfig {
+    use alien_platform_api::types;
+
+    types::DeploymentSetupConfig {
+        metadata: types::DeploymentSetupMetadata(serde_json::Map::new()),
+        policy: types::DeploymentSetupPolicy {
+            allow_release_pinning: None,
+            allowed_platforms: vec![
+                types::DeploymentSetupPolicyAllowedPlatformsItem::Aws,
+                types::DeploymentSetupPolicyAllowedPlatformsItem::Gcp,
+                types::DeploymentSetupPolicyAllowedPlatformsItem::Azure,
+                types::DeploymentSetupPolicyAllowedPlatformsItem::Kubernetes,
+                types::DeploymentSetupPolicyAllowedPlatformsItem::Local,
+            ],
+            allowed_setup_methods: vec![
+                types::DeploymentSetupMethod::Cloudformation,
+                types::DeploymentSetupMethod::GoogleOauth,
+                types::DeploymentSetupMethod::Terraform,
+                types::DeploymentSetupMethod::Helm,
+                types::DeploymentSetupMethod::Cli,
+                types::DeploymentSetupMethod::Manual,
+            ],
+            stack_settings: Some(types::DeploymentSetupStackSettingsPolicy {
+                allow_custom_registry: Some(true),
+                allow_external_bindings: Some(true),
+                allowed_deployment_models: vec![
+                    types::DeploymentSetupStackSettingsPolicyAllowedDeploymentModelsItem::Push,
+                    types::DeploymentSetupStackSettingsPolicyAllowedDeploymentModelsItem::Pull,
+                    types::DeploymentSetupStackSettingsPolicyAllowedDeploymentModelsItem::Airgapped,
+                ],
+                allowed_heartbeats_modes: vec![
+                    types::DeploymentSetupStackSettingsPolicyAllowedHeartbeatsModesItem::On,
+                    types::DeploymentSetupStackSettingsPolicyAllowedHeartbeatsModesItem::Off,
+                ],
+                allowed_network_modes: vec![
+                    types::DeploymentSetupStackSettingsPolicyAllowedNetworkModesItem::None,
+                    types::DeploymentSetupStackSettingsPolicyAllowedNetworkModesItem::Create,
+                    types::DeploymentSetupStackSettingsPolicyAllowedNetworkModesItem::Default,
+                    types::DeploymentSetupStackSettingsPolicyAllowedNetworkModesItem::Byo,
+                ],
+                allowed_telemetry_modes: vec![
+                    types::DeploymentSetupStackSettingsPolicyAllowedTelemetryModesItem::Off,
+                    types::DeploymentSetupStackSettingsPolicyAllowedTelemetryModesItem::Auto,
+                    types::DeploymentSetupStackSettingsPolicyAllowedTelemetryModesItem::ApprovalRequired,
+                ],
+                allowed_updates_modes: vec![
+                    types::DeploymentSetupStackSettingsPolicyAllowedUpdatesModesItem::Auto,
+                    types::DeploymentSetupStackSettingsPolicyAllowedUpdatesModesItem::ApprovalRequired,
+                ],
+                defaults: None,
+            }),
+        },
+        environment_variables,
+    }
+}
+
+#[cfg(feature = "platform")]
+fn platform_setup_environment_variables(
+    variables: &[super::CliEnvVar],
+) -> Result<Vec<alien_platform_api::types::EnvironmentVariableConfig>> {
+    use alien_platform_api::types;
+
+    variables
+        .iter()
+        .map(|variable| {
+            let target_resources = variable
+                .target_resources
+                .as_ref()
+                .map(|targets| {
+                    targets
+                        .iter()
+                        .map(|target| {
+                            types::EnvironmentVariableConfigTargetResourcesItem::try_from(
+                                target.clone(),
+                            )
+                            .into_alien_error()
+                            .context(ErrorData::ValidationError {
+                                field: if variable.is_secret {
+                                    "secret".to_string()
+                                } else {
+                                    "env".to_string()
+                                },
+                                message: format!(
+                                    "Invalid target resource pattern in {}: '{}'. Must match pattern ^[a-zA-Z0-9_-]+(\\*)?$",
+                                    if variable.is_secret { "--secret" } else { "--env" },
+                                    target
+                                ),
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()
+                })
+                .transpose()?;
+
+            Ok(types::EnvironmentVariableConfig {
+                name: types::EnvironmentVariableConfigName::try_from(variable.name.clone())
+                    .into_alien_error()
+                    .context(ErrorData::ValidationError {
+                        field: if variable.is_secret {
+                            "secret".to_string()
+                        } else {
+                            "env".to_string()
+                        },
+                        message: format!(
+                            "Invalid variable name in {}: '{}'. Must match pattern ^[A-Z_][A-Z0-9_]*$",
+                            if variable.is_secret { "--secret" } else { "--env" },
+                            variable.name
+                        ),
+                    })?,
+                value: types::EnvironmentVariableConfigValue::try_from(variable.value.clone())
+                    .into_alien_error()
+                    .context(ErrorData::ValidationError {
+                        field: if variable.is_secret {
+                            "secret".to_string()
+                        } else {
+                            "env".to_string()
+                        },
+                        message: format!(
+                            "Invalid variable value for {} '{}'. Must not exceed 10000 characters",
+                            if variable.is_secret { "--secret" } else { "--env" },
+                            variable.name
+                        ),
+                    })?,
+                type_: if variable.is_secret {
+                    types::EnvironmentVariableType::Secret
+                } else {
+                    types::EnvironmentVariableType::Plain
+                },
+                target_resources,
+            })
+        })
+        .collect()
+}
+
 /// Standalone/Dev mode: use manager API, show CLI command.
 async fn onboard_standalone(args: OnboardArgs, ctx: ExecutionMode, name: String) -> Result<()> {
     use alien_manager_api::types::CreateDeploymentGroupRequest;
     use alien_manager_api::SdkResultExt;
+
+    if !args.env_vars.is_empty() || !args.secret_vars.is_empty() {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "`alien onboard --env/--secret` is only supported in platform mode because standalone deployment-group tokens do not carry setup config.".to_string(),
+        }));
+    }
 
     let (project_id, _project_link) = ctx.resolve_project(None, !args.json).await?;
 

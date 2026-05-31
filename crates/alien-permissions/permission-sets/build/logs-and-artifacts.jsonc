@@ -47,11 +47,11 @@
     "gcp": [
       {
         "grant": {
-          "permissions": [
-            "logging.logEntries.create",
-            "storage.objects.create",
-            "storage.objects.get",
-            "storage.buckets.get"
+          "predefinedRoles": [
+            "roles/logging.logWriter",
+            "roles/storage.objectCreator",
+            "roles/storage.objectViewer",
+            "roles/storage.bucketViewer"
           ]
         },
         "binding": {

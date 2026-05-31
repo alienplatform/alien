@@ -89,6 +89,7 @@ pub fn helm_template_and_validate(files: &LinterFiles, values_yaml: Option<&str>
         }
 
         let rendered = run_command("helm", args.iter().map(|arg| arg.as_os_str()), None)?;
+        let rendered = helm_template_with_debug_on_failure(rendered, &args)?;
         if !matches!(rendered.status, LinterStatus::Passed) {
             return Ok(rendered);
         }
@@ -106,6 +107,60 @@ pub fn helm_template_and_validate(files: &LinterFiles, values_yaml: Option<&str>
             ],
             None,
         )
+    })
+}
+
+/// Render a chart with `helm template` and return the rendered manifest.
+pub fn helm_template(files: &LinterFiles, values_yaml: Option<&str>) -> LinterRun {
+    run_when_enabled("helm template", || {
+        let dir = write_files_to_temp_dir(files)?;
+        let values_path = if let Some(values) = values_yaml {
+            let path = dir.path().join("test-values.yaml");
+            write_file(&path, values)?;
+            Some(path)
+        } else {
+            None
+        };
+
+        let mut args = vec![
+            OsStr::new("template").to_os_string(),
+            OsStr::new("test-release").to_os_string(),
+            dir.path().as_os_str().to_os_string(),
+        ];
+        if let Some(path) = &values_path {
+            args.push(OsStr::new("-f").to_os_string());
+            args.push(path.as_os_str().to_os_string());
+        }
+
+        let rendered = run_command("helm", args.iter().map(|arg| arg.as_os_str()), None)?;
+        helm_template_with_debug_on_failure(rendered, &args)
+    })
+}
+
+fn helm_template_with_debug_on_failure(
+    rendered: LinterRun,
+    args: &[std::ffi::OsString],
+) -> Result<LinterRun, String> {
+    if matches!(rendered.status, LinterStatus::Passed) {
+        return Ok(rendered);
+    }
+
+    let mut debug_args = Vec::with_capacity(args.len() + 1);
+    debug_args.push(OsStr::new("--debug").to_os_string());
+    debug_args.extend(args.iter().cloned());
+    let debug = run_command("helm", debug_args.iter().map(|arg| arg.as_os_str()), None)?;
+    Ok(LinterRun {
+        tool: rendered.tool,
+        command: rendered.command,
+        status: rendered.status,
+        stdout: format!(
+            "{}\n\n--- helm template --debug stdout ---\n{}",
+            rendered.stdout, debug.stdout
+        ),
+        stderr: format!(
+            "{}\n\n--- helm template --debug stderr ---\n{}",
+            rendered.stderr, debug.stderr
+        ),
     })
 }
 

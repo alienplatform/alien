@@ -11,14 +11,15 @@ let value: DeploymentDetailResponse = {
   status: "error",
   projectId: "prj_mcytp6z3j91f7tn5ryqsfwtr",
   platform: "local",
+  deploymentProtocolVersion: 643854,
   deploymentGroupId: "dg_r27ict8c7vcgsumpj90ackf7b",
   stackSettings: {},
   currentReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
   desiredReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
   pinnedReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
-  retryRequested: false,
-  createdAt: new Date("2024-09-01T18:00:51.678Z"),
-  updatedAt: new Date("2025-06-14T13:55:15.241Z"),
+  retryRequested: true,
+  createdAt: new Date("2025-06-14T13:55:15.241Z"),
+  updatedAt: new Date("2025-07-19T07:45:42.706Z"),
   managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
   workspaceId: "ws_It13CUaGEhLLAB87simX0",
   release: {
@@ -36,7 +37,7 @@ let value: DeploymentDetailResponse = {
       commitAuthorLogin: "johndoe",
       commitAuthorAvatarUrl: "https://github.com/johndoe.png",
     },
-    createdAt: new Date("2024-12-03T20:05:51.098Z"),
+    createdAt: new Date("2024-04-17T05:47:54.417Z"),
   },
   deploymentGroup: {
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
@@ -59,6 +60,7 @@ let value: DeploymentDetailResponse = {
 | `status`                                                                                                                       | [models.DeploymentDetailResponseStatus](../models/deploymentdetailresponsestatus.md)                                           | :heavy_check_mark:                                                                                                             | Deployment status in the deployment lifecycle                                                                                  |                                                                                                                                |
 | `projectId`                                                                                                                    | *string*                                                                                                                       | :heavy_check_mark:                                                                                                             | Unique identifier for the project.                                                                                             | prj_mcytp6z3j91f7tn5ryqsfwtr                                                                                                   |
 | `platform`                                                                                                                     | [models.DeploymentDetailResponsePlatform](../models/deploymentdetailresponseplatform.md)                                       | :heavy_check_mark:                                                                                                             | Target platform for the deployment                                                                                             |                                                                                                                                |
+| `deploymentProtocolVersion`                                                                                                    | *number*                                                                                                                       | :heavy_check_mark:                                                                                                             | DeploymentState protocol version owned by the runtime/manager                                                                  |                                                                                                                                |
 | `deploymentGroupId`                                                                                                            | *string*                                                                                                                       | :heavy_check_mark:                                                                                                             | ID of deployment group this deployment belongs to                                                                              | dg_r27ict8c7vcgsumpj90ackf7b                                                                                                   |
 | `environmentInfo`                                                                                                              | *models.DeploymentDetailResponseEnvironmentInfoUnion*                                                                          | :heavy_minus_sign:                                                                                                             | Cloud environment information                                                                                                  |                                                                                                                                |
 | `stackSettings`                                                                                                                | [models.DeploymentDetailResponseStackSettings](../models/deploymentdetailresponsestacksettings.md)                             | :heavy_check_mark:                                                                                                             | User-provided configuration (network, deployment model, approvals)                                                             |                                                                                                                                |

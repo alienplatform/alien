@@ -12,7 +12,7 @@ use hcl::{
 };
 use std::str::FromStr;
 
-/// `${var.stack_name}-foo`-style HCL template string. Becomes a quoted
+/// `${local.resource_prefix}-foo`-style HCL template string. Becomes a quoted
 /// template in the rendered HCL.
 pub fn template(value: impl Into<String>) -> Expression {
     Expression::TemplateExpr(Box::new(TemplateExpr::QuotedString(value.into())))

@@ -111,7 +111,36 @@ pub fn controller_struct(_args: TokenStream, input: TokenStream) -> TokenStream 
     };
 
     // Add the state and stay count fields
+    let mut retry_state_resets = Vec::new();
+
     if let Fields::Named(ref mut fields) = item_struct.fields {
+        for field in &fields.named {
+            let Some(ident) = &field.ident else {
+                continue;
+            };
+            let name = ident.to_string();
+            if matches!(
+                name.as_str(),
+                "type"
+                    | "_controller_state_version"
+                    | "_controllerStateVersion"
+                    | "state"
+                    | "_internal_stay_count"
+            ) {
+                return Error::new(
+                    ident.span(),
+                    format!("controller field '{name}' is reserved for controller metadata"),
+                )
+                .to_compile_error()
+                .into();
+            }
+
+            if name.starts_with("wait_for_") && name.ends_with("_iterations") {
+                retry_state_resets.push(quote! {
+                    self.#ident = 0;
+                });
+            }
+        }
         fields.named.push(parse_quote! {
             pub(crate) state: #state_enum_name
         });
@@ -135,7 +164,16 @@ pub fn controller_struct(_args: TokenStream, input: TokenStream) -> TokenStream 
         #[serde(rename_all = "camelCase")]
     });
 
-    quote! { #item_struct }.into()
+    quote! {
+        #item_struct
+
+        impl #struct_name {
+            fn __alien_reset_retry_state(&mut self) {
+                #(#retry_state_resets)*
+            }
+        }
+    }
+    .into()
 }
 
 // Process impl block with #[controller] attribute
@@ -512,6 +550,7 @@ fn generate_controller_impl(
 
             fn reset_stay_count(&mut self) {
                 self._internal_stay_count = None;
+                self.__alien_reset_retry_state();
             }
 
             fn box_clone(&self) -> Box<dyn crate::core::ResourceController> {

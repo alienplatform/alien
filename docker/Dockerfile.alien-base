@@ -1,6 +1,6 @@
 # Multi-stage build to avoid copying both architectures to final image
 # Stage 1: Copy and select the correct binary
-FROM cgr.dev/chainguard/wolfi-base:latest as binary-selector
+FROM docker.io/chainguard/wolfi-base:latest as binary-selector
 
 # Copy alien-runtime for both architectures
 COPY target/aarch64-unknown-linux-musl/release/alien-runtime /tmp/alien-runtime-aarch64
@@ -14,7 +14,7 @@ RUN case "$TARGETARCH" in \
     esac
 
 # Stage 2: Final runtime image
-FROM cgr.dev/chainguard/wolfi-base:latest
+FROM docker.io/chainguard/wolfi-base:latest
 
 WORKDIR /app
 

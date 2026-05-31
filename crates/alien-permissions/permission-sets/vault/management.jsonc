@@ -10,12 +10,10 @@
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-*"]
+            "resources": ["*"]
           },
           "resource": {
-            "resources": [
-              "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-${resourceName}-*"
-            ]
+            "resources": ["*"]
           }
         }
       }
@@ -23,14 +21,25 @@
     "gcp": [
       {
         "grant": {
-          "permissions": ["secretmanager.secrets.get", "secretmanager.secrets.list"]
+          "predefinedRoles": ["roles/secretmanager.viewer"]
         },
         "binding": {
           "stack": {
             "scope": "projects/${projectName}"
-          },
+          }
+        }
+      },
+      {
+        "grant": {
+          "predefinedRoles": ["roles/secretmanager.viewer"]
+        },
+        "binding": {
           "resource": {
-            "scope": "projects/${projectName}/secrets/${resourceName}"
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "ResourceVaultSecretsManagement",
+              "expression": "resource.type == \"secretmanager.googleapis.com/Secret\" && resource.name.startsWith(\"projects/${projectNumber}/secrets/${resourceName}-\")"
+            }
           }
         }
       }
@@ -38,7 +47,7 @@
     "azure": [
       {
         "grant": {
-          "actions": ["Microsoft.KeyVault/vaults/read"]
+          "predefinedRoles": ["Reader"]
         },
         "binding": {
           "stack": {

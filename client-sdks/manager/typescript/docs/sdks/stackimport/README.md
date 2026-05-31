@@ -32,17 +32,14 @@ async function run() {
   const result = await alienManager.stackImport.stackImport({
     deploymentGroupToken: "<value>",
     deploymentName: "<value>",
-    managementConfig: {
-      serviceAccountEmail: "<value>",
-      platform: "gcp",
-    },
     platform: "gcp",
     region: "<value>",
+    resourcePrefix: "<value>",
     resources: [],
     setupFingerprint: "<value>",
     setupFingerprintVersion: 325467,
+    setupImportFormatVersion: 325467,
     setupTarget: "<value>",
-    stackPrefix: "<value>",
     stackSettings: {},
   });
 
@@ -71,17 +68,14 @@ async function run() {
   const res = await stackImportStackImport(alienManager, {
     deploymentGroupToken: "<value>",
     deploymentName: "<value>",
-    managementConfig: {
-      serviceAccountEmail: "<value>",
-      platform: "gcp",
-    },
     platform: "gcp",
     region: "<value>",
+    resourcePrefix: "<value>",
     resources: [],
     setupFingerprint: "<value>",
     setupFingerprintVersion: 325467,
+    setupImportFormatVersion: 325467,
     setupTarget: "<value>",
-    stackPrefix: "<value>",
     stackSettings: {},
   });
   if (res.ok) {

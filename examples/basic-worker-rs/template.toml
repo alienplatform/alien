@@ -1,0 +1,3 @@
+name = "basic-worker-rs"
+description = "The simplest Alien worker, in Rust."
+language = "Rust"

@@ -1,4 +1,4 @@
-//! Azure Container Apps Environment mutation that adds the required environment for function resources.
+//! Azure Container Apps Environment mutation that adds the required environment for worker resources.
 
 use crate::error::Result;
 use crate::StackMutation;
@@ -9,16 +9,16 @@ use alien_core::{
 use async_trait::async_trait;
 use tracing::{debug, info};
 
-/// Mutation that adds AzureContainerAppsEnvironment resource for function/build resources.
+/// Mutation that adds AzureContainerAppsEnvironment resource for worker/build resources.
 ///
-/// Functions and build resources on Azure run on Container Apps, which require a
+/// Workers and build resources on Azure run on Container Apps, which require a
 /// Container Apps Environment to be created first.
 pub struct AzureContainerAppsEnvironmentMutation;
 
 #[async_trait]
 impl StackMutation for AzureContainerAppsEnvironmentMutation {
     fn description(&self) -> &'static str {
-        "Add Azure Container Apps Environment required by Function resources"
+        "Add Azure Container Apps Environment required by Worker resources"
     }
 
     fn should_run(
@@ -32,10 +32,10 @@ impl StackMutation for AzureContainerAppsEnvironmentMutation {
             return false;
         }
 
-        // Check if we have function or build resources that need Container Apps Environment
+        // Check if we have worker or build resources that need Container Apps Environment
         let has_container_resources = stack.resources.iter().any(|(_, entry)| {
             let resource_type = entry.config.resource_type();
-            matches!(resource_type.as_ref(), "function" | "build")
+            matches!(resource_type.as_ref(), "worker" | "build")
         });
 
         if !has_container_resources {
@@ -53,7 +53,7 @@ impl StackMutation for AzureContainerAppsEnvironmentMutation {
         _stack_state: &StackState,
         _config: &DeploymentConfig,
     ) -> Result<Stack> {
-        info!("Adding AzureContainerAppsEnvironment resource for Azure functions/builds");
+        info!("Adding AzureContainerAppsEnvironment resource for Azure workers/builds");
 
         let env_id = "default-container-env";
 

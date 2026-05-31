@@ -1,0 +1,25 @@
+# ComputeCapacityGroupStatus
+
+## Example Usage
+
+```typescript
+import { ComputeCapacityGroupStatus } from "@alienplatform/manager-api/models";
+
+let value: ComputeCapacityGroupStatus = {
+  currentMachines: 511996,
+  desiredMachines: 463241,
+  groupId: "<id>",
+};
+```
+
+## Fields
+
+| Field                                                                              | Type                                                                               | Required                                                                           | Description                                                                        |
+| ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `currentMachines`                                                                  | *number*                                                                           | :heavy_check_mark:                                                                 | N/A                                                                                |
+| `desiredMachines`                                                                  | *number*                                                                           | :heavy_check_mark:                                                                 | N/A                                                                                |
+| `groupId`                                                                          | *string*                                                                           | :heavy_check_mark:                                                                 | N/A                                                                                |
+| `instanceType`                                                                     | *string*                                                                           | :heavy_minus_sign:                                                                 | N/A                                                                                |
+| `maxMachines`                                                                      | *number*                                                                           | :heavy_minus_sign:                                                                 | N/A                                                                                |
+| `minMachines`                                                                      | *number*                                                                           | :heavy_minus_sign:                                                                 | N/A                                                                                |
+| `recommendation`                                                                   | [models.ComputeCapacityRecommendation](../models/computecapacityrecommendation.md) | :heavy_minus_sign:                                                                 | N/A                                                                                |

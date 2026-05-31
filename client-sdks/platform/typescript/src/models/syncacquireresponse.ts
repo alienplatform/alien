@@ -89,9 +89,17 @@ export type SyncAcquireResponseCurrentReleaseOverrideAwGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -103,6 +111,10 @@ export type SyncAcquireResponseCurrentReleaseOverrideAw = {
    */
   binding: SyncAcquireResponseCurrentReleaseOverrideAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: SyncAcquireResponseCurrentReleaseOverrideEffect | undefined;
@@ -110,6 +122,10 @@ export type SyncAcquireResponseCurrentReleaseOverrideAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: SyncAcquireResponseCurrentReleaseOverrideAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -159,9 +175,17 @@ export type SyncAcquireResponseCurrentReleaseOverrideAzureGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -173,9 +197,17 @@ export type SyncAcquireResponseCurrentReleaseOverrideAzure = {
    */
   binding: SyncAcquireResponseCurrentReleaseOverrideAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncAcquireResponseCurrentReleaseOverrideAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -259,9 +291,17 @@ export type SyncAcquireResponseCurrentReleaseOverrideGcpGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -273,9 +313,17 @@ export type SyncAcquireResponseCurrentReleaseOverrideGcp = {
    */
   binding: SyncAcquireResponseCurrentReleaseOverrideGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncAcquireResponseCurrentReleaseOverrideGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -405,9 +453,17 @@ export type SyncAcquireResponseCurrentReleaseExtendAwGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -419,6 +475,10 @@ export type SyncAcquireResponseCurrentReleaseExtendAw = {
    */
   binding: SyncAcquireResponseCurrentReleaseExtendAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: SyncAcquireResponseCurrentReleaseExtendEffect | undefined;
@@ -426,6 +486,10 @@ export type SyncAcquireResponseCurrentReleaseExtendAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: SyncAcquireResponseCurrentReleaseExtendAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -475,9 +539,17 @@ export type SyncAcquireResponseCurrentReleaseExtendAzureGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -489,9 +561,17 @@ export type SyncAcquireResponseCurrentReleaseExtendAzure = {
    */
   binding: SyncAcquireResponseCurrentReleaseExtendAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncAcquireResponseCurrentReleaseExtendAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -575,9 +655,17 @@ export type SyncAcquireResponseCurrentReleaseExtendGcpGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -589,9 +677,17 @@ export type SyncAcquireResponseCurrentReleaseExtendGcp = {
    */
   binding: SyncAcquireResponseCurrentReleaseExtendGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncAcquireResponseCurrentReleaseExtendGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -729,9 +825,17 @@ export type SyncAcquireResponseCurrentReleaseProfileAwGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -743,6 +847,10 @@ export type SyncAcquireResponseCurrentReleaseProfileAw = {
    */
   binding: SyncAcquireResponseCurrentReleaseProfileAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: SyncAcquireResponseCurrentReleaseProfileEffect | undefined;
@@ -750,6 +858,10 @@ export type SyncAcquireResponseCurrentReleaseProfileAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: SyncAcquireResponseCurrentReleaseProfileAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -799,9 +911,17 @@ export type SyncAcquireResponseCurrentReleaseProfileAzureGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -813,9 +933,17 @@ export type SyncAcquireResponseCurrentReleaseProfileAzure = {
    */
   binding: SyncAcquireResponseCurrentReleaseProfileAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncAcquireResponseCurrentReleaseProfileAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -899,9 +1027,17 @@ export type SyncAcquireResponseCurrentReleaseProfileGcpGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -913,9 +1049,17 @@ export type SyncAcquireResponseCurrentReleaseProfileGcp = {
    */
   binding: SyncAcquireResponseCurrentReleaseProfileGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncAcquireResponseCurrentReleaseProfileGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -1309,6 +1453,38 @@ export type SyncAcquireResponseDeleteScopeUnion =
   | SyncAcquireResponseDeleteScopeEnum
   | any;
 
+/**
+ * Scope for a delete operation.
+ *
+ * @remarks
+ *
+ * Full deletes are setup/admin owned and may remove both Frozen and Live
+ * resources. Live-only deletes are used by setup handoff resources
+ * (Terraform/CloudFormation) so Alien removes only the resources it owns
+ * before setup tears down Frozen resources.
+ */
+export const SyncAcquireResponsePendingDeleteScopeEnum = {
+  Full: "full",
+  LiveOnly: "liveOnly",
+} as const;
+/**
+ * Scope for a delete operation.
+ *
+ * @remarks
+ *
+ * Full deletes are setup/admin owned and may remove both Frozen and Live
+ * resources. Live-only deletes are used by setup handoff resources
+ * (Terraform/CloudFormation) so Alien removes only the resources it owns
+ * before setup tears down Frozen resources.
+ */
+export type SyncAcquireResponsePendingDeleteScopeEnum = ClosedEnum<
+  typeof SyncAcquireResponsePendingDeleteScopeEnum
+>;
+
+export type SyncAcquireResponsePendingDeleteScopeUnion =
+  | SyncAcquireResponsePendingDeleteScopeEnum
+  | any;
+
 export const SyncAcquireResponsePreparedStackManagementEnum = {
   Auto: "auto",
 } as const;
@@ -1385,9 +1561,17 @@ export type SyncAcquireResponsePreparedStackOverrideAwGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -1399,6 +1583,10 @@ export type SyncAcquireResponsePreparedStackOverrideAw = {
    */
   binding: SyncAcquireResponsePreparedStackOverrideAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: SyncAcquireResponsePreparedStackOverrideEffect | undefined;
@@ -1406,6 +1594,10 @@ export type SyncAcquireResponsePreparedStackOverrideAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: SyncAcquireResponsePreparedStackOverrideAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -1455,9 +1647,17 @@ export type SyncAcquireResponsePreparedStackOverrideAzureGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -1469,9 +1669,17 @@ export type SyncAcquireResponsePreparedStackOverrideAzure = {
    */
   binding: SyncAcquireResponsePreparedStackOverrideAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncAcquireResponsePreparedStackOverrideAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -1555,9 +1763,17 @@ export type SyncAcquireResponsePreparedStackOverrideGcpGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -1569,9 +1785,17 @@ export type SyncAcquireResponsePreparedStackOverrideGcp = {
    */
   binding: SyncAcquireResponsePreparedStackOverrideGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncAcquireResponsePreparedStackOverrideGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -1701,9 +1925,17 @@ export type SyncAcquireResponsePreparedStackExtendAwGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -1715,6 +1947,10 @@ export type SyncAcquireResponsePreparedStackExtendAw = {
    */
   binding: SyncAcquireResponsePreparedStackExtendAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: SyncAcquireResponsePreparedStackExtendEffect | undefined;
@@ -1722,6 +1958,10 @@ export type SyncAcquireResponsePreparedStackExtendAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: SyncAcquireResponsePreparedStackExtendAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -1771,9 +2011,17 @@ export type SyncAcquireResponsePreparedStackExtendAzureGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -1785,9 +2033,17 @@ export type SyncAcquireResponsePreparedStackExtendAzure = {
    */
   binding: SyncAcquireResponsePreparedStackExtendAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncAcquireResponsePreparedStackExtendAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -1871,9 +2127,17 @@ export type SyncAcquireResponsePreparedStackExtendGcpGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -1885,9 +2149,17 @@ export type SyncAcquireResponsePreparedStackExtendGcp = {
    */
   binding: SyncAcquireResponsePreparedStackExtendGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncAcquireResponsePreparedStackExtendGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -2022,9 +2294,17 @@ export type SyncAcquireResponsePreparedStackProfileAwGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -2036,6 +2316,10 @@ export type SyncAcquireResponsePreparedStackProfileAw = {
    */
   binding: SyncAcquireResponsePreparedStackProfileAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: SyncAcquireResponsePreparedStackProfileEffect | undefined;
@@ -2043,6 +2327,10 @@ export type SyncAcquireResponsePreparedStackProfileAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: SyncAcquireResponsePreparedStackProfileAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -2092,9 +2380,17 @@ export type SyncAcquireResponsePreparedStackProfileAzureGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -2106,9 +2402,17 @@ export type SyncAcquireResponsePreparedStackProfileAzure = {
    */
   binding: SyncAcquireResponsePreparedStackProfileAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncAcquireResponsePreparedStackProfileAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -2192,9 +2496,17 @@ export type SyncAcquireResponsePreparedStackProfileGcpGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -2206,9 +2518,17 @@ export type SyncAcquireResponsePreparedStackProfileGcp = {
    */
   binding: SyncAcquireResponsePreparedStackProfileGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncAcquireResponsePreparedStackProfileGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -2414,6 +2734,11 @@ export type SyncAcquireResponseRuntimeMetadata = {
    * Used to avoid redundant sync operations during incremental deployment
    */
   lastSyncedEnvVarsHash?: string | null | undefined;
+  pendingDeleteScope?:
+    | SyncAcquireResponsePendingDeleteScopeEnum
+    | any
+    | null
+    | undefined;
   preparedStack?: SyncAcquireResponsePreparedStack | any | null | undefined;
   /**
    * Whether cross-account registry access has been successfully granted.
@@ -2462,6 +2787,28 @@ export type SyncAcquireResponseStackStateConfig = {
   type: string;
   additionalProperties?: { [k: string]: any | null } | undefined;
 };
+
+/**
+ * Represents the target cloud platform.
+ */
+export const SyncAcquireResponseControllerPlatformEnum = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type SyncAcquireResponseControllerPlatformEnum = ClosedEnum<
+  typeof SyncAcquireResponseControllerPlatformEnum
+>;
+
+export type SyncAcquireResponseControllerPlatformUnion =
+  | SyncAcquireResponseControllerPlatformEnum
+  | any;
 
 /**
  * New ResourceRef that works with any resource type.
@@ -2653,6 +3000,11 @@ export type SyncAcquireResponseStackStateResources = {
    * Resource that can hold any resource type in the Alien system. All resources share common 'type' and 'id' fields with additional type-specific properties.
    */
   config: SyncAcquireResponseStackStateConfig;
+  controllerPlatform?:
+    | SyncAcquireResponseControllerPlatformEnum
+    | any
+    | null
+    | undefined;
   /**
    * Complete list of dependencies for this resource, including infrastructure dependencies.
    *
@@ -2694,7 +3046,7 @@ export type SyncAcquireResponseStackStateResources = {
    */
   status: SyncAcquireResponseStackStateStatus;
   /**
-   * The high-level type of the resource (e.g., Function::RESOURCE_TYPE, Storage::RESOURCE_TYPE).
+   * The high-level type of the resource (e.g., Worker::RESOURCE_TYPE, Storage::RESOURCE_TYPE).
    */
   type: string;
 };
@@ -2824,9 +3176,17 @@ export type SyncAcquireResponseTargetReleaseOverrideAwGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -2838,6 +3198,10 @@ export type SyncAcquireResponseTargetReleaseOverrideAw = {
    */
   binding: SyncAcquireResponseTargetReleaseOverrideAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: SyncAcquireResponseTargetReleaseOverrideEffect | undefined;
@@ -2845,6 +3209,10 @@ export type SyncAcquireResponseTargetReleaseOverrideAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: SyncAcquireResponseTargetReleaseOverrideAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -2894,9 +3262,17 @@ export type SyncAcquireResponseTargetReleaseOverrideAzureGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -2908,9 +3284,17 @@ export type SyncAcquireResponseTargetReleaseOverrideAzure = {
    */
   binding: SyncAcquireResponseTargetReleaseOverrideAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncAcquireResponseTargetReleaseOverrideAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -2994,9 +3378,17 @@ export type SyncAcquireResponseTargetReleaseOverrideGcpGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -3008,9 +3400,17 @@ export type SyncAcquireResponseTargetReleaseOverrideGcp = {
    */
   binding: SyncAcquireResponseTargetReleaseOverrideGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncAcquireResponseTargetReleaseOverrideGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -3140,9 +3540,17 @@ export type SyncAcquireResponseTargetReleaseExtendAwGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -3154,6 +3562,10 @@ export type SyncAcquireResponseTargetReleaseExtendAw = {
    */
   binding: SyncAcquireResponseTargetReleaseExtendAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: SyncAcquireResponseTargetReleaseExtendEffect | undefined;
@@ -3161,6 +3573,10 @@ export type SyncAcquireResponseTargetReleaseExtendAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: SyncAcquireResponseTargetReleaseExtendAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -3210,9 +3626,17 @@ export type SyncAcquireResponseTargetReleaseExtendAzureGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -3224,9 +3648,17 @@ export type SyncAcquireResponseTargetReleaseExtendAzure = {
    */
   binding: SyncAcquireResponseTargetReleaseExtendAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncAcquireResponseTargetReleaseExtendAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -3310,9 +3742,17 @@ export type SyncAcquireResponseTargetReleaseExtendGcpGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -3324,9 +3764,17 @@ export type SyncAcquireResponseTargetReleaseExtendGcp = {
    */
   binding: SyncAcquireResponseTargetReleaseExtendGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncAcquireResponseTargetReleaseExtendGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -3461,9 +3909,17 @@ export type SyncAcquireResponseTargetReleaseProfileAwGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -3475,6 +3931,10 @@ export type SyncAcquireResponseTargetReleaseProfileAw = {
    */
   binding: SyncAcquireResponseTargetReleaseProfileAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: SyncAcquireResponseTargetReleaseProfileEffect | undefined;
@@ -3482,6 +3942,10 @@ export type SyncAcquireResponseTargetReleaseProfileAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: SyncAcquireResponseTargetReleaseProfileAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -3531,9 +3995,17 @@ export type SyncAcquireResponseTargetReleaseProfileAzureGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -3545,9 +4017,17 @@ export type SyncAcquireResponseTargetReleaseProfileAzure = {
    */
   binding: SyncAcquireResponseTargetReleaseProfileAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncAcquireResponseTargetReleaseProfileAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -3631,9 +4111,17 @@ export type SyncAcquireResponseTargetReleaseProfileGcpGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -3645,9 +4133,17 @@ export type SyncAcquireResponseTargetReleaseProfileGcp = {
    */
   binding: SyncAcquireResponseTargetReleaseProfileGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: SyncAcquireResponseTargetReleaseProfileGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -3891,7 +4387,7 @@ export type SyncAcquireResponseCurrent = {
    * Mismatched versions produce a clear error instead of silent corruption.
    * See docs/02-manager/10-deployment-protocol.md.
    */
-  protocolVersion?: number | undefined;
+  protocolVersion: number;
   /**
    * Whether a retry has been requested for a failed deployment
    *
@@ -3907,6 +4403,28 @@ export type SyncAcquireResponseCurrent = {
   status: SyncAcquireResponseStatus;
   targetRelease?: SyncAcquireResponseTargetRelease | any | null | undefined;
 };
+
+/**
+ * Represents the target cloud platform.
+ */
+export const SyncAcquireResponseBasePlatformEnum = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type SyncAcquireResponseBasePlatformEnum = ClosedEnum<
+  typeof SyncAcquireResponseBasePlatformEnum
+>;
+
+export type SyncAcquireResponseBasePlatformUnion =
+  | SyncAcquireResponseBasePlatformEnum
+  | any;
 
 /**
  * Configuration for a single container worker cluster.
@@ -3930,6 +4448,123 @@ export type SyncAcquireResponseClusters = {
   managementToken: string;
 };
 
+/**
+ * AWS Horizon machine image catalog.
+ */
+export type SyncAcquireResponseHorizonMachineImageAws = {
+  /**
+   * AMI IDs by architecture, then AWS region.
+   */
+  amis: { [k: string]: { [k: string]: string } };
+};
+
+export type SyncAcquireResponseHorizonMachineImageAwsUnion =
+  | SyncAcquireResponseHorizonMachineImageAws
+  | any;
+
+/**
+ * Azure Horizon machine image entry.
+ */
+export type SyncAcquireResponseAzureImages = {
+  /**
+   * Azure Compute Gallery image version ID.
+   */
+  imageVersionId: string;
+};
+
+/**
+ * Azure Horizon machine image catalog.
+ */
+export type SyncAcquireResponseHorizonMachineImageAzure = {
+  /**
+   * Images by architecture.
+   */
+  images: { [k: string]: SyncAcquireResponseAzureImages };
+};
+
+export type SyncAcquireResponseHorizonMachineImageAzureUnion =
+  | SyncAcquireResponseHorizonMachineImageAzure
+  | any;
+
+/**
+ * Base image metadata for the Horizon machine image.
+ */
+export type SyncAcquireResponseBaseImage = {
+  /**
+   * Base OS image name.
+   */
+  name: string;
+  /**
+   * Base OS image version or channel.
+   */
+  version: string;
+};
+
+/**
+ * GCP Horizon machine image entry.
+ */
+export type SyncAcquireResponseGcpImages = {
+  /**
+   * Source image self link or image-family URL.
+   */
+  sourceImage: string;
+};
+
+/**
+ * GCP Horizon machine image catalog.
+ */
+export type SyncAcquireResponseHorizonMachineImageGcp = {
+  /**
+   * Images by architecture.
+   */
+  images: { [k: string]: SyncAcquireResponseGcpImages };
+};
+
+export type SyncAcquireResponseHorizonMachineImageGcpUnion =
+  | SyncAcquireResponseHorizonMachineImageGcp
+  | any;
+
+/**
+ * Horizon machine image catalog.
+ *
+ * @remarks
+ *
+ * Platform resolves concrete provider images from this catalog during rollout.
+ */
+export type SyncAcquireResponseHorizonMachineImage = {
+  aws?: SyncAcquireResponseHorizonMachineImageAws | any | null | undefined;
+  azure?: SyncAcquireResponseHorizonMachineImageAzure | any | null | undefined;
+  /**
+   * Base image metadata for the Horizon machine image.
+   */
+  baseImage: SyncAcquireResponseBaseImage;
+  /**
+   * Logical image channel, such as prod, staging, or canary.
+   */
+  channel: string;
+  /**
+   * Image manifest creation timestamp.
+   */
+  createdAt: string;
+  gcp?: SyncAcquireResponseHorizonMachineImageGcp | any | null | undefined;
+  /**
+   * Git commit SHA used to build the image.
+   */
+  gitSha: string;
+  /**
+   * horizond daemon version baked into the image.
+   */
+  horizondVersion: string;
+  /**
+   * Published immutable machine image version.
+   */
+  machineImageVersion: string;
+};
+
+export type SyncAcquireResponseHorizonMachineImageUnion =
+  | SyncAcquireResponseHorizonMachineImage
+  | any;
+
 export const SyncAcquireResponseComputeBackendType = {
   Horizon: "horizon",
 } as const;
@@ -3938,7 +4573,7 @@ export type SyncAcquireResponseComputeBackendType = ClosedEnum<
 >;
 
 /**
- * Compute backend for Container and Function resources.
+ * Compute backend for Container and Worker resources.
  *
  * @remarks
  *
@@ -3947,26 +4582,22 @@ export type SyncAcquireResponseComputeBackendType = ClosedEnum<
  */
 export type SyncAcquireResponseComputeBackendHorizon = {
   /**
-   * Cluster configurations (one per ContainerCluster resource)
+   * Cluster configurations (one per ComputeCluster resource)
    *
    * @remarks
-   * Key: ContainerCluster resource ID from stack
+   * Key: ComputeCluster resource ID from stack
    * Value: Cluster ID and management token for that cluster
    */
   clusters: { [k: string]: SyncAcquireResponseClusters };
+  horizonMachineImage?:
+    | SyncAcquireResponseHorizonMachineImage
+    | any
+    | null
+    | undefined;
   /**
-   * Worker control-plane API base URL.
+   * Horizon control-plane API base URL.
    */
   url: string;
-  /**
-   * AMI / image ID for the worker machine image.
-   *
-   * @remarks
-   *
-   * The image contains the worker runtime bootstrap. Controllers only pass
-   * machine-specific settings into that image.
-   */
-  workerImageId?: string | null | undefined;
   type: SyncAcquireResponseComputeBackendType;
 };
 
@@ -6064,21 +6695,17 @@ export type SyncAcquireResponseConfigPlatformAzure = ClosedEnum<
  */
 export type SyncAcquireResponseManagementConfigAzure = {
   /**
-   * Management service principal object ID for local development fallback
-   */
-  managementPrincipalId?: string | null | undefined;
-  /**
    * The managing Azure Tenant ID for cross-tenant access
    */
   managingTenantId: string;
   /**
-   * OIDC issuer URL for federated identity credential creation
+   * OIDC issuer URL trusted by the target-side managed identity.
    */
-  oidcIssuer?: string | null | undefined;
+  oidcIssuer: string;
   /**
-   * OIDC subject claim for federated identity credential creation
+   * OIDC subject claim trusted by the target-side managed identity.
    */
-  oidcSubject?: string | null | undefined;
+  oidcSubject: string;
   platform: SyncAcquireResponseConfigPlatformAzure;
 };
 
@@ -6119,9 +6746,9 @@ export type SyncAcquireResponseManagementConfigAws = {
 };
 
 export type SyncAcquireResponseManagementConfigUnion =
+  | SyncAcquireResponseManagementConfigAzure
   | SyncAcquireResponseManagementConfigAws
   | SyncAcquireResponseManagementConfigGcp
-  | SyncAcquireResponseManagementConfigAzure
   | SyncAcquireResponseManagementConfigKubernetes
   | any;
 
@@ -6149,7 +6776,7 @@ export type SyncAcquireResponseMonitoring = {
    * into all containers. It must be plain (not a vault secret) because alien-runtime
    * reads `OTEL_EXPORTER_OTLP_HEADERS` at tracing-init time, before vault secrets load.
    *
-   * Worker VMs do NOT use this field directly. The ContainerCluster infra
+   * Worker VMs do NOT use this field directly. The ComputeCluster infra
    * controller writes the same value to the cloud vault used by the worker
    * image (GCP: Secret Manager, AWS: Secrets Manager, Azure: Key Vault).
    *
@@ -6203,33 +6830,63 @@ export type SyncAcquireResponseDeploymentModel = ClosedEnum<
   typeof SyncAcquireResponseDeploymentModel
 >;
 
-export type SyncAcquireResponseAws = {
+export type SyncAcquireResponseAwsStackSettings = {
   certificateArn: string;
 };
 
-export type SyncAcquireResponseAwsUnion = SyncAcquireResponseAws | any;
+export type SyncAcquireResponseStackSettingsAwsUnion =
+  | SyncAcquireResponseAwsStackSettings
+  | any;
 
-export type SyncAcquireResponseAzureConfig = {
+export type SyncAcquireResponseAzureStackSettings = {
   keyVaultCertificateId: string;
 };
 
-export type SyncAcquireResponseAzureUnion =
-  | SyncAcquireResponseAzureConfig
+export type SyncAcquireResponseStackSettingsAzureUnion =
+  | SyncAcquireResponseAzureStackSettings
   | any;
 
-export type SyncAcquireResponseGcpConfig = {
+export type SyncAcquireResponseGcpStackSettings = {
   certificateName: string;
 };
 
-export type SyncAcquireResponseGcpUnion = SyncAcquireResponseGcpConfig | any;
+export type SyncAcquireResponseStackSettingsGcpUnion =
+  | SyncAcquireResponseGcpStackSettings
+  | any;
+
+/**
+ * Namespace-scoped Kubernetes TLS Secret reference.
+ */
+export type SyncAcquireResponseTlsSecretRef = {
+  /**
+   * Secret namespace. Defaults to the release namespace when omitted.
+   */
+  namespace?: string | null | undefined;
+  /**
+   * Secret name.
+   */
+  secretName: string;
+};
+
+export type SyncAcquireResponseDomainsKubernetes = {
+  /**
+   * Namespace-scoped Kubernetes TLS Secret reference.
+   */
+  tlsSecretRef: SyncAcquireResponseTlsSecretRef;
+};
+
+export type SyncAcquireResponseDomainsKubernetesUnion =
+  | SyncAcquireResponseDomainsKubernetes
+  | any;
 
 /**
  * Platform-specific certificate references for custom domains.
  */
-export type SyncAcquireResponseCertificate = {
-  aws?: SyncAcquireResponseAws | any | null | undefined;
-  azure?: SyncAcquireResponseAzureConfig | any | null | undefined;
-  gcp?: SyncAcquireResponseGcpConfig | any | null | undefined;
+export type SyncAcquireResponseDomainsCertificate = {
+  aws?: SyncAcquireResponseAwsStackSettings | any | null | undefined;
+  azure?: SyncAcquireResponseAzureStackSettings | any | null | undefined;
+  gcp?: SyncAcquireResponseGcpStackSettings | any | null | undefined;
+  kubernetes?: SyncAcquireResponseDomainsKubernetes | any | null | undefined;
 };
 
 /**
@@ -6239,7 +6896,7 @@ export type SyncAcquireResponseCustomDomains = {
   /**
    * Platform-specific certificate references for custom domains.
    */
-  certificate: SyncAcquireResponseCertificate;
+  certificate: SyncAcquireResponseDomainsCertificate;
   /**
    * Fully qualified domain name to use.
    */
@@ -6289,6 +6946,703 @@ export const SyncAcquireResponseHeartbeats = {
 export type SyncAcquireResponseHeartbeats = ClosedEnum<
   typeof SyncAcquireResponseHeartbeats
 >;
+
+/**
+ * Optional provider-specific identity for a cloud-backed Kubernetes cluster.
+ */
+export type SyncAcquireResponseCloud = {
+  accountId?: string | null | undefined;
+  clusterId?: string | null | undefined;
+  clusterName?: string | null | undefined;
+  projectId?: string | null | undefined;
+  region?: string | null | undefined;
+  resourceGroup?: string | null | undefined;
+  subscriptionId?: string | null | undefined;
+};
+
+export type SyncAcquireResponseCloudUnion = SyncAcquireResponseCloud | any;
+
+/**
+ * Ownership model for the Kubernetes cluster.
+ */
+export const SyncAcquireResponseOwnership = {
+  Managed: "managed",
+  Existing: "existing",
+  External: "external",
+} as const;
+/**
+ * Ownership model for the Kubernetes cluster.
+ */
+export type SyncAcquireResponseOwnership = ClosedEnum<
+  typeof SyncAcquireResponseOwnership
+>;
+
+/**
+ * Kubernetes cluster setup settings.
+ */
+export type SyncAcquireResponseCluster = {
+  cloud?: SyncAcquireResponseCloud | any | null | undefined;
+  /**
+   * Namespace where the Alien chart and application resources run.
+   */
+  namespace?: string | null | undefined;
+  /**
+   * Ownership model for the Kubernetes cluster.
+   */
+  ownership: SyncAcquireResponseOwnership;
+};
+
+export type SyncAcquireResponseClusterUnion = SyncAcquireResponseCluster | any;
+
+export type SyncAcquireResponseCertificateNone2 = {
+  mode: "none";
+};
+
+export type SyncAcquireResponseCertificateManagedTLSSecret2 = {
+  mode: "managedTlsSecret";
+  /**
+   * Secret name template. Runtime may substitute resource/deployment tokens.
+   */
+  secretNameTemplate: string;
+};
+
+export type SyncAcquireResponseCertificateAwsAcmArn2 = {
+  /**
+   * Existing ACM certificate ARN.
+   */
+  certificateArn: string;
+  mode: "awsAcmArn";
+};
+
+export type SyncAcquireResponseCertificateManagedAcmImport2 = {
+  mode: "managedAcmImport";
+  /**
+   * ACM region. Defaults to the deployment region when omitted.
+   */
+  region?: string | null | undefined;
+  /**
+   * Tags applied to runtime-imported ACM certificates.
+   */
+  tags?: { [k: string]: string } | undefined;
+};
+
+/**
+ * Namespace-scoped Kubernetes TLS Secret reference.
+ */
+export type SyncAcquireResponseCertificateTLSSecretRef2 = {
+  /**
+   * Secret namespace. Defaults to the release namespace when omitted.
+   */
+  namespace?: string | null | undefined;
+  /**
+   * Secret name.
+   */
+  secretName: string;
+  mode: "tlsSecretRef";
+};
+
+/**
+ * Certificate publication or reference mode for Kubernetes public endpoints.
+ */
+export type SyncAcquireResponseCertificateUnion2 =
+  | SyncAcquireResponseCertificateTLSSecretRef2
+  | SyncAcquireResponseCertificateManagedAcmImport2
+  | SyncAcquireResponseCertificateAwsAcmArn2
+  | SyncAcquireResponseCertificateManagedTLSSecret2
+  | SyncAcquireResponseCertificateNone2;
+
+export const SyncAcquireResponseModeCustom = {
+  Custom: "custom",
+} as const;
+export type SyncAcquireResponseModeCustom = ClosedEnum<
+  typeof SyncAcquireResponseModeCustom
+>;
+
+export const SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum4 =
+  {
+    AzureApplicationGatewayForContainers:
+      "azureApplicationGatewayForContainers",
+  } as const;
+export type SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum4 =
+  ClosedEnum<
+    typeof SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum4
+  >;
+
+export type SyncAcquireResponseProviderAzureApplicationGatewayForContainers4 = {
+  /**
+   * Optional ALB name when using BYO Application Gateway resources.
+   */
+  albName?: string | null | undefined;
+  /**
+   * Optional ALB namespace when using BYO Application Gateway resources.
+   */
+  albNamespace?: string | null | undefined;
+  /**
+   * Public or internal frontend exposure.
+   */
+  frontend: string;
+  provider:
+    SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum4;
+};
+
+export const SyncAcquireResponseProviderGkeGatewayEnum4 = {
+  GkeGateway: "gkeGateway",
+} as const;
+export type SyncAcquireResponseProviderGkeGatewayEnum4 = ClosedEnum<
+  typeof SyncAcquireResponseProviderGkeGatewayEnum4
+>;
+
+export type SyncAcquireResponseProviderGkeGateway4 = {
+  provider: SyncAcquireResponseProviderGkeGatewayEnum4;
+  /**
+   * Optional static address name for the Gateway frontend.
+   */
+  staticAddressName?: string | null | undefined;
+};
+
+export const SyncAcquireResponseProviderAwsAlbEnum4 = {
+  AwsAlb: "awsAlb",
+} as const;
+export type SyncAcquireResponseProviderAwsAlbEnum4 = ClosedEnum<
+  typeof SyncAcquireResponseProviderAwsAlbEnum4
+>;
+
+export type SyncAcquireResponseProviderAwsAlb4 = {
+  /**
+   * Optional ALB IP address type, such as `dualstack`.
+   */
+  ipAddressType?: string | null | undefined;
+  provider: SyncAcquireResponseProviderAwsAlbEnum4;
+  /**
+   * Internet-facing or internal ALB scheme.
+   */
+  scheme: string;
+  /**
+   * Explicit subnet IDs when the profile cannot rely on controller discovery.
+   */
+  subnetIds?: Array<string> | undefined;
+  /**
+   * ALB target type, usually `ip`.
+   */
+  targetType: string;
+};
+
+export type SyncAcquireResponseProviderUnion4 =
+  | SyncAcquireResponseProviderAwsAlb4
+  | SyncAcquireResponseProviderAzureApplicationGatewayForContainers4
+  | SyncAcquireResponseProviderGkeGateway4
+  | any;
+
+/**
+ * Shared Gateway API route profile values.
+ */
+export type SyncAcquireResponseRouteGateway2 = {
+  /**
+   * Annotations applied to route objects.
+   */
+  annotations?: { [k: string]: string } | undefined;
+  /**
+   * Route controller identifier, for example a cloud Gateway controller.
+   */
+  controller?: string | null | undefined;
+  /**
+   * GatewayClass selected for generated Gateways.
+   */
+  gatewayClassName: string;
+  /**
+   * Labels applied to route objects.
+   */
+  labels?: { [k: string]: string } | undefined;
+  /**
+   * Listener port, usually 443.
+   */
+  listenerPort: number;
+  provider?:
+    | SyncAcquireResponseProviderAwsAlb4
+    | SyncAcquireResponseProviderAzureApplicationGatewayForContainers4
+    | SyncAcquireResponseProviderGkeGateway4
+    | any
+    | null
+    | undefined;
+  routeApi: "gateway";
+};
+
+export const SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum3 =
+  {
+    AzureApplicationGatewayForContainers:
+      "azureApplicationGatewayForContainers",
+  } as const;
+export type SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum3 =
+  ClosedEnum<
+    typeof SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum3
+  >;
+
+export type SyncAcquireResponseProviderAzureApplicationGatewayForContainers3 = {
+  /**
+   * Optional ALB name when using BYO Application Gateway resources.
+   */
+  albName?: string | null | undefined;
+  /**
+   * Optional ALB namespace when using BYO Application Gateway resources.
+   */
+  albNamespace?: string | null | undefined;
+  /**
+   * Public or internal frontend exposure.
+   */
+  frontend: string;
+  provider:
+    SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum3;
+};
+
+export const SyncAcquireResponseProviderGkeGatewayEnum3 = {
+  GkeGateway: "gkeGateway",
+} as const;
+export type SyncAcquireResponseProviderGkeGatewayEnum3 = ClosedEnum<
+  typeof SyncAcquireResponseProviderGkeGatewayEnum3
+>;
+
+export type SyncAcquireResponseProviderGkeGateway3 = {
+  provider: SyncAcquireResponseProviderGkeGatewayEnum3;
+  /**
+   * Optional static address name for the Gateway frontend.
+   */
+  staticAddressName?: string | null | undefined;
+};
+
+export const SyncAcquireResponseProviderAwsAlbEnum3 = {
+  AwsAlb: "awsAlb",
+} as const;
+export type SyncAcquireResponseProviderAwsAlbEnum3 = ClosedEnum<
+  typeof SyncAcquireResponseProviderAwsAlbEnum3
+>;
+
+export type SyncAcquireResponseProviderAwsAlb3 = {
+  /**
+   * Optional ALB IP address type, such as `dualstack`.
+   */
+  ipAddressType?: string | null | undefined;
+  provider: SyncAcquireResponseProviderAwsAlbEnum3;
+  /**
+   * Internet-facing or internal ALB scheme.
+   */
+  scheme: string;
+  /**
+   * Explicit subnet IDs when the profile cannot rely on controller discovery.
+   */
+  subnetIds?: Array<string> | undefined;
+  /**
+   * ALB target type, usually `ip`.
+   */
+  targetType: string;
+};
+
+export type SyncAcquireResponseProviderUnion3 =
+  | SyncAcquireResponseProviderAwsAlb3
+  | SyncAcquireResponseProviderAzureApplicationGatewayForContainers3
+  | SyncAcquireResponseProviderGkeGateway3
+  | any;
+
+/**
+ * Shared Ingress route profile values.
+ */
+export type SyncAcquireResponseRouteIngress2 = {
+  /**
+   * Annotations applied to route objects.
+   */
+  annotations?: { [k: string]: string } | undefined;
+  /**
+   * Route controller identifier, for example `eks.amazonaws.com/alb`.
+   */
+  controller?: string | null | undefined;
+  /**
+   * `spec.ingressClassName` for generated Ingresses.
+   */
+  ingressClassName: string;
+  /**
+   * Labels applied to route objects.
+   */
+  labels?: { [k: string]: string } | undefined;
+  provider?:
+    | SyncAcquireResponseProviderAwsAlb3
+    | SyncAcquireResponseProviderAzureApplicationGatewayForContainers3
+    | SyncAcquireResponseProviderGkeGateway3
+    | any
+    | null
+    | undefined;
+  routeApi: "ingress";
+};
+
+/**
+ * Kubernetes route API selected for public endpoints.
+ */
+export type SyncAcquireResponseRouteUnion2 =
+  | SyncAcquireResponseRouteIngress2
+  | SyncAcquireResponseRouteGateway2;
+
+export type SyncAcquireResponseExposureCustom = {
+  /**
+   * Certificate publication or reference mode for Kubernetes public endpoints.
+   */
+  certificate:
+    | SyncAcquireResponseCertificateTLSSecretRef2
+    | SyncAcquireResponseCertificateManagedAcmImport2
+    | SyncAcquireResponseCertificateAwsAcmArn2
+    | SyncAcquireResponseCertificateManagedTLSSecret2
+    | SyncAcquireResponseCertificateNone2;
+  /**
+   * Hostname routed by the Kubernetes public endpoint.
+   */
+  domain: string;
+  mode: SyncAcquireResponseModeCustom;
+  /**
+   * Kubernetes route API selected for public endpoints.
+   */
+  route: SyncAcquireResponseRouteIngress2 | SyncAcquireResponseRouteGateway2;
+};
+
+export type SyncAcquireResponseCertificateNone1 = {
+  mode: "none";
+};
+
+export type SyncAcquireResponseCertificateManagedTLSSecret1 = {
+  mode: "managedTlsSecret";
+  /**
+   * Secret name template. Runtime may substitute resource/deployment tokens.
+   */
+  secretNameTemplate: string;
+};
+
+export type SyncAcquireResponseCertificateAwsAcmArn1 = {
+  /**
+   * Existing ACM certificate ARN.
+   */
+  certificateArn: string;
+  mode: "awsAcmArn";
+};
+
+export type SyncAcquireResponseCertificateManagedAcmImport1 = {
+  mode: "managedAcmImport";
+  /**
+   * ACM region. Defaults to the deployment region when omitted.
+   */
+  region?: string | null | undefined;
+  /**
+   * Tags applied to runtime-imported ACM certificates.
+   */
+  tags?: { [k: string]: string } | undefined;
+};
+
+/**
+ * Namespace-scoped Kubernetes TLS Secret reference.
+ */
+export type SyncAcquireResponseCertificateTLSSecretRef1 = {
+  /**
+   * Secret namespace. Defaults to the release namespace when omitted.
+   */
+  namespace?: string | null | undefined;
+  /**
+   * Secret name.
+   */
+  secretName: string;
+  mode: "tlsSecretRef";
+};
+
+/**
+ * Certificate publication or reference mode for Kubernetes public endpoints.
+ */
+export type SyncAcquireResponseCertificateUnion1 =
+  | SyncAcquireResponseCertificateTLSSecretRef1
+  | SyncAcquireResponseCertificateManagedAcmImport1
+  | SyncAcquireResponseCertificateAwsAcmArn1
+  | SyncAcquireResponseCertificateManagedTLSSecret1
+  | SyncAcquireResponseCertificateNone1;
+
+export const SyncAcquireResponseModeGenerated = {
+  Generated: "generated",
+} as const;
+export type SyncAcquireResponseModeGenerated = ClosedEnum<
+  typeof SyncAcquireResponseModeGenerated
+>;
+
+export const SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum2 =
+  {
+    AzureApplicationGatewayForContainers:
+      "azureApplicationGatewayForContainers",
+  } as const;
+export type SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum2 =
+  ClosedEnum<
+    typeof SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum2
+  >;
+
+export type SyncAcquireResponseProviderAzureApplicationGatewayForContainers2 = {
+  /**
+   * Optional ALB name when using BYO Application Gateway resources.
+   */
+  albName?: string | null | undefined;
+  /**
+   * Optional ALB namespace when using BYO Application Gateway resources.
+   */
+  albNamespace?: string | null | undefined;
+  /**
+   * Public or internal frontend exposure.
+   */
+  frontend: string;
+  provider:
+    SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum2;
+};
+
+export const SyncAcquireResponseProviderGkeGatewayEnum2 = {
+  GkeGateway: "gkeGateway",
+} as const;
+export type SyncAcquireResponseProviderGkeGatewayEnum2 = ClosedEnum<
+  typeof SyncAcquireResponseProviderGkeGatewayEnum2
+>;
+
+export type SyncAcquireResponseProviderGkeGateway2 = {
+  provider: SyncAcquireResponseProviderGkeGatewayEnum2;
+  /**
+   * Optional static address name for the Gateway frontend.
+   */
+  staticAddressName?: string | null | undefined;
+};
+
+export const SyncAcquireResponseProviderAwsAlbEnum2 = {
+  AwsAlb: "awsAlb",
+} as const;
+export type SyncAcquireResponseProviderAwsAlbEnum2 = ClosedEnum<
+  typeof SyncAcquireResponseProviderAwsAlbEnum2
+>;
+
+export type SyncAcquireResponseProviderAwsAlb2 = {
+  /**
+   * Optional ALB IP address type, such as `dualstack`.
+   */
+  ipAddressType?: string | null | undefined;
+  provider: SyncAcquireResponseProviderAwsAlbEnum2;
+  /**
+   * Internet-facing or internal ALB scheme.
+   */
+  scheme: string;
+  /**
+   * Explicit subnet IDs when the profile cannot rely on controller discovery.
+   */
+  subnetIds?: Array<string> | undefined;
+  /**
+   * ALB target type, usually `ip`.
+   */
+  targetType: string;
+};
+
+export type SyncAcquireResponseProviderUnion2 =
+  | SyncAcquireResponseProviderAwsAlb2
+  | SyncAcquireResponseProviderAzureApplicationGatewayForContainers2
+  | SyncAcquireResponseProviderGkeGateway2
+  | any;
+
+/**
+ * Shared Gateway API route profile values.
+ */
+export type SyncAcquireResponseRouteGateway1 = {
+  /**
+   * Annotations applied to route objects.
+   */
+  annotations?: { [k: string]: string } | undefined;
+  /**
+   * Route controller identifier, for example a cloud Gateway controller.
+   */
+  controller?: string | null | undefined;
+  /**
+   * GatewayClass selected for generated Gateways.
+   */
+  gatewayClassName: string;
+  /**
+   * Labels applied to route objects.
+   */
+  labels?: { [k: string]: string } | undefined;
+  /**
+   * Listener port, usually 443.
+   */
+  listenerPort: number;
+  provider?:
+    | SyncAcquireResponseProviderAwsAlb2
+    | SyncAcquireResponseProviderAzureApplicationGatewayForContainers2
+    | SyncAcquireResponseProviderGkeGateway2
+    | any
+    | null
+    | undefined;
+  routeApi: "gateway";
+};
+
+export const SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum1 =
+  {
+    AzureApplicationGatewayForContainers:
+      "azureApplicationGatewayForContainers",
+  } as const;
+export type SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum1 =
+  ClosedEnum<
+    typeof SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum1
+  >;
+
+export type SyncAcquireResponseProviderAzureApplicationGatewayForContainers1 = {
+  /**
+   * Optional ALB name when using BYO Application Gateway resources.
+   */
+  albName?: string | null | undefined;
+  /**
+   * Optional ALB namespace when using BYO Application Gateway resources.
+   */
+  albNamespace?: string | null | undefined;
+  /**
+   * Public or internal frontend exposure.
+   */
+  frontend: string;
+  provider:
+    SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum1;
+};
+
+export const SyncAcquireResponseProviderGkeGatewayEnum1 = {
+  GkeGateway: "gkeGateway",
+} as const;
+export type SyncAcquireResponseProviderGkeGatewayEnum1 = ClosedEnum<
+  typeof SyncAcquireResponseProviderGkeGatewayEnum1
+>;
+
+export type SyncAcquireResponseProviderGkeGateway1 = {
+  provider: SyncAcquireResponseProviderGkeGatewayEnum1;
+  /**
+   * Optional static address name for the Gateway frontend.
+   */
+  staticAddressName?: string | null | undefined;
+};
+
+export const SyncAcquireResponseProviderAwsAlbEnum1 = {
+  AwsAlb: "awsAlb",
+} as const;
+export type SyncAcquireResponseProviderAwsAlbEnum1 = ClosedEnum<
+  typeof SyncAcquireResponseProviderAwsAlbEnum1
+>;
+
+export type SyncAcquireResponseProviderAwsAlb1 = {
+  /**
+   * Optional ALB IP address type, such as `dualstack`.
+   */
+  ipAddressType?: string | null | undefined;
+  provider: SyncAcquireResponseProviderAwsAlbEnum1;
+  /**
+   * Internet-facing or internal ALB scheme.
+   */
+  scheme: string;
+  /**
+   * Explicit subnet IDs when the profile cannot rely on controller discovery.
+   */
+  subnetIds?: Array<string> | undefined;
+  /**
+   * ALB target type, usually `ip`.
+   */
+  targetType: string;
+};
+
+export type SyncAcquireResponseProviderUnion1 =
+  | SyncAcquireResponseProviderAwsAlb1
+  | SyncAcquireResponseProviderAzureApplicationGatewayForContainers1
+  | SyncAcquireResponseProviderGkeGateway1
+  | any;
+
+/**
+ * Shared Ingress route profile values.
+ */
+export type SyncAcquireResponseRouteIngress1 = {
+  /**
+   * Annotations applied to route objects.
+   */
+  annotations?: { [k: string]: string } | undefined;
+  /**
+   * Route controller identifier, for example `eks.amazonaws.com/alb`.
+   */
+  controller?: string | null | undefined;
+  /**
+   * `spec.ingressClassName` for generated Ingresses.
+   */
+  ingressClassName: string;
+  /**
+   * Labels applied to route objects.
+   */
+  labels?: { [k: string]: string } | undefined;
+  provider?:
+    | SyncAcquireResponseProviderAwsAlb1
+    | SyncAcquireResponseProviderAzureApplicationGatewayForContainers1
+    | SyncAcquireResponseProviderGkeGateway1
+    | any
+    | null
+    | undefined;
+  routeApi: "ingress";
+};
+
+/**
+ * Kubernetes route API selected for public endpoints.
+ */
+export type SyncAcquireResponseRouteUnion1 =
+  | SyncAcquireResponseRouteIngress1
+  | SyncAcquireResponseRouteGateway1;
+
+export type SyncAcquireResponseExposureGenerated = {
+  /**
+   * Certificate publication or reference mode for Kubernetes public endpoints.
+   */
+  certificate:
+    | SyncAcquireResponseCertificateTLSSecretRef1
+    | SyncAcquireResponseCertificateManagedAcmImport1
+    | SyncAcquireResponseCertificateAwsAcmArn1
+    | SyncAcquireResponseCertificateManagedTLSSecret1
+    | SyncAcquireResponseCertificateNone1;
+  mode: SyncAcquireResponseModeGenerated;
+  /**
+   * Kubernetes route API selected for public endpoints.
+   */
+  route: SyncAcquireResponseRouteIngress1 | SyncAcquireResponseRouteGateway1;
+};
+
+export const SyncAcquireResponseModeDisabled = {
+  Disabled: "disabled",
+} as const;
+export type SyncAcquireResponseModeDisabled = ClosedEnum<
+  typeof SyncAcquireResponseModeDisabled
+>;
+
+export type SyncAcquireResponseExposureDisabled = {
+  mode: SyncAcquireResponseModeDisabled;
+};
+
+export type SyncAcquireResponseExposureUnion =
+  | SyncAcquireResponseExposureCustom
+  | SyncAcquireResponseExposureGenerated
+  | SyncAcquireResponseExposureDisabled
+  | any;
+
+/**
+ * Kubernetes runtime substrate configuration.
+ *
+ * @remarks
+ *
+ * This controls how setup chooses the cluster backing `Platform::Kubernetes`
+ * deployments. When omitted, cloud-backed Kubernetes deployments default to a
+ * managed cluster and generic/on-prem Kubernetes defaults to an external
+ * cluster.
+ */
+export type SyncAcquireResponseKubernetes = {
+  cluster?: SyncAcquireResponseCluster | any | null | undefined;
+  exposure?:
+    | SyncAcquireResponseExposureCustom
+    | SyncAcquireResponseExposureGenerated
+    | SyncAcquireResponseExposureDisabled
+    | any
+    | null
+    | undefined;
+};
+
+export type SyncAcquireResponseKubernetesUnion =
+  | SyncAcquireResponseKubernetes
+  | any;
 
 export const SyncAcquireResponseTypeByoVnetAzure = {
   ByoVnetAzure: "byo-vnet-azure",
@@ -6467,6 +7821,7 @@ export type SyncAcquireResponseStackSettings = {
    * How heartbeat health checks are handled.
    */
   heartbeats?: SyncAcquireResponseHeartbeats | undefined;
+  kubernetes?: SyncAcquireResponseKubernetes | any | null | undefined;
   network?:
     | SyncAcquireResponseNetworkByoVpcAws
     | SyncAcquireResponseNetworkByoVpcGcp
@@ -6498,11 +7853,22 @@ export type SyncAcquireResponseConfig = {
    * This requires running with elevated cloud credentials.
    */
   allowFrozenChanges?: boolean | undefined;
+  basePlatform?: SyncAcquireResponseBasePlatformEnum | any | null | undefined;
   computeBackend?:
     | SyncAcquireResponseComputeBackendHorizon
     | any
     | null
     | undefined;
+  /**
+   * Human-readable deployment name for cloud console metadata.
+   *
+   * @remarks
+   *
+   * This is separate from the physical resource prefix in StackState. It is
+   * used only for display text such as IAM role descriptions, service
+   * account descriptions, and custom role titles.
+   */
+  deploymentName?: string | null | undefined;
   /**
    * Deployment token for pull authentication with the manager's registry.
    *
@@ -6551,9 +7917,9 @@ export type SyncAcquireResponseConfig = {
       | SyncAcquireResponseExternalBindingsLocalVault;
   } | undefined;
   managementConfig?:
+    | SyncAcquireResponseManagementConfigAzure
     | SyncAcquireResponseManagementConfigAws
     | SyncAcquireResponseManagementConfigGcp
-    | SyncAcquireResponseManagementConfigAzure
     | SyncAcquireResponseManagementConfigKubernetes
     | any
     | null
@@ -6576,8 +7942,9 @@ export type SyncAcquireResponseConfig = {
    *
    * @remarks
    *
-   * Only Lambda (ECR) and Cloud Run (GAR) require native registry URIs.
-   * All other platforms pull through the manager's proxy.
+   * Lambda (ECR) and Cloud Run (GAR) require native registry URIs. Other
+   * runtimes, including Azure Container Apps, pull through the manager's
+   * registry proxy.
    *
    * Derived by the manager from the artifact registry binding:
    * - ECR: `{account_id}.dkr.ecr.{region}.amazonaws.com/{repository_prefix}`
@@ -6585,18 +7952,19 @@ export type SyncAcquireResponseConfig = {
    */
   nativeImageHost?: string | null | undefined;
   /**
-   * Public URLs for exposed resources (optional override for all platforms).
+   * Public URLs for exposed resources (optional override).
    *
    * @remarks
    *
-   * - **Kubernetes**: Pre-computed by Helm from services config (highly recommended)
-   * - **Cloud**: Optional override of domain_metadata or load balancer DNS
-   * - **Local**: Optional override of dynamic localhost URLs
+   * Use this only when a caller already knows the public URL. Managed public
+   * endpoint flows should prefer `domain_metadata` plus controller-reported
+   * load balancer outputs so DNS, certificate renewal, and route readiness
+   * stay tied to the resource state.
    *
    * If not set, platforms determine public URLs from other sources:
-   * - Cloud: domain_metadata FQDN or load balancer DNS
-   * - Local: http://localhost:{allocated_port}
-   * - Kubernetes: None (unless provided by Helm)
+   * - Managed DNS/TLS flows: `domain_metadata` FQDN or load balancer DNS
+   * - Local: `http://localhost:{allocated_port}`
+   * - Custom or disabled exposure: no public URL unless a controller reports one
    *
    * Key: resource ID, Value: public URL (e.g., "https://api.acme.com")
    */
@@ -6760,6 +8128,8 @@ export const SyncAcquireResponseCurrentReleaseOverrideAwGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncAcquireResponseCurrentReleaseOverrideAwGrantFromJSON(
@@ -6784,11 +8154,13 @@ export const SyncAcquireResponseCurrentReleaseOverrideAw$inboundSchema:
     binding: z.lazy(() =>
       SyncAcquireResponseCurrentReleaseOverrideAwBinding$inboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     effect: SyncAcquireResponseCurrentReleaseOverrideEffect$inboundSchema
       .optional(),
     grant: z.lazy(() =>
       SyncAcquireResponseCurrentReleaseOverrideAwGrant$inboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncAcquireResponseCurrentReleaseOverrideAwFromJSON(
@@ -6887,6 +8259,8 @@ export const SyncAcquireResponseCurrentReleaseOverrideAzureGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncAcquireResponseCurrentReleaseOverrideAzureGrantFromJSON(
@@ -6912,9 +8286,11 @@ export const SyncAcquireResponseCurrentReleaseOverrideAzure$inboundSchema:
       binding: z.lazy(() =>
         SyncAcquireResponseCurrentReleaseOverrideAzureBinding$inboundSchema
       ),
+      description: z.nullable(z.string()).optional(),
       grant: z.lazy(() =>
         SyncAcquireResponseCurrentReleaseOverrideAzureGrant$inboundSchema
       ),
+      label: z.nullable(z.string()).optional(),
     },
   );
 
@@ -7132,6 +8508,8 @@ export const SyncAcquireResponseCurrentReleaseOverrideGcpGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncAcquireResponseCurrentReleaseOverrideGcpGrantFromJSON(
@@ -7156,9 +8534,11 @@ export const SyncAcquireResponseCurrentReleaseOverrideGcp$inboundSchema:
     binding: z.lazy(() =>
       SyncAcquireResponseCurrentReleaseOverrideGcpBinding$inboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncAcquireResponseCurrentReleaseOverrideGcpGrant$inboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncAcquireResponseCurrentReleaseOverrideGcpFromJSON(
@@ -7387,6 +8767,8 @@ export const SyncAcquireResponseCurrentReleaseExtendAwGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     },
   );
 
@@ -7414,11 +8796,13 @@ export const SyncAcquireResponseCurrentReleaseExtendAw$inboundSchema: z.ZodType<
   binding: z.lazy(() =>
     SyncAcquireResponseCurrentReleaseExtendAwBinding$inboundSchema
   ),
+  description: z.nullable(z.string()).optional(),
   effect: SyncAcquireResponseCurrentReleaseExtendEffect$inboundSchema
     .optional(),
   grant: z.lazy(() =>
     SyncAcquireResponseCurrentReleaseExtendAwGrant$inboundSchema
   ),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function syncAcquireResponseCurrentReleaseExtendAwFromJSON(
@@ -7518,6 +8902,8 @@ export const SyncAcquireResponseCurrentReleaseExtendAzureGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncAcquireResponseCurrentReleaseExtendAzureGrantFromJSON(
@@ -7542,9 +8928,11 @@ export const SyncAcquireResponseCurrentReleaseExtendAzure$inboundSchema:
     binding: z.lazy(() =>
       SyncAcquireResponseCurrentReleaseExtendAzureBinding$inboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncAcquireResponseCurrentReleaseExtendAzureGrant$inboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncAcquireResponseCurrentReleaseExtendAzureFromJSON(
@@ -7760,6 +9148,8 @@ export const SyncAcquireResponseCurrentReleaseExtendGcpGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncAcquireResponseCurrentReleaseExtendGcpGrantFromJSON(
@@ -7784,9 +9174,11 @@ export const SyncAcquireResponseCurrentReleaseExtendGcp$inboundSchema:
     binding: z.lazy(() =>
       SyncAcquireResponseCurrentReleaseExtendGcpBinding$inboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncAcquireResponseCurrentReleaseExtendGcpGrant$inboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncAcquireResponseCurrentReleaseExtendGcpFromJSON(
@@ -8039,6 +9431,8 @@ export const SyncAcquireResponseCurrentReleaseProfileAwGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncAcquireResponseCurrentReleaseProfileAwGrantFromJSON(
@@ -8063,11 +9457,13 @@ export const SyncAcquireResponseCurrentReleaseProfileAw$inboundSchema:
     binding: z.lazy(() =>
       SyncAcquireResponseCurrentReleaseProfileAwBinding$inboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     effect: SyncAcquireResponseCurrentReleaseProfileEffect$inboundSchema
       .optional(),
     grant: z.lazy(() =>
       SyncAcquireResponseCurrentReleaseProfileAwGrant$inboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncAcquireResponseCurrentReleaseProfileAwFromJSON(
@@ -8167,6 +9563,8 @@ export const SyncAcquireResponseCurrentReleaseProfileAzureGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncAcquireResponseCurrentReleaseProfileAzureGrantFromJSON(
@@ -8191,9 +9589,11 @@ export const SyncAcquireResponseCurrentReleaseProfileAzure$inboundSchema:
     binding: z.lazy(() =>
       SyncAcquireResponseCurrentReleaseProfileAzureBinding$inboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncAcquireResponseCurrentReleaseProfileAzureGrant$inboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncAcquireResponseCurrentReleaseProfileAzureFromJSON(
@@ -8410,6 +9810,8 @@ export const SyncAcquireResponseCurrentReleaseProfileGcpGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncAcquireResponseCurrentReleaseProfileGcpGrantFromJSON(
@@ -8434,9 +9836,11 @@ export const SyncAcquireResponseCurrentReleaseProfileGcp$inboundSchema:
     binding: z.lazy(() =>
       SyncAcquireResponseCurrentReleaseProfileGcpBinding$inboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncAcquireResponseCurrentReleaseProfileGcpGrant$inboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncAcquireResponseCurrentReleaseProfileGcpFromJSON(
@@ -8943,6 +10347,34 @@ export function syncAcquireResponseDeleteScopeUnionFromJSON(
 }
 
 /** @internal */
+export const SyncAcquireResponsePendingDeleteScopeEnum$inboundSchema: z.ZodEnum<
+  typeof SyncAcquireResponsePendingDeleteScopeEnum
+> = z.enum(SyncAcquireResponsePendingDeleteScopeEnum);
+
+/** @internal */
+export const SyncAcquireResponsePendingDeleteScopeUnion$inboundSchema:
+  z.ZodType<SyncAcquireResponsePendingDeleteScopeUnion, unknown> = z.union([
+    SyncAcquireResponsePendingDeleteScopeEnum$inboundSchema,
+    z.any(),
+  ]);
+
+export function syncAcquireResponsePendingDeleteScopeUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponsePendingDeleteScopeUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponsePendingDeleteScopeUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponsePendingDeleteScopeUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const SyncAcquireResponsePreparedStackManagementEnum$inboundSchema:
   z.ZodEnum<typeof SyncAcquireResponsePreparedStackManagementEnum> = z.enum(
     SyncAcquireResponsePreparedStackManagementEnum,
@@ -9041,6 +10473,8 @@ export const SyncAcquireResponsePreparedStackOverrideAwGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncAcquireResponsePreparedStackOverrideAwGrantFromJSON(
@@ -9065,11 +10499,13 @@ export const SyncAcquireResponsePreparedStackOverrideAw$inboundSchema:
     binding: z.lazy(() =>
       SyncAcquireResponsePreparedStackOverrideAwBinding$inboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     effect: SyncAcquireResponsePreparedStackOverrideEffect$inboundSchema
       .optional(),
     grant: z.lazy(() =>
       SyncAcquireResponsePreparedStackOverrideAwGrant$inboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncAcquireResponsePreparedStackOverrideAwFromJSON(
@@ -9169,6 +10605,8 @@ export const SyncAcquireResponsePreparedStackOverrideAzureGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncAcquireResponsePreparedStackOverrideAzureGrantFromJSON(
@@ -9193,9 +10631,11 @@ export const SyncAcquireResponsePreparedStackOverrideAzure$inboundSchema:
     binding: z.lazy(() =>
       SyncAcquireResponsePreparedStackOverrideAzureBinding$inboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncAcquireResponsePreparedStackOverrideAzureGrant$inboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncAcquireResponsePreparedStackOverrideAzureFromJSON(
@@ -9413,6 +10853,8 @@ export const SyncAcquireResponsePreparedStackOverrideGcpGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncAcquireResponsePreparedStackOverrideGcpGrantFromJSON(
@@ -9437,9 +10879,11 @@ export const SyncAcquireResponsePreparedStackOverrideGcp$inboundSchema:
     binding: z.lazy(() =>
       SyncAcquireResponsePreparedStackOverrideGcpBinding$inboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncAcquireResponsePreparedStackOverrideGcpGrant$inboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncAcquireResponsePreparedStackOverrideGcpFromJSON(
@@ -9665,6 +11109,8 @@ export const SyncAcquireResponsePreparedStackExtendAwGrant$inboundSchema:
     actions: z.nullable(z.array(z.string())).optional(),
     dataActions: z.nullable(z.array(z.string())).optional(),
     permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
   });
 
 export function syncAcquireResponsePreparedStackExtendAwGrantFromJSON(
@@ -9691,10 +11137,12 @@ export const SyncAcquireResponsePreparedStackExtendAw$inboundSchema: z.ZodType<
   binding: z.lazy(() =>
     SyncAcquireResponsePreparedStackExtendAwBinding$inboundSchema
   ),
+  description: z.nullable(z.string()).optional(),
   effect: SyncAcquireResponsePreparedStackExtendEffect$inboundSchema.optional(),
   grant: z.lazy(() =>
     SyncAcquireResponsePreparedStackExtendAwGrant$inboundSchema
   ),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function syncAcquireResponsePreparedStackExtendAwFromJSON(
@@ -9794,6 +11242,8 @@ export const SyncAcquireResponsePreparedStackExtendAzureGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncAcquireResponsePreparedStackExtendAzureGrantFromJSON(
@@ -9818,9 +11268,11 @@ export const SyncAcquireResponsePreparedStackExtendAzure$inboundSchema:
     binding: z.lazy(() =>
       SyncAcquireResponsePreparedStackExtendAzureBinding$inboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncAcquireResponsePreparedStackExtendAzureGrant$inboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncAcquireResponsePreparedStackExtendAzureFromJSON(
@@ -10036,6 +11488,8 @@ export const SyncAcquireResponsePreparedStackExtendGcpGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     },
   );
 
@@ -10063,9 +11517,11 @@ export const SyncAcquireResponsePreparedStackExtendGcp$inboundSchema: z.ZodType<
   binding: z.lazy(() =>
     SyncAcquireResponsePreparedStackExtendGcpBinding$inboundSchema
   ),
+  description: z.nullable(z.string()).optional(),
   grant: z.lazy(() =>
     SyncAcquireResponsePreparedStackExtendGcpGrant$inboundSchema
   ),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function syncAcquireResponsePreparedStackExtendGcpFromJSON(
@@ -10315,6 +11771,8 @@ export const SyncAcquireResponsePreparedStackProfileAwGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     },
   );
 
@@ -10342,11 +11800,13 @@ export const SyncAcquireResponsePreparedStackProfileAw$inboundSchema: z.ZodType<
   binding: z.lazy(() =>
     SyncAcquireResponsePreparedStackProfileAwBinding$inboundSchema
   ),
+  description: z.nullable(z.string()).optional(),
   effect: SyncAcquireResponsePreparedStackProfileEffect$inboundSchema
     .optional(),
   grant: z.lazy(() =>
     SyncAcquireResponsePreparedStackProfileAwGrant$inboundSchema
   ),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function syncAcquireResponsePreparedStackProfileAwFromJSON(
@@ -10446,6 +11906,8 @@ export const SyncAcquireResponsePreparedStackProfileAzureGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncAcquireResponsePreparedStackProfileAzureGrantFromJSON(
@@ -10470,9 +11932,11 @@ export const SyncAcquireResponsePreparedStackProfileAzure$inboundSchema:
     binding: z.lazy(() =>
       SyncAcquireResponsePreparedStackProfileAzureBinding$inboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncAcquireResponsePreparedStackProfileAzureGrant$inboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncAcquireResponsePreparedStackProfileAzureFromJSON(
@@ -10689,6 +12153,8 @@ export const SyncAcquireResponsePreparedStackProfileGcpGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncAcquireResponsePreparedStackProfileGcpGrantFromJSON(
@@ -10713,9 +12179,11 @@ export const SyncAcquireResponsePreparedStackProfileGcp$inboundSchema:
     binding: z.lazy(() =>
       SyncAcquireResponsePreparedStackProfileGcpBinding$inboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncAcquireResponsePreparedStackProfileGcpGrant$inboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncAcquireResponsePreparedStackProfileGcpFromJSON(
@@ -11004,6 +12472,9 @@ export const SyncAcquireResponseRuntimeMetadata$inboundSchema: z.ZodType<
     z.union([SyncAcquireResponseDeleteScopeEnum$inboundSchema, z.any()]),
   ).optional(),
   lastSyncedEnvVarsHash: z.nullable(z.string()).optional(),
+  pendingDeleteScope: z.nullable(
+    z.union([SyncAcquireResponsePendingDeleteScopeEnum$inboundSchema, z.any()]),
+  ).optional(),
   preparedStack: z.nullable(
     z.union([
       z.lazy(() => SyncAcquireResponsePreparedStack$inboundSchema),
@@ -11075,6 +12546,34 @@ export function syncAcquireResponseStackStateConfigFromJSON(
     (x) =>
       SyncAcquireResponseStackStateConfig$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'SyncAcquireResponseStackStateConfig' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseControllerPlatformEnum$inboundSchema: z.ZodEnum<
+  typeof SyncAcquireResponseControllerPlatformEnum
+> = z.enum(SyncAcquireResponseControllerPlatformEnum);
+
+/** @internal */
+export const SyncAcquireResponseControllerPlatformUnion$inboundSchema:
+  z.ZodType<SyncAcquireResponseControllerPlatformUnion, unknown> = z.union([
+    SyncAcquireResponseControllerPlatformEnum$inboundSchema,
+    z.any(),
+  ]);
+
+export function syncAcquireResponseControllerPlatformUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseControllerPlatformUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseControllerPlatformUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseControllerPlatformUnion' from JSON`,
   );
 }
 
@@ -11262,6 +12761,9 @@ export const SyncAcquireResponseStackStateResources$inboundSchema: z.ZodType<
 > = z.object({
   _internal: z.nullable(z.any()).optional(),
   config: z.lazy(() => SyncAcquireResponseStackStateConfig$inboundSchema),
+  controllerPlatform: z.nullable(
+    z.union([SyncAcquireResponseControllerPlatformEnum$inboundSchema, z.any()]),
+  ).optional(),
   dependencies: z.array(
     z.lazy(() => SyncAcquireResponseStackStateDependency$inboundSchema),
   ).optional(),
@@ -11452,6 +12954,8 @@ export const SyncAcquireResponseTargetReleaseOverrideAwGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncAcquireResponseTargetReleaseOverrideAwGrantFromJSON(
@@ -11476,11 +12980,13 @@ export const SyncAcquireResponseTargetReleaseOverrideAw$inboundSchema:
     binding: z.lazy(() =>
       SyncAcquireResponseTargetReleaseOverrideAwBinding$inboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     effect: SyncAcquireResponseTargetReleaseOverrideEffect$inboundSchema
       .optional(),
     grant: z.lazy(() =>
       SyncAcquireResponseTargetReleaseOverrideAwGrant$inboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncAcquireResponseTargetReleaseOverrideAwFromJSON(
@@ -11580,6 +13086,8 @@ export const SyncAcquireResponseTargetReleaseOverrideAzureGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncAcquireResponseTargetReleaseOverrideAzureGrantFromJSON(
@@ -11604,9 +13112,11 @@ export const SyncAcquireResponseTargetReleaseOverrideAzure$inboundSchema:
     binding: z.lazy(() =>
       SyncAcquireResponseTargetReleaseOverrideAzureBinding$inboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncAcquireResponseTargetReleaseOverrideAzureGrant$inboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncAcquireResponseTargetReleaseOverrideAzureFromJSON(
@@ -11823,6 +13333,8 @@ export const SyncAcquireResponseTargetReleaseOverrideGcpGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncAcquireResponseTargetReleaseOverrideGcpGrantFromJSON(
@@ -11847,9 +13359,11 @@ export const SyncAcquireResponseTargetReleaseOverrideGcp$inboundSchema:
     binding: z.lazy(() =>
       SyncAcquireResponseTargetReleaseOverrideGcpBinding$inboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncAcquireResponseTargetReleaseOverrideGcpGrant$inboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncAcquireResponseTargetReleaseOverrideGcpFromJSON(
@@ -12075,6 +13589,8 @@ export const SyncAcquireResponseTargetReleaseExtendAwGrant$inboundSchema:
     actions: z.nullable(z.array(z.string())).optional(),
     dataActions: z.nullable(z.array(z.string())).optional(),
     permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
   });
 
 export function syncAcquireResponseTargetReleaseExtendAwGrantFromJSON(
@@ -12101,10 +13617,12 @@ export const SyncAcquireResponseTargetReleaseExtendAw$inboundSchema: z.ZodType<
   binding: z.lazy(() =>
     SyncAcquireResponseTargetReleaseExtendAwBinding$inboundSchema
   ),
+  description: z.nullable(z.string()).optional(),
   effect: SyncAcquireResponseTargetReleaseExtendEffect$inboundSchema.optional(),
   grant: z.lazy(() =>
     SyncAcquireResponseTargetReleaseExtendAwGrant$inboundSchema
   ),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function syncAcquireResponseTargetReleaseExtendAwFromJSON(
@@ -12204,6 +13722,8 @@ export const SyncAcquireResponseTargetReleaseExtendAzureGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncAcquireResponseTargetReleaseExtendAzureGrantFromJSON(
@@ -12228,9 +13748,11 @@ export const SyncAcquireResponseTargetReleaseExtendAzure$inboundSchema:
     binding: z.lazy(() =>
       SyncAcquireResponseTargetReleaseExtendAzureBinding$inboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncAcquireResponseTargetReleaseExtendAzureGrant$inboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncAcquireResponseTargetReleaseExtendAzureFromJSON(
@@ -12445,6 +13967,8 @@ export const SyncAcquireResponseTargetReleaseExtendGcpGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     },
   );
 
@@ -12472,9 +13996,11 @@ export const SyncAcquireResponseTargetReleaseExtendGcp$inboundSchema: z.ZodType<
   binding: z.lazy(() =>
     SyncAcquireResponseTargetReleaseExtendGcpBinding$inboundSchema
   ),
+  description: z.nullable(z.string()).optional(),
   grant: z.lazy(() =>
     SyncAcquireResponseTargetReleaseExtendGcpGrant$inboundSchema
   ),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function syncAcquireResponseTargetReleaseExtendGcpFromJSON(
@@ -12724,6 +14250,8 @@ export const SyncAcquireResponseTargetReleaseProfileAwGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     },
   );
 
@@ -12751,11 +14279,13 @@ export const SyncAcquireResponseTargetReleaseProfileAw$inboundSchema: z.ZodType<
   binding: z.lazy(() =>
     SyncAcquireResponseTargetReleaseProfileAwBinding$inboundSchema
   ),
+  description: z.nullable(z.string()).optional(),
   effect: SyncAcquireResponseTargetReleaseProfileEffect$inboundSchema
     .optional(),
   grant: z.lazy(() =>
     SyncAcquireResponseTargetReleaseProfileAwGrant$inboundSchema
   ),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function syncAcquireResponseTargetReleaseProfileAwFromJSON(
@@ -12855,6 +14385,8 @@ export const SyncAcquireResponseTargetReleaseProfileAzureGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncAcquireResponseTargetReleaseProfileAzureGrantFromJSON(
@@ -12879,9 +14411,11 @@ export const SyncAcquireResponseTargetReleaseProfileAzure$inboundSchema:
     binding: z.lazy(() =>
       SyncAcquireResponseTargetReleaseProfileAzureBinding$inboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncAcquireResponseTargetReleaseProfileAzureGrant$inboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncAcquireResponseTargetReleaseProfileAzureFromJSON(
@@ -13097,6 +14631,8 @@ export const SyncAcquireResponseTargetReleaseProfileGcpGrant$inboundSchema:
       actions: z.nullable(z.array(z.string())).optional(),
       dataActions: z.nullable(z.array(z.string())).optional(),
       permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
     });
 
 export function syncAcquireResponseTargetReleaseProfileGcpGrantFromJSON(
@@ -13121,9 +14657,11 @@ export const SyncAcquireResponseTargetReleaseProfileGcp$inboundSchema:
     binding: z.lazy(() =>
       SyncAcquireResponseTargetReleaseProfileGcpBinding$inboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       SyncAcquireResponseTargetReleaseProfileGcpGrant$inboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function syncAcquireResponseTargetReleaseProfileGcpFromJSON(
@@ -13447,7 +14985,7 @@ export const SyncAcquireResponseCurrent$inboundSchema: z.ZodType<
     ]),
   ).optional(),
   platform: SyncAcquireResponseCurrentPlatform$inboundSchema,
-  protocolVersion: z.int().optional(),
+  protocolVersion: z.int(),
   retryRequested: z.boolean().optional(),
   runtimeMetadata: z.nullable(
     z.union([
@@ -13481,6 +15019,28 @@ export function syncAcquireResponseCurrentFromJSON(
 }
 
 /** @internal */
+export const SyncAcquireResponseBasePlatformEnum$inboundSchema: z.ZodEnum<
+  typeof SyncAcquireResponseBasePlatformEnum
+> = z.enum(SyncAcquireResponseBasePlatformEnum);
+
+/** @internal */
+export const SyncAcquireResponseBasePlatformUnion$inboundSchema: z.ZodType<
+  SyncAcquireResponseBasePlatformUnion,
+  unknown
+> = z.union([SyncAcquireResponseBasePlatformEnum$inboundSchema, z.any()]);
+
+export function syncAcquireResponseBasePlatformUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseBasePlatformUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseBasePlatformUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseBasePlatformUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const SyncAcquireResponseClusters$inboundSchema: z.ZodType<
   SyncAcquireResponseClusters,
   unknown
@@ -13500,6 +15060,272 @@ export function syncAcquireResponseClustersFromJSON(
 }
 
 /** @internal */
+export const SyncAcquireResponseHorizonMachineImageAws$inboundSchema: z.ZodType<
+  SyncAcquireResponseHorizonMachineImageAws,
+  unknown
+> = z.object({
+  amis: z.record(z.string(), z.record(z.string(), z.string())),
+});
+
+export function syncAcquireResponseHorizonMachineImageAwsFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseHorizonMachineImageAws,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseHorizonMachineImageAws$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseHorizonMachineImageAws' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseHorizonMachineImageAwsUnion$inboundSchema:
+  z.ZodType<SyncAcquireResponseHorizonMachineImageAwsUnion, unknown> = z.union([
+    z.lazy(() => SyncAcquireResponseHorizonMachineImageAws$inboundSchema),
+    z.any(),
+  ]);
+
+export function syncAcquireResponseHorizonMachineImageAwsUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseHorizonMachineImageAwsUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseHorizonMachineImageAwsUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseHorizonMachineImageAwsUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseAzureImages$inboundSchema: z.ZodType<
+  SyncAcquireResponseAzureImages,
+  unknown
+> = z.object({
+  imageVersionId: z.string(),
+});
+
+export function syncAcquireResponseAzureImagesFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseAzureImages, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseAzureImages$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseAzureImages' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseHorizonMachineImageAzure$inboundSchema:
+  z.ZodType<SyncAcquireResponseHorizonMachineImageAzure, unknown> = z.object({
+    images: z.record(
+      z.string(),
+      z.lazy(() => SyncAcquireResponseAzureImages$inboundSchema),
+    ),
+  });
+
+export function syncAcquireResponseHorizonMachineImageAzureFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseHorizonMachineImageAzure,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseHorizonMachineImageAzure$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseHorizonMachineImageAzure' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseHorizonMachineImageAzureUnion$inboundSchema:
+  z.ZodType<SyncAcquireResponseHorizonMachineImageAzureUnion, unknown> = z
+    .union([
+      z.lazy(() => SyncAcquireResponseHorizonMachineImageAzure$inboundSchema),
+      z.any(),
+    ]);
+
+export function syncAcquireResponseHorizonMachineImageAzureUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseHorizonMachineImageAzureUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseHorizonMachineImageAzureUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseHorizonMachineImageAzureUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseBaseImage$inboundSchema: z.ZodType<
+  SyncAcquireResponseBaseImage,
+  unknown
+> = z.object({
+  name: z.string(),
+  version: z.string(),
+});
+
+export function syncAcquireResponseBaseImageFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseBaseImage, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseBaseImage$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseBaseImage' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseGcpImages$inboundSchema: z.ZodType<
+  SyncAcquireResponseGcpImages,
+  unknown
+> = z.object({
+  sourceImage: z.string(),
+});
+
+export function syncAcquireResponseGcpImagesFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseGcpImages, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseGcpImages$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseGcpImages' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseHorizonMachineImageGcp$inboundSchema: z.ZodType<
+  SyncAcquireResponseHorizonMachineImageGcp,
+  unknown
+> = z.object({
+  images: z.record(
+    z.string(),
+    z.lazy(() => SyncAcquireResponseGcpImages$inboundSchema),
+  ),
+});
+
+export function syncAcquireResponseHorizonMachineImageGcpFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseHorizonMachineImageGcp,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseHorizonMachineImageGcp$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseHorizonMachineImageGcp' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseHorizonMachineImageGcpUnion$inboundSchema:
+  z.ZodType<SyncAcquireResponseHorizonMachineImageGcpUnion, unknown> = z.union([
+    z.lazy(() => SyncAcquireResponseHorizonMachineImageGcp$inboundSchema),
+    z.any(),
+  ]);
+
+export function syncAcquireResponseHorizonMachineImageGcpUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseHorizonMachineImageGcpUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseHorizonMachineImageGcpUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseHorizonMachineImageGcpUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseHorizonMachineImage$inboundSchema: z.ZodType<
+  SyncAcquireResponseHorizonMachineImage,
+  unknown
+> = z.object({
+  aws: z.nullable(
+    z.union([
+      z.lazy(() => SyncAcquireResponseHorizonMachineImageAws$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  azure: z.nullable(
+    z.union([
+      z.lazy(() => SyncAcquireResponseHorizonMachineImageAzure$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  baseImage: z.lazy(() => SyncAcquireResponseBaseImage$inboundSchema),
+  channel: z.string(),
+  createdAt: z.string(),
+  gcp: z.nullable(
+    z.union([
+      z.lazy(() => SyncAcquireResponseHorizonMachineImageGcp$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  gitSha: z.string(),
+  horizondVersion: z.string(),
+  machineImageVersion: z.string(),
+});
+
+export function syncAcquireResponseHorizonMachineImageFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseHorizonMachineImage, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseHorizonMachineImage$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseHorizonMachineImage' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseHorizonMachineImageUnion$inboundSchema:
+  z.ZodType<SyncAcquireResponseHorizonMachineImageUnion, unknown> = z.union([
+    z.lazy(() => SyncAcquireResponseHorizonMachineImage$inboundSchema),
+    z.any(),
+  ]);
+
+export function syncAcquireResponseHorizonMachineImageUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseHorizonMachineImageUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseHorizonMachineImageUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseHorizonMachineImageUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const SyncAcquireResponseComputeBackendType$inboundSchema: z.ZodEnum<
   typeof SyncAcquireResponseComputeBackendType
 > = z.enum(SyncAcquireResponseComputeBackendType);
@@ -13513,8 +15339,13 @@ export const SyncAcquireResponseComputeBackendHorizon$inboundSchema: z.ZodType<
     z.string(),
     z.lazy(() => SyncAcquireResponseClusters$inboundSchema),
   ),
+  horizonMachineImage: z.nullable(
+    z.union([
+      z.lazy(() => SyncAcquireResponseHorizonMachineImage$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   url: z.string(),
-  workerImageId: z.nullable(z.string()).optional(),
   type: SyncAcquireResponseComputeBackendType$inboundSchema,
 });
 
@@ -17577,10 +19408,9 @@ export const SyncAcquireResponseManagementConfigAzure$inboundSchema: z.ZodType<
   SyncAcquireResponseManagementConfigAzure,
   unknown
 > = z.object({
-  managementPrincipalId: z.nullable(z.string()).optional(),
   managingTenantId: z.string(),
-  oidcIssuer: z.nullable(z.string()).optional(),
-  oidcSubject: z.nullable(z.string()).optional(),
+  oidcIssuer: z.string(),
+  oidcSubject: z.string(),
   platform: SyncAcquireResponseConfigPlatformAzure$inboundSchema,
 });
 
@@ -17655,9 +19485,9 @@ export const SyncAcquireResponseManagementConfigUnion$inboundSchema: z.ZodType<
   SyncAcquireResponseManagementConfigUnion,
   unknown
 > = z.union([
+  z.lazy(() => SyncAcquireResponseManagementConfigAzure$inboundSchema),
   z.lazy(() => SyncAcquireResponseManagementConfigAws$inboundSchema),
   z.lazy(() => SyncAcquireResponseManagementConfigGcp$inboundSchema),
-  z.lazy(() => SyncAcquireResponseManagementConfigAzure$inboundSchema),
   z.lazy(() => SyncAcquireResponseManagementConfigKubernetes$inboundSchema),
   z.any(),
 ]);
@@ -17725,142 +19555,237 @@ export const SyncAcquireResponseDeploymentModel$inboundSchema: z.ZodEnum<
 > = z.enum(SyncAcquireResponseDeploymentModel);
 
 /** @internal */
-export const SyncAcquireResponseAws$inboundSchema: z.ZodType<
-  SyncAcquireResponseAws,
+export const SyncAcquireResponseAwsStackSettings$inboundSchema: z.ZodType<
+  SyncAcquireResponseAwsStackSettings,
   unknown
 > = z.object({
   certificateArn: z.string(),
 });
 
-export function syncAcquireResponseAwsFromJSON(
+export function syncAcquireResponseAwsStackSettingsFromJSON(
   jsonString: string,
-): SafeParseResult<SyncAcquireResponseAws, SDKValidationError> {
+): SafeParseResult<SyncAcquireResponseAwsStackSettings, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => SyncAcquireResponseAws$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncAcquireResponseAws' from JSON`,
+    (x) =>
+      SyncAcquireResponseAwsStackSettings$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseAwsStackSettings' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncAcquireResponseAwsUnion$inboundSchema: z.ZodType<
-  SyncAcquireResponseAwsUnion,
+export const SyncAcquireResponseStackSettingsAwsUnion$inboundSchema: z.ZodType<
+  SyncAcquireResponseStackSettingsAwsUnion,
   unknown
-> = z.union([z.lazy(() => SyncAcquireResponseAws$inboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => SyncAcquireResponseAwsStackSettings$inboundSchema),
+  z.any(),
+]);
 
-export function syncAcquireResponseAwsUnionFromJSON(
+export function syncAcquireResponseStackSettingsAwsUnionFromJSON(
   jsonString: string,
-): SafeParseResult<SyncAcquireResponseAwsUnion, SDKValidationError> {
+): SafeParseResult<
+  SyncAcquireResponseStackSettingsAwsUnion,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => SyncAcquireResponseAwsUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncAcquireResponseAwsUnion' from JSON`,
+    (x) =>
+      SyncAcquireResponseStackSettingsAwsUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseStackSettingsAwsUnion' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncAcquireResponseAzureConfig$inboundSchema: z.ZodType<
-  SyncAcquireResponseAzureConfig,
+export const SyncAcquireResponseAzureStackSettings$inboundSchema: z.ZodType<
+  SyncAcquireResponseAzureStackSettings,
   unknown
 > = z.object({
   keyVaultCertificateId: z.string(),
 });
 
-export function syncAcquireResponseAzureConfigFromJSON(
+export function syncAcquireResponseAzureStackSettingsFromJSON(
   jsonString: string,
-): SafeParseResult<SyncAcquireResponseAzureConfig, SDKValidationError> {
+): SafeParseResult<SyncAcquireResponseAzureStackSettings, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => SyncAcquireResponseAzureConfig$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncAcquireResponseAzureConfig' from JSON`,
+    (x) =>
+      SyncAcquireResponseAzureStackSettings$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseAzureStackSettings' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncAcquireResponseAzureUnion$inboundSchema: z.ZodType<
-  SyncAcquireResponseAzureUnion,
-  unknown
-> = z.union([
-  z.lazy(() => SyncAcquireResponseAzureConfig$inboundSchema),
-  z.any(),
-]);
+export const SyncAcquireResponseStackSettingsAzureUnion$inboundSchema:
+  z.ZodType<SyncAcquireResponseStackSettingsAzureUnion, unknown> = z.union([
+    z.lazy(() => SyncAcquireResponseAzureStackSettings$inboundSchema),
+    z.any(),
+  ]);
 
-export function syncAcquireResponseAzureUnionFromJSON(
+export function syncAcquireResponseStackSettingsAzureUnionFromJSON(
   jsonString: string,
-): SafeParseResult<SyncAcquireResponseAzureUnion, SDKValidationError> {
+): SafeParseResult<
+  SyncAcquireResponseStackSettingsAzureUnion,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => SyncAcquireResponseAzureUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncAcquireResponseAzureUnion' from JSON`,
+    (x) =>
+      SyncAcquireResponseStackSettingsAzureUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseStackSettingsAzureUnion' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncAcquireResponseGcpConfig$inboundSchema: z.ZodType<
-  SyncAcquireResponseGcpConfig,
+export const SyncAcquireResponseGcpStackSettings$inboundSchema: z.ZodType<
+  SyncAcquireResponseGcpStackSettings,
   unknown
 > = z.object({
   certificateName: z.string(),
 });
 
-export function syncAcquireResponseGcpConfigFromJSON(
+export function syncAcquireResponseGcpStackSettingsFromJSON(
   jsonString: string,
-): SafeParseResult<SyncAcquireResponseGcpConfig, SDKValidationError> {
+): SafeParseResult<SyncAcquireResponseGcpStackSettings, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => SyncAcquireResponseGcpConfig$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncAcquireResponseGcpConfig' from JSON`,
+    (x) =>
+      SyncAcquireResponseGcpStackSettings$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseGcpStackSettings' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncAcquireResponseGcpUnion$inboundSchema: z.ZodType<
-  SyncAcquireResponseGcpUnion,
+export const SyncAcquireResponseStackSettingsGcpUnion$inboundSchema: z.ZodType<
+  SyncAcquireResponseStackSettingsGcpUnion,
   unknown
 > = z.union([
-  z.lazy(() => SyncAcquireResponseGcpConfig$inboundSchema),
+  z.lazy(() => SyncAcquireResponseGcpStackSettings$inboundSchema),
   z.any(),
 ]);
 
-export function syncAcquireResponseGcpUnionFromJSON(
+export function syncAcquireResponseStackSettingsGcpUnionFromJSON(
   jsonString: string,
-): SafeParseResult<SyncAcquireResponseGcpUnion, SDKValidationError> {
+): SafeParseResult<
+  SyncAcquireResponseStackSettingsGcpUnion,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => SyncAcquireResponseGcpUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncAcquireResponseGcpUnion' from JSON`,
+    (x) =>
+      SyncAcquireResponseStackSettingsGcpUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseStackSettingsGcpUnion' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncAcquireResponseCertificate$inboundSchema: z.ZodType<
-  SyncAcquireResponseCertificate,
+export const SyncAcquireResponseTlsSecretRef$inboundSchema: z.ZodType<
+  SyncAcquireResponseTlsSecretRef,
+  unknown
+> = z.object({
+  namespace: z.nullable(z.string()).optional(),
+  secretName: z.string(),
+});
+
+export function syncAcquireResponseTlsSecretRefFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseTlsSecretRef, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseTlsSecretRef$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseTlsSecretRef' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseDomainsKubernetes$inboundSchema: z.ZodType<
+  SyncAcquireResponseDomainsKubernetes,
+  unknown
+> = z.object({
+  tlsSecretRef: z.lazy(() => SyncAcquireResponseTlsSecretRef$inboundSchema),
+});
+
+export function syncAcquireResponseDomainsKubernetesFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseDomainsKubernetes, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseDomainsKubernetes$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseDomainsKubernetes' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseDomainsKubernetesUnion$inboundSchema: z.ZodType<
+  SyncAcquireResponseDomainsKubernetesUnion,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponseDomainsKubernetes$inboundSchema),
+  z.any(),
+]);
+
+export function syncAcquireResponseDomainsKubernetesUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseDomainsKubernetesUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseDomainsKubernetesUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseDomainsKubernetesUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseDomainsCertificate$inboundSchema: z.ZodType<
+  SyncAcquireResponseDomainsCertificate,
   unknown
 > = z.object({
   aws: z.nullable(
-    z.union([z.lazy(() => SyncAcquireResponseAws$inboundSchema), z.any()]),
+    z.union([
+      z.lazy(() => SyncAcquireResponseAwsStackSettings$inboundSchema),
+      z.any(),
+    ]),
   ).optional(),
   azure: z.nullable(
     z.union([
-      z.lazy(() => SyncAcquireResponseAzureConfig$inboundSchema),
+      z.lazy(() => SyncAcquireResponseAzureStackSettings$inboundSchema),
       z.any(),
     ]),
   ).optional(),
   gcp: z.nullable(
     z.union([
-      z.lazy(() => SyncAcquireResponseGcpConfig$inboundSchema),
+      z.lazy(() => SyncAcquireResponseGcpStackSettings$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  kubernetes: z.nullable(
+    z.union([
+      z.lazy(() => SyncAcquireResponseDomainsKubernetes$inboundSchema),
       z.any(),
     ]),
   ).optional(),
 });
 
-export function syncAcquireResponseCertificateFromJSON(
+export function syncAcquireResponseDomainsCertificateFromJSON(
   jsonString: string,
-): SafeParseResult<SyncAcquireResponseCertificate, SDKValidationError> {
+): SafeParseResult<SyncAcquireResponseDomainsCertificate, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => SyncAcquireResponseCertificate$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncAcquireResponseCertificate' from JSON`,
+    (x) =>
+      SyncAcquireResponseDomainsCertificate$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseDomainsCertificate' from JSON`,
   );
 }
 
@@ -17869,7 +19794,9 @@ export const SyncAcquireResponseCustomDomains$inboundSchema: z.ZodType<
   SyncAcquireResponseCustomDomains,
   unknown
 > = z.object({
-  certificate: z.lazy(() => SyncAcquireResponseCertificate$inboundSchema),
+  certificate: z.lazy(() =>
+    SyncAcquireResponseDomainsCertificate$inboundSchema
+  ),
   domain: z.string(),
 });
 
@@ -17947,6 +19874,1152 @@ export function syncAcquireResponseStackSettingsExternalBindingsFromJSON(
 export const SyncAcquireResponseHeartbeats$inboundSchema: z.ZodEnum<
   typeof SyncAcquireResponseHeartbeats
 > = z.enum(SyncAcquireResponseHeartbeats);
+
+/** @internal */
+export const SyncAcquireResponseCloud$inboundSchema: z.ZodType<
+  SyncAcquireResponseCloud,
+  unknown
+> = z.object({
+  accountId: z.nullable(z.string()).optional(),
+  clusterId: z.nullable(z.string()).optional(),
+  clusterName: z.nullable(z.string()).optional(),
+  projectId: z.nullable(z.string()).optional(),
+  region: z.nullable(z.string()).optional(),
+  resourceGroup: z.nullable(z.string()).optional(),
+  subscriptionId: z.nullable(z.string()).optional(),
+});
+
+export function syncAcquireResponseCloudFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseCloud, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseCloud$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseCloud' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseCloudUnion$inboundSchema: z.ZodType<
+  SyncAcquireResponseCloudUnion,
+  unknown
+> = z.union([z.lazy(() => SyncAcquireResponseCloud$inboundSchema), z.any()]);
+
+export function syncAcquireResponseCloudUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseCloudUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseCloudUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseCloudUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseOwnership$inboundSchema: z.ZodEnum<
+  typeof SyncAcquireResponseOwnership
+> = z.enum(SyncAcquireResponseOwnership);
+
+/** @internal */
+export const SyncAcquireResponseCluster$inboundSchema: z.ZodType<
+  SyncAcquireResponseCluster,
+  unknown
+> = z.object({
+  cloud: z.nullable(
+    z.union([z.lazy(() => SyncAcquireResponseCloud$inboundSchema), z.any()]),
+  ).optional(),
+  namespace: z.nullable(z.string()).optional(),
+  ownership: SyncAcquireResponseOwnership$inboundSchema,
+});
+
+export function syncAcquireResponseClusterFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseCluster, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseCluster$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseCluster' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseClusterUnion$inboundSchema: z.ZodType<
+  SyncAcquireResponseClusterUnion,
+  unknown
+> = z.union([z.lazy(() => SyncAcquireResponseCluster$inboundSchema), z.any()]);
+
+export function syncAcquireResponseClusterUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseClusterUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseClusterUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseClusterUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseCertificateNone2$inboundSchema: z.ZodType<
+  SyncAcquireResponseCertificateNone2,
+  unknown
+> = z.object({
+  mode: z.literal("none"),
+});
+
+export function syncAcquireResponseCertificateNone2FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseCertificateNone2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseCertificateNone2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseCertificateNone2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseCertificateManagedTLSSecret2$inboundSchema:
+  z.ZodType<SyncAcquireResponseCertificateManagedTLSSecret2, unknown> = z
+    .object({
+      mode: z.literal("managedTlsSecret"),
+      secretNameTemplate: z.string(),
+    });
+
+export function syncAcquireResponseCertificateManagedTLSSecret2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseCertificateManagedTLSSecret2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseCertificateManagedTLSSecret2$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseCertificateManagedTLSSecret2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseCertificateAwsAcmArn2$inboundSchema: z.ZodType<
+  SyncAcquireResponseCertificateAwsAcmArn2,
+  unknown
+> = z.object({
+  certificateArn: z.string(),
+  mode: z.literal("awsAcmArn"),
+});
+
+export function syncAcquireResponseCertificateAwsAcmArn2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseCertificateAwsAcmArn2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseCertificateAwsAcmArn2$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseCertificateAwsAcmArn2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseCertificateManagedAcmImport2$inboundSchema:
+  z.ZodType<SyncAcquireResponseCertificateManagedAcmImport2, unknown> = z
+    .object({
+      mode: z.literal("managedAcmImport"),
+      region: z.nullable(z.string()).optional(),
+      tags: z.record(z.string(), z.string()).optional(),
+    });
+
+export function syncAcquireResponseCertificateManagedAcmImport2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseCertificateManagedAcmImport2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseCertificateManagedAcmImport2$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseCertificateManagedAcmImport2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseCertificateTLSSecretRef2$inboundSchema:
+  z.ZodType<SyncAcquireResponseCertificateTLSSecretRef2, unknown> = z.object({
+    namespace: z.nullable(z.string()).optional(),
+    secretName: z.string(),
+    mode: z.literal("tlsSecretRef"),
+  });
+
+export function syncAcquireResponseCertificateTLSSecretRef2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseCertificateTLSSecretRef2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseCertificateTLSSecretRef2$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseCertificateTLSSecretRef2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseCertificateUnion2$inboundSchema: z.ZodType<
+  SyncAcquireResponseCertificateUnion2,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponseCertificateTLSSecretRef2$inboundSchema),
+  z.lazy(() => SyncAcquireResponseCertificateManagedAcmImport2$inboundSchema),
+  z.lazy(() => SyncAcquireResponseCertificateAwsAcmArn2$inboundSchema),
+  z.lazy(() => SyncAcquireResponseCertificateManagedTLSSecret2$inboundSchema),
+  z.lazy(() => SyncAcquireResponseCertificateNone2$inboundSchema),
+]);
+
+export function syncAcquireResponseCertificateUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseCertificateUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseCertificateUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseCertificateUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseModeCustom$inboundSchema: z.ZodEnum<
+  typeof SyncAcquireResponseModeCustom
+> = z.enum(SyncAcquireResponseModeCustom);
+
+/** @internal */
+export const SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum4$inboundSchema:
+  z.ZodEnum<
+    typeof SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum4
+  > = z.enum(
+    SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum4,
+  );
+
+/** @internal */
+export const SyncAcquireResponseProviderAzureApplicationGatewayForContainers4$inboundSchema:
+  z.ZodType<
+    SyncAcquireResponseProviderAzureApplicationGatewayForContainers4,
+    unknown
+  > = z.object({
+    albName: z.nullable(z.string()).optional(),
+    albNamespace: z.nullable(z.string()).optional(),
+    frontend: z.string(),
+    provider:
+      SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum4$inboundSchema,
+  });
+
+export function syncAcquireResponseProviderAzureApplicationGatewayForContainers4FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseProviderAzureApplicationGatewayForContainers4,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseProviderAzureApplicationGatewayForContainers4$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseProviderAzureApplicationGatewayForContainers4' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseProviderGkeGatewayEnum4$inboundSchema:
+  z.ZodEnum<typeof SyncAcquireResponseProviderGkeGatewayEnum4> = z.enum(
+    SyncAcquireResponseProviderGkeGatewayEnum4,
+  );
+
+/** @internal */
+export const SyncAcquireResponseProviderGkeGateway4$inboundSchema: z.ZodType<
+  SyncAcquireResponseProviderGkeGateway4,
+  unknown
+> = z.object({
+  provider: SyncAcquireResponseProviderGkeGatewayEnum4$inboundSchema,
+  staticAddressName: z.nullable(z.string()).optional(),
+});
+
+export function syncAcquireResponseProviderGkeGateway4FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseProviderGkeGateway4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseProviderGkeGateway4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseProviderGkeGateway4' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseProviderAwsAlbEnum4$inboundSchema: z.ZodEnum<
+  typeof SyncAcquireResponseProviderAwsAlbEnum4
+> = z.enum(SyncAcquireResponseProviderAwsAlbEnum4);
+
+/** @internal */
+export const SyncAcquireResponseProviderAwsAlb4$inboundSchema: z.ZodType<
+  SyncAcquireResponseProviderAwsAlb4,
+  unknown
+> = z.object({
+  ipAddressType: z.nullable(z.string()).optional(),
+  provider: SyncAcquireResponseProviderAwsAlbEnum4$inboundSchema,
+  scheme: z.string(),
+  subnetIds: z.array(z.string()).optional(),
+  targetType: z.string(),
+});
+
+export function syncAcquireResponseProviderAwsAlb4FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseProviderAwsAlb4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseProviderAwsAlb4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseProviderAwsAlb4' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseProviderUnion4$inboundSchema: z.ZodType<
+  SyncAcquireResponseProviderUnion4,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponseProviderAwsAlb4$inboundSchema),
+  z.lazy(() =>
+    SyncAcquireResponseProviderAzureApplicationGatewayForContainers4$inboundSchema
+  ),
+  z.lazy(() => SyncAcquireResponseProviderGkeGateway4$inboundSchema),
+  z.any(),
+]);
+
+export function syncAcquireResponseProviderUnion4FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseProviderUnion4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseProviderUnion4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseProviderUnion4' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseRouteGateway2$inboundSchema: z.ZodType<
+  SyncAcquireResponseRouteGateway2,
+  unknown
+> = z.object({
+  annotations: z.record(z.string(), z.string()).optional(),
+  controller: z.nullable(z.string()).optional(),
+  gatewayClassName: z.string(),
+  labels: z.record(z.string(), z.string()).optional(),
+  listenerPort: z.int(),
+  provider: z.nullable(
+    z.union([
+      z.lazy(() => SyncAcquireResponseProviderAwsAlb4$inboundSchema),
+      z.lazy(() =>
+        SyncAcquireResponseProviderAzureApplicationGatewayForContainers4$inboundSchema
+      ),
+      z.lazy(() => SyncAcquireResponseProviderGkeGateway4$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  routeApi: z.literal("gateway"),
+});
+
+export function syncAcquireResponseRouteGateway2FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseRouteGateway2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseRouteGateway2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseRouteGateway2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum3$inboundSchema:
+  z.ZodEnum<
+    typeof SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum3
+  > = z.enum(
+    SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum3,
+  );
+
+/** @internal */
+export const SyncAcquireResponseProviderAzureApplicationGatewayForContainers3$inboundSchema:
+  z.ZodType<
+    SyncAcquireResponseProviderAzureApplicationGatewayForContainers3,
+    unknown
+  > = z.object({
+    albName: z.nullable(z.string()).optional(),
+    albNamespace: z.nullable(z.string()).optional(),
+    frontend: z.string(),
+    provider:
+      SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum3$inboundSchema,
+  });
+
+export function syncAcquireResponseProviderAzureApplicationGatewayForContainers3FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseProviderAzureApplicationGatewayForContainers3,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseProviderAzureApplicationGatewayForContainers3$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseProviderAzureApplicationGatewayForContainers3' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseProviderGkeGatewayEnum3$inboundSchema:
+  z.ZodEnum<typeof SyncAcquireResponseProviderGkeGatewayEnum3> = z.enum(
+    SyncAcquireResponseProviderGkeGatewayEnum3,
+  );
+
+/** @internal */
+export const SyncAcquireResponseProviderGkeGateway3$inboundSchema: z.ZodType<
+  SyncAcquireResponseProviderGkeGateway3,
+  unknown
+> = z.object({
+  provider: SyncAcquireResponseProviderGkeGatewayEnum3$inboundSchema,
+  staticAddressName: z.nullable(z.string()).optional(),
+});
+
+export function syncAcquireResponseProviderGkeGateway3FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseProviderGkeGateway3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseProviderGkeGateway3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseProviderGkeGateway3' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseProviderAwsAlbEnum3$inboundSchema: z.ZodEnum<
+  typeof SyncAcquireResponseProviderAwsAlbEnum3
+> = z.enum(SyncAcquireResponseProviderAwsAlbEnum3);
+
+/** @internal */
+export const SyncAcquireResponseProviderAwsAlb3$inboundSchema: z.ZodType<
+  SyncAcquireResponseProviderAwsAlb3,
+  unknown
+> = z.object({
+  ipAddressType: z.nullable(z.string()).optional(),
+  provider: SyncAcquireResponseProviderAwsAlbEnum3$inboundSchema,
+  scheme: z.string(),
+  subnetIds: z.array(z.string()).optional(),
+  targetType: z.string(),
+});
+
+export function syncAcquireResponseProviderAwsAlb3FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseProviderAwsAlb3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseProviderAwsAlb3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseProviderAwsAlb3' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseProviderUnion3$inboundSchema: z.ZodType<
+  SyncAcquireResponseProviderUnion3,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponseProviderAwsAlb3$inboundSchema),
+  z.lazy(() =>
+    SyncAcquireResponseProviderAzureApplicationGatewayForContainers3$inboundSchema
+  ),
+  z.lazy(() => SyncAcquireResponseProviderGkeGateway3$inboundSchema),
+  z.any(),
+]);
+
+export function syncAcquireResponseProviderUnion3FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseProviderUnion3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseProviderUnion3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseProviderUnion3' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseRouteIngress2$inboundSchema: z.ZodType<
+  SyncAcquireResponseRouteIngress2,
+  unknown
+> = z.object({
+  annotations: z.record(z.string(), z.string()).optional(),
+  controller: z.nullable(z.string()).optional(),
+  ingressClassName: z.string(),
+  labels: z.record(z.string(), z.string()).optional(),
+  provider: z.nullable(
+    z.union([
+      z.lazy(() => SyncAcquireResponseProviderAwsAlb3$inboundSchema),
+      z.lazy(() =>
+        SyncAcquireResponseProviderAzureApplicationGatewayForContainers3$inboundSchema
+      ),
+      z.lazy(() => SyncAcquireResponseProviderGkeGateway3$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  routeApi: z.literal("ingress"),
+});
+
+export function syncAcquireResponseRouteIngress2FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseRouteIngress2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseRouteIngress2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseRouteIngress2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseRouteUnion2$inboundSchema: z.ZodType<
+  SyncAcquireResponseRouteUnion2,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponseRouteIngress2$inboundSchema),
+  z.lazy(() => SyncAcquireResponseRouteGateway2$inboundSchema),
+]);
+
+export function syncAcquireResponseRouteUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseRouteUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseRouteUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseRouteUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseExposureCustom$inboundSchema: z.ZodType<
+  SyncAcquireResponseExposureCustom,
+  unknown
+> = z.object({
+  certificate: z.union([
+    z.lazy(() => SyncAcquireResponseCertificateTLSSecretRef2$inboundSchema),
+    z.lazy(() => SyncAcquireResponseCertificateManagedAcmImport2$inboundSchema),
+    z.lazy(() => SyncAcquireResponseCertificateAwsAcmArn2$inboundSchema),
+    z.lazy(() => SyncAcquireResponseCertificateManagedTLSSecret2$inboundSchema),
+    z.lazy(() => SyncAcquireResponseCertificateNone2$inboundSchema),
+  ]),
+  domain: z.string(),
+  mode: SyncAcquireResponseModeCustom$inboundSchema,
+  route: z.union([
+    z.lazy(() => SyncAcquireResponseRouteIngress2$inboundSchema),
+    z.lazy(() => SyncAcquireResponseRouteGateway2$inboundSchema),
+  ]),
+});
+
+export function syncAcquireResponseExposureCustomFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseExposureCustom, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseExposureCustom$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseExposureCustom' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseCertificateNone1$inboundSchema: z.ZodType<
+  SyncAcquireResponseCertificateNone1,
+  unknown
+> = z.object({
+  mode: z.literal("none"),
+});
+
+export function syncAcquireResponseCertificateNone1FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseCertificateNone1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseCertificateNone1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseCertificateNone1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseCertificateManagedTLSSecret1$inboundSchema:
+  z.ZodType<SyncAcquireResponseCertificateManagedTLSSecret1, unknown> = z
+    .object({
+      mode: z.literal("managedTlsSecret"),
+      secretNameTemplate: z.string(),
+    });
+
+export function syncAcquireResponseCertificateManagedTLSSecret1FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseCertificateManagedTLSSecret1,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseCertificateManagedTLSSecret1$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseCertificateManagedTLSSecret1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseCertificateAwsAcmArn1$inboundSchema: z.ZodType<
+  SyncAcquireResponseCertificateAwsAcmArn1,
+  unknown
+> = z.object({
+  certificateArn: z.string(),
+  mode: z.literal("awsAcmArn"),
+});
+
+export function syncAcquireResponseCertificateAwsAcmArn1FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseCertificateAwsAcmArn1,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseCertificateAwsAcmArn1$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseCertificateAwsAcmArn1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseCertificateManagedAcmImport1$inboundSchema:
+  z.ZodType<SyncAcquireResponseCertificateManagedAcmImport1, unknown> = z
+    .object({
+      mode: z.literal("managedAcmImport"),
+      region: z.nullable(z.string()).optional(),
+      tags: z.record(z.string(), z.string()).optional(),
+    });
+
+export function syncAcquireResponseCertificateManagedAcmImport1FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseCertificateManagedAcmImport1,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseCertificateManagedAcmImport1$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseCertificateManagedAcmImport1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseCertificateTLSSecretRef1$inboundSchema:
+  z.ZodType<SyncAcquireResponseCertificateTLSSecretRef1, unknown> = z.object({
+    namespace: z.nullable(z.string()).optional(),
+    secretName: z.string(),
+    mode: z.literal("tlsSecretRef"),
+  });
+
+export function syncAcquireResponseCertificateTLSSecretRef1FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseCertificateTLSSecretRef1,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseCertificateTLSSecretRef1$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseCertificateTLSSecretRef1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseCertificateUnion1$inboundSchema: z.ZodType<
+  SyncAcquireResponseCertificateUnion1,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponseCertificateTLSSecretRef1$inboundSchema),
+  z.lazy(() => SyncAcquireResponseCertificateManagedAcmImport1$inboundSchema),
+  z.lazy(() => SyncAcquireResponseCertificateAwsAcmArn1$inboundSchema),
+  z.lazy(() => SyncAcquireResponseCertificateManagedTLSSecret1$inboundSchema),
+  z.lazy(() => SyncAcquireResponseCertificateNone1$inboundSchema),
+]);
+
+export function syncAcquireResponseCertificateUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseCertificateUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseCertificateUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseCertificateUnion1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseModeGenerated$inboundSchema: z.ZodEnum<
+  typeof SyncAcquireResponseModeGenerated
+> = z.enum(SyncAcquireResponseModeGenerated);
+
+/** @internal */
+export const SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum2$inboundSchema:
+  z.ZodEnum<
+    typeof SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum2
+  > = z.enum(
+    SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum2,
+  );
+
+/** @internal */
+export const SyncAcquireResponseProviderAzureApplicationGatewayForContainers2$inboundSchema:
+  z.ZodType<
+    SyncAcquireResponseProviderAzureApplicationGatewayForContainers2,
+    unknown
+  > = z.object({
+    albName: z.nullable(z.string()).optional(),
+    albNamespace: z.nullable(z.string()).optional(),
+    frontend: z.string(),
+    provider:
+      SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum2$inboundSchema,
+  });
+
+export function syncAcquireResponseProviderAzureApplicationGatewayForContainers2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseProviderAzureApplicationGatewayForContainers2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseProviderAzureApplicationGatewayForContainers2$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseProviderAzureApplicationGatewayForContainers2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseProviderGkeGatewayEnum2$inboundSchema:
+  z.ZodEnum<typeof SyncAcquireResponseProviderGkeGatewayEnum2> = z.enum(
+    SyncAcquireResponseProviderGkeGatewayEnum2,
+  );
+
+/** @internal */
+export const SyncAcquireResponseProviderGkeGateway2$inboundSchema: z.ZodType<
+  SyncAcquireResponseProviderGkeGateway2,
+  unknown
+> = z.object({
+  provider: SyncAcquireResponseProviderGkeGatewayEnum2$inboundSchema,
+  staticAddressName: z.nullable(z.string()).optional(),
+});
+
+export function syncAcquireResponseProviderGkeGateway2FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseProviderGkeGateway2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseProviderGkeGateway2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseProviderGkeGateway2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseProviderAwsAlbEnum2$inboundSchema: z.ZodEnum<
+  typeof SyncAcquireResponseProviderAwsAlbEnum2
+> = z.enum(SyncAcquireResponseProviderAwsAlbEnum2);
+
+/** @internal */
+export const SyncAcquireResponseProviderAwsAlb2$inboundSchema: z.ZodType<
+  SyncAcquireResponseProviderAwsAlb2,
+  unknown
+> = z.object({
+  ipAddressType: z.nullable(z.string()).optional(),
+  provider: SyncAcquireResponseProviderAwsAlbEnum2$inboundSchema,
+  scheme: z.string(),
+  subnetIds: z.array(z.string()).optional(),
+  targetType: z.string(),
+});
+
+export function syncAcquireResponseProviderAwsAlb2FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseProviderAwsAlb2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseProviderAwsAlb2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseProviderAwsAlb2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseProviderUnion2$inboundSchema: z.ZodType<
+  SyncAcquireResponseProviderUnion2,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponseProviderAwsAlb2$inboundSchema),
+  z.lazy(() =>
+    SyncAcquireResponseProviderAzureApplicationGatewayForContainers2$inboundSchema
+  ),
+  z.lazy(() => SyncAcquireResponseProviderGkeGateway2$inboundSchema),
+  z.any(),
+]);
+
+export function syncAcquireResponseProviderUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseProviderUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseProviderUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseProviderUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseRouteGateway1$inboundSchema: z.ZodType<
+  SyncAcquireResponseRouteGateway1,
+  unknown
+> = z.object({
+  annotations: z.record(z.string(), z.string()).optional(),
+  controller: z.nullable(z.string()).optional(),
+  gatewayClassName: z.string(),
+  labels: z.record(z.string(), z.string()).optional(),
+  listenerPort: z.int(),
+  provider: z.nullable(
+    z.union([
+      z.lazy(() => SyncAcquireResponseProviderAwsAlb2$inboundSchema),
+      z.lazy(() =>
+        SyncAcquireResponseProviderAzureApplicationGatewayForContainers2$inboundSchema
+      ),
+      z.lazy(() => SyncAcquireResponseProviderGkeGateway2$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  routeApi: z.literal("gateway"),
+});
+
+export function syncAcquireResponseRouteGateway1FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseRouteGateway1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseRouteGateway1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseRouteGateway1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum1$inboundSchema:
+  z.ZodEnum<
+    typeof SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum1
+  > = z.enum(
+    SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum1,
+  );
+
+/** @internal */
+export const SyncAcquireResponseProviderAzureApplicationGatewayForContainers1$inboundSchema:
+  z.ZodType<
+    SyncAcquireResponseProviderAzureApplicationGatewayForContainers1,
+    unknown
+  > = z.object({
+    albName: z.nullable(z.string()).optional(),
+    albNamespace: z.nullable(z.string()).optional(),
+    frontend: z.string(),
+    provider:
+      SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum1$inboundSchema,
+  });
+
+export function syncAcquireResponseProviderAzureApplicationGatewayForContainers1FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseProviderAzureApplicationGatewayForContainers1,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseProviderAzureApplicationGatewayForContainers1$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseProviderAzureApplicationGatewayForContainers1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseProviderGkeGatewayEnum1$inboundSchema:
+  z.ZodEnum<typeof SyncAcquireResponseProviderGkeGatewayEnum1> = z.enum(
+    SyncAcquireResponseProviderGkeGatewayEnum1,
+  );
+
+/** @internal */
+export const SyncAcquireResponseProviderGkeGateway1$inboundSchema: z.ZodType<
+  SyncAcquireResponseProviderGkeGateway1,
+  unknown
+> = z.object({
+  provider: SyncAcquireResponseProviderGkeGatewayEnum1$inboundSchema,
+  staticAddressName: z.nullable(z.string()).optional(),
+});
+
+export function syncAcquireResponseProviderGkeGateway1FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseProviderGkeGateway1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseProviderGkeGateway1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseProviderGkeGateway1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseProviderAwsAlbEnum1$inboundSchema: z.ZodEnum<
+  typeof SyncAcquireResponseProviderAwsAlbEnum1
+> = z.enum(SyncAcquireResponseProviderAwsAlbEnum1);
+
+/** @internal */
+export const SyncAcquireResponseProviderAwsAlb1$inboundSchema: z.ZodType<
+  SyncAcquireResponseProviderAwsAlb1,
+  unknown
+> = z.object({
+  ipAddressType: z.nullable(z.string()).optional(),
+  provider: SyncAcquireResponseProviderAwsAlbEnum1$inboundSchema,
+  scheme: z.string(),
+  subnetIds: z.array(z.string()).optional(),
+  targetType: z.string(),
+});
+
+export function syncAcquireResponseProviderAwsAlb1FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseProviderAwsAlb1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseProviderAwsAlb1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseProviderAwsAlb1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseProviderUnion1$inboundSchema: z.ZodType<
+  SyncAcquireResponseProviderUnion1,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponseProviderAwsAlb1$inboundSchema),
+  z.lazy(() =>
+    SyncAcquireResponseProviderAzureApplicationGatewayForContainers1$inboundSchema
+  ),
+  z.lazy(() => SyncAcquireResponseProviderGkeGateway1$inboundSchema),
+  z.any(),
+]);
+
+export function syncAcquireResponseProviderUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseProviderUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseProviderUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseProviderUnion1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseRouteIngress1$inboundSchema: z.ZodType<
+  SyncAcquireResponseRouteIngress1,
+  unknown
+> = z.object({
+  annotations: z.record(z.string(), z.string()).optional(),
+  controller: z.nullable(z.string()).optional(),
+  ingressClassName: z.string(),
+  labels: z.record(z.string(), z.string()).optional(),
+  provider: z.nullable(
+    z.union([
+      z.lazy(() => SyncAcquireResponseProviderAwsAlb1$inboundSchema),
+      z.lazy(() =>
+        SyncAcquireResponseProviderAzureApplicationGatewayForContainers1$inboundSchema
+      ),
+      z.lazy(() => SyncAcquireResponseProviderGkeGateway1$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  routeApi: z.literal("ingress"),
+});
+
+export function syncAcquireResponseRouteIngress1FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseRouteIngress1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseRouteIngress1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseRouteIngress1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseRouteUnion1$inboundSchema: z.ZodType<
+  SyncAcquireResponseRouteUnion1,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponseRouteIngress1$inboundSchema),
+  z.lazy(() => SyncAcquireResponseRouteGateway1$inboundSchema),
+]);
+
+export function syncAcquireResponseRouteUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseRouteUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseRouteUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseRouteUnion1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseExposureGenerated$inboundSchema: z.ZodType<
+  SyncAcquireResponseExposureGenerated,
+  unknown
+> = z.object({
+  certificate: z.union([
+    z.lazy(() => SyncAcquireResponseCertificateTLSSecretRef1$inboundSchema),
+    z.lazy(() => SyncAcquireResponseCertificateManagedAcmImport1$inboundSchema),
+    z.lazy(() => SyncAcquireResponseCertificateAwsAcmArn1$inboundSchema),
+    z.lazy(() => SyncAcquireResponseCertificateManagedTLSSecret1$inboundSchema),
+    z.lazy(() => SyncAcquireResponseCertificateNone1$inboundSchema),
+  ]),
+  mode: SyncAcquireResponseModeGenerated$inboundSchema,
+  route: z.union([
+    z.lazy(() => SyncAcquireResponseRouteIngress1$inboundSchema),
+    z.lazy(() => SyncAcquireResponseRouteGateway1$inboundSchema),
+  ]),
+});
+
+export function syncAcquireResponseExposureGeneratedFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseExposureGenerated, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseExposureGenerated$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseExposureGenerated' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseModeDisabled$inboundSchema: z.ZodEnum<
+  typeof SyncAcquireResponseModeDisabled
+> = z.enum(SyncAcquireResponseModeDisabled);
+
+/** @internal */
+export const SyncAcquireResponseExposureDisabled$inboundSchema: z.ZodType<
+  SyncAcquireResponseExposureDisabled,
+  unknown
+> = z.object({
+  mode: SyncAcquireResponseModeDisabled$inboundSchema,
+});
+
+export function syncAcquireResponseExposureDisabledFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseExposureDisabled, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseExposureDisabled$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseExposureDisabled' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseExposureUnion$inboundSchema: z.ZodType<
+  SyncAcquireResponseExposureUnion,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponseExposureCustom$inboundSchema),
+  z.lazy(() => SyncAcquireResponseExposureGenerated$inboundSchema),
+  z.lazy(() => SyncAcquireResponseExposureDisabled$inboundSchema),
+  z.any(),
+]);
+
+export function syncAcquireResponseExposureUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseExposureUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseExposureUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseExposureUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseKubernetes$inboundSchema: z.ZodType<
+  SyncAcquireResponseKubernetes,
+  unknown
+> = z.object({
+  cluster: z.nullable(
+    z.union([z.lazy(() => SyncAcquireResponseCluster$inboundSchema), z.any()]),
+  ).optional(),
+  exposure: z.nullable(
+    z.union([
+      z.lazy(() => SyncAcquireResponseExposureCustom$inboundSchema),
+      z.lazy(() => SyncAcquireResponseExposureGenerated$inboundSchema),
+      z.lazy(() => SyncAcquireResponseExposureDisabled$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+});
+
+export function syncAcquireResponseKubernetesFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseKubernetes, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseKubernetes$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseKubernetes' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseKubernetesUnion$inboundSchema: z.ZodType<
+  SyncAcquireResponseKubernetesUnion,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponseKubernetes$inboundSchema),
+  z.any(),
+]);
+
+export function syncAcquireResponseKubernetesUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseKubernetesUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseKubernetesUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseKubernetesUnion' from JSON`,
+  );
+}
 
 /** @internal */
 export const SyncAcquireResponseTypeByoVnetAzure$inboundSchema: z.ZodEnum<
@@ -18149,6 +21222,12 @@ export const SyncAcquireResponseStackSettings$inboundSchema: z.ZodType<
     ),
   ).optional(),
   heartbeats: SyncAcquireResponseHeartbeats$inboundSchema.optional(),
+  kubernetes: z.nullable(
+    z.union([
+      z.lazy(() => SyncAcquireResponseKubernetes$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   network: z.nullable(
     z.union([
       z.lazy(() => SyncAcquireResponseNetworkByoVpcAws$inboundSchema),
@@ -18179,12 +21258,16 @@ export const SyncAcquireResponseConfig$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   allowFrozenChanges: z.boolean().optional(),
+  basePlatform: z.nullable(
+    z.union([SyncAcquireResponseBasePlatformEnum$inboundSchema, z.any()]),
+  ).optional(),
   computeBackend: z.nullable(
     z.union([
       z.lazy(() => SyncAcquireResponseComputeBackendHorizon$inboundSchema),
       z.any(),
     ]),
   ).optional(),
+  deploymentName: z.nullable(z.string()).optional(),
   deploymentToken: z.nullable(z.string()).optional(),
   domainMetadata: z.nullable(
     z.union([
@@ -18255,9 +21338,9 @@ export const SyncAcquireResponseConfig$inboundSchema: z.ZodType<
   ).optional(),
   managementConfig: z.nullable(
     z.union([
+      z.lazy(() => SyncAcquireResponseManagementConfigAzure$inboundSchema),
       z.lazy(() => SyncAcquireResponseManagementConfigAws$inboundSchema),
       z.lazy(() => SyncAcquireResponseManagementConfigGcp$inboundSchema),
-      z.lazy(() => SyncAcquireResponseManagementConfigAzure$inboundSchema),
       z.lazy(() => SyncAcquireResponseManagementConfigKubernetes$inboundSchema),
       z.any(),
     ]),

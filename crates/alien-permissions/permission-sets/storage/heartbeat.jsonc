@@ -4,6 +4,8 @@
   "platforms": {
     "aws": [
       {
+        "label": "check-s3-bucket-health",
+        "description": "Read S3 bucket configuration needed for application health checks.",
         "grant": {
           "actions": [
             "s3:GetBucketLocation",
@@ -27,6 +29,8 @@
     ],
     "gcp": [
       {
+        "label": "check-cloud-storage-health",
+        "description": "Read Cloud Storage bucket configuration needed for application health checks.",
         "grant": {
           "permissions": [
             "storage.buckets.get",
@@ -52,11 +56,10 @@
     ],
     "azure": [
       {
+        "label": "check-blob-storage-health",
+        "description": "Read Azure Storage account metadata needed for application health checks.",
         "grant": {
-          "actions": [
-            "Microsoft.Storage/storageAccounts/read",
-            "Microsoft.Storage/storageAccounts/blobServices/containers/read"
-          ]
+          "predefinedRoles": ["Reader"]
         },
         "binding": {
           "stack": {

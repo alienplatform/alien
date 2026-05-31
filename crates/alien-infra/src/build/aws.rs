@@ -5,15 +5,19 @@ use crate::core::{EnvironmentVariableBuilder, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
 use alien_aws_clients::codebuild::{
     BatchGetProjectsRequest, CloudWatchLogsConfig, CreateProjectRequest, DeleteProjectRequest,
-    EnvironmentVariable, LogsConfig, ProjectArtifacts, ProjectEnvironment, ProjectSource,
+    EnvironmentVariable, LogsConfig, Project, ProjectArtifacts, ProjectEnvironment, ProjectSource,
     S3LogsConfig, Tag,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    standard_resource_tags, Build, BuildOutputs, ResourceOutputs, ResourceRef, ResourceStatus,
+    standard_resource_tags, AwsCodeBuildHeartbeatData, Build, BuildHeartbeatData,
+    BuildHeartbeatStatus, BuildOutputs, HeartbeatBackend, ObservedHealth, Platform,
+    ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs, ResourceRef,
+    ResourceStatus,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
+use chrono::Utc;
 
 /// Generates the full, prefixed AWS CodeBuild project name.
 fn get_aws_project_name(prefix: &str, name: &str) -> String {
@@ -258,6 +262,8 @@ phases:
                     }));
                 }
             }
+
+            emit_aws_build_heartbeat(ctx, &config.id, project);
         }
 
         debug!(name = %config.id, "Heartbeat check passed");
@@ -541,6 +547,75 @@ impl AwsBuildController {
             _internal_stay_count: None,
         }
     }
+}
+
+fn emit_aws_build_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    project: &Project,
+) {
+    let environment = project.environment.as_ref();
+    let artifacts = project.artifacts.as_ref();
+    let source = project.source.as_ref();
+    let logs_config = project.logs_config.as_ref();
+    let project_name = project
+        .name
+        .clone()
+        .unwrap_or_else(|| resource_id.to_string());
+
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: Build::RESOURCE_TYPE,
+        controller_platform: Platform::Aws,
+        backend: HeartbeatBackend::Aws,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::Build(BuildHeartbeatData::AwsCodeBuild(
+            AwsCodeBuildHeartbeatData {
+                status: BuildHeartbeatStatus {
+                    health: ObservedHealth::Healthy,
+                    lifecycle: ProviderLifecycleState::Running,
+                    message: Some(format!(
+                        "AWS CodeBuild project '{}' is reachable",
+                        project_name
+                    )),
+                    stale: false,
+                    partial: false,
+                    collection_issues: vec![],
+                },
+                project_name,
+                project_arn: project.arn.clone(),
+                description: project.description.clone(),
+                source_type: source.map(|source| source.r#type.clone()),
+                artifacts_type: artifacts.map(|artifacts| artifacts.r#type.clone()),
+                artifacts_encryption_disabled: artifacts
+                    .and_then(|artifacts| artifacts.encryption_disabled),
+                environment_type: environment.map(|environment| environment.r#type.clone()),
+                environment_image: environment.map(|environment| environment.image.clone()),
+                compute_type: environment.map(|environment| environment.compute_type.clone()),
+                image_pull_credentials_type: environment
+                    .and_then(|environment| environment.image_pull_credentials_type.clone()),
+                privileged_mode: environment.and_then(|environment| environment.privileged_mode),
+                environment_variable_count: environment
+                    .and_then(|environment| environment.environment_variables.as_ref())
+                    .map(|environment_variables| environment_variables.len() as u32)
+                    .unwrap_or(0),
+                service_role_present: project.service_role.is_some(),
+                encryption_key_present: project.encryption_key.is_some(),
+                cloud_watch_logs_status: logs_config
+                    .and_then(|logs_config| logs_config.cloud_watch_logs.as_ref())
+                    .map(|logs| logs.status.clone()),
+                s3_logs_status: logs_config
+                    .and_then(|logs_config| logs_config.s3_logs.as_ref())
+                    .map(|logs| logs.status.clone()),
+                timeout_in_minutes: project.timeout_in_minutes,
+                queued_timeout_in_minutes: project.queued_timeout_in_minutes,
+                created: project.created,
+                last_modified: project.last_modified,
+            },
+        )),
+        raw: vec![],
+    });
 }
 
 #[cfg(test)]

@@ -87,8 +87,8 @@ impl TestDeployment {
     }
 
     /// Poll the manager until the deployment reaches the `"running"` status,
-    /// or until `timeout` elapses. On success, populates `self.url` from the
-    /// deployment's `stackState.publicUrl` if available.
+    /// or until `timeout` elapses. On success, populates `self.url` from a
+    /// public Worker/Container resource output URL if available.
     pub async fn wait_until_running(
         &mut self,
         timeout: Duration,
@@ -114,43 +114,13 @@ impl TestDeployment {
             if status == "running" {
                 // Extract the public URL from stack_state resource outputs.
                 if let Some(ref state_value) = resp.stack_state {
-                    if let Ok(stack_state) =
-                        serde_json::from_value::<alien_core::StackState>(state_value.clone())
-                    {
-                        for (resource_id, resource_state) in &stack_state.resources {
-                            if let Some(ref outputs) = resource_state.outputs {
-                                let url = if let Some(f) =
-                                    outputs.downcast_ref::<alien_core::FunctionOutputs>()
-                                {
-                                    f.url.as_deref()
-                                } else if let Some(c) =
-                                    outputs.downcast_ref::<alien_core::ContainerOutputs>()
-                                {
-                                    c.url.as_deref()
-                                } else {
-                                    None
-                                };
-                                if let Some(url) = url {
-                                    self.url = Some(url.to_string());
-                                    debug!(
-                                        deployment = %self.id,
-                                        resource = %resource_id,
-                                        %url,
-                                        "deployment URL discovered from resource outputs"
-                                    );
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-                // Fallback: also try environment_info
-                if self.url.is_none() {
-                    if let Some(ref env_info) = resp.environment_info {
-                        if let Some(url) = env_info.get("url").and_then(|v| v.as_str()) {
-                            self.url = Some(url.to_string());
-                            debug!(deployment = %self.id, %url, "deployment URL from environment_info");
-                        }
+                    if let Some(url) = public_url_from_stack_state(state_value) {
+                        debug!(
+                            deployment = %self.id,
+                            %url,
+                            "deployment URL discovered from resource outputs"
+                        );
+                        self.url = Some(url);
                     }
                 }
                 return Ok(());
@@ -191,6 +161,56 @@ impl TestDeployment {
                 .into());
             }
             tokio::time::sleep(poll_interval).await;
+        }
+    }
+
+    /// Refresh the deployment's public URL from manager stack outputs.
+    pub async fn refresh_public_url(
+        &mut self,
+    ) -> Result<Option<String>, Box<dyn std::error::Error>> {
+        let resp = self
+            .manager
+            .client()
+            .get_deployment()
+            .id(&self.id)
+            .send()
+            .await
+            .map_err(|e| -> Box<dyn std::error::Error> {
+                format!("Failed to get deployment {}: {}", self.id, e).into()
+            })?;
+
+        if let Some(ref state_value) = resp.stack_state {
+            if let Some(url) = public_url_from_stack_state(state_value) {
+                debug!(
+                    deployment = %self.id,
+                    %url,
+                    "deployment URL refreshed from resource outputs"
+                );
+                self.url = Some(url);
+            }
+        }
+
+        Ok(self.url.clone())
+    }
+
+    /// Wait for the manager to expose a public URL in resource outputs.
+    pub async fn wait_for_public_url(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<String, Box<dyn std::error::Error>> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if let Some(url) = self.refresh_public_url().await? {
+                return Ok(url.trim_end_matches('/').to_string());
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(format!(
+                    "Timed out waiting for deployment {} to expose a public URL",
+                    self.id
+                )
+                .into());
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
         }
     }
 
@@ -290,5 +310,73 @@ impl TestDeployment {
 
         debug!(deployment = %self.id, "deployment destroyed");
         Ok(())
+    }
+}
+
+fn public_url_from_resource_outputs(outputs: &alien_core::ResourceOutputs) -> Option<String> {
+    if let Some(worker) = outputs.downcast_ref::<alien_core::WorkerOutputs>() {
+        return worker.url.clone();
+    }
+    if let Some(container) = outputs.downcast_ref::<alien_core::ContainerOutputs>() {
+        return container.url.clone();
+    }
+    None
+}
+
+fn public_url_from_stack_state(state_value: &Value) -> Option<String> {
+    let stack_state = serde_json::from_value::<alien_core::StackState>(state_value.clone()).ok()?;
+    for resource_state in stack_state.resources.values() {
+        if let Some(ref outputs) = resource_state.outputs {
+            if let Some(url) = public_url_from_resource_outputs(outputs) {
+                return Some(url);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resource_output_url_uses_explicit_container_url_first() {
+        let outputs = alien_core::ResourceOutputs::new(alien_core::ContainerOutputs {
+            name: "api".to_string(),
+            status: alien_core::ContainerStatus::Running,
+            current_replicas: 1,
+            desired_replicas: 1,
+            internal_dns: "api".to_string(),
+            url: Some("https://api.example.com".to_string()),
+            replicas: Vec::new(),
+            load_balancer_endpoint: Some(alien_core::LoadBalancerEndpoint {
+                dns_name: "k8s-api.example.elb.amazonaws.com".to_string(),
+                hosted_zone_id: None,
+            }),
+        });
+
+        assert_eq!(
+            public_url_from_resource_outputs(&outputs),
+            Some("https://api.example.com".to_string())
+        );
+    }
+
+    #[test]
+    fn resource_output_url_does_not_derive_from_load_balancer_endpoint() {
+        let outputs = alien_core::ResourceOutputs::new(alien_core::ContainerOutputs {
+            name: "api".to_string(),
+            status: alien_core::ContainerStatus::Running,
+            current_replicas: 1,
+            desired_replicas: 1,
+            internal_dns: "api".to_string(),
+            url: None,
+            replicas: Vec::new(),
+            load_balancer_endpoint: Some(alien_core::LoadBalancerEndpoint {
+                dns_name: "k8s-api.example.elb.amazonaws.com".to_string(),
+                hosted_zone_id: None,
+            }),
+        });
+
+        assert_eq!(public_url_from_resource_outputs(&outputs), None);
     }
 }

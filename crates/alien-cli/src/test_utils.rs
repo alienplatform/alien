@@ -1,7 +1,7 @@
 use alien_core::permissions::PermissionSetReference;
 use alien_core::{
-    Function, FunctionCode, ManagementPermissions, PermissionProfile, PermissionsConfig,
-    ResourceLifecycle, Stack, Storage,
+    ManagementPermissions, PermissionProfile, PermissionsConfig, ResourceLifecycle, Stack, Storage,
+    Worker, WorkerCode,
 };
 use indexmap::IndexMap;
 use std::fs;
@@ -78,7 +78,7 @@ const storage = new alien.Storage("test-storage")
   .publicRead(true)
   .build();
 
-const func = new alien.Function("test-function")
+const func = new alien.Worker("test-function")
   .code({
     type: "image",
     image: "test:latest",
@@ -99,7 +99,7 @@ const stack = new alien.Stack("test-stack-ts")
     },
     management: {
       extend: {
-        "*": ["function/provision", "storage/management"]
+        "*": ["worker/provision", "storage/management"]
       }
     }
   })
@@ -118,7 +118,7 @@ const storage = new alien.Storage("test-storage")
   .publicRead(true)
   .build();
 
-const func = new alien.Function("test-function")
+const func = new alien.Worker("test-function")
   .code({
     type: "image",
     image: "test:latest",
@@ -139,7 +139,7 @@ const stack = new alien.Stack("test-stack-js")
     },
     management: {
       extend: {
-        "*": ["function/provision", "storage/management"]
+        "*": ["worker/provision", "storage/management"]
       }
     }
   })
@@ -156,8 +156,8 @@ pub fn create_sample_stack(stack_id: &str) -> Stack {
         .public_read(true)
         .build();
 
-    let function = Function::new("test-function".to_string())
-        .code(FunctionCode::Image {
+    let function = Worker::new("test-function".to_string())
+        .code(WorkerCode::Image {
             image: "test:latest".to_string(),
         })
         .permissions("execution".to_string())
@@ -187,7 +187,7 @@ pub fn create_sample_stack(stack_id: &str) -> Stack {
     management_permissions.insert(
         "*".to_string(),
         vec![
-            PermissionSetReference::from_name("function/provision"),
+            PermissionSetReference::from_name("worker/provision"),
             PermissionSetReference::from_name("storage/management"),
         ],
     );

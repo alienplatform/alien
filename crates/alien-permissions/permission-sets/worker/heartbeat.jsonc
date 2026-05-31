@@ -1,0 +1,84 @@
+{
+  "id": "worker/heartbeat",
+  "description": "Allows readonly monitoring and health checks for worker resources",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": [
+            "lambda:GetFunctionConfiguration",
+            "lambda:ListVersionsByFunction",
+            "lambda:ListAliases",
+            "lambda:GetPolicy",
+            "lambda:ListTags",
+            "lambda:GetFunctionUrlConfig",
+            "lambda:GetCodeSigningConfig",
+            "lambda:GetFunctionEventInvokeConfig",
+            "lambda:GetEventSourceMapping",
+            "lambda:ListEventSourceMappings"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${stackPrefix}-*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${resourceName}"]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "predefinedRoles": ["roles/run.viewer"]
+        },
+        // Cloud Run does not support IAM conditions (resource.name/resource.type) for any operation.
+        // All conditions silently fail. Stack: scope-only. Resource: scoped to specific service.
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": {
+            "scope": "projects/${projectName}/locations/${region}/services/${resourceName}"
+          }
+        }
+      },
+      {
+        "grant": {
+          "predefinedRoles": ["roles/pubsub.viewer"]
+        },
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
+      },
+      {
+        "grant": {
+          "predefinedRoles": ["roles/iam.serviceAccountViewer"]
+        },
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "predefinedRoles": ["Reader"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/containerApps/${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

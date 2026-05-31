@@ -1,12 +1,18 @@
 use alien_error::{AlienError, Context, ContextError, IntoAlienError, IntoAlienErrorDirect};
 use alien_macros::controller;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
-use alien_core::{ArtifactRegistry, ArtifactRegistryOutputs, ResourceOutputs, ResourceStatus};
+use alien_core::{
+    ArtifactRegistry, ArtifactRegistryHeartbeatData, ArtifactRegistryHeartbeatStatus,
+    ArtifactRegistryOutputs, GcpArtifactRegistryHeartbeatData, HeartbeatBackend, ObservedHealth,
+    Platform, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
+    ResourceStatus,
+};
 use alien_gcp_clients::artifactregistry::{Repository, RepositoryFormat};
 use alien_gcp_clients::iam::{CreateServiceAccountRequest, ServiceAccount};
+use chrono::Utc;
 
 /// Generates the prefixed GAR repository name for a given resource.
 pub fn get_gcp_artifact_registry_repository_name(prefix: &str, resource_id: &str) -> String {
@@ -659,6 +665,53 @@ impl GcpArtifactRegistryController {
             }
 
             debug!(project_id=%stored_project_id, location=%stored_location, "GCP Artifact Registry heartbeat check passed");
+
+            let repository_id = self.repository_name.clone().unwrap_or_else(|| {
+                get_gcp_artifact_registry_repository_name(ctx.resource_prefix, &config.id)
+            });
+            let ar_client = ctx
+                .service_provider
+                .get_gcp_artifact_registry_client(gcp_cfg)?;
+            let repository = ar_client
+                .get_repository(
+                    stored_project_id.clone(),
+                    stored_location.clone(),
+                    repository_id.clone(),
+                )
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to get Artifact Registry repository '{}' during heartbeat check",
+                        repository_id
+                    ),
+                    resource_id: Some(config.id.clone()),
+                })?;
+            let iam_policy = ar_client
+                .get_repository_iam_policy(
+                    stored_project_id.clone(),
+                    stored_location.clone(),
+                    repository_id.clone(),
+                )
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to get Artifact Registry IAM policy '{}' during heartbeat check",
+                        repository_id
+                    ),
+                    resource_id: Some(config.id.clone()),
+                })?;
+
+            emit_gcp_artifact_registry_heartbeat(
+                ctx,
+                &config.id,
+                stored_project_id,
+                stored_location,
+                &repository_id,
+                repository,
+                iam_policy,
+                self.pull_service_account_email.clone(),
+                self.push_service_account_email.clone(),
+            );
         }
 
         Ok(HandlerAction::Continue {
@@ -696,7 +749,7 @@ impl GcpArtifactRegistryController {
     }
 
     fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
-        use alien_core::bindings::{ArtifactRegistryBinding, BindingValue};
+        use alien_core::bindings::ArtifactRegistryBinding;
 
         if let (Some(_project_id), Some(_location), Some(repository_name)) =
             (&self.project_id, &self.location, &self.repository_name)
@@ -802,6 +855,77 @@ impl GcpArtifactRegistryController {
     }
 }
 
+fn emit_gcp_artifact_registry_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    project_id: &str,
+    location: &str,
+    repository_id: &str,
+    repository: Repository,
+    iam_policy: alien_gcp_clients::iam::IamPolicy,
+    pull_service_account_email: Option<String>,
+    push_service_account_email: Option<String>,
+) {
+    let iam_roles = iam_policy
+        .bindings
+        .iter()
+        .map(|binding| binding.role.clone())
+        .collect::<Vec<_>>();
+
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: ArtifactRegistry::RESOURCE_TYPE,
+        controller_platform: Platform::Gcp,
+        backend: HeartbeatBackend::Gcp,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::ArtifactRegistry(
+            ArtifactRegistryHeartbeatData::GcpArtifactRegistry(GcpArtifactRegistryHeartbeatData {
+                status: ArtifactRegistryHeartbeatStatus {
+                    health: ObservedHealth::Healthy,
+                    lifecycle: ProviderLifecycleState::Running,
+                    message: Some(format!(
+                        "GCP Artifact Registry repository '{}' is reachable",
+                        repository_id
+                    )),
+                    stale: false,
+                    partial: false,
+                    collection_issues: vec![],
+                },
+                project_id: project_id.to_string(),
+                location: location.to_string(),
+                repository_id: repository_id.to_string(),
+                name: repository.name,
+                format: repository.format.map(|format| format!("{format:?}")),
+                mode: repository.mode.map(|mode| format!("{mode:?}")),
+                description: repository.description,
+                label_count: repository
+                    .labels
+                    .as_ref()
+                    .map(|labels| labels.len() as u32)
+                    .unwrap_or(0),
+                cleanup_policy_count: repository
+                    .cleanup_policies
+                    .as_ref()
+                    .map(|policies| policies.len() as u32)
+                    .unwrap_or(0),
+                cleanup_policy_dry_run: repository.cleanup_policy_dry_run,
+                kms_key_name_present: repository.kms_key_name.is_some(),
+                size_bytes: repository.size_bytes,
+                satisfies_pzs: repository.satisfies_pzs,
+                create_time: repository.create_time,
+                update_time: repository.update_time,
+                iam_policy_etag_present: iam_policy.etag.is_some(),
+                iam_binding_count: iam_roles.len() as u32,
+                iam_roles,
+                pull_service_account_email,
+                push_service_account_email,
+            }),
+        ),
+        raw: vec![],
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -809,7 +933,7 @@ mod tests {
     use crate::MockPlatformServiceProvider;
     use alien_core::Platform;
     use alien_gcp_clients::artifactregistry::MockArtifactRegistryApi;
-    use alien_gcp_clients::iam::{MockIamApi, Role, ServiceAccount};
+    use alien_gcp_clients::iam::{MockIamApi, ServiceAccount};
     use std::sync::Arc;
 
     fn basic_artifact_registry() -> ArtifactRegistry {
@@ -836,17 +960,6 @@ mod tests {
         }
     }
 
-    /// Adds common IAM mock expectations needed for resource-scoped permissions
-    /// (custom role ensure + patch flow triggered by management permission mutations).
-    fn add_resource_permission_mocks(mock_iam: &mut MockIamApi) {
-        mock_iam
-            .expect_get_role()
-            .returning(|_| Ok(Role::default()));
-        mock_iam
-            .expect_patch_role()
-            .returning(|_, _, _| Ok(Role::default()));
-    }
-
     fn setup_mock_client_for_creation_and_deletion() -> Arc<MockIamApi> {
         let mut mock_iam = MockIamApi::new();
 
@@ -859,8 +972,6 @@ mod tests {
         mock_iam
             .expect_delete_service_account()
             .returning(|_| Ok(()));
-
-        add_resource_permission_mocks(&mut mock_iam);
 
         Arc::new(mock_iam)
     }
@@ -881,8 +992,6 @@ mod tests {
                 let account_id = service_account_name.split('/').last().unwrap_or("unknown");
                 Ok(create_successful_service_account_response(account_id))
             });
-
-        add_resource_permission_mocks(&mut mock_iam);
 
         Arc::new(mock_iam)
     }

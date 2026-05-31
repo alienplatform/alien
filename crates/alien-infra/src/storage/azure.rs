@@ -1,22 +1,24 @@
 //! Controller for managing Azure Storage Containers.
 
 use crate::{
-    core::{ResourceController, ResourceControllerContext, ResourceControllerStepResult},
+    core::ResourceControllerContext,
     error::{ErrorData, Result},
     infra_requirements::azure_utils,
 };
 use alien_azure_clients::azure::models::blob::{
-    BlobContainer, ContainerProperties, ContainerPropertiesPublicAccess,
+    BlobContainer, BlobServiceProperties, ContainerProperties, ContainerPropertiesPublicAccess,
 };
+use alien_azure_clients::azure::models::storage::StorageAccount;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    Resource, ResourceDefinition, ResourceOutputs, ResourceStatus, Storage, StorageOutputs,
+    AzureBlobStorageHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
+    ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
+    ResourceStatus, Storage, StorageHeartbeatData, StorageHeartbeatStatus, StorageOutputs,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
-use alien_macros::{controller, flow_entry, handler, terminal_state};
-use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
-use std::{any::Any, fmt::Debug, time::Duration};
+use alien_macros::controller;
+use chrono::Utc;
+use std::{fmt::Debug, time::Duration};
 use tracing::{debug, info, warn};
 
 fn get_azure_container_name(prefix: &str, name: &str) -> String {
@@ -191,15 +193,42 @@ impl AzureStorageController {
             let client = ctx
                 .service_provider
                 .get_azure_blob_container_client(azure_config)?;
+            let storage_accounts_client = ctx
+                .service_provider
+                .get_azure_storage_accounts_client(azure_config)?;
 
             // Check if container still exists
-            client
+            let container = client
                 .get_blob_container(&resource_group_name, &storage_account_name, container_name)
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: "Failed to check Azure Storage Container during heartbeat".to_string(),
                     resource_id: Some(config.id.clone()),
                 })?;
+            let storage_account = storage_accounts_client
+                .get_storage_account_properties(&resource_group_name, &storage_account_name)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to get Azure Storage account during heartbeat".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?;
+            let blob_service = client
+                .get_blob_service_properties(&resource_group_name, &storage_account_name)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to get Azure Blob service during heartbeat".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?;
+
+            emit_azure_storage_heartbeat(
+                ctx,
+                &config.id,
+                &resource_group_name,
+                &storage_account_name,
+                container,
+                storage_account,
+                blob_service,
+            );
 
             debug!(name = %config.id, container = %container_name, "Azure Storage Container exists and is accessible");
         }
@@ -387,7 +416,7 @@ impl AzureStorageController {
     }
 
     fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
-        use alien_core::bindings::{BindingValue, StorageBinding};
+        use alien_core::bindings::StorageBinding;
 
         if let (Some(storage_account_name), Some(container_name)) =
             (&self.storage_account_name, &self.container_name)
@@ -406,6 +435,136 @@ impl AzureStorageController {
             Ok(None)
         }
     }
+}
+
+fn emit_azure_storage_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    resource_group_name: &str,
+    storage_account_name: &str,
+    container: BlobContainer,
+    storage_account: StorageAccount,
+    blob_service: BlobServiceProperties,
+) {
+    let container_name = container
+        .name
+        .clone()
+        .unwrap_or_else(|| resource_id.to_string());
+    let container_public_access = container
+        .properties
+        .as_ref()
+        .and_then(|properties| properties.public_access.as_ref())
+        .map(ToString::to_string);
+    let account_properties = storage_account.properties.as_ref();
+    let blob_service_properties = blob_service.properties.as_ref();
+    let location = storage_account.location.clone();
+    let sku_name = storage_account.sku.as_ref().map(|sku| sku.name.to_string());
+    let sku_tier = storage_account
+        .sku
+        .as_ref()
+        .and_then(|sku| sku.tier.as_ref())
+        .map(ToString::to_string);
+    let access_tier = account_properties
+        .and_then(|properties| properties.access_tier.as_ref())
+        .map(ToString::to_string);
+    let encryption = account_properties.and_then(|properties| properties.encryption.as_ref());
+    let encryption_services = encryption.and_then(|encryption| encryption.services.as_ref());
+    let blob_delete_retention =
+        blob_service_properties.and_then(|properties| properties.delete_retention_policy.as_ref());
+    let container_delete_retention = blob_service_properties
+        .and_then(|properties| properties.container_delete_retention_policy.as_ref());
+    let change_feed =
+        blob_service_properties.and_then(|properties| properties.change_feed.as_ref());
+    let public_network_access = account_properties
+        .and_then(|properties| properties.public_network_access.as_ref())
+        .map(ToString::to_string);
+    let allow_blob_public_access =
+        account_properties.and_then(|properties| properties.allow_blob_public_access);
+    let provisioning_state = account_properties
+        .and_then(|properties| properties.provisioning_state.as_ref())
+        .map(ToString::to_string);
+    let health = match provisioning_state.as_deref() {
+        Some("Succeeded") => ObservedHealth::Healthy,
+        Some("Failed") => ObservedHealth::Unhealthy,
+        _ => ObservedHealth::Degraded,
+    };
+
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: Storage::RESOURCE_TYPE,
+        controller_platform: Platform::Azure,
+        backend: HeartbeatBackend::Azure,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::Storage(StorageHeartbeatData::AzureBlob(
+            AzureBlobStorageHeartbeatData {
+                status: StorageHeartbeatStatus {
+                    health,
+                    lifecycle: ProviderLifecycleState::Running,
+                    message: Some(format!(
+                        "Azure Storage container '{}' metadata is reachable",
+                        container_name
+                    )),
+                    stale: false,
+                    partial: false,
+                    collection_issues: vec![],
+                },
+                name: container_name,
+                storage_account_name: Some(storage_account_name.to_string()),
+                resource_group: Some(resource_group_name.to_string()),
+                location: Some(location),
+                account_kind: storage_account.kind.as_ref().map(ToString::to_string),
+                sku_name,
+                sku_tier,
+                access_tier,
+                provisioning_state,
+                primary_location: account_properties
+                    .and_then(|properties| properties.primary_location.clone()),
+                secondary_location: account_properties
+                    .and_then(|properties| properties.secondary_location.clone()),
+                status_of_primary: account_properties
+                    .and_then(|properties| properties.status_of_primary.as_ref())
+                    .map(ToString::to_string),
+                status_of_secondary: account_properties
+                    .and_then(|properties| properties.status_of_secondary.as_ref())
+                    .map(ToString::to_string),
+                public_network_access,
+                allow_blob_public_access,
+                encryption_key_source: encryption
+                    .map(|encryption| encryption.key_source.to_string()),
+                blob_encryption_enabled: encryption_services
+                    .and_then(|services| services.blob.as_ref())
+                    .and_then(|service| service.enabled),
+                file_encryption_enabled: encryption_services
+                    .and_then(|services| services.file.as_ref())
+                    .and_then(|service| service.enabled),
+                queue_encryption_enabled: encryption_services
+                    .and_then(|services| services.queue.as_ref())
+                    .and_then(|service| service.enabled),
+                table_encryption_enabled: encryption_services
+                    .and_then(|services| services.table.as_ref())
+                    .and_then(|service| service.enabled),
+                blob_versioning_enabled: blob_service_properties
+                    .and_then(|properties| properties.is_versioning_enabled),
+                blob_delete_retention_enabled: blob_delete_retention
+                    .and_then(|policy| policy.enabled),
+                blob_delete_retention_days: blob_delete_retention
+                    .and_then(|policy| policy.days)
+                    .map(|days| days.get()),
+                container_delete_retention_enabled: container_delete_retention
+                    .and_then(|policy| policy.enabled),
+                container_delete_retention_days: container_delete_retention
+                    .and_then(|policy| policy.days)
+                    .map(|days| days.get()),
+                change_feed_enabled: change_feed.and_then(|feed| feed.enabled),
+                change_feed_retention_days: change_feed
+                    .and_then(|feed| feed.retention_in_days)
+                    .map(|days| u64::from(days.get())),
+                container_public_access,
+            },
+        )),
+        raw: vec![],
+    });
 }
 
 impl AzureStorageController {

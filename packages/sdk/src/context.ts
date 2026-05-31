@@ -10,12 +10,12 @@ import type { Channel } from "nice-grpc"
 import { createClient } from "nice-grpc"
 import { ArtifactRegistry } from "./bindings/artifact-registry.js"
 import { Build } from "./bindings/build.js"
-import { FunctionBinding } from "./bindings/function.js"
 import { Kv } from "./bindings/kv.js"
 import { Queue } from "./bindings/queue.js"
 import { ServiceAccount } from "./bindings/service-account.js"
 import { Storage } from "./bindings/storage.js"
 import { Vault } from "./bindings/vault.js"
+import { WorkerBinding } from "./bindings/worker.js"
 import { createGrpcChannel, getOrCreateChannel } from "./channel.js"
 import { command } from "./commands.js"
 import { InvalidBindingConfigError } from "./errors.js"
@@ -33,7 +33,7 @@ import type { AlienBindingsConfig, AlienBindingsProvider } from "./types.js"
 import { type WaitUntilManager, initWaitUntilManager, waitUntil } from "./wait-until.js"
 
 /**
- * Instance ID for this function instance.
+ * Instance ID for this worker process.
  */
 function generateInstanceId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`
@@ -88,7 +88,7 @@ export class AlienContext implements AlienBindingsProvider {
         InvalidBindingConfigError.create({
           message: "ALIEN_BINDINGS_GRPC_ADDRESS environment variable is not set",
           suggestion:
-            "Make sure you're running inside an Alien function or set the variable manually",
+            "Make sure you're running inside an Alien worker or set the variable manually",
         }),
       )
     }
@@ -205,13 +205,13 @@ export class AlienContext implements AlienBindingsProvider {
   }
 
   /**
-   * Get a function binding.
+   * Get a worker binding.
    *
    * @param name - Binding name
-   * @returns Function binding instance
+   * @returns Worker binding instance
    */
-  func(name: string): FunctionBinding {
-    return this.getBinding(`function:${name}`, () => new FunctionBinding(this.channel, name))
+  worker(name: string): WorkerBinding {
+    return this.getBinding(`worker:${name}`, () => new WorkerBinding(this.channel, name))
   }
 
   /**

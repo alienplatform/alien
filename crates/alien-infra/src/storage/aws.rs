@@ -1,24 +1,23 @@
 use alien_error::{AlienError, ContextError};
-use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
-use std::any::Any;
 use std::fmt::Debug;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
-use crate::core::{ResourceController, ResourceControllerContext, ResourceControllerStepResult};
+use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_aws_clients::s3::{
-    LifecycleConfiguration, LifecycleExpiration, LifecycleRule, LifecycleRuleFilter,
-    LifecycleRuleStatus, PublicAccessBlockConfiguration, S3Api, S3Client, VersioningStatus,
+    GetBucketEncryptionOutput, LifecycleConfiguration, LifecycleExpiration, LifecycleRule,
+    LifecycleRuleFilter, LifecycleRuleStatus, PublicAccessBlockConfiguration, VersioningStatus,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    standard_resource_tags, Resource, ResourceOutputs, ResourceStatus, Storage, StorageOutputs,
+    standard_resource_tags, AwsS3StorageHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
+    ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
+    ResourceStatus, Storage, StorageHeartbeatData, StorageHeartbeatStatus, StorageOutputs,
 };
 use alien_error::{Context, IntoAlienError};
-use alien_macros::{controller, flow_entry, handler, terminal_state};
-use std::sync::Arc;
+use alien_macros::controller;
+use chrono::Utc;
 
 /// Generates the full, prefixed AWS bucket name.
 fn get_aws_bucket_name(prefix: &str, name: &str) -> String {
@@ -33,6 +32,13 @@ fn is_bucket_already_owned(error: &AlienError<CloudClientErrorData>) -> bool {
                 || message.contains("you already own")
                 || message.contains("already owned by you")
                 || message.contains("previous request to create the named bucket succeeded")
+    )
+}
+
+fn is_missing_optional_bucket_metadata(error: &AlienError<CloudClientErrorData>) -> bool {
+    matches!(
+        &error.error,
+        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
     )
 }
 
@@ -380,12 +386,89 @@ impl AwsStorageController {
             // This AWS API call is used because it requires s3:GetBucketLocation permission,
             // which is included in 'heartbeat' level roles, unlike s3:ListBucket
             // required by head_bucket.
-            client.get_bucket_location(bucket_name).await.context(
+            let location = client.get_bucket_location(bucket_name).await.context(
                 ErrorData::CloudPlatformError {
                     message: "Failed to check S3 bucket during heartbeat".to_string(),
                     resource_id: Some(config.id.clone()),
                 },
             )?;
+            let versioning = client.get_bucket_versioning(bucket_name).await.context(
+                ErrorData::CloudPlatformError {
+                    message: "Failed to get S3 bucket versioning during heartbeat".to_string(),
+                    resource_id: Some(config.id.clone()),
+                },
+            )?;
+
+            let lifecycle = match client.get_bucket_lifecycle_configuration(bucket_name).await {
+                Ok(configuration) => Some(configuration),
+                Err(error) if is_missing_optional_bucket_metadata(&error) => None,
+                Err(error) => {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message: "Failed to get S3 bucket lifecycle during heartbeat".to_string(),
+                        resource_id: Some(config.id.clone()),
+                    }));
+                }
+            };
+
+            let encryption = match client.get_bucket_encryption(bucket_name).await {
+                Ok(configuration) => Some(configuration),
+                Err(error) if is_missing_optional_bucket_metadata(&error) => None,
+                Err(error) => {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message: "Failed to get S3 bucket encryption during heartbeat".to_string(),
+                        resource_id: Some(config.id.clone()),
+                    }));
+                }
+            };
+
+            let public_access_block = match client.get_public_access_block(bucket_name).await {
+                Ok(configuration) => Some(configuration),
+                Err(error) if is_missing_optional_bucket_metadata(&error) => None,
+                Err(error) => {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message: "Failed to get S3 bucket public access block during heartbeat"
+                            .to_string(),
+                        resource_id: Some(config.id.clone()),
+                    }));
+                }
+            };
+
+            let bucket_policy_present = match client.get_bucket_policy(bucket_name).await {
+                Ok(output) => Some(!output.policy.trim().is_empty()),
+                Err(error) if is_missing_optional_bucket_metadata(&error) => Some(false),
+                Err(error) => {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message: "Failed to get S3 bucket policy during heartbeat".to_string(),
+                        resource_id: Some(config.id.clone()),
+                    }));
+                }
+            };
+
+            let bucket_acl_present = match client.get_bucket_acl(bucket_name).await {
+                Ok(output) => {
+                    Some(output.owner.is_some() || !output.access_control_list.grants.is_empty())
+                }
+                Err(error) if is_missing_optional_bucket_metadata(&error) => Some(false),
+                Err(error) => {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message: "Failed to get S3 bucket ACL during heartbeat".to_string(),
+                        resource_id: Some(config.id.clone()),
+                    }));
+                }
+            };
+
+            emit_aws_s3_storage_heartbeat(
+                ctx,
+                &config.id,
+                bucket_name,
+                location,
+                versioning.status,
+                lifecycle,
+                encryption,
+                public_access_block,
+                bucket_policy_present,
+                bucket_acl_present,
+            );
 
             debug!(name = %config.id, bucket = %bucket_name, "S3 bucket exists and is accessible");
         }
@@ -848,7 +931,7 @@ impl AwsStorageController {
     }
 
     fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
-        use alien_core::bindings::{BindingValue, StorageBinding};
+        use alien_core::bindings::StorageBinding;
 
         if let Some(bucket_name) = &self.bucket_name {
             let binding = StorageBinding::s3(bucket_name.clone());
@@ -863,6 +946,88 @@ impl AwsStorageController {
         } else {
             Ok(None)
         }
+    }
+}
+
+fn emit_aws_s3_storage_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    bucket_name: &str,
+    location: alien_aws_clients::s3::GetBucketLocationOutput,
+    versioning_status: Option<VersioningStatus>,
+    lifecycle: Option<LifecycleConfiguration>,
+    encryption: Option<GetBucketEncryptionOutput>,
+    public_access_block: Option<PublicAccessBlockConfiguration>,
+    bucket_policy_present: Option<bool>,
+    bucket_acl_present: Option<bool>,
+) {
+    let region = location.region();
+    let versioning_status_label = versioning_status.map(versioning_status_label);
+    let versioning_enabled = Some(matches!(
+        versioning_status_label.as_deref(),
+        Some("Enabled")
+    ));
+    let lifecycle_rule_count = lifecycle
+        .as_ref()
+        .map(|configuration| configuration.rules.len() as u64);
+    let lifecycle_present = lifecycle_rule_count.map(|count| count > 0).unwrap_or(false);
+    let encryption_config_present = encryption.is_some();
+    let encryption_enabled = encryption
+        .as_ref()
+        .map(|configuration| !configuration.rules.is_empty());
+    let public_access_block_present = public_access_block.is_some();
+
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: Storage::RESOURCE_TYPE,
+        controller_platform: Platform::Aws,
+        backend: HeartbeatBackend::Aws,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::Storage(StorageHeartbeatData::AwsS3(
+            AwsS3StorageHeartbeatData {
+                status: StorageHeartbeatStatus {
+                    health: ObservedHealth::Healthy,
+                    lifecycle: ProviderLifecycleState::Running,
+                    message: Some(format!("S3 bucket '{}' metadata is reachable", bucket_name)),
+                    stale: false,
+                    partial: false,
+                    collection_issues: vec![],
+                },
+                name: bucket_name.to_string(),
+                region: Some(region.clone()),
+                bucket_location: Some(region),
+                versioning_status: versioning_status_label,
+                versioning_enabled,
+                lifecycle_present,
+                lifecycle_rule_count,
+                encryption_config_present,
+                encryption_enabled,
+                public_access_block_present,
+                block_public_acls: public_access_block
+                    .as_ref()
+                    .and_then(|configuration| configuration.block_public_acls),
+                ignore_public_acls: public_access_block
+                    .as_ref()
+                    .and_then(|configuration| configuration.ignore_public_acls),
+                block_public_policy: public_access_block
+                    .as_ref()
+                    .and_then(|configuration| configuration.block_public_policy),
+                restrict_public_buckets: public_access_block
+                    .as_ref()
+                    .and_then(|configuration| configuration.restrict_public_buckets),
+                bucket_policy_present,
+                bucket_acl_present,
+            },
+        )),
+        raw: vec![],
+    });
+}
+
+fn versioning_status_label(status: VersioningStatus) -> String {
+    match status {
+        VersioningStatus::Enabled => "Enabled".to_string(),
+        VersioningStatus::Suspended => "Suspended".to_string(),
     }
 }
 

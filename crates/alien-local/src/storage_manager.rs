@@ -1,5 +1,5 @@
 use crate::error::{ErrorData, Result};
-use alien_error::{Context, IntoAlienError};
+use alien_error::{Context, ContextError, IntoAlienError, IntoAlienErrorDirect};
 use std::path::PathBuf;
 use tracing::{debug, info};
 
@@ -117,10 +117,10 @@ impl LocalStorageManager {
         self.state_dir.join("storage").join(id).exists()
     }
 
-    /// Verifies that a storage resource exists and is healthy by actually accessing it.
+    /// Verifies that a storage resource exists and is reachable.
     ///
-    /// This performs a real storage access operation similar to what bindings do, ensuring
-    /// the storage directory is accessible and can be listed (similar to S3 HeadBucket).
+    /// This checks directory metadata and opens the directory handle without reading file
+    /// names or file contents.
     ///
     /// # Arguments
     /// * `id` - Resource identifier
@@ -129,19 +129,27 @@ impl LocalStorageManager {
     /// Ok(()) if storage exists and is healthy, error otherwise
     pub async fn check_health(&self, id: &str) -> Result<()> {
         use alien_error::AlienError;
-        use futures::StreamExt;
-        use object_store::{local::LocalFileSystem, ObjectStore};
 
         let storage_path = self.state_dir.join("storage").join(id);
 
-        if !storage_path.exists() {
-            return Err(AlienError::new(ErrorData::ServiceResourceNotFound {
-                resource_id: id.to_string(),
-                resource_type: "storage".to_string(),
-            }));
-        }
+        let metadata = tokio::fs::metadata(&storage_path).await.map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                AlienError::new(ErrorData::ServiceResourceNotFound {
+                    resource_id: id.to_string(),
+                    resource_type: "storage".to_string(),
+                })
+            } else {
+                error
+                    .into_alien_error()
+                    .context(ErrorData::LocalDirectoryError {
+                        path: storage_path.display().to_string(),
+                        operation: "metadata".to_string(),
+                        reason: "Failed to read storage directory metadata".to_string(),
+                    })
+            }
+        })?;
 
-        if !storage_path.is_dir() {
+        if !metadata.is_dir() {
             return Err(AlienError::new(ErrorData::LocalDirectoryError {
                 path: storage_path.display().to_string(),
                 operation: "health_check".to_string(),
@@ -149,21 +157,15 @@ impl LocalStorageManager {
             }));
         }
 
-        // Try to actually open and list the storage (similar to S3 HeadBucket)
-        // This ensures the directory is accessible, readable, and functional
-        let store = LocalFileSystem::new_with_prefix(&storage_path)
+        // Open the directory to verify reachability without enumerating customer files.
+        let _entries = tokio::fs::read_dir(&storage_path)
+            .await
             .into_alien_error()
             .context(ErrorData::LocalDirectoryError {
                 path: storage_path.display().to_string(),
                 operation: "open".to_string(),
-                reason: "Failed to open storage with LocalFileSystem".to_string(),
+                reason: "Failed to open storage directory".to_string(),
             })?;
-
-        // Perform a list operation (similar to HeadBucket - verifies access without reading data)
-        let mut list_stream = store.list(None);
-        // Just take the first item (or verify stream can be created)
-        // We don't need to consume all items, just verify we can list
-        let _ = list_stream.next().await;
 
         Ok(())
     }

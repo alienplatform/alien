@@ -21,25 +21,20 @@
     "gcp": [
       {
         "grant": {
-          "permissions": ["pubsub.subscriptions.consume", "pubsub.subscriptions.get"]
+          "predefinedRoles": ["roles/pubsub.subscriber", "roles/pubsub.viewer"]
         },
-        // GCP IAM conditions with resource.type/resource.name do not evaluate correctly
-        // for pubsub.subscriptions.consume at runtime.
-        // Access is scoped per-stack via the service account identity instead.
         "binding": {
           "stack": { "scope": "projects/${projectName}" },
-          "resource": { "scope": "projects/${projectName}" }
+          "resource": {
+            "scope": "projects/${projectName}/subscriptions/${resourceName}"
+          }
         }
       }
     ],
     "azure": [
       {
         "grant": {
-          "actions": [
-            "Microsoft.ServiceBus/namespaces/read",
-            "Microsoft.ServiceBus/namespaces/queues/read"
-          ],
-          "dataActions": ["Microsoft.ServiceBus/namespaces/messages/receive/action"]
+          "predefinedRoles": ["Azure Service Bus Data Receiver"]
         },
         "binding": {
           "stack": {

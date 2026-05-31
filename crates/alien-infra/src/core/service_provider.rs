@@ -8,6 +8,7 @@ use alien_aws_clients::{
     dynamodb::{DynamoDbApi, DynamoDbClient},
     ec2::{Ec2Api, Ec2Client},
     ecr::{EcrApi, EcrClient},
+    eks::{EksApi, EksClient},
     elbv2::{Elbv2Api, Elbv2Client},
     eventbridge::{EventBridgeApi, EventBridgeClient},
     iam::{IamApi, IamClient},
@@ -15,6 +16,7 @@ use alien_aws_clients::{
     s3::{S3Api, S3Client},
     secrets_manager::{SecretsManagerApi, SecretsManagerClient},
     sqs::{SqsApi, SqsClient},
+    ssm::{SsmApi, SsmClient},
     AwsClientConfig, AwsCredentialProvider,
 };
 use alien_azure_clients::{
@@ -30,6 +32,7 @@ use alien_azure_clients::{
     },
     load_balancers::{AzureLoadBalancerClient, LoadBalancerApi},
     long_running_operation::{LongRunningOperationApi, LongRunningOperationClient},
+    managed_clusters::{AzureManagedClustersClient, ManagedClustersApi},
     managed_identity::{AzureManagedIdentityClient, ManagedIdentityApi},
     network::{AzureNetworkClient, NetworkApi as AzureNetworkApi},
     resources::{AzureResourcesClient, ResourcesApi},
@@ -48,6 +51,7 @@ use alien_gcp_clients::{
     cloudrun::{CloudRunApi, CloudRunClient},
     cloudscheduler::{CloudSchedulerApi, CloudSchedulerClient},
     compute::{ComputeApi as GcpComputeApi, ComputeClient as GcpComputeClient},
+    container::{ContainerApi as GkeContainerApi, ContainerClient as GkeContainerClient},
     firestore::{FirestoreApi, FirestoreClient},
     gcs::{GcsApi, GcsClient},
     iam::{IamApi as GcpIamApi, IamClient as GcpIamClient},
@@ -59,8 +63,10 @@ use alien_gcp_clients::{
 };
 #[cfg(feature = "kubernetes")]
 use alien_k8s_clients::{
-    deployments::DeploymentApi, jobs::JobApi, kubernetes_client::KubernetesClient, pods::PodApi,
-    secrets::SecretsApi, services::ServiceApi, KubernetesClientConfig,
+    deployments::DeploymentApi, events::EventApi, jobs::JobApi,
+    kubernetes_client::KubernetesClient, metrics::MetricsApi, nodes::NodeApi, pods::PodApi,
+    routes::RouteApi, secrets::SecretsApi, services::ServiceApi, version::VersionApi,
+    KubernetesClientConfig,
 };
 use std::sync::Arc;
 
@@ -92,6 +98,7 @@ pub trait PlatformServiceProvider: Send + Sync {
         &self,
         config: &AwsClientConfig,
     ) -> Result<Arc<dyn SecretsManagerApi>>;
+    async fn get_aws_ssm_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn SsmApi>>;
     async fn get_aws_dynamodb_client(
         &self,
         config: &AwsClientConfig,
@@ -103,6 +110,7 @@ pub trait PlatformServiceProvider: Send + Sync {
         config: &AwsClientConfig,
     ) -> Result<Arc<dyn AutoScalingApi>>;
     async fn get_aws_elbv2_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn Elbv2Api>>;
+    async fn get_aws_eks_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn EksApi>>;
     async fn get_aws_acm_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn AcmApi>>;
     async fn get_aws_apigatewayv2_client(
         &self,
@@ -142,6 +150,10 @@ pub trait PlatformServiceProvider: Send + Sync {
         &self,
         config: &GcpClientConfig,
     ) -> Result<Arc<dyn CloudSchedulerApi>>;
+    fn get_gcp_container_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<Arc<dyn GkeContainerApi>>;
 
     // Azure clients
     fn get_azure_authorization_client(
@@ -180,6 +192,10 @@ pub trait PlatformServiceProvider: Send + Sync {
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn ManagedIdentityApi>>;
+    fn get_azure_managed_clusters_client(
+        &self,
+        config: &AzureClientConfig,
+    ) -> Result<Arc<dyn ManagedClustersApi>>;
     fn get_azure_resources_client(
         &self,
         config: &AzureClientConfig,
@@ -242,6 +258,21 @@ pub trait PlatformServiceProvider: Send + Sync {
         config: &'a KubernetesClientConfig,
     ) -> Result<Arc<dyn PodApi>>;
     #[cfg(feature = "kubernetes")]
+    async fn get_kubernetes_event_client<'a>(
+        &'a self,
+        config: &'a KubernetesClientConfig,
+    ) -> Result<Arc<dyn EventApi>>;
+    #[cfg(feature = "kubernetes")]
+    async fn get_kubernetes_node_client<'a>(
+        &'a self,
+        config: &'a KubernetesClientConfig,
+    ) -> Result<Arc<dyn NodeApi>>;
+    #[cfg(feature = "kubernetes")]
+    async fn get_kubernetes_metrics_client<'a>(
+        &'a self,
+        config: &'a KubernetesClientConfig,
+    ) -> Result<Arc<dyn MetricsApi>>;
+    #[cfg(feature = "kubernetes")]
     async fn get_kubernetes_secrets_client<'a>(
         &'a self,
         config: &'a KubernetesClientConfig,
@@ -251,6 +282,16 @@ pub trait PlatformServiceProvider: Send + Sync {
         &'a self,
         config: &'a KubernetesClientConfig,
     ) -> Result<Arc<dyn ServiceApi>>;
+    #[cfg(feature = "kubernetes")]
+    async fn get_kubernetes_route_client<'a>(
+        &'a self,
+        config: &'a KubernetesClientConfig,
+    ) -> Result<Arc<dyn RouteApi>>;
+    #[cfg(feature = "kubernetes")]
+    async fn get_kubernetes_version_client<'a>(
+        &'a self,
+        config: &'a KubernetesClientConfig,
+    ) -> Result<Arc<dyn VersionApi>>;
 
     // Local platform service managers (return None for non-local platforms)
     #[cfg(feature = "local")]
@@ -275,9 +316,9 @@ pub trait PlatformServiceProvider: Send + Sync {
     }
 
     #[cfg(feature = "local")]
-    fn get_local_function_manager(&self) -> Option<Arc<alien_local::LocalFunctionManager>>;
+    fn get_local_worker_manager(&self) -> Option<Arc<alien_local::LocalWorkerManager>>;
     #[cfg(not(feature = "local"))]
-    fn get_local_function_manager(&self) -> Option<Arc<()>> {
+    fn get_local_worker_manager(&self) -> Option<Arc<()>> {
         None
     }
 
@@ -445,6 +486,19 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         )))
     }
 
+    async fn get_aws_ssm_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn SsmApi>> {
+        let credentials = AwsCredentialProvider::from_config(config.clone())
+            .await
+            .context(crate::error::ErrorData::CloudPlatformError {
+                message: "Failed to create AWS credential provider".to_string(),
+                resource_id: None,
+            })?;
+        Ok(Arc::new(SsmClient::new(
+            reqwest::Client::new(),
+            credentials,
+        )))
+    }
+
     async fn get_aws_dynamodb_client(
         &self,
         config: &AwsClientConfig,
@@ -511,6 +565,19 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
                 resource_id: None,
             })?;
         Ok(Arc::new(Elbv2Client::new(
+            reqwest::Client::new(),
+            credentials,
+        )))
+    }
+
+    async fn get_aws_eks_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn EksApi>> {
+        let credentials = AwsCredentialProvider::from_config(config.clone())
+            .await
+            .context(crate::error::ErrorData::CloudPlatformError {
+                message: "Failed to create AWS credential provider".to_string(),
+                resource_id: None,
+            })?;
+        Ok(Arc::new(EksClient::new(
             reqwest::Client::new(),
             credentials,
         )))
@@ -664,6 +731,16 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         )))
     }
 
+    fn get_gcp_container_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<Arc<dyn GkeContainerApi>> {
+        Ok(Arc::new(GkeContainerClient::new(
+            reqwest::Client::new(),
+            config.clone(),
+        )))
+    }
+
     // Azure implementations
     fn get_azure_authorization_client(
         &self,
@@ -750,6 +827,16 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn ManagedIdentityApi>> {
         Ok(Arc::new(AzureManagedIdentityClient::new(
+            reqwest::Client::new(),
+            AzureTokenCache::new(config.clone()),
+        )))
+    }
+
+    fn get_azure_managed_clusters_client(
+        &self,
+        config: &AzureClientConfig,
+    ) -> Result<Arc<dyn ManagedClustersApi>> {
+        Ok(Arc::new(AzureManagedClustersClient::new(
             reqwest::Client::new(),
             AzureTokenCache::new(config.clone()),
         )))
@@ -907,6 +994,48 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
     }
 
     #[cfg(feature = "kubernetes")]
+    async fn get_kubernetes_event_client<'a>(
+        &'a self,
+        config: &'a KubernetesClientConfig,
+    ) -> Result<Arc<dyn EventApi>> {
+        let client = KubernetesClient::new(config.clone()).await.context(
+            crate::error::ErrorData::CloudPlatformError {
+                message: "Failed to create Kubernetes event client".to_string(),
+                resource_id: None,
+            },
+        )?;
+        Ok(Arc::new(client))
+    }
+
+    #[cfg(feature = "kubernetes")]
+    async fn get_kubernetes_node_client<'a>(
+        &'a self,
+        config: &'a KubernetesClientConfig,
+    ) -> Result<Arc<dyn NodeApi>> {
+        let client = KubernetesClient::new(config.clone()).await.context(
+            crate::error::ErrorData::CloudPlatformError {
+                message: "Failed to create Kubernetes node client".to_string(),
+                resource_id: None,
+            },
+        )?;
+        Ok(Arc::new(client))
+    }
+
+    #[cfg(feature = "kubernetes")]
+    async fn get_kubernetes_metrics_client<'a>(
+        &'a self,
+        config: &'a KubernetesClientConfig,
+    ) -> Result<Arc<dyn MetricsApi>> {
+        let client = KubernetesClient::new(config.clone()).await.context(
+            crate::error::ErrorData::CloudPlatformError {
+                message: "Failed to create Kubernetes metrics client".to_string(),
+                resource_id: None,
+            },
+        )?;
+        Ok(Arc::new(client))
+    }
+
+    #[cfg(feature = "kubernetes")]
     async fn get_kubernetes_secrets_client<'a>(
         &'a self,
         config: &'a KubernetesClientConfig,
@@ -934,6 +1063,34 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         Ok(Arc::new(client))
     }
 
+    #[cfg(feature = "kubernetes")]
+    async fn get_kubernetes_route_client<'a>(
+        &'a self,
+        config: &'a KubernetesClientConfig,
+    ) -> Result<Arc<dyn RouteApi>> {
+        let client = KubernetesClient::new(config.clone()).await.context(
+            crate::error::ErrorData::CloudPlatformError {
+                message: "Failed to create Kubernetes route client".to_string(),
+                resource_id: None,
+            },
+        )?;
+        Ok(Arc::new(client))
+    }
+
+    #[cfg(feature = "kubernetes")]
+    async fn get_kubernetes_version_client<'a>(
+        &'a self,
+        config: &'a KubernetesClientConfig,
+    ) -> Result<Arc<dyn VersionApi>> {
+        let client = KubernetesClient::new(config.clone()).await.context(
+            crate::error::ErrorData::CloudPlatformError {
+                message: "Failed to create Kubernetes version client".to_string(),
+                resource_id: None,
+            },
+        )?;
+        Ok(Arc::new(client))
+    }
+
     // Local platform service managers
     #[cfg(feature = "local")]
     fn get_local_storage_manager(&self) -> Option<Arc<alien_local::LocalStorageManager>> {
@@ -955,8 +1112,8 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
     }
 
     #[cfg(feature = "local")]
-    fn get_local_function_manager(&self) -> Option<Arc<alien_local::LocalFunctionManager>> {
-        self.local_bindings.as_ref().map(|p| p.function_manager())
+    fn get_local_worker_manager(&self) -> Option<Arc<alien_local::LocalWorkerManager>> {
+        self.local_bindings.as_ref().map(|p| p.worker_manager())
     }
 
     #[cfg(feature = "local")]

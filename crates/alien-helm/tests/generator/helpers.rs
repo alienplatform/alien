@@ -4,6 +4,8 @@ use alien_core::{Stack, StackSettings};
 use alien_helm::{generate_helm_chart, HelmChart, HelmOptions, HelmRegistry};
 use indexmap::IndexMap;
 
+use super::test_utils;
+
 /// Render `stack` into a chart through the built-in registry.
 pub fn render(stack: &Stack, settings: StackSettings) -> HelmChart {
     let registry = HelmRegistry::built_in();
@@ -36,16 +38,19 @@ pub fn snapshot_chart(name: &str, chart: &HelmChart) {
 }
 
 /// Run `helm lint` + `helm template` + `kubeconform` against the chart
-/// for both bootstrap paths (manager-fetch + external-bindings initialize).
+/// for the default values and every generated example values file.
 pub fn assert_helm_valid(chart: &HelmChart, context: &str) {
     let files = linter_files(chart);
-    alien_helm::test_utils::helm_lint(&files).assert_ok(format!("{context} helm lint"));
-    alien_helm::test_utils::helm_template_and_validate(&files, None)
-        .assert_ok(format!("{context} helm template manager-fetch"));
-    if let Some(local_values) = files.get("examples/onprem.yaml") {
-        alien_helm::test_utils::helm_template_and_validate(&files, Some(local_values)).assert_ok(
-            format!("{context} helm template external-bindings initialize"),
-        );
+    test_utils::helm_lint(&files).assert_ok(format!("{context} helm lint"));
+    test_utils::helm_template_and_validate(&files, None)
+        .assert_ok(format!("{context} helm template default values"));
+
+    for (path, values) in files
+        .iter()
+        .filter(|(path, _)| path.starts_with("examples/") && path.ends_with(".yaml"))
+    {
+        test_utils::helm_template_and_validate(&files, Some(values))
+            .assert_ok(format!("{context} helm template {path}"));
     }
 }
 

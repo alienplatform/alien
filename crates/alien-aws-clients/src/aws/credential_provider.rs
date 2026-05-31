@@ -2,7 +2,9 @@ use std::sync::RwLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use alien_client_core::Result;
-use alien_core::{AwsClientConfig, AwsCredentials, AwsServiceOverrides};
+#[cfg(any(test, feature = "test-utils"))]
+use alien_core::AwsServiceOverrides;
+use alien_core::{AwsClientConfig, AwsCredentials};
 use aws_credential_types::Credentials;
 
 /// How many seconds before expiry to proactively refresh credentials.

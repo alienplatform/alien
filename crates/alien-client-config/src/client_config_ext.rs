@@ -2,7 +2,14 @@
 
 use alien_client_core::{ErrorData, Result};
 use alien_core::{ClientConfig, ImpersonationConfig, Platform};
-use alien_error::{AlienError, Context};
+use alien_error::AlienError;
+#[cfg(any(
+    feature = "aws",
+    feature = "gcp",
+    feature = "azure",
+    feature = "kubernetes"
+))]
+use alien_error::Context;
 use async_trait::async_trait;
 use std::collections::HashMap;
 
@@ -187,6 +194,8 @@ impl ClientConfigExt for ClientConfig {
             ClientConfig::Azure(_) => Platform::Azure,
             #[cfg(feature = "kubernetes")]
             ClientConfig::Kubernetes(_) => Platform::Kubernetes,
+            #[cfg(feature = "kubernetes")]
+            ClientConfig::KubernetesCloud { .. } => Platform::Kubernetes,
             ClientConfig::Test => Platform::Test,
             ClientConfig::Local { .. } => Platform::Local,
             // This should never be reached when no features are enabled,

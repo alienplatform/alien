@@ -55,18 +55,43 @@ on:
         description: "Local / Windows / Agent"
         type: boolean
         default: false
-      language:
-        description: "Language filter"
+      app:
+        description: "App filter"
         type: choice
-        default: "Rust"
+        default: "comprehensive-rust"
         options:
           - All
-          - Rust
-          - TypeScript
+          - comprehensive-rust
+          - comprehensive-ts
+          - full-stack-microservices
+      network_mode:
+        description: "Cloud network mode"
+        type: choice
+        default: "none"
+        options:
+          - none
+          - use-default
+          - create
+          - existing
+      kubernetes_cluster_mode:
+        description: "Kubernetes cluster mode for Terraform + Helm E2E"
+        type: choice
+        default: existing
+        options:
+          - existing
+          - create
       build_images:
-        description: "Build container images (disable to use latest from main)"
+        description: "Build container images (disable to use latest/default images or explicit overrides)"
         type: boolean
         default: true
+      base_image_override:
+        description: "Optional alien-base image to use when skipping image builds"
+        type: string
+        default: ""
+      agent_image_override:
+        description: "Optional alien-agent image to use when skipping image builds"
+        type: string
+        default: ""
       skip_cleanup:
         description: "Skip post-test resource cleanup (useful for debugging)"
         type: boolean
@@ -79,6 +104,26 @@ on:
         description: "Run local agent in foreground (no service install, no sudo)"
         type: boolean
         default: true
+      aws_target:
+        description: "AWS target account"
+        type: choice
+        default: aws-target-1
+        options:
+          - aws-target-1
+      gcp_target:
+        description: "GCP target project"
+        type: choice
+        default: gcp-target-3
+        options:
+          - gcp-target-1
+          - gcp-target-2
+          - gcp-target-3
+      azure_target:
+        description: "Azure target subscription"
+        type: choice
+        default: azure-target-1
+        options:
+          - azure-target-1
   merge_group:
   pull_request:
     types: [opened, reopened, synchronize, labeled]
@@ -87,6 +132,9 @@ permissions:
   contents: read
   id-token: write
   packages: write
+
+env:
+  ALIEN_E2E_SLOT: "03"
 
 jobs:
   # ── Compute which tests, platforms, and architectures to run ────────
@@ -107,8 +155,11 @@ jobs:
       needs_x86_64: ${{ steps.set.outputs.needs_x86_64 }}
       needs_aarch64: ${{ steps.set.outputs.needs_aarch64 }}
       build_images: ${{ steps.set.outputs.build_images }}
+      build_base_image: ${{ steps.set.outputs.build_base_image }}
+      build_agent_image: ${{ steps.set.outputs.build_agent_image }}
       skip_cleanup: ${{ steps.set.outputs.skip_cleanup }}
       test_filter: ${{ steps.set.outputs.test_filter }}
+      network_mode: ${{ steps.set.outputs.network_mode }}
     steps:
       - id: set
         run: |
@@ -139,8 +190,11 @@ jobs:
             echo "needs_x86_64=false" >> $GITHUB_OUTPUT
             echo "needs_aarch64=false" >> $GITHUB_OUTPUT
             echo "build_images=true" >> $GITHUB_OUTPUT
+            echo "build_base_image=true" >> $GITHUB_OUTPUT
+            echo "build_agent_image=true" >> $GITHUB_OUTPUT
             echo "skip_cleanup=false" >> $GITHUB_OUTPUT
             echo "test_filter=" >> $GITHUB_OUTPUT
+            echo "network_mode=none" >> $GITHUB_OUTPUT
             exit 0
           fi
 
@@ -160,8 +214,11 @@ jobs:
             LOCAL_LINUX_AGENT="${{ inputs.run_local_linux_agent }}"
             LOCAL_MACOS_AGENT="${{ inputs.run_local_macos_agent }}"
             LOCAL_WINDOWS_AGENT="${{ inputs.run_local_windows_agent }}"
-            LANG="${{ inputs.language }}"
+            APP="${{ inputs.app }}"
+            NETWORK_MODE="${{ inputs.network_mode }}"
             BUILD_IMAGES="${{ inputs.build_images }}"
+            BASE_IMAGE_OVERRIDE="${{ inputs.base_image_override }}"
+            AGENT_IMAGE_OVERRIDE="${{ inputs.agent_image_override }}"
             SKIP_CLEANUP="${{ inputs.skip_cleanup }}"
             TEST_FILTER="${{ inputs.test_filter }}"
           else
@@ -178,33 +235,49 @@ jobs:
             LOCAL_LINUX_AGENT=true
             LOCAL_MACOS_AGENT=false
             LOCAL_WINDOWS_AGENT=false
-            LANG=Rust; BUILD_IMAGES=true; SKIP_CLEANUP=false; TEST_FILTER=""
+            APP=comprehensive-rust; NETWORK_MODE=none; BUILD_IMAGES=true; BASE_IMAGE_OVERRIDE=""; AGENT_IMAGE_OVERRIDE=""; SKIP_CLEANUP=false; TEST_FILTER=""
+          fi
+
+          BUILD_BASE_IMAGE=$BUILD_IMAGES
+          BUILD_AGENT_IMAGE=$BUILD_IMAGES
+          if [ "$BUILD_IMAGES" != "true" ]; then
+            BUILD_BASE_IMAGE=false
+            BUILD_AGENT_IMAGE=false
+          fi
+          if [ -n "$BASE_IMAGE_OVERRIDE" ]; then
+            BUILD_BASE_IMAGE=false
+          fi
+          if [ -n "$AGENT_IMAGE_OVERRIDE" ]; then
+            BUILD_AGENT_IMAGE=false
+          fi
+          if [ "$BUILD_BASE_IMAGE" != "true" ] && [ "$BUILD_AGENT_IMAGE" != "true" ]; then
+            BUILD_IMAGES=false
           fi
 
           # Build push matrix
           PUSH_ENTRIES='[]'
           if [ "$PUSH_AWS_CLI" = "true" ]; then
-            if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
-              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-aws-rust","test_filter":"push_aws_rust","needs_oidc":false}]')
+            if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-rust" ]; then
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-aws-comprehensive-rust","test_filter":"push_aws_comprehensive_rust","needs_oidc":false,"resource_suffix":"awscr"}]')
             fi
-            if [ "$LANG" = "All" ] || [ "$LANG" = "TypeScript" ]; then
-              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-aws-typescript","test_filter":"push_aws_typescript","needs_oidc":false}]')
+            if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-ts" ]; then
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-aws-comprehensive-ts","test_filter":"push_aws_comprehensive_ts","needs_oidc":false,"resource_suffix":"awsct"}]')
             fi
           fi
           if [ "$PUSH_GCP_CLI" = "true" ]; then
-            if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
-              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-gcp-rust","test_filter":"push_gcp_rust","needs_oidc":false}]')
+            if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-rust" ]; then
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-gcp-comprehensive-rust","test_filter":"push_gcp_comprehensive_rust","needs_oidc":false,"resource_suffix":"gcpcr"}]')
             fi
-            if [ "$LANG" = "All" ] || [ "$LANG" = "TypeScript" ]; then
-              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-gcp-typescript","test_filter":"push_gcp_typescript","needs_oidc":false}]')
+            if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-ts" ]; then
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-gcp-comprehensive-ts","test_filter":"push_gcp_comprehensive_ts","needs_oidc":false,"resource_suffix":"gcpct"}]')
             fi
           fi
           if [ "$PUSH_AZURE_CLI" = "true" ]; then
-            if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
-              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-azure-rust","test_filter":"push_azure_rust","needs_oidc":true}]')
+            if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-rust" ]; then
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-azure-comprehensive-rust","test_filter":"push_azure_comprehensive_rust","needs_oidc":true,"resource_suffix":"azcr"}]')
             fi
-            if [ "$LANG" = "All" ] || [ "$LANG" = "TypeScript" ]; then
-              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-azure-typescript","test_filter":"push_azure_typescript","needs_oidc":true}]')
+            if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-ts" ]; then
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-azure-comprehensive-ts","test_filter":"push_azure_comprehensive_ts","needs_oidc":true,"resource_suffix":"azct"}]')
             fi
           fi
 
@@ -213,27 +286,27 @@ jobs:
           # Build local matrix (native agent on each OS)
           LOCAL_ENTRIES='[]'
           if [ "$LOCAL_LINUX_AGENT" = "true" ]; then
-            if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
-              LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-linux-rust","os":"depot-ubuntu-24.04-arm-8","test_filter":"pull_local_rust"}]')
+            if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-rust" ]; then
+              LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-linux-comprehensive-rust","os":"depot-ubuntu-24.04-arm-8","test_filter":"pull_local_comprehensive_rust"}]')
             fi
-            if [ "$LANG" = "All" ] || [ "$LANG" = "TypeScript" ]; then
-              LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-linux-typescript","os":"depot-ubuntu-24.04-arm-8","test_filter":"pull_local_typescript"}]')
+            if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-ts" ]; then
+              LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-linux-comprehensive-ts","os":"depot-ubuntu-24.04-arm-8","test_filter":"pull_local_comprehensive_ts"}]')
             fi
           fi
           if [ "$LOCAL_MACOS_AGENT" = "true" ]; then
-            if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
-              LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-macos-rust","os":"depot-macos-latest","test_filter":"pull_local_rust"}]')
+            if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-rust" ]; then
+              LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-macos-comprehensive-rust","os":"depot-macos-latest","test_filter":"pull_local_comprehensive_rust"}]')
             fi
-            if [ "$LANG" = "All" ] || [ "$LANG" = "TypeScript" ]; then
-              LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-macos-typescript","os":"depot-macos-latest","test_filter":"pull_local_typescript"}]')
+            if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-ts" ]; then
+              LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-macos-comprehensive-ts","os":"depot-macos-latest","test_filter":"pull_local_comprehensive_ts"}]')
             fi
           fi
           if [ "$LOCAL_WINDOWS_AGENT" = "true" ]; then
-            if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
-              LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-windows-rust","os":"depot-windows-2025-8","test_filter":"pull_local_rust"}]')
+            if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-rust" ]; then
+              LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-windows-comprehensive-rust","os":"depot-windows-2025-8","test_filter":"pull_local_comprehensive_rust"}]')
             fi
-            if [ "$LANG" = "All" ] || [ "$LANG" = "TypeScript" ]; then
-              LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-windows-typescript","os":"depot-windows-2025-8","test_filter":"pull_local_typescript"}]')
+            if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-ts" ]; then
+              LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-windows-comprehensive-ts","os":"depot-windows-2025-8","test_filter":"pull_local_comprehensive_ts"}]')
             fi
           fi
 
@@ -242,24 +315,35 @@ jobs:
           # Build Terraform distribution matrix. Kubernetes entries provision
           # frozen resources with Terraform and install the agent with Helm.
           TERRAFORM_ENTRIES='[]'
-          if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
+          if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-rust" ]; then
             if [ "$PUSH_AWS_TERRAFORM" = "true" ]; then
-              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-aws-push-rust","test_filter":"terraform_aws_push_rust","needs_oidc":false}]')
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-aws-push-comprehensive-rust","test_filter":"terraform_aws_push_comprehensive_rust","needs_oidc":false,"resource_suffix":"tfawscr"}]')
             fi
             if [ "$PUSH_GCP_TERRAFORM" = "true" ]; then
-              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-gcp-push-rust","test_filter":"terraform_gcp_push_rust","needs_oidc":false}]')
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-gcp-push-comprehensive-rust","test_filter":"terraform_gcp_push_comprehensive_rust","needs_oidc":false,"resource_suffix":"tfgcpcr"}]')
             fi
             if [ "$PUSH_AZURE_TERRAFORM" = "true" ]; then
-              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-azure-push-rust","test_filter":"terraform_azure_push_rust","needs_oidc":true}]')
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-azure-push-comprehensive-rust","test_filter":"terraform_azure_push_comprehensive_rust","needs_oidc":true,"resource_suffix":"tfazcr"}]')
             fi
             if [ "$KUBERNETES_AWS_TERRAFORM_HELM" = "true" ]; then
-              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-eks-helm-pull-rust","test_filter":"terraform_eks_helm_pull_rust","needs_oidc":false}]')
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-eks-helm-pull-comprehensive-rust","test_filter":"terraform_eks_helm_pull_comprehensive_rust","needs_oidc":false,"resource_suffix":"tfekscr"}]')
             fi
             if [ "$KUBERNETES_GCP_TERRAFORM_HELM" = "true" ]; then
-              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-gke-helm-pull-rust","test_filter":"terraform_gke_helm_pull_rust","needs_oidc":false}]')
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-gke-helm-pull-comprehensive-rust","test_filter":"terraform_gke_helm_pull_comprehensive_rust","needs_oidc":false,"resource_suffix":"tfgkecr"}]')
             fi
             if [ "$KUBERNETES_AZURE_TERRAFORM_HELM" = "true" ]; then
-              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-aks-helm-pull-rust","test_filter":"terraform_aks_helm_pull_rust","needs_oidc":true}]')
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-aks-helm-pull-comprehensive-rust","test_filter":"terraform_aks_helm_pull_comprehensive_rust","needs_oidc":true,"resource_suffix":"tfakscr"}]')
+            fi
+          fi
+          if [ "$APP" = "All" ] || [ "$APP" = "full-stack-microservices" ]; then
+            if [ "$KUBERNETES_AWS_TERRAFORM_HELM" = "true" ]; then
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-eks-helm-pull-full-stack-microservices","test_filter":"terraform_eks_helm_pull_full_stack_microservices","needs_oidc":false,"resource_suffix":"tfeksfs"}]')
+            fi
+            if [ "$KUBERNETES_GCP_TERRAFORM_HELM" = "true" ]; then
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-gke-helm-pull-full-stack-microservices","test_filter":"terraform_gke_helm_pull_full_stack_microservices","needs_oidc":false,"resource_suffix":"tfgkefs"}]')
+            fi
+            if [ "$KUBERNETES_AZURE_TERRAFORM_HELM" = "true" ]; then
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-aks-helm-pull-full-stack-microservices","test_filter":"terraform_aks_helm_pull_full_stack_microservices","needs_oidc":true,"resource_suffix":"tfaksfs"}]')
             fi
           fi
 
@@ -267,8 +351,8 @@ jobs:
           # and currently validates the push/import path.
           CLOUDFORMATION_ENTRIES='[]'
           if [ "$PUSH_AWS_CLOUDFORMATION" = "true" ]; then
-            if [ "$LANG" = "All" ] || [ "$LANG" = "Rust" ]; then
-              CLOUDFORMATION_ENTRIES=$(echo "$CLOUDFORMATION_ENTRIES" | jq -c '. + [{"name":"cloudformation-aws-push-rust","test_filter":"cloudformation_aws_push_rust","needs_oidc":false}]')
+            if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-rust" ]; then
+              CLOUDFORMATION_ENTRIES=$(echo "$CLOUDFORMATION_ENTRIES" | jq -c '. + [{"name":"cloudformation-aws-push-comprehensive-rust","test_filter":"cloudformation_aws_push_comprehensive_rust","needs_oidc":false,"resource_suffix":"cfawscr"}]')
             fi
           fi
 
@@ -301,8 +385,11 @@ jobs:
           echo "needs_x86_64=$NEEDS_X86_64" >> $GITHUB_OUTPUT
           echo "needs_aarch64=$NEEDS_AARCH64" >> $GITHUB_OUTPUT
           echo "build_images=$BUILD_IMAGES" >> $GITHUB_OUTPUT
+          echo "build_base_image=$BUILD_BASE_IMAGE" >> $GITHUB_OUTPUT
+          echo "build_agent_image=$BUILD_AGENT_IMAGE" >> $GITHUB_OUTPUT
           echo "skip_cleanup=$SKIP_CLEANUP" >> $GITHUB_OUTPUT
           echo "test_filter=$TEST_FILTER" >> $GITHUB_OUTPUT
+          echo "network_mode=$NETWORK_MODE" >> $GITHUB_OUTPUT
 
   # ── Build alien-runtime + alien-agent for needed architectures ─────
   # Combined into one cargo invocation per arch to share compilation of
@@ -329,15 +416,25 @@ jobs:
           install-protoc: "true"
 
       - name: Build alien-runtime + alien-agent (x86_64)
-        run: depot cargo build --release -p alien-runtime -p alien-agent --target x86_64-unknown-linux-musl
+        run: |
+          PACKAGES=()
+          if [ "${{ needs.compute-matrix.outputs.build_base_image }}" = "true" ]; then
+            PACKAGES+=("-p" "alien-runtime")
+          fi
+          if [ "${{ needs.compute-matrix.outputs.build_agent_image }}" = "true" ]; then
+            PACKAGES+=("-p" "alien-agent")
+          fi
+          depot cargo build --release "${PACKAGES[@]}" --target x86_64-unknown-linux-musl
 
       - uses: actions/upload-artifact@v4
+        if: needs.compute-matrix.outputs.build_base_image == 'true'
         with:
           name: alien-runtime-x86_64
           path: target/x86_64-unknown-linux-musl/release/alien-runtime
           retention-days: 1
 
       - uses: actions/upload-artifact@v4
+        if: needs.compute-matrix.outputs.build_agent_image == 'true'
         with:
           name: alien-agent-x86_64
           path: target/x86_64-unknown-linux-musl/release/alien-agent
@@ -364,15 +461,25 @@ jobs:
           install-protoc: "true"
 
       - name: Build alien-runtime + alien-agent (aarch64)
-        run: depot cargo build --release -p alien-runtime -p alien-agent --target aarch64-unknown-linux-musl
+        run: |
+          PACKAGES=()
+          if [ "${{ needs.compute-matrix.outputs.build_base_image }}" = "true" ]; then
+            PACKAGES+=("-p" "alien-runtime")
+          fi
+          if [ "${{ needs.compute-matrix.outputs.build_agent_image }}" = "true" ]; then
+            PACKAGES+=("-p" "alien-agent")
+          fi
+          depot cargo build --release "${PACKAGES[@]}" --target aarch64-unknown-linux-musl
 
       - uses: actions/upload-artifact@v4
+        if: needs.compute-matrix.outputs.build_base_image == 'true'
         with:
           name: alien-runtime-aarch64
           path: target/aarch64-unknown-linux-musl/release/alien-runtime
           retention-days: 1
 
       - uses: actions/upload-artifact@v4
+        if: needs.compute-matrix.outputs.build_agent_image == 'true'
         with:
           name: alien-agent-aarch64
           path: target/aarch64-unknown-linux-musl/release/alien-agent
@@ -381,9 +488,10 @@ jobs:
   # ── Build container images ─────────────────────────────────────────
 
   build-base-image:
-    needs: [build-x86_64, build-aarch64]
+    needs: [compute-matrix, build-x86_64, build-aarch64]
     if: |
       !cancelled() && !failure() &&
+      needs.compute-matrix.outputs.build_base_image == 'true' &&
       (needs.build-x86_64.result == 'success' || needs.build-aarch64.result == 'success')
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 15
@@ -446,9 +554,10 @@ jobs:
           provenance: false
 
   build-agent-image:
-    needs: [build-x86_64, build-aarch64]
+    needs: [compute-matrix, build-x86_64, build-aarch64]
     if: |
       !cancelled() && !failure() &&
+      needs.compute-matrix.outputs.build_agent_image == 'true' &&
       (needs.build-x86_64.result == 'success' || needs.build-aarch64.result == 'success')
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 15
@@ -535,6 +644,9 @@ jobs:
           # vars.* are not auto-masked by GitHub (only secrets.* are)
           echo "::add-mask::${{ vars.TEST_GCP_MGMT_PROJECT_ID }}"
           echo "::add-mask::${{ vars.TEST_GCP_TARGET_PROJECT_ID }}"
+          echo "::add-mask::${{ vars.TEST_GCP_TARGET_1_PROJECT_ID }}"
+          echo "::add-mask::${{ vars.TEST_GCP_TARGET_2_PROJECT_ID }}"
+          echo "::add-mask::${{ vars.TEST_GCP_TARGET_3_PROJECT_ID }}"
 
       - name: Terraform init
         working-directory: infra/test
@@ -555,6 +667,10 @@ jobs:
           TF_VAR_google_management_project_id: ${{ vars.TEST_GCP_MGMT_PROJECT_ID }}
           TF_VAR_google_target_service_account_key: ${{ secrets.TEST_GCP_TARGET_SA_KEY }}
           TF_VAR_google_target_project_id: ${{ vars.TEST_GCP_TARGET_PROJECT_ID }}
+          TF_VAR_google_target_1_service_account_key: ${{ secrets.TEST_GCP_TARGET_1_SA_KEY }}
+          TF_VAR_google_target_1_project_id: ${{ vars.TEST_GCP_TARGET_1_PROJECT_ID }}
+          TF_VAR_google_target_3_service_account_key: ${{ secrets.TEST_GCP_TARGET_3_SA_KEY }}
+          TF_VAR_google_target_3_project_id: ${{ vars.TEST_GCP_TARGET_3_PROJECT_ID }}
           TF_VAR_azure_management_subscription_id: ${{ secrets.TEST_AZURE_MGMT_SUBSCRIPTION_ID }}
           TF_VAR_azure_management_tenant_id: ${{ secrets.TEST_AZURE_MGMT_TENANT_ID }}
           TF_VAR_azure_management_client_id: ${{ secrets.TEST_AZURE_MGMT_CLIENT_ID }}
@@ -563,6 +679,32 @@ jobs:
           TF_VAR_azure_target_tenant_id: ${{ secrets.TEST_AZURE_TARGET_TENANT_ID }}
           TF_VAR_azure_target_client_id: ${{ secrets.TEST_AZURE_TARGET_CLIENT_ID }}
           TF_VAR_azure_target_client_secret: ${{ secrets.TEST_AZURE_TARGET_CLIENT_SECRET }}
+
+      - uses: azure/setup-helm@v4
+
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          install_components: gke-gcloud-auth-plugin
+
+      - name: Install Kubernetes auth helpers
+        run: |
+          if ! command -v aws >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y awscli unzip
+          fi
+          case "$(uname -m)" in
+            aarch64|arm64) KUBELOGIN_ARCH=arm64 ;;
+            x86_64|amd64) KUBELOGIN_ARCH=amd64 ;;
+            *) echo "Unsupported kubelogin architecture: $(uname -m)" >&2; exit 1 ;;
+          esac
+          curl -fsSL -o /tmp/kubelogin.zip "https://github.com/Azure/kubelogin/releases/download/v0.2.17/kubelogin-linux-${KUBELOGIN_ARCH}.zip"
+          unzip -q /tmp/kubelogin.zip -d /tmp/kubelogin
+          sudo install -m 0755 "/tmp/kubelogin/bin/linux_${KUBELOGIN_ARCH}/kubelogin" /usr/local/bin/kubelogin
+
+      - name: Configure provider-native E2E ingress
+        run: ./scripts/configure-e2e-provider-ingress.sh
+        env:
+          TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
 
       - name: Set up Azure OIDC token
         run: |
@@ -578,6 +720,21 @@ jobs:
       - name: Generate .env.test
         run: |
           ./scripts/gen-env-test.sh
+          cp .env.test .env.test.1password
+          ./scripts/select-e2e-targets.sh \
+            --env-file .env.test.1password \
+            --aws aws-target-1 \
+            --gcp gcp-target-3 \
+            --azure azure-target-1
+          ./scripts/select-e2e-targets.sh \
+            --env-file .env.test \
+            --aws "${{ inputs.aws_target || 'aws-target-1' }}" \
+            --gcp "${{ inputs.gcp_target || 'gcp-target-3' }}" \
+            --azure "${{ inputs.azure_target || 'azure-target-1' }}"
+          printf "\nALIEN_E2E_SLOT='%s'\n" "$ALIEN_E2E_SLOT" >> .env.test
+          printf "\nALIEN_E2E_SLOT='%s'\n" "$ALIEN_E2E_SLOT" >> .env.test.1password
+          printf "\nALIEN_E2E_KUBERNETES_CLUSTER_MODE='%s'\n" "${{ inputs.kubernetes_cluster_mode || 'existing' }}" >> .env.test
+          printf "\nALIEN_E2E_KUBERNETES_CLUSTER_MODE='%s'\n" "${{ inputs.kubernetes_cluster_mode || 'existing' }}" >> .env.test.1password
           echo "--- verifying .env.test exists ---"
           ls -la .env.test
           wc -l .env.test
@@ -596,14 +753,57 @@ jobs:
             [ -n "$val" ] && echo "::add-mask::$val"
           done < .env.test
 
+      - name: Ensure EKS OIDC provider
+        if: inputs.run_kubernetes_aws_terraform_helm == true
+        run: |
+          set -a && source .env.test && set +a
+          export AWS_ACCESS_KEY_ID="$AWS_TARGET_ACCESS_KEY_ID"
+          export AWS_SECRET_ACCESS_KEY="$AWS_TARGET_SECRET_ACCESS_KEY"
+          export AWS_SESSION_TOKEN="${AWS_TARGET_SESSION_TOKEN:-}"
+          export AWS_DEFAULT_REGION="$AWS_TARGET_REGION"
+          ./scripts/ensure-aws-eks-oidc-provider.sh
+
+      - name: Pre-clean stale AWS E2E resources
+        if: |
+          needs.compute-matrix.outputs.has_push == 'true' ||
+          needs.compute-matrix.outputs.has_terraform == 'true' ||
+          needs.compute-matrix.outputs.has_cloudformation == 'true'
+        continue-on-error: true
+        run: |
+          set -a && source .env.test && set +a
+          export AWS_ACCESS_KEY_ID="$AWS_TARGET_ACCESS_KEY_ID"
+          export AWS_SECRET_ACCESS_KEY="$AWS_TARGET_SECRET_ACCESS_KEY"
+          export AWS_SESSION_TOKEN="${AWS_TARGET_SESSION_TOKEN:-}"
+          export AWS_DEFAULT_REGION="$AWS_TARGET_REGION"
+          for suffix in "" "-awscr" "-awsct" "-cfawscr" "-tfawscr" "-tfekscr" "-tfeksfs" "-awsr" "-awst" "-cfaws" "-tfaws" "-tfeks"; do
+            export ALIEN_E2E_RESOURCE_PREFIX="e2e-${ALIEN_E2E_SLOT}${suffix}"
+            ./scripts/cleanup-aws-e2e-resources.sh
+          done
+
       - name: Upload .env.test artifact
         uses: actions/upload-artifact@v4
         with:
           name: env-test-e2e
-          path: .env.test
+          path: |
+            .env.test
+            .alien-kubeconfigs/
           if-no-files-found: error
           include-hidden-files: true
           retention-days: 1
+
+      - name: Install 1Password CLI
+        uses: 1password/install-cli-action@v1
+
+      - name: Upload .env.test to 1Password (for local dev)
+        run: |
+          if op document get alien-test-env --vault "$OP_VAULT_NAME" > /dev/null 2>&1; then
+            op document edit alien-test-env .env.test.1password --vault "$OP_VAULT_NAME"
+          else
+            op document create .env.test.1password --title alien-test-env --vault "$OP_VAULT_NAME"
+          fi
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          OP_VAULT_NAME: ${{ secrets.OP_VAULT_NAME }}
 
   # ── E2E push test matrix ───────────────────────────────────────────
 
@@ -663,6 +863,10 @@ jobs:
 
       - uses: depot/setup-action@v1
 
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
       - uses: mozilla-actions/sccache-action@v0.0.9
 
       - uses: taiki-e/install-action@cargo-nextest
@@ -686,7 +890,10 @@ jobs:
           cache: pnpm
 
       - name: Install JS dependencies and build packages
-        run: pnpm install --frozen-lockfile && pnpm build
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+          pnpm -C examples install --frozen-lockfile
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
 
@@ -706,9 +913,11 @@ jobs:
       - name: Run E2E push test
         env:
           NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
-          ALIEN_TEST_OVERRIDE_BASE_IMAGE: ${{ needs.compute-matrix.outputs.build_images == 'true' && needs.build-base-image.outputs.base_image || '' }}
+          ALIEN_OVERRIDE_BASE_IMAGE: ${{ inputs.base_image_override || (needs.compute-matrix.outputs.build_base_image == 'true' && needs.build-base-image.outputs.base_image || '') }}
+          ALIEN_E2E_NETWORK_MODE: ${{ needs.compute-matrix.outputs.network_mode }}
         run: |
           set -a && source .env.test && set +a
+          export ALIEN_E2E_RESOURCE_PREFIX="e2e-${ALIEN_E2E_SLOT}-${{ matrix.resource_suffix }}"
           depot cargo nextest run -p alien-test --test push ${{ matrix.test_filter }} ${{ needs.compute-matrix.outputs.test_filter }} --no-capture
 
   # ── E2E CloudFormation distribution matrix ─────────────────────────
@@ -742,6 +951,10 @@ jobs:
 
       - uses: depot/setup-action@v1
 
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
       - uses: mozilla-actions/sccache-action@v0.0.9
 
       - uses: taiki-e/install-action@cargo-nextest
@@ -772,7 +985,10 @@ jobs:
         run: pipx install cfn-lint
 
       - name: Install JS dependencies and build packages
-        run: pnpm install --frozen-lockfile && pnpm build
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+          pnpm -C examples install --frozen-lockfile
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
 
@@ -789,9 +1005,12 @@ jobs:
       - name: Run E2E CloudFormation distribution test
         env:
           NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
-          ALIEN_TEST_OVERRIDE_BASE_IMAGE: ${{ needs.compute-matrix.outputs.build_images == 'true' && needs.build-base-image.outputs.base_image || '' }}
+          ALIEN_OVERRIDE_BASE_IMAGE: ${{ inputs.base_image_override || (needs.compute-matrix.outputs.build_base_image == 'true' && needs.build-base-image.outputs.base_image || '') }}
+          ALIEN_E2E_NETWORK_MODE: ${{ needs.compute-matrix.outputs.network_mode }}
         run: |
           set -a && source .env.test && set +a
+          export ALIEN_TEST_BUN_BINARY="$(command -v bun)"
+          export ALIEN_E2E_RESOURCE_PREFIX="e2e-${ALIEN_E2E_SLOT}-${{ matrix.resource_suffix }}"
           depot cargo nextest run -p alien-test --test distribution ${{ matrix.test_filter }} ${{ needs.compute-matrix.outputs.test_filter }} --no-capture
 
   # ── E2E Terraform distribution matrix ──────────────────────────────
@@ -805,7 +1024,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.compute-matrix.outputs.terraform_matrix) }}
-    runs-on: depot-ubuntu-24.04-arm-8
+    runs-on: depot-ubuntu-24.04-16
     timeout-minutes: 90
     env:
       CARGO_INCREMENTAL: "0"
@@ -841,19 +1060,23 @@ jobs:
           echo "OIDC_REFRESH_PID=$!" >> $GITHUB_ENV
 
       - uses: docker/login-action@v3
-        if: needs.compute-matrix.outputs.build_images == 'true'
+        if: needs.compute-matrix.outputs.build_agent_image == 'true'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Pull agent image
-        if: needs.compute-matrix.outputs.build_images == 'true'
+        if: needs.compute-matrix.outputs.build_agent_image == 'true'
         run: docker pull ${{ needs.build-agent-image.outputs.agent_image }}
 
       - uses: dtolnay/rust-toolchain@nightly
 
       - uses: depot/setup-action@v1
+
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
 
       - uses: mozilla-actions/sccache-action@v0.0.9
 
@@ -885,10 +1108,15 @@ jobs:
 
       - name: Install kubectl and kind
         run: |
-          curl -Lo kubectl https://dl.k8s.io/release/v1.30.0/bin/linux/amd64/kubectl
+          case "$(uname -m)" in
+            x86_64) K8S_ARCH=amd64 ;;
+            aarch64|arm64) K8S_ARCH=arm64 ;;
+            *) echo "Unsupported Kubernetes tooling architecture: $(uname -m)" >&2; exit 1 ;;
+          esac
+          curl -Lo kubectl "https://dl.k8s.io/release/v1.30.0/bin/linux/${K8S_ARCH}/kubectl"
           chmod +x kubectl
           sudo mv kubectl /usr/local/bin/kubectl
-          curl -Lo kind https://kind.sigs.k8s.io/dl/v0.24.0/kind-linux-amd64
+          curl -Lo kind "https://kind.sigs.k8s.io/dl/v0.24.0/kind-linux-${K8S_ARCH}"
           chmod +x kind
           sudo mv kind /usr/local/bin/kind
 
@@ -899,7 +1127,10 @@ jobs:
           sudo mv kubeconform /usr/local/bin/kubeconform
 
       - name: Install JS dependencies and build packages
-        run: pnpm install --frozen-lockfile && pnpm build
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+          pnpm -C examples install --frozen-lockfile
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
 
@@ -916,11 +1147,17 @@ jobs:
       - name: Run E2E Terraform distribution test
         env:
           NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
-          ALIEN_TEST_OVERRIDE_BASE_IMAGE: ${{ needs.compute-matrix.outputs.build_images == 'true' && needs.build-base-image.outputs.base_image || '' }}
-          ALIEN_TEST_OVERRIDE_AGENT_IMAGE: ${{ needs.compute-matrix.outputs.build_images == 'true' && needs.build-agent-image.outputs.agent_image || '' }}
+          ALIEN_OVERRIDE_BASE_IMAGE: ${{ inputs.base_image_override || (needs.compute-matrix.outputs.build_base_image == 'true' && needs.build-base-image.outputs.base_image || '') }}
+          ALIEN_TEST_OVERRIDE_AGENT_IMAGE: ${{ inputs.agent_image_override || (needs.compute-matrix.outputs.build_agent_image == 'true' && needs.build-agent-image.outputs.agent_image || '') }}
+          ALIEN_E2E_NETWORK_MODE: ${{ needs.compute-matrix.outputs.network_mode }}
+          ALIEN_TEST_GHCR_USERNAME: ${{ github.actor }}
+          ALIEN_TEST_GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -a && source .env.test && set +a
-          depot cargo nextest run -p alien-test --test distribution ${{ matrix.test_filter }} ${{ needs.compute-matrix.outputs.test_filter }} --no-capture
+          export ALIEN_TEST_BUN_BINARY="$(command -v bun)"
+          "$ALIEN_TEST_BUN_BINARY" --version
+          export ALIEN_E2E_RESOURCE_PREFIX="e2e-${ALIEN_E2E_SLOT}-${{ matrix.resource_suffix }}"
+          cargo nextest run -p alien-test --test distribution ${{ matrix.test_filter }} ${{ needs.compute-matrix.outputs.test_filter }} --no-capture
 
   # ── E2E local test matrix ──────────────────────────────────────────
   # Installs alien-agent as an OS service via `alien-deploy up` on each
@@ -958,6 +1195,11 @@ jobs:
       - uses: depot/setup-action@v1
         if: runner.os != 'Windows'
 
+      - uses: docker/setup-qemu-action@v3
+        if: runner.os == 'Linux'
+        with:
+          platforms: arm64
+
       - uses: mozilla-actions/sccache-action@v0.0.9
 
       - uses: taiki-e/install-action@cargo-nextest
@@ -993,7 +1235,10 @@ jobs:
           cache: pnpm
 
       - name: Install JS dependencies and build packages
-        run: pnpm install --frozen-lockfile && pnpm build
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+          pnpm -C examples install --frozen-lockfile
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
 
@@ -1068,101 +1313,55 @@ jobs:
   # orphaned cloud resources in the dedicated test target accounts.
 
   cleanup:
-    needs: [compute-matrix, push-test, cloudformation-test, terraform-test, local-test]
+    needs: [compute-matrix, setup, push-test, cloudformation-test, terraform-test, local-test]
     if: always() && needs.compute-matrix.outputs.skip_cleanup != 'true'
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 30
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Download .env.test
+        uses: actions/download-artifact@v4
+        with:
+          name: env-test-e2e
+
       - name: Clean up AWS resources
         if: always()
         continue-on-error: true
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.TEST_AWS_TARGET_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.TEST_AWS_TARGET_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: us-east-2
         run: |
-          echo "Deleting CloudFormation stacks in target account..."
-          STACKS=$(aws cloudformation list-stacks \
-            --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE ROLLBACK_COMPLETE \
-                                  CREATE_FAILED UPDATE_FAILED DELETE_FAILED \
-            --query 'StackSummaries[].StackName' --output text) || true
-          for stack in $STACKS; do
-            echo "Deleting stack: $stack"
-            aws cloudformation delete-stack --stack-name "$stack" || true
-          done
-
-          echo "Waiting for stack deletions to complete..."
-          for stack in $STACKS; do
-            aws cloudformation wait stack-delete-complete --stack-name "$stack" 2>/dev/null || true
-          done
-
-          echo "Deleting orphaned Lambda functions with alien- prefix..."
-          LAMBDAS=$(aws lambda list-functions --query 'Functions[?starts_with(FunctionName, `alien-`)].FunctionName' --output text) || true
-          for fn in $LAMBDAS; do
-            echo "Deleting Lambda function: $fn"
-            aws lambda delete-function --function-name "$fn" || true
-          done
-
-          echo "Deleting orphaned SQS queues with alien- prefix..."
-          QUEUES=$(aws sqs list-queues --queue-name-prefix alien- --query 'QueueUrls[]' --output text 2>/dev/null) || true
-          for queue in $QUEUES; do
-            echo "Deleting SQS queue: $queue"
-            aws sqs delete-queue --queue-url "$queue" || true
-          done
-
-          echo "Deleting orphaned DynamoDB tables with alien- prefix..."
-          TABLES=$(aws dynamodb list-tables --query 'TableNames[?starts_with(@, `alien-`)]' --output text) || true
-          for table in $TABLES; do
-            echo "Deleting DynamoDB table: $table"
-            aws dynamodb delete-table --table-name "$table" || true
-          done
-
-          echo "Deleting orphaned SSM parameters with /alien- prefix..."
-          PARAMS=$(aws ssm describe-parameters --parameter-filters "Key=Name,Option=BeginsWith,Values=/alien-" --query 'Parameters[].Name' --output text) || true
-          for param in $PARAMS; do
-            echo "Deleting SSM parameter: $param"
-            aws ssm delete-parameter --name "$param" || true
-          done
-
-          echo "Deleting orphaned IAM roles with alien- prefix..."
-          ROLES=$(aws iam list-roles --query 'Roles[?starts_with(RoleName, `alien-`)].RoleName' --output text) || true
-          for role in $ROLES; do
-            echo "Detaching policies and deleting IAM role: $role"
-            POLICIES=$(aws iam list-attached-role-policies --role-name "$role" --query 'AttachedPolicies[].PolicyArn' --output text) || true
-            for policy in $POLICIES; do
-              aws iam detach-role-policy --role-name "$role" --policy-arn "$policy" || true
-            done
-            INLINE=$(aws iam list-role-policies --role-name "$role" --query 'PolicyNames[]' --output text) || true
-            for ip in $INLINE; do
-              aws iam delete-role-policy --role-name "$role" --policy-name "$ip" || true
-            done
-            aws iam delete-role --role-name "$role" || true
+          set -a && source .env.test && set +a
+          export AWS_ACCESS_KEY_ID="$AWS_TARGET_ACCESS_KEY_ID"
+          export AWS_SECRET_ACCESS_KEY="$AWS_TARGET_SECRET_ACCESS_KEY"
+          export AWS_SESSION_TOKEN="${AWS_TARGET_SESSION_TOKEN:-}"
+          export AWS_DEFAULT_REGION="$AWS_TARGET_REGION"
+          for suffix in "" "-awscr" "-awsct" "-cfawscr" "-tfawscr" "-tfekscr" "-tfeksfs" "-awsr" "-awst" "-cfaws" "-tfaws" "-tfeks"; do
+            export ALIEN_E2E_RESOURCE_PREFIX="e2e-${ALIEN_E2E_SLOT}${suffix}"
+            ./scripts/cleanup-aws-e2e-resources.sh
           done
 
       - name: Clean up GCP resources
         if: always()
         continue-on-error: true
-        env:
-          GCP_TARGET_PROJECT_ID: ${{ vars.TEST_GCP_TARGET_PROJECT_ID }}
         run: |
-          echo '${{ secrets.TEST_GCP_TARGET_SA_KEY }}' > /tmp/gcp-key.json
+          set -a && source .env.test && set +a
+          echo "$GOOGLE_TARGET_SERVICE_ACCOUNT_KEY" > /tmp/gcp-key.json
           gcloud auth activate-service-account --key-file=/tmp/gcp-key.json --quiet || true
-          gcloud config set project "$GCP_TARGET_PROJECT_ID" --quiet || true
+          gcloud config set project "$GOOGLE_TARGET_PROJECT_ID" --quiet || true
 
           echo "Deleting Cloud Run services in target project..."
-          SERVICES=$(gcloud run services list --platform=managed --region=us-east4 \
+          SERVICES=$(gcloud run services list --platform=managed --region="$GOOGLE_TARGET_REGION" \
             --format='value(name)' 2>/dev/null) || true
           for svc in $SERVICES; do
             echo "Deleting Cloud Run service: $svc"
-            gcloud run services delete "$svc" --platform=managed --region=us-east4 --quiet || true
+            gcloud run services delete "$svc" --platform=managed --region="$GOOGLE_TARGET_REGION" --quiet || true
           done
 
           echo "Deleting orphaned Cloud Functions in target project..."
-          FUNCTIONS=$(gcloud functions list --regions=us-east4 \
+          FUNCTIONS=$(gcloud functions list --regions="$GOOGLE_TARGET_REGION" \
             --format='value(name)' 2>/dev/null) || true
           for fn in $FUNCTIONS; do
             echo "Deleting Cloud Function: $fn"
-            gcloud functions delete "$fn" --region=us-east4 --quiet || true
+            gcloud functions delete "$fn" --region="$GOOGLE_TARGET_REGION" --quiet || true
           done
 
           echo "Deleting orphaned Pub/Sub topics with alien- prefix..."
@@ -1198,16 +1397,12 @@ jobs:
       - name: Clean up Azure resources
         if: always()
         continue-on-error: true
-        env:
-          AZURE_SUBSCRIPTION_ID: ${{ secrets.TEST_AZURE_TARGET_SUBSCRIPTION_ID }}
-          AZURE_TENANT_ID: ${{ secrets.TEST_AZURE_TARGET_TENANT_ID }}
-          AZURE_CLIENT_ID: ${{ secrets.TEST_AZURE_TARGET_CLIENT_ID }}
-          AZURE_CLIENT_SECRET: ${{ secrets.TEST_AZURE_TARGET_CLIENT_SECRET }}
         run: |
+          set -a && source .env.test && set +a
           az login --service-principal \
-            -u "$AZURE_CLIENT_ID" -p "$AZURE_CLIENT_SECRET" --tenant "$AZURE_TENANT_ID" \
+            -u "$AZURE_TARGET_CLIENT_ID" -p "$AZURE_TARGET_CLIENT_SECRET" --tenant "$AZURE_TARGET_TENANT_ID" \
             --output none || true
-          az account set --subscription "$AZURE_SUBSCRIPTION_ID" || true
+          az account set --subscription "$AZURE_TARGET_SUBSCRIPTION_ID" || true
 
           echo "Deleting resource groups in target subscription (excluding shared env)..."
           GROUPS=$(az group list --query "[?!starts_with(name, 'alien-e2e-shared-')].name" -o tsv 2>/dev/null) || true

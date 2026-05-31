@@ -7,7 +7,7 @@ Core types shared across all Alien crates. Defines the vocabulary of the platfor
 - `stack` / `stack_state` / `stack_settings` — Stack definitions, resource graph, frozen vs live lifecycle
 - `deployment/` — Deployment types: status, config, state, release, compute, domain, environment variables
 - `platform` — Platform enum (Aws, Gcp, Azure, Kubernetes, Local)
-- `resource` / `resources/` — Resource types and per-resource configs (Function, Container, Storage, KV, Queue, Vault, etc.)
+- `resource` / `resources/` — Resource types and per-resource configs (Worker, Container, Storage, KV, Queue, Vault, etc.)
 - `bindings/` / `external_bindings` — Binding type definitions and external (bring-your-own) bindings
 - `commands_types` — Remote command protocol types (CommandState, Envelope, BodySpec)
 - `permissions` — Permission definitions

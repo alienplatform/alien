@@ -21,14 +21,24 @@ use alien_error::AlienError;
 
 use crate::core::{serialize_controller, ResourceController};
 
+pub fn make_imported_state<C>(controller: C, ctx: &ImportContext<'_>) -> Result<StackResourceState>
+where
+    C: ResourceController + 'static,
+{
+    make_imported_state_with_status(controller, ctx, ResourceStatus::Running)
+}
+
 /// Build a `StackResourceState` for an imported resource.
 ///
-/// The supplied `controller` must already be in its terminal "Ready" state
-/// (i.e. all identifying fields populated, state machine pointing at the
-/// running terminal). Outputs and binding params are derived from the
-/// controller; serialization preserves the `type` discriminator so
-/// [`crate::core::deserialize_controller`] round-trips the value.
-pub fn make_imported_state<C>(controller: C, ctx: &ImportContext<'_>) -> Result<StackResourceState>
+/// Most importers should use [`make_imported_state`], which marks the resource
+/// Running. Setup resources that need one final controller-owned wait before
+/// live provisioning may use this helper with a non-terminal status, provided
+/// the controller already has enough identifying fields to produce outputs.
+pub fn make_imported_state_with_status<C>(
+    controller: C,
+    ctx: &ImportContext<'_>,
+    status: ResourceStatus,
+) -> Result<StackResourceState>
 where
     C: ResourceController + 'static,
 {
@@ -54,7 +64,7 @@ where
 
     Ok(StackResourceState::builder()
         .resource_type(resource_type)
-        .status(ResourceStatus::Running)
+        .status(status)
         .config(ctx.resource.config.clone())
         .internal_state(internal_state)
         .maybe_outputs(outputs)

@@ -47,7 +47,7 @@ impl TfEmitter for AzureContainerAppsEnvironmentEmitter {
                 attr(
                     "name",
                     expr::raw(format!(
-                        "replace(lower(\"${{var.stack_name}}-{label}-logs\"), \"_\", \"-\")"
+                        "replace(lower(\"${{local.resource_prefix}}-{label}-logs\"), \"_\", \"-\")"
                     )),
                 ),
                 attr(
@@ -71,7 +71,7 @@ impl TfEmitter for AzureContainerAppsEnvironmentEmitter {
                 attr(
                     "name",
                     expr::raw(format!(
-                        "replace(lower(\"${{var.stack_name}}-{label}\"), \"_\", \"-\")"
+                        "replace(lower(\"${{local.resource_prefix}}-{label}\"), \"_\", \"-\")"
                     )),
                 ),
                 attr(
@@ -122,6 +122,7 @@ impl TfEmitter for AzureContainerAppsEnvironmentEmitter {
                         &binding.default_domain,
                     )?,
                 ),
+                ("customDomainVerificationId", expr::raw("null")),
             ]));
         }
 
@@ -140,6 +141,14 @@ impl TfEmitter for AzureContainerAppsEnvironmentEmitter {
             (
                 "defaultDomain",
                 expr::traversal(["azurerm_container_app_environment", label, "default_domain"]),
+            ),
+            (
+                "customDomainVerificationId",
+                expr::traversal([
+                    "azurerm_container_app_environment",
+                    label,
+                    "custom_domain_verification_id",
+                ]),
             ),
         ]))
     }
@@ -175,6 +184,7 @@ impl TfEmitter for AzureContainerAppsEnvironmentEmitter {
                         &binding.default_domain,
                     )?,
                 ),
+                ("customDomainVerificationId", expr::raw("null")),
             ])));
         }
 
@@ -195,6 +205,14 @@ impl TfEmitter for AzureContainerAppsEnvironmentEmitter {
             (
                 "defaultDomain",
                 expr::traversal(["azurerm_container_app_environment", label, "default_domain"]),
+            ),
+            (
+                "customDomainVerificationId",
+                expr::traversal([
+                    "azurerm_container_app_environment",
+                    label,
+                    "custom_domain_verification_id",
+                ]),
             ),
         ])))
     }

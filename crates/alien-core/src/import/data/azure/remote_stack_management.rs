@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct AzureRemoteStackManagementImportData {
     /// Subscription ID containing the management identity.
     pub subscription_id: String,
@@ -21,5 +21,6 @@ pub struct AzureRemoteStackManagementImportData {
     pub client_id: String,
     /// Whether the management role assignments were applied by the
     /// generated stack.
+    #[serde(deserialize_with = "crate::import::data::deserialize_bool_from_bool_or_string")]
     pub management_permissions_applied: bool,
 }

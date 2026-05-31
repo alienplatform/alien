@@ -9,7 +9,7 @@ use tracing::{debug, info};
 
 /// Resource types that carry a `permissions` profile and therefore need a dependency
 /// on the corresponding `{permissions}-sa` service account.
-const PERMISSION_BEARING_RESOURCE_TYPES: &[&str] = &["container", "function"];
+const PERMISSION_BEARING_RESOURCE_TYPES: &[&str] = &["container", "worker"];
 
 /// Mutation that adds ServiceAccount dependencies to resources that have resource-scoped permissions.
 ///
@@ -51,7 +51,7 @@ impl StackMutation for ServiceAccountDependenciesMutation {
             alien_core::ManagementPermissions::Auto => {}
         }
 
-        // Also run if any container or function uses a named permission profile, so we can
+        // Also run if any container or worker uses a named permission profile, so we can
         // wire it as a declared dependency on the corresponding SA.
         for (_resource_id, entry) in &stack.resources {
             let rtype = entry.config.resource_type();
@@ -69,7 +69,7 @@ impl StackMutation for ServiceAccountDependenciesMutation {
         &self,
         mut stack: Stack,
         stack_state: &StackState,
-        _config: &DeploymentConfig,
+        config: &DeploymentConfig,
     ) -> Result<Stack> {
         info!("Adding ServiceAccount dependencies to resources with resource-scoped permissions");
 
@@ -98,11 +98,12 @@ impl StackMutation for ServiceAccountDependenciesMutation {
             }
         }
 
-        // Handle management permissions dependencies for non-cross-account platforms
-        if !matches!(
-            stack_state.platform,
-            Platform::Aws | Platform::Gcp | Platform::Azure
-        ) {
+        // Handle management permissions dependencies only when management is
+        // performed by a stack-local service account. Cloud platforms, and
+        // Kubernetes setup backed by a cloud base platform, use
+        // RemoteStackManagement instead; wiring `management-sa` there creates a
+        // dependency on a resource that is intentionally not in the stack.
+        if !management_permissions_use_remote_stack_management(stack_state.platform, config) {
             match &stack.permissions.management {
                 alien_core::ManagementPermissions::Extend(management_profile)
                 | alien_core::ManagementPermissions::Override(management_profile) => {
@@ -127,7 +128,7 @@ impl StackMutation for ServiceAccountDependenciesMutation {
             }
         }
 
-        // Second pass: for every container/function with a named permission profile, add
+        // Second pass: for every container/worker with a named permission profile, add
         // the corresponding {profile}-sa as a declared dependency.  This ensures the
         // executor waits for the SA before creating the resource and propagates SA changes
         // to the resource automatically — the consumer side of the SA dependency, not just
@@ -194,5 +195,125 @@ impl StackMutation for ServiceAccountDependenciesMutation {
         );
 
         Ok(stack)
+    }
+}
+
+fn management_permissions_use_remote_stack_management(
+    platform: Platform,
+    config: &DeploymentConfig,
+) -> bool {
+    if matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
+        return true;
+    }
+
+    platform == Platform::Kubernetes
+        && matches!(
+            config.base_platform,
+            Some(Platform::Aws | Platform::Gcp | Platform::Azure)
+        )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::permissions::{ManagementPermissions, PermissionProfile, PermissionsConfig};
+    use alien_core::{
+        EnvironmentVariablesSnapshot, ExternalBindings, ResourceEntry, ResourceLifecycle,
+        StackSettings, Vault,
+    };
+    use indexmap::IndexMap;
+
+    fn empty_config(base_platform: Option<Platform>) -> DeploymentConfig {
+        let builder = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: Vec::new(),
+                hash: String::new(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default());
+        match base_platform {
+            Some(base_platform) => builder.base_platform(base_platform).build(),
+            None => builder.build(),
+        }
+    }
+
+    fn stack_with_management_scoped_vault() -> Stack {
+        let mut resources = IndexMap::new();
+        resources.insert(
+            "secrets".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(Vault::new("secrets".to_string()).build()),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                remote_access: false,
+            },
+        );
+
+        let management = ManagementPermissions::Extend(PermissionProfile(
+            [(
+                "secrets".to_string(),
+                vec![alien_core::permissions::PermissionSetReference::from_name(
+                    "vault/data-write",
+                )],
+            )]
+            .into_iter()
+            .collect(),
+        ));
+
+        Stack {
+            id: "test-stack".to_string(),
+            resources,
+            permissions: PermissionsConfig {
+                profiles: IndexMap::new(),
+                management,
+            },
+            supported_platforms: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn cloud_backed_kubernetes_skips_management_sa_dependencies() {
+        let stack = stack_with_management_scoped_vault();
+        let result = ServiceAccountDependenciesMutation
+            .mutate(
+                stack,
+                &StackState::new(Platform::Kubernetes),
+                &empty_config(Some(Platform::Aws)),
+            )
+            .await
+            .unwrap();
+
+        let secrets = result.resources.get("secrets").unwrap();
+        assert!(
+            secrets
+                .dependencies
+                .iter()
+                .all(|dependency| dependency.id() != "management-sa"),
+            "cloud-backed Kubernetes setup uses RemoteStackManagement, not a stack-local management-sa"
+        );
+    }
+
+    #[tokio::test]
+    async fn plain_kubernetes_keeps_management_sa_dependencies() {
+        let stack = stack_with_management_scoped_vault();
+        let result = ServiceAccountDependenciesMutation
+            .mutate(
+                stack,
+                &StackState::new(Platform::Kubernetes),
+                &empty_config(None),
+            )
+            .await
+            .unwrap();
+
+        let secrets = result.resources.get("secrets").unwrap();
+        assert!(
+            secrets
+                .dependencies
+                .iter()
+                .any(|dependency| dependency.id() == "management-sa"),
+            "plain Kubernetes management still depends on a stack-local management-sa"
+        );
     }
 }

@@ -14,11 +14,6 @@ alien-error = { workspace = true }
 # Async runtime
 tokio = { workspace = true, features = ["full"] }
 
-# HTTP server (TODO: Remove once Worker resource is implemented - Workers don't need HTTP)
-hyper = { version = "1.5.2", features = ["server", "http1"] }
-hyper-util = { version = "0.1.10", features = ["tokio", "server"] }
-http-body-util = "0.1.2"
-
 # Serialization
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -45,4 +40,3 @@ blake3 = "1.5.5"
 regex = "1.11.1"
 
 [dev-dependencies]
-

@@ -3,20 +3,20 @@ import { getStackState } from "@alienplatform/core/tests"
 import { beforeAll, describe, expect, it } from "vitest"
 
 const state = getStackState()
-const functionUrl = getResourceOutputs({
+const workerUrl = getResourceOutputs({
   state,
-  resource: { type: "function", name: "alien-rs-fn" },
+  resource: { type: "worker", name: "alien-rs-worker" },
 }).url
 
 describe("Alien Test Server Integration Tests", () => {
   beforeAll(() => {
     // Ensure the deployment outputs are available
-    expect(functionUrl).toBeDefined()
+    expect(workerUrl).toBeDefined()
   })
 
   describe("/hello endpoint", () => {
     it("should return hello message", async () => {
-      const response = await fetch(`${functionUrl}/hello`)
+      const response = await fetch(`${workerUrl}/hello`)
       expect(response.status).toBe(200)
 
       const text = await response.text()
@@ -34,7 +34,7 @@ describe("Alien Test Server Integration Tests", () => {
         },
       }
 
-      const response = await fetch(`${functionUrl}/inspect`, {
+      const response = await fetch(`${workerUrl}/inspect`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -52,7 +52,7 @@ describe("Alien Test Server Integration Tests", () => {
 
   describe("/env-var endpoint", () => {
     it("should read environment variables", async () => {
-      const response = await fetch(`${functionUrl}/env-var/RUST_LOG`)
+      const response = await fetch(`${workerUrl}/env-var/RUST_LOG`)
       expect(response.status).toBe(200)
 
       const result = await response.json()
@@ -62,7 +62,7 @@ describe("Alien Test Server Integration Tests", () => {
     })
 
     it("should handle missing environment variables", async () => {
-      const response = await fetch(`${functionUrl}/env-var/DOES_NOT_EXIST`)
+      const response = await fetch(`${workerUrl}/env-var/DOES_NOT_EXIST`)
       expect(response.status).toBe(200)
 
       const result = await response.json()
@@ -73,7 +73,7 @@ describe("Alien Test Server Integration Tests", () => {
 
   describe("Storage integration", () => {
     it("should perform storage operations successfully", async () => {
-      const response = await fetch(`${functionUrl}/storage-test/alien-storage`, {
+      const response = await fetch(`${workerUrl}/storage-test/alien-storage`, {
         method: "POST",
       })
 
@@ -108,7 +108,7 @@ describe("Alien Test Server Integration Tests", () => {
 
   describe("Server-Sent Events", () => {
     it("should stream SSE messages", async () => {
-      const response = await fetch(`${functionUrl}/sse`)
+      const response = await fetch(`${workerUrl}/sse`)
       expect(response.status).toBe(200)
       expect(response.headers.get("content-type")).toContain("text/event-stream")
 

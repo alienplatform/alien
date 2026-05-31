@@ -338,7 +338,10 @@ impl VirtualMachineScaleSetsApi for AzureVmssClient {
         let url = self.base.build_url(
             &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Compute/virtualMachineScaleSets/{}/virtualMachines", 
                      &self.token_cache.config().subscription_id, resource_group_name, vmss_name),
-            Some(vec![("api-version", Self::API_VERSION.into())]),
+            Some(vec![
+                ("api-version", Self::API_VERSION.into()),
+                ("$expand", "instanceView".into()),
+            ]),
         );
 
         let builder = AzureRequestBuilder::new(Method::GET, url.clone()).content_length("");

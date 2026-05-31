@@ -4,42 +4,26 @@
 
 import * as z from "zod/v4";
 import { ClosedEnum } from "../types/enums.js";
+import {
+  PrivateManagerCloud,
+  PrivateManagerCloud$outboundSchema,
+} from "./privatemanagercloud.js";
+import {
+  PrivateManagerSetupMethod,
+  PrivateManagerSetupMethod$outboundSchema,
+} from "./privatemanagersetupmethod.js";
 
 /**
- * Platform where the Manager will be deployed (must be aws, gcp, or azure)
+ * Optional network mode for the private-manager setup. Defaults to create for production isolation; default uses the provider default network for faster dev/test setup.
  */
-export const NewManagerRequestPlatform = {
-  Aws: "aws",
-  Gcp: "gcp",
-  Azure: "azure",
-  Kubernetes: "kubernetes",
-  Local: "local",
-  Test: "test",
+export const NetworkEnum = {
+  Create: "create",
+  Default: "default",
 } as const;
 /**
- * Platform where the Manager will be deployed (must be aws, gcp, or azure)
+ * Optional network mode for the private-manager setup. Defaults to create for production isolation; default uses the provider default network for faster dev/test setup.
  */
-export type NewManagerRequestPlatform = ClosedEnum<
-  typeof NewManagerRequestPlatform
->;
-
-/**
- * Represents the target cloud platform.
- */
-export const NewManagerRequestTarget = {
-  Aws: "aws",
-  Gcp: "gcp",
-  Azure: "azure",
-  Kubernetes: "kubernetes",
-  Local: "local",
-  Test: "test",
-} as const;
-/**
- * Represents the target cloud platform.
- */
-export type NewManagerRequestTarget = ClosedEnum<
-  typeof NewManagerRequestTarget
->;
+export type NetworkEnum = ClosedEnum<typeof NetworkEnum>;
 
 /**
  * Optional external OTLP config for forwarding logs to Axiom, Datadog, etc. Falls back to built-in DeepStore when not set.
@@ -58,13 +42,21 @@ export type OtlpConfig = {
 export type NewManagerRequest = {
   name: string;
   /**
-   * Platform where the Manager will be deployed (must be aws, gcp, or azure)
+   * Cloud where the private manager will be deployed.
    */
-  platform: NewManagerRequestPlatform;
+  cloud: PrivateManagerCloud;
   /**
-   * Platforms this Manager can manage (can include local, kubernetes, etc.)
+   * Cloud region for the manager.
    */
-  targets: Array<NewManagerRequestTarget>;
+  region: string;
+  /**
+   * Optional setup method. Defaults to cloudformation for AWS, google-oauth for GCP, and terraform for Azure.
+   */
+  setupMethod?: PrivateManagerSetupMethod | undefined;
+  /**
+   * Optional network mode for the private-manager setup. Defaults to create for production isolation; default uses the provider default network for faster dev/test setup.
+   */
+  network?: NetworkEnum | undefined;
   /**
    * Optional external OTLP config for forwarding logs to Axiom, Datadog, etc. Falls back to built-in DeepStore when not set.
    */
@@ -72,14 +64,9 @@ export type NewManagerRequest = {
 };
 
 /** @internal */
-export const NewManagerRequestPlatform$outboundSchema: z.ZodEnum<
-  typeof NewManagerRequestPlatform
-> = z.enum(NewManagerRequestPlatform);
-
-/** @internal */
-export const NewManagerRequestTarget$outboundSchema: z.ZodEnum<
-  typeof NewManagerRequestTarget
-> = z.enum(NewManagerRequestTarget);
+export const NetworkEnum$outboundSchema: z.ZodEnum<typeof NetworkEnum> = z.enum(
+  NetworkEnum,
+);
 
 /** @internal */
 export type OtlpConfig$Outbound = {
@@ -103,8 +90,10 @@ export function otlpConfigToJSON(otlpConfig: OtlpConfig): string {
 /** @internal */
 export type NewManagerRequest$Outbound = {
   name: string;
-  platform: string;
-  targets: Array<string>;
+  cloud: string;
+  region: string;
+  setupMethod?: string | undefined;
+  network?: string | undefined;
   otlpConfig?: OtlpConfig$Outbound | undefined;
 };
 
@@ -114,8 +103,10 @@ export const NewManagerRequest$outboundSchema: z.ZodType<
   NewManagerRequest
 > = z.object({
   name: z.string(),
-  platform: NewManagerRequestPlatform$outboundSchema,
-  targets: z.array(NewManagerRequestTarget$outboundSchema),
+  cloud: PrivateManagerCloud$outboundSchema,
+  region: z.string(),
+  setupMethod: PrivateManagerSetupMethod$outboundSchema.optional(),
+  network: NetworkEnum$outboundSchema.optional(),
   otlpConfig: z.lazy(() => OtlpConfig$outboundSchema).optional(),
 });
 

@@ -12,7 +12,7 @@ import { deploymentsGetStats } from "../funcs/deploymentsGetStats.js";
 import { deploymentsImport } from "../funcs/deploymentsImport.js";
 import { deploymentsList } from "../funcs/deploymentsList.js";
 import { deploymentsListFilterDeploymentGroups } from "../funcs/deploymentsListFilterDeploymentGroups.js";
-import { deploymentsListFilterPlatforms } from "../funcs/deploymentsListFilterPlatforms.js";
+import { deploymentsListFilterEnvironments } from "../funcs/deploymentsListFilterEnvironments.js";
 import { deploymentsPinRelease } from "../funcs/deploymentsPinRelease.js";
 import { deploymentsRedeploy } from "../funcs/deploymentsRedeploy.js";
 import { deploymentsRetry } from "../funcs/deploymentsRetry.js";
@@ -66,13 +66,13 @@ export class Deployments extends ClientSDK {
   }
 
   /**
-   * List distinct platforms used by deployments. Used for filter dropdowns.
+   * List distinct effective environments used by deployments. Used for filter dropdowns.
    */
-  async listFilterPlatforms(
-    request?: operations.ListDeploymentFilterPlatformsRequest | undefined,
+  async listFilterEnvironments(
+    request?: operations.ListDeploymentFilterEnvironmentsRequest | undefined,
     options?: RequestOptions,
-  ): Promise<operations.ListDeploymentFilterPlatformsResponse> {
-    return unwrapAsync(deploymentsListFilterPlatforms(
+  ): Promise<operations.ListDeploymentFilterEnvironmentsResponse> {
+    return unwrapAsync(deploymentsListFilterEnvironments(
       this,
       request,
       options,

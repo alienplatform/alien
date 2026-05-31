@@ -40,3 +40,12 @@ variable "target_client_secret" {
   type      = string
   sensitive = true
 }
+
+variable "e2e_aks_cluster_name" {
+  type    = string
+  default = ""
+}
+
+variable "e2e_aks_kubernetes_version" {
+  type = string
+}

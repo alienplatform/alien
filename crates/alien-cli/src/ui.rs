@@ -16,7 +16,7 @@ use comfy_table::{
     modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL_CONDENSED, Attribute, Cell, Color,
     ContentArrangement, Table,
 };
-use console::{measure_text_width, style, Term};
+use console::{measure_text_width, style, truncate_str, Term};
 use indexmap::IndexMap;
 
 // ---------------------------------------------------------------------------
@@ -249,8 +249,11 @@ impl LiveRegionInner {
             frame.to_string()
         };
 
+        let max_width = terminal_line_width(&self.term);
+
         for line in &lines {
-            let output = line.replace(SPINNER_PLACEHOLDER, &styled_frame);
+            let output =
+                truncate_to_width(&line.replace(SPINNER_PLACEHOLDER, &styled_frame), max_width);
             let _ = self.term.write_line(&output);
         }
         let _ = self.term.flush();
@@ -319,6 +322,11 @@ impl LiveRegion {
         guard.render();
     }
 
+    fn line_width(&self) -> usize {
+        let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        terminal_line_width(&guard.term)
+    }
+
     /// Print a permanent line above the live region.
     pub fn println(&self, line: &str) {
         let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
@@ -341,6 +349,20 @@ impl LiveRegion {
             guard.rendered_count = 0;
         }
         guard.sections.clear();
+    }
+}
+
+fn terminal_line_width(term: &Term) -> usize {
+    let (_, columns) = term.size();
+    usize::from(columns).saturating_sub(1).max(20)
+}
+
+fn truncate_to_width(value: &str, width: usize) -> String {
+    if measure_text_width(value) <= width {
+        value.to_string()
+    } else {
+        let tail = if width >= 4 { "..." } else { "" };
+        truncate_str(value, width, tail).into_owned()
     }
 }
 
@@ -411,6 +433,15 @@ fn format_message(label: &str, detail: Option<&str>) -> String {
     }
 }
 
+fn pad_display_width(value: String, width: usize) -> String {
+    let current_width = measure_text_width(&value);
+    if current_width >= width {
+        value
+    } else {
+        format!("{value}{}", " ".repeat(width - current_width))
+    }
+}
+
 /// Build a single display line for a step or resource row.
 fn build_row_line(state: RowState, label: &str, detail: Option<&str>) -> String {
     let prefix = match state {
@@ -453,14 +484,42 @@ fn build_resource_progress_line(
     label: &str,
     detail: Option<&str>,
     progress: &PushProgress,
+    message_width: usize,
+    max_line_width: Option<usize>,
 ) -> String {
-    let msg = format_message(label, detail);
+    let raw_msg = format_message(label, detail);
 
     // When totals are not yet known, show only the spinner + message
     // (no empty bar that looks stuck at 0%).
     if progress.total_bytes == 0 && progress.total_layers == 0 {
+        let msg = match max_line_width {
+            Some(max_line_width) => truncate_to_width(&raw_msg, max_line_width.saturating_sub(2)),
+            None => raw_msg,
+        };
         return format!("{SPINNER_PLACEHOLDER} {msg}");
     }
+
+    let suffix = if progress.total_bytes > 0 {
+        format!(
+            "{}/{}",
+            format_bytes(progress.bytes_uploaded),
+            format_bytes(progress.total_bytes)
+        )
+    } else if progress.total_layers > 0 {
+        format!("{}/{}", progress.layers_uploaded, progress.total_layers)
+    } else {
+        String::new()
+    };
+
+    let msg_width = match max_line_width {
+        Some(max_line_width) => {
+            // spinner + space, msg + space, bar + space, suffix
+            let fixed_width = 2 + 1 + (24 + 2) + 1 + measure_text_width(&suffix);
+            message_width.min(max_line_width.saturating_sub(fixed_width).max(8))
+        }
+        None => message_width,
+    };
+    let msg = pad_display_width(truncate_to_width(&raw_msg, msg_width), msg_width);
 
     let bar = build_progress_bar_text(
         if progress.total_bytes > 0 {
@@ -475,17 +534,6 @@ fn build_resource_progress_line(
         },
         24,
     );
-    let suffix = if progress.total_bytes > 0 {
-        format!(
-            "{}/{}",
-            format_bytes(progress.bytes_uploaded),
-            format_bytes(progress.total_bytes)
-        )
-    } else if progress.total_layers > 0 {
-        format!("{}/{}", progress.layers_uploaded, progress.total_layers)
-    } else {
-        String::new()
-    };
     format!("{SPINNER_PLACEHOLDER} {msg} {bar} {suffix}")
 }
 
@@ -536,12 +584,24 @@ impl FixedStepsState {
             ));
         }
 
+        let progress_message_width = self
+            .resources
+            .values()
+            .filter(|resource| resource.progress.is_some())
+            .map(|resource| {
+                measure_text_width(&format_message(&resource.label, resource.detail.as_deref()))
+            })
+            .max()
+            .unwrap_or(0);
+
         for resource in self.resources.values() {
             if let Some(progress) = &resource.progress {
                 lines.push(build_resource_progress_line(
                     &resource.label,
                     resource.detail.as_deref(),
                     progress,
+                    progress_message_width,
+                    None,
                 ));
             } else {
                 lines.push(build_row_line(
@@ -939,6 +999,10 @@ struct CommandEventState {
 #[derive(Clone)]
 enum EventRole {
     Status,
+    PlatformScope {
+        platform: String,
+        destination: Option<String>,
+    },
     ResourceScope(String),
     ResourceChild(String),
 }
@@ -963,12 +1027,26 @@ impl CommandEventHandler {
         }
     }
 
-    fn rebuild_lines(state: &CommandEventState) -> Vec<String> {
+    fn rebuild_lines(state: &CommandEventState, max_line_width: Option<usize>) -> Vec<String> {
         let mut lines = Vec::new();
 
         if let Some(msg) = &state.status_message {
+            let msg = match max_line_width {
+                Some(max_line_width) => truncate_to_width(msg, max_line_width.saturating_sub(2)),
+                None => msg.clone(),
+            };
             lines.push(format!("{SPINNER_PLACEHOLDER} {msg}"));
         }
+
+        let progress_message_width = state
+            .resources
+            .values()
+            .filter(|resource| resource.progress.is_some())
+            .map(|resource| {
+                measure_text_width(&format_message(&resource.label, resource.detail.as_deref()))
+            })
+            .max()
+            .unwrap_or(0);
 
         for resource in state.resources.values() {
             if let Some(progress) = &resource.progress {
@@ -976,6 +1054,8 @@ impl CommandEventHandler {
                     &resource.label,
                     resource.detail.as_deref(),
                     progress,
+                    progress_message_width,
+                    max_line_width,
                 ));
             } else {
                 lines.push(build_row_line(
@@ -1039,6 +1119,13 @@ impl CommandEventHandler {
                 state
                     .event_roles
                     .insert(id.to_string(), EventRole::ResourceScope(key));
+            }
+            AlienEvent::PushingStack {
+                platform,
+                destination,
+                ..
+            } => {
+                self.handle_pushing_stack(state, id, platform, destination);
             }
             AlienEvent::CompilingCode { language, progress } => {
                 if let Some(resource_key) =
@@ -1120,12 +1207,25 @@ impl CommandEventHandler {
                     }
                 }
             }
+            AlienEvent::PushingStack {
+                platform,
+                destination,
+                ..
+            } => {
+                self.handle_pushing_stack(state, id, platform, destination);
+            }
             AlienEvent::PushingResource {
                 resource_name,
                 resource_type,
             } => {
                 self.clear_status(state);
-                let key = format!("push:{resource_type}:{resource_name}");
+                let (platform, destination) = parent_id
+                    .and_then(|parent| platform_scope_from_parent(state, parent))
+                    .unwrap_or((None, None));
+                let key = match platform.as_deref() {
+                    Some(platform) => format!("push:{platform}:{resource_type}:{resource_name}"),
+                    None => format!("push:{resource_type}:{resource_name}"),
+                };
                 let label = format!("{resource_type} {resource_name}");
                 let entry = state
                     .resources
@@ -1138,7 +1238,10 @@ impl CommandEventHandler {
                     });
                 entry.label = label;
                 entry.state = RowState::Active;
-                entry.detail = Some("preparing".to_string());
+                entry.detail = destination
+                    .as_ref()
+                    .map(|destination| format!("to {destination}"))
+                    .or_else(|| Some("preparing".to_string()));
                 state
                     .event_roles
                     .insert(id.to_string(), EventRole::ResourceScope(key));
@@ -1191,7 +1294,10 @@ impl EventHandler for CommandEventHandler {
                         self.handle_release_created(&mut state, &id, parent_id.as_deref(), &event)
                     }
                 }
-                self.live.set_section("events", Self::rebuild_lines(&state));
+                self.live.set_section(
+                    "events",
+                    Self::rebuild_lines(&state, Some(self.live.line_width())),
+                );
             }
             EventChange::Updated { id, event, .. } => {
                 let mut state = self.state.lock().expect("command event state poisoned");
@@ -1221,21 +1327,29 @@ impl EventHandler for CommandEventHandler {
                         _ => {}
                     }
                 }
-                self.live.set_section("events", Self::rebuild_lines(&state));
+                self.live.set_section(
+                    "events",
+                    Self::rebuild_lines(&state, Some(self.live.line_width())),
+                );
             }
             EventChange::StateChanged { id, new_state, .. } => {
                 let mut state = self.state.lock().expect("command event state poisoned");
                 match state.event_roles.get(&id).cloned() {
-                    Some(EventRole::Status) => match new_state {
-                        EventState::Success | EventState::Failed { .. } => {
-                            self.clear_status(&mut state);
+                    Some(EventRole::Status) | Some(EventRole::PlatformScope { .. }) => {
+                        match new_state {
+                            EventState::Success | EventState::Failed { .. } => {
+                                self.clear_status(&mut state);
+                            }
+                            _ => {}
                         }
-                        _ => {}
-                    },
+                    }
                     Some(EventRole::ResourceScope(resource_key)) => match new_state {
                         EventState::Success => {
-                            // Remove completed resources so they don't linger
-                            state.resources.shift_remove(&resource_key);
+                            if let Some(entry) = state.resources.get_mut(&resource_key) {
+                                entry.state = RowState::Complete;
+                                entry.detail = None;
+                                entry.progress = None;
+                            }
                         }
                         EventState::Failed { error } => {
                             if let Some(entry) = state.resources.get_mut(&resource_key) {
@@ -1248,7 +1362,10 @@ impl EventHandler for CommandEventHandler {
                     },
                     _ => {}
                 };
-                self.live.set_section("events", Self::rebuild_lines(&state));
+                self.live.set_section(
+                    "events",
+                    Self::rebuild_lines(&state, Some(self.live.line_width())),
+                );
             }
         }
 
@@ -1256,10 +1373,53 @@ impl EventHandler for CommandEventHandler {
     }
 }
 
+impl CommandEventHandler {
+    fn handle_pushing_stack(
+        &self,
+        state: &mut CommandEventState,
+        id: &str,
+        platform: &str,
+        destination: &Option<String>,
+    ) {
+        state
+            .resources
+            .retain(|key, _| !key.starts_with("release-build:"));
+        self.set_status(
+            state,
+            match destination {
+                Some(destination) => {
+                    format!("Pushing {platform} images to {destination}")
+                }
+                None => format!("Pushing {platform} images"),
+            },
+        );
+        state.event_roles.insert(
+            id.to_string(),
+            EventRole::PlatformScope {
+                platform: platform.to_string(),
+                destination: destination.clone(),
+            },
+        );
+    }
+}
+
 fn resource_key_from_parent_or_child(state: &CommandEventState, parent_id: &str) -> Option<String> {
     match state.event_roles.get(parent_id) {
         Some(EventRole::ResourceScope(resource_key))
         | Some(EventRole::ResourceChild(resource_key)) => Some(resource_key.clone()),
+        _ => None,
+    }
+}
+
+fn platform_scope_from_parent(
+    state: &CommandEventState,
+    parent_id: &str,
+) -> Option<(Option<String>, Option<String>)> {
+    match state.event_roles.get(parent_id) {
+        Some(EventRole::PlatformScope {
+            platform,
+            destination,
+        }) => Some((Some(platform.clone()), destination.clone())),
         _ => None,
     }
 }
@@ -1273,6 +1433,106 @@ fn build_resource_noun(
         format!("{resource_type} {} (shared)", related_resources.join(", "))
     } else {
         format!("{resource_type} {resource_name}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn empty_command_state() -> CommandEventState {
+        CommandEventState {
+            status_message: None,
+            event_roles: HashMap::new(),
+            resources: IndexMap::new(),
+        }
+    }
+
+    #[test]
+    fn release_pushing_stack_clears_build_rows() {
+        let handler = CommandEventHandler::new(UiCommandKind::Release);
+        let mut state = empty_command_state();
+
+        handler.handle_release_created(
+            &mut state,
+            "build-shared",
+            None,
+            &AlienEvent::BuildingResource {
+                resource_name: "control-api".to_string(),
+                resource_type: "container".to_string(),
+                related_resources: vec![
+                    "control-api".to_string(),
+                    "messaging-gateway".to_string(),
+                    "agent-core".to_string(),
+                ],
+            },
+        );
+
+        assert!(state
+            .resources
+            .contains_key("release-build:container:control-api"));
+
+        handler.handle_release_created(
+            &mut state,
+            "push-stack",
+            None,
+            &AlienEvent::PushingStack {
+                stack: "vicaro-data-plane".to_string(),
+                platform: "kubernetes".to_string(),
+                destination: Some("managed registry".to_string()),
+            },
+        );
+
+        assert!(state
+            .resources
+            .keys()
+            .all(|key| !key.starts_with("release-build:")));
+        assert_eq!(
+            state.status_message.as_deref(),
+            Some("Pushing kubernetes images to managed registry")
+        );
+
+        handler.handle_release_created(
+            &mut state,
+            "push-shared",
+            Some("push-stack"),
+            &AlienEvent::PushingResource {
+                resource_name: "control-api, messaging-gateway, agent-core (shared)".to_string(),
+                resource_type: "container".to_string(),
+            },
+        );
+
+        assert!(state.resources.contains_key(
+            "push:kubernetes:container:control-api, messaging-gateway, agent-core (shared)"
+        ));
+    }
+
+    #[test]
+    fn progress_line_fits_narrow_terminal_width() {
+        let progress = PushProgress {
+            operation: "uploading".to_string(),
+            layers_uploaded: 0,
+            total_layers: 0,
+            bytes_uploaded: 94_800_000,
+            total_bytes: 289_400_000,
+        };
+
+        let line = build_resource_progress_line(
+            "container control-api, messaging-gateway, agent-core, task-scheduler, billing-worker (shared)",
+            None,
+            &progress,
+            95,
+            Some(80),
+        )
+        .replace(SPINNER_PLACEHOLDER, "⠋");
+
+        assert!(
+            measure_text_width(&line) <= 80,
+            "line should fit in 80 columns: {line}"
+        );
+        assert!(line.contains("..."));
+        assert!(line.contains("["));
+        assert!(line.contains('/'));
     }
 }
 

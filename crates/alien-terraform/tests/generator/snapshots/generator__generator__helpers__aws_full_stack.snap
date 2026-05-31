@@ -11,24 +11,33 @@ terraform {
       source  = "hashicorp/aws"
       version = ">= 5.0"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = ">= 3.6"
+    }
   }
 }
 
 === variables.tf ===
-variable "stack_name" {
+variable "resource_prefix" {
   type        = string
-  description = "Stable physical-name prefix for resources created by this module."
-}
-
-variable "deployment_name" {
-  type        = string
-  description = "Deployment name used when registering the resolved stack import. Defaults to stack_name."
+  description = "Optional stable physical resource prefix. Leave empty to generate one."
   default     = ""
+
+  validation {
+    condition     = var.resource_prefix == "" || (can(regex("^[a-z][a-z0-9-]{1,38}[a-z0-9]$", var.resource_prefix)) && length(regexall("--", var.resource_prefix)) == 0)
+    error_message = "resource_prefix must be 3-40 characters: lowercase letters, numbers, and hyphens; start with a letter; end with a letter or number; and not contain consecutive hyphens."
+  }
 }
 
-variable "deployment_group_token" {
+variable "name" {
   type        = string
-  description = "Deployment group token used when registering the resolved stack import."
+  description = "Human-readable application name shown in setup and cloud IAM review metadata."
+}
+
+variable "token" {
+  type        = string
+  description = "Install token from the application setup page. This is the same token used by the deploy CLI --token flag."
   sensitive   = true
 }
 
@@ -59,8 +68,50 @@ variable "managing_role_arn" {
 
 variable "managing_account_id" {
   type        = string
-  description = "AWS account ID hosting the manager. Referenced by stack-side IAM policies that scope cross-account ECR pulls. Empty disables those grants."
+  description = "Account ID hosting the manager. Referenced by resource-side IAM policies that scope cross-account image pulls. Empty disables those grants."
   default     = ""
+}
+
+variable "network_mode" {
+  type        = string
+  description = "Choose whether this setup creates a new network, uses an existing network, or uses the default network. Values: create-new, use-existing, use-default."
+  default     = "create-new"
+}
+
+variable "vpc_cidr" {
+  type        = string
+  description = "CIDR for a newly-created network. Empty uses 10.42.0.0/16."
+  default     = ""
+}
+
+variable "availability_zones" {
+  type        = number
+  description = "Number of availability zones to use when creating a new network."
+  default     = 2
+}
+
+variable "vpc_id" {
+  type        = string
+  description = "Existing VPC ID. Required when network is use-existing."
+  default     = ""
+}
+
+variable "public_subnet_ids" {
+  type        = list(string)
+  description = "Existing public subnet IDs. Required when network is use-existing."
+  default     = []
+}
+
+variable "private_subnet_ids" {
+  type        = list(string)
+  description = "Existing private subnet IDs. Required when network is use-existing."
+  default     = []
+}
+
+variable "security_group_ids" {
+  type        = list(string)
+  description = "Existing security group IDs. Required when network is use-existing."
+  default     = []
 }
 
 === providers.tf ===
@@ -72,8 +123,15 @@ data "aws_caller_identity" "current" {}
 
 data "aws_region" "current" {}
 
+=== resource_prefix.tf ===
+resource "random_id" "resource_prefix" {
+  byte_length = 4
+}
+
 === locals.tf ===
 locals {
+  resource_prefix     = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
+  deployment_name     = var.name
   deployment_platform = "aws"
   deployment_target   = "aws"
   deployment_region   = data.aws_region.current.region
@@ -81,23 +139,23 @@ locals {
     platform        = "aws"
     managingRoleArn = var.managing_role_arn
   }
-  deployment_stack_settings = jsondecode(var.stack_settings_json)
+  deployment_settings = merge(jsondecode(var.stack_settings_json), { network = jsondecode(var.network_mode == "create-new" ? jsonencode({ type = "create", cidr = var.vpc_cidr == "" ? null : var.vpc_cidr, availabilityZones = var.availability_zones }) : var.network_mode == "use-existing" ? jsonencode({ type = "byo-vpc-aws", vpcId = var.vpc_id, publicSubnetIds = var.public_subnet_ids, privateSubnetIds = var.private_subnet_ids, securityGroupIds = var.security_group_ids }) : jsonencode({ type = "use-default" })) })
   deployment_resources = [
     {
       id   = "default-network"
       type = "network"
       importData = {
-        vpcId               = aws_vpc.default_network.id
-        cidrBlock           = aws_vpc.default_network.cidr_block
-        internetGatewayId   = aws_internet_gateway.default_network.id
-        natGatewayId        = aws_nat_gateway.default_network.id
-        eipAllocationId     = aws_eip.default_network_nat.id
-        publicSubnetIds     = aws_subnet.default_network_public[*].id
-        privateSubnetIds    = aws_subnet.default_network_private[*].id
-        publicRouteTableId  = aws_route_table.default_network_public.id
-        privateRouteTableId = aws_route_table.default_network_private.id
-        securityGroupId     = aws_security_group.default_network_workload.id
-        availabilityZones   = slice(data.aws_availability_zones.available.names, 0, 2)
+        vpcId               = var.network_mode == "create-new" ? aws_vpc.default_network[0].id : var.network_mode == "use-existing" ? var.vpc_id : null
+        cidrBlock           = var.network_mode == "create-new" ? aws_vpc.default_network[0].cidr_block : null
+        internetGatewayId   = var.network_mode == "create-new" ? aws_internet_gateway.default_network[0].id : null
+        natGatewayId        = var.network_mode == "create-new" ? aws_nat_gateway.default_network[0].id : null
+        eipAllocationId     = var.network_mode == "create-new" ? aws_eip.default_network_nat[0].id : null
+        publicSubnetIds     = var.network_mode == "create-new" ? aws_subnet.default_network_public[*].id : var.network_mode == "use-existing" ? var.public_subnet_ids : []
+        privateSubnetIds    = var.network_mode == "create-new" ? aws_subnet.default_network_private[*].id : var.network_mode == "use-existing" ? var.private_subnet_ids : []
+        publicRouteTableId  = var.network_mode == "create-new" ? aws_route_table.default_network_public[0].id : null
+        privateRouteTableId = var.network_mode == "create-new" ? aws_route_table.default_network_private[0].id : null
+        securityGroupId     = var.network_mode == "create-new" ? aws_security_group.default_network_workload[0].id : var.network_mode == "use-existing" ? try(var.security_group_ids[0], null) : null
+        availabilityZones   = var.network_mode == "use-default" ? [] : slice(data.aws_availability_zones.available.names, 0, 2)
         isByoVpc            = false
       }
     },
@@ -150,7 +208,7 @@ locals {
       importData = {
         accountId       = data.aws_caller_identity.current.account_id
         region          = data.aws_region.current.region
-        parameterPrefix = "${var.stack_name}-secrets"
+        parameterPrefix = "${local.resource_prefix}-secrets"
       }
     },
     {
@@ -161,7 +219,7 @@ locals {
         region           = data.aws_region.current.region
         registryId       = "${data.aws_caller_identity.current.account_id}:${data.aws_region.current.region}"
         registryEndpoint = aws_ecr_repository.registry.registry_id
-        repositoryPrefix = "${var.stack_name}-registry"
+        repositoryPrefix = "${local.resource_prefix}-registry"
         pullRoleArn      = aws_iam_role.registry_pull.arn
         pushRoleArn      = aws_iam_role.registry_push.arn
       }
@@ -175,123 +233,130 @@ data "aws_availability_zones" "available" {
 }
 
 resource "aws_vpc" "default_network" {
-  cidr_block           = "10.44.0.0/16"
+  count                = var.network_mode == "create-new" ? 1 : 0
+  cidr_block           = var.vpc_cidr == "" ? "10.44.0.0/16" : var.vpc_cidr
   enable_dns_support   = true
   enable_dns_hostnames = true
   tags = {
-    "alien.dev/managed-by" = "alien"
-    "alien.dev/stack"      = var.stack_name
-    "alien.dev/resource"   = "default-network"
-    AlienResourceType      = "network"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "default-network"
+    "resource-type" = "network"
   }
 }
 
 resource "aws_internet_gateway" "default_network" {
-  vpc_id = aws_vpc.default_network.id
+  count  = var.network_mode == "create-new" ? 1 : 0
+  vpc_id = aws_vpc.default_network[0].id
   tags = {
-    "alien.dev/managed-by" = "alien"
-    "alien.dev/stack"      = var.stack_name
-    "alien.dev/resource"   = "default-network"
-    AlienResourceType      = "network"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "default-network"
+    "resource-type" = "network"
   }
 }
 
 resource "aws_subnet" "default_network_public" {
-  count                   = 2
-  vpc_id                  = aws_vpc.default_network.id
-  cidr_block              = cidrsubnet(aws_vpc.default_network.cidr_block, 8, count.index)
+  count                   = var.network_mode == "create-new" ? var.availability_zones : 0
+  vpc_id                  = aws_vpc.default_network[0].id
+  cidr_block              = cidrsubnet(aws_vpc.default_network[0].cidr_block, 8, count.index)
   availability_zone       = data.aws_availability_zones.available.names[count.index]
   map_public_ip_on_launch = true
   tags = {
-    "alien.dev/managed-by" = "alien"
-    "alien.dev/stack"      = var.stack_name
-    "alien.dev/resource"   = "default-network"
-    AlienResourceType      = "network"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "default-network"
+    "resource-type" = "network"
   }
 }
 
 resource "aws_subnet" "default_network_private" {
-  count             = 2
-  vpc_id            = aws_vpc.default_network.id
-  cidr_block        = cidrsubnet(aws_vpc.default_network.cidr_block, 8, count.index + 2)
+  count             = var.network_mode == "create-new" ? var.availability_zones : 0
+  vpc_id            = aws_vpc.default_network[0].id
+  cidr_block        = cidrsubnet(aws_vpc.default_network[0].cidr_block, 8, count.index + var.availability_zones)
   availability_zone = data.aws_availability_zones.available.names[count.index]
   tags = {
-    "alien.dev/managed-by" = "alien"
-    "alien.dev/stack"      = var.stack_name
-    "alien.dev/resource"   = "default-network"
-    AlienResourceType      = "network"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "default-network"
+    "resource-type" = "network"
   }
 }
 
 resource "aws_eip" "default_network_nat" {
+  count  = var.network_mode == "create-new" ? 1 : 0
   domain = "vpc"
   tags = {
-    "alien.dev/managed-by" = "alien"
-    "alien.dev/stack"      = var.stack_name
-    "alien.dev/resource"   = "default-network"
-    AlienResourceType      = "network"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "default-network"
+    "resource-type" = "network"
   }
 }
 
 resource "aws_nat_gateway" "default_network" {
-  allocation_id = aws_eip.default_network_nat.id
+  count         = var.network_mode == "create-new" ? 1 : 0
+  allocation_id = aws_eip.default_network_nat[0].id
   subnet_id     = aws_subnet.default_network_public[0].id
   tags = {
-    "alien.dev/managed-by" = "alien"
-    "alien.dev/stack"      = var.stack_name
-    "alien.dev/resource"   = "default-network"
-    AlienResourceType      = "network"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "default-network"
+    "resource-type" = "network"
   }
 }
 
 resource "aws_route_table" "default_network_public" {
-  vpc_id = aws_vpc.default_network.id
+  count  = var.network_mode == "create-new" ? 1 : 0
+  vpc_id = aws_vpc.default_network[0].id
 
   route {
     cidr_block = "0.0.0.0/0"
-    gateway_id = aws_internet_gateway.default_network.id
+    gateway_id = aws_internet_gateway.default_network[0].id
   }
 
   tags = {
-    "alien.dev/managed-by" = "alien"
-    "alien.dev/stack"      = var.stack_name
-    "alien.dev/resource"   = "default-network"
-    AlienResourceType      = "network"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "default-network"
+    "resource-type" = "network"
   }
 }
 
 resource "aws_route_table" "default_network_private" {
-  vpc_id = aws_vpc.default_network.id
+  count  = var.network_mode == "create-new" ? 1 : 0
+  vpc_id = aws_vpc.default_network[0].id
 
   route {
     cidr_block     = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.default_network.id
+    nat_gateway_id = aws_nat_gateway.default_network[0].id
   }
 
   tags = {
-    "alien.dev/managed-by" = "alien"
-    "alien.dev/stack"      = var.stack_name
-    "alien.dev/resource"   = "default-network"
-    AlienResourceType      = "network"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "default-network"
+    "resource-type" = "network"
   }
 }
 
 resource "aws_route_table_association" "default_network_public" {
-  count          = 2
+  count          = var.network_mode == "create-new" ? var.availability_zones : 0
   subnet_id      = aws_subnet.default_network_public[count.index].id
-  route_table_id = aws_route_table.default_network_public.id
+  route_table_id = aws_route_table.default_network_public[0].id
 }
 
 resource "aws_route_table_association" "default_network_private" {
-  count          = 2
+  count          = var.network_mode == "create-new" ? var.availability_zones : 0
   subnet_id      = aws_subnet.default_network_private[count.index].id
-  route_table_id = aws_route_table.default_network_private.id
+  route_table_id = aws_route_table.default_network_private[0].id
 }
 
 resource "aws_security_group" "default_network_workload" {
-  name_prefix = "${var.stack_name}-workload-"
+  count       = var.network_mode == "create-new" ? 1 : 0
+  name_prefix = "${local.resource_prefix}-workload-"
   description = "Private workload security group"
-  vpc_id      = aws_vpc.default_network.id
+  vpc_id      = aws_vpc.default_network[0].id
 
   egress {
     from_port = 0
@@ -303,88 +368,84 @@ resource "aws_security_group" "default_network_workload" {
   }
 
   tags = {
-    "alien.dev/managed-by" = "alien"
-    "alien.dev/stack"      = var.stack_name
-    "alien.dev/resource"   = "default-network"
-    AlienResourceType      = "network"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "default-network"
+    "resource-type" = "network"
   }
 }
 
 === execution_sa.tf ===
 resource "aws_iam_role" "execution_sa" {
-  name               = "${var.stack_name}-execution-sa"
+  name               = length(format("%s-%s", local.resource_prefix, "execution-sa")) <= 64 ? format("%s-%s", local.resource_prefix, "execution-sa") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "execution-sa"), 0, 55), substr(sha1(format("%s-%s", local.resource_prefix, "execution-sa")), 0, 8))
   assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { Service = ["codebuild.amazonaws.com", "lambda.amazonaws.com"] }, Action = "sts:AssumeRole" }] })
   tags = {
-    "alien.dev/managed-by" = "alien"
-    "alien.dev/stack"      = var.stack_name
-    "alien.dev/resource"   = "execution-sa"
-    AlienResourceType      = "service-account"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "execution-sa"
+    "resource-type" = "service-account"
   }
 }
 
 resource "aws_iam_role_policy" "execution_sa_set_0" {
   name   = "storage-data-read-0"
   role   = aws_iam_role.execution_sa.id
-  policy = jsonencode({ Statement = [{ Action = ["s3:ListBucket", "s3:GetObject", "s3:GetObjectVersion", "s3:GetObjectAcl"], Effect = "Allow", Resource = ["arn:aws:s3:::${var.stack_name}-*", "arn:aws:s3:::${var.stack_name}-*/*"], Sid = "StorageDataRead" }], Version = "2012-10-17" })
+  policy = jsonencode({ Statement = [{ Action = ["s3:ListBucket", "s3:GetObject", "s3:GetObjectVersion", "s3:GetObjectAcl"], Effect = "Allow", Resource = ["arn:aws:s3:::${local.resource_prefix}-*", "arn:aws:s3:::${local.resource_prefix}-*/*"], Sid = "ReadS3Objects" }], Version = "2012-10-17" })
 }
 
 resource "aws_iam_role_policy" "execution_sa_set_1" {
   name   = "queue-data-write-1"
   role   = aws_iam_role.execution_sa.id
-  policy = jsonencode({ Statement = [{ Action = ["sqs:SendMessage", "sqs:DeleteMessage", "sqs:ChangeMessageVisibility", "sqs:GetQueueAttributes", "sqs:GetQueueUrl"], Effect = "Allow", Resource = ["arn:aws:sqs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:${var.stack_name}-*"], Sid = "QueueDataWrite" }], Version = "2012-10-17" })
+  policy = jsonencode({ Statement = [{ Action = ["sqs:SendMessage", "sqs:DeleteMessage", "sqs:ChangeMessageVisibility", "sqs:GetQueueAttributes", "sqs:GetQueueUrl"], Effect = "Allow", Resource = ["arn:aws:sqs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:${local.resource_prefix}-*"], Sid = "SendSqsMessages" }], Version = "2012-10-17" })
 }
 
 === management.tf ===
 resource "aws_iam_role" "management" {
-  name               = "${var.stack_name}-management"
+  name               = length(format("%s-%s", local.resource_prefix, "management")) <= 64 ? format("%s-%s", local.resource_prefix, "management") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "management"), 0, 55), substr(sha1(format("%s-%s", local.resource_prefix, "management")), 0, 8))
   assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "AllowManagingRole", Effect = "Allow", Principal = { AWS = var.managing_role_arn }, Action = "sts:AssumeRole", Condition = { StringEquals = { "aws:PrincipalArn" = var.managing_role_arn } } }] })
   tags = {
-    "alien.dev/managed-by" = "alien"
-    "alien.dev/stack"      = var.stack_name
-    "alien.dev/resource"   = "management"
-    AlienResourceType      = "remote-stack-management"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "management"
+    "resource-type" = "remote-stack-management"
   }
 }
 
-resource "aws_iam_role_policy" "management_set_0" {
-  name   = "function-management-0"
-  role   = aws_iam_role.management.id
-  policy = jsonencode({ Statement = [{ Action = ["lambda:UpdateFunctionCode", "lambda:UpdateFunctionConfiguration", "lambda:PublishVersion", "lambda:CreateAlias", "lambda:DeleteAlias", "lambda:UpdateAlias", "lambda:PutFunctionConcurrency", "lambda:DeleteFunctionConcurrency", "lambda:PutFunctionEventInvokeConfig", "lambda:DeleteFunctionEventInvokeConfig", "lambda:GetFunction", "lambda:GetFunctionConfiguration", "lambda:ListVersionsByFunction", "lambda:ListAliases", "lambda:GetPolicy", "lambda:ListTags", "lambda:GetFunctionUrlConfig", "lambda:GetCodeSigningConfig", "lambda:GetFunctionEventInvokeConfig", "lambda:AddPermission", "lambda:RemovePermission", "lambda:GetEventSourceMapping", "lambda:ListEventSourceMappings", "lambda:UpdateEventSourceMapping"], Condition = { StringEquals = { "aws:ResourceTag/alien.dev/managed-by" = "alien", "aws:ResourceTag/alien.dev/stack" = "${var.stack_name}" } }, Effect = "Allow", Resource = ["arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${var.stack_name}-*"], Sid = "FunctionManagement1" }, { Action = ["iam:PassRole"], Effect = "Allow", Resource = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.stack_name}-*-sa"], Sid = "FunctionManagement2" }, { Action = ["ecr:GetAuthorizationToken"], Effect = "Allow", Resource = ["*"], Sid = "FunctionManagement3" }, { Action = ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"], Effect = "Allow", Resource = ["arn:aws:ecr:*:${var.managing_account_id}:repository/*"], Sid = "FunctionManagement4" }, { Action = ["acm:ImportCertificate"], Condition = { StringEquals = { "aws:RequestTag/alien.dev/managed-by" = "alien", "aws:RequestTag/alien.dev/stack" = "${var.stack_name}" } }, Effect = "Allow", Resource = ["arn:aws:acm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:certificate/*"], Sid = "FunctionManagement5" }, { Action = ["acm:ImportCertificate", "acm:DeleteCertificate", "acm:DescribeCertificate"], Condition = { StringEquals = { "aws:ResourceTag/alien.dev/managed-by" = "alien", "aws:ResourceTag/alien.dev/stack" = "${var.stack_name}" } }, Effect = "Allow", Resource = ["arn:aws:acm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:certificate/*"], Sid = "FunctionManagement6" }, { Action = ["apigateway:POST"], Condition = { StringEquals = { "aws:RequestTag/alien.dev/managed-by" = "alien", "aws:RequestTag/alien.dev/stack" = "${var.stack_name}" } }, Effect = "Allow", Resource = ["arn:aws:apigateway:${data.aws_region.current.region}::/apis", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames", "arn:aws:apigateway:${data.aws_region.current.region}::/tags/*"], Sid = "FunctionManagement7" }, { Action = ["apigateway:POST"], Condition = { StringEquals = { "aws:ResourceTag/alien.dev/managed-by" = "alien", "aws:ResourceTag/alien.dev/stack" = "${var.stack_name}" } }, Effect = "Allow", Resource = ["arn:aws:apigateway:${data.aws_region.current.region}::/apis/*", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*"], Sid = "FunctionManagement8" }, { Action = ["apigateway:TagResource"], Condition = { StringEquals = { "aws:RequestTag/alien.dev/managed-by" = "alien", "aws:RequestTag/alien.dev/stack" = "${var.stack_name}" } }, Effect = "Allow", Resource = ["arn:aws:apigateway:${data.aws_region.current.region}::/apis/*", "arn:aws:apigateway:${data.aws_region.current.region}::/apis/*/stages", "arn:aws:apigateway:${data.aws_region.current.region}::/apis/*/stages/*", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*"], Sid = "FunctionManagement9" }, { Action = ["apigateway:GET", "apigateway:DELETE", "apigateway:PATCH", "apigateway:PUT"], Condition = { StringEquals = { "aws:ResourceTag/alien.dev/managed-by" = "alien", "aws:ResourceTag/alien.dev/stack" = "${var.stack_name}" } }, Effect = "Allow", Resource = ["arn:aws:apigateway:${data.aws_region.current.region}::/apis/*", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*"], Sid = "FunctionManagement10" }, { Action = ["events:PutRule", "events:TagResource"], Condition = { StringEquals = { "aws:RequestTag/alien.dev/managed-by" = "alien", "aws:RequestTag/alien.dev/stack" = "${var.stack_name}" } }, Effect = "Allow", Resource = ["arn:aws:events:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:rule/${var.stack_name}-*"], Sid = "FunctionManagement11" }, { Action = ["events:DeleteRule", "events:DescribeRule", "events:PutTargets", "events:RemoveTargets"], Condition = { StringEquals = { "aws:ResourceTag/alien.dev/managed-by" = "alien", "aws:ResourceTag/alien.dev/stack" = "${var.stack_name}" } }, Effect = "Allow", Resource = ["arn:aws:events:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:rule/${var.stack_name}-*"], Sid = "FunctionManagement12" }], Version = "2012-10-17" })
+resource "aws_iam_policy" "management_managed_policy_0" {
+  name   = length(format("%s-%s", local.resource_prefix, "deployment-management-0")) <= 128 ? format("%s-%s", local.resource_prefix, "deployment-management-0") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "deployment-management-0"), 0, 119), substr(sha1(format("%s-%s", local.resource_prefix, "deployment-management-0")), 0, 8))
+  policy = jsonencode({ Statement = [{ Action = ["lambda:UpdateFunctionCode", "lambda:UpdateFunctionConfiguration", "lambda:PublishVersion", "lambda:CreateAlias", "lambda:DeleteAlias", "lambda:UpdateAlias", "lambda:PutFunctionConcurrency", "lambda:DeleteFunctionConcurrency", "lambda:PutFunctionEventInvokeConfig", "lambda:DeleteFunctionEventInvokeConfig", "lambda:GetFunction", "lambda:GetFunctionConfiguration", "lambda:ListVersionsByFunction", "lambda:ListAliases", "lambda:GetPolicy", "lambda:ListTags", "lambda:GetFunctionUrlConfig", "lambda:GetCodeSigningConfig", "lambda:GetFunctionEventInvokeConfig", "lambda:AddPermission", "lambda:RemovePermission", "lambda:GetEventSourceMapping", "lambda:ListEventSourceMappings", "lambda:UpdateEventSourceMapping"], Condition = { StringEquals = { "aws:ResourceTag/deployment" = "${local.resource_prefix}", "aws:ResourceTag/managed-by" = "deployment" } }, Effect = "Allow", Resource = ["arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${local.resource_prefix}-*"], Sid = "UpdateLambdaFunctions" }, { Action = ["iam:PassRole"], Effect = "Allow", Resource = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*-sa"], Sid = "PassLambdaExecutionRoles" }, { Action = ["ecr:GetAuthorizationToken"], Effect = "Allow", Resource = ["*"], Sid = "GetEcrLoginToken" }, { Action = ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"], Effect = "Allow", Resource = ["arn:aws:ecr:*:${var.managing_account_id}:repository/*"], Sid = "ReadDeploymentContainerImages" }, { Action = ["acm:ImportCertificate", "acm:AddTagsToCertificate"], Condition = { StringEquals = { "aws:RequestTag/deployment" = "${local.resource_prefix}", "aws:RequestTag/managed-by" = "deployment" } }, Effect = "Allow", Resource = ["arn:aws:acm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:certificate/*"], Sid = "ImportTlsCertificates" }, { Action = ["acm:ImportCertificate", "acm:AddTagsToCertificate", "acm:DeleteCertificate", "acm:DescribeCertificate"], Condition = { StringEquals = { "aws:ResourceTag/deployment" = "${local.resource_prefix}", "aws:ResourceTag/managed-by" = "deployment" } }, Effect = "Allow", Resource = ["arn:aws:acm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:certificate/*"], Sid = "ManageTlsCertificates" }, { Action = ["apigateway:POST", "apigateway:PUT"], Condition = { StringEquals = { "aws:RequestTag/deployment" = "${local.resource_prefix}", "aws:RequestTag/managed-by" = "deployment" } }, Effect = "Allow", Resource = ["arn:aws:apigateway:${data.aws_region.current.region}::/apis", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames", "arn:aws:apigateway:${data.aws_region.current.region}::/tags/*"], Sid = "CreateHttpApiEndpoints" }, { Action = ["apigateway:POST"], Condition = { StringEquals = { "aws:ResourceTag/deployment" = "${local.resource_prefix}", "aws:ResourceTag/managed-by" = "deployment" } }, Effect = "Allow", Resource = ["arn:aws:apigateway:${data.aws_region.current.region}::/apis/*", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*/apimappings"], Sid = "CreateHttpApiRoutes" }, { Action = ["apigateway:TagResource", "apigateway:PUT"], Condition = { StringEquals = { "aws:RequestTag/deployment" = "${local.resource_prefix}", "aws:RequestTag/managed-by" = "deployment" } }, Effect = "Allow", Resource = ["arn:aws:apigateway:${data.aws_region.current.region}::/apis/*", "arn:aws:apigateway:${data.aws_region.current.region}::/apis/*/stages", "arn:aws:apigateway:${data.aws_region.current.region}::/apis/*/stages/*", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*", "arn:aws:apigateway:${data.aws_region.current.region}::/tags/*"], Sid = "TagHttpApiEndpoints" }, { Action = ["apigateway:GET", "apigateway:DELETE", "apigateway:PATCH", "apigateway:PUT"], Condition = { StringEquals = { "aws:ResourceTag/deployment" = "${local.resource_prefix}", "aws:ResourceTag/managed-by" = "deployment" } }, Effect = "Allow", Resource = ["arn:aws:apigateway:${data.aws_region.current.region}::/apis/*", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*/apimappings", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*/apimappings/*"], Sid = "ManageHttpApiEndpoints" }, { Action = ["events:PutRule", "events:TagResource"], Condition = { StringEquals = { "aws:RequestTag/deployment" = "${local.resource_prefix}", "aws:RequestTag/managed-by" = "deployment" } }, Effect = "Allow", Resource = ["arn:aws:events:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:rule/${local.resource_prefix}-*"], Sid = "CreateEventbridgeSchedules" }, { Action = ["events:DeleteRule", "events:DescribeRule", "events:PutTargets", "events:RemoveTargets"], Condition = { StringEquals = { "aws:ResourceTag/deployment" = "${local.resource_prefix}", "aws:ResourceTag/managed-by" = "deployment" } }, Effect = "Allow", Resource = ["arn:aws:events:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:rule/${local.resource_prefix}-*"], Sid = "ManageEventbridgeSchedules" }, { Action = ["s3:GetBucketLocation", "s3:GetBucketVersioning", "s3:GetLifecycleConfiguration", "s3:GetBucketPolicy", "s3:GetBucketAcl", "s3:GetEncryptionConfiguration", "s3:GetBucketPublicAccessBlock"], Effect = "Allow", Resource = ["arn:aws:s3:::${local.resource_prefix}-*"], Sid = "CheckS3BucketHealth" }], Version = "2012-10-17" })
 }
 
-resource "aws_iam_role_policy" "management_set_1" {
-  name   = "storage-heartbeat-1"
-  role   = aws_iam_role.management.id
-  policy = jsonencode({ Statement = [{ Action = ["s3:GetBucketLocation", "s3:GetBucketVersioning", "s3:GetLifecycleConfiguration", "s3:GetBucketPolicy", "s3:GetBucketAcl", "s3:GetEncryptionConfiguration", "s3:GetBucketPublicAccessBlock"], Effect = "Allow", Resource = ["arn:aws:s3:::${var.stack_name}-*"], Sid = "StorageHeartbeat" }], Version = "2012-10-17" })
+resource "aws_iam_role_policy_attachment" "management_managed_policy_0_attachment" {
+  role       = aws_iam_role.management.name
+  policy_arn = aws_iam_policy.management_managed_policy_0.arn
 }
 
-resource "aws_iam_role_policy" "management_set_2" {
-  name   = "queue-heartbeat-2"
-  role   = aws_iam_role.management.id
-  policy = jsonencode({ Statement = [{ Action = ["sqs:GetQueueAttributes", "sqs:ListQueueTags"], Effect = "Allow", Resource = ["arn:aws:sqs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:${var.stack_name}-*"], Sid = "QueueHeartbeat" }], Version = "2012-10-17" })
+resource "aws_iam_policy" "management_managed_policy_1" {
+  name   = length(format("%s-%s", local.resource_prefix, "deployment-management-1")) <= 128 ? format("%s-%s", local.resource_prefix, "deployment-management-1") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "deployment-management-1"), 0, 119), substr(sha1(format("%s-%s", local.resource_prefix, "deployment-management-1")), 0, 8))
+  policy = jsonencode({ Statement = [{ Action = ["sqs:GetQueueAttributes", "sqs:ListQueueTags"], Effect = "Allow", Resource = ["arn:aws:sqs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:${local.resource_prefix}-*"], Sid = "CheckSqsQueueHealth" }, { Action = ["dynamodb:DescribeTable", "dynamodb:ListTables", "dynamodb:DescribeTimeToLive", "dynamodb:ListTagsOfResource", "dynamodb:DescribeContinuousBackups"], Effect = "Allow", Resource = ["arn:aws:dynamodb:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:table/${local.resource_prefix}-*"], Sid = "CheckDynamodbTableHealth" }], Version = "2012-10-17" })
 }
 
-resource "aws_iam_role_policy" "management_set_3" {
-  name   = "kv-heartbeat-3"
-  role   = aws_iam_role.management.id
-  policy = jsonencode({ Statement = [{ Action = ["dynamodb:DescribeTable", "dynamodb:ListTables", "dynamodb:DescribeTimeToLive", "dynamodb:ListTagsOfResource", "dynamodb:DescribeContinuousBackups"], Effect = "Allow", Resource = ["arn:aws:dynamodb:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:table/${var.stack_name}-*"], Sid = "KvHeartbeat" }], Version = "2012-10-17" })
+resource "aws_iam_role_policy_attachment" "management_managed_policy_1_attachment" {
+  role       = aws_iam_role.management.name
+  policy_arn = aws_iam_policy.management_managed_policy_1.arn
 }
 
 resource "aws_iam_role_policy" "management_self_read" {
-  name   = "alien-management-self-read"
+  name   = "deployment-management-self-read"
   role   = aws_iam_role.management.id
-  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "ReadOwnManagementRole", Effect = "Allow", Action = "iam:GetRole", Resource = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.stack_name}-management" }] })
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "ReadOwnManagementRole", Effect = "Allow", Action = "iam:GetRole", Resource = aws_iam_role.management.arn }] })
 }
 
 === assets.tf ===
 resource "aws_s3_bucket" "assets" {
-  bucket        = "${var.stack_name}-assets"
+  bucket        = "${local.resource_prefix}-assets"
   force_destroy = true
   tags = {
-    "alien.dev/managed-by" = "alien"
-    "alien.dev/stack"      = var.stack_name
-    "alien.dev/resource"   = "assets"
-    AlienResourceType      = "storage"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "assets"
+    "resource-type" = "storage"
   }
 }
 
@@ -427,23 +488,29 @@ resource "aws_s3_bucket_versioning" "assets" {
   }
 }
 
+resource "aws_iam_role_policy" "assets_management_storage-heartbeat_0" {
+  name   = "assets-storage-heartbeat-0"
+  role   = aws_iam_role.management.id
+  policy = jsonencode({ Statement = [{ Action = ["s3:GetBucketLocation", "s3:GetBucketVersioning", "s3:GetLifecycleConfiguration", "s3:GetBucketPolicy", "s3:GetBucketAcl", "s3:GetEncryptionConfiguration", "s3:GetBucketPublicAccessBlock"], Effect = "Allow", Resource = ["arn:aws:s3:::${aws_s3_bucket.assets.bucket}"], Sid = "CheckS3BucketHealth" }], Version = "2012-10-17" })
+}
+
 === jobs.tf ===
 resource "aws_sqs_queue" "jobs" {
-  name                       = "${var.stack_name}-jobs"
+  name                       = "${local.resource_prefix}-jobs"
   sqs_managed_sse_enabled    = true
   visibility_timeout_seconds = 1080
   message_retention_seconds  = 345600
   tags = {
-    "alien.dev/managed-by" = "alien"
-    "alien.dev/stack"      = var.stack_name
-    "alien.dev/resource"   = "jobs"
-    AlienResourceType      = "queue"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "jobs"
+    "resource-type" = "queue"
   }
 }
 
 === metadata.tf ===
 resource "aws_dynamodb_table" "metadata" {
-  name         = "${var.stack_name}-metadata"
+  name         = "${local.resource_prefix}-metadata"
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "pk"
   range_key    = "sk"
@@ -472,10 +539,10 @@ resource "aws_dynamodb_table" "metadata" {
   }
 
   tags = {
-    "alien.dev/managed-by" = "alien"
-    "alien.dev/stack"      = var.stack_name
-    "alien.dev/resource"   = "metadata"
-    AlienResourceType      = "kv"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "metadata"
+    "resource-type" = "kv"
   }
 
   lifecycle {
@@ -487,12 +554,12 @@ resource "aws_dynamodb_table" "metadata" {
 resource "aws_iam_role_policy" "management_vault_secrets_set_0" {
   name   = "alien-mgmt-secrets-vault-data-write"
   role   = aws_iam_role.management.id
-  policy = jsonencode({ Statement = [{ Action = ["ssm:PutParameter", "ssm:DeleteParameter"], Effect = "Allow", Resource = ["arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter/${var.stack_name}-secrets-*"], Sid = "VaultDataWrite" }], Version = "2012-10-17" })
+  policy = jsonencode({ Statement = [{ Action = ["ssm:PutParameter", "ssm:DeleteParameter"], Effect = "Allow", Resource = ["arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter/${local.resource_prefix}-secrets-*"], Sid = "WriteSsmParameters" }], Version = "2012-10-17" })
 }
 
 === registry.tf ===
 resource "aws_ecr_repository" "registry" {
-  name                 = "${var.stack_name}-registry"
+  name                 = "${local.resource_prefix}-registry"
   image_tag_mutability = "IMMUTABLE"
 
   image_scanning_configuration {
@@ -505,10 +572,10 @@ resource "aws_ecr_repository" "registry" {
 
   force_delete = false
   tags = {
-    "alien.dev/managed-by" = "alien"
-    "alien.dev/stack"      = var.stack_name
-    "alien.dev/resource"   = "registry"
-    AlienResourceType      = "artifact-registry"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "registry"
+    "resource-type" = "artifact-registry"
   }
 
   lifecycle {
@@ -522,24 +589,24 @@ resource "aws_ecr_lifecycle_policy" "registry" {
 }
 
 resource "aws_iam_role" "registry_pull" {
-  name               = "${var.stack_name}-registry-pull"
+  name               = length(format("%s-%s", local.resource_prefix, "registry-pull")) <= 64 ? format("%s-%s", local.resource_prefix, "registry-pull") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "registry-pull"), 0, 55), substr(sha1(format("%s-%s", local.resource_prefix, "registry-pull")), 0, 8))
   assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { AWS = aws_iam_role.execution_sa.arn }, Action = "sts:AssumeRole" }] })
   tags = {
-    "alien.dev/managed-by" = "alien"
-    "alien.dev/stack"      = var.stack_name
-    "alien.dev/resource"   = "registry"
-    AlienResourceType      = "artifact-registry"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "registry"
+    "resource-type" = "artifact-registry"
   }
 }
 
 resource "aws_iam_role" "registry_push" {
-  name               = "${var.stack_name}-registry-push"
+  name               = length(format("%s-%s", local.resource_prefix, "registry-push")) <= 64 ? format("%s-%s", local.resource_prefix, "registry-push") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "registry-push"), 0, 55), substr(sha1(format("%s-%s", local.resource_prefix, "registry-push")), 0, 8))
   assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { AWS = aws_iam_role.execution_sa.arn }, Action = "sts:AssumeRole" }] })
   tags = {
-    "alien.dev/managed-by" = "alien"
-    "alien.dev/stack"      = var.stack_name
-    "alien.dev/resource"   = "registry"
-    AlienResourceType      = "artifact-registry"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "registry"
+    "resource-type" = "artifact-registry"
   }
 }
 
@@ -556,16 +623,20 @@ resource "aws_iam_role_policy" "registry_push_policy" {
 }
 
 === import.tf ===
-resource "terraform_data" "deployment_stack_import" {
+resource "terraform_data" "deployment_import" {
   input = {
-    platform               = local.deployment_platform
-    deployment_group_token = var.deployment_group_token
-    deployment_name        = var.deployment_name == "" ? var.stack_name : var.deployment_name
-    stack_prefix           = var.stack_name
-    manager_url            = var.manager_url
-    management_config      = local.deployment_management_config
-    stack_settings         = local.deployment_stack_settings
-    resources              = local.deployment_resources
+    platform                    = local.deployment_platform
+    token                       = var.token
+    name                        = var.name
+    resource_prefix             = local.resource_prefix
+    setup_target                = ""
+    setup_import_format_version = 1
+    setup_fingerprint           = ""
+    setup_fingerprint_version   = 0
+    manager_url                 = var.manager_url
+    management_config           = local.deployment_management_config
+    stack_settings              = local.deployment_settings
+    resources                   = local.deployment_resources
   }
   depends_on = [
     aws_vpc.default_network,
@@ -583,10 +654,10 @@ resource "terraform_data" "deployment_stack_import" {
     aws_iam_role_policy.execution_sa_set_0,
     aws_iam_role_policy.execution_sa_set_1,
     aws_iam_role.management,
-    aws_iam_role_policy.management_set_0,
-    aws_iam_role_policy.management_set_1,
-    aws_iam_role_policy.management_set_2,
-    aws_iam_role_policy.management_set_3,
+    aws_iam_policy.management_managed_policy_0,
+    aws_iam_role_policy_attachment.management_managed_policy_0_attachment,
+    aws_iam_policy.management_managed_policy_1,
+    aws_iam_role_policy_attachment.management_managed_policy_1_attachment,
     aws_iam_role_policy.management_self_read,
     aws_s3_bucket.assets,
     aws_s3_bucket_server_side_encryption_configuration.assets,
@@ -594,6 +665,7 @@ resource "terraform_data" "deployment_stack_import" {
     aws_s3_bucket_public_access_block.assets,
     aws_s3_bucket_policy.assets,
     aws_s3_bucket_versioning.assets,
+    aws_iam_role_policy.assets_management_storage-heartbeat_0,
     aws_sqs_queue.jobs,
     aws_dynamodb_table.metadata,
     aws_iam_role_policy.management_vault_secrets_set_0,
@@ -612,9 +684,9 @@ output "deployment_target" {
   description = "Terraform module target."
 }
 
-output "deployment_stack_prefix" {
-  value       = var.stack_name
-  description = "Physical stack prefix."
+output "deployment_resource_prefix" {
+  value       = local.resource_prefix
+  description = "Physical resource prefix."
 }
 
 output "deployment_platform" {
@@ -627,13 +699,33 @@ output "deployment_region" {
   description = "Target cloud region or location."
 }
 
+output "deployment_setup_target" {
+  value       = ""
+  description = "Setup target."
+}
+
+output "deployment_setup_import_format_version" {
+  value       = 1
+  description = "Setup import payload format version."
+}
+
+output "deployment_setup_fingerprint" {
+  value       = ""
+  description = "Setup compatibility fingerprint."
+}
+
+output "deployment_setup_fingerprint_version" {
+  value       = 0
+  description = "Setup fingerprint algorithm version."
+}
+
 output "deployment_management_config" {
   value       = jsonencode(local.deployment_management_config)
   description = "Manager import ManagementConfig JSON."
 }
 
 output "deployment_stack_settings" {
-  value       = jsonencode(local.deployment_stack_settings)
+  value       = jsonencode(local.deployment_settings)
   description = "Manager import StackSettings JSON."
   sensitive   = true
 }
@@ -653,7 +745,7 @@ Run:
 ```bash
 terraform init -backend=false
 terraform validate
-terraform apply -var='stack_name=full-aws' -var='deployment_group_token=...'
+terraform apply -var='name=full-aws' -var='token=...'
 ```
 
 This module exposes `deployment_management_config` / `deployment_stack_settings` / `deployment_resources` for external registration flows.

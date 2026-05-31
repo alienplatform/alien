@@ -15,11 +15,11 @@ use alien_core::{NetworkSettings, Platform, Stack};
 /// This is the single source of truth. When adding a new resource type that
 /// needs VPC (e.g., databases, caches), add it here.
 ///
-/// Resources that *optionally* use a network (e.g., functions) are NOT listed
+/// Resources that *optionally* use a network (e.g., workers) are NOT listed
 /// here — they use the network if it exists but don't require one.
 const RESOURCE_TYPES_REQUIRING_NETWORK: &[&str] = &[
-    "container",         // Triggers ContainerClusterMutation -> needs VPC
-    "container-cluster", // ASGs/MIGs/VMSSs need VPC subnets
+    "container",       // Triggers ComputeClusterMutation -> needs VPC
+    "compute-cluster", // ASGs/MIGs/VMSSs need VPC subnets
 ];
 
 /// Check if any resource in the stack requires VPC networking.
@@ -134,11 +134,10 @@ impl PublicSubnetsRequiredCheck {
             let resource_type_str = resource_type.0.as_ref();
 
             match resource_type_str {
-                "function" => {
-                    if let Some(function) =
-                        resource_entry.config.downcast_ref::<alien_core::Function>()
+                "worker" => {
+                    if let Some(worker) = resource_entry.config.downcast_ref::<alien_core::Worker>()
                     {
-                        if matches!(function.ingress, alien_core::Ingress::Public) {
+                        if matches!(worker.ingress, alien_core::Ingress::Public) {
                             return true;
                         }
                     }
@@ -211,9 +210,9 @@ impl CompileTimeCheck for NetworkSettingsPlatformCheck {
 mod tests {
     use super::*;
     use alien_core::{
-        permissions::PermissionsConfig, CapacityGroup, Container, ContainerCluster, ContainerCode,
-        Function, FunctionCode, Ingress, Network, NetworkSettings, ResourceEntry,
-        ResourceLifecycle, ResourceSpec,
+        permissions::PermissionsConfig, CapacityGroup, ComputeCluster, Container, ContainerCode,
+        Ingress, Network, NetworkSettings, ResourceEntry, ResourceLifecycle, ResourceSpec, Worker,
+        WorkerCode,
     };
     use indexmap::IndexMap;
 
@@ -242,8 +241,8 @@ mod tests {
     fn create_function_entry(id: &str, ingress: Ingress) -> ResourceEntry {
         ResourceEntry {
             config: alien_core::Resource::new(
-                Function::new(id.to_string())
-                    .code(FunctionCode::Image {
+                Worker::new(id.to_string())
+                    .code(WorkerCode::Image {
                         image: "test:latest".to_string(),
                     })
                     .permissions("default".to_string())
@@ -292,9 +291,9 @@ mod tests {
     }
 
     #[test]
-    fn test_stack_requires_network_with_container_cluster() {
+    fn test_stack_requires_network_with_compute_cluster() {
         let mut resources = IndexMap::new();
-        let cluster = ContainerCluster::new("compute".to_string())
+        let cluster = ComputeCluster::new("compute".to_string())
             .capacity_group(CapacityGroup {
                 group_id: "general".to_string(),
                 instance_type: None,
@@ -320,8 +319,8 @@ mod tests {
     fn test_stack_does_not_require_network_for_functions_only() {
         let mut resources = IndexMap::new();
         resources.insert(
-            "my-function".to_string(),
-            create_function_entry("my-function", Ingress::Private),
+            "my-worker".to_string(),
+            create_function_entry("my-worker", Ingress::Private),
         );
         let stack = create_stack(resources);
         assert!(!stack_requires_network(&stack));
@@ -348,8 +347,8 @@ mod tests {
             }),
         );
         resources.insert(
-            "my-function".to_string(),
-            create_function_entry("my-function", Ingress::Public),
+            "my-worker".to_string(),
+            create_function_entry("my-worker", Ingress::Public),
         );
 
         let stack = create_stack(resources);
@@ -373,8 +372,8 @@ mod tests {
             }),
         );
         resources.insert(
-            "my-function".to_string(),
-            create_function_entry("my-function", Ingress::Public),
+            "my-worker".to_string(),
+            create_function_entry("my-worker", Ingress::Public),
         );
 
         let stack = create_stack(resources);
@@ -397,8 +396,8 @@ mod tests {
             }),
         );
         resources.insert(
-            "my-function".to_string(),
-            create_function_entry("my-function", Ingress::Private),
+            "my-worker".to_string(),
+            create_function_entry("my-worker", Ingress::Private),
         );
 
         let stack = create_stack(resources);

@@ -26,11 +26,14 @@ use futures::{stream::BoxStream, StreamExt};
 use object_store::{
     path::Path, Attributes as OsAttributes, Error as ObjectStoreError, GetOptions,
     GetRange as OsGetRange, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta,
-    PutMultipartOpts, PutOptions, PutPayload, PutResult,
+    PutMultipartOptions, PutOptions, PutPayload, PutResult,
 };
 use prost_types;
-use std::fmt::{Debug, Formatter};
 use std::time::Duration;
+use std::{
+    collections::HashMap,
+    fmt::{Debug, Formatter},
+};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_stream::wrappers::ReceiverStream;
@@ -123,6 +126,26 @@ impl GrpcStorage {
     fn client(&self) -> StorageServiceClient<Channel> {
         self.client.clone()
     }
+
+    fn http_presigned_backend(
+        url: &str,
+        method: &str,
+        headers: HashMap<String, String>,
+        invalid_url_reason: &str,
+    ) -> crate::error::Result<PresignedRequestBackend> {
+        Url::parse(url)
+            .into_alien_error()
+            .context(ErrorData::InvalidConfigurationUrl {
+                url: url.to_string(),
+                reason: invalid_url_reason.to_string(),
+            })?;
+
+        Ok(PresignedRequestBackend::Http {
+            url: url.to_string(),
+            method: method.to_string(),
+            headers,
+        })
+    }
 }
 
 impl std::fmt::Display for GrpcStorage {
@@ -182,29 +205,14 @@ impl crate::Storage for GrpcStorage {
             .into_inner();
 
         // Parse the returned URL to determine if it's HTTP or local
+        let headers = response
+            .headers
+            .into_iter()
+            .map(|header| (header.key, header.value))
+            .collect();
         let url = &response.url;
         let backend = if url.starts_with("http://") || url.starts_with("https://") {
-            // HTTP-based presigned URL (AWS S3, GCP GCS, Azure Blob)
-            let parsed_url = reqwest::Url::parse(url).into_alien_error().context(
-                ErrorData::InvalidConfigurationUrl {
-                    url: url.to_string(),
-                    reason: "Invalid presigned PUT URL format".to_string(),
-                },
-            )?;
-
-            // Extract headers from query parameters if any (some providers include them)
-            let mut headers = std::collections::HashMap::new();
-            for (key, value) in parsed_url.query_pairs() {
-                if key.starts_with("X-") || key.starts_with("x-") {
-                    headers.insert(key.to_string(), value.to_string());
-                }
-            }
-
-            PresignedRequestBackend::Http {
-                url: url.clone(),
-                method: "PUT".to_string(),
-                headers,
-            }
+            Self::http_presigned_backend(url, "PUT", headers, "Invalid presigned PUT URL format")?
         } else if url.starts_with("local://") {
             // Local filesystem URL
             let file_path = url.strip_prefix("local://").unwrap_or(url);
@@ -262,29 +270,14 @@ impl crate::Storage for GrpcStorage {
             .into_inner();
 
         // Parse the returned URL to determine if it's HTTP or local
+        let headers = response
+            .headers
+            .into_iter()
+            .map(|header| (header.key, header.value))
+            .collect();
         let url = &response.url;
         let backend = if url.starts_with("http://") || url.starts_with("https://") {
-            // HTTP-based presigned URL (AWS S3, GCP GCS, Azure Blob)
-            let parsed_url = reqwest::Url::parse(url).into_alien_error().context(
-                ErrorData::InvalidConfigurationUrl {
-                    url: url.to_string(),
-                    reason: "Invalid presigned GET URL format".to_string(),
-                },
-            )?;
-
-            // Extract headers from query parameters if any (some providers include them)
-            let mut headers = std::collections::HashMap::new();
-            for (key, value) in parsed_url.query_pairs() {
-                if key.starts_with("X-") || key.starts_with("x-") {
-                    headers.insert(key.to_string(), value.to_string());
-                }
-            }
-
-            PresignedRequestBackend::Http {
-                url: url.clone(),
-                method: "GET".to_string(),
-                headers,
-            }
+            Self::http_presigned_backend(url, "GET", headers, "Invalid presigned GET URL format")?
         } else if url.starts_with("local://") {
             // Local filesystem URL
             let file_path = url.strip_prefix("local://").unwrap_or(url);
@@ -342,29 +335,19 @@ impl crate::Storage for GrpcStorage {
             .into_inner();
 
         // Parse the returned URL to determine if it's HTTP or local
+        let headers = response
+            .headers
+            .into_iter()
+            .map(|header| (header.key, header.value))
+            .collect();
         let url = &response.url;
         let backend = if url.starts_with("http://") || url.starts_with("https://") {
-            // HTTP-based presigned URL (AWS S3, GCP GCS, Azure Blob)
-            let parsed_url = reqwest::Url::parse(url).into_alien_error().context(
-                ErrorData::InvalidConfigurationUrl {
-                    url: url.to_string(),
-                    reason: "Invalid presigned DELETE URL format".to_string(),
-                },
-            )?;
-
-            // Extract headers from query parameters if any (some providers include them)
-            let mut headers = std::collections::HashMap::new();
-            for (key, value) in parsed_url.query_pairs() {
-                if key.starts_with("X-") || key.starts_with("x-") {
-                    headers.insert(key.to_string(), value.to_string());
-                }
-            }
-
-            PresignedRequestBackend::Http {
-                url: url.clone(),
-                method: "DELETE".to_string(),
+            Self::http_presigned_backend(
+                url,
+                "DELETE",
                 headers,
-            }
+                "Invalid presigned DELETE URL format",
+            )?
         } else if url.starts_with("local://") {
             // Local filesystem URL
             let file_path = url.strip_prefix("local://").unwrap_or(url);
@@ -423,7 +406,7 @@ impl object_store::ObjectStore for GrpcStorage {
     async fn put_multipart_opts(
         &self,
         location: &Path,
-        opts: PutMultipartOpts,
+        opts: PutMultipartOptions,
     ) -> object_store::Result<Box<dyn MultipartUpload>> {
         let mut client = self.client();
         let path_str = location.to_string();
@@ -767,6 +750,68 @@ impl object_store::ObjectStore for GrpcStorage {
                 )
             })?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn http_presigned_backend_keeps_query_auth_out_of_headers() {
+        let signed_url = "https://bucket.s3.us-east-2.amazonaws.com/key\
+            ?X-Amz-Algorithm=AWS4-HMAC-SHA256\
+            &X-Amz-Credential=AKIA%2F20260527%2Fus-east-2%2Fs3%2Faws4_request\
+            &X-Amz-Date=20260527T173759Z\
+            &X-Amz-Expires=300\
+            &X-Amz-SignedHeaders=host\
+            &X-Amz-Signature=abc123";
+
+        let backend = GrpcStorage::http_presigned_backend(
+            signed_url,
+            "PUT",
+            HashMap::new(),
+            "Invalid presigned PUT URL format",
+        )
+        .expect("valid signed URL");
+
+        match backend {
+            PresignedRequestBackend::Http {
+                url,
+                method,
+                headers,
+            } => {
+                assert_eq!(url, signed_url);
+                assert_eq!(method, "PUT");
+                assert!(headers.is_empty());
+            }
+            PresignedRequestBackend::Local { .. } => panic!("expected HTTP backend"),
+        }
+    }
+
+    #[test]
+    fn http_presigned_backend_preserves_provider_headers() {
+        let signed_url = "https://account.blob.core.windows.net/container/key?sas=token";
+        let mut headers = HashMap::new();
+        headers.insert("x-ms-blob-type".to_string(), "BlockBlob".to_string());
+
+        let backend = GrpcStorage::http_presigned_backend(
+            signed_url,
+            "PUT",
+            headers,
+            "Invalid presigned PUT URL format",
+        )
+        .expect("valid signed URL");
+
+        match backend {
+            PresignedRequestBackend::Http { headers, .. } => {
+                assert_eq!(
+                    headers.get("x-ms-blob-type"),
+                    Some(&"BlockBlob".to_string())
+                );
+            }
+            PresignedRequestBackend::Local { .. } => panic!("expected HTTP backend"),
+        }
     }
 }
 

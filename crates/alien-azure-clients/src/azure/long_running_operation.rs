@@ -1,9 +1,8 @@
 use crate::azure::common::{AzureClientBase, AzureRequestBuilder};
 use crate::azure::token_cache::AzureTokenCache;
-use alien_client_core::{Error, ErrorData, Result};
+use alien_client_core::{ErrorData, Result};
 
 use alien_error::{AlienError, Context, IntoAlienError};
-use async_trait::async_trait;
 #[cfg(feature = "test-utils")]
 use mockall::automock;
 use reqwest::{Client, Method, Response, StatusCode};

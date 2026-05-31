@@ -1,0 +1,23 @@
+# PreparedDeploymentStackOverrideGcp
+
+GCP-specific platform permission configuration
+
+## Example Usage
+
+```typescript
+import { PreparedDeploymentStackOverrideGcp } from "@alienplatform/platform-api/models";
+
+let value: PreparedDeploymentStackOverrideGcp = {
+  binding: {},
+  grant: {},
+};
+```
+
+## Fields
+
+| Field                                                                                                      | Type                                                                                                       | Required                                                                                                   | Description                                                                                                |
+| ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `binding`                                                                                                  | [models.PreparedDeploymentStackOverrideGcpBinding](../models/prepareddeploymentstackoverridegcpbinding.md) | :heavy_check_mark:                                                                                         | Generic binding configuration for permissions                                                              |
+| `description`                                                                                              | *string*                                                                                                   | :heavy_minus_sign:                                                                                         | Short admin-facing description of why this entry exists.                                                   |
+| `grant`                                                                                                    | [models.PreparedDeploymentStackOverrideGcpGrant](../models/prepareddeploymentstackoverridegcpgrant.md)     | :heavy_check_mark:                                                                                         | Grant permissions for a specific cloud platform                                                            |
+| `label`                                                                                                    | *string*                                                                                                   | :heavy_minus_sign:                                                                                         | Stable admin-facing label for this permission entry.                                                       |

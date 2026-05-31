@@ -5,7 +5,53 @@
 
 use std::env;
 
-use alien_core::Platform;
+use alien_core::{NetworkSettings, Platform};
+use anyhow::{bail, Context};
+
+const E2E_SLOT_ENV: &str = "ALIEN_E2E_SLOT";
+const E2E_RESOURCE_PREFIX_ENV: &str = "ALIEN_E2E_RESOURCE_PREFIX";
+const E2E_SLOT_MESSAGE: &str = "Set ALIEN_E2E_SLOT to one of 01..10, e.g. ALIEN_E2E_SLOT=03";
+const E2E_RESOURCE_PREFIX_MESSAGE: &str = "ALIEN_E2E_RESOURCE_PREFIX must be 3-40 characters: lowercase letters, numbers, and hyphens; start with a letter; end with a letter or number; and not contain consecutive hyphens.";
+
+pub fn e2e_resource_prefix() -> anyhow::Result<String> {
+    if let Some(prefix) = env_opt(E2E_RESOURCE_PREFIX_ENV) {
+        validate_e2e_resource_prefix(&prefix)?;
+        return Ok(prefix);
+    }
+
+    let slot = env::var(E2E_SLOT_ENV).context(E2E_SLOT_MESSAGE)?;
+    e2e_resource_prefix_from_slot(&slot)
+}
+
+pub fn e2e_resource_prefix_from_slot(slot: &str) -> anyhow::Result<String> {
+    match slot {
+        "01" | "02" | "03" | "04" | "05" | "06" | "07" | "08" | "09" | "10" => {
+            Ok(format!("e2e-{slot}"))
+        }
+        _ => bail!(E2E_SLOT_MESSAGE),
+    }
+}
+
+fn validate_e2e_resource_prefix(prefix: &str) -> anyhow::Result<()> {
+    let valid_len = (3..=40).contains(&prefix.len());
+    let valid_chars = prefix
+        .bytes()
+        .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
+    let valid_edges = prefix
+        .as_bytes()
+        .first()
+        .is_some_and(u8::is_ascii_lowercase)
+        && prefix
+            .as_bytes()
+            .last()
+            .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit());
+
+    if valid_len && valid_chars && valid_edges && !prefix.contains("--") {
+        Ok(())
+    } else {
+        bail!(E2E_RESOURCE_PREFIX_MESSAGE)
+    }
+}
 
 /// AWS credentials for a single role (management or target).
 #[derive(Debug, Clone)]
@@ -69,16 +115,13 @@ pub struct AzureConfig {
     pub client_id: String,
     pub client_secret: String,
     pub region: String,
+    /// Azure service principal object ID. Role assignments require this
+    /// principal ID; the application/client ID is not sufficient.
+    pub principal_id: Option<String>,
     /// OIDC issuer for production and CI token exchange.
     pub oidc_issuer: Option<String>,
     /// OIDC subject for production and CI token exchange.
     pub oidc_subject: Option<String>,
-    /// Management SP client ID (local development fallback only).
-    pub management_sp_client_id: Option<String>,
-    /// Management SP client secret (local development fallback only).
-    pub management_sp_client_secret: Option<String>,
-    /// Management SP object/principal ID (local development fallback only).
-    pub management_sp_object_id: Option<String>,
 }
 
 /// Azure-specific test resources provisioned by Terraform.
@@ -131,6 +174,54 @@ pub struct E2eArtifactRegistryConfig {
     pub azure_acr_repository: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct KubernetesRuntimeConfig {
+    pub kubeconfig: String,
+    pub kube_context: Option<String>,
+    pub namespace_prefix: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct EksKubernetesConfig {
+    pub runtime: KubernetesRuntimeConfig,
+    pub cluster_name: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct GkeKubernetesConfig {
+    pub runtime: KubernetesRuntimeConfig,
+    pub cluster_name: String,
+    pub cluster_location: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct AksKubernetesConfig {
+    pub runtime: KubernetesRuntimeConfig,
+    pub cluster_name: String,
+    pub cluster_resource_group_name: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct KubernetesTestConfig {
+    pub eks: Option<EksKubernetesConfig>,
+    pub gke: Option<GkeKubernetesConfig>,
+    pub aks: Option<AksKubernetesConfig>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum E2eNetworkMode {
+    None,
+    UseDefault,
+    Create,
+    Existing,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KubernetesClusterMode {
+    Existing,
+    Create,
+}
+
 /// Top-level test configuration holding optional credentials for every
 /// supported cloud platform, in both management and target roles.
 #[derive(Debug, Clone)]
@@ -145,6 +236,9 @@ pub struct TestConfig {
     pub azure_target: Option<AzureConfig>,
     pub azure_resources: AzureTestResources,
     pub e2e_artifact_registry: E2eArtifactRegistryConfig,
+    pub kubernetes: KubernetesTestConfig,
+    pub e2e_network_mode: E2eNetworkMode,
+    pub kubernetes_cluster_mode: KubernetesClusterMode,
 }
 
 impl TestConfig {
@@ -167,9 +261,42 @@ impl TestConfig {
             azure_target: Self::load_azure_target(),
             azure_resources: Self::load_azure_resources(),
             e2e_artifact_registry: Self::load_e2e_artifact_registry(),
+            kubernetes: Self::load_kubernetes(),
+            e2e_network_mode: Self::load_e2e_network_mode(),
+            kubernetes_cluster_mode: Self::load_kubernetes_cluster_mode(),
         };
         config.mask_ci_secrets();
         config
+    }
+
+    pub fn e2e_network_settings(
+        &self,
+        platform: Platform,
+    ) -> anyhow::Result<Option<NetworkSettings>> {
+        match self.e2e_network_mode {
+            E2eNetworkMode::None => Ok(None),
+            E2eNetworkMode::UseDefault => match platform {
+                Platform::Aws | Platform::Gcp | Platform::Azure => {
+                    Ok(Some(NetworkSettings::UseDefault))
+                }
+                Platform::Kubernetes | Platform::Local | Platform::Test => Ok(None),
+            },
+            E2eNetworkMode::Create => match platform {
+                Platform::Aws | Platform::Gcp | Platform::Azure => {
+                    Ok(Some(NetworkSettings::Create {
+                        cidr: None,
+                        availability_zones: 2,
+                    }))
+                }
+                Platform::Kubernetes | Platform::Local | Platform::Test => Ok(None),
+            },
+            E2eNetworkMode::Existing => match platform {
+                Platform::Aws | Platform::Gcp | Platform::Azure => {
+                    self.e2e_existing_network_settings(platform).map(Some)
+                }
+                Platform::Kubernetes | Platform::Local | Platform::Test => Ok(None),
+            },
+        }
     }
 
     /// Return the platforms where **both** management and target credentials
@@ -237,7 +364,8 @@ impl TestConfig {
             region,
             credentials_json: env::var("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY")
                 .ok()
-                .map(|s| s.trim().to_string()),
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
             management_identity_email: env::var("GOOGLE_MANAGEMENT_IDENTITY_EMAIL")
                 .ok()
                 .filter(|s| !s.is_empty()),
@@ -255,7 +383,8 @@ impl TestConfig {
             region,
             credentials_json: env::var("GOOGLE_TARGET_SERVICE_ACCOUNT_KEY")
                 .ok()
-                .map(|s| s.trim().to_string()),
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
             management_identity_email: None,
             management_identity_unique_id: None,
         })
@@ -275,19 +404,13 @@ impl TestConfig {
             client_id,
             client_secret,
             region,
+            principal_id: env::var("AZURE_MANAGEMENT_PRINCIPAL_ID")
+                .ok()
+                .filter(|s| !s.is_empty()),
             oidc_issuer: env::var("AZURE_MANAGEMENT_OIDC_ISSUER")
                 .ok()
                 .filter(|s| !s.is_empty()),
             oidc_subject: env::var("AZURE_MANAGEMENT_OIDC_SUBJECT")
-                .ok()
-                .filter(|s| !s.is_empty()),
-            management_sp_client_id: env::var("AZURE_MANAGEMENT_SP_CLIENT_ID")
-                .ok()
-                .filter(|s| !s.is_empty()),
-            management_sp_client_secret: env::var("AZURE_MANAGEMENT_SP_CLIENT_SECRET")
-                .ok()
-                .filter(|s| !s.is_empty()),
-            management_sp_object_id: env::var("AZURE_MANAGEMENT_SP_OBJECT_ID")
                 .ok()
                 .filter(|s| !s.is_empty()),
         })
@@ -308,11 +431,11 @@ impl TestConfig {
             client_id,
             client_secret,
             region,
+            principal_id: env::var("AZURE_TARGET_PRINCIPAL_ID")
+                .ok()
+                .filter(|s| !s.is_empty()),
             oidc_issuer: None,
             oidc_subject: None,
-            management_sp_client_id: None,
-            management_sp_client_secret: None,
-            management_sp_object_id: None,
         })
     }
 
@@ -327,6 +450,59 @@ impl TestConfig {
             ecr_push_role_arn: env::var("ALIEN_TEST_AWS_ECR_PUSH_ROLE_ARN").ok(),
             ecr_pull_role_arn: env::var("ALIEN_TEST_AWS_ECR_PULL_ROLE_ARN").ok(),
             ecr_repository: env::var("ALIEN_TEST_AWS_ECR_REPOSITORY").ok(),
+        }
+    }
+
+    fn load_e2e_network_mode() -> E2eNetworkMode {
+        match env::var("ALIEN_E2E_NETWORK_MODE") {
+            Ok(value) => match value.as_str() {
+                "" | "none" => E2eNetworkMode::None,
+                "default" | "use-default" => E2eNetworkMode::UseDefault,
+                "create" => E2eNetworkMode::Create,
+                "existing" => E2eNetworkMode::Existing,
+                _ => panic!(
+                    "ALIEN_E2E_NETWORK_MODE must be one of: none, use-default, create, existing"
+                ),
+            },
+            Err(_) => E2eNetworkMode::None,
+        }
+    }
+
+    fn load_kubernetes_cluster_mode() -> KubernetesClusterMode {
+        match env::var("ALIEN_E2E_KUBERNETES_CLUSTER_MODE") {
+            Ok(value) => match value.as_str() {
+                "" | "existing" => KubernetesClusterMode::Existing,
+                "create" => KubernetesClusterMode::Create,
+                _ => panic!("ALIEN_E2E_KUBERNETES_CLUSTER_MODE must be one of: existing, create"),
+            },
+            Err(_) => KubernetesClusterMode::Existing,
+        }
+    }
+
+    fn e2e_existing_network_settings(&self, platform: Platform) -> anyhow::Result<NetworkSettings> {
+        match platform {
+            Platform::Aws => Ok(NetworkSettings::ByoVpcAws {
+                vpc_id: required_env("ALIEN_E2E_AWS_VPC_ID")?,
+                public_subnet_ids: required_csv_env("ALIEN_E2E_AWS_PUBLIC_SUBNET_IDS")?,
+                private_subnet_ids: required_csv_env("ALIEN_E2E_AWS_PRIVATE_SUBNET_IDS")?,
+                security_group_ids: csv_env("ALIEN_E2E_AWS_SECURITY_GROUP_IDS"),
+            }),
+            Platform::Gcp => Ok(NetworkSettings::ByoVpcGcp {
+                network_name: required_env("ALIEN_E2E_GCP_NETWORK_NAME")?,
+                subnet_name: required_env("ALIEN_E2E_GCP_SUBNET_NAME")?,
+                region: env::var("ALIEN_E2E_GCP_REGION")
+                    .ok()
+                    .or_else(|| self.gcp_target.as_ref().map(|target| target.region.clone()))
+                    .context("ALIEN_E2E_GCP_REGION or GOOGLE_TARGET_REGION is required")?,
+            }),
+            Platform::Azure => Ok(NetworkSettings::ByoVnetAzure {
+                vnet_resource_id: required_env("ALIEN_E2E_AZURE_VNET_RESOURCE_ID")?,
+                public_subnet_name: required_env("ALIEN_E2E_AZURE_PUBLIC_SUBNET_NAME")?,
+                private_subnet_name: required_env("ALIEN_E2E_AZURE_PRIVATE_SUBNET_NAME")?,
+            }),
+            Platform::Kubernetes | Platform::Local | Platform::Test => {
+                bail!("ALIEN_E2E_NETWORK_MODE=existing is not supported for {platform:?}")
+            }
         }
     }
 
@@ -381,6 +557,56 @@ impl TestConfig {
             gcp_ar_push_sa_email: env::var("E2E_GCP_AR_PUSH_SA_EMAIL").ok(),
             azure_acr_repository: env::var("E2E_AZURE_ACR_REPOSITORY").ok(),
         }
+    }
+
+    fn load_kubernetes() -> KubernetesTestConfig {
+        KubernetesTestConfig {
+            eks: env_opt("ALIEN_TEST_EKS_CLUSTER_NAME").and_then(|cluster_name| {
+                Some(EksKubernetesConfig {
+                    runtime: Self::load_kubernetes_runtime("EKS")?,
+                    cluster_name,
+                })
+            }),
+            gke: match (
+                env_opt("ALIEN_TEST_GKE_CLUSTER_NAME"),
+                env_opt("ALIEN_TEST_GKE_CLUSTER_LOCATION"),
+            ) {
+                (Some(cluster_name), Some(cluster_location)) => {
+                    Self::load_kubernetes_runtime("GKE").map(|runtime| GkeKubernetesConfig {
+                        runtime,
+                        cluster_name,
+                        cluster_location,
+                    })
+                }
+                _ => None,
+            },
+            aks: match (
+                env_opt("ALIEN_TEST_AKS_CLUSTER_NAME"),
+                env_opt("ALIEN_TEST_AKS_CLUSTER_RESOURCE_GROUP"),
+            ) {
+                (Some(cluster_name), Some(cluster_resource_group_name)) => {
+                    Self::load_kubernetes_runtime("AKS").map(|runtime| AksKubernetesConfig {
+                        runtime,
+                        cluster_name,
+                        cluster_resource_group_name,
+                    })
+                }
+                _ => None,
+            },
+        }
+    }
+
+    fn load_kubernetes_runtime(provider: &str) -> Option<KubernetesRuntimeConfig> {
+        let kubeconfig = env_opt(&format!("ALIEN_TEST_{provider}_KUBECONFIG"))
+            .or_else(|| env_opt("ALIEN_TEST_K8S_KUBECONFIG"))
+            .or_else(|| env_opt("KUBECONFIG"))?;
+        Some(KubernetesRuntimeConfig {
+            kubeconfig,
+            kube_context: env_opt(&format!("ALIEN_TEST_{provider}_KUBE_CONTEXT"))
+                .or_else(|| env_opt("ALIEN_TEST_K8S_KUBE_CONTEXT")),
+            namespace_prefix: env_opt("ALIEN_TEST_K8S_NAMESPACE_PREFIX")
+                .unwrap_or_else(|| "alien-test".to_string()),
+        })
     }
 
     // -- CI secret masking ----------------------------------------------------
@@ -439,9 +665,7 @@ impl TestConfig {
             mask(&az.tenant_id);
             mask(&az.client_id);
             mask(&az.client_secret);
-            mask_opt(&az.management_sp_client_id);
-            mask_opt(&az.management_sp_client_secret);
-            mask_opt(&az.management_sp_object_id);
+            mask_opt(&az.principal_id);
         }
         let azr = &self.azure_resources;
         mask_opt(&azr.resource_group);
@@ -469,4 +693,72 @@ impl TestConfig {
         mask_opt(&e2e.gcp_ar_push_sa_email);
         mask_opt(&e2e.azure_acr_repository);
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{e2e_resource_prefix_from_slot, validate_e2e_resource_prefix};
+
+    #[test]
+    fn e2e_resource_prefix_accepts_bounded_slots() {
+        assert_eq!(e2e_resource_prefix_from_slot("01").unwrap(), "e2e-01");
+        assert_eq!(e2e_resource_prefix_from_slot("10").unwrap(), "e2e-10");
+    }
+
+    #[test]
+    fn e2e_resource_prefix_rejects_unbounded_slots() {
+        assert!(e2e_resource_prefix_from_slot("1").is_err());
+        assert!(e2e_resource_prefix_from_slot("00").is_err());
+        assert!(e2e_resource_prefix_from_slot("11").is_err());
+        assert!(e2e_resource_prefix_from_slot("random").is_err());
+    }
+
+    #[test]
+    fn e2e_resource_prefix_override_accepts_job_scoped_prefixes() {
+        validate_e2e_resource_prefix("e2e-04-tfaws").unwrap();
+        validate_e2e_resource_prefix("e2e-10-cfaws").unwrap();
+    }
+
+    #[test]
+    fn e2e_resource_prefix_override_rejects_invalid_prefixes() {
+        assert!(validate_e2e_resource_prefix("04-tfaws").is_err());
+        assert!(validate_e2e_resource_prefix("e2e-04--tfaws").is_err());
+        assert!(validate_e2e_resource_prefix("e2e_04_tfaws").is_err());
+        assert!(validate_e2e_resource_prefix("e2e-04-tfaws-").is_err());
+        assert!(
+            validate_e2e_resource_prefix("e2e-04-this-prefix-is-far-too-long-for-e2e").is_err()
+        );
+    }
+}
+
+fn env_opt(name: &str) -> Option<String> {
+    env::var(name).ok().filter(|value| !value.trim().is_empty())
+}
+
+fn required_env(name: &str) -> anyhow::Result<String> {
+    env::var(name).with_context(|| format!("{name} is required"))
+}
+
+fn csv_env(name: &str) -> Vec<String> {
+    env::var(name)
+        .ok()
+        .map(|value| parse_csv(&value))
+        .unwrap_or_default()
+}
+
+fn required_csv_env(name: &str) -> anyhow::Result<Vec<String>> {
+    let values = parse_csv(&required_env(name)?);
+    if values.is_empty() {
+        bail!("{name} must contain at least one value");
+    }
+    Ok(values)
+}
+
+fn parse_csv(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
 }

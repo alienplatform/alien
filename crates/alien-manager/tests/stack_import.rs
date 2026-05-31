@@ -23,14 +23,17 @@ use alien_commands::dispatchers::NullCommandDispatcher;
 use alien_commands::server::{CommandDispatcher, CommandRegistry, CommandServer};
 use alien_commands::InMemoryCommandRegistry;
 use alien_core::import::{
-    ImportSourceKind, ImportedResource, StackImportRequest, StackImportResponse,
+    ImportSourceKind, ImportedResource, KubernetesClusterImportData, StackImportRequest,
+    StackImportResponse,
 };
+use alien_core::permissions::PermissionProfile;
 use alien_core::{
     AwsEnvironmentInfo, AwsManagementConfig, AwsRemoteStackManagementImportData,
     AwsStorageImportData, AzureEnvironmentInfo, AzureManagementConfig,
     AzureRemoteStackManagementImportData, EnvironmentInfo, GcpEnvironmentInfo, GcpManagementConfig,
-    GcpRemoteStackManagementImportData, ManagementConfig, Platform, RemoteStackManagement,
-    ResourceLifecycle, ResourceStatus, Stack, StackSettings, Storage,
+    GcpRemoteStackManagementImportData, KubernetesCluster, KubernetesClusterOwnership,
+    KubernetesClusterProvider, ManagementConfig, Platform, RemoteStackManagement,
+    ResourceLifecycle, ResourceStatus, Stack, StackSettings, Storage, Worker, WorkerCode,
 };
 use alien_manager::auth::Authz;
 use alien_manager::config::ManagerConfig;
@@ -240,20 +243,22 @@ fn aws_s3_import_request(
     bucket: &str,
 ) -> StackImportRequest {
     StackImportRequest {
+        setup_import_format_version: 1,
         deployment_group_token: "ignored".to_string(),
         deployment_name: deployment_name.to_string(),
-        stack_prefix: deployment_name.to_string(),
+        resource_prefix: deployment_name.to_string(),
         source_kind: Some(ImportSourceKind::CloudFormation),
         release_id: None,
         platform: Platform::Aws,
+        base_platform: None,
         region: region.to_string(),
         setup_target: "aws".to_string(),
         setup_fingerprint: "test".to_string(),
         setup_fingerprint_version: 1,
         stack_settings: StackSettings::default(),
-        management_config: ManagementConfig::Aws(AwsManagementConfig {
+        management_config: Some(ManagementConfig::Aws(AwsManagementConfig {
             managing_role_arn: "arn:aws:iam::123456789012:role/AlienManager".to_string(),
-        }),
+        })),
         resources: vec![ImportedResource {
             id: resource_id.to_string(),
             resource_type: alien_core::Storage::RESOURCE_TYPE.into(),
@@ -276,11 +281,24 @@ fn stack_with_storage(resource_id: &str) -> Stack {
         .build()
 }
 
-fn stack_with_remote_management(resource_id: &str) -> Stack {
+fn source_stack_without_setup_resources() -> Stack {
+    Stack::new("imported".to_string()).build()
+}
+
+fn stack_with_worker(resource_id: &str) -> Stack {
     Stack::new("imported".to_string())
+        .permission(
+            "execution",
+            PermissionProfile::new().global(["worker/execute"]),
+        )
         .add(
-            RemoteStackManagement::new(resource_id.to_string()).build(),
-            ResourceLifecycle::Frozen,
+            Worker::new(resource_id.to_string())
+                .code(WorkerCode::Image {
+                    image: "public.ecr.aws/lambda/provided:al2023".to_string(),
+                })
+                .permissions("execution".to_string())
+                .build(),
+            ResourceLifecycle::Live,
         )
         .build()
 }
@@ -292,20 +310,22 @@ fn aws_remote_management_import_request(
     account_id: &str,
 ) -> StackImportRequest {
     StackImportRequest {
+        setup_import_format_version: 1,
         deployment_group_token: "ignored".to_string(),
         deployment_name: deployment_name.to_string(),
-        stack_prefix: deployment_name.to_string(),
+        resource_prefix: deployment_name.to_string(),
         source_kind: Some(ImportSourceKind::CloudFormation),
         release_id: None,
         platform: Platform::Aws,
+        base_platform: None,
         region: region.to_string(),
         setup_target: "aws".to_string(),
         setup_fingerprint: "test".to_string(),
         setup_fingerprint_version: 1,
         stack_settings: StackSettings::default(),
-        management_config: ManagementConfig::Aws(AwsManagementConfig {
+        management_config: Some(ManagementConfig::Aws(AwsManagementConfig {
             managing_role_arn: "arn:aws:iam::123456789012:role/AlienManager".to_string(),
-        }),
+        })),
         resources: vec![ImportedResource {
             id: resource_id.to_string(),
             resource_type: RemoteStackManagement::RESOURCE_TYPE.into(),
@@ -313,6 +333,41 @@ fn aws_remote_management_import_request(
                 role_name: format!("{deployment_name}-management"),
                 role_arn: format!("arn:aws:iam::{account_id}:role/{deployment_name}-management"),
                 management_permissions_applied: true,
+            })
+            .unwrap(),
+        }],
+    }
+}
+
+fn eks_cluster_import_request(deployment_name: &str, region: &str) -> StackImportRequest {
+    StackImportRequest {
+        setup_import_format_version: 1,
+        deployment_group_token: "ignored".to_string(),
+        deployment_name: deployment_name.to_string(),
+        resource_prefix: deployment_name.to_string(),
+        source_kind: Some(ImportSourceKind::Terraform),
+        release_id: None,
+        platform: Platform::Kubernetes,
+        base_platform: Some(Platform::Aws),
+        region: region.to_string(),
+        setup_target: "kubernetes:aws:terraform-helm".to_string(),
+        setup_fingerprint: "test".to_string(),
+        setup_fingerprint_version: 1,
+        stack_settings: StackSettings::default(),
+        management_config: Some(ManagementConfig::Aws(AwsManagementConfig {
+            managing_role_arn: "arn:aws:iam::123456789012:role/AlienManager".to_string(),
+        })),
+        resources: vec![ImportedResource {
+            id: "kubernetes".to_string(),
+            resource_type: KubernetesCluster::RESOURCE_TYPE.into(),
+            import_data: serde_json::to_value(KubernetesClusterImportData {
+                provider: KubernetesClusterProvider::Eks,
+                ownership: KubernetesClusterOwnership::Existing,
+                namespace: "alien-e2e".to_string(),
+                cluster_name: Some("alien-e2e".to_string()),
+                cluster_id: None,
+                cloud_metadata_ready: Some(true),
+                azure_application_gateway_for_containers: None,
             })
             .unwrap(),
         }],
@@ -327,20 +382,22 @@ fn gcp_remote_management_import_request(
     project_number: Option<&str>,
 ) -> StackImportRequest {
     StackImportRequest {
+        setup_import_format_version: 1,
         deployment_group_token: "ignored".to_string(),
         deployment_name: deployment_name.to_string(),
-        stack_prefix: deployment_name.to_string(),
+        resource_prefix: deployment_name.to_string(),
         source_kind: Some(ImportSourceKind::Terraform),
         release_id: None,
         platform: Platform::Gcp,
+        base_platform: None,
         region: region.to_string(),
         setup_target: "gcp".to_string(),
         setup_fingerprint: "test".to_string(),
         setup_fingerprint_version: 1,
         stack_settings: StackSettings::default(),
-        management_config: ManagementConfig::Gcp(GcpManagementConfig {
+        management_config: Some(ManagementConfig::Gcp(GcpManagementConfig {
             service_account_email: "manager@example.iam.gserviceaccount.com".to_string(),
-        }),
+        })),
         resources: vec![ImportedResource {
             id: resource_id.to_string(),
             resource_type: RemoteStackManagement::RESOURCE_TYPE.into(),
@@ -366,23 +423,24 @@ fn azure_remote_management_import_request(
     tenant_id: &str,
 ) -> StackImportRequest {
     StackImportRequest {
+        setup_import_format_version: 1,
         deployment_group_token: "ignored".to_string(),
         deployment_name: deployment_name.to_string(),
-        stack_prefix: deployment_name.to_string(),
+        resource_prefix: deployment_name.to_string(),
         source_kind: Some(ImportSourceKind::Terraform),
         release_id: None,
         platform: Platform::Azure,
+        base_platform: None,
         region: region.to_string(),
         setup_target: "azure".to_string(),
         setup_fingerprint: "test".to_string(),
         setup_fingerprint_version: 1,
         stack_settings: StackSettings::default(),
-        management_config: ManagementConfig::Azure(AzureManagementConfig {
+        management_config: Some(ManagementConfig::Azure(AzureManagementConfig {
             managing_tenant_id: tenant_id.to_string(),
-            oidc_issuer: None,
-            oidc_subject: None,
-            management_principal_id: None,
-        }),
+            oidc_issuer: "https://issuer.example".to_string(),
+            oidc_subject: "system:serviceaccount:alien:manager".to_string(),
+        })),
         resources: vec![ImportedResource {
             id: resource_id.to_string(),
             resource_type: RemoteStackManagement::RESOURCE_TYPE.into(),
@@ -407,6 +465,14 @@ async fn post_import(
     bearer: Option<&str>,
     body: &StackImportRequest,
 ) -> (StatusCode, serde_json::Value) {
+    post_import_json(fixture, bearer, serde_json::to_value(body).unwrap()).await
+}
+
+async fn post_import_json(
+    fixture: &Fixture,
+    bearer: Option<&str>,
+    body: serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
     let router = alien_manager::routes::stack::router().with_state(fixture.state.clone());
 
     let mut req = Request::builder()
@@ -419,7 +485,7 @@ async fn post_import(
     }
 
     let request = req
-        .body(Body::from(serde_json::to_vec(body).unwrap()))
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
         .unwrap();
 
     let response = router.oneshot(request).await.unwrap();
@@ -522,11 +588,46 @@ async fn happy_path_creates_imported_deployment() {
 }
 
 #[tokio::test]
+async fn kubernetes_import_resolves_release_stack_by_runtime_platform() {
+    let fixture =
+        make_fixture_for_platform(Platform::Kubernetes, Some(stack_with_worker("worker"))).await;
+    let body = eks_cluster_import_request("acme-k8s", "us-east-1");
+
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(status, StatusCode::CREATED, "body = {:#}", json);
+
+    let parsed: StackImportResponse = serde_json::from_value(json).unwrap();
+    let persisted = fixture
+        .deployment_store
+        .get_deployment(
+            &alien_manager::auth::Subject::system(),
+            &parsed.deployment_id,
+        )
+        .await
+        .unwrap()
+        .expect("deployment must persist");
+    let stack_state = persisted.stack_state.expect("stack_state must persist");
+
+    assert_eq!(stack_state.platform, Platform::Kubernetes);
+    assert!(
+        stack_state.resources.contains_key("kubernetes"),
+        "Kubernetes substrate should be present in imported stack state"
+    );
+
+    let prepared_stack = persisted
+        .runtime_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.prepared_stack.as_ref())
+        .expect("prepared_stack must be persisted for imported provisioning");
+    assert!(
+        prepared_stack.resources.contains_key("kubernetes"),
+        "prepared stack should be derived with Kubernetes mutations"
+    );
+}
+
+#[tokio::test]
 async fn aws_import_persists_target_environment_info() {
-    let fixture = make_fixture(Some(stack_with_remote_management(
-        "remote-stack-management",
-    )))
-    .await;
+    let fixture = make_fixture(Some(source_stack_without_setup_resources())).await;
     let body = aws_remote_management_import_request(
         "acme-prod",
         "us-west-2",
@@ -558,12 +659,26 @@ async fn aws_import_persists_target_environment_info() {
 }
 
 #[tokio::test]
+async fn aws_cloudformation_import_accepts_stringified_booleans() {
+    let fixture = make_fixture(Some(source_stack_without_setup_resources())).await;
+    let mut body = aws_remote_management_import_request(
+        "acme-prod",
+        "us-west-2",
+        "remote-stack-management",
+        "210987654321",
+    );
+    body.resources[0].import_data["managementPermissionsApplied"] =
+        serde_json::Value::String("true".to_string());
+
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(status, StatusCode::CREATED, "body = {:#}", json);
+}
+
+#[tokio::test]
 async fn gcp_import_persists_target_environment_info() {
-    let fixture = make_fixture_for_platform(
-        Platform::Gcp,
-        Some(stack_with_remote_management("remote-stack-management")),
-    )
-    .await;
+    let fixture =
+        make_fixture_for_platform(Platform::Gcp, Some(source_stack_without_setup_resources()))
+            .await;
     let body = gcp_remote_management_import_request(
         "acme-prod",
         "us-central1",
@@ -600,7 +715,7 @@ async fn gcp_import_persists_target_environment_info() {
 async fn azure_import_persists_target_environment_info() {
     let fixture = make_fixture_for_platform(
         Platform::Azure,
-        Some(stack_with_remote_management("remote-stack-management")),
+        Some(source_stack_without_setup_resources()),
     )
     .await;
     let body = azure_remote_management_import_request(
@@ -708,10 +823,13 @@ async fn native_deployment_blocks_imported_name() {
         .create_deployment(
             &alien_manager::auth::Subject::system(),
             CreateDeploymentParams {
+                deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
                 name: "acme-prod".to_string(),
                 deployment_group_id: fixture.deployment_group_id.clone(),
                 platform: Platform::Aws,
+                base_platform: None,
                 stack_settings: StackSettings::default(),
+                stack_state: None,
                 environment_variables: None,
                 deployment_token: None,
             },
@@ -803,6 +921,42 @@ async fn missing_deployment_name_returns_400() {
     let fixture = make_fixture(Some(stack_with_storage("assets"))).await;
     let mut body = aws_s3_import_request("", "us-east-1", "assets", "acme-imports");
     body.deployment_name.clear();
+
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body = {:#}", json);
+}
+
+#[tokio::test]
+async fn missing_setup_import_format_version_returns_incompatible_error() {
+    let fixture = make_fixture(Some(stack_with_storage("assets"))).await;
+    let body = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
+    let mut json = serde_json::to_value(body).unwrap();
+    json.as_object_mut()
+        .expect("stack import request should serialize to object")
+        .remove("setupImportFormatVersion");
+
+    let (status, json) = post_import_json(&fixture, Some(&fixture.dg_token), json).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body = {:#}", json);
+    assert_eq!(json["code"], "INCOMPATIBLE_SETUP_IMPORT");
+}
+
+#[tokio::test]
+async fn malformed_setup_import_format_version_returns_incompatible_error() {
+    let fixture = make_fixture(Some(stack_with_storage("assets"))).await;
+    let body = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
+    let mut json = serde_json::to_value(body).unwrap();
+    json["setupImportFormatVersion"] = serde_json::Value::String("1".to_string());
+
+    let (status, json) = post_import_json(&fixture, Some(&fixture.dg_token), json).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body = {:#}", json);
+    assert_eq!(json["code"], "INCOMPATIBLE_SETUP_IMPORT");
+}
+
+#[tokio::test]
+async fn invalid_resource_prefix_returns_400() {
+    let fixture = make_fixture(Some(stack_with_storage("assets"))).await;
+    let mut body = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
+    body.resource_prefix = "Acme_Prod".to_string();
 
     let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "body = {:#}", json);

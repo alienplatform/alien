@@ -23,7 +23,8 @@ use crate::{
     target::TerraformTarget,
 };
 use alien_core::{
-    import::EmitContext, ownership_policy_for_resource_type, ErrorData, Network, NetworkSettings,
+    import::{EmitContext, CURRENT_SETUP_IMPORT_FORMAT_VERSION},
+    ownership_policy_for_resource_type, ErrorData, Network, NetworkSettings, RemoteStackManagement,
     Result, Stack, StackSettings,
 };
 use alien_error::{AlienError, IntoAlienError};
@@ -33,6 +34,7 @@ use hcl::{
     Identifier,
 };
 use indexmap::IndexMap;
+use std::collections::HashSet;
 
 /// Generated Terraform module \u2014 one `.tf` file per Alien stack resource
 /// plus the supporting framework (`versions.tf` / `variables.tf` /
@@ -65,11 +67,20 @@ pub struct TerraformOptions<'a> {
     /// [`TfRegistry::built_in()`]; plugin-aware callers extend it before
     /// passing.
     pub registry: &'a TfRegistry,
+    /// Human-friendly application name shown in generated review surfaces.
+    pub display_name: Option<String>,
     pub stack_settings: StackSettings,
     /// Optional self-registration settings. When present, the generated module
     /// requires the configured provider and creates its registration resource
     /// after raw infrastructure is resolved.
     pub registration: Option<TerraformRegistration>,
+    /// Optional Helm chart install settings. Only Kubernetes targets with
+    /// self-registration can install the chart because the chart needs the
+    /// manager deployment id and deployment token.
+    pub helm_install: Option<TerraformHelmInstall>,
+    /// AWS regions supported by the Alien environment that produced this
+    /// module. Empty means no generated region validation.
+    pub supported_aws_regions: Vec<String>,
 }
 
 /// Terraform provider dependency used by self-registering modules.
@@ -94,7 +105,12 @@ impl TerraformRegistration {
     }
 }
 
-/// Per-network-resource extra variables (e.g. BYO VPC ids for AWS).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TerraformHelmInstall {
+    pub chart_ref: String,
+}
+
+/// Per-network-resource extra variables (e.g. existing VPC ids for AWS).
 /// Computed once and threaded into `variables.tf`.
 struct NetworkVariables {
     /// `(name, description, default)` entries for `variables.tf`.
@@ -122,22 +138,22 @@ fn network_extra_variables(stack: &Stack, labels: &IndexMap<String, String>) -> 
         {
             extra_string_vars.push((
                 format!("{label}_vpc_id"),
-                "BYO VPC id supplied by the customer.".to_string(),
+                "Existing VPC ID supplied by the customer.".to_string(),
                 Some(Expression::String(vpc_id.clone())),
             ));
             extra_list_vars.push((
                 format!("{label}_public_subnet_ids"),
-                "BYO public subnet ids supplied by the customer.".to_string(),
+                "Existing public subnet IDs supplied by the customer.".to_string(),
                 Some(public_subnet_ids.clone()),
             ));
             extra_list_vars.push((
                 format!("{label}_private_subnet_ids"),
-                "BYO private subnet ids supplied by the customer.".to_string(),
+                "Existing private subnet IDs supplied by the customer.".to_string(),
                 Some(private_subnet_ids.clone()),
             ));
             extra_list_vars.push((
                 format!("{label}_security_group_ids"),
-                "BYO security group ids supplied by the customer.".to_string(),
+                "Existing security group IDs supplied by the customer.".to_string(),
                 Some(security_group_ids.clone()),
             ));
         }
@@ -155,7 +171,20 @@ pub fn generate_terraform_module(
     options: TerraformOptions<'_>,
 ) -> Result<ModuleFiles> {
     let labels = resource_labels(stack)?;
-    let platform = target.platform();
+    let platform = target.cloud_platform();
+    let mut stack_settings = options.stack_settings.clone();
+    if target.is_kubernetes()
+        && matches!(
+            target.cloud_platform(),
+            alien_core::Platform::Aws | alien_core::Platform::Gcp
+        )
+        && stack_settings.network.is_none()
+    {
+        stack_settings.network = Some(NetworkSettings::Create {
+            cidr: None,
+            availability_zones: 2,
+        });
+    }
 
     let mut per_resource: IndexMap<String, TfFragment> = IndexMap::new();
     let mut imported_resources: Vec<Expression> = Vec::new();
@@ -174,7 +203,7 @@ pub fn generate_terraform_module(
             resource,
             resource_id,
             platform,
-            stack_settings: &options.stack_settings,
+            stack_settings: &stack_settings,
             names: &labels,
         };
 
@@ -202,8 +231,12 @@ pub fn generate_terraform_module(
             &mut shared_locals,
         )?;
     }
+    if matches!(platform, alien_core::Platform::Gcp) {
+        dedupe_gcp_support_resources(&mut per_resource)?;
+    }
     apply_resource_dependencies(stack, &mut per_resource);
     if matches!(platform, alien_core::Platform::Azure) {
+        emit_azure_setup_resource_role_definitions(&mut per_resource, stack)?;
         apply_azure_resource_group_dependency(stack, &labels, &mut per_resource);
     }
     let gcp_iam_propagation_dependencies = if matches!(platform, alien_core::Platform::Gcp) {
@@ -226,6 +259,21 @@ pub fn generate_terraform_module(
     }
 
     let network_vars = network_extra_variables(stack, &labels);
+    let include_kubernetes_provider =
+        target.is_kubernetes() && has_resource_type(&per_resource, "kubernetes_manifest");
+    let include_helm_provider =
+        target.is_kubernetes() && options.registration.is_some() && options.helm_install.is_some();
+    let include_azapi_provider = has_resource_type(&per_resource, "azapi_update_resource")
+        || has_resource_type(&per_resource, "azapi_resource_action");
+    let has_remote_management =
+        stack_has_resource_type(stack, RemoteStackManagement::RESOURCE_TYPE);
+    let needs_azure_management_inputs = has_remote_management || target == TerraformTarget::Aks;
+    let deployment_name_default = options
+        .display_name
+        .as_deref()
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| stack.id())
+        .to_string();
 
     let mut files: IndexMap<String, String> = IndexMap::new();
     files.insert(
@@ -234,6 +282,9 @@ pub fn generate_terraform_module(
             target,
             options.registration.as_ref(),
             gcp_iam_propagation_barrier.is_some(),
+            include_kubernetes_provider,
+            include_helm_provider,
+            include_azapi_provider,
         ))?,
     );
     files.insert(
@@ -241,20 +292,36 @@ pub fn generate_terraform_module(
         render_body(variables_body(
             target,
             &network_vars,
-            &options.stack_settings,
+            &stack_settings,
+            options.registration.as_ref(),
+            options.helm_install.as_ref(),
+            &deployment_name_default,
+            needs_azure_management_inputs,
+            &options.supported_aws_regions,
         )?)?,
     );
     files.insert(
         "providers.tf".to_string(),
-        render_body(providers_body(target))?,
+        render_body(providers_body(
+            target,
+            include_kubernetes_provider,
+            include_helm_provider,
+            include_azapi_provider,
+        ))?,
+    );
+    files.insert(
+        "resource_prefix.tf".to_string(),
+        render_body(resource_prefix_body())?,
     );
     files.insert(
         "locals.tf".to_string(),
         render_body(locals_body(
             target,
-            &options.stack_settings,
+            &stack_settings,
             imported_resources,
             &shared_locals,
+            options.registration.is_some(),
+            has_remote_management,
         )?)?,
     );
 
@@ -271,21 +338,39 @@ pub fn generate_terraform_module(
             render_body(gcp_iam_propagation_body(&gcp_iam_propagation_dependencies))?,
         );
     }
-
     files.insert(
         "import.tf".to_string(),
         render_body(import_body(
+            target,
             options.registration.as_ref(),
             &import_depends_on,
         ))?,
     );
+    if let Some(helm_install) = options
+        .helm_install
+        .as_ref()
+        .filter(|_| target.is_kubernetes() && options.registration.is_some())
+    {
+        files.insert(
+            "helm.tf".to_string(),
+            render_body(helm_install_body(
+                options.registration.as_ref().expect("checked above"),
+                helm_install,
+            ))?,
+        );
+    }
     files.insert(
         "outputs.tf".to_string(),
         render_body(outputs_body(target, options.registration.as_ref()))?,
     );
     files.insert(
         "README.md".to_string(),
-        readme_md(stack, target, options.registration.as_ref()),
+        readme_md(
+            stack,
+            target,
+            options.registration.as_ref(),
+            options.display_name.as_deref(),
+        ),
     );
 
     let mut module = ModuleFiles { files };
@@ -297,6 +382,83 @@ pub fn generate_terraform_module(
     let _ = format_with_terraform(&mut module);
 
     Ok(module)
+}
+
+fn emit_azure_setup_resource_role_definitions(
+    per_resource: &mut IndexMap<String, TfFragment>,
+    stack: &Stack,
+) -> Result<()> {
+    let Some((_resource_id, fragment)) = per_resource.iter_mut().next() else {
+        return Ok(());
+    };
+
+    crate::emitters::azure::helpers::emit_setup_resource_role_definitions(stack, fragment)
+}
+
+fn dedupe_gcp_support_resources(per_resource: &mut IndexMap<String, TfFragment>) -> Result<()> {
+    let mut seen_custom_roles = HashSet::new();
+    let mut seen_iam_member_grants = HashSet::new();
+    let mut seen_resource_addresses: IndexMap<String, Block> = IndexMap::new();
+
+    for fragment in per_resource.values_mut() {
+        let mut retained = Vec::with_capacity(fragment.resource_blocks.len());
+        for resource in std::mem::take(&mut fragment.resource_blocks) {
+            if resource.identifier.as_str() != "resource" {
+                retained.push(resource);
+                continue;
+            }
+
+            let Some(provider_type) = resource.labels.first().map(|label| label.as_str()) else {
+                retained.push(resource);
+                continue;
+            };
+
+            let Some(label) = resource.labels.get(1).map(|label| label.as_str()) else {
+                retained.push(resource);
+                continue;
+            };
+
+            let address = format!("{provider_type}.{label}");
+            if let Some(existing) = seen_resource_addresses.get(&address) {
+                if existing != &resource {
+                    return Err(AlienError::new(ErrorData::GenericError {
+                        message: format!(
+                            "generated conflicting Terraform resources for GCP support resource '{address}'"
+                        ),
+                    }));
+                }
+                continue;
+            }
+            seen_resource_addresses.insert(address, resource.clone());
+
+            if provider_type == "google_project_iam_custom_role" {
+                if seen_custom_roles.insert(label.to_string()) {
+                    retained.push(resource);
+                }
+                continue;
+            }
+
+            if provider_type.ends_with("_iam_member") {
+                let grant_key = format!(
+                    "{provider_type}:{}",
+                    terraform_body_identity(&resource.body)
+                );
+                if seen_iam_member_grants.insert(grant_key) {
+                    retained.push(resource);
+                }
+                continue;
+            }
+
+            retained.push(resource);
+        }
+        fragment.resource_blocks = retained;
+    }
+
+    Ok(())
+}
+
+fn terraform_body_identity(body: &Body) -> String {
+    format!("{body:?}")
 }
 
 fn fragment_to_body(fragment: TfFragment) -> Body {
@@ -347,6 +509,9 @@ fn apply_resource_dependencies(stack: &Stack, per_resource: &mut IndexMap<String
         }
 
         for resource in &mut fragment.resource_blocks {
+            if !resource_inherits_stack_resource_dependencies(resource) {
+                continue;
+            }
             upsert_depends_on(resource, &depends_on);
         }
     }
@@ -393,6 +558,42 @@ fn resource_address(resource: &Block) -> Option<Expression> {
     Some(expr::traversal([provider_type, label]))
 }
 
+fn has_resource_type(per_resource: &IndexMap<String, TfFragment>, resource_type: &str) -> bool {
+    per_resource
+        .values()
+        .flat_map(|fragment| fragment.resource_blocks.iter())
+        .any(|resource| {
+            resource.identifier.as_str() == "resource"
+                && resource
+                    .labels
+                    .first()
+                    .map(|label| label.as_str() == resource_type)
+                    .unwrap_or(false)
+        })
+}
+
+fn stack_has_resource_type(stack: &Stack, resource_type: alien_core::ResourceType) -> bool {
+    stack
+        .resources()
+        .any(|(_, entry)| entry.config.resource_type() == resource_type)
+}
+
+fn resource_inherits_stack_resource_dependencies(resource: &Block) -> bool {
+    !is_gcp_iam_support_resource(resource)
+}
+
+fn is_gcp_iam_support_resource(resource: &Block) -> bool {
+    if resource.identifier.as_str() != "resource" {
+        return false;
+    }
+
+    let Some(provider_type) = resource.labels.first().map(|label| label.as_str()) else {
+        return false;
+    };
+
+    provider_type == "google_project_iam_custom_role" || provider_type.ends_with("_iam_member")
+}
+
 fn gcp_iam_resource_addresses(per_resource: &IndexMap<String, TfFragment>) -> Vec<Expression> {
     per_resource
         .values()
@@ -406,9 +607,7 @@ fn gcp_iam_resource_addresses(per_resource: &IndexMap<String, TfFragment>) -> Ve
             };
             matches!(
                 provider_type,
-                "google_project_iam_custom_role"
-                    | "google_project_iam_member"
-                    | "google_service_account_iam_member"
+                "google_project_iam_member" | "google_service_account_iam_member"
             )
         })
         .filter_map(resource_address)
@@ -513,6 +712,9 @@ fn versions_body(
     target: TerraformTarget,
     registration: Option<&TerraformRegistration>,
     include_time_provider: bool,
+    include_kubernetes_provider: bool,
+    include_helm_provider: bool,
+    include_azapi_provider: bool,
 ) -> Body {
     let mut required: Vec<Structure> = vec![attr(
         "required_version",
@@ -520,24 +722,46 @@ fn versions_body(
     )];
 
     let mut provider_attrs: Vec<Structure> = Vec::new();
-    if matches!(target.platform(), alien_core::Platform::Aws) {
+    if matches!(target.cloud_platform(), alien_core::Platform::Aws) {
         provider_attrs.push(attr("aws", provider_decl_attr("hashicorp/aws", ">= 5.0")));
+        if matches!(target, TerraformTarget::Eks) {
+            provider_attrs.push(attr("tls", provider_decl_attr("hashicorp/tls", ">= 4.0")));
+        }
     }
-    if matches!(target.platform(), alien_core::Platform::Gcp) {
+    if matches!(target.cloud_platform(), alien_core::Platform::Gcp) {
         provider_attrs.push(attr(
             "google",
             provider_decl_attr("hashicorp/google", ">= 5.0"),
         ));
-        if include_time_provider {
-            provider_attrs.push(attr("time", provider_decl_attr("hashicorp/time", ">= 0.9")));
-        }
     }
-    if matches!(target.platform(), alien_core::Platform::Azure) {
+    if matches!(target.cloud_platform(), alien_core::Platform::Azure) {
         provider_attrs.push(attr(
             "azurerm",
             provider_decl_attr("hashicorp/azurerm", ">= 3.100"),
         ));
+        if include_azapi_provider {
+            provider_attrs.push(attr("azapi", provider_decl_attr("Azure/azapi", ">= 2.6")));
+        }
     }
+    if include_time_provider {
+        provider_attrs.push(attr("time", provider_decl_attr("hashicorp/time", ">= 0.9")));
+    }
+    if include_kubernetes_provider {
+        provider_attrs.push(attr(
+            "kubernetes",
+            provider_decl_attr("hashicorp/kubernetes", ">= 2.30"),
+        ));
+    }
+    if include_helm_provider {
+        provider_attrs.push(attr(
+            "helm",
+            provider_decl_attr("hashicorp/helm", ">= 2.13"),
+        ));
+    }
+    provider_attrs.push(attr(
+        "random",
+        provider_decl_attr("hashicorp/random", ">= 3.6"),
+    ));
     if let Some(registration) = registration {
         provider_attrs.push(attr(
             &registration.provider_name,
@@ -573,33 +797,50 @@ fn variables_body(
     target: TerraformTarget,
     network_vars: &NetworkVariables,
     stack_settings: &StackSettings,
+    registration: Option<&TerraformRegistration>,
+    helm_install: Option<&TerraformHelmInstall>,
+    deployment_name_default: &str,
+    needs_azure_management_inputs: bool,
+    supported_aws_regions: &[String],
 ) -> Result<Body> {
     let mut blocks: Vec<Structure> = Vec::new();
-    let stack_settings_json = serde_json::to_string(stack_settings)
+    let stack_settings_default = serde_json::to_string(stack_settings)
         .into_alien_error()
         .map_err(|err| {
             AlienError::new(ErrorData::JsonSerializationFailed {
                 reason: format!("failed to serialize StackSettings: {err}"),
             })
         })?;
-    blocks.push(nested(variable_block(
-        "stack_name",
-        "Stable physical-name prefix for resources created by this module.",
-        None,
-        false,
-    )));
-    blocks.push(nested(variable_block(
-        "deployment_name",
-        "Deployment name used when registering the resolved stack import. Defaults to stack_name.",
-        Some(Expression::String("".to_string())),
-        false,
-    )));
-    blocks.push(nested(variable_block(
-        "deployment_group_token",
-        "Deployment group token used when registering the resolved stack import.",
-        None,
-        true,
-    )));
+
+    blocks.push(nested(resource_prefix_variable_block()));
+
+    if registration.is_some() {
+        blocks.push(nested(variable_block(
+            "deployment_name",
+            "Human-readable application name used in setup and cloud IAM review metadata.",
+            Some(Expression::String(deployment_name_default.to_string())),
+            false,
+        )));
+        blocks.push(nested(variable_block(
+            "deployment_group_token",
+            "Install token used when registering the resolved cloud resources.",
+            None,
+            true,
+        )));
+    } else {
+        blocks.push(nested(variable_block(
+            "name",
+            "Human-readable application name shown in setup and cloud IAM review metadata.",
+            None,
+            false,
+        )));
+        blocks.push(nested(variable_block(
+            "token",
+            "Install token from the application setup page. This is the same token used by the deploy CLI --token flag.",
+            None,
+            true,
+        )));
+    }
     blocks.push(nested(variable_block(
         "manager_url",
         "Optional manager endpoint used by pull-style runtimes.",
@@ -609,17 +850,12 @@ fn variables_body(
     blocks.push(nested(variable_block(
         "stack_settings_json",
         "Optional JSON-encoded StackSettings override supplied by deployment installers.",
-        Some(Expression::String(stack_settings_json)),
+        Some(Expression::String(stack_settings_default)),
         true,
     )));
 
-    if matches!(target.platform(), alien_core::Platform::Aws) {
-        blocks.push(nested(variable_block(
-            "aws_region",
-            "AWS region used by the AWS provider.",
-            Some(Expression::String("us-east-1".to_string())),
-            false,
-        )));
+    if matches!(target.cloud_platform(), alien_core::Platform::Aws) {
+        blocks.push(nested(aws_region_variable_block(supported_aws_regions)));
         blocks.push(nested(variable_block(
             "managing_role_arn",
             "ARN of the manager IAM identity allowed to assume management roles.",
@@ -628,12 +864,54 @@ fn variables_body(
         )));
         blocks.push(nested(variable_block(
             "managing_account_id",
-            "AWS account ID hosting the manager. Referenced by stack-side IAM policies that scope cross-account ECR pulls. Empty disables those grants.",
+            "Account ID hosting the manager. Referenced by resource-side IAM policies that scope cross-account image pulls. Empty disables those grants.",
             Some(Expression::String(String::new())),
             false,
         )));
     }
-    if matches!(target.platform(), alien_core::Platform::Gcp) {
+    if matches!(target.cloud_platform(), alien_core::Platform::Aws)
+        && has_dynamic_aws_network_settings(stack_settings.network.as_ref())
+    {
+        blocks.push(nested(variable_block(
+            "network_mode",
+            "Choose whether this setup creates a new network, uses an existing network, or uses the default network. Values: create-new, use-existing, use-default.",
+            Some(Expression::String("create-new".to_string())),
+            false,
+        )));
+        blocks.push(nested(variable_block(
+            "vpc_cidr",
+            "CIDR for a newly-created network. Empty uses 10.42.0.0/16.",
+            Some(Expression::String(String::new())),
+            false,
+        )));
+        blocks.push(nested(number_variable_block(
+            "availability_zones",
+            "Number of availability zones to use when creating a new network.",
+            Some(2),
+        )));
+        blocks.push(nested(variable_block(
+            "vpc_id",
+            "Existing VPC ID. Required when network is use-existing.",
+            Some(Expression::String(String::new())),
+            false,
+        )));
+        blocks.push(nested(list_variable_block(
+            "public_subnet_ids",
+            "Existing public subnet IDs. Required when network is use-existing.",
+            Some(vec![]),
+        )));
+        blocks.push(nested(list_variable_block(
+            "private_subnet_ids",
+            "Existing private subnet IDs. Required when network is use-existing.",
+            Some(vec![]),
+        )));
+        blocks.push(nested(list_variable_block(
+            "security_group_ids",
+            "Existing security group IDs. Required when network is use-existing.",
+            Some(vec![]),
+        )));
+    }
+    if matches!(target.cloud_platform(), alien_core::Platform::Gcp) {
         blocks.push(nested(variable_block(
             "gcp_project",
             "GCP project ID.",
@@ -653,12 +931,55 @@ fn variables_body(
             false,
         )));
         blocks.push(nested(bool_variable_block(
-            "gcp_use_existing_custom_roles",
-            "Use pre-created project custom roles named after Alien permission sets instead of creating per-stack custom roles.",
-            Some(false),
+            "gcp_manage_custom_roles",
+            "Whether this module creates the GCP project custom roles it binds. Set to false when those roles are managed outside this stack.",
+            Some(true),
         )));
+        blocks.push(nested(variable_block(
+            "gcp_custom_role_prefix",
+            "Prefix used for GCP project custom role IDs when gcp_manage_custom_roles is false. Empty uses resource_prefix.",
+            Some(Expression::String(String::new())),
+            false,
+        )));
+        if has_dynamic_gcp_network_settings(stack_settings.network.as_ref()) {
+            blocks.push(nested(variable_block(
+                "network_mode",
+                "Choose whether this setup creates a new network, uses an existing network, or uses the default network. Values: create-new, use-existing, use-default.",
+                Some(Expression::String("create-new".to_string())),
+                false,
+            )));
+            blocks.push(nested(variable_block(
+                "network_cidr",
+                "CIDR for a newly-created network. Empty uses 10.44.0.0/16.",
+                Some(Expression::String(String::new())),
+                false,
+            )));
+            blocks.push(nested(number_variable_block(
+                "availability_zones",
+                "Reserved for cross-cloud network-mode parity. GCP creates one regional subnet.",
+                Some(2),
+            )));
+            blocks.push(nested(variable_block(
+                "network_name",
+                "Existing VPC network name. Required when network is use-existing.",
+                Some(Expression::String(String::new())),
+                false,
+            )));
+            blocks.push(nested(variable_block(
+                "subnet_name",
+                "Existing subnet name. Required when network is use-existing.",
+                Some(Expression::String(String::new())),
+                false,
+            )));
+            blocks.push(nested(variable_block(
+                "network_region",
+                "Existing subnet region. Empty uses gcp_region.",
+                Some(Expression::String(String::new())),
+                false,
+            )));
+        }
     }
-    if matches!(target.platform(), alien_core::Platform::Azure) {
+    if matches!(target.cloud_platform(), alien_core::Platform::Azure) {
         blocks.push(nested(variable_block(
             "azure_location",
             "Azure location.",
@@ -671,52 +992,111 @@ fn variables_body(
             None,
             false,
         )));
+        if target == TerraformTarget::Aks {
+            blocks.push(nested(variable_block(
+                "azure_tenant_id",
+                "Azure tenant ID hosting the target AKS Kubernetes API identities.",
+                None,
+                false,
+            )));
+        }
         blocks.push(nested(variable_block(
             "azure_resource_group_name",
             "Azure resource group name.",
             None,
             false,
         )));
-        blocks.push(nested(variable_block(
-            "azure_managing_tenant_id",
-            "Azure tenant ID the manager uses for cross-tenant access.",
-            Some(Expression::String(String::new())),
-            false,
-        )));
-        blocks.push(nested(variable_block(
-            "azure_management_principal_id",
-            "Optional service-principal object ID for local development fallback role assignment.",
-            Some(Expression::String(String::new())),
-            false,
-        )));
-        blocks.push(nested(variable_block(
-            "azure_oidc_issuer",
-            "OIDC issuer URL for Azure Federated Identity Credential. Empty disables FIC creation.",
-            Some(Expression::String(String::new())),
-            false,
-        )));
-        blocks.push(nested(variable_block(
-            "azure_oidc_subject",
-            "OIDC subject claim for Azure Federated Identity Credential. Empty disables FIC creation.",
-            Some(Expression::String(String::new())),
-            false,
-        )));
+        if needs_azure_management_inputs {
+            blocks.push(nested(variable_block(
+                "azure_managing_tenant_id",
+                "Azure tenant ID the manager uses for cross-tenant access.",
+                None,
+                false,
+            )));
+            blocks.push(nested(variable_block(
+                "azure_oidc_issuer",
+                "OIDC issuer URL for Azure Federated Identity Credential.",
+                None,
+                false,
+            )));
+            blocks.push(nested(variable_block(
+                "azure_oidc_subject",
+                "OIDC subject claim for Azure Federated Identity Credential.",
+                None,
+                false,
+            )));
+        }
     }
     if target.is_kubernetes() {
+        blocks.push(nested(variable_block(
+            "kubernetes_cluster_mode",
+            "Kubernetes cluster mode. Values: create or existing.",
+            Some(Expression::String("create".to_string())),
+            false,
+        )));
         blocks.push(nested(variable_block(
             "kubernetes_namespace",
             "Kubernetes namespace for runtime resources.",
             Some(Expression::String("default".to_string())),
             false,
         )));
-        if matches!(target, TerraformTarget::Aks) {
-            blocks.push(nested(variable_block(
-                "aks_oidc_issuer_url",
-                "OIDC issuer URL of the AKS cluster (read from `az aks show` and supplied by the customer).",
-                Some(Expression::String(String::new())),
-                false,
-            )));
-        }
+    }
+    if target.is_kubernetes() && registration.is_some() && helm_install.is_some() {
+        blocks.push(nested(bool_variable_block(
+            "helm_install_enabled",
+            "Whether this module installs the Alien Helm chart after registering the deployment.",
+            Some(true),
+        )));
+        blocks.push(nested(variable_block(
+            "helm_release_name",
+            "Helm release name used for the Alien runtime chart.",
+            Some(Expression::String("alien".to_string())),
+            false,
+        )));
+        blocks.push(nested(variable_block(
+            "helm_chart",
+            "OCI Helm chart reference to install.",
+            Some(Expression::String(
+                helm_install.expect("checked above").chart_ref.clone(),
+            )),
+            false,
+        )));
+    }
+    if matches!(target, TerraformTarget::Eks) {
+        blocks.push(nested(variable_block(
+            "eks_cluster_name",
+            "Existing EKS cluster name that Helm will install into.",
+            Some(Expression::String(String::new())),
+            false,
+        )));
+    }
+    if matches!(target, TerraformTarget::Gke) {
+        blocks.push(nested(variable_block(
+            "gke_cluster_name",
+            "Existing GKE cluster name that Helm will install into.",
+            Some(Expression::String(String::new())),
+            false,
+        )));
+        blocks.push(nested(variable_block(
+            "gke_cluster_location",
+            "Existing GKE cluster location (region or zone).",
+            Some(Expression::String(String::new())),
+            false,
+        )));
+    }
+    if matches!(target, TerraformTarget::Aks) {
+        blocks.push(nested(variable_block(
+            "aks_cluster_name",
+            "Existing AKS cluster name that Helm will install into.",
+            Some(Expression::String(String::new())),
+            false,
+        )));
+        blocks.push(nested(variable_block(
+            "aks_cluster_resource_group_name",
+            "Resource group containing the existing AKS cluster.",
+            Some(Expression::String(String::new())),
+            false,
+        )));
     }
 
     for (name, description, default) in &network_vars.extra_string_vars {
@@ -738,6 +1118,95 @@ fn variables_body(
     Ok(Body::from(blocks))
 }
 
+fn resource_prefix_variable_block() -> Block {
+    let body = vec![
+        attr("type", expr::raw("string")),
+        attr(
+            "description",
+            Expression::String(
+                "Optional stable physical resource prefix. Leave empty to generate one."
+                    .to_string(),
+            ),
+        ),
+        attr("default", Expression::String(String::new())),
+        nested(block(
+            "validation",
+            [
+                attr(
+                    "condition",
+                    expr::raw(
+                        "var.resource_prefix == \"\" || (can(regex(\"^[a-z][a-z0-9-]{1,38}[a-z0-9]$\", var.resource_prefix)) && length(regexall(\"--\", var.resource_prefix)) == 0)",
+                    ),
+                ),
+                attr(
+                    "error_message",
+                    Expression::String(
+                        "resource_prefix must be 3-40 characters: lowercase letters, numbers, and hyphens; start with a letter; end with a letter or number; and not contain consecutive hyphens."
+                            .to_string(),
+                    ),
+                ),
+            ],
+        )),
+    ];
+    Block {
+        identifier: Identifier::sanitized("variable"),
+        labels: vec![BlockLabel::String("resource_prefix".to_string())],
+        body: Body::from(body),
+    }
+}
+
+fn aws_region_variable_block(supported_aws_regions: &[String]) -> Block {
+    let default_region = supported_aws_regions
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "us-east-1".to_string());
+    let mut body: Vec<Structure> = vec![
+        attr("type", expr::raw("string")),
+        attr(
+            "description",
+            Expression::String("AWS region used by the AWS provider.".to_string()),
+        ),
+        attr("default", Expression::String(default_region)),
+    ];
+
+    if !supported_aws_regions.is_empty() {
+        let supported = Expression::Array(
+            supported_aws_regions
+                .iter()
+                .cloned()
+                .map(Expression::String)
+                .collect(),
+        );
+        let regions = supported_aws_regions.join(", ");
+        body.push(nested(block(
+            "validation",
+            [
+                attr(
+                    "condition",
+                    Expression::FuncCall(Box::new(
+                        hcl::expr::FuncCall::builder(Identifier::sanitized("contains"))
+                            .arg(supported)
+                            .arg(expr::raw("var.aws_region"))
+                            .build(),
+                    )),
+                ),
+                attr(
+                    "error_message",
+                    Expression::String(format!(
+                        "aws_region must be one of the AWS regions supported by this Alien environment: {regions}."
+                    )),
+                ),
+            ],
+        )));
+    }
+
+    Block {
+        identifier: Identifier::sanitized("variable"),
+        labels: vec![BlockLabel::String("aws_region".to_string())],
+        body: Body::from(body),
+    }
+}
+
 fn list_variable_block(name: &str, description: &str, default: Option<Vec<String>>) -> Block {
     let mut body: Vec<Structure> = vec![
         attr("type", expr::raw("list(string)")),
@@ -747,6 +1216,24 @@ fn list_variable_block(name: &str, description: &str, default: Option<Vec<String
         body.push(attr(
             "default",
             Expression::Array(default.into_iter().map(Expression::String).collect()),
+        ));
+    }
+    Block {
+        identifier: Identifier::sanitized("variable"),
+        labels: vec![BlockLabel::String(name.to_string())],
+        body: Body::from(body),
+    }
+}
+
+fn number_variable_block(name: &str, description: &str, default: Option<i64>) -> Block {
+    let mut body: Vec<Structure> = vec![
+        attr("type", expr::raw("number")),
+        attr("description", Expression::String(description.to_string())),
+    ];
+    if let Some(default) = default {
+        body.push(attr(
+            "default",
+            Expression::Number(hcl::Number::from(default)),
         ));
     }
     Block {
@@ -794,9 +1281,14 @@ fn variable_block(
     }
 }
 
-fn providers_body(target: TerraformTarget) -> Body {
+fn providers_body(
+    target: TerraformTarget,
+    include_kubernetes_provider: bool,
+    include_helm_provider: bool,
+    include_azapi_provider: bool,
+) -> Body {
     let mut structures: Vec<Structure> = Vec::new();
-    match target.platform() {
+    match target.cloud_platform() {
         alien_core::Platform::Aws => {
             structures.push(Structure::Block(Block {
                 identifier: Identifier::sanitized("provider"),
@@ -842,24 +1334,138 @@ fn providers_body(target: TerraformTarget) -> Body {
                     Structure::Block(block("features", [])),
                 ]),
             }));
+            if include_azapi_provider {
+                structures.push(Structure::Block(Block {
+                    identifier: Identifier::sanitized("provider"),
+                    labels: vec![BlockLabel::String("azapi".to_string())],
+                    body: Body::default(),
+                }));
+            }
         }
         _ => {}
+    }
+    if include_kubernetes_provider {
+        structures.push(Structure::Block(Block {
+            identifier: Identifier::sanitized("provider"),
+            labels: vec![BlockLabel::String("kubernetes".to_string())],
+            body: Body::from(kubernetes_provider_body(target)),
+        }));
+    }
+    if include_helm_provider {
+        structures.push(Structure::Block(Block {
+            identifier: Identifier::sanitized("provider"),
+            labels: vec![BlockLabel::String("helm".to_string())],
+            body: Body::from(vec![nested(block(
+                "kubernetes",
+                kubernetes_provider_body(target),
+            ))]),
+        }));
     }
     Body::from(structures)
 }
 
+fn kubernetes_provider_body(target: TerraformTarget) -> Vec<Structure> {
+    match target {
+        TerraformTarget::Eks => vec![
+            attr("host", expr::raw("data.aws_eks_cluster.target.endpoint")),
+            attr(
+                "cluster_ca_certificate",
+                expr::raw("base64decode(data.aws_eks_cluster.target.certificate_authority[0].data)"),
+            ),
+            attr("token", expr::raw("data.aws_eks_cluster_auth.target.token")),
+        ],
+        TerraformTarget::Gke => vec![
+            attr(
+                "host",
+                expr::raw("\"https://${data.google_container_cluster.target.endpoint}\""),
+            ),
+            attr(
+                "cluster_ca_certificate",
+                expr::raw(
+                    "base64decode(data.google_container_cluster.target.master_auth[0].cluster_ca_certificate)",
+                ),
+            ),
+            attr("token", expr::raw("data.google_client_config.current.access_token")),
+        ],
+        TerraformTarget::Aks => vec![
+            attr(
+                "host",
+                expr::raw("data.azurerm_kubernetes_cluster.target.kube_config[0].host"),
+            ),
+            attr(
+                "cluster_ca_certificate",
+                expr::raw(
+                    "base64decode(data.azurerm_kubernetes_cluster.target.kube_config[0].cluster_ca_certificate)",
+                ),
+            ),
+            attr(
+                "client_certificate",
+                expr::raw(
+                    "base64decode(data.azurerm_kubernetes_cluster.target.kube_config[0].client_certificate)",
+                ),
+            ),
+            attr(
+                "client_key",
+                expr::raw("base64decode(data.azurerm_kubernetes_cluster.target.kube_config[0].client_key)"),
+            ),
+        ],
+        _ => Vec::new(),
+    }
+}
+
+fn resource_prefix_body() -> Body {
+    Body::from(vec![Structure::Block(resource_block(
+        "random_id",
+        "resource_prefix",
+        [attr(
+            "byte_length",
+            Expression::Number(hcl::Number::from(4)),
+        )],
+    ))])
+}
+
 fn locals_body(
     target: TerraformTarget,
-    _stack_settings: &StackSettings,
+    stack_settings: &StackSettings,
     imported_resources: Vec<Expression>,
     extra: &IndexMap<String, Expression>,
+    registration: bool,
+    has_remote_management: bool,
 ) -> Result<Body> {
     let mut body: Vec<Structure> = Vec::new();
 
     body.push(attr(
-        "deployment_platform",
-        Expression::String(target.platform().as_str().to_string()),
+        "resource_prefix",
+        expr::raw(
+            "var.resource_prefix == \"\" ? format(\"a%s\", random_id.resource_prefix.hex) : var.resource_prefix",
+        ),
     ));
+    body.push(attr(
+        "deployment_name",
+        expr::raw(if registration {
+            "var.deployment_name"
+        } else {
+            "var.name"
+        }),
+    ));
+    if matches!(target.cloud_platform(), alien_core::Platform::Gcp) {
+        body.push(attr(
+            "gcp_custom_role_prefix",
+            expr::raw(
+                "substr(replace(lower(var.gcp_custom_role_prefix == \"\" ? local.resource_prefix : var.gcp_custom_role_prefix), \"-\", \"_\"), 0, 18)",
+            ),
+        ));
+    }
+    body.push(attr(
+        "deployment_platform",
+        Expression::String(target.deployment_platform().as_str().to_string()),
+    ));
+    if let Some(base_platform) = target.base_platform() {
+        body.push(attr(
+            "deployment_base_platform",
+            Expression::String(base_platform.as_str().to_string()),
+        ));
+    }
     body.push(attr(
         "deployment_target",
         Expression::String(target.name().to_string()),
@@ -867,33 +1473,51 @@ fn locals_body(
     body.push(attr("deployment_region", region_expression(target)));
     body.push(attr(
         "deployment_management_config",
-        management_config_expression(target),
+        if has_remote_management {
+            management_config_expression(target)
+        } else {
+            expr::raw("null")
+        },
     ));
+    if target.is_kubernetes() {
+        if !extra.contains_key("kubernetes_exposure") {
+            body.push(attr(
+                "kubernetes_exposure",
+                expr::object([("mode", Expression::String("disabled".to_string()))]),
+            ));
+        }
+        body.push(attr(
+            "deployment_kubernetes_settings",
+            expr::raw(
+                r#"merge(try(jsondecode(var.stack_settings_json).kubernetes, {}), {
+  exposure = jsondecode(try(jsondecode(var.stack_settings_json).kubernetes.exposure, null) == null ? jsonencode(local.kubernetes_exposure) : jsonencode(jsondecode(var.stack_settings_json).kubernetes.exposure))
+})"#,
+            ),
+        ));
+    }
     body.push(attr(
-        "deployment_stack_settings",
-        expr::raw("jsondecode(var.stack_settings_json)"),
+        "deployment_settings",
+        stack_settings_expression(target, stack_settings),
     ));
     body.push(attr(
         "deployment_resources",
         Expression::Array(imported_resources),
     ));
 
+    if target.is_kubernetes() {
+        for (name, value) in [
+            ("kubernetes_kubeconfig", Expression::String(String::new())),
+            ("kubernetes_kube_context", Expression::String(String::new())),
+        ] {
+            if !extra.contains_key(name) {
+                body.push(attr(name, value));
+            }
+        }
+    }
+
     for (name, value) in extra {
         body.push(attr(name, value.clone()));
     }
-    if target.is_kubernetes() {
-        body.push(attr(
-            "helm_values",
-            expr::object([
-                ("serviceAccounts", expr::raw("local.helm_service_accounts")),
-                (
-                    "stackSettings",
-                    expr::raw("local.deployment_stack_settings"),
-                ),
-            ]),
-        ));
-    }
-
     Ok(Body::from(vec![Structure::Block(Block {
         identifier: Identifier::sanitized("locals"),
         labels: vec![],
@@ -902,7 +1526,7 @@ fn locals_body(
 }
 
 fn region_expression(target: TerraformTarget) -> Expression {
-    match target.platform() {
+    match target.cloud_platform() {
         alien_core::Platform::Aws => expr::raw("data.aws_region.current.region"),
         alien_core::Platform::Gcp => expr::raw("var.gcp_region"),
         alien_core::Platform::Azure => expr::raw("var.azure_location"),
@@ -914,9 +1538,9 @@ fn management_config_expression(target: TerraformTarget) -> Expression {
     let mut object: indexmap::IndexMap<&str, Expression> = indexmap::IndexMap::new();
     object.insert(
         "platform",
-        Expression::String(target.platform().as_str().to_string()),
+        Expression::String(target.cloud_platform().as_str().to_string()),
     );
-    match target.platform() {
+    match target.cloud_platform() {
         alien_core::Platform::Aws => {
             object.insert("managingRoleArn", expr::raw("var.managing_role_arn"));
         }
@@ -932,27 +1556,107 @@ fn management_config_expression(target: TerraformTarget) -> Expression {
                 "managingTenantId",
                 expr::raw("var.azure_managing_tenant_id"),
             );
-            object.insert(
-                "managementPrincipalId",
-                expr::raw(
-                    "var.azure_management_principal_id == \"\" ? null : var.azure_management_principal_id",
-                ),
-            );
-            object.insert(
-                "oidcIssuer",
-                expr::raw("var.azure_oidc_issuer == \"\" ? null : var.azure_oidc_issuer"),
-            );
-            object.insert(
-                "oidcSubject",
-                expr::raw("var.azure_oidc_subject == \"\" ? null : var.azure_oidc_subject"),
-            );
+            object.insert("oidcIssuer", expr::raw("var.azure_oidc_issuer"));
+            object.insert("oidcSubject", expr::raw("var.azure_oidc_subject"));
         }
         _ => {}
     }
     expr::object(object.into_iter().map(|(k, v)| (k, v)))
 }
 
-fn import_body(registration: Option<&TerraformRegistration>, depends_on: &[Expression]) -> Body {
+fn stack_settings_expression(
+    target: TerraformTarget,
+    stack_settings: &StackSettings,
+) -> Expression {
+    match target.cloud_platform() {
+        alien_core::Platform::Aws
+            if has_dynamic_aws_network_settings(stack_settings.network.as_ref()) =>
+        {
+            let kubernetes_settings = if target.is_kubernetes() {
+                "\n  kubernetes = local.deployment_kubernetes_settings"
+            } else {
+                ""
+            };
+            return expr::raw(format!(
+                r#"merge(jsondecode(var.stack_settings_json), {{
+  network = jsondecode(
+    var.network_mode == "create-new" ? jsonencode({{
+      type              = "create"
+      cidr              = var.vpc_cidr == "" ? null : var.vpc_cidr
+      availabilityZones = var.availability_zones
+    }}) : var.network_mode == "use-existing" ? jsonencode({{
+      type             = "byo-vpc-aws"
+      vpcId            = var.vpc_id
+      publicSubnetIds  = var.public_subnet_ids
+      privateSubnetIds = var.private_subnet_ids
+      securityGroupIds = var.security_group_ids
+    }}) : jsonencode({{
+      type = "use-default"
+    }})
+  )
+{kubernetes_settings}
+}})"#
+            ));
+        }
+        alien_core::Platform::Gcp
+            if has_dynamic_gcp_network_settings(stack_settings.network.as_ref()) =>
+        {
+            let kubernetes_settings = if target.is_kubernetes() {
+                "\n  kubernetes = local.deployment_kubernetes_settings"
+            } else {
+                ""
+            };
+            return expr::raw(format!(
+                r#"merge(jsondecode(var.stack_settings_json), {{
+  network = jsondecode(
+    var.network_mode == "create-new" ? jsonencode({{
+      type              = "create"
+      cidr              = var.network_cidr == "" ? null : var.network_cidr
+      availabilityZones = var.availability_zones
+    }}) : var.network_mode == "use-existing" ? jsonencode({{
+      type        = "byo-vpc-gcp"
+      networkName = var.network_name
+      subnetName  = var.subnet_name
+      region      = var.network_region == "" ? var.gcp_region : var.network_region
+    }}) : jsonencode({{
+      type = "use-default"
+    }})
+  )
+{kubernetes_settings}
+}})"#
+            ));
+        }
+        _ if target.is_kubernetes() => {
+            return expr::raw(
+                r#"merge(jsondecode(var.stack_settings_json), {
+  kubernetes = local.deployment_kubernetes_settings
+})"#,
+            );
+        }
+        _ => return expr::raw("jsondecode(var.stack_settings_json)"),
+    }
+}
+
+fn has_dynamic_aws_network_settings(network: Option<&NetworkSettings>) -> bool {
+    matches!(
+        network,
+        Some(
+            NetworkSettings::Create { .. }
+                | NetworkSettings::UseDefault
+                | NetworkSettings::ByoVpcAws { .. }
+        )
+    )
+}
+
+fn has_dynamic_gcp_network_settings(network: Option<&NetworkSettings>) -> bool {
+    matches!(network, Some(NetworkSettings::Create { .. }))
+}
+
+fn import_body(
+    target: TerraformTarget,
+    registration: Option<&TerraformRegistration>,
+    depends_on: &[Expression],
+) -> Body {
     let depends_on_attr = (!depends_on.is_empty()).then(|| {
         attr(
             "depends_on",
@@ -965,14 +1669,17 @@ fn import_body(registration: Option<&TerraformRegistration>, depends_on: &[Expre
                 "deployment_group_token",
                 expr::raw("var.deployment_group_token"),
             ),
-            attr(
-                "name",
-                expr::raw("var.deployment_name == \"\" ? var.stack_name : var.deployment_name"),
-            ),
-            attr("stack_prefix", expr::raw("var.stack_name")),
+            attr("name", expr::raw("local.deployment_name")),
+            attr("resource_prefix", expr::raw("local.resource_prefix")),
             attr(
                 "setup_target",
                 Expression::String(registration.setup_target.clone()),
+            ),
+            attr(
+                "setup_import_format_version",
+                Expression::Number(hcl::Number::from(i64::from(
+                    CURRENT_SETUP_IMPORT_FORMAT_VERSION,
+                ))),
             ),
             attr(
                 "setup_fingerprint",
@@ -991,12 +1698,15 @@ fn import_body(registration: Option<&TerraformRegistration>, depends_on: &[Expre
                 "management_config",
                 expr::raw("local.deployment_management_config"),
             ),
-            attr(
-                "stack_settings",
-                expr::raw("local.deployment_stack_settings"),
-            ),
+            attr("stack_settings", expr::raw("local.deployment_settings")),
             attr("resources", expr::raw("local.deployment_resources")),
         ];
+        if target.is_kubernetes() {
+            body.push(attr(
+                "base_platform",
+                expr::raw("local.deployment_base_platform"),
+            ));
+        }
         if let Some(depends_on_attr) = depends_on_attr {
             body.push(depends_on_attr);
         }
@@ -1009,44 +1719,57 @@ fn import_body(registration: Option<&TerraformRegistration>, depends_on: &[Expre
 
     let mut body = vec![attr(
         "input",
-        expr::object([
-            ("platform", expr::raw("local.deployment_platform")),
-            (
-                "deployment_group_token",
-                expr::raw("var.deployment_group_token"),
+        expr::object(
+            [
+                ("platform", expr::raw("local.deployment_platform")),
+                ("token", expr::raw("var.token")),
+                ("name", expr::raw("var.name")),
+                ("resource_prefix", expr::raw("local.resource_prefix")),
+                (
+                    "setup_target",
+                    Expression::String(
+                        registration
+                            .map(|r| r.setup_target.clone())
+                            .unwrap_or_default(),
+                    ),
+                ),
+                (
+                    "setup_import_format_version",
+                    Expression::Number(hcl::Number::from(i64::from(
+                        CURRENT_SETUP_IMPORT_FORMAT_VERSION,
+                    ))),
+                ),
+                (
+                    "setup_fingerprint",
+                    Expression::String(
+                        registration
+                            .map(|r| r.setup_fingerprint.clone())
+                            .unwrap_or_default(),
+                    ),
+                ),
+                (
+                    "setup_fingerprint_version",
+                    Expression::Number(hcl::Number::from(i64::from(
+                        registration
+                            .map(|r| r.setup_fingerprint_version)
+                            .unwrap_or_default(),
+                    ))),
+                ),
+                ("manager_url", expr::raw("var.manager_url")),
+                (
+                    "management_config",
+                    expr::raw("local.deployment_management_config"),
+                ),
+                ("stack_settings", expr::raw("local.deployment_settings")),
+                ("resources", expr::raw("local.deployment_resources")),
+            ]
+            .into_iter()
+            .chain(
+                target
+                    .is_kubernetes()
+                    .then(|| ("basePlatform", expr::raw("local.deployment_base_platform"))),
             ),
-            (
-                "deployment_name",
-                expr::raw("var.deployment_name == \"\" ? var.stack_name : var.deployment_name"),
-            ),
-            ("stack_prefix", expr::raw("var.stack_name")),
-            (
-                "setup_target",
-                Expression::String(registration.map(|r| r.setup_target.clone()).unwrap_or_default()),
-            ),
-            (
-                "setup_fingerprint",
-                Expression::String(registration.map(|r| r.setup_fingerprint.clone()).unwrap_or_default()),
-            ),
-            (
-                "setup_fingerprint_version",
-                Expression::Number(hcl::Number::from(i64::from(
-                    registration
-                        .map(|r| r.setup_fingerprint_version)
-                        .unwrap_or_default(),
-                ))),
-            ),
-            ("manager_url", expr::raw("var.manager_url")),
-            (
-                "management_config",
-                expr::raw("local.deployment_management_config"),
-            ),
-            (
-                "stack_settings",
-                expr::raw("local.deployment_stack_settings"),
-            ),
-            ("resources", expr::raw("local.deployment_resources")),
-        ]),
+        ),
     )];
     if let Some(depends_on_attr) = depends_on_attr {
         body.push(depends_on_attr);
@@ -1054,8 +1777,39 @@ fn import_body(registration: Option<&TerraformRegistration>, depends_on: &[Expre
 
     Body::from(vec![Structure::Block(resource_block(
         "terraform_data",
-        "deployment_stack_import",
+        "deployment_import",
         body,
+    ))])
+}
+
+fn helm_install_body(
+    registration: &TerraformRegistration,
+    _helm_install: &TerraformHelmInstall,
+) -> Body {
+    Body::from(vec![Structure::Block(resource_block(
+        "helm_release",
+        "alien",
+        [
+            attr("count", expr::raw("var.helm_install_enabled ? 1 : 0")),
+            attr("name", expr::raw("var.helm_release_name")),
+            attr("namespace", expr::raw("var.kubernetes_namespace")),
+            attr("create_namespace", Expression::Bool(true)),
+            attr("chart", expr::raw("var.helm_chart")),
+            attr(
+                "values",
+                Expression::Array(vec![expr::raw(format!(
+                    "{}.this.helm_values",
+                    registration.provider_resource_type()
+                ))]),
+            ),
+            attr(
+                "depends_on",
+                Expression::Array(vec![expr::raw(format!(
+                    "{}.this",
+                    registration.provider_resource_type()
+                ))]),
+            ),
+        ],
     ))])
 }
 
@@ -1067,9 +1821,9 @@ fn outputs_body(target: TerraformTarget, registration: Option<&TerraformRegistra
             "Terraform module target.",
         ),
         (
-            "deployment_stack_prefix",
-            expr::raw("var.stack_name"),
-            "Physical stack prefix.",
+            "deployment_resource_prefix",
+            expr::raw("local.resource_prefix"),
+            "Physical resource prefix.",
         ),
         (
             "deployment_platform",
@@ -1089,6 +1843,13 @@ fn outputs_body(target: TerraformTarget, registration: Option<&TerraformRegistra
                     .unwrap_or_default(),
             ),
             "Setup target.",
+        ),
+        (
+            "deployment_setup_import_format_version",
+            Expression::Number(hcl::Number::from(i64::from(
+                CURRENT_SETUP_IMPORT_FORMAT_VERSION,
+            ))),
+            "Setup import payload format version.",
         ),
         (
             "deployment_setup_fingerprint",
@@ -1115,7 +1876,7 @@ fn outputs_body(target: TerraformTarget, registration: Option<&TerraformRegistra
         ),
         (
             "deployment_stack_settings",
-            expr::raw("jsonencode(local.deployment_stack_settings)"),
+            expr::raw("jsonencode(local.deployment_settings)"),
             "Manager import StackSettings JSON.",
         ),
         (
@@ -1133,12 +1894,30 @@ fn outputs_body(target: TerraformTarget, registration: Option<&TerraformRegistra
             )),
             "Manager deployment id assigned by the Terraform registration provider.",
         ));
+        outputs.push((
+            "deployment_token",
+            expr::raw(format!(
+                "{}.this.deployment_token",
+                registration.provider_resource_type()
+            )),
+            "Deployment token assigned by the Terraform registration provider.",
+        ));
     }
     if target.is_kubernetes() {
         outputs.push((
-            "helm_values",
-            expr::raw("jsonencode(local.helm_values)"),
-            "Helm values JSON for the manager-fetch Kubernetes install.",
+            "deployment_base_platform",
+            expr::raw("local.deployment_base_platform"),
+            "Base cloud platform for Kubernetes targets.",
+        ));
+        outputs.push((
+            "kubernetes_kubeconfig",
+            expr::raw("local.kubernetes_kubeconfig"),
+            "Kubeconfig for managed Kubernetes clusters created by this module.",
+        ));
+        outputs.push((
+            "kubernetes_kube_context",
+            expr::raw("local.kubernetes_kube_context"),
+            "Kube context for managed Kubernetes clusters created by this module.",
         ));
     }
 
@@ -1149,7 +1928,10 @@ fn outputs_body(target: TerraformTarget, registration: Option<&TerraformRegistra
                 attr("value", value),
                 attr("description", Expression::String(description.to_string())),
             ];
-            if name == "deployment_stack_settings" || name == "helm_values" {
+            if name == "deployment_stack_settings"
+                || name == "deployment_token"
+                || name == "kubernetes_kubeconfig"
+            {
                 body.push(attr("sensitive", Expression::Bool(true)));
             }
 
@@ -1168,7 +1950,13 @@ fn readme_md(
     stack: &Stack,
     target: TerraformTarget,
     registration: Option<&TerraformRegistration>,
+    display_name: Option<&str>,
 ) -> String {
+    let apply_args = if registration.is_some() {
+        "-var='deployment_group_token=...'".to_string()
+    } else {
+        format!("-var='name={}' -var='token=...'", stack.id())
+    };
     let registration_note = registration
         .map(|registration| {
             format!(
@@ -1180,15 +1968,16 @@ fn readme_md(
             "This module exposes `deployment_management_config` / `deployment_stack_settings` / `deployment_resources` for external registration flows.\n".to_string()
         });
 
+    let display_name = display_name.unwrap_or_else(|| stack.id());
     format!(
         "# Terraform module - {}\n\n\
 Target: `{}`.\n\n\
 Run:\n\n\
-```bash\nterraform init -backend=false\nterraform validate\nterraform apply -var='stack_name={}' -var='deployment_group_token=...'\n```\n\n\
+```bash\nterraform init -backend=false\nterraform validate\nterraform apply {}\n```\n\n\
 {}",
-        stack.id(),
+        display_name,
         target.name(),
-        stack.id(),
+        apply_args,
         registration_note
     )
 }
@@ -1196,6 +1985,16 @@ Run:\n\n\
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_core::{Queue, RemoteStackManagement, ResourceLifecycle, ResourceRef};
+
+    fn block_has_depends_on(block: &Block) -> bool {
+        block.body.0.iter().any(|structure| {
+            matches!(
+                structure,
+                Structure::Attribute(attribute) if attribute.key.as_str() == "depends_on"
+            )
+        })
+    }
 
     #[test]
     fn registration_uses_configured_provider_identity() {
@@ -1213,17 +2012,101 @@ mod tests {
             TerraformTarget::Aws,
             Some(&registration),
             false,
+            false,
+            false,
+            false,
         ))
         .expect("versions render");
         assert!(versions.contains("example_app ="));
         assert!(versions.contains("registry.example.com/acme/example-app"));
 
-        let import =
-            render_body(import_body(Some(&registration), &[])).expect("registration import render");
+        let import = render_body(import_body(TerraformTarget::Aws, Some(&registration), &[]))
+            .expect("registration import render");
         assert!(import.contains("resource \"example_app_deployment\" \"this\""));
 
         let outputs =
             render_body(outputs_body(TerraformTarget::Aws, Some(&registration))).expect("outputs");
         assert!(outputs.contains("example_app_deployment.this.deployment_id"));
+    }
+
+    #[test]
+    fn resource_prefix_validation_uses_terraform_supported_regex() {
+        let variables = render_body(Body::from(vec![nested(resource_prefix_variable_block())]))
+            .expect("variables render");
+
+        assert!(variables.contains("^[a-z][a-z0-9-]{1,38}[a-z0-9]$"));
+        assert!(variables.contains("length(regexall(\"--\", var.resource_prefix)) == 0"));
+        assert!(!variables.contains("(?="));
+    }
+
+    #[test]
+    fn stack_dependencies_skip_gcp_iam_support_resources() {
+        let stack = Stack::new("test".to_string())
+            .add_with_dependencies(
+                Queue::new("queue".to_string()).build(),
+                ResourceLifecycle::Live,
+                vec![ResourceRef::new(
+                    RemoteStackManagement::RESOURCE_TYPE,
+                    "remote-stack-management",
+                )],
+            )
+            .add(
+                RemoteStackManagement::new("remote-stack-management".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+
+        let mut per_resource = IndexMap::new();
+        per_resource.insert(
+            "queue".to_string(),
+            TfFragment {
+                resource_blocks: vec![
+                    resource_block(
+                        "google_project_iam_custom_role",
+                        "gcp_role_queue_heartbeat_part1",
+                        [
+                            attr("project", expr::raw("var.gcp_project")),
+                            attr("role_id", Expression::String("role_test".to_string())),
+                        ],
+                    ),
+                    resource_block(
+                        "google_pubsub_topic",
+                        "queue",
+                        [attr("name", Expression::String("queue".to_string()))],
+                    ),
+                ],
+                ..TfFragment::default()
+            },
+        );
+        per_resource.insert(
+            "remote-stack-management".to_string(),
+            TfFragment {
+                resource_blocks: vec![resource_block(
+                    "google_project_iam_member",
+                    "gcp_role_queue_heartbeat_part1_remote_stack_management_binding_0",
+                    [
+                        attr("project", expr::raw("var.gcp_project")),
+                        attr(
+                            "role",
+                            expr::traversal([
+                                "google_project_iam_custom_role",
+                                "gcp_role_queue_heartbeat_part1",
+                                "name",
+                            ]),
+                        ),
+                    ],
+                )],
+                ..TfFragment::default()
+            },
+        );
+
+        apply_resource_dependencies(&stack, &mut per_resource);
+
+        let queue_fragment = per_resource.get("queue").expect("queue fragment");
+        let custom_role = &queue_fragment.resource_blocks[0];
+        let topic = &queue_fragment.resource_blocks[1];
+
+        assert!(!block_has_depends_on(custom_role));
+        assert!(block_has_depends_on(topic));
     }
 }

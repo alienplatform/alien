@@ -46,12 +46,7 @@ pub async fn handle_running(
         })
     })?;
 
-    // Stamp deployment-config values onto ContainerCluster template inputs.
-    // Running still drives management work for Frozen container clusters, such
-    // as worker image rollouts.
-    crate::helpers::stamp_worker_template(&mut target_stack, &config)?;
-
-    // Inject environment variables so the executor sees the same Function config
+    // Inject environment variables so the executor sees the same Worker config
     // as what was deployed during Provisioning. Without this, the executor detects
     // a config mismatch (prepared_stack without env vars vs stack_state with env vars)
     // and incorrectly triggers an update flow.
@@ -101,6 +96,7 @@ pub async fn handle_running(
                 | alien_core::ResourceStatus::RefreshFailed
         )
     });
+    let heartbeats = step_result.heartbeats.clone();
 
     if has_failed {
         info!("Health check failed for one or more resources");
@@ -117,6 +113,7 @@ pub async fn handle_running(
             error,
             suggested_delay_ms: None,
             update_heartbeat: false,
+            heartbeats: heartbeats.clone(),
         })
     } else {
         info!("Health check passed for all resources");
@@ -128,6 +125,7 @@ pub async fn handle_running(
             error: None,
             suggested_delay_ms: None,
             update_heartbeat: true, // Update heartbeat timestamp for Running status
+            heartbeats,
         })
     }
 }
@@ -159,6 +157,7 @@ pub async fn handle_refresh_failed(
             error: None,
             suggested_delay_ms: None,
             update_heartbeat: false,
+            heartbeats: vec![],
         });
     }
 
@@ -190,5 +189,6 @@ pub async fn handle_refresh_failed(
         error: None,
         suggested_delay_ms: None,
         update_heartbeat: false,
+        heartbeats: vec![],
     })
 }

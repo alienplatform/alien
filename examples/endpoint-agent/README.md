@@ -2,8 +2,6 @@
 
 A Rust agent that runs on employee devices, monitors system activity, and stores data in encrypted local storage.
 
-**Note:** This example currently uses `Function` with a minimal HTTP health endpoint. The implementation is ready to transition to `Worker` resource once it's available - Workers are designed specifically for endpoint agents and don't require HTTP.
-
 ## Overview
 
 This example demonstrates an endpoint security monitoring agent that:
@@ -157,4 +155,3 @@ The example includes a simulation command for testing.
 ## License
 
 ISC
-

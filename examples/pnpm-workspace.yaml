@@ -1,10 +1,12 @@
 packages:
-  - basic-function-ts
-  - basic-function-rs
+  - basic-worker-ts
+  - basic-worker-rs
   - remote-worker-ts
   - data-connector-ts
   - event-pipeline-ts
   - webhook-api-ts
   - byoc-database
   - endpoint-agent
+  - full-stack-microservices
+  - full-stack-microservices/services/*
   - github-agent/packages/remote-agent

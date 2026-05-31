@@ -411,6 +411,24 @@ async function run() {
   const result = await alien.deploymentGroups.createDeploymentGroupToken({
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
     workspace: "my-workspace",
+    createDeploymentGroupTokenRequest: {
+      deploymentSetupConfig: {
+        metadata: {
+          "key": "<value>",
+          "key1": "<value>",
+          "key2": "<value>",
+        },
+        policy: {
+          allowedPlatforms: [
+            "kubernetes",
+          ],
+          allowedSetupMethods: [
+            "manual",
+          ],
+        },
+        environmentVariables: [],
+      },
+    },
   });
 
   console.log(result);
@@ -437,6 +455,24 @@ async function run() {
   const res = await deploymentGroupsCreateDeploymentGroupToken(alien, {
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
     workspace: "my-workspace",
+    createDeploymentGroupTokenRequest: {
+      deploymentSetupConfig: {
+        metadata: {
+          "key": "<value>",
+          "key1": "<value>",
+          "key2": "<value>",
+        },
+        policy: {
+          allowedPlatforms: [
+            "kubernetes",
+          ],
+          allowedSetupMethods: [
+            "manual",
+          ],
+        },
+        environmentVariables: [],
+      },
+    },
   });
   if (res.ok) {
     const { value: result } = res;

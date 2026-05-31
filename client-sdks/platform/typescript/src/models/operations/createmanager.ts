@@ -4,10 +4,6 @@
 
 import * as z from "zod/v4";
 import { remap as remap$ } from "../../lib/primitives.js";
-import { safeParse } from "../../lib/schemas.js";
-import { ClosedEnum } from "../../types/enums.js";
-import { Result as SafeParseResult } from "../../types/fp.js";
-import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 import * as models from "../index.js";
 
 export type CreateManagerRequest = {
@@ -16,111 +12,6 @@ export type CreateManagerRequest = {
    */
   workspace?: string | undefined;
   newManagerRequest?: models.NewManagerRequest | undefined;
-};
-
-/**
- * Represents the target cloud platform.
- */
-export const Target = {
-  Aws: "aws",
-  Gcp: "gcp",
-  Azure: "azure",
-  Kubernetes: "kubernetes",
-  Local: "local",
-  Test: "test",
-} as const;
-/**
- * Represents the target cloud platform.
- */
-export type Target = ClosedEnum<typeof Target>;
-
-/**
- * Runtime metrics (self-reported via heartbeat)
- */
-export type CreateManagerMetrics = {
-  /**
-   * Number of active deployments
-   */
-  activeDeployments?: number | undefined;
-  /**
-   * Number of pending deployments
-   */
-  pendingDeployments?: number | undefined;
-  /**
-   * Memory usage in megabytes
-   */
-  memoryUsageMb?: number | undefined;
-  /**
-   * CPU usage percentage
-   */
-  cpuUsagePercent?: number | undefined;
-};
-
-/**
- * Manager schema
- */
-export type CreateManagerResponse = {
-  id: string;
-  /**
-   * Display name of the manager
-   */
-  name: string;
-  /**
-   * Platforms this manager can handle
-   */
-  targets: Array<Target>;
-  /**
-   * Manager URL (self-reported via heartbeat). DeepStore endpoints are exposed through this URL (e.g., {url}/v1/logs)
-   */
-  url?: string | null | undefined;
-  /**
-   * Per-platform management configurations for cross-account access (self-reported via heartbeat)
-   */
-  managementConfigs: models.ManagerManagementConfigs;
-  /**
-   * Whether this is a system manager (Alien-hosted)
-   */
-  isSystem: boolean;
-  /**
-   * The workspace ID (for system managers, this is ALIEN_WORKSPACE_ID)
-   */
-  workspaceId: string;
-  /**
-   * Current health status
-   */
-  status: models.ManagerStatus;
-  /**
-   * Manager version (self-reported via heartbeat)
-   */
-  version?: string | null | undefined;
-  /**
-   * Runtime metrics (self-reported via heartbeat)
-   */
-  metrics?: CreateManagerMetrics | null | undefined;
-  /**
-   * Timestamp of the last received heartbeat from the manager
-   */
-  lastHeartbeatAt?: Date | null | undefined;
-  /**
-   * ID of the logs database associated with this manager
-   */
-  logsDatabaseId?: string | null | undefined;
-  /**
-   * Number of deployments currently being managed by this manager
-   */
-  managedDeploymentCount: number;
-  /**
-   * Timestamp when the manager was created
-   */
-  createdAt: Date;
-  /**
-   * Deployment link for the web deployment page
-   */
-  deploymentLink: string;
-  /**
-   * Deployment token for CLI deployment (use with `alien deploy --token=...`)
-   */
-  token: string;
 };
 
 /** @internal */
@@ -147,65 +38,5 @@ export function createManagerRequestToJSON(
 ): string {
   return JSON.stringify(
     CreateManagerRequest$outboundSchema.parse(createManagerRequest),
-  );
-}
-
-/** @internal */
-export const Target$inboundSchema: z.ZodEnum<typeof Target> = z.enum(Target);
-
-/** @internal */
-export const CreateManagerMetrics$inboundSchema: z.ZodType<
-  CreateManagerMetrics,
-  unknown
-> = z.object({
-  activeDeployments: z.number().optional(),
-  pendingDeployments: z.number().optional(),
-  memoryUsageMb: z.number().optional(),
-  cpuUsagePercent: z.number().optional(),
-});
-
-export function createManagerMetricsFromJSON(
-  jsonString: string,
-): SafeParseResult<CreateManagerMetrics, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CreateManagerMetrics$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CreateManagerMetrics' from JSON`,
-  );
-}
-
-/** @internal */
-export const CreateManagerResponse$inboundSchema: z.ZodType<
-  CreateManagerResponse,
-  unknown
-> = z.object({
-  id: z.string(),
-  name: z.string(),
-  targets: z.array(Target$inboundSchema),
-  url: z.nullable(z.string()).optional(),
-  managementConfigs: models.ManagerManagementConfigs$inboundSchema,
-  isSystem: z.boolean(),
-  workspaceId: z.string(),
-  status: models.ManagerStatus$inboundSchema,
-  version: z.nullable(z.string()).optional(),
-  metrics: z.nullable(z.lazy(() => CreateManagerMetrics$inboundSchema))
-    .optional(),
-  lastHeartbeatAt: z.nullable(
-    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  ).optional(),
-  logsDatabaseId: z.nullable(z.string()).optional(),
-  managedDeploymentCount: z.int(),
-  createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  deploymentLink: z.string(),
-  token: z.string(),
-});
-
-export function createManagerResponseFromJSON(
-  jsonString: string,
-): SafeParseResult<CreateManagerResponse, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CreateManagerResponse$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CreateManagerResponse' from JSON`,
   );
 }

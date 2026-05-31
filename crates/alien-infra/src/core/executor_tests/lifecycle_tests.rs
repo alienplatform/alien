@@ -1,9 +1,13 @@
 //! Tests for lifecycle filtering (Frozen vs Live resources).
 
 use super::helpers::*;
+use crate::core::state_utils::StackResourceStateExt;
+use crate::core::StackExecutor;
 use crate::error::Result;
+use crate::storage::TestStorageController;
 use alien_core::{
-    Function, Resource, ResourceLifecycle, ResourceRef, ResourceStatus, Stack, Storage,
+    Resource, ResourceLifecycle, ResourceOutputs, ResourceRef, ResourceStatus, Stack, Storage,
+    StorageOutputs, Worker,
 };
 
 /// Tests that filtering to Frozen only processes Frozen resources.
@@ -27,6 +31,173 @@ async fn test_frozen_filter_only_processes_frozen() -> Result<()> {
         Some(ResourceStatus::Running)
     );
     assert_not_in_state(&final_state, &["func1"]);
+
+    Ok(())
+}
+
+/// Tests that callers can skip Ready handlers for already-running resources.
+#[tokio::test]
+async fn test_filtered_executor_can_skip_running_ready_handlers() -> Result<()> {
+    let store1 = test_storage("store1");
+
+    let stack = Stack::new("skip-running-ready-test".to_owned())
+        .add(store1.clone(), ResourceLifecycle::Frozen)
+        .build();
+
+    let executor = StackExecutor::builder(&stack, alien_core::ClientConfig::Test)
+        .deployment_config(
+            &alien_core::DeploymentConfig::builder()
+                .stack_settings(alien_core::StackSettings::default())
+                .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                    variables: vec![],
+                    hash: String::new(),
+                    created_at: String::new(),
+                })
+                .external_bindings(alien_core::ExternalBindings::default())
+                .allow_frozen_changes(false)
+                .build(),
+        )
+        .lifecycle_filter(vec![ResourceLifecycle::Frozen])
+        .step_running_resources(false)
+        .build()?;
+
+    let mut resource_state = alien_core::StackResourceState::new_pending(
+        Storage::RESOURCE_TYPE.to_string(),
+        Resource::new(store1),
+        Some(ResourceLifecycle::Frozen),
+        vec![],
+    );
+    resource_state.status = ResourceStatus::Running;
+    resource_state.outputs = Some(ResourceOutputs::new(StorageOutputs {
+        bucket_name: "imported-store1".to_string(),
+    }));
+    let mut controller = TestStorageController::default();
+    controller.bucket_name = Some("imported-store1".to_string());
+    resource_state.set_internal_controller(Some(Box::new(controller)))?;
+
+    let mut state = new_test_state();
+    state
+        .resources
+        .insert("store1".to_string(), resource_state.clone());
+
+    let step_result = executor.step(state).await?;
+
+    assert_eq!(
+        get_status(&step_result.next_state, "store1"),
+        Some(ResourceStatus::Running)
+    );
+    assert_eq!(
+        step_result.suggested_delay_ms, None,
+        "Running resources should not run Ready handlers when disabled"
+    );
+
+    Ok(())
+}
+
+/// Tests that filtered executors still run Ready handlers for already-running
+/// managed resources outside the filter.
+#[tokio::test]
+async fn test_filtered_executor_steps_out_of_scope_running_resources() -> Result<()> {
+    let store1 = test_storage("store1");
+    let func1 = test_function("func1");
+
+    let stack = Stack::new("out-of-scope-ready-test".to_owned())
+        .add(store1.clone(), ResourceLifecycle::Frozen)
+        .add_with_dependencies(
+            func1,
+            ResourceLifecycle::Live,
+            vec![ResourceRef::new(Storage::RESOURCE_TYPE, "store1")],
+        )
+        .build();
+
+    let state_after_frozen = run_to_synced(
+        &new_executor_with_filter(&stack, vec![ResourceLifecycle::Frozen])?,
+        new_test_state(),
+    )
+    .await?;
+
+    let executor = StackExecutor::builder(&stack, alien_core::ClientConfig::Test)
+        .deployment_config(
+            &alien_core::DeploymentConfig::builder()
+                .stack_settings(alien_core::StackSettings::default())
+                .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                    variables: vec![],
+                    hash: String::new(),
+                    created_at: String::new(),
+                })
+                .external_bindings(alien_core::ExternalBindings::default())
+                .allow_frozen_changes(false)
+                .build(),
+        )
+        .lifecycle_filter(vec![ResourceLifecycle::Live])
+        .build()?;
+
+    let step_result = executor.step(state_after_frozen).await?;
+
+    let storage_controller: TestStorageController = step_result
+        .next_state
+        .resources
+        .get("store1")
+        .and_then(|resource| resource.get_internal_controller_typed().ok())
+        .expect("storage controller should remain available");
+
+    assert_eq!(
+        get_status(&step_result.next_state, "store1"),
+        Some(ResourceStatus::Running)
+    );
+    assert_eq!(
+        storage_controller.ready_checks, 1,
+        "Out-of-scope running resources should run Ready handlers when enabled"
+    );
+
+    Ok(())
+}
+
+/// Tests that filtered executors can finish already-started management work
+/// for out-of-scope resources before provisioning dependents.
+#[tokio::test]
+async fn test_filtered_executor_steps_out_of_scope_updating_dependency() -> Result<()> {
+    let store1 = test_storage_with_public_read("store1", false);
+    let func1 = test_function("func1");
+
+    let stack = Stack::new("out-of-scope-updating-test".to_owned())
+        .add(store1.clone(), ResourceLifecycle::Frozen)
+        .add_with_dependencies(
+            func1.clone(),
+            ResourceLifecycle::Live,
+            vec![ResourceRef::new(Storage::RESOURCE_TYPE, "store1")],
+        )
+        .build();
+
+    let state_after_frozen = run_to_synced(
+        &new_executor_with_filter(&stack, vec![ResourceLifecycle::Frozen])?,
+        new_test_state(),
+    )
+    .await?;
+
+    let updated_store1 = test_storage_with_public_read("store1", true);
+    let updated_stack = Stack::new("out-of-scope-updating-test".to_owned())
+        .add(updated_store1, ResourceLifecycle::Frozen)
+        .add_with_dependencies(
+            func1,
+            ResourceLifecycle::Live,
+            vec![ResourceRef::new(Storage::RESOURCE_TYPE, "store1")],
+        )
+        .build();
+
+    let frozen_executor =
+        new_executor_with_filter(&updated_stack, vec![ResourceLifecycle::Frozen])?;
+    let state_with_updating_frozen = frozen_executor.step(state_after_frozen).await?.next_state;
+
+    assert_eq!(
+        get_status(&state_with_updating_frozen, "store1"),
+        Some(ResourceStatus::Updating)
+    );
+
+    let live_executor = new_executor_with_filter(&updated_stack, vec![ResourceLifecycle::Live])?;
+    let final_state = run_steps(&live_executor, state_with_updating_frozen, 8).await?;
+
+    assert_all_running(&final_state, &["store1", "func1"]);
 
     Ok(())
 }
@@ -241,7 +412,7 @@ async fn test_transitive_dependencies_across_lifecycles() -> Result<()> {
         .add_with_dependencies(
             resource_c.clone(),
             ResourceLifecycle::Frozen,
-            vec![ResourceRef::new(Function::RESOURCE_TYPE, "resource-b")],
+            vec![ResourceRef::new(Worker::RESOURCE_TYPE, "resource-b")],
         )
         .build();
 
@@ -437,14 +608,14 @@ async fn test_complex_dependency_graph_with_lifecycles() -> Result<()> {
             resource_d.clone(),
             ResourceLifecycle::Frozen,
             vec![
-                ResourceRef::new(Function::RESOURCE_TYPE, "resource-b"),
-                ResourceRef::new(Function::RESOURCE_TYPE, "resource-c"),
+                ResourceRef::new(Worker::RESOURCE_TYPE, "resource-b"),
+                ResourceRef::new(Worker::RESOURCE_TYPE, "resource-c"),
             ],
         )
         .add_with_dependencies(
             resource_e.clone(),
             ResourceLifecycle::Live,
-            vec![ResourceRef::new(Function::RESOURCE_TYPE, "resource-d")],
+            vec![ResourceRef::new(Worker::RESOURCE_TYPE, "resource-d")],
         )
         .build();
 

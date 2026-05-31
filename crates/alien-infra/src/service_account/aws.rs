@@ -8,15 +8,18 @@ use alien_aws_clients::iam::{
     TrustPolicyPrincipalValue, TrustPolicyStatement,
 };
 use alien_core::{
-    standard_resource_tags, Build, Container, ContainerCluster, Function, ResourceOutputs,
-    ResourceStatus, ServiceAccount, ServiceAccountOutputs,
+    standard_resource_tags, AwsIamRoleServiceAccountHeartbeatData, Build, ComputeCluster,
+    Container, HeartbeatBackend, ObservedHealth, Platform, ProviderLifecycleState,
+    ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs, ResourceStatus, ServiceAccount,
+    ServiceAccountHeartbeatData, ServiceAccountHeartbeatStatus, ServiceAccountOutputs, Worker,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
-use alien_macros::{controller, flow_entry, handler, terminal_state};
+use alien_macros::controller;
 use alien_permissions::{
     generators::{AwsIamPolicy, AwsIamStatement, AwsRuntimePermissionsGenerator},
     BindingTarget, PermissionContext,
 };
+use chrono::Utc;
 
 /// Generates the AWS IAM role name for a ServiceAccount.
 fn get_aws_role_name(prefix: &str, name: &str) -> String {
@@ -24,7 +27,7 @@ fn get_aws_role_name(prefix: &str, name: &str) -> String {
 }
 
 // Define the inline policy name we will manage
-const MANAGED_POLICY_NAME: &str = "alien-managed-policy";
+const MANAGED_POLICY_NAME: &str = "deployment-permissions";
 
 #[controller]
 pub struct AwsServiceAccountController {
@@ -67,10 +70,16 @@ impl AwsServiceAccountController {
         let role_request = CreateRoleRequest::builder()
             .role_name(role_name.clone())
             .assume_role_policy_document(assume_role_policy)
-            .description(format!(
-                "Service account role for Alien resource {}",
-                config.id
-            ))
+            .description(match ctx.deployment_name_for_metadata() {
+                Some(deployment_name) => format!(
+                    "Runtime IAM role for {deployment_name}. Resource prefix: {}. Resource: {}.",
+                    ctx.resource_prefix, config.id
+                ),
+                None => format!(
+                    "Runtime IAM role. Resource prefix: {}. Resource: {}.",
+                    ctx.resource_prefix, config.id
+                ),
+            })
             .tags(
                 standard_resource_tags(ctx.resource_prefix, &config.id)
                     .into_iter()
@@ -204,6 +213,7 @@ impl AwsServiceAccountController {
 
     #[handler(state = Ready, on_failure = RefreshFailed, status = ResourceStatus::Running)]
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<ServiceAccount>()?;
         let aws_config = ctx.get_aws_config()?;
         let client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
         let role_name = self.role_name.as_ref().unwrap();
@@ -214,14 +224,14 @@ impl AwsServiceAccountController {
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to get IAM role during heartbeat check".to_string(),
-                resource_id: Some(ctx.desired_resource_config::<ServiceAccount>()?.id.clone()),
+                resource_id: Some(config.id.clone()),
             })?;
 
         // Check if role ARN matches what we expect
         if let Some(expected_arn) = &self.role_arn {
             if role.get_role_result.role.arn != *expected_arn {
                 return Err(AlienError::new(ErrorData::ResourceDrift {
-                    resource_id: ctx.desired_resource_config::<ServiceAccount>()?.id.clone(),
+                    resource_id: config.id.clone(),
                     message: format!(
                         "Role ARN changed from {} to {}",
                         expected_arn, role.get_role_result.role.arn
@@ -229,6 +239,41 @@ impl AwsServiceAccountController {
                 }));
             }
         }
+
+        let attached_policies = client
+            .list_attached_role_policies(role_name)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to list attached IAM role policies during heartbeat check"
+                    .to_string(),
+                resource_id: Some(config.id.clone()),
+            })?
+            .list_attached_role_policies_result
+            .attached_policies
+            .map(|policies| policies.member)
+            .unwrap_or_default();
+
+        let inline_policy_names = client
+            .list_role_policies(role_name)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to list inline IAM role policies during heartbeat check"
+                    .to_string(),
+                resource_id: Some(config.id.clone()),
+            })?
+            .list_role_policies_result
+            .policy_names
+            .map(|names| names.member)
+            .unwrap_or_default();
+
+        emit_aws_service_account_heartbeat(
+            ctx,
+            &config.id,
+            &role.get_role_result.role,
+            attached_policies,
+            inline_policy_names,
+            self.stack_permissions_applied,
+        );
 
         Ok(HandlerAction::Continue {
             state: Ready,
@@ -585,7 +630,7 @@ impl AwsServiceAccountController {
     ///
     /// This function determines which AWS services and IAM roles should be allowed to assume
     /// this service account's IAM role by analyzing:
-    /// 1. Functions/Builds that use a permission profile matching this ServiceAccount
+    /// 1. Workers/Builds that use a permission profile matching this ServiceAccount
     /// 2. Other ServiceAccounts that have impersonation permissions for this ServiceAccount
     ///
     /// **Naming Convention Assumption**: ServiceAccounts created from permission profiles follow
@@ -610,13 +655,13 @@ impl AwsServiceAccountController {
             .unwrap_or(&service_account.id);
 
         // Analyze the stack in a single pass to determine:
-        // 1. Which AWS services need to assume this role (Functions using this profile -> Lambda, Builds -> CodeBuild)
+        // 1. Which AWS services need to assume this role (Workers using this profile -> Lambda, Builds -> CodeBuild)
         // 2. Which other ServiceAccounts can impersonate this one
         for (_, resource_entry) in ctx.desired_stack.resources() {
             let resource = &resource_entry.config;
 
-            // Check if there are Functions that use THIS service account's profile
-            if let Some(function) = resource.downcast_ref::<Function>() {
+            // Check if there are Workers that use THIS service account's profile
+            if let Some(function) = resource.downcast_ref::<Worker>() {
                 if function.get_permissions() == profile_name {
                     if !services.contains(&"lambda.amazonaws.com".to_string()) {
                         services.push("lambda.amazonaws.com".to_string());
@@ -634,9 +679,9 @@ impl AwsServiceAccountController {
             }
         }
 
-        // Check if any Container in the stack uses this profile — if so, the ContainerCluster VM
+        // Check if any Container in the stack uses this profile — if so, the ComputeCluster VM
         // role needs to assume this SA role to vend per-container credentials via the IMDS proxy.
-        // The VM role ARN is deterministic: {prefix}-{clusterId}-role (set in container_cluster/aws.rs).
+        // The VM role ARN is deterministic: {prefix}-{clusterId}-role (set in compute_cluster/aws.rs).
         let has_container_using_profile = ctx.desired_stack.resources().any(|(_, entry)| {
             entry
                 .config
@@ -653,7 +698,7 @@ impl AwsServiceAccountController {
                 .unwrap_or_default();
 
             for (cluster_id, entry) in ctx.desired_stack.resources() {
-                if entry.config.downcast_ref::<ContainerCluster>().is_some() {
+                if entry.config.downcast_ref::<ComputeCluster>().is_some() {
                     let vm_role_arn = format!(
                         "arn:aws:iam::{}:role/{}-{}-role",
                         account_id, ctx.resource_prefix, cluster_id,
@@ -663,7 +708,7 @@ impl AwsServiceAccountController {
                             service_account = %service_account.id,
                             cluster_id = %cluster_id,
                             vm_role_arn = %vm_role_arn,
-                            "Adding ContainerCluster VM role to SA trust policy for IMDS credential vending"
+                            "Adding ComputeCluster VM role to SA trust policy for IMDS credential vending"
                         );
                         role_arns.push(vm_role_arn);
                     }
@@ -878,7 +923,7 @@ impl AwsServiceAccountController {
             let is_lambda_role = ctx.desired_stack.resources().any(|(_, entry)| {
                 entry
                     .config
-                    .downcast_ref::<Function>()
+                    .downcast_ref::<Worker>()
                     .map(|f| f.get_permissions() == profile_name)
                     .unwrap_or(false)
             });
@@ -945,4 +990,89 @@ impl AwsServiceAccountController {
             _internal_stay_count: None,
         }
     }
+}
+
+fn emit_aws_service_account_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    role: &alien_aws_clients::iam::Role,
+    attached_policies: Vec<alien_aws_clients::iam::AttachedPolicy>,
+    inline_policy_names: Vec<String>,
+    stack_permissions_applied: bool,
+) {
+    let tag_count = role
+        .tags
+        .as_ref()
+        .map(|tags| tags.member.len() as u32)
+        .unwrap_or(0);
+    let managed_tag_count = role
+        .tags
+        .as_ref()
+        .map(|tags| {
+            tags.member
+                .iter()
+                .filter(|tag| tag.key.starts_with("alien"))
+                .count() as u32
+        })
+        .unwrap_or(0);
+    let attached_policy_names = attached_policies
+        .iter()
+        .map(|policy| policy.policy_name.clone())
+        .collect::<Vec<_>>();
+    let attached_policy_count = attached_policy_names.len() as u32;
+    let inline_policy_count = inline_policy_names.len() as u32;
+    let message = format!("AWS IAM role '{}' is reachable", role.role_name);
+
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: ServiceAccount::RESOURCE_TYPE,
+        controller_platform: Platform::Aws,
+        backend: HeartbeatBackend::Aws,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::ServiceAccount(ServiceAccountHeartbeatData::AwsIamRole(
+            AwsIamRoleServiceAccountHeartbeatData {
+                status: ServiceAccountHeartbeatStatus {
+                    health: ObservedHealth::Healthy,
+                    lifecycle: ProviderLifecycleState::Running,
+                    message: Some(message),
+                    stale: false,
+                    partial: false,
+                    collection_issues: vec![],
+                },
+                role_name: role.role_name.clone(),
+                role_arn: role.arn.clone(),
+                role_id: role.role_id.clone(),
+                path: role.path.clone(),
+                create_date: role.create_date.clone(),
+                description: role.description.clone(),
+                max_session_duration: role.max_session_duration,
+                assume_role_policy_present: role.assume_role_policy_document.is_some(),
+                permissions_boundary_type: role
+                    .permissions_boundary
+                    .as_ref()
+                    .and_then(|boundary| boundary.permissions_boundary_type.clone()),
+                permissions_boundary_arn: role
+                    .permissions_boundary
+                    .as_ref()
+                    .and_then(|boundary| boundary.permissions_boundary_arn.clone()),
+                tag_count,
+                managed_tag_count,
+                attached_policy_count,
+                attached_policy_names,
+                inline_policy_count,
+                inline_policy_names,
+                stack_permissions_applied,
+                last_used_date: role
+                    .role_last_used
+                    .as_ref()
+                    .and_then(|last_used| last_used.last_used_date.clone()),
+                last_used_region: role
+                    .role_last_used
+                    .as_ref()
+                    .and_then(|last_used| last_used.region.clone()),
+            },
+        )),
+        raw: vec![],
+    });
 }

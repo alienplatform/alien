@@ -11,7 +11,7 @@ cargo build -p alien-agent -p alien-deploy-cli
 # Build runtime base image (x86_64 for GCP/Azure, arm64 for AWS Lambda)
 docker buildx build -t alien-runtime:local --platform linux/amd64 \
   -f crates/alien-runtime/Dockerfile .
-export ALIEN_TEST_OVERRIDE_BASE_IMAGE=alien-runtime:local
+export ALIEN_OVERRIDE_BASE_IMAGE=alien-runtime:local
 
 # Source test credentials
 set -a && source .env.test && set +a

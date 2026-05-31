@@ -8,13 +8,13 @@
 //! service.
 //!
 //! Run a single test:
-//!   cargo nextest run -p alien-test --test pull pull_local_rust
+//!   cargo nextest run -p alien-test --test pull pull_local_comprehensive_rust
 //!
 //! Run all pull tests:
 //!   cargo nextest run -p alien-test --test pull
 
 use alien_core::Platform;
-use alien_test::{DeploymentModel, Language};
+use alien_test::{DeploymentModel, TestApp};
 use test_context::test_context;
 
 mod common;
@@ -28,17 +28,17 @@ e2e_test_context!(
     LocalPullRust,
     Platform::Local,
     DeploymentModel::Pull,
-    Language::Rust
+    TestApp::ComprehensiveRust
 );
 
 #[test_context(LocalPullRust)]
 #[tokio::test]
-async fn pull_local_rust(ctx: &mut LocalPullRust) {
+async fn pull_local_comprehensive_rust(ctx: &mut LocalPullRust) {
     common::runner::check_all_bindings(
         &ctx.ctx.deployment,
         ctx.ctx.platform,
         ctx.ctx.model,
-        ctx.ctx.language,
+        ctx.ctx.app,
     )
     .await
     .expect("binding checks failed");
@@ -51,17 +51,17 @@ e2e_test_context!(
     LocalPullTypeScript,
     Platform::Local,
     DeploymentModel::Pull,
-    Language::TypeScript
+    TestApp::ComprehensiveTs
 );
 
 #[test_context(LocalPullTypeScript)]
 #[tokio::test]
-async fn pull_local_typescript(ctx: &mut LocalPullTypeScript) {
+async fn pull_local_comprehensive_ts(ctx: &mut LocalPullTypeScript) {
     common::runner::check_all_bindings(
         &ctx.ctx.deployment,
         ctx.ctx.platform,
         ctx.ctx.model,
-        ctx.ctx.language,
+        ctx.ctx.app,
     )
     .await
     .expect("binding checks failed");

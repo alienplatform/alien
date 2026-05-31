@@ -1,6 +1,6 @@
 # OutputsCloudformation
 
-Outputs from a CloudFormation package build
+Outputs from a CloudFormation package build.
 
 ## Example Usage
 
@@ -8,11 +8,7 @@ Outputs from a CloudFormation package build
 import { OutputsCloudformation } from "@alienplatform/platform-api/models";
 
 let value: OutputsCloudformation = {
-  launchStackUrl: "https://weird-newsprint.info/",
-  sha256: "<value>",
-  size: 243114,
-  stackPolicyUrl: "https://teeming-legging.biz/",
-  templateUrl: "https://similar-petticoat.name",
+  targets: {},
   type: "cloudformation",
 };
 ```
@@ -21,9 +17,5 @@ let value: OutputsCloudformation = {
 
 | Field                                                                      | Type                                                                       | Required                                                                   | Description                                                                |
 | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `launchStackUrl`                                                           | *string*                                                                   | :heavy_check_mark:                                                         | AWS Console quick-launch URL                                               |
-| `sha256`                                                                   | *string*                                                                   | :heavy_check_mark:                                                         | SHA256 checksum of the template                                            |
-| `size`                                                                     | *number*                                                                   | :heavy_check_mark:                                                         | Template size in bytes                                                     |
-| `stackPolicyUrl`                                                           | *string*                                                                   | :heavy_check_mark:                                                         | S3 URL to the CloudFormation stack policy                                  |
-| `templateUrl`                                                              | *string*                                                                   | :heavy_check_mark:                                                         | S3 URL to the CloudFormation template                                      |
+| `targets`                                                                  | Record<string, [models.PackageTargets](../models/packagetargets.md)>       | :heavy_check_mark:                                                         | Template artifacts by CloudFormation target.                               |
 | `type`                                                                     | [models.OutputsTypeCloudformation](../models/outputstypecloudformation.md) | :heavy_check_mark:                                                         | N/A                                                                        |

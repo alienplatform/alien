@@ -10,8 +10,9 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use alien_core::{
-    import::ImportSourceKind, ContainerOutputs, DeleteScope, EnvironmentVariable, FunctionOutputs,
-    Platform, StackSettings,
+    import::ImportSourceKind, is_valid_resource_prefix, ContainerOutputs, DeleteScope,
+    EnvironmentVariable, Platform, StackSettings, StackState, WorkerOutputs,
+    RESOURCE_PREFIX_ERROR_MESSAGE,
 };
 
 use crate::error::ErrorData;
@@ -35,6 +36,8 @@ pub struct CreateDeploymentRequest {
     pub stack_settings: Option<StackSettings>,
     #[serde(default)]
     pub environment_variables: Option<Vec<EnvironmentVariable>>,
+    #[serde(default)]
+    pub resource_prefix: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -321,16 +324,31 @@ async fn create_deployment(
 
     // Create the deployment first (token is set after).
     let (raw_token, key_prefix, key_hash) = ids::generate_token(TokenType::Deployment.prefix());
+    let stack_state = match req.resource_prefix {
+        Some(resource_prefix) => {
+            if !is_valid_resource_prefix(&resource_prefix) {
+                return ErrorData::bad_request(RESOURCE_PREFIX_ERROR_MESSAGE).into_response();
+            }
+            Some(StackState::with_resource_prefix(
+                req.platform.clone(),
+                resource_prefix,
+            ))
+        }
+        None => None,
+    };
 
     let mut deployment = match state
         .deployment_store
         .create_deployment(
             &subject,
             CreateDeploymentParams {
+                deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
                 name: req.name,
                 deployment_group_id: deployment_group_id.clone(),
                 platform: req.platform,
+                base_platform: None,
                 stack_settings: req.stack_settings.unwrap_or_default(),
+                stack_state,
                 environment_variables: req.environment_variables,
                 deployment_token: Some(raw_token.clone()),
             },
@@ -547,8 +565,8 @@ async fn get_deployment_info(
     if let Some(stack_state) = &deployment.stack_state {
         for (resource_id, resource_state) in &stack_state.resources {
             let public_url = match resource_state.resource_type.as_str() {
-                "function" => stack_state
-                    .get_resource_outputs::<FunctionOutputs>(resource_id)
+                "worker" => stack_state
+                    .get_resource_outputs::<WorkerOutputs>(resource_id)
                     .ok()
                     .and_then(|o| o.url.clone()),
                 "container" => stack_state
@@ -681,6 +699,21 @@ async fn retry_deployment(
     };
     if !state.authz.can_update_deployment(&subject, &deployment) {
         return ErrorData::forbidden("Cannot retry deployment").into_response();
+    }
+
+    let retryable_failed_statuses = [
+        "initial-setup-failed",
+        "provisioning-failed",
+        "refresh-failed",
+        "update-failed",
+        "delete-failed",
+    ];
+    if !retryable_failed_statuses.contains(&deployment.status.as_str()) {
+        return ErrorData::bad_request(format!(
+            "Deployment '{}' is in status '{}' and cannot be retried",
+            deployment.id, deployment.status
+        ))
+        .into_response();
     }
 
     if let Err(e) = state

@@ -2,14 +2,17 @@ use alien_error::AlienError;
 
 // Re-export core traits and types
 pub use alien_context::AlienContext;
-pub use alien_core::{BindingsMode, Platform, ENV_ALIEN_BINDINGS_MODE, ENV_ALIEN_DEPLOYMENT_TYPE};
+pub use alien_core::{
+    BindingsMode, Platform, ENV_ALIEN_BASE_PLATFORM, ENV_ALIEN_BINDINGS_MODE,
+    ENV_ALIEN_DEPLOYMENT_TYPE,
+};
 pub use error::{ErrorData, Result};
 pub use provider::BindingsProvider;
 pub use traits::{
     ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions,
     AwsServiceAccountInfo, AzureServiceAccountInfo, Binding, BindingsProviderApi, Build, Container,
-    Function, GcpServiceAccountInfo, ImpersonationRequest, Kv, Queue, RegistryAuthMethod,
-    RepositoryResponse, ServiceAccount, ServiceAccountInfo, Storage, Vault,
+    GcpServiceAccountInfo, ImpersonationRequest, Kv, Queue, RegistryAuthMethod, RepositoryResponse,
+    ServiceAccount, ServiceAccountInfo, Storage, Vault, Worker,
 };
 pub use wait_until::{DrainConfig, DrainResponse, WaitUntil, WaitUntilContext};
 

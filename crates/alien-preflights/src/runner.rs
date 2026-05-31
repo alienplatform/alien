@@ -247,6 +247,27 @@ impl PreflightRunner {
                 })?;
         }
 
+        let mut dependency_result =
+            crate::compile_time::validate_stack_dependencies(&current_stack);
+        dependency_result.check_description = Some(
+            "Mutated resource dependencies should be valid and shouldn't create circular references"
+                .to_string(),
+        );
+        if !dependency_result.success {
+            error!(
+                error_count = dependency_result.errors.len(),
+                "Post-mutation dependency validation failed"
+            );
+            for msg in &dependency_result.errors {
+                error!("  {}", msg);
+            }
+            return Err(AlienError::new(ErrorData::ValidationFailed {
+                error_count: 1,
+                warning_count: dependency_result.warnings.len(),
+                results: vec![dependency_result],
+            }));
+        }
+
         Ok(current_stack)
     }
 

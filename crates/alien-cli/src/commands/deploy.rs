@@ -5,7 +5,7 @@
 //! 2. Discover manager URL (resolve_manager for OAuth, DG endpoint for DG tokens)
 //! 3. Run step loop via manager (acquire → step → reconcile → release)
 
-use crate::commands::deployments::MonitoringMode;
+use crate::commands::deployments::{parse_resource_prefix, MonitoringMode};
 use crate::commands::{
     create_initial_deployment, fetch_dev_deployment_live_state,
     wait_for_dev_deployment_ready_with_progress,
@@ -22,7 +22,6 @@ use alien_deployment::manager_api_transport::{
 };
 use alien_deployment::runner::{RunnerPolicy, RunnerResult};
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_manager_api::Client as ManagerClient;
 use alien_platform_api::Client as SdkClient;
 use clap::Parser;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
@@ -56,6 +55,11 @@ pub struct DeployArgs {
     /// Target platform for the deployment (aws, gcp, azure)
     #[arg(long)]
     pub platform: String,
+
+    /// Physical-name prefix for generated cloud resources.
+    /// Omit to let the manager generate one.
+    #[arg(long, value_parser = parse_resource_prefix)]
+    pub resource_prefix: Option<String>,
 
     /// Allow experimental platforms (kubernetes, local)
     #[arg(long)]
@@ -104,30 +108,6 @@ fn create_platform_client(api_key: &str, base_url: &str) -> Result<SdkClient> {
         })?;
 
     Ok(SdkClient::new_with_client(base_url, http_client))
-}
-
-/// Create authenticated manager client
-fn create_manager_client(token: &str, manager_url: &str) -> Result<ManagerClient> {
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        AUTHORIZATION,
-        HeaderValue::from_str(&format!("Bearer {}", token))
-            .into_alien_error()
-            .context(ErrorData::ConfigurationError {
-                message: "Invalid token format".to_string(),
-            })?,
-    );
-    headers.insert(USER_AGENT, HeaderValue::from_static("alien-cli"));
-
-    let http_client = reqwest::Client::builder()
-        .default_headers(headers)
-        .build()
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to create HTTP client".to_string(),
-        })?;
-
-    Ok(ManagerClient::new_with_client(manager_url, http_client))
 }
 
 /// Main entry point for deploy command
@@ -276,6 +256,7 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                         network: sdk_network,
                         domains: None,
                         external_bindings: None,
+                        kubernetes: None,
                     };
 
                     let create_response = sdk_client
@@ -305,6 +286,16 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                                 },
                             )?,
                             stack_settings: Some(stack_settings),
+                            resource_prefix: args
+                                .resource_prefix
+                                .clone()
+                                .map(TryInto::try_into)
+                                .transpose()
+                                .into_alien_error()
+                                .context(ErrorData::ValidationError {
+                                    field: "resource_prefix".to_string(),
+                                    message: "Invalid resource prefix".to_string(),
+                                })?,
                             manager_id: None,
                             pinned_release_id: None,
                             environment_variables: None,
@@ -726,7 +717,7 @@ fn format_local_dev_resource_value(
                 || public_resource
                     .resource_type
                     .as_deref()
-                    .is_some_and(|resource_type| resource_type.eq_ignore_ascii_case("function"))
+                    .is_some_and(|resource_type| resource_type.eq_ignore_ascii_case("worker"))
             {
                 return "running (private)".to_string();
             }

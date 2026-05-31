@@ -197,8 +197,7 @@ fn test_build_command_json_failure_is_structured_error() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let payload: serde_json::Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(payload["code"], "VALIDATION_ERROR");
-    assert!(payload["message"]
-        .as_str()
-        .unwrap()
-        .contains("Unknown platform"));
+    let message = payload["message"].as_str().unwrap();
+    assert!(message.contains("platform"));
+    assert!(message.contains("invalid-platform"));
 }

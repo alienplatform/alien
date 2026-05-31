@@ -7,16 +7,16 @@ use super::helpers::*;
 use crate::core::state_utils::{StackResourceStateExt, StackStateExt};
 use crate::core::StackExecutor;
 use crate::error::Result;
-use crate::function::{TestFunctionController, TestFunctionState};
+use crate::worker::{TestWorkerController, TestWorkerState};
 use alien_core::{
-    Function, FunctionCode, Platform, Resource, ResourceLifecycle, ResourceRef, ResourceStatus,
-    Stack, StackSettings, StackState, Storage,
+    Platform, Resource, ResourceLifecycle, ResourceRef, ResourceStatus, Stack, StackSettings,
+    StackState, Storage, Worker, WorkerCode,
 };
 
 /// Helper to create a function that will fail on first attempt (memory > 4GB).
-fn failing_function(id: &str) -> Function {
-    Function::new(id.to_string())
-        .code(FunctionCode::Image {
+fn failing_function(id: &str) -> Worker {
+    Worker::new(id.to_string())
+        .code(WorkerCode::Image {
             image: format!("image-{}", id),
         })
         .memory_mb(5120) // > 4096 will fail
@@ -25,9 +25,9 @@ fn failing_function(id: &str) -> Function {
 }
 
 /// Helper to create a function with specific memory.
-fn function_with_memory(id: &str, memory_mb: u32) -> Function {
-    Function::new(id.to_string())
-        .code(FunctionCode::Image {
+fn function_with_memory(id: &str, memory_mb: u32) -> Worker {
+    Worker::new(id.to_string())
+        .code(WorkerCode::Image {
             image: format!("image-{}", id),
         })
         .memory_mb(memory_mb)
@@ -36,9 +36,9 @@ fn function_with_memory(id: &str, memory_mb: u32) -> Function {
 }
 
 /// Helper to create a function that fails N times before succeeding.
-fn retryable_function(id: &str, fail_count: u32) -> Function {
-    Function::new(id.to_string())
-        .code(FunctionCode::Image {
+fn retryable_function(id: &str, fail_count: u32) -> Worker {
+    Worker::new(id.to_string())
+        .code(WorkerCode::Image {
             image: format!("image-{}", id),
         })
         .memory_mb(1024)
@@ -53,7 +53,7 @@ fn retryable_function(id: &str, fail_count: u32) -> Function {
 /// Tests automatic recovery when config is updated after failure.
 #[tokio::test]
 async fn test_failure_auto_recovery_on_config_update() -> Result<()> {
-    // v1: Function with high memory that will fail
+    // v1: Worker with high memory that will fail
     let fail_func_v1 = failing_function("fail-func");
     let dep_func = test_function("dep-func");
 
@@ -62,7 +62,7 @@ async fn test_failure_auto_recovery_on_config_update() -> Result<()> {
         .add_with_dependencies(
             dep_func.clone(),
             ResourceLifecycle::Live,
-            vec![ResourceRef::new(Function::RESOURCE_TYPE, "fail-func")],
+            vec![ResourceRef::new(Worker::RESOURCE_TYPE, "fail-func")],
         )
         .build();
 
@@ -104,7 +104,7 @@ async fn test_failure_auto_recovery_on_config_update() -> Result<()> {
         .add_with_dependencies(
             dep_func.clone(),
             ResourceLifecycle::Live,
-            vec![ResourceRef::new(Function::RESOURCE_TYPE, "fail-func")],
+            vec![ResourceRef::new(Worker::RESOURCE_TYPE, "fail-func")],
         )
         .build();
 
@@ -130,7 +130,7 @@ async fn test_failure_auto_recovery_on_config_update() -> Result<()> {
 /// Tests manual retry after failure.
 #[tokio::test]
 async fn test_failure_manual_retry() -> Result<()> {
-    // Function that fails exactly 10 times (our max retries)
+    // Worker that fails exactly 10 times (our max retries)
     let fail_func = retryable_function("retry-func", 10);
 
     let stack = Stack::new("manual-retry-stack".to_owned())
@@ -175,7 +175,7 @@ async fn test_failure_manual_retry() -> Result<()> {
 /// Tests transient failure with automatic retry.
 #[tokio::test]
 async fn test_transient_failure_auto_retry() -> Result<()> {
-    // Function that fails 2 times then succeeds (within retry limit)
+    // Worker that fails 2 times then succeeds (within retry limit)
     let fail_func = retryable_function("transient-func", 2);
 
     let stack = Stack::new("transient-retry-stack".to_owned())
@@ -345,9 +345,9 @@ async fn test_retry_with_config_drift() -> Result<()> {
 /// - Different error codes for each type
 #[tokio::test]
 async fn test_retryable_vs_non_retryable_error_behavior() -> Result<()> {
-    // Function with retryable failure (persistent failure that retries)
-    let retryable_func = Function::new("retryable-func".to_string())
-        .code(FunctionCode::Image {
+    // Worker with retryable failure (persistent failure that retries)
+    let retryable_func = Worker::new("retryable-func".to_string())
+        .code(WorkerCode::Image {
             image: "image-retryable".to_string(),
         })
         .memory_mb(1024) // Normal memory
@@ -358,9 +358,9 @@ async fn test_retryable_vs_non_retryable_error_behavior() -> Result<()> {
         .permissions("execution".to_string())
         .build();
 
-    // Function with non-retryable failure (memory > 4GB fails immediately)
-    let non_retryable_func = Function::new("non-retryable-func".to_string())
-        .code(FunctionCode::Image {
+    // Worker with non-retryable failure (memory > 4GB fails immediately)
+    let non_retryable_func = Worker::new("non-retryable-func".to_string())
+        .code(WorkerCode::Image {
             image: "image-non-retryable".to_string(),
         })
         .memory_mb(5120) // > 4096 will fail immediately with non-retryable error
@@ -517,8 +517,8 @@ async fn test_manual_retry_with_config_change() -> Result<()> {
 async fn test_retry_counter_isolation_between_resources() -> Result<()> {
     // Two functions with different failure behaviors
     // func1: Will fail with retryable errors (many retries)
-    let func1 = Function::new("func1".to_string())
-        .code(FunctionCode::Image {
+    let func1 = Worker::new("func1".to_string())
+        .code(WorkerCode::Image {
             image: "image-func1".to_string(),
         })
         .memory_mb(1024)
@@ -608,7 +608,7 @@ async fn test_retry_counter_isolation_between_resources() -> Result<()> {
 /// Tests that transient failure counter resets after successful completion.
 #[tokio::test]
 async fn test_transient_failure_counter_reset_after_success() -> Result<()> {
-    // Function that fails 2 times then succeeds
+    // Worker that fails 2 times then succeeds
     let func = retryable_function("transient-reset-func", 2);
 
     let stack = Stack::new("transient-reset-stack".to_owned())
@@ -697,11 +697,11 @@ async fn test_manual_retry_resets_state_properly() -> Result<()> {
     Ok(())
 }
 
-/// Creates a Function configured to use Stay-based polling that never advances,
+/// Creates a Worker configured to use Stay-based polling that never advances,
 /// causing the macro's max_times exhaustion path to be triggered.
-fn stay_exhausting_function(id: &str, max_times: u32) -> Function {
-    Function::new(id.to_string())
-        .code(FunctionCode::Image {
+fn stay_exhausting_function(id: &str, max_times: u32) -> Worker {
+    Worker::new(id.to_string())
+        .code(WorkerCode::Image {
             image: format!("image-{}", id),
         })
         .memory_mb(1024)
@@ -766,12 +766,12 @@ async fn test_stay_exhaustion_saves_last_failed_state() -> Result<()> {
 
     // The lastFailedState must hold the controller at the polling handler, not at the
     // terminal failure state. (internal_state correctly holds the terminal CreateFailed.)
-    let saved: TestFunctionController =
+    let saved: TestWorkerController =
         serde_json::from_value(resource.last_failed_state.as_ref().unwrap().clone())
-            .expect("last_failed_state must deserialize to TestFunctionController");
+            .expect("last_failed_state must deserialize to TestWorkerController");
     assert_eq!(
         saved.state,
-        TestFunctionState::CreateFunctionPolling,
+        TestWorkerState::CreateWorkerPolling,
         "lastFailedState must capture the polling state, not the failure terminal"
     );
 
@@ -824,10 +824,10 @@ async fn test_config_change_during_provisioning_recreates_with_new_config() -> R
 
     // Verify func1 was recreated with image-v2 config.
     let func1_state = final_state.resources.get("func1").unwrap();
-    let func1_final = func1_state.config.downcast_ref::<Function>().unwrap();
+    let func1_final = func1_state.config.downcast_ref::<Worker>().unwrap();
     assert_eq!(
         func1_final.code,
-        FunctionCode::Image {
+        WorkerCode::Image {
             image: "image-v2".to_string()
         },
         "func1 must have been recreated with image-v2 config"
@@ -885,7 +885,7 @@ async fn test_stay_exhaustion_full_retry_cycle() -> Result<()> {
     let retried_resource = state.resources.get("cycle-func").unwrap();
     assert_eq!(retried_resource.status, ResourceStatus::Provisioning);
     let retried_controller = retried_resource
-        .get_internal_controller_typed::<TestFunctionController>()
+        .get_internal_controller_typed::<TestWorkerController>()
         .unwrap();
     assert!(
         retried_controller._internal_stay_count.is_none(),

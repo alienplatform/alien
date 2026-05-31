@@ -114,14 +114,17 @@ fn test_aws_cloudformation_multiple_statements() {
     assert_eq!(result.statement.len(), 2);
 
     // First statement should be for Lambda
-    assert_eq!(result.statement[0].sid, "FunctionExecute1");
+    assert_eq!(result.statement[0].sid, "WorkerExecuteLambdaInvokeWorker");
     assert_eq!(
         result.statement[0].action,
-        vec![json!("lambda:InvokeFunction")]
+        vec![json!("lambda:InvokeWorker")]
     );
 
     // Second statement should be for ECR
-    assert_eq!(result.statement[1].sid, "FunctionExecute2");
+    assert_eq!(
+        result.statement[1].sid,
+        "WorkerExecuteEcrBatchGetImageAndEcrGetDownloadUrlForLayer"
+    );
     assert_eq!(
         result.statement[1].action,
         vec![

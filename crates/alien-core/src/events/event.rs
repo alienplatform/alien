@@ -71,7 +71,7 @@ pub enum AlienEvent {
     BuildingResource {
         /// Name of the resource being built
         resource_name: String,
-        /// Type of the resource: "function", "container", "worker"
+        /// Type of the resource: "worker", "container"
         resource_type: String,
         /// All resource names sharing this build (for deduped container groups)
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -101,6 +101,9 @@ pub enum AlienEvent {
         stack: String,
         /// Target platform
         platform: String,
+        /// Human-readable destination for pushed images
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        destination: Option<String>,
     },
 
     /// Pushing resource images to registry
@@ -108,7 +111,7 @@ pub enum AlienEvent {
     PushingResource {
         /// Name of the resource being pushed
         resource_name: String,
-        /// Type of the resource: "function", "container", "worker"
+        /// Type of the resource: "worker", "container"
         resource_type: String,
     },
 
@@ -208,7 +211,7 @@ pub enum AlienEvent {
 
     /// Running test function after deployment
     #[serde(rename_all = "camelCase")]
-    RunningTestFunction {
+    RunningTestWorker {
         /// Name of the stack being tested
         stack_name: String,
     },

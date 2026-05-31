@@ -7,10 +7,18 @@ import { safeParse } from "../lib/schemas.js";
 import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import {
-  DeploymentPageBackground,
-  DeploymentPageBackground$inboundSchema,
-} from "./deploymentpagebackground.js";
+  DeploymentInfoSetupConfig,
+  DeploymentInfoSetupConfig$inboundSchema,
+} from "./deploymentinfosetupconfig.js";
+import {
+  DeploymentPortalAppearance,
+  DeploymentPortalAppearance$inboundSchema,
+} from "./deploymentportalappearance.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
+import {
+  SupportedCloudRegions,
+  SupportedCloudRegions$inboundSchema,
+} from "./supportedcloudregions.js";
 
 /**
  * Type of token used to authenticate this request
@@ -66,6 +74,16 @@ export type DeploymentInfoDeploymentGroup = {
   name: string;
 };
 
+export type DeploymentInfoWorkspace = {
+  id: string;
+  name: string;
+  avatarUrl?: string | null | undefined;
+};
+
+export type Portal = {
+  appearance: DeploymentPortalAppearance;
+};
+
 /**
  * Represents the target cloud platform.
  */
@@ -83,8 +101,12 @@ export const StackSummaryPlatform = {
 export type StackSummaryPlatform = ClosedEnum<typeof StackSummaryPlatform>;
 
 export type ResourceCounts = {
-  functions: number;
+  workers: number;
   containers: number;
+  /**
+   * Workers or Containers that need managed public HTTPS endpoint setup
+   */
+  publicHttpsEndpoints: number;
   /**
    * Storage, queue, KV, vault, database, or cache resources that Kubernetes needs Terraform to provision
    */
@@ -102,9 +124,7 @@ export type StackSummary = {
 
 export type DeploymentInfoProject = {
   name: string;
-  workspace: string;
-  deploymentPageBackground?: DeploymentPageBackground | null | undefined;
-  deploymentPageLogoUrl?: string | null | undefined;
+  portal: Portal;
   stackSummary?: StackSummary | null | undefined;
 };
 
@@ -193,9 +213,9 @@ export const CloudformationStatus = {
 export type CloudformationStatus = ClosedEnum<typeof CloudformationStatus>;
 
 /**
- * Outputs from a CloudFormation package build
+ * Information about a single CloudFormation template package for one target.
  */
-export type CloudformationOutputs = {
+export type CloudformationTargets = {
   /**
    * AWS Console quick-launch URL
    */
@@ -213,9 +233,23 @@ export type CloudformationOutputs = {
    */
   stackPolicyUrl: string;
   /**
+   * CloudFormation target (aws, eks)
+   */
+  target: string;
+  /**
    * S3 URL to the CloudFormation template
    */
   templateUrl: string;
+};
+
+/**
+ * Outputs from a CloudFormation package build.
+ */
+export type CloudformationOutputs = {
+  /**
+   * Template artifacts by CloudFormation target.
+   */
+  targets: { [k: string]: CloudformationTargets };
 };
 
 export const DeploymentInfoMode = {
@@ -231,7 +265,7 @@ export type DeploymentInfoCloudformation = {
   status: CloudformationStatus;
   version?: string | undefined;
   /**
-   * Outputs from a CloudFormation package build
+   * Outputs from a CloudFormation package build.
    */
   outputs?: CloudformationOutputs | undefined;
   error?: any | null | undefined;
@@ -474,21 +508,17 @@ export type DeploymentInfoManagementConfigKubernetes = {
  */
 export type DeploymentInfoManagementConfigAzure = {
   /**
-   * Management service principal object ID for local development fallback
-   */
-  managementPrincipalId?: string | null | undefined;
-  /**
    * The managing Azure Tenant ID for cross-tenant access
    */
   managingTenantId: string;
   /**
-   * OIDC issuer URL for federated identity credential creation
+   * OIDC issuer URL trusted by the target-side managed identity.
    */
-  oidcIssuer?: string | null | undefined;
+  oidcIssuer: string;
   /**
-   * OIDC subject claim for federated identity credential creation
+   * OIDC subject claim trusted by the target-side managed identity.
    */
-  oidcSubject?: string | null | undefined;
+  oidcSubject: string;
   platform: "azure";
 };
 
@@ -528,7 +558,7 @@ export type DeploymentInfoManagementConfigUnion =
   | DeploymentInfoManagementConfigAzure
   | DeploymentInfoManagementConfigKubernetes;
 
-export type Targets = {
+export type InstallContextTargets = {
   /**
    * Represents the target cloud platform.
    */
@@ -550,11 +580,11 @@ export type Targets = {
   awsManagingAccountId?: string | undefined;
 };
 
-export type InstallContext = {
+export type DeploymentInfoInstallContext = {
   /**
    * Deployment-session install context by Terraform/installer target
    */
-  targets: { [k: string]: Targets };
+  targets: { [k: string]: InstallContextTargets };
 };
 
 export type DeploymentInfo = {
@@ -570,9 +600,12 @@ export type DeploymentInfo = {
    * Deployment group details (present when using a deployment-group token)
    */
   deploymentGroup?: DeploymentInfoDeploymentGroup | undefined;
+  workspace: DeploymentInfoWorkspace;
   project: DeploymentInfoProject;
   packages: Packages;
-  installContext: InstallContext;
+  installContext: DeploymentInfoInstallContext;
+  supportedRegions: SupportedCloudRegions;
+  setupConfig?: DeploymentInfoSetupConfig | undefined;
 };
 
 /** @internal */
@@ -624,6 +657,41 @@ export function deploymentInfoDeploymentGroupFromJSON(
 }
 
 /** @internal */
+export const DeploymentInfoWorkspace$inboundSchema: z.ZodType<
+  DeploymentInfoWorkspace,
+  unknown
+> = z.object({
+  id: z.string(),
+  name: z.string(),
+  avatarUrl: z.nullable(z.string()).optional(),
+});
+
+export function deploymentInfoWorkspaceFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentInfoWorkspace, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentInfoWorkspace$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInfoWorkspace' from JSON`,
+  );
+}
+
+/** @internal */
+export const Portal$inboundSchema: z.ZodType<Portal, unknown> = z.object({
+  appearance: DeploymentPortalAppearance$inboundSchema,
+});
+
+export function portalFromJSON(
+  jsonString: string,
+): SafeParseResult<Portal, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Portal$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Portal' from JSON`,
+  );
+}
+
+/** @internal */
 export const StackSummaryPlatform$inboundSchema: z.ZodEnum<
   typeof StackSummaryPlatform
 > = z.enum(StackSummaryPlatform);
@@ -631,8 +699,9 @@ export const StackSummaryPlatform$inboundSchema: z.ZodEnum<
 /** @internal */
 export const ResourceCounts$inboundSchema: z.ZodType<ResourceCounts, unknown> =
   z.object({
-    functions: z.int(),
+    workers: z.int(),
     containers: z.int(),
+    publicHttpsEndpoints: z.int(),
     externalInfra: z.int(),
     total: z.int(),
   });
@@ -670,10 +739,7 @@ export const DeploymentInfoProject$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   name: z.string(),
-  workspace: z.string(),
-  deploymentPageBackground: z.nullable(DeploymentPageBackground$inboundSchema)
-    .optional(),
-  deploymentPageLogoUrl: z.nullable(z.string()).optional(),
+  portal: z.lazy(() => Portal$inboundSchema),
   stackSummary: z.nullable(z.lazy(() => StackSummary$inboundSchema)).optional(),
 });
 
@@ -777,15 +843,37 @@ export const CloudformationStatus$inboundSchema: z.ZodEnum<
 > = z.enum(CloudformationStatus);
 
 /** @internal */
-export const CloudformationOutputs$inboundSchema: z.ZodType<
-  CloudformationOutputs,
+export const CloudformationTargets$inboundSchema: z.ZodType<
+  CloudformationTargets,
   unknown
 > = z.object({
   launchStackUrl: z.string(),
   sha256: z.string(),
   size: z.int(),
   stackPolicyUrl: z.string(),
+  target: z.string(),
   templateUrl: z.string(),
+});
+
+export function cloudformationTargetsFromJSON(
+  jsonString: string,
+): SafeParseResult<CloudformationTargets, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CloudformationTargets$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CloudformationTargets' from JSON`,
+  );
+}
+
+/** @internal */
+export const CloudformationOutputs$inboundSchema: z.ZodType<
+  CloudformationOutputs,
+  unknown
+> = z.object({
+  targets: z.record(
+    z.string(),
+    z.lazy(() => CloudformationTargets$inboundSchema),
+  ),
 });
 
 export function cloudformationOutputsFromJSON(
@@ -1066,10 +1154,9 @@ export const DeploymentInfoManagementConfigAzure$inboundSchema: z.ZodType<
   DeploymentInfoManagementConfigAzure,
   unknown
 > = z.object({
-  managementPrincipalId: z.nullable(z.string()).optional(),
   managingTenantId: z.string(),
-  oidcIssuer: z.nullable(z.string()).optional(),
-  oidcSubject: z.nullable(z.string()).optional(),
+  oidcIssuer: z.string(),
+  oidcSubject: z.string(),
   platform: z.literal("azure"),
 });
 
@@ -1145,7 +1232,10 @@ export function deploymentInfoManagementConfigUnionFromJSON(
 }
 
 /** @internal */
-export const Targets$inboundSchema: z.ZodType<Targets, unknown> = z.object({
+export const InstallContextTargets$inboundSchema: z.ZodType<
+  InstallContextTargets,
+  unknown
+> = z.object({
   platform: TargetsPlatformEnum$inboundSchema,
   managerUrl: z.string(),
   managementConfig: z.union([
@@ -1157,29 +1247,34 @@ export const Targets$inboundSchema: z.ZodType<Targets, unknown> = z.object({
   awsManagingAccountId: z.string().optional(),
 });
 
-export function targetsFromJSON(
+export function installContextTargetsFromJSON(
   jsonString: string,
-): SafeParseResult<Targets, SDKValidationError> {
+): SafeParseResult<InstallContextTargets, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Targets$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Targets' from JSON`,
+    (x) => InstallContextTargets$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'InstallContextTargets' from JSON`,
   );
 }
 
 /** @internal */
-export const InstallContext$inboundSchema: z.ZodType<InstallContext, unknown> =
-  z.object({
-    targets: z.record(z.string(), z.lazy(() => Targets$inboundSchema)),
-  });
+export const DeploymentInfoInstallContext$inboundSchema: z.ZodType<
+  DeploymentInfoInstallContext,
+  unknown
+> = z.object({
+  targets: z.record(
+    z.string(),
+    z.lazy(() => InstallContextTargets$inboundSchema),
+  ),
+});
 
-export function installContextFromJSON(
+export function deploymentInfoInstallContextFromJSON(
   jsonString: string,
-): SafeParseResult<InstallContext, SDKValidationError> {
+): SafeParseResult<DeploymentInfoInstallContext, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => InstallContext$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'InstallContext' from JSON`,
+    (x) => DeploymentInfoInstallContext$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInfoInstallContext' from JSON`,
   );
 }
 
@@ -1190,9 +1285,12 @@ export const DeploymentInfo$inboundSchema: z.ZodType<DeploymentInfo, unknown> =
     deployment: z.lazy(() => DeploymentInfoDeployment$inboundSchema).optional(),
     deploymentGroup: z.lazy(() => DeploymentInfoDeploymentGroup$inboundSchema)
       .optional(),
+    workspace: z.lazy(() => DeploymentInfoWorkspace$inboundSchema),
     project: z.lazy(() => DeploymentInfoProject$inboundSchema),
     packages: z.lazy(() => Packages$inboundSchema),
-    installContext: z.lazy(() => InstallContext$inboundSchema),
+    installContext: z.lazy(() => DeploymentInfoInstallContext$inboundSchema),
+    supportedRegions: SupportedCloudRegions$inboundSchema,
+    setupConfig: DeploymentInfoSetupConfig$inboundSchema.optional(),
   });
 
 export function deploymentInfoFromJSON(

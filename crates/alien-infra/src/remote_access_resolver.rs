@@ -9,7 +9,7 @@ use crate::ClientConfigExt as _;
 use alien_aws_clients::AwsImpersonationConfig;
 use alien_core::{
     ClientConfig, EnvironmentInfo, ImpersonationConfig, Platform, RemoteStackManagement,
-    RemoteStackManagementOutputs, ResourceOutputsDefinition, StackState,
+    RemoteStackManagementOutputs, StackState,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 #[cfg(feature = "gcp")]
@@ -194,16 +194,14 @@ impl RemoteAccessResolver {
         )
     }
 
-    /// Resolve Azure impersonation using OIDC token exchange or SP cross-tenant credentials.
+    /// Resolve Azure impersonation using target-side UAMI Workload Identity.
     ///
     /// The access_configuration from RSM outputs is JSON:
     ///   { "uamiClientId": "<client-id>", "tenantId": "<customer-tenant-id>" }
     ///
-    /// Primary path (production/CI): reads OIDC token from AZURE_FEDERATED_TOKEN_FILE,
-    /// exchanges it for an ARM token via the customer's Azure AD token endpoint.
-    ///
-    /// Fallback path (local dev): uses ServicePrincipal client_credentials grant
-    /// against the customer's tenant.
+    /// The manager process must expose AZURE_FEDERATED_TOKEN_FILE. The target
+    /// subscription trusts that token through the Federated Identity Credential
+    /// created on the RemoteStackManagement UAMI during setup.
     async fn resolve_azure_impersonation(
         &self,
         base_config: ClientConfig,
@@ -231,11 +229,6 @@ impl RemoteAccessResolver {
             })
         })?;
 
-        let token_url = format!(
-            "https://login.microsoftonline.com/{}/oauth2/v2.0/token",
-            customer_tenant_id
-        );
-
         // Extract target subscription/region from environment info
         let (target_subscription, target_region) = match target_environment {
             Some(EnvironmentInfo::Azure(info)) => {
@@ -252,73 +245,40 @@ impl RemoteAccessResolver {
             },
         };
 
-        // Primary: OIDC WorkloadIdentity (if AZURE_FEDERATED_TOKEN_FILE is set).
-        // Return WorkloadIdentity credentials instead of a pre-exchanged AccessToken
-        // so each Azure client can request a token with the appropriate scope
-        // (ARM for management APIs, vault.azure.net for Key Vault data plane, etc.).
-        if let Some(token_file) = self.env.get("AZURE_FEDERATED_TOKEN_FILE") {
-            info!(
-                uami_client_id = %uami_client_id,
-                customer_tenant_id = %customer_tenant_id,
-                "Resolving Azure access via OIDC WorkloadIdentity"
-            );
+        let token_file = self.env.get("AZURE_FEDERATED_TOKEN_FILE").ok_or_else(|| {
+            AlienError::new(ErrorData::AuthenticationFailed {
+                message: "AZURE_FEDERATED_TOKEN_FILE is required for Azure remote stack access"
+                    .to_string(),
+                method: Some("azure_workload_identity".to_string()),
+            })
+        })?;
 
-            let authority_host = self
-                .env
-                .get("AZURE_AUTHORITY_HOST")
-                .cloned()
-                .unwrap_or_else(|| "https://login.microsoftonline.com/".to_string());
+        info!(
+            uami_client_id = %uami_client_id,
+            customer_tenant_id = %customer_tenant_id,
+            "Resolving Azure access via OIDC WorkloadIdentity"
+        );
 
-            return Ok(ClientConfig::Azure(Box::new(
-                alien_azure_clients::AzureClientConfig {
-                    subscription_id: target_subscription,
+        let authority_host = self
+            .env
+            .get("AZURE_AUTHORITY_HOST")
+            .cloned()
+            .unwrap_or_else(|| "https://login.microsoftonline.com/".to_string());
+
+        Ok(ClientConfig::Azure(Box::new(
+            alien_azure_clients::AzureClientConfig {
+                subscription_id: target_subscription,
+                tenant_id: customer_tenant_id.to_string(),
+                region: target_region,
+                credentials: alien_azure_clients::AzureCredentials::WorkloadIdentity {
+                    client_id: uami_client_id.to_string(),
                     tenant_id: customer_tenant_id.to_string(),
-                    region: target_region,
-                    credentials: alien_azure_clients::AzureCredentials::WorkloadIdentity {
-                        client_id: uami_client_id.to_string(),
-                        tenant_id: customer_tenant_id.to_string(),
-                        federated_token_file: token_file.clone(),
-                        authority_host,
-                    },
-                    service_overrides: None,
+                    federated_token_file: token_file.clone(),
+                    authority_host,
                 },
-            )));
-        }
-
-        // Fallback: SP cross-tenant client_credentials (local dev)
-        if let ClientConfig::Azure(azure_config) = &base_config {
-            if let alien_azure_clients::AzureCredentials::ServicePrincipal {
-                client_id,
-                client_secret,
-            } = &azure_config.credentials
-            {
-                info!(
-                    customer_tenant_id = %customer_tenant_id,
-                    "Resolving Azure access via SP cross-tenant client_credentials"
-                );
-
-                let access_token =
-                    exchange_sp_credentials(&token_url, client_id, client_secret).await?;
-
-                return Ok(ClientConfig::Azure(Box::new(
-                    alien_azure_clients::AzureClientConfig {
-                        subscription_id: target_subscription,
-                        tenant_id: customer_tenant_id.to_string(),
-                        region: target_region,
-                        credentials: alien_azure_clients::AzureCredentials::AccessToken {
-                            token: access_token,
-                        },
-                        service_overrides: None,
-                    },
-                )));
-            }
-        }
-
-        Err(AlienError::new(ErrorData::AuthenticationFailed {
-            message: "No OIDC token file or SP credentials available for Azure cross-tenant access"
-                .to_string(),
-            method: Some("azure_impersonation".to_string()),
-        }))
+                service_overrides: None,
+            },
+        )))
     }
 
     /// Create a base client configuration for the specified platform
@@ -335,115 +295,6 @@ impl RemoteAccessResolver {
                 message: "Failed to load platform configuration from environment".to_string(),
             })
     }
-}
-
-/// Exchange an OIDC token for an Azure ARM access token via federated identity credential
-async fn exchange_oidc_token(
-    token_url: &str,
-    uami_client_id: &str,
-    oidc_token: &str,
-) -> Result<String> {
-    let client = reqwest::Client::new();
-    let form = [
-        ("grant_type", "client_credentials"),
-        ("client_id", uami_client_id),
-        (
-            "client_assertion_type",
-            "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
-        ),
-        ("client_assertion", oidc_token),
-        ("scope", "https://management.azure.com/.default"),
-    ];
-
-    let response = client
-        .post(token_url)
-        .form(&form)
-        .send()
-        .await
-        .into_alien_error()
-        .context(ErrorData::AuthenticationFailed {
-            message: "OIDC token exchange request failed".to_string(),
-            method: Some("oidc_token_exchange".to_string()),
-        })?;
-
-    if !response.status().is_success() {
-        let error_text = response.text().await.unwrap_or_default();
-        return Err(AlienError::new(ErrorData::AuthenticationFailed {
-            message: format!("OIDC token exchange failed ({}): {}", token_url, error_text),
-            method: Some("oidc_token_exchange".to_string()),
-        }));
-    }
-
-    #[derive(serde::Deserialize)]
-    struct TokenResponse {
-        access_token: String,
-    }
-
-    let token_response: TokenResponse =
-        response
-            .json()
-            .await
-            .into_alien_error()
-            .context(ErrorData::AuthenticationFailed {
-                message: "Failed to parse OIDC token exchange response".to_string(),
-                method: Some("oidc_token_exchange".to_string()),
-            })?;
-
-    Ok(token_response.access_token)
-}
-
-/// Exchange SP credentials for an Azure ARM access token (cross-tenant)
-async fn exchange_sp_credentials(
-    token_url: &str,
-    client_id: &str,
-    client_secret: &str,
-) -> Result<String> {
-    let client = reqwest::Client::new();
-    let form = [
-        ("grant_type", "client_credentials"),
-        ("client_id", client_id),
-        ("client_secret", client_secret),
-        ("scope", "https://management.azure.com/.default"),
-    ];
-
-    let response = client
-        .post(token_url)
-        .form(&form)
-        .send()
-        .await
-        .into_alien_error()
-        .context(ErrorData::AuthenticationFailed {
-            message: "SP cross-tenant token request failed".to_string(),
-            method: Some("sp_cross_tenant".to_string()),
-        })?;
-
-    if !response.status().is_success() {
-        let error_text = response.text().await.unwrap_or_default();
-        return Err(AlienError::new(ErrorData::AuthenticationFailed {
-            message: format!(
-                "SP cross-tenant token request failed ({}): {}",
-                token_url, error_text
-            ),
-            method: Some("sp_cross_tenant".to_string()),
-        }));
-    }
-
-    #[derive(serde::Deserialize)]
-    struct TokenResponse {
-        access_token: String,
-    }
-
-    let token_response: TokenResponse =
-        response
-            .json()
-            .await
-            .into_alien_error()
-            .context(ErrorData::AuthenticationFailed {
-                message: "Failed to parse SP token response".to_string(),
-                method: Some("sp_cross_tenant".to_string()),
-            })?;
-
-    Ok(token_response.access_token)
 }
 
 impl Default for RemoteAccessResolver {

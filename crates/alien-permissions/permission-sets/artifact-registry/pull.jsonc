@@ -53,19 +53,11 @@
     "gcp": [
       {
         "grant": {
-          "permissions": [
-            "artifactregistry.repositories.get",
-            "artifactregistry.repositories.list",
-            "artifactregistry.tags.get",
-            "artifactregistry.tags.list",
-            "artifactregistry.versions.get",
-            "artifactregistry.versions.list",
-            "artifactregistry.repositories.downloadArtifacts"
-          ]
+          "predefinedRoles": ["roles/artifactregistry.reader"]
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}/locations/${region}"
+            "scope": "projects/${projectName}"
           },
           "resource": {
             "scope": "projects/${projectName}/locations/${region}/repositories/${resourceName}"
@@ -79,9 +71,6 @@
         "binding": {
           "stack": {
             "scope": "projects/${projectName}"
-          },
-          "resource": {
-            "scope": "projects/${projectName}"
           }
         }
       }
@@ -89,10 +78,7 @@
     "azure": [
       {
         "grant": {
-          "actions": [
-            "Microsoft.ContainerRegistry/registries/read",
-            "Microsoft.ContainerRegistry/registries/metadata/read"
-          ]
+          "predefinedRoles": ["AcrPull"]
         },
         "binding": {
           "stack": {

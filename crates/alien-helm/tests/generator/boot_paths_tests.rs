@@ -2,7 +2,7 @@
 //! shapes — `manager-fetch path` (default `values.yaml`) and
 //! `external-bindings initialize path` (`examples/onprem.yaml`).
 
-use super::helpers::render;
+use super::{helpers::render, test_utils};
 use alien_core::{
     ArtifactRegistry, ExternalBindings, Kv, Queue, ResourceLifecycle, Stack, StackSettings,
     Storage, Vault,
@@ -18,8 +18,7 @@ fn schema_accepts_manager_fetch_default_values() {
         .build();
     let chart = render(&stack, StackSettings::default());
     let files = chart.files;
-    alien_helm::test_utils::helm_template_and_validate(&files, None)
-        .assert_ok("manager-fetch path");
+    test_utils::helm_template_and_validate(&files, None).assert_ok("manager-fetch path");
 }
 
 #[test]
@@ -52,7 +51,7 @@ fn schema_accepts_external_bindings_initialize_onprem_values() {
         .get("examples/onprem.yaml")
         .expect("onprem example")
         .clone();
-    alien_helm::test_utils::helm_template_and_validate(&files, Some(&local_values))
+    test_utils::helm_template_and_validate(&files, Some(&local_values))
         .assert_ok("external-bindings initialize path");
 
     let values: serde_yaml::Value =

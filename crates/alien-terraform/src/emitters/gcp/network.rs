@@ -56,7 +56,7 @@ impl TfEmitter for GcpNetworkEmitter {
                 ));
                 Ok(fragment)
             }
-            NetworkSettings::Create { cidr, .. } => Ok(create_topology(label, cidr.clone())),
+            NetworkSettings::Create { cidr, .. } => Ok(dynamic_topology(label, cidr.clone())),
             NetworkSettings::ByoVpcAws { .. } | NetworkSettings::ByoVnetAzure { .. } => {
                 Err(AlienError::new(ErrorData::OperationNotSupported {
                     operation: "generate_terraform_module".to_string(),
@@ -76,6 +76,7 @@ impl TfEmitter for GcpNetworkEmitter {
                 ("vpcSelfLink", Expression::Null),
                 ("vpcName", Expression::Null),
                 ("subnetSelfLinks", Expression::Array(vec![])),
+                ("cidrBlock", Expression::Null),
                 ("routerSelfLink", Expression::Null),
                 ("natName", Expression::Null),
                 ("isByoVpc", Expression::Bool(true)),
@@ -101,6 +102,15 @@ impl TfEmitter for GcpNetworkEmitter {
                             "self_link",
                         ])]),
                     ),
+                    (
+                        "cidrBlock",
+                        expr::traversal([
+                            "data",
+                            "google_compute_subnetwork",
+                            &subnet_label,
+                            "ip_cidr_range",
+                        ]),
+                    ),
                     ("routerSelfLink", Expression::Null),
                     ("natName", Expression::Null),
                     ("isByoVpc", Expression::Bool(true)),
@@ -110,33 +120,46 @@ impl TfEmitter for GcpNetworkEmitter {
                 let subnet_label = format!("{label}_workload");
                 let router_label = format!("{label}_router");
                 let nat_label = format!("{label}_nat");
+                let existing_subnet_label = format!("{label}_existing_subnet");
                 expr::object([
                     ("projectId", expr::raw("var.gcp_project")),
                     (
                         "vpcSelfLink",
-                        expr::traversal(["google_compute_network", label, "self_link"]),
+                        expr::raw(format!(
+                            "var.network_mode == \"create-new\" ? google_compute_network.{label}[0].self_link : var.network_mode == \"use-existing\" ? data.google_compute_network.{label}[0].self_link : null"
+                        )),
                     ),
                     (
                         "vpcName",
-                        expr::traversal(["google_compute_network", label, "name"]),
+                        expr::raw(format!(
+                            "var.network_mode == \"create-new\" ? google_compute_network.{label}[0].name : var.network_mode == \"use-existing\" ? data.google_compute_network.{label}[0].name : null"
+                        )),
                     ),
                     (
                         "subnetSelfLinks",
-                        Expression::Array(vec![expr::traversal([
-                            "google_compute_subnetwork",
-                            &subnet_label,
-                            "self_link",
-                        ])]),
+                        expr::raw(format!(
+                            "var.network_mode == \"create-new\" ? [google_compute_subnetwork.{subnet_label}[0].self_link] : var.network_mode == \"use-existing\" ? [data.google_compute_subnetwork.{existing_subnet_label}[0].self_link] : []"
+                        )),
+                    ),
+                    (
+                        "cidrBlock",
+                        expr::raw(format!(
+                            "var.network_mode == \"create-new\" ? google_compute_subnetwork.{subnet_label}[0].ip_cidr_range : var.network_mode == \"use-existing\" ? data.google_compute_subnetwork.{existing_subnet_label}[0].ip_cidr_range : null"
+                        )),
                     ),
                     (
                         "routerSelfLink",
-                        expr::traversal(["google_compute_router", &router_label, "self_link"]),
+                        expr::raw(format!(
+                            "var.network_mode == \"create-new\" ? google_compute_router.{router_label}[0].self_link : null"
+                        )),
                     ),
                     (
                         "natName",
-                        expr::traversal(["google_compute_router_nat", &nat_label, "name"]),
+                        expr::raw(format!(
+                            "var.network_mode == \"create-new\" ? google_compute_router_nat.{nat_label}[0].name : null"
+                        )),
                     ),
-                    ("isByoVpc", Expression::Bool(false)),
+                    ("isByoVpc", expr::raw("var.network_mode != \"create-new\"")),
                 ])
             }
             _ => Expression::Null,
@@ -144,11 +167,73 @@ impl TfEmitter for GcpNetworkEmitter {
     }
 }
 
-fn create_topology(label: &str, cidr: Option<String>) -> TfFragment {
+fn dynamic_topology(label: &str, cidr: Option<String>) -> TfFragment {
+    let mut fragment = create_topology(label, cidr, true);
+    for resource in &mut fragment.resource_blocks {
+        let existing = std::mem::take(&mut resource.body);
+        resource.body = hcl::structure::Body::from(
+            std::iter::once(attr(
+                "count",
+                expr::raw("var.network_mode == \"create-new\" ? 1 : 0"),
+            ))
+            .chain(existing.into_iter())
+            .collect::<Vec<_>>(),
+        );
+    }
+
+    let existing_subnet_label = format!("{label}_existing_subnet");
+    fragment.data_blocks.push(data_block(
+        "google_compute_network",
+        label,
+        [
+            attr(
+                "count",
+                expr::raw("var.network_mode == \"use-existing\" ? 1 : 0"),
+            ),
+            attr("name", expr::raw("var.network_name")),
+            attr("project", expr::raw("var.gcp_project")),
+        ],
+    ));
+    fragment.data_blocks.push(data_block(
+        "google_compute_subnetwork",
+        &existing_subnet_label,
+        [
+            attr(
+                "count",
+                expr::raw("var.network_mode == \"use-existing\" ? 1 : 0"),
+            ),
+            attr("name", expr::raw("var.subnet_name")),
+            attr("project", expr::raw("var.gcp_project")),
+            attr(
+                "region",
+                expr::raw("var.network_region == \"\" ? var.gcp_region : var.network_region"),
+            ),
+        ],
+    ));
+
+    fragment
+}
+
+fn create_topology(label: &str, cidr: Option<String>, counted: bool) -> TfFragment {
     let cidr_str = cidr.unwrap_or_else(|| "10.44.0.0/16".to_string());
     let subnet_label = format!("{label}_workload");
     let router_label = format!("{label}_router");
     let nat_label = format!("{label}_nat");
+    let network_name = gcp_network_name(label, "");
+    let subnet_name = gcp_network_name(label, "-workload");
+    let router_name_attr = gcp_network_name(label, "-router");
+    let nat_name = gcp_network_name(label, "-nat");
+    let firewall_name = gcp_network_name(label, "-internal");
+    let network_id = if counted {
+        expr::raw(format!("google_compute_network.{label}[0].id"))
+    } else {
+        expr::traversal(["google_compute_network", label, "id"])
+    };
+    let router_name = if counted {
+        expr::raw(format!("google_compute_router.{router_label}[0].name"))
+    } else {
+        expr::traversal(["google_compute_router", &router_label, "name"])
+    };
 
     let mut fragment = TfFragment::default();
 
@@ -156,10 +241,7 @@ fn create_topology(label: &str, cidr: Option<String>) -> TfFragment {
         "google_compute_network",
         label,
         [
-            attr(
-                "name",
-                crate::emitters::gcp::helpers::stack_name_template(label),
-            ),
+            attr("name", network_name),
             attr("project", expr::raw("var.gcp_project")),
             attr("auto_create_subnetworks", Expression::Bool(false)),
             attr("routing_mode", Expression::String("REGIONAL".to_string())),
@@ -170,17 +252,11 @@ fn create_topology(label: &str, cidr: Option<String>) -> TfFragment {
         "google_compute_subnetwork",
         &subnet_label,
         [
-            attr(
-                "name",
-                expr::template(format!("${{var.stack_name}}-{label}-workload")),
-            ),
+            attr("name", subnet_name),
             attr("project", expr::raw("var.gcp_project")),
             attr("region", expr::raw("var.gcp_region")),
             attr("ip_cidr_range", Expression::String(cidr_str.clone())),
-            attr(
-                "network",
-                expr::traversal(["google_compute_network", label, "id"]),
-            ),
+            attr("network", network_id.clone()),
             attr("private_ip_google_access", Expression::Bool(true)),
         ],
     ));
@@ -189,16 +265,10 @@ fn create_topology(label: &str, cidr: Option<String>) -> TfFragment {
         "google_compute_router",
         &router_label,
         [
-            attr(
-                "name",
-                expr::template(format!("${{var.stack_name}}-{label}-router")),
-            ),
+            attr("name", router_name_attr),
             attr("project", expr::raw("var.gcp_project")),
             attr("region", expr::raw("var.gcp_region")),
-            attr(
-                "network",
-                expr::traversal(["google_compute_network", label, "id"]),
-            ),
+            attr("network", network_id.clone()),
         ],
     ));
 
@@ -206,16 +276,10 @@ fn create_topology(label: &str, cidr: Option<String>) -> TfFragment {
         "google_compute_router_nat",
         &nat_label,
         [
-            attr(
-                "name",
-                expr::template(format!("${{var.stack_name}}-{label}-nat")),
-            ),
+            attr("name", nat_name),
             attr("project", expr::raw("var.gcp_project")),
             attr("region", expr::raw("var.gcp_region")),
-            attr(
-                "router",
-                expr::traversal(["google_compute_router", &router_label, "name"]),
-            ),
+            attr("router", router_name),
             attr(
                 "nat_ip_allocate_option",
                 Expression::String("AUTO_ONLY".to_string()),
@@ -238,15 +302,9 @@ fn create_topology(label: &str, cidr: Option<String>) -> TfFragment {
         "google_compute_firewall",
         &format!("{label}_internal"),
         [
-            attr(
-                "name",
-                expr::template(format!("${{var.stack_name}}-{label}-internal")),
-            ),
+            attr("name", firewall_name),
             attr("project", expr::raw("var.gcp_project")),
-            attr(
-                "network",
-                expr::traversal(["google_compute_network", label, "id"]),
-            ),
+            attr("network", network_id),
             attr("direction", Expression::String("INGRESS".to_string())),
             attr(
                 "source_ranges",
@@ -260,4 +318,11 @@ fn create_topology(label: &str, cidr: Option<String>) -> TfFragment {
     ));
 
     fragment
+}
+
+fn gcp_network_name(label: &str, suffix: &str) -> Expression {
+    let segment = label.replace('_', "-");
+    expr::raw(format!(
+        "trim(substr(\"${{local.resource_prefix}}-{segment}{suffix}\", 0, 63), \"-\")"
+    ))
 }

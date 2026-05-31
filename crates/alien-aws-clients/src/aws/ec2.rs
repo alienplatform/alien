@@ -43,7 +43,6 @@ use mockall::automock;
 #[serde(rename_all = "PascalCase")]
 struct Ec2ErrorResponse {
     pub errors: Ec2ErrorsWrapper,
-    pub request_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -140,6 +139,10 @@ pub trait Ec2Api: Send + Sync + std::fmt::Debug {
         &self,
         request: DescribeSecurityGroupsRequest,
     ) -> Result<DescribeSecurityGroupsResponse>;
+    async fn describe_network_interfaces(
+        &self,
+        request: DescribeNetworkInterfacesRequest,
+    ) -> Result<DescribeNetworkInterfacesResponse>;
     async fn create_security_group(
         &self,
         request: CreateSecurityGroupRequest,
@@ -488,13 +491,14 @@ impl Ec2Client {
             | "SubnetLimitExceeded"
             | "SecurityGroupLimitExceeded"
             | "AddressLimitExceeded" => ErrorData::QuotaExceeded { message },
-            "InvalidVpcState" | "InvalidSubnetID.DuplicateSubnet" | "InvalidGroup.Duplicate" => {
-                ErrorData::RemoteResourceConflict {
-                    message,
-                    resource_type: "EC2 Resource".into(),
-                    resource_name: resource.into(),
-                }
-            }
+            "InvalidVpcState"
+            | "InvalidSubnetID.DuplicateSubnet"
+            | "InvalidGroup.Duplicate"
+            | "InvalidPermission.Duplicate" => ErrorData::RemoteResourceConflict {
+                message,
+                resource_type: "EC2 Resource".into(),
+                resource_name: resource.into(),
+            },
             "DependencyViolation" | "ResourceInUse" => ErrorData::RemoteResourceConflict {
                 message,
                 resource_type: "EC2 Resource".into(),
@@ -569,19 +573,25 @@ impl Ec2Client {
         form_data: &mut HashMap<String, String>,
         tag_specs: &[TagSpecification],
     ) {
+        Self::add_tag_specifications_with_prefix(form_data, "TagSpecification", tag_specs);
+    }
+
+    /// Add tag specification parameters under a specific EC2 query prefix.
+    fn add_tag_specifications_with_prefix(
+        form_data: &mut HashMap<String, String>,
+        prefix: &str,
+        tag_specs: &[TagSpecification],
+    ) {
         for (i, spec) in tag_specs.iter().enumerate() {
             let idx = i + 1;
             form_data.insert(
-                format!("TagSpecification.{}.ResourceType", idx),
+                format!("{prefix}.{idx}.ResourceType"),
                 spec.resource_type.clone(),
             );
             for (j, tag) in spec.tags.iter().enumerate() {
+                form_data.insert(format!("{prefix}.{idx}.Tag.{}.Key", j + 1), tag.key.clone());
                 form_data.insert(
-                    format!("TagSpecification.{}.Tag.{}.Key", idx, j + 1),
-                    tag.key.clone(),
-                );
-                form_data.insert(
-                    format!("TagSpecification.{}.Tag.{}.Value", idx, j + 1),
+                    format!("{prefix}.{idx}.Tag.{}.Value", j + 1),
                     tag.value.clone(),
                 );
             }
@@ -1152,6 +1162,42 @@ impl Ec2Api for Ec2Client {
             .await
     }
 
+    async fn describe_network_interfaces(
+        &self,
+        request: DescribeNetworkInterfacesRequest,
+    ) -> Result<DescribeNetworkInterfacesResponse> {
+        let mut form_data = HashMap::new();
+        form_data.insert(
+            "Action".to_string(),
+            "DescribeNetworkInterfaces".to_string(),
+        );
+        form_data.insert("Version".to_string(), "2016-11-15".to_string());
+
+        if let Some(network_interface_ids) = &request.network_interface_ids {
+            for (i, network_interface_id) in network_interface_ids.iter().enumerate() {
+                form_data.insert(
+                    format!("NetworkInterfaceId.{}", i + 1),
+                    network_interface_id.clone(),
+                );
+            }
+        }
+
+        if let Some(filters) = &request.filters {
+            Self::add_filters(&mut form_data, filters);
+        }
+
+        if let Some(max_results) = request.max_results {
+            form_data.insert("MaxResults".to_string(), max_results.to_string());
+        }
+
+        if let Some(next_token) = &request.next_token {
+            form_data.insert("NextToken".to_string(), next_token.clone());
+        }
+
+        self.send_form(form_data, "DescribeNetworkInterfaces", "NetworkInterface")
+            .await
+    }
+
     async fn create_security_group(
         &self,
         request: CreateSecurityGroupRequest,
@@ -1717,6 +1763,20 @@ impl Ec2Api for Ec2Client {
                     http_put_response_hop_limit.to_string(),
                 );
             }
+            if let Some(instance_metadata_tags) = &metadata_options.instance_metadata_tags {
+                form_data.insert(
+                    "LaunchTemplateData.MetadataOptions.InstanceMetadataTags".to_string(),
+                    instance_metadata_tags.clone(),
+                );
+            }
+        }
+
+        if let Some(tag_specs) = &data.tag_specifications {
+            Self::add_tag_specifications_with_prefix(
+                &mut form_data,
+                "LaunchTemplateData.TagSpecification",
+                tag_specs,
+            );
         }
 
         if let Some(tag_specs) = &request.tag_specifications {
@@ -1775,6 +1835,40 @@ impl Ec2Api for Ec2Client {
             form_data.insert(
                 "LaunchTemplateData.InstanceType".to_string(),
                 instance_type.clone(),
+            );
+        }
+        if let Some(metadata_options) = &data.metadata_options {
+            if let Some(http_tokens) = &metadata_options.http_tokens {
+                form_data.insert(
+                    "LaunchTemplateData.MetadataOptions.HttpTokens".to_string(),
+                    http_tokens.clone(),
+                );
+            }
+            if let Some(http_endpoint) = &metadata_options.http_endpoint {
+                form_data.insert(
+                    "LaunchTemplateData.MetadataOptions.HttpEndpoint".to_string(),
+                    http_endpoint.clone(),
+                );
+            }
+            if let Some(http_put_response_hop_limit) = metadata_options.http_put_response_hop_limit
+            {
+                form_data.insert(
+                    "LaunchTemplateData.MetadataOptions.HttpPutResponseHopLimit".to_string(),
+                    http_put_response_hop_limit.to_string(),
+                );
+            }
+            if let Some(instance_metadata_tags) = &metadata_options.instance_metadata_tags {
+                form_data.insert(
+                    "LaunchTemplateData.MetadataOptions.InstanceMetadataTags".to_string(),
+                    instance_metadata_tags.clone(),
+                );
+            }
+        }
+        if let Some(tag_specs) = &data.tag_specifications {
+            Self::add_tag_specifications_with_prefix(
+                &mut form_data,
+                "LaunchTemplateData.TagSpecification",
+                tag_specs,
             );
         }
 
@@ -2549,6 +2643,63 @@ pub struct SecurityGroup {
     pub tag_set: Option<TagSet>,
 }
 
+/// Request to describe network interfaces.
+#[derive(Debug, Clone, Serialize, Builder, Default)]
+pub struct DescribeNetworkInterfacesRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network_interface_ids: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filters: Option<Vec<Filter>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_results: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_token: Option<String>,
+}
+
+/// Response from describing network interfaces.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DescribeNetworkInterfacesResponse {
+    #[serde(rename = "networkInterfaceSet")]
+    pub network_interface_set: Option<NetworkInterfaceSet>,
+    #[serde(rename = "nextToken")]
+    pub next_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkInterfaceSet {
+    #[serde(rename = "item", default)]
+    pub items: Vec<NetworkInterface>,
+}
+
+/// Represents an EC2 network interface.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkInterface {
+    pub network_interface_id: Option<String>,
+    pub status: Option<String>,
+    pub description: Option<String>,
+    pub subnet_id: Option<String>,
+    pub vpc_id: Option<String>,
+    #[serde(rename = "groupSet")]
+    pub group_set: Option<GroupIdentifierSet>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupIdentifierSet {
+    #[serde(rename = "item", default)]
+    pub items: Vec<GroupIdentifier>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupIdentifier {
+    pub group_id: Option<String>,
+    pub group_name: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IpPermissionSet {
@@ -3190,6 +3341,9 @@ pub struct RequestLaunchTemplateData {
     /// Metadata options.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata_options: Option<LaunchTemplateInstanceMetadataOptions>,
+    /// Tags to apply to resources created from the launch template.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag_specifications: Option<Vec<TagSpecification>>,
 }
 
 /// IAM instance profile specification for launch template.
@@ -3249,6 +3403,8 @@ pub struct LaunchTemplateInstanceMetadataOptions {
     pub http_endpoint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub http_put_response_hop_limit: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instance_metadata_tags: Option<String>,
 }
 
 /// Response from creating a launch template.

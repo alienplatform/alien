@@ -6,6 +6,7 @@
 use super::helpers::{render_sample, sample_stack, SampleResource};
 use alien_cloudformation::RegistrationMode;
 use alien_core::{ResourceLifecycle, ResourceRef, Stack, StackSettings};
+use indexmap::indexmap;
 
 const LAMBDA_ARN: &str = "arn:aws:lambda:us-east-1:123456789012:function:alien-import";
 
@@ -27,6 +28,7 @@ fn custom_resource_invokes_lambda_with_resolved_payload() {
         StackSettings::default(),
         RegistrationMode::CustomResource {
             lambda_arn: LAMBDA_ARN.to_string(),
+            callback_url: None,
         },
         "registration custom resource",
     );
@@ -40,10 +42,33 @@ fn both_modes_emit_lambda_plus_outputs() {
         StackSettings::default(),
         RegistrationMode::Both {
             lambda_arn: LAMBDA_ARN.to_string(),
+            callback_url: None,
         },
         "registration both",
     );
     insta::assert_snapshot!("registration_both", yaml);
+}
+
+#[test]
+fn regional_both_emits_mapping_plus_outputs() {
+    let yaml = render_sample(
+        &sample_stack(),
+        StackSettings::default(),
+        RegistrationMode::RegionalBoth {
+            lambda_arns_by_region: indexmap! {
+                "us-east-1".to_string() => LAMBDA_ARN.to_string(),
+                "eu-west-1".to_string() => "arn:aws:lambda:eu-west-1:123456789012:function:alien-import".to_string(),
+            },
+            callback_url: Some("https://api.dev.example.com".to_string()),
+        },
+        "registration regional both",
+    );
+
+    assert!(yaml.contains("RegionalCustomResourceServiceTokens:"));
+    assert!(yaml.contains("Fn::FindInMap:"));
+    assert!(yaml.contains("Ref: AWS::Region"));
+    assert!(yaml.contains("CallbackUrl: https://api.dev.example.com"));
+    insta::assert_snapshot!("registration_regional_both", yaml);
 }
 
 #[test]

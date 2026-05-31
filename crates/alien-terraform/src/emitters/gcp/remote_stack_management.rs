@@ -4,11 +4,7 @@
 //!
 //! 1. Create a `google_service_account` for the management identity.
 //! 2. For every permission set in `ctx.stack.management().profile()`,
-//!    emit a `google_project_iam_custom_role` + matching
-//!    `google_project_iam_member` binding through
-//!    [`emit_custom_role_and_bindings`]. The role contents come
-//!    straight from `GcpRuntimePermissionsGenerator::generate_custom_role`,
-//!    so apply-time and TF-time bind identical role schemas.
+//!    emit matching custom-role `google_project_iam_member` bindings.
 //! 3. Grant `roles/iam.serviceAccountTokenCreator` +
 //!    `roles/iam.serviceAccountUser` on the management SA to the
 //!    caller-supplied manager identity (`var.managing_service_account_email`).
@@ -19,13 +15,20 @@ use crate::{
     block::{attr, data_block, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::gcp::helpers::{
-        downcast, emit_custom_role_and_bindings, permission_context, required_label,
-        service_account_id_template, service_account_member_for_label,
+        binding_label_for_role, downcast, emit_custom_roles_for_bindings, permission_context,
+        push_iam_member, required_label, role_expression_for_binding, service_account_id_template,
+        service_account_member_for_label,
     },
     expr,
 };
 use alien_core::{
-    import::EmitContext, PermissionProfile, PermissionSetReference, RemoteStackManagement, Result,
+    import::EmitContext, ErrorData, KubernetesCluster, PermissionProfile, PermissionSet,
+    PermissionSetReference, RemoteStackManagement, Result,
+};
+use alien_error::AlienError;
+use alien_permissions::{
+    generators::{GcpBindingTargetScope, GcpRuntimePermissionsGenerator},
+    BindingTarget, PermissionContext,
 };
 use hcl::expr::Expression;
 
@@ -47,12 +50,12 @@ impl TfEmitter for GcpRemoteStackManagementEmitter {
                 attr("account_id", account_id_template),
                 attr(
                     "display_name",
-                    expr::template("Alien stack management identity".to_string()),
+                    expr::template("${local.deployment_name}: Management service account".to_string()),
                 ),
                 attr(
                     "description",
                     expr::template(
-                        "${var.stack_name} cross-account management service account".to_string(),
+                        "Management cloud identity for ${local.deployment_name}. Resource prefix: ${local.resource_prefix}.".to_string(),
                     ),
                 ),
             ],
@@ -63,23 +66,45 @@ impl TfEmitter for GcpRemoteStackManagementEmitter {
             [attr("project_id", expr::raw("var.gcp_project"))],
         ));
 
-        // Per-permission-set custom roles + bindings, derived from the
-        // stack's management profile via alien-permissions. Matches
-        // exactly what GcpRemoteStackManagementController emits at run
-        // time.
         let member = service_account_member_for_label(label);
-        let context = permission_context(label);
+        let context = permission_context(label, ctx.stack.id());
         if let Some(profile) = ctx.stack.management().profile() {
             for permission_set_ref in global_permission_refs(profile) {
                 if let Some(permission_set) = permission_set_ref
                     .resolve(|name| alien_permissions::get_permission_set(name).cloned())
                 {
-                    emit_custom_role_and_bindings(
+                    emit_project_management_bindings(
                         &mut fragment,
                         label,
                         &member,
                         &permission_set,
                         &context,
+                        BindingTarget::Stack,
+                    )?;
+                }
+            }
+            for (resource_id, permission_set_ref) in resource_scoped_permission_refs(profile) {
+                let Some(resource_entry) = ctx.stack.resources.get(resource_id) else {
+                    continue;
+                };
+                if resource_entry
+                    .config
+                    .downcast_ref::<KubernetesCluster>()
+                    .is_none()
+                {
+                    continue;
+                }
+                if let Some(permission_set) = permission_set_ref
+                    .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+                {
+                    let binding_label = format!("{label}_{}", terraform_label_segment(resource_id));
+                    emit_project_management_bindings(
+                        &mut fragment,
+                        &binding_label,
+                        &member,
+                        &permission_set,
+                        &context,
+                        BindingTarget::Resource,
                     )?;
                 }
             }
@@ -137,10 +162,78 @@ impl TfEmitter for GcpRemoteStackManagementEmitter {
     }
 }
 
+fn emit_project_management_bindings(
+    fragment: &mut TfFragment,
+    label: &str,
+    member: &Expression,
+    permission_set: &PermissionSet,
+    context: &PermissionContext,
+    binding_target: BindingTarget,
+) -> Result<()> {
+    if permission_set.platforms.gcp.is_none() {
+        return Ok(());
+    }
+
+    let generator = GcpRuntimePermissionsGenerator::new();
+    let grant_plan = generator
+        .generate_grant_plan(permission_set, binding_target, context)
+        .map_err(|err| {
+            AlienError::new(ErrorData::GenericError {
+                message: format!(
+                    "failed to generate GCP remote management IAM grant plan for '{}': {}",
+                    permission_set.id, err
+                ),
+            })
+        })?;
+    let bindings = grant_plan.bindings_for_target(GcpBindingTargetScope::Project);
+    let custom_roles = emit_custom_roles_for_bindings(fragment, &grant_plan, &bindings)?;
+
+    for (idx, binding) in bindings.into_iter().enumerate() {
+        let role_label = binding_label_for_role(&binding.role, &custom_roles)?;
+        let role = role_expression_for_binding(&binding.role, &custom_roles)?;
+        push_iam_member(
+            fragment,
+            &format!("{role_label}_{label}_binding_{idx}"),
+            role,
+            member,
+            &binding,
+        )?;
+    }
+
+    Ok(())
+}
+
 fn global_permission_refs(profile: &PermissionProfile) -> Vec<&PermissionSetReference> {
     profile
         .0
         .get("*")
         .map(|refs| refs.iter().collect())
         .unwrap_or_default()
+}
+
+fn resource_scoped_permission_refs(
+    profile: &PermissionProfile,
+) -> Vec<(&str, &PermissionSetReference)> {
+    profile
+        .0
+        .iter()
+        .filter(|(scope, _)| scope.as_str() != "*")
+        .flat_map(|(resource_id, refs)| {
+            refs.iter()
+                .map(move |permission_set_ref| (resource_id.as_str(), permission_set_ref))
+        })
+        .collect()
+}
+
+fn terraform_label_segment(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }

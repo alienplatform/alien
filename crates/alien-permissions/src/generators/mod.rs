@@ -2,6 +2,7 @@ pub mod aws_cloudformation;
 pub mod aws_runtime;
 pub mod azure_runtime;
 pub mod gcp_runtime;
+mod labels;
 
 pub use aws_cloudformation::{
     AwsCloudFormationIamPolicy, AwsCloudFormationIamStatement,
@@ -9,9 +10,12 @@ pub use aws_cloudformation::{
 };
 pub use aws_runtime::{AwsIamPolicy, AwsIamStatement, AwsRuntimePermissionsGenerator};
 pub use azure_runtime::{
-    AzureRoleAssignment, AzureRoleAssignmentProperties, AzureRoleDefinition,
-    AzureRuntimePermissionsGenerator,
+    azure_predefined_role_id, dedupe_azure_role_bindings, AzureCustomRole, AzureGrantPlan,
+    AzureRoleAssignment, AzureRoleAssignmentProperties, AzureRoleBinding, AzureRoleDefinition,
+    AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator,
 };
 pub use gcp_runtime::{
-    GcpCustomRole, GcpIamBinding, GcpIamBindings, GcpIamCondition, GcpRuntimePermissionsGenerator,
+    custom_role_permission_set_prefix, custom_role_prefix, GcpBindingResourceKind,
+    GcpBindingTargetScope, GcpCustomRole, GcpGrantPlan, GcpIamBinding, GcpIamBindings,
+    GcpIamCondition, GcpRuntimePermissionsGenerator,
 };

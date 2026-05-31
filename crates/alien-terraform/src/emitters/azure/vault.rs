@@ -12,17 +12,23 @@
 //!   module doesn't need an extra customer-supplied variable.
 
 use crate::{
-    block::{attr, block, data_block, nested, resource_block},
+    block::{attr, data_block, resource_block},
     emitter::{TfEmitter, TfFragment},
-    emitters::azure::helpers::{downcast, permission_context, required_label, tags},
+    emitters::azure::helpers::{
+        downcast, permission_context, required_label, service_account_principal_id,
+        setup_execution_role_label, setup_management_role_label, tags,
+    },
     expr,
 };
 use alien_core::{
-    import::EmitContext, ErrorData, PermissionProfile, PermissionSet, PermissionSetReference,
-    RemoteStackManagement, Result, Vault,
+    import::EmitContext, PermissionProfile, PermissionSetReference, RemoteStackManagement, Result,
+    Vault,
 };
 use alien_error::Context;
-use alien_permissions::{generators::AzureRuntimePermissionsGenerator, BindingTarget};
+use alien_permissions::{
+    generators::{AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator},
+    BindingTarget,
+};
 use hcl::expr::Expression;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -72,7 +78,7 @@ impl TfEmitter for AzureVaultEmitter {
             ],
         ));
 
-        emit_management_permissions(ctx, label, &mut fragment)?;
+        emit_vault_permissions(ctx, label, &mut fragment)?;
 
         Ok(fragment)
     }
@@ -113,22 +119,86 @@ impl TfEmitter for AzureVaultEmitter {
 /// the lower-cased `${stack}-{id}` template.
 fn vault_name_expr(vault_id: &str) -> Expression {
     expr::raw(format!(
-        "substr(lower(\"${{var.stack_name}}-{}\"), 0, 24)",
+        "substr(lower(\"${{local.resource_prefix}}-{}\"), 0, 24)",
         vault_id
     ))
 }
 
-fn emit_management_permissions(
+fn emit_vault_permissions(
     ctx: &EmitContext<'_>,
     vault_label: &str,
     fragment: &mut TfFragment,
 ) -> Result<()> {
+    for (profile_name, permission_set_refs) in vault_permission_owners(ctx) {
+        let Some(principal_id_expr) = service_account_principal_id(ctx, &profile_name) else {
+            continue;
+        };
+
+        for permission_set_ref in permission_set_refs {
+            let Some(permission_set) = permission_set_ref
+                .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+            else {
+                continue;
+            };
+            if permission_set.id.ends_with("/provision") || permission_set.platforms.azure.is_none()
+            {
+                continue;
+            }
+
+            let generator = AzureRuntimePermissionsGenerator::new();
+            let permission_context = permission_context(vault_label)
+                .with_resource_name(format!("${{local.resource_prefix}}-{}", ctx.resource_id));
+            let grant_plan = generator
+                .generate_grant_plan(
+                    &permission_set,
+                    BindingTarget::Resource,
+                    &permission_context,
+                )
+                .context(alien_core::ErrorData::GenericError {
+                    message: format!(
+                        "failed to generate Azure vault grants for '{}'",
+                        permission_set.id
+                    ),
+                })?;
+
+            for (binding_index, binding) in grant_plan.bindings.iter().enumerate() {
+                let role_definition_id = match &binding.role_definition {
+                    AzureRoleDefinitionRef::Predefined { role_definition_id } => {
+                        expr::template(role_definition_id.clone())
+                    }
+                    AzureRoleDefinitionRef::Custom { key } => {
+                        let index = grant_plan
+                            .custom_roles
+                            .iter()
+                            .position(|role| role.key == *key)
+                            .unwrap_or(0);
+                        let role_label =
+                            setup_execution_role_label(&profile_name, &binding.role_name, index);
+                        expr::traversal([
+                            "azurerm_role_definition",
+                            role_label.as_str(),
+                            "role_definition_resource_id",
+                        ])
+                    }
+                };
+                emit_role_assignment(
+                    fragment,
+                    ctx.resource_id,
+                    vault_label,
+                    &profile_name,
+                    binding_index,
+                    &binding.role_name,
+                    role_definition_id,
+                    principal_id_expr.clone(),
+                );
+            }
+        }
+    }
+
     let Some(management_label) = remote_stack_management_label(ctx) else {
         return Ok(());
     };
 
-    let context = permission_context(management_label)
-        .with_resource_name(format!("${{azurerm_key_vault.{vault_label}.name}}"));
     let principal_id_expr = expr::traversal([
         "azurerm_user_assigned_identity",
         management_label,
@@ -145,100 +215,76 @@ fn emit_management_permissions(
             continue;
         }
 
-        let role_label = management_role_label(management_label, &permission_set.id);
-        if should_emit_shared_role_definition(ctx, &permission_set.id) {
-            emit_management_role_definition(fragment, &role_label, &permission_set, &context)?;
+        let generator = AzureRuntimePermissionsGenerator::new();
+        let permission_context = permission_context(vault_label)
+            .with_resource_name(format!("${{local.resource_prefix}}-{}", ctx.resource_id));
+        let grant_plan = generator
+            .generate_grant_plan(
+                &permission_set,
+                BindingTarget::Resource,
+                &permission_context,
+            )
+            .context(alien_core::ErrorData::GenericError {
+                message: format!(
+                    "failed to generate Azure vault management grants for '{}'",
+                    permission_set.id
+                ),
+            })?;
+
+        for (binding_index, binding) in grant_plan.bindings.iter().enumerate() {
+            let role_definition_id = match &binding.role_definition {
+                AzureRoleDefinitionRef::Predefined { role_definition_id } => {
+                    expr::template(role_definition_id.clone())
+                }
+                AzureRoleDefinitionRef::Custom { key } => {
+                    let index = grant_plan
+                        .custom_roles
+                        .iter()
+                        .position(|role| role.key == *key)
+                        .unwrap_or(0);
+                    let role_label = setup_management_role_label(&binding.role_name, index);
+                    expr::traversal([
+                        "azurerm_role_definition",
+                        role_label.as_str(),
+                        "role_definition_resource_id",
+                    ])
+                }
+            };
+            emit_role_assignment(
+                fragment,
+                ctx.resource_id,
+                vault_label,
+                "management",
+                binding_index,
+                &binding.role_name,
+                role_definition_id,
+                principal_id_expr.clone(),
+            );
         }
-        emit_management_role_assignment(
-            fragment,
-            ctx.resource_id,
-            vault_label,
-            &role_label,
-            principal_id_expr.clone(),
-            &permission_set,
-        );
     }
 
     Ok(())
 }
 
-fn emit_management_role_definition(
-    fragment: &mut TfFragment,
-    role_label: &str,
-    permission_set: &PermissionSet,
-    context: &alien_permissions::PermissionContext,
-) -> Result<()> {
-    let generator = AzureRuntimePermissionsGenerator::new();
-    let mut role_definition = generator
-        .generate_role_definition(permission_set, BindingTarget::Resource, context)
-        .context(ErrorData::GenericError {
-            message: format!(
-                "failed to generate Azure management role permissions for '{}'",
-                permission_set.id
-            ),
-        })?;
-    role_definition.name = format!("{} [mgmt]", role_definition.name);
-
-    fragment.resource_blocks.push(resource_block(
-        "azurerm_role_definition",
-        role_label,
-        [
-            attr("name", expr::template(role_definition.name)),
-            attr(
-                "role_definition_id",
-                expr::raw(&format!(
-                    "uuidv5(\"oid\", \"alien:azure:mgmt-res-role-def:${{var.stack_name}}:{}\")",
-                    permission_set.id
-                )),
-            ),
-            attr(
-                "scope",
-                expr::raw(
-                    "\"/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}\"",
-                ),
-            ),
-            attr("description", Expression::String(role_definition.description)),
-            nested(block(
-                "permissions",
-                [
-                    attr("actions", string_array(role_definition.actions)),
-                    attr("data_actions", string_array(role_definition.data_actions)),
-                    attr("not_actions", string_array(role_definition.not_actions)),
-                    attr(
-                        "not_data_actions",
-                        string_array(role_definition.not_data_actions),
-                    ),
-                ],
-            )),
-            attr(
-                "assignable_scopes",
-                Expression::Array(vec![expr::raw(
-                    "\"/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}\"",
-                )]),
-            ),
-        ],
-    ));
-
-    Ok(())
-}
-
-fn emit_management_role_assignment(
+fn emit_role_assignment(
     fragment: &mut TfFragment,
     vault_id: &str,
     vault_label: &str,
-    role_label: &str,
+    principal_label: &str,
+    binding_index: usize,
+    role_name: &str,
+    role_definition_id: Expression,
     principal_id_expr: Expression,
-    permission_set: &PermissionSet,
 ) {
+    let role_label = sanitize_role_label(role_name);
     fragment.resource_blocks.push(resource_block(
         "azurerm_role_assignment",
-        &format!("{vault_label}_{role_label}_assignment"),
+        &format!("{vault_label}_{role_label}_{principal_label}_assignment_{binding_index}"),
         [
             attr(
                 "name",
                 expr::raw(&format!(
-                    "uuidv5(\"oid\", \"alien:azure:mgmt-res-role-assign:${{var.stack_name}}:{}:{}\")",
-                    vault_id, permission_set.id
+                    "uuidv5(\"oid\", \"deployment:azure:vault-role-assign:${{local.resource_prefix}}:{vault_id}:{role_label}:{principal_label}:{binding_index}\")"
                 )),
             ),
             attr(
@@ -247,15 +293,24 @@ fn emit_management_role_assignment(
             ),
             attr(
                 "role_definition_id",
-                expr::traversal([
-                    "azurerm_role_definition",
-                    role_label,
-                    "role_definition_resource_id",
-                ]),
+                role_definition_id,
             ),
             attr("principal_id", principal_id_expr),
         ],
     ));
+}
+
+fn sanitize_role_label(input: &str) -> String {
+    input
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 fn remote_stack_management_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
@@ -268,88 +323,52 @@ fn remote_stack_management_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str
     })
 }
 
+fn vault_permission_owners<'a>(
+    ctx: &'a EmitContext<'_>,
+) -> Vec<(String, Vec<&'a PermissionSetReference>)> {
+    let mut owners = Vec::new();
+    for (profile_name, profile) in ctx.stack.permission_profiles() {
+        let refs = resource_permission_refs(profile, ctx.resource_id);
+        if refs.is_empty() {
+            continue;
+        }
+        owners.push((profile_name.clone(), refs));
+    }
+    owners
+}
+
 fn management_permission_refs<'a>(ctx: &'a EmitContext<'_>) -> Vec<&'a PermissionSetReference> {
     let Some(profile) = ctx.stack.management().profile() else {
         return Vec::new();
     };
-    let mut refs = Vec::new();
-    refs.extend(resource_permission_refs(profile, ctx.resource_id));
-    refs.extend(
-        profile
-            .0
-            .get("*")
-            .into_iter()
-            .flat_map(|items| items.iter())
-            .filter(|reference| reference.id().starts_with("vault/")),
-    );
-    refs
+    resource_permission_refs(profile, ctx.resource_id)
 }
 
 fn resource_permission_refs<'a>(
     profile: &'a PermissionProfile,
     resource_id: &str,
 ) -> Vec<&'a PermissionSetReference> {
-    profile
-        .0
-        .get(resource_id)
-        .map(|refs| refs.iter().collect())
-        .unwrap_or_default()
-}
-
-fn should_emit_shared_role_definition(ctx: &EmitContext<'_>, permission_set_id: &str) -> bool {
-    ctx.stack
-        .resources()
-        .find_map(|(resource_id, entry)| {
-            if entry.config.resource_type() != Vault::RESOURCE_TYPE {
-                return None;
-            }
-            let refs = management_permission_refs_for_resource(ctx, resource_id);
-            refs.iter()
-                .any(|reference| reference.id() == permission_set_id)
-                .then_some(resource_id.as_str())
-        })
-        .is_some_and(|resource_id| resource_id == ctx.resource_id)
-}
-
-fn management_permission_refs_for_resource<'a>(
-    ctx: &'a EmitContext<'_>,
-    resource_id: &str,
-) -> Vec<&'a PermissionSetReference> {
-    let Some(profile) = ctx.stack.management().profile() else {
-        return Vec::new();
-    };
     let mut refs = Vec::new();
-    refs.extend(resource_permission_refs(profile, resource_id));
-    refs.extend(
-        profile
-            .0
-            .get("*")
-            .into_iter()
-            .flat_map(|items| items.iter())
-            .filter(|reference| reference.id().starts_with("vault/")),
-    );
-    refs
-}
+    let mut seen_ids = std::collections::HashSet::new();
 
-fn management_role_label(management_label: &str, permission_set_id: &str) -> String {
-    format!(
-        "{management_label}_management_{}",
-        sanitize_role_label(permission_set_id)
-    )
-}
-
-fn string_array(items: Vec<String>) -> Expression {
-    Expression::Array(items.into_iter().map(Expression::String).collect())
-}
-
-fn sanitize_role_label(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    for ch in input.chars() {
-        if ch.is_ascii_alphanumeric() {
-            out.push(ch.to_ascii_lowercase());
-        } else {
-            out.push('_');
+    if let Some(resource_refs) = profile.0.get(resource_id) {
+        for permission_ref in resource_refs {
+            if seen_ids.insert(permission_ref.id().to_string()) {
+                refs.push(permission_ref);
+            }
         }
     }
-    out
+
+    if let Some(wildcard_refs) = profile.0.get("*") {
+        for permission_ref in wildcard_refs
+            .iter()
+            .filter(|permission_ref| permission_ref.id().starts_with("vault/"))
+        {
+            if seen_ids.insert(permission_ref.id().to_string()) {
+                refs.push(permission_ref);
+            }
+        }
+    }
+
+    refs
 }

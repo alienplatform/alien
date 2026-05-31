@@ -200,6 +200,21 @@ async fn sync_with_manager(
         }
     }
 
+    let mut state_hydrated = false;
+    if let Some(manager_state) = sync_response.current_state {
+        let local_state = state.db.get_deployment_state().await?;
+        if local_state
+            .as_ref()
+            .is_none_or(is_uninitialized_deployment_state)
+        {
+            state.db.set_deployment_state(&manager_state).await?;
+            state_hydrated = true;
+            info!("Hydrated deployment state from manager");
+        } else {
+            debug!("Manager returned deployment state, but local state is already initialized");
+        }
+    }
+
     // Check if there's a new target
     let has_update = sync_response.target.is_some();
 
@@ -224,7 +239,17 @@ async fn sync_with_manager(
                 });
 
             // Update target_release in state
+            let target_release_id = target_deployment.release_info.release_id.clone();
+            let current_release_id = deployment_state
+                .current_release
+                .as_ref()
+                .map(|release| release.release_id.clone());
             deployment_state.target_release = Some(target_deployment.release_info.clone());
+            if deployment_state.status == alien_core::DeploymentStatus::Running
+                && current_release_id.as_deref() != Some(target_release_id.as_str())
+            {
+                deployment_state.status = alien_core::DeploymentStatus::UpdatePending;
+            }
 
             // Save state and config
             state.db.set_deployment_state(&deployment_state).await?;
@@ -256,5 +281,57 @@ async fn sync_with_manager(
         }
     }
 
-    Ok(has_update)
+    Ok(has_update || state_hydrated)
+}
+
+fn is_uninitialized_deployment_state(state: &alien_core::DeploymentState) -> bool {
+    state.status == alien_core::DeploymentStatus::Pending
+        && state.current_release.is_none()
+        && state.target_release.is_none()
+        && state.stack_state.is_none()
+        && state.environment_info.is_none()
+        && state.runtime_metadata.is_none()
+}
+
+#[cfg(test)]
+mod tests {
+    use alien_core::{
+        DeploymentState, DeploymentStatus, Platform, CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+    };
+
+    use super::is_uninitialized_deployment_state;
+
+    #[test]
+    fn recognizes_empty_pending_state_as_uninitialized() {
+        let state = DeploymentState {
+            platform: Platform::Kubernetes,
+            status: DeploymentStatus::Pending,
+            current_release: None,
+            target_release: None,
+            stack_state: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+
+        assert!(is_uninitialized_deployment_state(&state));
+    }
+
+    #[test]
+    fn recognizes_non_pending_state_as_initialized() {
+        let state = DeploymentState {
+            platform: Platform::Kubernetes,
+            status: DeploymentStatus::Provisioning,
+            current_release: None,
+            target_release: None,
+            stack_state: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+
+        assert!(!is_uninitialized_deployment_state(&state));
+    }
 }

@@ -15,5 +15,5 @@ let value: ImportSourceKind = "terraform";
 ## Values
 
 ```typescript
-"cloud-formation" | "terraform" | "helm"
+"cloudformation" | "terraform" | "helm"
 ```

@@ -2,9 +2,7 @@ use alien_build::{
     build_stack,
     settings::{BuildSettings, PlatformBuildSettings},
 };
-use alien_core::{
-    permissions::PermissionProfile, Function, FunctionCode, Ingress, ResourceLifecycle,
-};
+use alien_core::{permissions::PermissionProfile, Ingress, ResourceLifecycle, Worker, WorkerCode};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::path::{Path, PathBuf as StdPathBuf};
@@ -19,8 +17,8 @@ fn load_test_env() {
 }
 
 // Helper to create a basic function for testing
-fn create_test_function(name: &str, code: FunctionCode) -> Function {
-    Function::new(name.to_string())
+fn create_test_function(name: &str, code: WorkerCode) -> Worker {
+    Worker::new(name.to_string())
         .code(code)
         .memory_mb(512)
         .timeout_seconds(60)
@@ -34,13 +32,13 @@ fn stack_with_permissions(name: &str) -> alien_core::StackBuilder {
     alien_core::Stack::new(name.to_string()).permission("execution", PermissionProfile::new())
 }
 
-fn assert_image_dir_has_hash(image: &str, function_name: &str) {
+fn assert_image_dir_has_hash(image: &str, resource_name: &str) {
     let dir_name = Path::new(image)
         .file_name()
         .and_then(|name| name.to_str())
         .expect("Image path should end with a directory name");
 
-    let prefix = format!("{}-", function_name);
+    let prefix = format!("{}-", resource_name);
     assert!(
         dir_name.starts_with(&prefix),
         "Image path should start with {}: got {}",
@@ -123,7 +121,7 @@ path = "src/main.rs"
 
 // Helper function to test workspace builds
 async fn test_rust_workspace_build(
-    function_name: &str,
+    resource_name: &str,
     stack_name: &str,
     src_dir: PathBuf,
     success_message: &str,
@@ -132,8 +130,8 @@ async fn test_rust_workspace_build(
     let output_dir_path = temp_output_dir.path().to_path_buf();
 
     let func_with_workspace = create_test_function(
-        function_name,
-        FunctionCode::Source {
+        resource_name,
+        WorkerCode::Source {
             src: src_dir.to_str().unwrap().to_string(),
             toolchain: alien_core::ToolchainConfig::Rust {
                 binary_name: "my-app".to_string(),
@@ -167,11 +165,11 @@ async fn test_rust_workspace_build(
     // Verify that the function was converted to an Image
     let mut func_found = false;
     for (_id, entry) in built_stack.resources() {
-        if let Some(f) = entry.config.downcast_ref::<alien_core::Function>() {
-            if f.id == function_name {
+        if let Some(f) = entry.config.downcast_ref::<alien_core::Worker>() {
+            if f.id == resource_name {
                 func_found = true;
                 match &f.code {
-                    FunctionCode::Image { image } => {
+                    WorkerCode::Image { image } => {
                         // After build, image should be a local directory path
                         let image_path = PathBuf::from(image);
                         assert!(
@@ -179,7 +177,7 @@ async fn test_rust_workspace_build(
                             "Image should be a local directory path, got: {}",
                             image
                         );
-                        assert_image_dir_has_hash(image, function_name);
+                        assert_image_dir_has_hash(image, resource_name);
 
                         // Verify the directory contains OCI tarballs
                         let test_output_dir = output_dir_path.join("build").join("test");
@@ -189,15 +187,15 @@ async fn test_rust_workspace_build(
                             image_path.display()
                         );
                     }
-                    _ => panic!("Function should have been converted to Image"),
+                    _ => panic!("Worker should have been converted to Image"),
                 }
             }
         }
     }
     assert!(
         func_found,
-        "Workspace function '{}' was not found in the result stack",
-        function_name
+        "Workspace worker '{}' was not found in the result stack",
+        resource_name
     );
 
     println!("✅ {}", success_message);
@@ -216,7 +214,7 @@ async fn test_rust_toolchain_invalid_project() {
 
     let func_with_invalid_rust = create_test_function(
         "invalid-rust-func",
-        FunctionCode::Source {
+        WorkerCode::Source {
             src: temp_source_dir.path().to_str().unwrap().to_string(),
             toolchain: alien_core::ToolchainConfig::Rust {
                 binary_name: "test-app".to_string(),
@@ -293,7 +291,7 @@ async fn test_real_cargo_init_project() {
 
     let func_with_cargo_project = create_test_function(
         "my-cargo-func",
-        FunctionCode::Source {
+        WorkerCode::Source {
             src: project_dir.to_str().unwrap().to_string(),
             toolchain: alien_core::ToolchainConfig::Rust {
                 binary_name: "test-cargo-app".to_string(),
@@ -327,11 +325,11 @@ async fn test_real_cargo_init_project() {
     // Verify that the function was converted to an Image
     let mut cargo_func_found = false;
     for (_id, entry) in built_stack.resources() {
-        if let Some(f) = entry.config.downcast_ref::<alien_core::Function>() {
+        if let Some(f) = entry.config.downcast_ref::<alien_core::Worker>() {
             if f.id == "my-cargo-func" {
                 cargo_func_found = true;
                 match &f.code {
-                    FunctionCode::Image { image } => {
+                    WorkerCode::Image { image } => {
                         // After build, image should be a local directory path
                         let image_path = PathBuf::from(image);
                         assert!(
@@ -349,7 +347,7 @@ async fn test_real_cargo_init_project() {
                             image_path.display()
                         );
                     }
-                    _ => panic!("Function should have been converted to Image"),
+                    _ => panic!("Worker should have been converted to Image"),
                 }
             }
         }

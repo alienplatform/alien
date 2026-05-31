@@ -35,7 +35,7 @@ export function domainsGet(
   options?: RequestOptions,
 ): APIPromise<
   Result<
-    models.Domain,
+    models.DomainWithUsage,
     | errors.APIError
     | AlienError
     | ResponseValidationError
@@ -61,7 +61,7 @@ async function $do(
 ): Promise<
   [
     Result<
-      models.Domain,
+      models.DomainWithUsage,
       | errors.APIError
       | AlienError
       | ResponseValidationError
@@ -154,7 +154,7 @@ async function $do(
   };
 
   const [result] = await M.match<
-    models.Domain,
+    models.DomainWithUsage,
     | errors.APIError
     | AlienError
     | ResponseValidationError
@@ -165,7 +165,7 @@ async function $do(
     | UnexpectedClientError
     | SDKValidationError
   >(
-    M.json(200, models.Domain$inboundSchema),
+    M.json(200, models.DomainWithUsage$inboundSchema),
     M.jsonErr(404, errors.APIError$inboundSchema),
     M.jsonErr(500, errors.APIError$inboundSchema),
     M.fail("4XX"),

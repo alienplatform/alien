@@ -1,5 +1,8 @@
-mod function;
-pub use function::*;
+mod worker;
+pub use worker::*;
+
+mod daemon;
+pub use daemon::*;
 
 mod storage;
 pub use storage::*;
@@ -43,8 +46,11 @@ pub use kv::*;
 mod network;
 pub use network::*;
 
-mod container_cluster;
-pub use container_cluster::*;
+mod compute_cluster;
+pub use compute_cluster::*;
+
+mod kubernetes_cluster;
+pub use kubernetes_cluster::*;
 
 mod container;
 pub use container::*;

@@ -997,6 +997,10 @@ pub fn find_instance_type(platform: Platform, name: &str) -> Option<&'static Ins
 /// Aggregated resource requirements from all containers in a capacity group.
 #[derive(Debug, Clone)]
 pub struct WorkloadRequirements {
+    /// Total CPU needed at desired scale (sum of desired CPU * desired_replicas per container)
+    pub total_cpu_at_desired: f64,
+    /// Total memory needed at desired scale (sum of desired memory * desired_replicas per container)
+    pub total_memory_bytes_at_desired: u64,
     /// Total CPU needed at maximum scale (sum of desired CPU * max_replicas per container)
     pub total_cpu_at_max: f64,
     /// Total memory needed at maximum scale (sum of desired memory * max_replicas per container)
@@ -1034,20 +1038,26 @@ const MAX_MACHINES_PER_CLUSTER: u32 = 10;
 /// Beyond this, horizontal scaling is always preferred over bigger machines.
 const MAX_STANDARD_VCPU: u32 = 8;
 
-/// How many of the largest container we want to fit per machine (for bin-packing).
-const CONTAINERS_PER_MACHINE: f64 = 4.0;
+/// How many of the largest standard container we want to fit per machine.
+const STANDARD_CONTAINERS_PER_MACHINE: f64 = 2.0;
 
 /// Overhead factor for system processes and bin-packing inefficiency.
 const OVERHEAD_FACTOR: f64 = 1.25;
+
+/// Runtime CPU reserved for system processes on each managed container machine.
+const SYSTEM_RESERVE_CPU: f64 = 0.5;
+
+/// Runtime planning headroom for total desired/max workload.
+const WORKLOAD_HEADROOM_FACTOR: f64 = 1.15;
 
 /// Select the best instance type for a workload on a given platform.
 ///
 /// The algorithm:
 /// 1. GPU workloads: Match by GPU type, find smallest instance with enough GPUs.
 /// 2. Storage-heavy workloads (>200Gi ephemeral): Use storage-optimized instances.
-/// 3. All other workloads: Size the machine to fit ~4 of the largest container
-///    with overhead, capped at 8 vCPUs. Use GeneralPurpose family for broad
-///    availability and reasonable cost. Scale horizontally for more capacity.
+/// 3. All other workloads: Size the machine to fit a small HA-friendly baseline,
+///    capped at 8 vCPUs. Use GeneralPurpose family for broad availability and
+///    reasonable cost. Scale horizontally for more capacity.
 ///
 /// Returns an error if no suitable instance type is found.
 pub fn select_instance_type(
@@ -1107,14 +1117,6 @@ pub fn select_instance_type(
         candidates
     };
 
-    // Size the instance based on the largest single container, not total workload.
-    // Target: fit ~4 of the largest container per machine with overhead.
-    let target_cpu =
-        (requirements.max_cpu_per_container * CONTAINERS_PER_MACHINE * OVERHEAD_FACTOR).max(0.25);
-    let target_memory =
-        (requirements.max_memory_per_container as f64 * CONTAINERS_PER_MACHINE * OVERHEAD_FACTOR)
-            .max(256.0 * MI as f64);
-
     // Cap at MAX_STANDARD_VCPU for non-GPU/non-storage workloads
     let vcpu_cap =
         if family == InstanceFamily::GpuCompute || family == InstanceFamily::StorageOptimized {
@@ -1122,6 +1124,23 @@ pub fn select_instance_type(
         } else {
             MAX_STANDARD_VCPU
         };
+
+    let desired_target_machines = desired_target_machines(requirements);
+    let target_cpu =
+        (requirements.max_cpu_per_container * STANDARD_CONTAINERS_PER_MACHINE * OVERHEAD_FACTOR)
+            .max(
+                requirements.total_cpu_at_desired * WORKLOAD_HEADROOM_FACTOR
+                    / desired_target_machines as f64,
+            )
+            .max(0.25);
+    let target_memory = (requirements.max_memory_per_container as f64
+        * STANDARD_CONTAINERS_PER_MACHINE
+        * OVERHEAD_FACTOR)
+        .max(
+            requirements.total_memory_bytes_at_desired as f64 * WORKLOAD_HEADROOM_FACTOR
+                / desired_target_machines as f64,
+        )
+        .max(256.0 * MI as f64);
 
     // Find the smallest instance that meets per-container targets within the cap.
     let selected = candidates
@@ -1147,7 +1166,7 @@ pub fn select_instance_type(
 
     // Calculate machine counts
     let max_machines = compute_max_machines(requirements, selected);
-    let min_machines = compute_min_machines(max_machines);
+    let min_machines = compute_min_machines(requirements, selected, max_machines);
 
     Ok(InstanceSelection {
         instance_type: selected.name,
@@ -1184,13 +1203,13 @@ pub fn select_family(requirements: &WorkloadRequirements) -> InstanceFamily {
 
 /// Calculate maximum machines needed to fit the workload with headroom.
 fn compute_max_machines(requirements: &WorkloadRequirements, instance: &InstanceTypeSpec) -> u32 {
-    // How many machines to fit total CPU at max scale (with 25% headroom)
-    let cpu_with_headroom = requirements.total_cpu_at_max * 1.25;
-    let cpu_machines = (cpu_with_headroom / instance.vcpu as f64).ceil() as u32;
+    let cpu_with_headroom = requirements.total_cpu_at_max * WORKLOAD_HEADROOM_FACTOR;
+    let cpu_machines = (cpu_with_headroom / allocatable_cpu(instance)).ceil() as u32;
 
-    // How many machines to fit total memory at max scale (with 25% headroom)
-    let mem_with_headroom = requirements.total_memory_bytes_at_max as f64 * 1.25;
-    let mem_machines = (mem_with_headroom / instance.memory_bytes as f64).ceil() as u32;
+    let mem_with_headroom =
+        requirements.total_memory_bytes_at_max as f64 * WORKLOAD_HEADROOM_FACTOR;
+    let mem_machines =
+        (mem_with_headroom / allocatable_memory_bytes(instance) as f64).ceil() as u32;
 
     // Take the larger of CPU-based and memory-based, clamped to cluster limit
     cpu_machines
@@ -1200,12 +1219,54 @@ fn compute_max_machines(requirements: &WorkloadRequirements, instance: &Instance
 }
 
 /// Calculate minimum machines for HA.
-fn compute_min_machines(max_machines: u32) -> u32 {
-    // At least 1, at most 2 for HA (larger min for larger clusters)
-    if max_machines >= 3 {
+fn compute_min_machines(
+    requirements: &WorkloadRequirements,
+    instance: &InstanceTypeSpec,
+    max_machines: u32,
+) -> u32 {
+    let cpu_with_headroom = requirements.total_cpu_at_desired * WORKLOAD_HEADROOM_FACTOR;
+    let cpu_machines = (cpu_with_headroom / allocatable_cpu(instance)).ceil() as u32;
+
+    let mem_with_headroom =
+        requirements.total_memory_bytes_at_desired as f64 * WORKLOAD_HEADROOM_FACTOR;
+    let mem_machines =
+        (mem_with_headroom / allocatable_memory_bytes(instance) as f64).ceil() as u32;
+
+    cpu_machines
+        .max(mem_machines)
+        .max(1)
+        .min(2)
+        .min(max_machines)
+}
+
+fn desired_target_machines(requirements: &WorkloadRequirements) -> u32 {
+    if requirements.total_cpu_at_desired >= 2.0
+        || requirements.total_memory_bytes_at_desired >= 4 * GI
+    {
         2
     } else {
         1
+    }
+}
+
+fn allocatable_cpu(instance: &InstanceTypeSpec) -> f64 {
+    (instance.vcpu as f64 - SYSTEM_RESERVE_CPU).max(0.25)
+}
+
+fn allocatable_memory_bytes(instance: &InstanceTypeSpec) -> u64 {
+    instance
+        .memory_bytes
+        .saturating_sub(system_reserve_memory_bytes(instance.memory_bytes))
+        .max(256 * MI)
+}
+
+fn system_reserve_memory_bytes(memory_bytes: u64) -> u64 {
+    if memory_bytes < 4 * GI {
+        256 * MI
+    } else if memory_bytes < 16 * GI {
+        512 * MI
+    } else {
+        GI
     }
 }
 
@@ -1340,6 +1401,8 @@ mod tests {
     #[test]
     fn test_select_burstable_for_small_workload() {
         let req = WorkloadRequirements {
+            total_cpu_at_desired: 1.0,
+            total_memory_bytes_at_desired: 2 * GI,
             total_cpu_at_max: 1.0,
             total_memory_bytes_at_max: 2 * GI,
             max_cpu_per_container: 0.5,
@@ -1356,6 +1419,8 @@ mod tests {
     fn test_select_general_purpose_for_standard_workload() {
         // Standard workloads always get GeneralPurpose regardless of CPU:memory ratio
         let req = WorkloadRequirements {
+            total_cpu_at_desired: 20.0,
+            total_memory_bytes_at_desired: 80 * GI,
             total_cpu_at_max: 20.0,
             total_memory_bytes_at_max: 80 * GI,
             max_cpu_per_container: 2.0,
@@ -1372,6 +1437,8 @@ mod tests {
     fn test_select_general_purpose_even_for_cpu_heavy() {
         // CPU-heavy workloads still get GeneralPurpose (no more ComputeOptimized auto-select)
         let req = WorkloadRequirements {
+            total_cpu_at_desired: 20.0,
+            total_memory_bytes_at_desired: 20 * GI,
             total_cpu_at_max: 20.0,
             total_memory_bytes_at_max: 20 * GI,
             max_cpu_per_container: 2.0,
@@ -1387,6 +1454,8 @@ mod tests {
     #[test]
     fn test_select_storage_optimized_for_large_ephemeral() {
         let req = WorkloadRequirements {
+            total_cpu_at_desired: 8.0,
+            total_memory_bytes_at_desired: 32 * GI,
             total_cpu_at_max: 8.0,
             total_memory_bytes_at_max: 32 * GI,
             max_cpu_per_container: 2.0,
@@ -1402,6 +1471,8 @@ mod tests {
     #[test]
     fn test_select_gpu_instance() {
         let req = WorkloadRequirements {
+            total_cpu_at_desired: 8.0,
+            total_memory_bytes_at_desired: 32 * GI,
             total_cpu_at_max: 8.0,
             total_memory_bytes_at_max: 32 * GI,
             max_cpu_per_container: 4.0,
@@ -1421,6 +1492,8 @@ mod tests {
     #[test]
     fn test_select_works_for_all_cloud_platforms() {
         let req = WorkloadRequirements {
+            total_cpu_at_desired: 4.0,
+            total_memory_bytes_at_desired: 16 * GI,
             total_cpu_at_max: 4.0,
             total_memory_bytes_at_max: 16 * GI,
             max_cpu_per_container: 1.0,
@@ -1438,6 +1511,8 @@ mod tests {
     fn test_machine_count_reasonable() {
         // Single container: 1 CPU, 2Gi, maxReplicas=20
         let req = WorkloadRequirements {
+            total_cpu_at_desired: 20.0,
+            total_memory_bytes_at_desired: 40 * GI,
             total_cpu_at_max: 20.0,
             total_memory_bytes_at_max: 40 * GI,
             max_cpu_per_container: 1.0,
@@ -1455,6 +1530,8 @@ mod tests {
     fn test_instance_size_capped_at_8_vcpu() {
         // Even with very large containers, instance size is capped at 8 vCPUs
         let req = WorkloadRequirements {
+            total_cpu_at_desired: 70.0,
+            total_memory_bytes_at_desired: 140 * GI,
             total_cpu_at_max: 70.0,
             total_memory_bytes_at_max: 140 * GI,
             max_cpu_per_container: 2.0,
@@ -1477,10 +1554,12 @@ mod tests {
     }
 
     #[test]
-    fn test_manager_stack_gets_reasonable_instance() {
-        // Simulates the manager stack: 4 containers, each 2 CPU / 4 GiB
+    fn test_larger_autoscaled_workload_gets_reasonable_instance() {
+        // Simulates a larger autoscaled workload: 4 containers, each 2 CPU / 4 GiB
         // maxReplicas: 10, 10, 10, 5
         let req = WorkloadRequirements {
+            total_cpu_at_desired: 70.0,
+            total_memory_bytes_at_desired: 140 * GI,
             total_cpu_at_max: 70.0,              // 2*10 + 2*10 + 2*10 + 2*5
             total_memory_bytes_at_max: 140 * GI, // 4*10 + 4*10 + 4*10 + 4*5
             max_cpu_per_container: 2.0,
@@ -1497,6 +1576,8 @@ mod tests {
     #[test]
     fn test_profile_has_required_fields() {
         let req = WorkloadRequirements {
+            total_cpu_at_desired: 4.0,
+            total_memory_bytes_at_desired: 16 * GI,
             total_cpu_at_max: 4.0,
             total_memory_bytes_at_max: 16 * GI,
             max_cpu_per_container: 1.0,
@@ -1513,6 +1594,8 @@ mod tests {
     #[test]
     fn test_error_for_unsupported_gpu_type() {
         let req = WorkloadRequirements {
+            total_cpu_at_desired: 8.0,
+            total_memory_bytes_at_desired: 32 * GI,
             total_cpu_at_max: 8.0,
             total_memory_bytes_at_max: 32 * GI,
             max_cpu_per_container: 4.0,

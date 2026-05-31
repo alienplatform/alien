@@ -38,6 +38,8 @@ pub struct PermissionContext {
 
     // Common variables
     pub stack_prefix: Option<String>,
+    pub stack_name: Option<String>,
+    pub deployment_name: Option<String>,
     pub resource_name: Option<String>,
     pub service_account_name: Option<String>,
     pub principal_id: Option<String>,
@@ -62,6 +64,8 @@ impl PermissionContext {
             managing_subscription_id: None,
             managing_resource_group: None,
             stack_prefix: None,
+            stack_name: None,
+            deployment_name: None,
             resource_name: None,
             service_account_name: None,
             principal_id: None,
@@ -143,6 +147,18 @@ impl PermissionContext {
         self
     }
 
+    /// Builder pattern for the user-facing stack name
+    pub fn with_stack_name(mut self, stack_name: impl Into<String>) -> Self {
+        self.stack_name = Some(stack_name.into());
+        self
+    }
+
+    /// Builder pattern for the human-facing deployment name.
+    pub fn with_deployment_name(mut self, deployment_name: impl Into<String>) -> Self {
+        self.deployment_name = Some(deployment_name.into());
+        self
+    }
+
     /// Builder pattern for resource name
     pub fn with_resource_name(mut self, resource_name: impl Into<String>) -> Self {
         self.resource_name = Some(resource_name.into());
@@ -202,6 +218,8 @@ impl PermissionContext {
             "resourceGroup" => self.resource_group.as_deref(),
             "storageAccountName" => self.storage_account_name.as_deref(),
             "stackPrefix" => self.stack_prefix.as_deref(),
+            "stackName" => self.stack_name.as_deref(),
+            "deploymentName" => self.deployment_name.as_deref(),
             "resourceName" => self.resource_name.as_deref(),
             "serviceAccountName" => self.service_account_name.as_deref(),
             "principalId" => self.principal_id.as_deref(),

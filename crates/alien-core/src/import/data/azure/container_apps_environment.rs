@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct AzureContainerAppsEnvironmentImportData {
     /// Subscription ID hosting the environment.
     pub subscription_id: String,
@@ -17,4 +17,7 @@ pub struct AzureContainerAppsEnvironmentImportData {
     pub resource_id: String,
     /// Default domain (`<env>.<region>.azurecontainerapps.io`).
     pub default_domain: String,
+    /// Domain verification ID required for Azure Container Apps custom domain
+    /// DNS ownership records.
+    pub custom_domain_verification_id: Option<String>,
 }

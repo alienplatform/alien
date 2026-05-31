@@ -11,9 +11,15 @@ use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_azure_clients::keyvault::KeyVaultManagementApi;
 use alien_azure_clients::models::keyvault::{
-    Sku, SkuFamily, SkuName, VaultCreateOrUpdateParameters, VaultProperties,
+    Sku, SkuFamily, SkuName, Vault as AzureVaultModel, VaultCreateOrUpdateParameters,
+    VaultProperties,
 };
-use alien_core::{ResourceOutputs, ResourceStatus, Vault, VaultOutputs};
+use alien_core::{
+    AzureKeyVaultHeartbeatData, HeartbeatBackend, ObservedHealth, Platform, ProviderLifecycleState,
+    ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs, ResourceStatus, Vault,
+    VaultHeartbeatData, VaultHeartbeatStatus, VaultOutputs,
+};
+use chrono::Utc;
 
 /// Azure Vault controller.
 ///
@@ -30,6 +36,20 @@ pub struct AzureVaultController {
     /// Key Vault management client for Azure operations
     #[serde(skip)]
     pub(crate) vault_client: Option<Arc<dyn KeyVaultManagementApi>>,
+}
+
+impl AzureVaultController {
+    /// Creates a ready Azure Key Vault controller for tests.
+    pub fn mock_ready(vault_id: &str) -> Self {
+        Self {
+            state: AzureVaultState::Ready,
+            vault_name: Some(format!("test-{vault_id}")),
+            resource_group_name: Some("test-rg".to_string()),
+            vault_uri: Some(format!("https://test-{vault_id}.vault.azure.net")),
+            vault_client: None,
+            _internal_stay_count: None,
+        }
+    }
 }
 
 #[controller]
@@ -225,8 +245,32 @@ impl AzureVaultController {
     )]
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Vault>()?;
+        let azure_config = ctx.get_azure_config()?;
 
-        debug!(vault_id = %config.id, "Azure Key Vault ready (placeholder)");
+        if self.vault_client.is_none() {
+            self.vault_client = Some(
+                ctx.service_provider
+                    .get_azure_key_vault_management_client(azure_config)?,
+            );
+        }
+
+        if let (Some(vault_name), Some(resource_group_name), Some(client)) = (
+            &self.vault_name,
+            &self.resource_group_name,
+            &self.vault_client,
+        ) {
+            let vault = client
+                .get_vault(resource_group_name.clone(), vault_name.clone())
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to get Azure Key Vault '{}'", vault_name),
+                    resource_id: Some(config.id.clone()),
+                })?;
+
+            emit_azure_key_vault_heartbeat(ctx, &config.id, resource_group_name, vault);
+        }
+
+        debug!(vault_id = %config.id, "Azure Key Vault heartbeat check passed");
 
         Ok(HandlerAction::Continue {
             state: Ready,
@@ -276,6 +320,73 @@ impl AzureVaultController {
             Ok(None)
         }
     }
+}
+
+fn emit_azure_key_vault_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    resource_group_name: &str,
+    vault: AzureVaultModel,
+) {
+    let provisioning_state = vault
+        .properties
+        .provisioning_state
+        .as_ref()
+        .map(ToString::to_string);
+    let health = match provisioning_state.as_deref() {
+        Some("Succeeded") => ObservedHealth::Healthy,
+        Some(_) => ObservedHealth::Degraded,
+        None => ObservedHealth::Unknown,
+    };
+    let lifecycle = match provisioning_state.as_deref() {
+        Some("Succeeded") => ProviderLifecycleState::Running,
+        Some(_) => ProviderLifecycleState::Updating,
+        None => ProviderLifecycleState::Unknown,
+    };
+
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: Vault::RESOURCE_TYPE,
+        controller_platform: Platform::Azure,
+        backend: HeartbeatBackend::Azure,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::Vault(VaultHeartbeatData::AzureKeyVault(
+            AzureKeyVaultHeartbeatData {
+                status: VaultHeartbeatStatus {
+                    health,
+                    lifecycle,
+                    message: Some(format!(
+                        "Azure Key Vault management metadata is reachable; provisioning state is {}",
+                        provisioning_state.as_deref().unwrap_or("unknown")
+                    )),
+                    stale: false,
+                    partial: false,
+                    collection_issues: vec![],
+                },
+                name: vault.name.unwrap_or_else(|| resource_id.to_string()),
+                resource_group: Some(resource_group_name.to_string()),
+                resource_id: vault.id,
+                location: vault.location,
+                vault_uri: vault.properties.vault_uri,
+                provisioning_state,
+                sku_family: Some(vault.properties.sku.family.to_string()),
+                sku_name: Some(vault.properties.sku.name.to_string()),
+                soft_delete_enabled: vault.properties.enable_soft_delete,
+                soft_delete_retention_days: vault.properties.soft_delete_retention_in_days,
+                purge_protection_enabled: vault.properties.enable_purge_protection,
+                rbac_authorization_enabled: vault.properties.enable_rbac_authorization,
+                public_network_access: vault.properties.public_network_access,
+                access_policy_count: vault.properties.access_policies.len() as u32,
+                private_endpoint_connection_count: vault
+                    .properties
+                    .private_endpoint_connections
+                    .len() as u32,
+                secret_metadata_listed: false,
+            },
+        )),
+        raw: vec![],
+    });
 }
 
 impl AzureVaultController {

@@ -2,69 +2,170 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 use tracing::{debug, info};
 
-use crate::core::{EnvironmentVariableBuilder, ResourceController, ResourceControllerContext};
+use crate::core::{
+    kubernetes_runtime_pod_labels, EnvironmentVariableBuilder, ResourceController,
+    ResourceControllerContext,
+};
 use crate::error::{ErrorData, Result};
+use crate::kubernetes_public_endpoint::{
+    container_public_endpoint_target, delete_kubernetes_public_endpoint,
+    reconcile_kubernetes_public_endpoint, KubernetesEndpointAction, KubernetesPublicEndpointState,
+};
+use crate::kubernetes_workload_heartbeat::{
+    emit_kubernetes_workload_heartbeat, label_selector, KubernetesWorkload,
+    KubernetesWorkloadDataKind, KubernetesWorkloadHeartbeatInput,
+};
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    Container, ContainerCode, ContainerOutputs, ContainerStatus, ResourceOutputs, ResourceStatus,
+    kubernetes_resource_name, kubernetes_service_account_name, Container, ContainerCode,
+    ContainerOutputs, ContainerStatus, EnvironmentVariable, EnvironmentVariableType,
+    ResourceOutputs, ResourceStatus, ENV_ALIEN_SECRETS,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
 
 use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec, StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
-    Container as K8sContainer, ContainerPort, EnvVar, PersistentVolumeClaim,
-    PersistentVolumeClaimSpec, PodSpec, PodTemplateSpec, ResourceRequirements, Volume, VolumeMount,
+    Container as K8sContainer, ContainerPort, EnvVar, LocalObjectReference, PersistentVolumeClaim,
+    PersistentVolumeClaimSpec, PodSpec, PodTemplateSpec, ResourceRequirements, Secret, Service,
+    ServicePort, ServiceSpec, Volume, VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
+use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
+use k8s_openapi::ByteString;
 
-/// Generates a Kubernetes resource name from the stack prefix and container ID.
-fn generate_kubernetes_container_name(resource_prefix: &str, id: &str) -> String {
-    // Kubernetes names must be lowercase and follow DNS-1123 label requirements
-    let clean_prefix = resource_prefix
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '-')
-        .collect::<String>()
-        .to_lowercase();
-    let clean_id = id
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '-')
-        .collect::<String>()
-        .to_lowercase();
+// Cold Kubernetes nodes can spend several minutes pulling application images,
+// especially when the registry endpoint is a remote proxy. Treat that as a
+// legitimate provisioning phase; terminal pull failures still surface through
+// workload heartbeats and events.
+const KUBERNETES_WORKLOAD_READY_MAX_POLLS: u32 = 360; // 360 * 5s = 30 minutes
 
-    let combined = format!("{}-{}", clean_prefix, clean_id);
+async fn create_registry_pull_secret(
+    secrets_client: &std::sync::Arc<dyn alien_k8s_clients::SecretsApi>,
+    namespace: &str,
+    secret_name: &str,
+    proxy_host: &str,
+    deployment_token: &str,
+) -> Result<()> {
+    use base64::engine::{general_purpose::STANDARD as BASE64, Engine as _};
 
-    // Truncate to 63 characters if necessary (Kubernetes limit)
-    if combined.len() > 63 {
-        combined[..63].to_string()
-    } else {
-        combined
+    let auth = BASE64.encode(format!("deployment:{deployment_token}"));
+    let docker_config = serde_json::json!({
+        "auths": {
+            proxy_host: {
+                "username": "deployment",
+                "password": deployment_token,
+                "auth": auth,
+            }
+        }
+    });
+
+    let docker_config_bytes = serde_json::to_vec(&docker_config)
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to serialize Docker config".to_string(),
+            resource_id: None,
+        })?;
+
+    let secret = Secret {
+        metadata: ObjectMeta {
+            name: Some(secret_name.to_string()),
+            namespace: Some(namespace.to_string()),
+            ..Default::default()
+        },
+        type_: Some("kubernetes.io/dockerconfigjson".to_string()),
+        data: Some({
+            let mut data = BTreeMap::new();
+            data.insert(
+                ".dockerconfigjson".to_string(),
+                k8s_openapi::ByteString(docker_config_bytes),
+            );
+            data
+        }),
+        ..Default::default()
+    };
+
+    match secrets_client.create_secret(namespace, &secret).await {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            let err = format!("{e}");
+            if err.contains("AlreadyExists") || err.contains("409") {
+                Ok(())
+            } else {
+                Err(e.context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to create registry pull secret '{secret_name}'"),
+                    resource_id: None,
+                }))
+            }
+        }
     }
 }
 
-/// Generates the ServiceAccount name following Helm naming convention.
-/// Format: {release-name}-{permission-profile}-sa
-fn generate_service_account_name(resource_prefix: &str, permission_profile: &str) -> String {
-    let clean_prefix = resource_prefix
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '-')
-        .collect::<String>()
-        .to_lowercase();
-    let clean_profile = permission_profile
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '-')
-        .collect::<String>()
-        .to_lowercase();
+#[derive(Debug, Clone)]
+struct KubernetesEnvSecretPlan {
+    secret_name: String,
+    checksum: String,
+    keys: Vec<String>,
+}
 
-    let combined = format!("{}-{}-sa", clean_prefix, clean_profile);
-
-    // Truncate to 63 characters if necessary
-    if combined.len() > 63 {
-        combined[..63].to_string()
-    } else {
-        combined
+fn matches_environment_target(resource_id: &str, target_resources: &Option<Vec<String>>) -> bool {
+    match target_resources {
+        None => true,
+        Some(patterns) if patterns.is_empty() => false,
+        Some(patterns) => patterns.iter().any(|pattern| {
+            if let Some(prefix) = pattern.strip_suffix('*') {
+                resource_id.starts_with(prefix)
+            } else {
+                resource_id == pattern
+            }
+        }),
     }
+}
+
+fn applicable_secret_environment_variables<'a>(
+    resource_id: &str,
+    variables: &'a [EnvironmentVariable],
+) -> Vec<&'a EnvironmentVariable> {
+    variables
+        .iter()
+        .filter(|var| var.var_type == EnvironmentVariableType::Secret)
+        .filter(|var| matches_environment_target(resource_id, &var.target_resources))
+        .collect()
+}
+
+fn secret_checksum(secret_vars: &[&EnvironmentVariable]) -> String {
+    use sha2::{Digest, Sha256};
+
+    let mut vars = secret_vars.to_vec();
+    vars.sort_by(|left, right| left.name.cmp(&right.name));
+
+    let mut hasher = Sha256::new();
+    for var in vars {
+        hasher.update(var.name.as_bytes());
+        hasher.update(b"=");
+        hasher.update(var.value.as_bytes());
+        hasher.update(b"\n");
+    }
+
+    format!("{:x}", hasher.finalize())
+}
+
+fn first_declared_container_port(config: &Container) -> Option<u16> {
+    config.ports.first().map(|port| port.port)
+}
+
+fn kubernetes_port_name(port: &alien_core::ContainerPort) -> String {
+    if port.expose == Some(alien_core::ExposeProtocol::Http) {
+        "http".to_string()
+    } else {
+        format!("tcp-{}", port.port)
+    }
+}
+
+fn is_already_exists(error: &alien_client_core::Error) -> bool {
+    let text = error.to_string();
+    text.contains("AlreadyExists") || text.contains("409")
 }
 
 #[controller]
@@ -77,10 +178,12 @@ pub struct KubernetesContainerController {
     pub(crate) namespace: Option<String>,
     /// The service name for the container (for binding construction)
     pub(crate) service_name: Option<String>,
-    /// The public URL if available (from Helm pre-computed map)
-    pub(crate) public_url: Option<String>,
+    /// The first declared service port for binding construction.
+    pub(crate) service_port: Option<u16>,
     /// The container ID (for binding construction)
     pub(crate) container_id: Option<String>,
+    /// Public endpoint route/certificate state.
+    pub(crate) public_endpoint: KubernetesPublicEndpointState,
 }
 
 #[controller]
@@ -98,23 +201,53 @@ impl KubernetesContainerController {
 
         info!(id=%config.id, "Initiating Kubernetes Container creation");
 
-        let container_name = generate_kubernetes_container_name(&ctx.resource_prefix, &config.id);
+        let container_name = kubernetes_resource_name(&ctx.resource_prefix, &config.id);
         let namespace = self.get_kubernetes_namespace(ctx)?;
 
         // Store data needed for binding construction
         self.container_id = Some(config.id.clone());
         self.service_name = Some(container_name.clone());
+        self.service_port = first_declared_container_port(config);
         self.namespace = Some(namespace.clone());
-        self.public_url = ctx
-            .deployment_config
-            .public_urls
-            .as_ref()
-            .and_then(|urls| urls.get(&config.id))
-            .cloned();
-
         // Generate ServiceAccount name following Helm naming convention
         let service_account_name =
-            generate_service_account_name(&ctx.resource_prefix, config.get_permissions());
+            kubernetes_service_account_name(&ctx.resource_prefix, config.get_permissions());
+        let image_pull_secret_name = if matches!(config.code, ContainerCode::Image { .. }) {
+            let token = ctx.deployment_config.deployment_token.as_ref().ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceControllerConfigError {
+                    resource_id: config.id.clone(),
+                    message: "deployment_token is required for Kubernetes to pull images from the registry proxy".to_string(),
+                })
+            })?;
+            let manager_url = ctx.deployment_config.manager_url.as_ref().ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceControllerConfigError {
+                    resource_id: config.id.clone(),
+                    message: "manager_url is required for Kubernetes registry pull credentials"
+                        .to_string(),
+                })
+            })?;
+            let secret_name = format!("{}-registry", container_name);
+            let secrets_client = ctx
+                .service_provider
+                .get_kubernetes_secrets_client(kubernetes_config)
+                .await?;
+            create_registry_pull_secret(
+                &secrets_client,
+                &namespace,
+                &secret_name,
+                manager_url,
+                token,
+            )
+            .await?;
+            Some(secret_name)
+        } else {
+            None
+        };
+        let env_secret_plan = self
+            .reconcile_environment_secret(config, &container_name, &namespace, ctx)
+            .await?;
+        self.reconcile_internal_service(config, &container_name, &namespace, ctx)
+            .await?;
 
         self.is_stateful = config.stateful;
         self.workload_name = Some(container_name.clone());
@@ -131,6 +264,8 @@ impl KubernetesContainerController {
                     &container_name,
                     &namespace,
                     &service_account_name,
+                    image_pull_secret_name.as_deref(),
+                    env_secret_plan.as_ref(),
                     ctx,
                 )
                 .await?;
@@ -156,6 +291,8 @@ impl KubernetesContainerController {
                     &container_name,
                     &namespace,
                     &service_account_name,
+                    image_pull_secret_name.as_deref(),
+                    env_secret_plan.as_ref(),
                     ctx,
                 )
                 .await?;
@@ -279,8 +416,8 @@ impl KubernetesContainerController {
                 info!(workload_name=%workload_name, namespace=%namespace, workload_type=%workload_type, "Container workload is ready");
 
                 return Ok(HandlerAction::Continue {
-                    state: Ready,
-                    suggested_delay: Some(Duration::from_secs(30)),
+                    state: ReconcilePublicEndpoint,
+                    suggested_delay: None,
                 });
             } else {
                 debug!(workload_name=%workload_name, ready=%ready_replicas, total=%replicas, "Container workload not yet ready");
@@ -288,9 +425,61 @@ impl KubernetesContainerController {
         }
 
         Ok(HandlerAction::Stay {
-            max_times: 60, // 60 attempts * 5 seconds = 5 minutes max wait
+            max_times: KUBERNETES_WORKLOAD_READY_MAX_POLLS,
             suggested_delay: Some(Duration::from_secs(5)),
         })
+    }
+
+    #[handler(
+        state = ReconcilePublicEndpoint,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn reconcile_public_endpoint(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<Container>()?;
+        let workload_name = self.workload_name.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: config.id.clone(),
+                message: "Workload name not set in state".to_string(),
+            })
+        })?;
+        let namespace = self.namespace.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: config.id.clone(),
+                message: "Namespace not set in state".to_string(),
+            })
+        })?;
+        let labels = self.build_labels(workload_name);
+        let action = reconcile_kubernetes_public_endpoint(
+            ctx,
+            container_public_endpoint_target(
+                &config.id,
+                workload_name,
+                namespace,
+                labels,
+                &config.ports,
+                config
+                    .health_check
+                    .as_ref()
+                    .map(|check| check.path.as_str()),
+            )?,
+            &mut self.public_endpoint,
+        )
+        .await?;
+
+        match action {
+            KubernetesEndpointAction::Ready => Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: Some(Duration::from_secs(30)),
+            }),
+            KubernetesEndpointAction::Waiting { suggested_delay } => Ok(HandlerAction::Stay {
+                max_times: 60,
+                suggested_delay: Some(suggested_delay),
+            }),
+        }
     }
 
     // ─────────────── READY STATE ────────────────────────────────
@@ -310,7 +499,7 @@ impl KubernetesContainerController {
                 .get_kubernetes_deployment_client(kubernetes_config)
                 .await?;
 
-            let (ready_replicas, replicas) = if self.is_stateful {
+            let (ready_replicas, replicas, workload) = if self.is_stateful {
                 let statefulset = deployment_client
                     .get_statefulset(namespace, workload_name)
                     .await
@@ -319,10 +508,17 @@ impl KubernetesContainerController {
                         resource_id: Some(config.id.clone()),
                     })?;
 
-                if let Some(status) = statefulset.status {
-                    (status.ready_replicas, Some(status.replicas))
+                if let Some(status) = statefulset.status.clone() {
+                    (
+                        status.ready_replicas,
+                        Some(status.replicas),
+                        KubernetesWorkload::StatefulSet(StatefulSet {
+                            status: Some(status),
+                            ..statefulset
+                        }),
+                    )
                 } else {
-                    (None, None)
+                    (None, None, KubernetesWorkload::StatefulSet(statefulset))
                 }
             } else {
                 let deployment = deployment_client
@@ -333,10 +529,17 @@ impl KubernetesContainerController {
                         resource_id: Some(config.id.clone()),
                     })?;
 
-                if let Some(status) = deployment.status {
-                    (status.ready_replicas, status.replicas)
+                if let Some(status) = deployment.status.clone() {
+                    (
+                        status.ready_replicas,
+                        status.replicas,
+                        KubernetesWorkload::Deployment(Deployment {
+                            status: Some(status),
+                            ..deployment
+                        }),
+                    )
                 } else {
-                    (None, None)
+                    (None, None, KubernetesWorkload::Deployment(deployment))
                 }
             };
 
@@ -350,6 +553,51 @@ impl KubernetesContainerController {
                         ),
                     }));
                 }
+            }
+
+            let labels = self.build_labels(workload_name);
+            emit_kubernetes_workload_heartbeat(
+                ctx,
+                KubernetesWorkloadHeartbeatInput {
+                    deployment_id: None,
+                    resource_id: config.id.clone(),
+                    resource_type: Container::RESOURCE_TYPE,
+                    data_kind: KubernetesWorkloadDataKind::Container,
+                    command_supported: false,
+                    namespace: namespace.clone(),
+                    workload_name: workload_name.clone(),
+                    workload_kind: if self.is_stateful {
+                        alien_core::KubernetesWorkloadKind::StatefulSet
+                    } else {
+                        alien_core::KubernetesWorkloadKind::Deployment
+                    },
+                    workload,
+                    label_selector: label_selector(&labels)?,
+                },
+            )
+            .await?;
+
+            let action = reconcile_kubernetes_public_endpoint(
+                ctx,
+                container_public_endpoint_target(
+                    &config.id,
+                    workload_name,
+                    namespace,
+                    labels,
+                    &config.ports,
+                    config
+                        .health_check
+                        .as_ref()
+                        .map(|check| check.path.as_str()),
+                )?,
+                &mut self.public_endpoint,
+            )
+            .await?;
+            if let KubernetesEndpointAction::Waiting { suggested_delay } = action {
+                return Ok(HandlerAction::Stay {
+                    max_times: 60,
+                    suggested_delay: Some(suggested_delay),
+                });
             }
 
             debug!(workload_name=%workload_name, namespace=%namespace, "Container workload is healthy");
@@ -394,7 +642,44 @@ impl KubernetesContainerController {
         info!(workload_name=%workload_name, workload_type=%workload_type, "Updating Kubernetes Container workload");
 
         let service_account_name =
-            generate_service_account_name(&ctx.resource_prefix, config.get_permissions());
+            kubernetes_service_account_name(&ctx.resource_prefix, config.get_permissions());
+        let image_pull_secret_name = if matches!(config.code, ContainerCode::Image { .. }) {
+            let token = ctx.deployment_config.deployment_token.as_ref().ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceControllerConfigError {
+                    resource_id: config.id.clone(),
+                    message: "deployment_token is required for Kubernetes to pull images from the registry proxy".to_string(),
+                })
+            })?;
+            let manager_url = ctx.deployment_config.manager_url.as_ref().ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceControllerConfigError {
+                    resource_id: config.id.clone(),
+                    message: "manager_url is required for Kubernetes registry pull credentials"
+                        .to_string(),
+                })
+            })?;
+            let secret_name = format!("{}-registry", workload_name);
+            let secrets_client = ctx
+                .service_provider
+                .get_kubernetes_secrets_client(kubernetes_config)
+                .await?;
+            create_registry_pull_secret(
+                &secrets_client,
+                namespace,
+                &secret_name,
+                manager_url,
+                token,
+            )
+            .await?;
+            Some(secret_name)
+        } else {
+            None
+        };
+        let env_secret_plan = self
+            .reconcile_environment_secret(config, workload_name, namespace, ctx)
+            .await?;
+        self.service_port = first_declared_container_port(config);
+        self.reconcile_internal_service(config, workload_name, namespace, ctx)
+            .await?;
         let deployment_client = ctx
             .service_provider
             .get_kubernetes_deployment_client(kubernetes_config)
@@ -415,7 +700,15 @@ impl KubernetesContainerController {
 
             let resource_version = existing.metadata.resource_version.clone();
             let mut new_statefulset = self
-                .build_statefulset(config, workload_name, namespace, &service_account_name, ctx)
+                .build_statefulset(
+                    config,
+                    workload_name,
+                    namespace,
+                    &service_account_name,
+                    image_pull_secret_name.as_deref(),
+                    env_secret_plan.as_ref(),
+                    ctx,
+                )
                 .await?;
             new_statefulset.metadata.resource_version = resource_version;
 
@@ -438,7 +731,15 @@ impl KubernetesContainerController {
 
             let resource_version = existing.metadata.resource_version.clone();
             let mut new_deployment = self
-                .build_deployment(config, workload_name, namespace, &service_account_name, ctx)
+                .build_deployment(
+                    config,
+                    workload_name,
+                    namespace,
+                    &service_account_name,
+                    image_pull_secret_name.as_deref(),
+                    env_secret_plan.as_ref(),
+                    ctx,
+                )
                 .await?;
             new_deployment.metadata.resource_version = resource_version;
 
@@ -546,8 +847,8 @@ impl KubernetesContainerController {
                 };
                 info!(workload_name=%workload_name, workload_type=%workload_type, "Container workload rollout complete");
                 return Ok(HandlerAction::Continue {
-                    state: Ready,
-                    suggested_delay: Some(Duration::from_secs(30)),
+                    state: ReconcilePublicEndpointAfterUpdate,
+                    suggested_delay: None,
                 });
             } else {
                 debug!(workload_name=%workload_name, ready=%ready_replicas, total=%replicas, "Container workload rollout in progress");
@@ -555,9 +856,61 @@ impl KubernetesContainerController {
         }
 
         Ok(HandlerAction::Stay {
-            max_times: 60,
+            max_times: KUBERNETES_WORKLOAD_READY_MAX_POLLS,
             suggested_delay: Some(Duration::from_secs(5)),
         })
+    }
+
+    #[handler(
+        state = ReconcilePublicEndpointAfterUpdate,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn reconcile_public_endpoint_after_update(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<Container>()?;
+        let workload_name = self.workload_name.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: config.id.clone(),
+                message: "Workload name not set in state".to_string(),
+            })
+        })?;
+        let namespace = self.namespace.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: config.id.clone(),
+                message: "Namespace not set in state".to_string(),
+            })
+        })?;
+        let labels = self.build_labels(workload_name);
+        let action = reconcile_kubernetes_public_endpoint(
+            ctx,
+            container_public_endpoint_target(
+                &config.id,
+                workload_name,
+                namespace,
+                labels,
+                &config.ports,
+                config
+                    .health_check
+                    .as_ref()
+                    .map(|check| check.path.as_str()),
+            )?,
+            &mut self.public_endpoint,
+        )
+        .await?;
+
+        match action {
+            KubernetesEndpointAction::Ready => Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: Some(Duration::from_secs(30)),
+            }),
+            KubernetesEndpointAction::Waiting { suggested_delay } => Ok(HandlerAction::Stay {
+                max_times: 60,
+                suggested_delay: Some(suggested_delay),
+            }),
+        }
     }
 
     // ─────────────── DELETE FLOW ──────────────────────────────
@@ -579,6 +932,13 @@ impl KubernetesContainerController {
         })?;
 
         info!(namespace=%namespace, "Initiating Kubernetes Container deletion");
+
+        delete_kubernetes_public_endpoint(ctx, &config.id, namespace, &mut self.public_endpoint)
+            .await?;
+        if let Some(service_name) = &self.service_name {
+            self.delete_internal_service(namespace, service_name, ctx)
+                .await?;
+        }
 
         // Delete Deployment or StatefulSet
         if let Some(workload_name) = &self.workload_name {
@@ -735,9 +1095,9 @@ impl KubernetesContainerController {
                 current_replicas: 0, // Will be updated by runtime
                 desired_replicas: 0, // Will be updated by runtime
                 internal_dns: format!("{}.svc.cluster.local", workload_name),
-                url: None,            // Public URL from Helm-created Service/Ingress
+                url: self.public_endpoint.effective_public_url(),
                 replicas: Vec::new(), // Replica details tracked separately
-                load_balancer_endpoint: None, // Kubernetes uses Service, not direct LB endpoint
+                load_balancer_endpoint: self.public_endpoint.load_balancer_endpoint.clone(),
             }))
         } else {
             None
@@ -755,11 +1115,11 @@ impl KubernetesContainerController {
                 name: BindingValue::Value(container_id.clone()),
                 namespace: BindingValue::Value(namespace.clone()),
                 service_name: BindingValue::Value(service_name.clone()),
-                service_port: BindingValue::Value(80),
+                service_port: BindingValue::Value(self.service_port.unwrap_or(80)),
                 public_url: self
-                    .public_url
-                    .as_ref()
-                    .map(|url| BindingValue::Value(url.clone())),
+                    .public_endpoint
+                    .effective_public_url()
+                    .map(BindingValue::Value),
             };
 
             // Serialize to JSON
@@ -777,6 +1137,76 @@ impl KubernetesContainerController {
     }
 }
 
+#[cfg(test)]
+mod output_tests {
+    use alien_core::ContainerOutputs;
+
+    use super::{
+        KubernetesContainerController, KubernetesContainerState, KubernetesPublicEndpointState,
+    };
+
+    #[test]
+    fn build_outputs_includes_public_endpoint_url() {
+        let public_endpoint = KubernetesPublicEndpointState {
+            public_url: Some("https://container.example.test".to_string()),
+            ..Default::default()
+        };
+        let controller = KubernetesContainerController {
+            state: KubernetesContainerState::Ready,
+            workload_name: Some("test-container".to_string()),
+            is_stateful: false,
+            namespace: Some("test-namespace".to_string()),
+            service_name: Some("test-container".to_string()),
+            service_port: Some(3000),
+            container_id: Some("container".to_string()),
+            public_endpoint,
+            _internal_stay_count: None,
+        };
+
+        let outputs = controller.build_outputs().expect("outputs");
+        let container_outputs = outputs
+            .downcast_ref::<ContainerOutputs>()
+            .expect("container outputs");
+
+        assert_eq!(
+            container_outputs.url.as_deref(),
+            Some("https://container.example.test")
+        );
+    }
+
+    #[test]
+    fn build_outputs_derives_public_url_from_load_balancer_endpoint() {
+        let public_endpoint = KubernetesPublicEndpointState {
+            load_balancer_endpoint: Some(alien_core::LoadBalancerEndpoint {
+                dns_name: "k8s-container.example.elb.amazonaws.com".to_string(),
+                hosted_zone_id: None,
+            }),
+            ..Default::default()
+        };
+        let controller = KubernetesContainerController {
+            state: KubernetesContainerState::Ready,
+            workload_name: Some("test-container".to_string()),
+            is_stateful: false,
+            namespace: Some("test-namespace".to_string()),
+            service_name: Some("test-container".to_string()),
+            service_port: Some(3000),
+            container_id: Some("container".to_string()),
+            public_endpoint,
+            _internal_stay_count: None,
+        };
+
+        let outputs = controller.build_outputs().expect("outputs");
+        let container_outputs = outputs
+            .downcast_ref::<ContainerOutputs>()
+            .expect("container outputs");
+
+        assert_eq!(
+            container_outputs.url.as_deref(),
+            Some("http://k8s-container.example.elb.amazonaws.com")
+        );
+    }
+}
+
 impl KubernetesContainerController {
     /// Creates a controller in a ready state with mock values for testing purposes.
     #[cfg(feature = "test-utils")]
@@ -787,10 +1217,226 @@ impl KubernetesContainerController {
             is_stateful,
             namespace: Some(namespace.to_string()),
             service_name: Some(container_name.to_string()),
-            public_url: None,
+            service_port: Some(80),
             container_id: Some("test-container".to_string()),
+            public_endpoint: KubernetesPublicEndpointState::default(),
             _internal_stay_count: None,
         }
+    }
+
+    async fn reconcile_environment_secret(
+        &self,
+        config: &Container,
+        workload_name: &str,
+        namespace: &str,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<Option<KubernetesEnvSecretPlan>> {
+        let secret_vars = applicable_secret_environment_variables(
+            &config.id,
+            &ctx.deployment_config.environment_variables.variables,
+        );
+        if secret_vars.is_empty() {
+            return Ok(None);
+        }
+
+        let secret_name = format!("{workload_name}-env");
+        let checksum = secret_checksum(&secret_vars);
+        let keys = secret_vars
+            .iter()
+            .map(|var| var.name.clone())
+            .collect::<Vec<_>>();
+
+        let mut secret = Secret {
+            metadata: ObjectMeta {
+                name: Some(secret_name.clone()),
+                namespace: Some(namespace.to_string()),
+                labels: Some(BTreeMap::from([
+                    ("managed-by".to_string(), "alien".to_string()),
+                    ("alien.dev/resource-id".to_string(), config.id.clone()),
+                ])),
+                annotations: Some(BTreeMap::from([(
+                    "alien.dev/env-secret-checksum".to_string(),
+                    checksum.clone(),
+                )])),
+                ..Default::default()
+            },
+            type_: Some("Opaque".to_string()),
+            data: Some(
+                secret_vars
+                    .iter()
+                    .map(|var| (var.name.clone(), ByteString(var.value.as_bytes().to_vec())))
+                    .collect(),
+            ),
+            ..Default::default()
+        };
+
+        let kubernetes_config = ctx.get_kubernetes_config()?;
+        let secrets_client = ctx
+            .service_provider
+            .get_kubernetes_secrets_client(kubernetes_config)
+            .await?;
+
+        match secrets_client.create_secret(namespace, &secret).await {
+            Ok(_) => {}
+            Err(e) => {
+                let err = format!("{e}");
+                if err.contains("AlreadyExists") || err.contains("409") {
+                    let existing = secrets_client
+                        .get_secret(namespace, &secret_name)
+                        .await
+                        .context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Failed to read existing environment Secret for container '{}'",
+                                config.id
+                            ),
+                            resource_id: Some(config.id.clone()),
+                        })?;
+                    secret.metadata.resource_version = existing.metadata.resource_version;
+                    secrets_client
+                        .update_secret(namespace, &secret_name, &secret)
+                        .await
+                        .context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Failed to update environment Secret for container '{}'",
+                                config.id
+                            ),
+                            resource_id: Some(config.id.clone()),
+                        })?;
+                } else {
+                    return Err(e.context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to create environment Secret for container '{}'",
+                            config.id
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    }));
+                }
+            }
+        }
+
+        Ok(Some(KubernetesEnvSecretPlan {
+            secret_name,
+            checksum,
+            keys,
+        }))
+    }
+
+    async fn reconcile_internal_service(
+        &self,
+        config: &Container,
+        service_name: &str,
+        namespace: &str,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<()> {
+        let kubernetes_config = ctx.get_kubernetes_config()?;
+        let service_client = ctx
+            .service_provider
+            .get_kubernetes_service_client(kubernetes_config)
+            .await?;
+
+        let Some(mut service) = self.build_internal_service(config, service_name, namespace) else {
+            self.delete_internal_service(namespace, service_name, ctx)
+                .await?;
+            return Ok(());
+        };
+
+        match service_client.create_service(namespace, &service).await {
+            Ok(_) => Ok(()),
+            Err(e) if is_already_exists(&e) => {
+                let existing = service_client
+                    .get_service(namespace, service_name)
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to get internal Service '{}' before update",
+                            service_name
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    })?;
+                service.metadata.resource_version = existing.metadata.resource_version;
+                service_client
+                    .update_service(namespace, service_name, &service)
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to update internal Service '{}'", service_name),
+                        resource_id: Some(config.id.clone()),
+                    })?;
+                Ok(())
+            }
+            Err(e) => Err(e.context(ErrorData::CloudPlatformError {
+                message: format!("Failed to create internal Service '{}'", service_name),
+                resource_id: Some(config.id.clone()),
+            })),
+        }
+    }
+
+    async fn delete_internal_service(
+        &self,
+        namespace: &str,
+        service_name: &str,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<()> {
+        let kubernetes_config = ctx.get_kubernetes_config()?;
+        let service_client = ctx
+            .service_provider
+            .get_kubernetes_service_client(kubernetes_config)
+            .await?;
+
+        match service_client.delete_service(namespace, service_name).await {
+            Ok(()) => Ok(()),
+            Err(e)
+                if matches!(
+                    e.error,
+                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
+                Ok(())
+            }
+            Err(e) => Err(e.context(ErrorData::CloudPlatformError {
+                message: format!("Failed to delete internal Service '{}'", service_name),
+                resource_id: Some(service_name.to_string()),
+            })),
+        }
+    }
+
+    fn build_internal_service(
+        &self,
+        config: &Container,
+        service_name: &str,
+        namespace: &str,
+    ) -> Option<Service> {
+        if config.ports.is_empty() {
+            return None;
+        }
+
+        let labels = self.build_labels(service_name);
+        Some(Service {
+            metadata: ObjectMeta {
+                name: Some(service_name.to_string()),
+                namespace: Some(namespace.to_string()),
+                labels: Some(labels.clone()),
+                ..Default::default()
+            },
+            spec: Some(ServiceSpec {
+                type_: Some("ClusterIP".to_string()),
+                selector: Some(labels),
+                ports: Some(
+                    config
+                        .ports
+                        .iter()
+                        .map(|port| ServicePort {
+                            name: Some(kubernetes_port_name(port)),
+                            port: port.port as i32,
+                            protocol: Some("TCP".to_string()),
+                            target_port: Some(IntOrString::Int(port.port as i32)),
+                            ..Default::default()
+                        })
+                        .collect(),
+                ),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
     }
 
     /// Builds a Kubernetes Deployment for stateless containers.
@@ -800,12 +1446,27 @@ impl KubernetesContainerController {
         container_name: &str,
         namespace: &str,
         service_account_name: &str,
+        image_pull_secret_name: Option<&str>,
+        env_secret_plan: Option<&KubernetesEnvSecretPlan>,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<Deployment> {
         let labels = self.build_labels(container_name);
+        let pod_labels = kubernetes_runtime_pod_labels(ctx, labels.clone());
         let pod_spec = self
-            .build_pod_spec(config, service_account_name, ctx)
+            .build_pod_spec(
+                config,
+                service_account_name,
+                image_pull_secret_name,
+                env_secret_plan,
+                ctx,
+            )
             .await?;
+        let pod_annotations = env_secret_plan.map(|plan| {
+            BTreeMap::from([(
+                "alien.dev/env-secret-checksum".to_string(),
+                plan.checksum.clone(),
+            )])
+        });
 
         let deployment = Deployment {
             metadata: ObjectMeta {
@@ -822,7 +1483,8 @@ impl KubernetesContainerController {
                 },
                 template: PodTemplateSpec {
                     metadata: Some(ObjectMeta {
-                        labels: Some(labels),
+                        labels: Some(pod_labels),
+                        annotations: pod_annotations,
                         ..Default::default()
                     }),
                     spec: Some(pod_spec),
@@ -842,12 +1504,27 @@ impl KubernetesContainerController {
         container_name: &str,
         namespace: &str,
         service_account_name: &str,
+        image_pull_secret_name: Option<&str>,
+        env_secret_plan: Option<&KubernetesEnvSecretPlan>,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<StatefulSet> {
         let labels = self.build_labels(container_name);
+        let pod_labels = kubernetes_runtime_pod_labels(ctx, labels.clone());
         let pod_spec = self
-            .build_pod_spec(config, service_account_name, ctx)
+            .build_pod_spec(
+                config,
+                service_account_name,
+                image_pull_secret_name,
+                env_secret_plan,
+                ctx,
+            )
             .await?;
+        let pod_annotations = env_secret_plan.map(|plan| {
+            BTreeMap::from([(
+                "alien.dev/env-secret-checksum".to_string(),
+                plan.checksum.clone(),
+            )])
+        });
 
         // Build volume claim templates for persistent storage
         let mut volume_claim_templates = Vec::new();
@@ -870,7 +1547,6 @@ impl KubernetesContainerController {
                         }),
                         ..Default::default()
                     }),
-                    storage_class_name: persistent_storage.storage_type.clone(),
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -894,7 +1570,8 @@ impl KubernetesContainerController {
                 service_name: Some(container_name.to_string()),
                 template: PodTemplateSpec {
                     metadata: Some(ObjectMeta {
-                        labels: Some(labels),
+                        labels: Some(pod_labels),
+                        annotations: pod_annotations,
                         ..Default::default()
                     }),
                     spec: Some(pod_spec),
@@ -917,6 +1594,8 @@ impl KubernetesContainerController {
         &self,
         config: &Container,
         service_account_name: &str,
+        image_pull_secret_name: Option<&str>,
+        env_secret_plan: Option<&KubernetesEnvSecretPlan>,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<PodSpec> {
         // Determine the container image
@@ -942,6 +1621,23 @@ impl KubernetesContainerController {
         let (env_map, bindings) = env_builder.build_with_bindings();
 
         let mut env_vars = Vec::new();
+
+        if let Some(plan) = env_secret_plan {
+            for key in &plan.keys {
+                env_vars.push(EnvVar {
+                    name: key.clone(),
+                    value: None,
+                    value_from: Some(k8s_openapi::api::core::v1::EnvVarSource {
+                        secret_key_ref: Some(k8s_openapi::api::core::v1::SecretKeySelector {
+                            name: plan.secret_name.clone(),
+                            key: key.clone(),
+                            optional: Some(false),
+                        }),
+                        ..Default::default()
+                    }),
+                });
+            }
+        }
 
         // Process bindings for Kubernetes SecretRefs
         for (binding_name, binding_json) in bindings {
@@ -980,6 +1676,9 @@ impl KubernetesContainerController {
 
         // Add all remaining env vars from the builder (includes user vars + injected vars)
         for (key, value) in env_map {
+            if key == ENV_ALIEN_SECRETS && env_secret_plan.is_some() {
+                continue;
+            }
             // Skip if already added as a secret ref
             if !env_vars.iter().any(|ev| ev.name == key) {
                 env_vars.push(EnvVar {
@@ -1027,7 +1726,7 @@ impl KubernetesContainerController {
                     .iter()
                     .map(|p| ContainerPort {
                         container_port: p.port as i32,
-                        name: Some("http".to_string()),
+                        name: Some(kubernetes_port_name(p)),
                         protocol: Some("TCP".to_string()),
                         ..Default::default()
                     })
@@ -1078,6 +1777,11 @@ impl KubernetesContainerController {
         let pod_spec = PodSpec {
             service_account_name: Some(service_account_name.to_string()),
             containers: vec![container],
+            image_pull_secrets: image_pull_secret_name.map(|name| {
+                vec![LocalObjectReference {
+                    name: name.to_string(),
+                }]
+            }),
             volumes: if volumes.is_empty() {
                 None
             } else {
@@ -1137,44 +1841,121 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_generate_kubernetes_container_name() {
+    fn test_kubernetes_container_name() {
         // Test basic functionality
         assert_eq!(
-            generate_kubernetes_container_name("my-stack", "my-container"),
-            "my-stack-my-container"
+            kubernetes_resource_name("my-stack", "my-container"),
+            "my-container"
         );
 
         // Test character filtering and lowercasing
         assert_eq!(
-            generate_kubernetes_container_name("My_Stack!", "Test#123"),
-            "mystack-test123"
+            kubernetes_resource_name("My_Stack!", "Test#123"),
+            "test-123"
         );
 
         // Test length truncation
         let long_prefix = "a".repeat(50);
         let long_id = "b".repeat(20);
-        let result = generate_kubernetes_container_name(&long_prefix, &long_id);
+        let result = kubernetes_resource_name(&long_prefix, &long_id);
         assert!(result.len() <= 63);
-        assert!(result.starts_with("aaa"));
+        assert_eq!(result, long_id);
     }
 
     #[test]
-    fn test_generate_service_account_name() {
+    fn test_kubernetes_service_account_name() {
         // Test basic functionality
         assert_eq!(
-            generate_service_account_name("my-app", "reader"),
+            kubernetes_service_account_name("my-app", "reader"),
             "my-app-reader-sa"
         );
 
         // Test character filtering
         assert_eq!(
-            generate_service_account_name("My_App!", "Writer#Profile"),
-            "myapp-writerprofile-sa"
+            kubernetes_service_account_name("My_App!", "Writer#Profile"),
+            "my-app-writer-profile-sa"
         );
 
         // Test length truncation
         let long_prefix = "a".repeat(50);
-        let result = generate_service_account_name(&long_prefix, "reader");
+        let result = kubernetes_service_account_name(&long_prefix, "reader");
         assert!(result.len() <= 63);
+    }
+
+    #[test]
+    fn deployment_secret_matching_respects_exact_and_wildcard_targets() {
+        let vars = vec![
+            alien_core::EnvironmentVariable {
+                name: "APP_SECRET".to_string(),
+                value: "secret".to_string(),
+                var_type: alien_core::EnvironmentVariableType::Secret,
+                target_resources: Some(vec!["api".to_string()]),
+            },
+            alien_core::EnvironmentVariable {
+                name: "WORKER_SECRET".to_string(),
+                value: "secret".to_string(),
+                var_type: alien_core::EnvironmentVariableType::Secret,
+                target_resources: Some(vec!["worker*".to_string()]),
+            },
+            alien_core::EnvironmentVariable {
+                name: "PLAIN".to_string(),
+                value: "not-secret".to_string(),
+                var_type: alien_core::EnvironmentVariableType::Plain,
+                target_resources: None,
+            },
+        ];
+
+        let api_vars = applicable_secret_environment_variables("api", &vars);
+        assert_eq!(api_vars.len(), 1);
+        assert_eq!(api_vars[0].name, "APP_SECRET");
+
+        let worker_vars = applicable_secret_environment_variables("worker-main", &vars);
+        assert_eq!(worker_vars.len(), 1);
+        assert_eq!(worker_vars[0].name, "WORKER_SECRET");
+
+        let dashboard_vars = applicable_secret_environment_variables("dashboard", &vars);
+        assert!(dashboard_vars.is_empty());
+    }
+
+    #[test]
+    fn internal_service_uses_declared_container_ports() {
+        let config = Container::new("api".to_string())
+            .code(ContainerCode::Image {
+                image: "registry.example.com/api:1".to_string(),
+            })
+            .cpu(alien_core::ResourceSpec {
+                min: "100m".to_string(),
+                desired: "500m".to_string(),
+            })
+            .memory(alien_core::ResourceSpec {
+                min: "128Mi".to_string(),
+                desired: "512Mi".to_string(),
+            })
+            .port(3000)
+            .permissions("runtime".to_string())
+            .build();
+        let controller = KubernetesContainerController {
+            state: KubernetesContainerState::Ready,
+            workload_name: Some("api".to_string()),
+            is_stateful: false,
+            namespace: Some("test-ns".to_string()),
+            service_name: Some("api".to_string()),
+            service_port: Some(3000),
+            container_id: Some("api".to_string()),
+            public_endpoint: KubernetesPublicEndpointState::default(),
+            _internal_stay_count: None,
+        };
+
+        let service = controller
+            .build_internal_service(&config, "api", "test-ns")
+            .expect("internal service");
+        let spec = service.spec.expect("service spec");
+
+        assert_eq!(service.metadata.name.as_deref(), Some("api"));
+        assert_eq!(spec.type_.as_deref(), Some("ClusterIP"));
+        let ports = spec.ports.expect("service ports");
+        assert_eq!(ports.len(), 1);
+        assert_eq!(ports[0].port, 3000);
+        assert_eq!(ports[0].target_port, Some(IntOrString::Int(3000)));
     }
 }

@@ -11,8 +11,6 @@
             "dynamodb:DescribeTimeToLive",
             "dynamodb:UpdateTimeToLive",
             "dynamodb:ListTagsOfResource",
-            "dynamodb:TagResource",
-            "dynamodb:UntagResource",
             "dynamodb:DescribeContinuousBackups",
             "dynamodb:UpdateContinuousBackups"
           ]
@@ -32,9 +30,8 @@
         "grant": {
           "permissions": [
             "datastore.databases.get",
+            "datastore.databases.getMetadata",
             "datastore.databases.list",
-            "datastore.entities.get",
-            "datastore.entities.list",
             "datastore.indexes.get",
             "datastore.indexes.list"
           ]
@@ -52,11 +49,7 @@
     "azure": [
       {
         "grant": {
-          "actions": [
-            "Microsoft.Storage/storageAccounts/tableServices/read",
-            "Microsoft.Storage/storageAccounts/tableServices/tables/read",
-            "Microsoft.Storage/storageAccounts/read"
-          ]
+          "predefinedRoles": ["Reader"]
         },
         "binding": {
           "stack": {

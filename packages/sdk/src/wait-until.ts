@@ -1,7 +1,7 @@
 /**
  * WaitUntil functionality for background task management.
  *
- * Allows functions to continue running after the response has been sent.
+ * Allows workers to continue running after the response has been sent.
  */
 
 import { type Channel, createClient } from "nice-grpc"

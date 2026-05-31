@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct AwsNetworkImportData {
     /// VPC ID. Absent when default-VPC mode defers lookup to AWS at runtime.
     pub vpc_id: Option<String>,
@@ -29,5 +29,6 @@ pub struct AwsNetworkImportData {
     /// Availability zone names used by created or BYO subnets.
     pub availability_zones: Vec<String>,
     /// True when the VPC is owned outside this stack.
+    #[serde(deserialize_with = "crate::import::data::deserialize_bool_from_bool_or_string")]
     pub is_byo_vpc: bool,
 }

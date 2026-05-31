@@ -468,7 +468,7 @@ function findPublicUrl(
   }
 
   const publicResources = Object.entries(resources).filter(
-    ([_, r]) => (r.resourceType === "container" || r.resourceType === "function") && r.url,
+    ([_, r]) => (r.resourceType === "container" || r.resourceType === "worker") && r.url,
   )
   if (publicResources.length > 0) {
     return publicResources[publicResources.length - 1]![1].url

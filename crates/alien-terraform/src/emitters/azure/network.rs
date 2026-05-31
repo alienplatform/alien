@@ -131,6 +131,7 @@ fn create_topology(ctx: &EmitContext<'_>, label: &str, cidr: Option<String>) -> 
     let cidr = cidr.unwrap_or_else(|| "10.46.0.0/16".to_string());
     let public_label = format!("{label}_public");
     let private_label = format!("{label}_private");
+    let alb_label = format!("{label}_alb");
     let nat_label = format!("{label}_nat");
     let nat_pip_label = format!("{label}_nat_pip");
     let nsg_label = format!("{label}_workload");
@@ -143,7 +144,7 @@ fn create_topology(ctx: &EmitContext<'_>, label: &str, cidr: Option<String>) -> 
         [
             attr(
                 "name",
-                expr::template(format!("${{var.stack_name}}-{label}")),
+                expr::template(format!("${{local.resource_prefix}}-{label}")),
             ),
             attr(
                 "resource_group_name",
@@ -164,7 +165,7 @@ fn create_topology(ctx: &EmitContext<'_>, label: &str, cidr: Option<String>) -> 
         [
             attr(
                 "name",
-                expr::template(format!("${{var.stack_name}}-{label}-public")),
+                expr::template(format!("${{local.resource_prefix}}-{label}-public")),
             ),
             attr(
                 "resource_group_name",
@@ -189,7 +190,7 @@ fn create_topology(ctx: &EmitContext<'_>, label: &str, cidr: Option<String>) -> 
         [
             attr(
                 "name",
-                expr::template(format!("${{var.stack_name}}-{label}-private")),
+                expr::template(format!("${{local.resource_prefix}}-{label}-private")),
             ),
             attr(
                 "resource_group_name",
@@ -209,12 +210,64 @@ fn create_topology(ctx: &EmitContext<'_>, label: &str, cidr: Option<String>) -> 
     ));
 
     fragment.resource_blocks.push(resource_block(
+        "azurerm_subnet",
+        &alb_label,
+        [
+            attr(
+                "name",
+                expr::template(format!("${{local.resource_prefix}}-{label}-alb")),
+            ),
+            attr(
+                "resource_group_name",
+                expr::raw("var.azure_resource_group_name"),
+            ),
+            attr(
+                "virtual_network_name",
+                expr::traversal(["azurerm_virtual_network", label, "name"]),
+            ),
+            attr(
+                "address_prefixes",
+                Expression::Array(vec![expr::raw(format!(
+                    "cidrsubnet(tolist(azurerm_virtual_network.{label}.address_space)[0], 8, 2)"
+                ))]),
+            ),
+            nested(crate::block::block(
+                "delegation",
+                [
+                    attr(
+                        "name",
+                        Expression::String("application-gateway-for-containers".to_string()),
+                    ),
+                    nested(crate::block::block(
+                        "service_delegation",
+                        [
+                            attr(
+                                "name",
+                                Expression::String(
+                                    "Microsoft.ServiceNetworking/trafficControllers".to_string(),
+                                ),
+                            ),
+                            attr(
+                                "actions",
+                                Expression::Array(vec![Expression::String(
+                                    "Microsoft.Network/virtualNetworks/subnets/join/action"
+                                        .to_string(),
+                                )]),
+                            ),
+                        ],
+                    )),
+                ],
+            )),
+        ],
+    ));
+
+    fragment.resource_blocks.push(resource_block(
         "azurerm_public_ip",
         &nat_pip_label,
         [
             attr(
                 "name",
-                expr::template(format!("${{var.stack_name}}-{label}-nat-pip")),
+                expr::template(format!("${{local.resource_prefix}}-{label}-nat-pip")),
             ),
             attr(
                 "resource_group_name",
@@ -236,7 +289,7 @@ fn create_topology(ctx: &EmitContext<'_>, label: &str, cidr: Option<String>) -> 
         [
             attr(
                 "name",
-                expr::template(format!("${{var.stack_name}}-{label}-nat")),
+                expr::template(format!("${{local.resource_prefix}}-{label}-nat")),
             ),
             attr(
                 "resource_group_name",
@@ -288,7 +341,7 @@ fn create_topology(ctx: &EmitContext<'_>, label: &str, cidr: Option<String>) -> 
         [
             attr(
                 "name",
-                expr::template(format!("${{var.stack_name}}-{label}-workload")),
+                expr::template(format!("${{local.resource_prefix}}-{label}-workload")),
             ),
             attr(
                 "resource_group_name",

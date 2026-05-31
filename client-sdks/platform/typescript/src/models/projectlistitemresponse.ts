@@ -6,6 +6,18 @@ import * as z from "zod/v4";
 import { safeParse } from "../lib/schemas.js";
 import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
+import {
+  DeploymentPortalAccentColor,
+  DeploymentPortalAccentColor$inboundSchema,
+} from "./deploymentportalaccentcolor.js";
+import {
+  DeploymentPortalAppearancePreset,
+  DeploymentPortalAppearancePreset$inboundSchema,
+} from "./deploymentportalappearancepreset.js";
+import {
+  DeploymentPortalDensity,
+  DeploymentPortalDensity$inboundSchema,
+} from "./deploymentportaldensity.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import {
   ProjectReleaseInfo,
@@ -15,24 +27,24 @@ import {
 /**
  * The Git Provider of the repository
  */
-export const ProjectListItemResponseTypeGithub = {
+export const ProjectListItemResponseType = {
   Github: "github",
 } as const;
 /**
  * The Git Provider of the repository
  */
-export type ProjectListItemResponseTypeGithub = ClosedEnum<
-  typeof ProjectListItemResponseTypeGithub
+export type ProjectListItemResponseType = ClosedEnum<
+  typeof ProjectListItemResponseType
 >;
 
 /**
- * The Git Repository that will be connected to the project. When this is defined, any pushes to the specified connected Git Repository will be automatically deployed
+ * Verified source repository connected to the project. Alien uses this for GitHub Actions setup and source-aware features; releases are still created explicitly by CI or `alien release`.
  */
 export type ProjectListItemResponseGitRepository = {
   /**
    * The Git Provider of the repository
    */
-  type: ProjectListItemResponseTypeGithub;
+  type: ProjectListItemResponseType;
   /**
    * The name of the git repository
    */
@@ -40,69 +52,41 @@ export type ProjectListItemResponseGitRepository = {
 };
 
 /**
- * Type of animated background to display on the deployment page.
+ * Customer-facing deployment portal appearance settings.
  */
-export const ProjectListItemResponseDeploymentPageBackgroundType = {
-  GradientMesh: "gradient-mesh",
-  FloatingOrbs: "floating-orbs",
-  FlickeringGrid: "flickering-grid",
-  BubbleGlow: "bubble-glow",
-  ParticleField: "particle-field",
-} as const;
-/**
- * Type of animated background to display on the deployment page.
- */
-export type ProjectListItemResponseDeploymentPageBackgroundType = ClosedEnum<
-  typeof ProjectListItemResponseDeploymentPageBackgroundType
->;
-
-/**
- * Color mode for the background animation.
- */
-export const ProjectListItemResponseMode = {
-  Dark: "dark",
-  Light: "light",
-} as const;
-/**
- * Color mode for the background animation.
- */
-export type ProjectListItemResponseMode = ClosedEnum<
-  typeof ProjectListItemResponseMode
->;
-
-/**
- * Color scheme for the background animation.
- */
-export const ProjectListItemResponseColorScheme = {
-  Blue: "blue",
-  Purple: "purple",
-  Green: "green",
-  Orange: "orange",
-  Pink: "pink",
-} as const;
-/**
- * Color scheme for the background animation.
- */
-export type ProjectListItemResponseColorScheme = ClosedEnum<
-  typeof ProjectListItemResponseColorScheme
->;
-
-/**
- * Customization settings for the deployment page background animation.
- */
-export type ProjectListItemResponseDeploymentPageBackground = {
+export type ProjectListItemResponseDeploymentPortalAppearance = {
   /**
-   * Type of animated background to display on the deployment page.
+   * Optional project-specific avatar override for the deployment portal.
    */
-  type: ProjectListItemResponseDeploymentPageBackgroundType;
+  avatarUrl?: string | null | undefined;
   /**
-   * Color mode for the background animation.
+   * Curated visual style for the deployment portal.
    */
-  mode: ProjectListItemResponseMode;
+  preset: DeploymentPortalAppearancePreset;
   /**
-   * Color scheme for the background animation.
+   * Accent color used for highlights and primary actions.
    */
-  colorScheme: ProjectListItemResponseColorScheme;
+  accentColor: DeploymentPortalAccentColor;
+  /**
+   * Optional portal title. Defaults to the project name.
+   */
+  title?: string | null | undefined;
+  /**
+   * Optional customer-facing subtitle.
+   */
+  subtitle?: string | null | undefined;
+  /**
+   * Optional support or contact URL.
+   */
+  supportUrl?: string | null | undefined;
+  /**
+   * Optional documentation URL.
+   */
+  docsUrl?: string | null | undefined;
+  /**
+   * Layout density for portal content.
+   */
+  density: DeploymentPortalDensity;
 };
 
 /**
@@ -131,6 +115,10 @@ export type ProjectListItemResponseCloudformation = {
    * Whether CloudFormation package generation is enabled
    */
   enabled: boolean;
+  /**
+   * Human-friendly application name shown in generated install artifacts
+   */
+  displayName?: string | null | undefined;
 };
 
 /**
@@ -177,6 +165,10 @@ export type ProjectListItemResponseTerraform = {
    * Whether Terraform package generation is enabled
    */
   enabled: boolean;
+  /**
+   * Human-friendly application name shown in generated install artifacts
+   */
+  displayName?: string | null | undefined;
 };
 
 /**
@@ -205,6 +197,32 @@ export type ProjectListItemResponsePackagesConfig = {
   terraform?: ProjectListItemResponseTerraform | null | undefined;
 };
 
+/**
+ * Project default private managers for new push deployments.
+ */
+export type ProjectListItemResponseDefaultManagers = {
+  /**
+   * Unique identifier for a default private manager.
+   */
+  aws?: string | null | undefined;
+  /**
+   * Unique identifier for a default private manager.
+   */
+  gcp?: string | null | undefined;
+  /**
+   * Unique identifier for a default private manager.
+   */
+  azure?: string | null | undefined;
+  /**
+   * Unique identifier for a default private manager.
+   */
+  kubernetes?: string | null | undefined;
+  /**
+   * Unique identifier for a default private manager.
+   */
+  local?: string | null | undefined;
+};
+
 export type ProjectListItemResponse = {
   /**
    * Unique identifier for the project.
@@ -215,7 +233,7 @@ export type ProjectListItemResponse = {
    */
   name: string;
   /**
-   * The Git Repository that will be connected to the project. When this is defined, any pushes to the specified connected Git Repository will be automatically deployed
+   * Verified source repository connected to the project. Alien uses this for GitHub Actions setup and source-aware features; releases are still created explicitly by CI or `alien release`.
    */
   gitRepository?: ProjectListItemResponseGitRepository | null | undefined;
   /**
@@ -223,16 +241,12 @@ export type ProjectListItemResponse = {
    */
   rootDirectory?: string | null | undefined;
   /**
-   * Customization settings for the deployment page background animation.
+   * Customer-facing deployment portal appearance settings.
    */
-  deploymentPageBackground?:
-    | ProjectListItemResponseDeploymentPageBackground
+  deploymentPortalAppearance?:
+    | ProjectListItemResponseDeploymentPortalAppearance
     | null
     | undefined;
-  /**
-   * Custom logo URL to show on the deployment page.
-   */
-  deploymentPageLogoUrl?: string | null | undefined;
   /**
    * Configuration for embedded packages (CLI, CloudFormation, Helm, Terraform)
    */
@@ -241,6 +255,10 @@ export type ProjectListItemResponse = {
    * Selected domain for this project (null = default system domain)
    */
   domainId?: string | null | undefined;
+  /**
+   * Project default private managers for new push deployments.
+   */
+  defaultManagers?: ProjectListItemResponseDefaultManagers | null | undefined;
   createdAt: Date;
   /**
    * Unique identifier for the workspace.
@@ -251,16 +269,16 @@ export type ProjectListItemResponse = {
 };
 
 /** @internal */
-export const ProjectListItemResponseTypeGithub$inboundSchema: z.ZodEnum<
-  typeof ProjectListItemResponseTypeGithub
-> = z.enum(ProjectListItemResponseTypeGithub);
+export const ProjectListItemResponseType$inboundSchema: z.ZodEnum<
+  typeof ProjectListItemResponseType
+> = z.enum(ProjectListItemResponseType);
 
 /** @internal */
 export const ProjectListItemResponseGitRepository$inboundSchema: z.ZodType<
   ProjectListItemResponseGitRepository,
   unknown
 > = z.object({
-  type: ProjectListItemResponseTypeGithub$inboundSchema,
+  type: ProjectListItemResponseType$inboundSchema,
   repo: z.string(),
 });
 
@@ -276,42 +294,32 @@ export function projectListItemResponseGitRepositoryFromJSON(
 }
 
 /** @internal */
-export const ProjectListItemResponseDeploymentPageBackgroundType$inboundSchema:
-  z.ZodEnum<typeof ProjectListItemResponseDeploymentPageBackgroundType> = z
-    .enum(ProjectListItemResponseDeploymentPageBackgroundType);
-
-/** @internal */
-export const ProjectListItemResponseMode$inboundSchema: z.ZodEnum<
-  typeof ProjectListItemResponseMode
-> = z.enum(ProjectListItemResponseMode);
-
-/** @internal */
-export const ProjectListItemResponseColorScheme$inboundSchema: z.ZodEnum<
-  typeof ProjectListItemResponseColorScheme
-> = z.enum(ProjectListItemResponseColorScheme);
-
-/** @internal */
-export const ProjectListItemResponseDeploymentPageBackground$inboundSchema:
-  z.ZodType<ProjectListItemResponseDeploymentPageBackground, unknown> = z
+export const ProjectListItemResponseDeploymentPortalAppearance$inboundSchema:
+  z.ZodType<ProjectListItemResponseDeploymentPortalAppearance, unknown> = z
     .object({
-      type: ProjectListItemResponseDeploymentPageBackgroundType$inboundSchema,
-      mode: ProjectListItemResponseMode$inboundSchema,
-      colorScheme: ProjectListItemResponseColorScheme$inboundSchema,
+      avatarUrl: z.nullable(z.string()).optional(),
+      preset: DeploymentPortalAppearancePreset$inboundSchema.default("clean"),
+      accentColor: DeploymentPortalAccentColor$inboundSchema.default("blue"),
+      title: z.nullable(z.string()).optional(),
+      subtitle: z.nullable(z.string()).optional(),
+      supportUrl: z.nullable(z.string()).optional(),
+      docsUrl: z.nullable(z.string()).optional(),
+      density: DeploymentPortalDensity$inboundSchema.default("comfortable"),
     });
 
-export function projectListItemResponseDeploymentPageBackgroundFromJSON(
+export function projectListItemResponseDeploymentPortalAppearanceFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  ProjectListItemResponseDeploymentPageBackground,
+  ProjectListItemResponseDeploymentPortalAppearance,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      ProjectListItemResponseDeploymentPageBackground$inboundSchema.parse(
+      ProjectListItemResponseDeploymentPortalAppearance$inboundSchema.parse(
         JSON.parse(x),
       ),
-    `Failed to parse 'ProjectListItemResponseDeploymentPageBackground' from JSON`,
+    `Failed to parse 'ProjectListItemResponseDeploymentPortalAppearance' from JSON`,
   );
 }
 
@@ -341,6 +349,7 @@ export const ProjectListItemResponseCloudformation$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   enabled: z.boolean(),
+  displayName: z.nullable(z.string()).optional(),
 });
 
 export function projectListItemResponseCloudformationFromJSON(
@@ -400,6 +409,7 @@ export const ProjectListItemResponseTerraform$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   enabled: z.boolean(),
+  displayName: z.nullable(z.string()).optional(),
 });
 
 export function projectListItemResponseTerraformFromJSON(
@@ -444,6 +454,29 @@ export function projectListItemResponsePackagesConfigFromJSON(
 }
 
 /** @internal */
+export const ProjectListItemResponseDefaultManagers$inboundSchema: z.ZodType<
+  ProjectListItemResponseDefaultManagers,
+  unknown
+> = z.object({
+  aws: z.nullable(z.string()).optional(),
+  gcp: z.nullable(z.string()).optional(),
+  azure: z.nullable(z.string()).optional(),
+  kubernetes: z.nullable(z.string()).optional(),
+  local: z.nullable(z.string()).optional(),
+});
+
+export function projectListItemResponseDefaultManagersFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectListItemResponseDefaultManagers, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ProjectListItemResponseDefaultManagers$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectListItemResponseDefaultManagers' from JSON`,
+  );
+}
+
+/** @internal */
 export const ProjectListItemResponse$inboundSchema: z.ZodType<
   ProjectListItemResponse,
   unknown
@@ -454,14 +487,18 @@ export const ProjectListItemResponse$inboundSchema: z.ZodType<
     z.lazy(() => ProjectListItemResponseGitRepository$inboundSchema),
   ).optional(),
   rootDirectory: z.nullable(z.string()).optional(),
-  deploymentPageBackground: z.nullable(
-    z.lazy(() => ProjectListItemResponseDeploymentPageBackground$inboundSchema),
+  deploymentPortalAppearance: z.nullable(
+    z.lazy(() =>
+      ProjectListItemResponseDeploymentPortalAppearance$inboundSchema
+    ),
   ).optional(),
-  deploymentPageLogoUrl: z.nullable(z.string()).optional(),
   packagesConfig: z.nullable(
     z.lazy(() => ProjectListItemResponsePackagesConfig$inboundSchema),
   ).optional(),
   domainId: z.nullable(z.string()).optional(),
+  defaultManagers: z.nullable(
+    z.lazy(() => ProjectListItemResponseDefaultManagers$inboundSchema),
+  ).optional(),
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   workspaceId: z.string(),
   deploymentCount: z.number().optional(),

@@ -88,7 +88,7 @@ export interface AlienErrorMetadata<TContext extends z.ZodTypeAny> {
   internal: boolean
   /** HTTP status code for API responses */
   httpStatusCode?: number
-  /** Function to generate human-readable error message from context */
+  /** Worker to generate human-readable error message from context */
   message: (context: z.infer<TContext>) => string
 }
 
@@ -315,7 +315,7 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
       return "undefined"
     }
 
-    // Try to get constructor name first (for Arrays, Functions, custom classes, etc.)
+    // Try to get constructor name first (for Arrays, Workers, custom classes, etc.)
     if (error?.constructor?.name) {
       return error.constructor.name
     }

@@ -33,6 +33,26 @@ output "target_account_id" {
   sensitive = true
 }
 
+output "e2e_vpc_id" {
+  value     = aws_vpc.e2e.id
+  sensitive = true
+}
+
+output "e2e_public_subnet_ids" {
+  value     = aws_subnet.e2e_public[*].id
+  sensitive = true
+}
+
+output "e2e_private_subnet_ids" {
+  value     = aws_subnet.e2e_private[*].id
+  sensitive = true
+}
+
+output "e2e_security_group_ids" {
+  value     = [aws_security_group.e2e.id]
+  sensitive = true
+}
+
 output "s3_bucket" {
   value     = aws_s3_bucket.test.bucket
   sensitive = true
@@ -76,5 +96,62 @@ output "e2e_ar_push_role_arn" {
 
 output "e2e_ar_pull_role_arn" {
   value     = aws_iam_role.e2e_ar_pull.arn
+  sensitive = true
+}
+
+output "e2e_eks_cluster_name" {
+  value     = aws_eks_cluster.e2e.name
+  sensitive = true
+}
+
+output "e2e_eks_kube_context" {
+  value     = aws_eks_cluster.e2e.name
+  sensitive = true
+}
+
+output "e2e_eks_kubeconfig" {
+  value = yamlencode({
+    apiVersion = "v1"
+    kind       = "Config"
+    clusters = [{
+      name = aws_eks_cluster.e2e.name
+      cluster = {
+        server                       = aws_eks_cluster.e2e.endpoint
+        "certificate-authority-data" = aws_eks_cluster.e2e.certificate_authority[0].data
+      }
+    }]
+    contexts = [{
+      name = aws_eks_cluster.e2e.name
+      context = {
+        cluster = aws_eks_cluster.e2e.name
+        user    = aws_eks_cluster.e2e.name
+      }
+    }]
+    "current-context" = aws_eks_cluster.e2e.name
+    users = [{
+      name = aws_eks_cluster.e2e.name
+      user = {
+        exec = {
+          apiVersion = "client.authentication.k8s.io/v1beta1"
+          command    = "aws"
+          args       = ["eks", "get-token", "--cluster-name", aws_eks_cluster.e2e.name, "--region", var.target_region]
+          env = [
+            { name = "AWS_ACCESS_KEY_ID", value = aws_iam_access_key.target.id },
+            { name = "AWS_SECRET_ACCESS_KEY", value = aws_iam_access_key.target.secret },
+          ]
+        }
+      }
+    }]
+  })
+  sensitive = true
+}
+
+output "e2e_k8s_public_host_suffix" {
+  value     = "${aws_eip.e2e_ingress[0].public_ip}.sslip.io"
+  sensitive = true
+}
+
+output "e2e_ingress_eip_allocation_ids" {
+  value     = aws_eip.e2e_ingress[*].id
   sensitive = true
 }

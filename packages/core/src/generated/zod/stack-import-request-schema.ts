@@ -14,26 +14,30 @@ import { StackSettingsSchema } from "./stack-settings-schema.js";
  * @description Request body for manager-side stack import.
  */
 export const StackImportRequestSchema = z.object({
-    "deploymentGroupToken": z.string().describe("Deployment-group token authorizing the import."),
+    get "basePlatform"(){
+                return z.union([PlatformSchema, z.null()]).optional()
+              },
+"deploymentGroupToken": z.string().describe("Deployment-group token authorizing the import."),
 "deploymentName": z.string().describe("User-chosen deployment name. Must be unique within the deployment\ngroup; the manager returns 409 on collision rather than silently\nresolving to an existing deployment. Each setup adapter picks\nthe natural source: CloudFormation defaults to the CFN stack name,\nHelm to `{namespace}/{release}`, Terraform requires an explicit\n`name` attribute on the `alien_deployment` resource."),
 get "managementConfig"(){
-                return ManagementConfigSchema.describe("Management configuration for different cloud platforms.\n\nPlatform-derived configuration for cross-account/cross-tenant access.\nThis is NOT user-specified - it's derived from the Manager's ServiceAccount.")
+                return z.union([ManagementConfigSchema, z.null()]).optional()
               },
 get "platform"(){
                 return PlatformSchema.describe("Represents the target cloud platform.")
               },
 "region": z.string().describe("Region or location reported by the setup artifact."),
 "releaseId": z.string().describe("Optional release id that produced the setup package. When\nomitted, the manager imports against the latest release.").nullish(),
+"resourcePrefix": z.string().describe("Stable physical-name prefix used by the setup package for generated\nresources. Runtime controllers use it when addressing imported\nresources."),
 get "resources"(){
                 return z.array(ImportedResourceSchema.describe("One resolved resource import payload.")).describe("Imported resources with typed per-resource payloads.")
               },
 "setupFingerprint": z.string().describe("Setup compatibility fingerprint embedded in the package."),
 "setupFingerprintVersion": z.int().min(0).describe("Setup fingerprint algorithm version embedded in the package."),
+"setupImportFormatVersion": z.int().min(0).describe("Wire-format version for the setup import payload."),
 "setupTarget": z.string().describe("Setup target this package was generated for."),
 get "sourceKind"(){
                 return z.union([ImportSourceKindSchema, z.null()]).optional()
               },
-"stackPrefix": z.string().describe("Stable physical-name prefix used by the setup package for\ngenerated resources. This is the Alien stack prefix, not merely a UI\nname: runtime controllers use it when addressing imported resources."),
 get "stackSettings"(){
                 return StackSettingsSchema.describe("User-customizable deployment settings specified at deploy time.\n\nThese settings are provided by the customer via CloudFormation parameters,\nTerraform attributes, CLI flags, or Helm values. They customize how the\ndeployment runs and what capabilities are enabled.\n\n**Key distinction**: StackSettings is user-customizable, while ManagementConfig\nis platform-derived (from the Manager's ServiceAccount).")
               }

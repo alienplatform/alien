@@ -16,32 +16,32 @@
         "binding": {
           "stack": {
             "resources": [
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/app/${stackPrefix}-*/*",
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/net/${stackPrefix}-*/*",
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/${stackPrefix}-*/*",
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/app/${stackPrefix}-*/*/*",
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/net/${stackPrefix}-*/*/*"
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/app/*/*",
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/net/*/*",
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/*/*",
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/app/*/*/*",
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/net/*/*/*"
             ],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${managedByTag}": "alien"
+                "aws:RequestTag/${managedByTag}": "deployment"
               }
             }
           },
           "resource": {
             "resources": [
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/app/${stackPrefix}-*/*",
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/net/${stackPrefix}-*/*",
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/${stackPrefix}-*/*",
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/app/${stackPrefix}-*/*/*",
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/net/${stackPrefix}-*/*/*"
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/app/*/*",
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/net/*/*",
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/*/*",
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/app/*/*/*",
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/net/*/*/*"
             ],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${resourceTag}": "${resourceName}",
-                "aws:RequestTag/${managedByTag}": "alien"
+                "aws:RequestTag/${managedByTag}": "deployment"
               }
             }
           }
@@ -58,32 +58,32 @@
         "binding": {
           "stack": {
             "resources": [
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/app/${stackPrefix}-*/*",
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/net/${stackPrefix}-*/*",
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/${stackPrefix}-*/*",
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/app/${stackPrefix}-*/*/*",
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/net/${stackPrefix}-*/*/*"
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/app/*/*",
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/net/*/*",
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/*/*",
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/app/*/*/*",
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/net/*/*/*"
             ],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${managedByTag}": "alien"
+                "aws:ResourceTag/${managedByTag}": "deployment"
               }
             }
           },
           "resource": {
             "resources": [
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/app/${stackPrefix}-*/*",
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/net/${stackPrefix}-*/*",
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/${stackPrefix}-*/*",
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/app/${stackPrefix}-*/*/*",
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/net/${stackPrefix}-*/*/*"
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/app/*/*",
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/net/*/*",
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/*/*",
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/app/*/*/*",
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/net/*/*/*"
             ],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
                 "aws:ResourceTag/${resourceTag}": "${resourceName}",
-                "aws:ResourceTag/${managedByTag}": "alien"
+                "aws:ResourceTag/${managedByTag}": "deployment"
               }
             }
           }
@@ -92,10 +92,7 @@
       // EBS Volumes for stateful containers with .persistentStorage()
       {
         "grant": {
-          "actions": [
-            "ec2:CreateVolume",
-            "ec2:CreateTags"
-          ]
+          "actions": ["ec2:CreateVolume", "ec2:CreateTags"]
         },
         "binding": {
           "stack": {
@@ -103,7 +100,7 @@
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${managedByTag}": "alien"
+                "aws:RequestTag/${managedByTag}": "deployment"
               }
             }
           },
@@ -113,7 +110,7 @@
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${resourceTag}": "${resourceName}",
-                "aws:RequestTag/${managedByTag}": "alien"
+                "aws:RequestTag/${managedByTag}": "deployment"
               }
             }
           }
@@ -129,7 +126,7 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${managedByTag}": "alien"
+                "aws:ResourceTag/${managedByTag}": "deployment"
               }
             }
           },
@@ -139,7 +136,7 @@
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
                 "aws:ResourceTag/${resourceTag}": "${resourceName}",
-                "aws:ResourceTag/${managedByTag}": "alien"
+                "aws:ResourceTag/${managedByTag}": "deployment"
               }
             }
           }
@@ -166,28 +163,50 @@
         }
       },
       // Security group for LB (created by container controller, not cluster).
-      // Create is allowed only when the request carries Alien boundary tags.
+      // AWS authorizes CreateSecurityGroup against the target VPC. The created
+      // security group is tag-bound by the paired CreateTags-on-create grant.
       {
         "grant": {
           "actions": ["ec2:CreateSecurityGroup"]
         },
         "binding": {
           "stack": {
-            "resources": ["*"],
+            "resources": [
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/*"
+            ]
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["ec2:CreateTags"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"],
             "condition": {
               "StringEquals": {
+                "ec2:CreateAction": "CreateSecurityGroup",
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${managedByTag}": "alien"
+                "aws:RequestTag/${managedByTag}": "deployment"
               }
             }
           },
           "resource": {
-            "resources": ["*"],
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"],
             "condition": {
               "StringEquals": {
+                "ec2:CreateAction": "CreateSecurityGroup",
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${resourceTag}": "${resourceName}",
-                "aws:RequestTag/${managedByTag}": "alien"
+                "aws:RequestTag/${managedByTag}": "deployment"
               }
             }
           }
@@ -195,10 +214,7 @@
       },
       {
         "grant": {
-          "actions": [
-            "ec2:DeleteSecurityGroup",
-            "ec2:AuthorizeSecurityGroupIngress"
-          ]
+          "actions": ["ec2:DeleteSecurityGroup", "ec2:AuthorizeSecurityGroupIngress"]
         },
         "binding": {
           "stack": {
@@ -206,7 +222,7 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${managedByTag}": "alien"
+                "aws:ResourceTag/${managedByTag}": "deployment"
               }
             }
           },
@@ -216,7 +232,7 @@
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
                 "aws:ResourceTag/${resourceTag}": "${resourceName}",
-                "aws:ResourceTag/${managedByTag}": "alien"
+                "aws:ResourceTag/${managedByTag}": "deployment"
               }
             }
           }
@@ -225,10 +241,7 @@
       {
         // AWS requires Resource: "*" for security group and VPC describe APIs.
         "grant": {
-          "actions": [
-            "ec2:DescribeSecurityGroups",
-            "ec2:DescribeVpcs"
-          ]
+          "actions": ["ec2:DescribeSecurityGroups", "ec2:DescribeVpcs"]
         },
         "binding": {
           "stack": {
@@ -242,7 +255,7 @@
       // ACM certificates for HTTPS containers
       {
         "grant": {
-          "actions": ["acm:ImportCertificate"]
+          "actions": ["acm:ImportCertificate", "acm:AddTagsToCertificate"]
         },
         "binding": {
           "stack": {
@@ -250,7 +263,7 @@
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${managedByTag}": "alien"
+                "aws:RequestTag/${managedByTag}": "deployment"
               }
             }
           },
@@ -260,7 +273,7 @@
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${resourceTag}": "${resourceName}",
-                "aws:RequestTag/${managedByTag}": "alien"
+                "aws:RequestTag/${managedByTag}": "deployment"
               }
             }
           }
@@ -268,7 +281,11 @@
       },
       {
         "grant": {
-          "actions": ["acm:DeleteCertificate", "acm:DescribeCertificate"]
+          "actions": [
+            "acm:AddTagsToCertificate",
+            "acm:DeleteCertificate",
+            "acm:DescribeCertificate"
+          ]
         },
         "binding": {
           "stack": {
@@ -276,7 +293,7 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${managedByTag}": "alien"
+                "aws:ResourceTag/${managedByTag}": "deployment"
               }
             }
           },
@@ -286,7 +303,7 @@
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
                 "aws:ResourceTag/${resourceTag}": "${resourceName}",
-                "aws:ResourceTag/${managedByTag}": "alien"
+                "aws:ResourceTag/${managedByTag}": "deployment"
               }
             }
           }
@@ -304,22 +321,29 @@
             "compute.healthChecks.create",
             "compute.healthChecks.delete",
             "compute.healthChecks.get",
+            "compute.healthChecks.update",
+            "compute.healthChecks.useReadOnly",
             "compute.networkEndpointGroups.create",
             "compute.networkEndpointGroups.delete",
             "compute.networkEndpointGroups.get",
+            "compute.networkEndpointGroups.use",
             "compute.backendServices.create",
             "compute.backendServices.delete",
             "compute.backendServices.get",
             "compute.backendServices.update",
+            "compute.backendServices.use",
             "compute.urlMaps.create",
             "compute.urlMaps.delete",
             "compute.urlMaps.get",
+            "compute.urlMaps.use",
             "compute.targetHttpsProxies.create",
             "compute.targetHttpsProxies.delete",
             "compute.targetHttpsProxies.get",
+            "compute.targetHttpsProxies.use",
             "compute.globalAddresses.create",
             "compute.globalAddresses.delete",
             "compute.globalAddresses.get",
+            "compute.globalAddresses.use",
             "compute.globalForwardingRules.create",
             "compute.globalForwardingRules.delete",
             "compute.globalForwardingRules.get"

@@ -5,14 +5,25 @@
     "aws": [
       {
         "grant": {
+          "actions": ["ecr:DescribeRepositories"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/*"]
+          }
+        }
+      },
+      {
+        "grant": {
           "actions": [
-            "ecr:DescribeRepositories",
             "ecr:DescribeImages",
             "ecr:ListImages",
             "ecr:DescribeImageScanFindings",
             "ecr:GetRepositoryPolicy",
-            "ecr:ListTagsForResource",
-            "ecr:DescribeRegistry"
+            "ecr:ListTagsForResource"
           ]
         },
         "binding": {
@@ -42,7 +53,7 @@
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}/locations/${region}"
+            "scope": "projects/${projectName}"
           },
           "resource": {
             "scope": "projects/${projectName}/locations/${region}/repositories/${resourceName}"
@@ -53,11 +64,7 @@
     "azure": [
       {
         "grant": {
-          "actions": [
-            "Microsoft.ContainerRegistry/registries/read",
-            "Microsoft.ContainerRegistry/registries/metadata/read",
-            "Microsoft.ContainerRegistry/registries/quarantine/read"
-          ]
+          "predefinedRoles": ["Reader"]
         },
         "binding": {
           "stack": {

@@ -5,10 +5,16 @@ use std::sync::OnceLock;
 
 use crate::core::ResourceController;
 use crate::error::{ErrorData, Result};
+#[cfg(feature = "local")]
+use alien_core::ComputeCluster;
+#[cfg(any(feature = "kubernetes", feature = "local"))]
+use alien_core::Container;
+#[cfg(any(feature = "kubernetes", feature = "local"))]
+use alien_core::Daemon;
 use alien_core::{
     ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup, AzureServiceBusNamespace,
-    AzureStorageAccount, Build, Container, ContainerCluster, Function, Kv, Network,
-    RemoteStackManagement, ServiceAccount, ServiceActivation, Storage, Vault,
+    AzureStorageAccount, Build, Kv, Network, RemoteStackManagement, ServiceAccount,
+    ServiceActivation, Storage, Vault, Worker,
 };
 use alien_core::{Platform, ResourceDefinition, ResourceType};
 use alien_error::AlienError;
@@ -108,7 +114,7 @@ impl ResourceRegistry {
     }
 
     /// Starts a resource registration builder
-    pub fn register<R>(&mut self, resource_type: ResourceType) -> ResourceRegistration<R>
+    pub fn register<R>(&mut self, resource_type: ResourceType) -> ResourceRegistration<'_, R>
     where
         R: ResourceDefinition + 'static,
     {
@@ -148,60 +154,76 @@ impl ResourceRegistry {
     pub fn with_built_ins() -> Self {
         let mut registry = Self::new();
 
-        // Register built-in Function controllers
+        // Register built-in Worker controllers
         #[cfg(feature = "aws")]
         registry.register_controller_factory(
-            Function::RESOURCE_TYPE,
+            Worker::RESOURCE_TYPE,
             Platform::Aws,
-            Box::new(DefaultControllerFactory::<
-                crate::function::AwsFunctionController,
-            >::new()),
+            Box::new(DefaultControllerFactory::<crate::worker::AwsWorkerController>::new()),
         );
 
         #[cfg(feature = "gcp")]
         registry.register_controller_factory(
-            Function::RESOURCE_TYPE,
+            Worker::RESOURCE_TYPE,
             Platform::Gcp,
-            Box::new(DefaultControllerFactory::<
-                crate::function::GcpFunctionController,
-            >::new()),
+            Box::new(DefaultControllerFactory::<crate::worker::GcpWorkerController>::new()),
         );
 
         #[cfg(feature = "azure")]
         registry.register_controller_factory(
-            Function::RESOURCE_TYPE,
+            Worker::RESOURCE_TYPE,
             Platform::Azure,
             Box::new(DefaultControllerFactory::<
-                crate::function::AzureFunctionController,
+                crate::worker::AzureWorkerController,
             >::new()),
         );
 
         #[cfg(feature = "test")]
         registry.register_controller_factory(
-            Function::RESOURCE_TYPE,
+            Worker::RESOURCE_TYPE,
             Platform::Test,
             Box::new(DefaultControllerFactory::<
-                crate::function::TestFunctionController,
+                crate::worker::TestWorkerController,
             >::new()),
         );
 
-        // Register Kubernetes Function controller
+        // Register Kubernetes Worker controller
         #[cfg(feature = "kubernetes")]
         registry.register_controller_factory(
-            Function::RESOURCE_TYPE,
+            Worker::RESOURCE_TYPE,
             Platform::Kubernetes,
             Box::new(DefaultControllerFactory::<
-                crate::function::KubernetesFunctionController,
+                crate::worker::KubernetesWorkerController,
             >::new()),
         );
 
-        // Register Local Function controller
+        // Register Local Worker controller
         #[cfg(feature = "local")]
         registry.register_controller_factory(
-            Function::RESOURCE_TYPE,
+            Worker::RESOURCE_TYPE,
             Platform::Local,
             Box::new(DefaultControllerFactory::<
-                crate::function::LocalFunctionController,
+                crate::worker::LocalWorkerController,
+            >::new()),
+        );
+
+        // Register Kubernetes Daemon controller.
+        #[cfg(feature = "kubernetes")]
+        registry.register_controller_factory(
+            Daemon::RESOURCE_TYPE,
+            Platform::Kubernetes,
+            Box::new(DefaultControllerFactory::<
+                crate::daemon::KubernetesDaemonController,
+            >::new()),
+        );
+
+        // Register Local Daemon controller.
+        #[cfg(feature = "local")]
+        registry.register_controller_factory(
+            Daemon::RESOURCE_TYPE,
+            Platform::Local,
+            Box::new(DefaultControllerFactory::<
+                crate::daemon::LocalDaemonController,
             >::new()),
         );
 
@@ -612,13 +634,52 @@ impl ResourceRegistry {
             Box::new(DefaultControllerFactory::<crate::kv::LocalKvController>::new()),
         );
 
-        // Register Local ContainerCluster controller
+        // Register Local ComputeCluster controller
         #[cfg(feature = "local")]
         registry.register_controller_factory(
-            ContainerCluster::RESOURCE_TYPE,
+            ComputeCluster::RESOURCE_TYPE,
             Platform::Local,
             Box::new(DefaultControllerFactory::<
-                crate::container_cluster::LocalContainerClusterController,
+                crate::compute_cluster::LocalComputeClusterController,
+            >::new()),
+        );
+
+        // Register KubernetesCluster controller. The cluster is selected or
+        // created during setup; this runtime controller records substrate
+        // readiness once the agent is installed and reporting.
+        #[cfg(feature = "kubernetes")]
+        registry.register_controller_factory(
+            alien_core::KubernetesCluster::RESOURCE_TYPE,
+            Platform::Kubernetes,
+            Box::new(DefaultControllerFactory::<
+                crate::kubernetes_cluster::KubernetesClusterController,
+            >::new()),
+        );
+
+        #[cfg(all(feature = "aws", feature = "kubernetes"))]
+        registry.register_controller_factory(
+            alien_core::KubernetesCluster::RESOURCE_TYPE,
+            Platform::Aws,
+            Box::new(DefaultControllerFactory::<
+                crate::kubernetes_cluster::KubernetesClusterController,
+            >::new()),
+        );
+
+        #[cfg(all(feature = "gcp", feature = "kubernetes"))]
+        registry.register_controller_factory(
+            alien_core::KubernetesCluster::RESOURCE_TYPE,
+            Platform::Gcp,
+            Box::new(DefaultControllerFactory::<
+                crate::kubernetes_cluster::KubernetesClusterController,
+            >::new()),
+        );
+
+        #[cfg(all(feature = "azure", feature = "kubernetes"))]
+        registry.register_controller_factory(
+            alien_core::KubernetesCluster::RESOURCE_TYPE,
+            Platform::Azure,
+            Box::new(DefaultControllerFactory::<
+                crate::kubernetes_cluster::KubernetesClusterController,
             >::new()),
         );
 

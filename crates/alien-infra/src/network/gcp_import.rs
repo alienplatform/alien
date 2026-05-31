@@ -40,10 +40,11 @@ impl ResourceImporter for GcpNetworkImporter {
             router_name: None,
             cloud_nat_name: data.nat_name,
             firewall_name: None,
-            // Region and CIDR live in `StackSettings.network` and are picked
-            // up by the controller's heartbeat path.
+            // Region is still resolved from stack settings or the cloud
+            // self-link; the CIDR comes from the imported subnetwork so
+            // dependent resources can create scoped firewall rules.
             region: None,
-            cidr_block: None,
+            cidr_block: data.cidr_block,
             is_byo_vpc: data.is_byo_vpc,
             pending_operation_name: None,
             pending_operation_region: None,

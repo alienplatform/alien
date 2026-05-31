@@ -10,17 +10,20 @@ let value: ForwardImportRequest = {
   managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
   source: {
     deploymentName: "<value>",
-    stackPrefix: "<value>",
+    resourcePrefix: "<value>",
     releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
     platform: "kubernetes",
     region: "<value>",
     setupTarget: "<value>",
+    setupImportFormatVersion: 171752,
     setupFingerprint: "<value>",
-    setupFingerprintVersion: 171752,
+    setupFingerprintVersion: 188662,
     stackSettings: {},
     managementConfig: {
-      managingRoleArn: "<value>",
-      platform: "aws",
+      managingTenantId: "<id>",
+      oidcIssuer: "<value>",
+      oidcSubject: "<value>",
+      platform: "azure",
     },
     resources: [
       {

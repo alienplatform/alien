@@ -6,9 +6,6 @@ use crate::azure::token_cache::AzureTokenCache;
 use alien_client_core::{ErrorData, Result};
 
 use alien_error::{AlienError, Context, IntoAlienError};
-use async_trait::async_trait;
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use chrono::Utc;
 use reqwest::{Client, Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -442,15 +439,13 @@ impl TableManagementApi for AzureTableManagementClient {
 pub struct AzureTableStorageClient {
     pub client: Client,
     pub token_cache: AzureTokenCache,
-    pub storage_account_key: String,
 }
 
 impl AzureTableStorageClient {
-    pub fn new(client: Client, token_cache: AzureTokenCache, storage_account_key: String) -> Self {
+    pub fn new(client: Client, token_cache: AzureTokenCache) -> Self {
         Self {
             client,
             token_cache,
-            storage_account_key,
         }
     }
 
@@ -489,76 +484,6 @@ impl AzureTableStorageClient {
         urlencoding::encode(value).to_string()
     }
 
-    /// Generate shared key signature for Azure Table Storage authentication
-    fn generate_shared_key_signature(
-        &self,
-        method: &str,
-        url: &url::Url,
-        headers: &HashMap<String, String>,
-        storage_account_name: &str,
-        storage_account_key: &str,
-    ) -> Result<String> {
-        // Construct the string to sign according to Azure Table Storage specification
-        // For Table Storage, we use x-ms-date preferentially
-        let date = headers.get("x-ms-date").ok_or_else(|| {
-            AlienError::new(ErrorData::RequestSignError {
-                message: "x-ms-date header is required for shared key authentication".to_string(),
-            })
-        })?;
-
-        let canonicalized_resource = self.canonicalize_resource(url, storage_account_name);
-
-        // String to sign format for Table Storage:
-        // VERB + "\n" +
-        // Content-MD5 + "\n" +
-        // Content-Type + "\n" +
-        // Date + "\n" +
-        // CanonicalizedResource
-        let string_to_sign = format!(
-            "{}\n{}\n{}\n{}\n{}",
-            method.to_uppercase(),
-            headers.get("Content-MD5").unwrap_or(&String::new()),
-            headers.get("Content-Type").unwrap_or(&String::new()),
-            date,
-            canonicalized_resource
-        );
-
-        // Create HMAC-SHA256 signature
-        use hmac::{Hmac, Mac};
-        use sha2::Sha256;
-
-        type HmacSha256 = Hmac<Sha256>;
-
-        let decoded_key = BASE64
-            .decode(storage_account_key)
-            .into_alien_error()
-            .context(ErrorData::RequestSignError {
-                message: "Failed to decode storage account key".to_string(),
-            })?;
-
-        let mut mac = HmacSha256::new_from_slice(&decoded_key)
-            .into_alien_error()
-            .context(ErrorData::RequestSignError {
-                message: "Failed to create HMAC".to_string(),
-            })?;
-
-        mac.update(string_to_sign.as_bytes());
-        let signature = mac.finalize().into_bytes();
-        let signature_b64 = BASE64.encode(signature);
-
-        Ok(format!(
-            "SharedKey {}:{}",
-            storage_account_name, signature_b64
-        ))
-    }
-
-    /// Canonicalize the resource string for shared key authentication
-    /// For Table Storage, query parameters should NOT be included in the canonicalized resource
-    fn canonicalize_resource(&self, url: &url::Url, storage_account_name: &str) -> String {
-        let path = url.path();
-        format!("/{}{}", storage_account_name, path)
-    }
-
     /// Execute an HTTP request and handle errors using centralized Azure error mapping
     async fn execute_data_plane_request(
         &self,
@@ -572,13 +497,7 @@ impl AzureTableStorageClient {
         additional_headers: Option<HashMap<String, String>>,
     ) -> Result<reqwest::Response> {
         let headers = self
-            .sign_request_with_shared_key(
-                method,
-                url,
-                body,
-                storage_account_name,
-                resource_group_name,
-            )
+            .bearer_auth_headers(method, body, storage_account_name, resource_group_name)
             .await?;
 
         let mut request_builder = match method {
@@ -641,22 +560,21 @@ impl AzureTableStorageClient {
         }
     }
 
-    /// Sign an HTTP request using shared key authentication
-    async fn sign_request_with_shared_key(
+    /// Build Table Storage data-plane headers using Microsoft Entra auth.
+    async fn bearer_auth_headers(
         &self,
-        method: &str,
-        url: &url::Url,
+        _method: &str,
         body: &str,
-        storage_account_name: &str,
-        _resource_group_name: &str, // No longer needed, but keeping for API compatibility
+        _storage_account_name: &str,
+        _resource_group_name: &str,
     ) -> Result<HashMap<String, String>> {
-        let storage_account_key = &self.storage_account_key;
+        let bearer_token = self
+            .token_cache
+            .get_bearer_token_with_scope("https://storage.azure.com/.default")
+            .await?;
 
         let mut headers = HashMap::new();
 
-        // Add required headers
-        let date = Utc::now().format("%a, %d %b %Y %H:%M:%S GMT").to_string();
-        headers.insert("x-ms-date".to_string(), date);
         headers.insert("x-ms-version".to_string(), "2020-12-06".to_string());
         headers.insert("Content-Length".to_string(), body.len().to_string());
 
@@ -668,16 +586,10 @@ impl AzureTableStorageClient {
             headers.insert("Content-Type".to_string(), "application/json".to_string());
         }
 
-        // Generate signature
-        let authorization = self.generate_shared_key_signature(
-            method,
-            url,
-            &headers,
-            storage_account_name,
-            storage_account_key,
-        )?;
-
-        headers.insert("Authorization".to_string(), authorization);
+        headers.insert(
+            "Authorization".to_string(),
+            format!("Bearer {}", bearer_token),
+        );
         headers.insert(
             "Accept".to_string(),
             "application/json;odata=minimalmetadata".to_string(),

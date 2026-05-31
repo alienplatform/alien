@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+package alien_bindings.worker;
+
+// Worker service for direct worker-to-worker invocation
+service WorkerService {
+    // Invoke a worker with HTTP request data
+    rpc Invoke(InvokeRequest) returns (InvokeResponse);
+
+    // Get the public URL of the worker, if available
+    rpc GetWorkerUrl(GetWorkerUrlRequest) returns (GetWorkerUrlResponse);
+}
+
+// Messages for Invoke
+message InvokeRequest {
+    // Name of the Worker binding to use
+    string binding_name = 1;
+    // Target worker identifier (name, ARN, URL, etc.)
+    string target_worker = 2;
+    // HTTP method
+    string method = 3;
+    // Request path
+    string path = 4;
+    // HTTP headers
+    map<string, string> headers = 5;
+    // Request body bytes
+    bytes body = 6;
+    // Optional timeout for the invocation in seconds
+    optional uint64 timeout_seconds = 7;
+}
+
+message InvokeResponse {
+    // HTTP status code
+    uint32 status = 1;
+    // HTTP response headers
+    map<string, string> headers = 2;
+    // Response body bytes
+    bytes body = 3;
+}
+
+// Messages for GetWorkerUrl
+message GetWorkerUrlRequest {
+    // Name of the Worker binding to use
+    string binding_name = 1;
+}
+
+message GetWorkerUrlResponse {
+    // The public URL if available
+    optional string url = 1;
+}

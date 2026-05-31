@@ -9,12 +9,21 @@ import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 export type AgentSyncResponse = {
   /**
-   * Public URL for the commands API. Cloud-deployed functions use this
+   * Public URL for the commands API. Cloud-deployed workers use this
    *
    * @remarks
    * to poll for pending commands instead of the agent's local sync URL.
    */
   commandsUrl?: string | null | undefined;
+  /**
+   * Authoritative deployment state from the manager.
+   *
+   * @remarks
+   *
+   * Returned when a pull deployment attaches with an empty local state while
+   * the manager already has imported or previously reconciled state.
+   */
+  currentState?: any | undefined;
   target?: any | undefined;
 };
 
@@ -24,6 +33,7 @@ export const AgentSyncResponse$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   commandsUrl: z.nullable(z.string()).optional(),
+  currentState: z.any().optional(),
   target: z.any().optional(),
 });
 

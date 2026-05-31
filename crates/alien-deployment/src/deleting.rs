@@ -30,6 +30,10 @@ pub async fn handle_delete_pending(
         })
     })?;
 
+    if delete_scope == DeleteScope::LiveOnly {
+        include_runtime_managed_resources_in_live_delete(&mut stack_state);
+    }
+
     // Prepare stack for destroy (handles failed resources appropriately)
     use alien_infra::state_utils::StackStateExt;
     let prepared = match delete_scope {
@@ -56,6 +60,7 @@ pub async fn handle_delete_pending(
         error: None,
         suggested_delay_ms: None,
         update_heartbeat: false,
+        heartbeats: vec![],
     })
 }
 
@@ -136,6 +141,7 @@ pub async fn handle_deleting(
             error: None,
             suggested_delay_ms: None,
             update_heartbeat: false,
+            heartbeats: vec![],
         }
     } else if stack_status == StackStatus::Failure {
         info!("Deletion failed");
@@ -153,6 +159,7 @@ pub async fn handle_deleting(
             error,
             suggested_delay_ms: None,
             update_heartbeat: false,
+            heartbeats: vec![],
         }
     } else {
         // Still in progress
@@ -164,6 +171,7 @@ pub async fn handle_deleting(
             error: None,
             suggested_delay_ms: step_result.suggested_delay_ms,
             update_heartbeat: false,
+            heartbeats: step_result.heartbeats,
         }
     };
 
@@ -198,6 +206,7 @@ pub async fn handle_delete_failed(
             error: None,
             suggested_delay_ms: None,
             update_heartbeat: false,
+            heartbeats: vec![],
         });
     }
 
@@ -209,6 +218,10 @@ pub async fn handle_delete_failed(
             message: "Stack state required for delete retry".to_string(),
         })
     })?;
+
+    if delete_scope == DeleteScope::LiveOnly {
+        include_runtime_managed_resources_in_live_delete(&mut stack_state);
+    }
 
     // Prepare stack for destroy (handles failed resources appropriately)
     use alien_infra::state_utils::StackStateExt;
@@ -238,6 +251,7 @@ pub async fn handle_delete_failed(
         error: None,
         suggested_delay_ms: None,
         update_heartbeat: false,
+        heartbeats: vec![],
     })
 }
 
@@ -273,5 +287,80 @@ fn compute_delete_scope_status(
 
             StackState::compute_stack_status_from_resources(&statuses)
         }
+    }
+}
+
+fn include_runtime_managed_resources_in_live_delete(stack_state: &mut StackState) {
+    for resource in stack_state.resources.values_mut() {
+        // Setup creates the compute boundary, but runtime controllers create
+        // and delete the actual machine pools. Those runtime-owned resources
+        // must be drained before the setup tool can remove its VPC/subnets.
+        if resource.resource_type == "compute-cluster" {
+            resource.lifecycle = Some(ResourceLifecycle::Live);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alien_core::{
+        ComputeCluster, Platform, Resource, ResourceLifecycle, ResourceStatus, StackResourceState,
+        StackState, Storage,
+    };
+
+    use super::include_runtime_managed_resources_in_live_delete;
+
+    fn resource_state(
+        resource: Resource,
+        lifecycle: ResourceLifecycle,
+        status: ResourceStatus,
+    ) -> StackResourceState {
+        StackResourceState {
+            resource_type: resource.resource_type().as_ref().to_string(),
+            internal_state: None,
+            status,
+            outputs: None,
+            config: resource,
+            previous_config: None,
+            retry_attempt: 0,
+            error: None,
+            lifecycle: Some(lifecycle),
+            controller_platform: None,
+            dependencies: Vec::new(),
+            last_failed_state: None,
+            remote_binding_params: None,
+        }
+    }
+
+    #[test]
+    fn live_delete_includes_compute_cluster_but_not_other_frozen_resources() {
+        let mut stack_state = StackState::new(Platform::Aws);
+        stack_state.resources.insert(
+            "compute".to_string(),
+            resource_state(
+                Resource::new(ComputeCluster::new("compute".to_string()).build()),
+                ResourceLifecycle::Frozen,
+                ResourceStatus::Running,
+            ),
+        );
+        stack_state.resources.insert(
+            "storage".to_string(),
+            resource_state(
+                Resource::new(Storage::new("storage".to_string()).build()),
+                ResourceLifecycle::Frozen,
+                ResourceStatus::Running,
+            ),
+        );
+
+        include_runtime_managed_resources_in_live_delete(&mut stack_state);
+
+        assert_eq!(
+            stack_state.resources["compute"].lifecycle,
+            Some(ResourceLifecycle::Live)
+        );
+        assert_eq!(
+            stack_state.resources["storage"].lifecycle,
+            Some(ResourceLifecycle::Frozen)
+        );
     }
 }

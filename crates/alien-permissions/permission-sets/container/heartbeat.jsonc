@@ -37,7 +37,7 @@
     "azure": [
       {
         "grant": {
-          "actions": ["Microsoft.Network/loadBalancers/read", "Microsoft.Compute/disks/read"]
+          "predefinedRoles": ["Reader"]
         },
         "binding": {
           "stack": {

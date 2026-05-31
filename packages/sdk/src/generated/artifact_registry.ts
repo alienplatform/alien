@@ -48,16 +48,16 @@ export function artifactRegistryPermissionsToJSON(object: ArtifactRegistryPermis
 
 /** Types of compute services that can access artifact registries */
 export enum ComputeServiceType {
-  /** FUNCTION - Serverless functions */
-  FUNCTION = 0,
+  /** WORKER - Serverless workers */
+  WORKER = 0,
   UNRECOGNIZED = -1,
 }
 
 export function computeServiceTypeFromJSON(object: any): ComputeServiceType {
   switch (object) {
     case 0:
-    case "FUNCTION":
-      return ComputeServiceType.FUNCTION;
+    case "WORKER":
+      return ComputeServiceType.WORKER;
     case -1:
     case "UNRECOGNIZED":
     default:
@@ -67,8 +67,8 @@ export function computeServiceTypeFromJSON(object: any): ComputeServiceType {
 
 export function computeServiceTypeToJSON(object: ComputeServiceType): string {
   switch (object) {
-    case ComputeServiceType.FUNCTION:
-      return "FUNCTION";
+    case ComputeServiceType.WORKER:
+      return "WORKER";
     case ComputeServiceType.UNRECOGNIZED:
     default:
       return "UNRECOGNIZED";
@@ -213,7 +213,7 @@ export interface AwsCrossAccountAccess {
   allowedServiceTypes: ComputeServiceType[];
   /** Specific IAM role ARNs to grant access to */
   roleArns: string[];
-  /** AWS regions where target Lambda functions run (for sourceArn condition) */
+  /** AWS regions where target Lambda workers run (for sourceArn condition) */
   regions: string[];
 }
 

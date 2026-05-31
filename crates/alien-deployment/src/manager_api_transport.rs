@@ -8,7 +8,7 @@
 //! | alien-cli        | `resolve_manager()` (discovers URL via platform)   |
 //! | alien-terraform  | `manager_url` from SyncAcquire response            |
 
-use alien_core::DeploymentState;
+use alien_core::{DeploymentState, ResourceHeartbeat};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_manager_api::{Client as ManagerClient, SdkResultExt};
 use async_trait::async_trait;
@@ -45,6 +45,7 @@ impl DeploymentLoopTransport for ManagerApiTransport {
         step_error: Option<&AlienError>,
         update_heartbeat: bool,
         suggested_delay_ms: Option<u64>,
+        heartbeats: Vec<ResourceHeartbeat>,
     ) -> Result<StepReconcileResult, AlienError> {
         let state_json =
             serde_json::to_value(state)
@@ -64,6 +65,7 @@ impl DeploymentLoopTransport for ManagerApiTransport {
             .context(alien_error::GenericError {
                 message: "suggested_delay_ms exceeded manager API integer range".to_string(),
             })?;
+        let heartbeats = to_manager_api_heartbeats(heartbeats)?;
 
         // POST state to the manager
         let resp = self
@@ -76,6 +78,7 @@ impl DeploymentLoopTransport for ManagerApiTransport {
                 update_heartbeat: Some(update_heartbeat),
                 error: error_json,
                 suggested_delay_ms,
+                heartbeats,
             })
             .send()
             .await
@@ -110,6 +113,19 @@ impl DeploymentLoopTransport for ManagerApiTransport {
             config: config_update,
         })
     }
+}
+
+fn to_manager_api_heartbeats(
+    heartbeats: Vec<ResourceHeartbeat>,
+) -> Result<Vec<alien_manager_api::types::ResourceHeartbeat>, AlienError> {
+    heartbeats
+        .into_iter()
+        .map(|heartbeat| serde_json::to_value(heartbeat).and_then(serde_json::from_value))
+        .collect::<Result<Vec<alien_manager_api::types::ResourceHeartbeat>, _>>()
+        .into_alien_error()
+        .context(alien_error::GenericError {
+            message: "Failed to convert heartbeats for manager API".to_string(),
+        })
 }
 
 // ---------------------------------------------------------------------------
@@ -196,6 +212,7 @@ pub async fn final_reconcile(
             update_heartbeat: Some(false),
             error: None,
             suggested_delay_ms: None,
+            heartbeats: vec![],
         })
         .send()
         .await
@@ -205,6 +222,79 @@ pub async fn final_reconcile(
             error = %e,
             "Failed to reconcile final deployment state"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::{
+        ContainerHeartbeatData, HeartbeatBackend, HeartbeatCollectionIssue,
+        HeartbeatCollectionIssueReason, HeartbeatIssueSeverity, KubernetesContainerHeartbeatData,
+        KubernetesWorkloadKind, ObservedHealth, Platform, ProviderLifecycleState,
+        ResourceHeartbeatData, ResourceType, WorkloadHeartbeatStatus, WorkloadReplicaStatus,
+    };
+    use chrono::TimeZone;
+
+    fn sample_heartbeat() -> ResourceHeartbeat {
+        ResourceHeartbeat {
+            deployment_id: Some("dep_test".to_string()),
+            resource_id: "api".to_string(),
+            resource_type: ResourceType::from("container"),
+            controller_platform: Platform::Kubernetes,
+            backend: HeartbeatBackend::Kubernetes,
+            observed_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
+            data: ResourceHeartbeatData::Container(ContainerHeartbeatData::Kubernetes(
+                KubernetesContainerHeartbeatData {
+                    status: WorkloadHeartbeatStatus {
+                        health: ObservedHealth::Healthy,
+                        lifecycle: ProviderLifecycleState::Running,
+                        message: None,
+                        stale: false,
+                        partial: true,
+                        collection_issues: vec![HeartbeatCollectionIssue {
+                            source: "metrics".to_string(),
+                            reason: HeartbeatCollectionIssueReason::NotInstalled,
+                            severity: HeartbeatIssueSeverity::Warning,
+                            message: "metrics API is not installed".to_string(),
+                        }],
+                    },
+                    namespace: "default".to_string(),
+                    name: "api".to_string(),
+                    workload_kind: KubernetesWorkloadKind::Deployment,
+                    replicas: WorkloadReplicaStatus {
+                        desired: Some(2),
+                        current: Some(2),
+                        ready: Some(2),
+                        available: Some(2),
+                        updated: Some(2),
+                        misscheduled: None,
+                    },
+                    restarts: Some(0),
+                    cpu: None,
+                    memory: None,
+                    workload: None,
+                    pods: vec![],
+                    events: vec![],
+                },
+            )),
+            raw: vec![],
+        }
+    }
+
+    #[test]
+    fn converts_core_heartbeats_to_generated_manager_request_type() {
+        let heartbeats = to_manager_api_heartbeats(vec![sample_heartbeat()])
+            .expect("core heartbeat should convert to generated manager API heartbeat");
+
+        let value = serde_json::to_value(&heartbeats[0]).expect("heartbeat should serialize");
+
+        assert_eq!(value["deploymentId"], "dep_test");
+        assert_eq!(value["resourceId"], "api");
+        assert_eq!(value["data"]["resourceType"], "container");
+        assert!(value.get("collection").is_none());
+        assert!(value["data"]["data"].get("summary").is_none());
+        assert!(value["data"]["data"].get("detail").is_none());
     }
 }
 

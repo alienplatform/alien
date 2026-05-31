@@ -1,23 +1,28 @@
 use crate::{
     registry::CfRegistry,
-    template::{CfExpression, CfOutput, CfParameter, CfResource, CfTemplate},
+    template::{
+        CfExpression, CfMapping, CfOutput, CfParameter, CfResource, CfRule, CfRuleAssertion,
+        CfTemplate,
+    },
 };
 use alien_core::{
-    import::EmitContext, ownership_policy_for_resource_type, DomainSettings, ErrorData, Function,
-    FunctionCode, HeartbeatsMode, Network, NetworkSettings, Platform, Result, Stack, StackSettings,
-    TelemetryMode, UpdatesMode,
+    import::{EmitContext, CURRENT_SETUP_IMPORT_FORMAT_VERSION},
+    ownership_policy_for_resource_type, DomainSettings, ErrorData, HeartbeatsMode,
+    KubernetesCluster, KubernetesSettings, Network, NetworkSettings, Platform, Result, Stack,
+    StackSettings, TelemetryMode, UpdatesMode, Worker, WorkerCode,
 };
 use alien_error::AlienError;
 use indexmap::{indexmap, IndexMap};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::collections::HashSet;
 
 const TEMPLATE_VERSION: &str = "2010-09-09";
 const LANGUAGE_EXTENSIONS_TRANSFORM: &str = "AWS::LanguageExtensions";
 
-const PARAM_DEPLOYMENT_GROUP_TOKEN: &str = "DeploymentGroupToken";
+const PARAM_TOKEN: &str = "Token";
 const PARAM_MANAGING_ROLE_ARN: &str = "ManagingRoleArn";
 const PARAM_MANAGING_ACCOUNT_ID: &str = "ManagingAccountId";
+const PARAM_NETWORK_MODE: &str = "NetworkMode";
 const PARAM_VPC_CIDR: &str = "VpcCidr";
 const PARAM_AVAILABILITY_ZONES: &str = "AvailabilityZones";
 const PARAM_VPC_ID: &str = "VpcId";
@@ -33,48 +38,112 @@ const PARAM_HEARTBEATS_MODE: &str = "HeartbeatsMode";
 
 const CONDITION_NETWORK_CREATE_AZ2: &str = "NetworkCreateUseAz2";
 const CONDITION_NETWORK_CREATE_AZ3: &str = "NetworkCreateUseAz3";
+const CONDITION_NETWORK_AZ2: &str = "NetworkUseAz2";
+const CONDITION_NETWORK_AZ3: &str = "NetworkUseAz3";
+const CONDITION_NETWORK_MODE_CREATE: &str = "NetworkModeCreate";
+const CONDITION_NETWORK_MODE_USE_EXISTING: &str = "NetworkModeUseExisting";
 const CONDITION_HAS_VPC_CIDR: &str = "HasVpcCidr";
 const CONDITION_HAS_DOMAIN_NAME: &str = "HasDomainName";
 
 const OUTPUT_SOURCE_KIND: &str = "DeploymentSourceKind";
-const OUTPUT_STACK_PREFIX: &str = "DeploymentStackPrefix";
+const OUTPUT_DEPLOYMENT_ID: &str = "DeploymentId";
+const OUTPUT_RESOURCE_PREFIX: &str = "DeploymentResourcePrefix";
 const OUTPUT_PLATFORM: &str = "DeploymentPlatform";
+const OUTPUT_BASE_PLATFORM: &str = "DeploymentBasePlatform";
 const OUTPUT_REGION: &str = "DeploymentRegion";
 const OUTPUT_SETUP_TARGET: &str = "DeploymentSetupTarget";
+const OUTPUT_SETUP_IMPORT_FORMAT_VERSION: &str = "DeploymentSetupImportFormatVersion";
 const OUTPUT_SETUP_FINGERPRINT: &str = "DeploymentSetupFingerprint";
 const OUTPUT_SETUP_FINGERPRINT_VERSION: &str = "DeploymentSetupFingerprintVersion";
 const OUTPUT_MANAGEMENT_CONFIG: &str = "DeploymentManagementConfig";
 const OUTPUT_STACK_SETTINGS: &str = "DeploymentStackSettings";
 const OUTPUT_RESOURCES: &str = "DeploymentResources";
 const OUTPUT_RESOURCES_CHUNK_BYTES: usize = 3_500;
-const STANDARD_OUTPUT_COUNT: usize = 9;
+const STANDARD_OUTPUT_COUNT: usize = 12;
 const CLOUDFORMATION_MAX_OUTPUTS: usize = 200;
+const MAPPING_REGIONAL_CUSTOM_RESOURCE_SERVICE_TOKENS: &str = "RegionalCustomResourceServiceTokens";
+const MAPPING_SERVICE_TOKEN_KEY: &str = "ServiceToken";
+const RULE_SUPPORTED_AWS_REGION: &str = "SupportedAwsRegion";
 
 /// Registration behavior for the generated CloudFormation template.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RegistrationMode {
     /// Register through a CloudFormation custom resource.
-    CustomResource { lambda_arn: String },
+    CustomResource {
+        lambda_arn: String,
+        callback_url: Option<String>,
+    },
+    /// Register through a same-region CloudFormation custom resource.
+    RegionalCustomResource {
+        lambda_arns_by_region: IndexMap<String, String>,
+        callback_url: Option<String>,
+    },
     /// Emit stack outputs that can be registered out of band.
     OutputsFallback,
     /// Emit both the custom resource and stack outputs.
-    Both { lambda_arn: String },
+    Both {
+        lambda_arn: String,
+        callback_url: Option<String>,
+    },
+    /// Emit both a same-region custom resource and stack outputs.
+    RegionalBoth {
+        lambda_arns_by_region: IndexMap<String, String>,
+        callback_url: Option<String>,
+    },
 }
 
 impl RegistrationMode {
-    fn lambda_arn(&self) -> Option<&str> {
+    fn service_token(&self, template: &mut CfTemplate) -> Result<Option<CfExpression>> {
         match self {
-            RegistrationMode::CustomResource { lambda_arn }
-            | RegistrationMode::Both { lambda_arn } => Some(lambda_arn.as_str()),
-            RegistrationMode::OutputsFallback => None,
+            RegistrationMode::CustomResource { lambda_arn, .. }
+            | RegistrationMode::Both { lambda_arn, .. } => {
+                Ok(Some(CfExpression::from(lambda_arn.clone())))
+            }
+            RegistrationMode::RegionalCustomResource {
+                lambda_arns_by_region,
+                ..
+            }
+            | RegistrationMode::RegionalBoth {
+                lambda_arns_by_region,
+                ..
+            } => regional_service_token(template, lambda_arns_by_region).map(Some),
+            RegistrationMode::OutputsFallback => Ok(None),
         }
     }
 
     fn emits_outputs(&self) -> bool {
         matches!(
             self,
-            RegistrationMode::OutputsFallback | RegistrationMode::Both { .. }
+            RegistrationMode::OutputsFallback
+                | RegistrationMode::Both { .. }
+                | RegistrationMode::RegionalBoth { .. }
         )
+    }
+
+    fn callback_url(&self) -> Option<&str> {
+        match self {
+            RegistrationMode::CustomResource { callback_url, .. }
+            | RegistrationMode::RegionalCustomResource { callback_url, .. }
+            | RegistrationMode::Both { callback_url, .. }
+            | RegistrationMode::RegionalBoth { callback_url, .. } => callback_url.as_deref(),
+            RegistrationMode::OutputsFallback => None,
+        }
+    }
+
+    pub fn supported_regions(&self) -> Vec<String> {
+        match self {
+            RegistrationMode::RegionalCustomResource {
+                lambda_arns_by_region,
+                ..
+            }
+            | RegistrationMode::RegionalBoth {
+                lambda_arns_by_region,
+                ..
+            } => lambda_arns_by_region.keys().cloned().collect(),
+            RegistrationMode::CustomResource { .. }
+            | RegistrationMode::Both { .. }
+            | RegistrationMode::OutputsFallback => Vec::new(),
+        }
     }
 }
 
@@ -84,12 +153,55 @@ pub struct CloudFormationOptions<'a> {
     /// [`CfRegistry::built_in()`]; plugin-aware callers extend it before
     /// passing.
     pub registry: &'a CfRegistry,
+    pub target: CloudFormationTarget,
     pub stack_settings: StackSettings,
     pub setup_target: String,
     pub setup_fingerprint: String,
     pub setup_fingerprint_version: u32,
     pub registration: RegistrationMode,
     pub description: Option<String>,
+}
+
+/// CloudFormation setup target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloudFormationTarget {
+    Aws,
+    Eks,
+}
+
+impl CloudFormationTarget {
+    /// The cloud platform whose CloudFormation emitters back this target.
+    pub fn cloud_platform(self) -> Platform {
+        match self {
+            CloudFormationTarget::Aws | CloudFormationTarget::Eks => Platform::Aws,
+        }
+    }
+
+    /// Stable target name used in setup metadata and package outputs.
+    pub fn name(self) -> &'static str {
+        match self {
+            CloudFormationTarget::Aws => "aws",
+            CloudFormationTarget::Eks => "eks",
+        }
+    }
+
+    fn deployment_platform(self) -> Platform {
+        match self {
+            CloudFormationTarget::Aws => Platform::Aws,
+            CloudFormationTarget::Eks => Platform::Kubernetes,
+        }
+    }
+
+    fn base_platform(self) -> Option<Platform> {
+        match self {
+            CloudFormationTarget::Aws => None,
+            CloudFormationTarget::Eks => Some(Platform::Aws),
+        }
+    }
+
+    fn is_kubernetes(self) -> bool {
+        matches!(self, CloudFormationTarget::Eks)
+    }
 }
 
 /// Generate a CloudFormation template for a stack.
@@ -100,6 +212,14 @@ pub fn generate_cloudformation_template(
     validate_stack_for_cloudformation(stack)?;
     validate_stack_settings(&options.stack_settings)?;
 
+    let mut stack_settings = options.stack_settings.clone();
+    if options.target.is_kubernetes() && stack_settings.network.is_none() {
+        stack_settings.network = Some(NetworkSettings::Create {
+            cidr: None,
+            availability_zones: 2,
+        });
+    }
+
     let names = logical_names(stack)?;
     let mut template = CfTemplate {
         aws_template_format_version: TEMPLATE_VERSION.to_string(),
@@ -107,19 +227,22 @@ pub fn generate_cloudformation_template(
             options
                 .description
                 .clone()
-                .unwrap_or_else(|| format!("Deployment stack for {}", stack.id())),
+                .unwrap_or_else(|| format!("Application setup stack for {}", stack.id())),
         ),
         transform: vec![LANGUAGE_EXTENSIONS_TRANSFORM.to_string()],
         metadata: IndexMap::new(),
         parameters: IndexMap::new(),
+        mappings: IndexMap::new(),
         conditions: IndexMap::new(),
+        rules: IndexMap::new(),
         resources: IndexMap::new(),
         outputs: IndexMap::new(),
     };
 
-    add_standard_parameters(&mut template, &options.stack_settings);
-    add_standard_conditions(&mut template, stack, &options.stack_settings);
-    add_console_interface_metadata(&mut template, &options.stack_settings);
+    add_standard_parameters(&mut template, &stack_settings);
+    add_supported_region_rule(&mut template, &options.registration);
+    add_standard_conditions(&mut template, stack, &stack_settings);
+    add_console_interface_metadata(&mut template, &stack_settings);
 
     let mut imported_resources = Vec::new();
     let mut emitted_resource_ids: IndexMap<String, Vec<String>> = IndexMap::new();
@@ -130,14 +253,16 @@ pub fn generate_cloudformation_template(
         if !ownership.should_emit_in_setup(resource.lifecycle) {
             continue;
         }
-        let emitter = options.registry.require(&resource_type, Platform::Aws)?;
+        let emitter = options
+            .registry
+            .require(&resource_type, options.target.cloud_platform())?;
 
         let ctx = EmitContext {
             stack,
             resource,
             resource_id,
-            platform: Platform::Aws,
-            stack_settings: &options.stack_settings,
+            platform: options.target.cloud_platform(),
+            stack_settings: &stack_settings,
             names: &names,
         };
 
@@ -162,20 +287,31 @@ pub fn generate_cloudformation_template(
         ]));
     }
 
-    let management_config = management_config_expression();
-    let stack_settings = stack_settings_expression(&options.stack_settings);
+    let kubernetes_namespace = if options.target.is_kubernetes() {
+        kubernetes_cluster_namespace(stack).map(CfExpression::from)
+    } else {
+        None
+    };
+
+    let management_config = management_config_expression(options.target);
+    let stack_settings = stack_settings_expression(
+        options.target,
+        &stack_settings,
+        kubernetes_namespace.clone(),
+    );
     let resources = CfExpression::list(imported_resources);
 
     apply_resource_dependencies(stack, &emitted_resource_ids, &mut template);
 
-    if let Some(lambda_arn) = options.registration.lambda_arn() {
+    if let Some(service_token) = options.registration.service_token(&mut template)? {
         add_custom_resource(
             &mut template,
-            lambda_arn,
+            service_token,
             management_config.clone(),
             stack_settings.clone(),
             &options,
             resources.clone(),
+            options.registration.callback_url(),
         );
     }
 
@@ -192,9 +328,45 @@ pub fn generate_cloudformation_template(
     Ok(template)
 }
 
+fn regional_service_token(
+    template: &mut CfTemplate,
+    lambda_arns_by_region: &IndexMap<String, String>,
+) -> Result<CfExpression> {
+    if lambda_arns_by_region.is_empty() {
+        return Err(AlienError::new(ErrorData::OperationNotSupported {
+            operation: "generate_cloudformation_template".to_string(),
+            reason: "regional custom resource registration requires at least one region"
+                .to_string(),
+        }));
+    }
+
+    let mut mapping = CfMapping::new();
+    for (region, lambda_arn) in lambda_arns_by_region {
+        mapping.insert(
+            region.clone(),
+            indexmap! {
+                MAPPING_SERVICE_TOKEN_KEY.to_string() => CfExpression::from(lambda_arn.clone()),
+            },
+        );
+    }
+    template.mappings.insert(
+        MAPPING_REGIONAL_CUSTOM_RESOURCE_SERVICE_TOKENS.to_string(),
+        mapping,
+    );
+
+    Ok(CfExpression::find_in_map(
+        MAPPING_REGIONAL_CUSTOM_RESOURCE_SERVICE_TOKENS,
+        CfExpression::ref_("AWS::Region"),
+        MAPPING_SERVICE_TOKEN_KEY,
+    ))
+}
+
 /// Serialize a CloudFormation template to YAML.
 pub fn to_yaml(template: &CfTemplate) -> Result<String> {
-    let yaml = serde_yaml::to_string(template).map_err(|error| {
+    let mut template = template.clone();
+    sort_template_metadata(&mut template);
+
+    let yaml = serde_yaml::to_string(&template).map_err(|error| {
         AlienError::new(ErrorData::TemplateSerializationFailed {
             format: "CloudFormation YAML".to_string(),
             reason: error.to_string(),
@@ -202,6 +374,38 @@ pub fn to_yaml(template: &CfTemplate) -> Result<String> {
     })?;
 
     Ok(quote_yaml_1_1_mode_scalars(&yaml))
+}
+
+fn sort_template_metadata(template: &mut CfTemplate) {
+    for value in template.metadata.values_mut() {
+        sort_json_value(value);
+    }
+    for resource in template.resources.values_mut() {
+        for value in resource.metadata.values_mut() {
+            sort_json_value(value);
+        }
+    }
+}
+
+fn sort_json_value(value: &mut Value) {
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                sort_json_value(value);
+            }
+        }
+        Value::Object(values) => {
+            let mut entries = std::mem::take(values).into_iter().collect::<Vec<_>>();
+            entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+
+            for (_, value) in &mut entries {
+                sort_json_value(value);
+            }
+
+            values.extend(entries);
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+    }
 }
 
 fn quote_yaml_1_1_mode_scalars(yaml: &str) -> String {
@@ -241,8 +445,8 @@ pub fn generate_cloudformation_stack_policy(_stack: &Stack) -> Result<serde_json
 
 fn validate_stack_for_cloudformation(stack: &Stack) -> Result<()> {
     for (resource_id, resource) in stack.resources() {
-        if let Some(function) = resource.config.downcast_ref::<Function>() {
-            if matches!(function.code, FunctionCode::Source { .. }) {
+        if let Some(function) = resource.config.downcast_ref::<Worker>() {
+            if matches!(function.code, WorkerCode::Source { .. }) {
                 return Err(AlienError::new(ErrorData::OperationNotSupported {
                     operation: "generate_cloudformation_template".to_string(),
                     reason: format!(
@@ -405,9 +609,9 @@ fn apply_resource_dependencies(
 
 fn add_standard_parameters(template: &mut CfTemplate, settings: &StackSettings) {
     template.parameters.insert(
-        PARAM_DEPLOYMENT_GROUP_TOKEN.to_string(),
+        PARAM_TOKEN.to_string(),
         string_parameter(
-            "Deployment-group token used when registering the resolved stack import.",
+            "Install token from the application setup page.",
             None,
             None,
             true,
@@ -416,7 +620,7 @@ fn add_standard_parameters(template: &mut CfTemplate, settings: &StackSettings) 
     template.parameters.insert(
         PARAM_MANAGING_ROLE_ARN.to_string(),
         string_parameter(
-            "AWS IAM role ARN for the manager identity allowed to assume generated management roles.",
+            "Manager IAM role ARN allowed to assume generated management roles.",
             None,
             None,
             false,
@@ -425,7 +629,7 @@ fn add_standard_parameters(template: &mut CfTemplate, settings: &StackSettings) 
     template.parameters.insert(
         PARAM_MANAGING_ACCOUNT_ID.to_string(),
         string_parameter(
-            "AWS account ID hosting the manager. Referenced by stack-side IAM policies that scope cross-account ECR pulls. Empty disables those grants.",
+            "AWS account ID for the management account that hosts application container images.",
             Some(String::new()),
             None,
             false,
@@ -438,8 +642,8 @@ fn add_standard_parameters(template: &mut CfTemplate, settings: &StackSettings) 
     template.parameters.insert(
         PARAM_DOMAIN_NAME.to_string(),
         string_parameter(
-            "Optional domain name for public endpoints. Empty disables custom domains.",
-            domain_defaults.domain_name,
+            "Optional custom domain for public endpoints. Leave unset to expose through the generated load balancer DNS name over HTTP.",
+            Some(domain_defaults.domain_name.unwrap_or_default()),
             None,
             false,
         ),
@@ -447,8 +651,8 @@ fn add_standard_parameters(template: &mut CfTemplate, settings: &StackSettings) 
     template.parameters.insert(
         PARAM_HOSTED_ZONE_ID.to_string(),
         string_parameter(
-            "Optional Route 53 hosted zone ID for the domain.",
-            None,
+            "Route 53 hosted zone ID for the custom domain. Not needed for the auto-generated domain.",
+            Some(String::new()),
             None,
             false,
         ),
@@ -456,8 +660,8 @@ fn add_standard_parameters(template: &mut CfTemplate, settings: &StackSettings) 
     template.parameters.insert(
         PARAM_CERTIFICATE_ARN.to_string(),
         string_parameter(
-            "Optional ACM certificate ARN for the domain.",
-            domain_defaults.certificate_arn,
+            "ACM certificate ARN for the custom domain. Required when DomainName is set.",
+            Some(domain_defaults.certificate_arn.unwrap_or_default()),
             None,
             false,
         ),
@@ -501,13 +705,30 @@ fn add_standard_parameters(template: &mut CfTemplate, settings: &StackSettings) 
 
 fn add_network_parameters(template: &mut CfTemplate, network: Option<&NetworkSettings>) {
     let defaults = NetworkParameterDefaults::from_settings(network);
+    template.parameters.insert(
+        PARAM_NETWORK_MODE.to_string(),
+        string_parameter(
+            "Choose create-new for a managed VPC, use-existing for your VPC, or use-default for the account default VPC.",
+            Some(network_mode_default(network).to_string()),
+            Some(vec![
+                CfExpression::from("create-new"),
+                CfExpression::from("use-existing"),
+                CfExpression::from("use-default"),
+            ]),
+            false,
+        ),
+    );
     match network {
-        Some(NetworkSettings::Create { .. }) => {
+        Some(
+            NetworkSettings::Create { .. }
+            | NetworkSettings::UseDefault
+            | NetworkSettings::ByoVpcAws { .. },
+        ) => {
             template.parameters.insert(
                 PARAM_VPC_CIDR.to_string(),
                 string_parameter(
-                    "CIDR for created VPCs. Empty uses the generated default.",
-                    defaults.cidr,
+                    "Only used with create-new. CIDR for the new VPC; leave unset for the generated default.",
+                    Some(defaults.cidr.unwrap_or_default()),
                     None,
                     false,
                 ),
@@ -515,7 +736,7 @@ fn add_network_parameters(template: &mut CfTemplate, network: Option<&NetworkSet
             template.parameters.insert(
                 PARAM_AVAILABILITY_ZONES.to_string(),
                 number_parameter(
-                    "Number of availability zones to use when creating a VPC.",
+                    "Only used with create-new. Number of availability zones for the new VPC.",
                     defaults.availability_zones,
                     Some(vec![
                         CfExpression::from(1u8),
@@ -524,49 +745,107 @@ fn add_network_parameters(template: &mut CfTemplate, network: Option<&NetworkSet
                     ]),
                 ),
             );
-        }
-        Some(NetworkSettings::ByoVpcAws { .. }) => {
             template.parameters.insert(
                 PARAM_VPC_ID.to_string(),
-                string_parameter("Existing VPC ID.", defaults.vpc_id, None, false),
+                string_parameter(
+                    "Only used with use-existing. Existing VPC ID.",
+                    Some(defaults.vpc_id.unwrap_or_default()),
+                    None,
+                    false,
+                ),
             );
             template.parameters.insert(
                 PARAM_PUBLIC_SUBNET_IDS.to_string(),
-                comma_list_parameter("Existing public subnet IDs.", defaults.public_subnet_ids),
+                comma_list_parameter(
+                    "Only used with use-existing. Existing public subnet IDs.",
+                    defaults.public_subnet_ids,
+                ),
             );
             template.parameters.insert(
                 PARAM_PRIVATE_SUBNET_IDS.to_string(),
-                comma_list_parameter("Existing private subnet IDs.", defaults.private_subnet_ids),
+                comma_list_parameter(
+                    "Only used with use-existing. Existing private subnet IDs.",
+                    defaults.private_subnet_ids,
+                ),
             );
             template.parameters.insert(
                 PARAM_SECURITY_GROUP_IDS.to_string(),
-                comma_list_parameter("Existing security group IDs.", defaults.security_group_ids),
+                comma_list_parameter(
+                    "Only used with use-existing. Existing security group IDs.",
+                    defaults.security_group_ids,
+                ),
             );
         }
-        None
-        | Some(NetworkSettings::UseDefault)
-        | Some(NetworkSettings::ByoVpcGcp { .. } | NetworkSettings::ByoVnetAzure { .. }) => {}
+        None | Some(NetworkSettings::ByoVpcGcp { .. } | NetworkSettings::ByoVnetAzure { .. }) => {}
     }
 }
 
+fn add_supported_region_rule(template: &mut CfTemplate, registration: &RegistrationMode) {
+    let supported_regions = registration.supported_regions();
+    if supported_regions.is_empty() {
+        return;
+    }
+
+    let regions = supported_regions.join(", ");
+    template.rules.insert(
+        RULE_SUPPORTED_AWS_REGION.to_string(),
+        CfRule {
+            assertions: vec![CfRuleAssertion {
+                assertion: CfExpression::contains(
+                    CfExpression::list(supported_regions.into_iter().map(CfExpression::from)),
+                    CfExpression::ref_("AWS::Region"),
+                ),
+                assert_description: format!(
+                    "This template can only be launched in AWS regions supported by this Alien environment: {regions}."
+                ),
+            }],
+        },
+    );
+}
+
 fn add_standard_conditions(template: &mut CfTemplate, stack: &Stack, settings: &StackSettings) {
-    if stack_has_created_network(stack) {
+    let has_created_network = stack_has_created_network(stack);
+    if has_dynamic_aws_network_settings(settings.network.as_ref()) || has_created_network {
         template.conditions.insert(
-            CONDITION_NETWORK_CREATE_AZ2.to_string(),
+            CONDITION_NETWORK_MODE_CREATE.to_string(),
+            equals_ref(PARAM_NETWORK_MODE, "create-new"),
+        );
+        template.conditions.insert(
+            CONDITION_NETWORK_MODE_USE_EXISTING.to_string(),
+            equals_ref(PARAM_NETWORK_MODE, "use-existing"),
+        );
+    }
+    if has_created_network {
+        template.conditions.insert(
+            CONDITION_NETWORK_AZ2.to_string(),
             CfExpression::not(CfExpression::equals(
                 CfExpression::ref_(PARAM_AVAILABILITY_ZONES),
                 CfExpression::from(1u8),
             )),
         );
         template.conditions.insert(
-            CONDITION_NETWORK_CREATE_AZ3.to_string(),
+            CONDITION_NETWORK_AZ3.to_string(),
             CfExpression::equals(
                 CfExpression::ref_(PARAM_AVAILABILITY_ZONES),
                 CfExpression::from(3u8),
             ),
         );
+        template.conditions.insert(
+            CONDITION_NETWORK_CREATE_AZ2.to_string(),
+            CfExpression::and([
+                equals_ref(PARAM_NETWORK_MODE, "create-new"),
+                condition_ref(CONDITION_NETWORK_AZ2),
+            ]),
+        );
+        template.conditions.insert(
+            CONDITION_NETWORK_CREATE_AZ3.to_string(),
+            CfExpression::and([
+                equals_ref(PARAM_NETWORK_MODE, "create-new"),
+                condition_ref(CONDITION_NETWORK_AZ3),
+            ]),
+        );
     }
-    if matches!(settings.network, Some(NetworkSettings::Create { .. })) {
+    if has_dynamic_aws_network_settings(settings.network.as_ref()) || has_created_network {
         template.conditions.insert(
             CONDITION_HAS_VPC_CIDR.to_string(),
             CfExpression::not(equals_ref(PARAM_VPC_CIDR, "")),
@@ -587,12 +866,23 @@ fn stack_has_created_network(stack: &Stack) -> bool {
     })
 }
 
+fn has_dynamic_aws_network_settings(network: Option<&NetworkSettings>) -> bool {
+    matches!(
+        network,
+        Some(
+            NetworkSettings::Create { .. }
+                | NetworkSettings::UseDefault
+                | NetworkSettings::ByoVpcAws { .. }
+        )
+    )
+}
+
 fn add_console_interface_metadata(template: &mut CfTemplate, settings: &StackSettings) {
     let network_parameters = network_parameter_names(settings.network.as_ref());
     let mut parameter_groups = vec![json!({
         "Label": { "default": "Registration" },
         "Parameters": [
-            PARAM_DEPLOYMENT_GROUP_TOKEN,
+            PARAM_TOKEN,
             PARAM_MANAGING_ROLE_ARN,
             PARAM_MANAGING_ACCOUNT_ID,
         ]
@@ -604,7 +894,7 @@ fn add_console_interface_metadata(template: &mut CfTemplate, settings: &StackSet
         }));
     }
     parameter_groups.push(json!({
-        "Label": { "default": "Domains" },
+        "Label": { "default": "Custom domain" },
         "Parameters": [PARAM_DOMAIN_NAME, PARAM_HOSTED_ZONE_ID, PARAM_CERTIFICATE_ARN]
     }));
     parameter_groups.push(json!({
@@ -613,11 +903,7 @@ fn add_console_interface_metadata(template: &mut CfTemplate, settings: &StackSet
     }));
 
     let mut parameter_labels = serde_json::Map::new();
-    insert_parameter_label(
-        &mut parameter_labels,
-        PARAM_DEPLOYMENT_GROUP_TOKEN,
-        "Deployment group token",
-    );
+    insert_parameter_label(&mut parameter_labels, PARAM_TOKEN, "Install token");
     insert_parameter_label(
         &mut parameter_labels,
         PARAM_MANAGING_ROLE_ARN,
@@ -626,7 +912,7 @@ fn add_console_interface_metadata(template: &mut CfTemplate, settings: &StackSet
     insert_parameter_label(
         &mut parameter_labels,
         PARAM_MANAGING_ACCOUNT_ID,
-        "Manager AWS account ID",
+        "Manager account ID",
     );
     for parameter in network_parameter_names(settings.network.as_ref()) {
         let label = match parameter {
@@ -636,6 +922,7 @@ fn add_console_interface_metadata(template: &mut CfTemplate, settings: &StackSet
             PARAM_PUBLIC_SUBNET_IDS => "Public subnet IDs",
             PARAM_PRIVATE_SUBNET_IDS => "Private subnet IDs",
             PARAM_SECURITY_GROUP_IDS => "Security group IDs",
+            PARAM_NETWORK_MODE => "Network",
             _ => continue,
         };
         insert_parameter_label(&mut parameter_labels, parameter, label);
@@ -666,16 +953,20 @@ fn add_console_interface_metadata(template: &mut CfTemplate, settings: &StackSet
 
 fn network_parameter_names(network: Option<&NetworkSettings>) -> Vec<&'static str> {
     match network {
-        Some(NetworkSettings::Create { .. }) => vec![PARAM_VPC_CIDR, PARAM_AVAILABILITY_ZONES],
-        Some(NetworkSettings::ByoVpcAws { .. }) => vec![
+        Some(
+            NetworkSettings::UseDefault
+            | NetworkSettings::Create { .. }
+            | NetworkSettings::ByoVpcAws { .. },
+        ) => vec![
+            PARAM_NETWORK_MODE,
+            PARAM_VPC_CIDR,
+            PARAM_AVAILABILITY_ZONES,
             PARAM_VPC_ID,
             PARAM_PUBLIC_SUBNET_IDS,
             PARAM_PRIVATE_SUBNET_IDS,
             PARAM_SECURITY_GROUP_IDS,
         ],
-        None
-        | Some(NetworkSettings::UseDefault)
-        | Some(NetworkSettings::ByoVpcGcp { .. } | NetworkSettings::ByoVnetAzure { .. }) => {
+        None | Some(NetworkSettings::ByoVpcGcp { .. } | NetworkSettings::ByoVnetAzure { .. }) => {
             Vec::new()
         }
     }
@@ -691,11 +982,12 @@ fn insert_parameter_label(
 
 fn add_custom_resource(
     template: &mut CfTemplate,
-    lambda_arn: &str,
+    service_token: CfExpression,
     management_config: CfExpression,
     stack_settings: CfExpression,
     options: &CloudFormationOptions<'_>,
     resources: CfExpression,
+    callback_url: Option<&str>,
 ) {
     let depends_on = template
         .resources
@@ -709,27 +1001,37 @@ fn add_custom_resource(
         "AWS::CloudFormation::CustomResource".to_string(),
     );
     resource.depends_on = depends_on;
-    // The Custom Resource forwards `DeploymentName` to the Platform's
-    // `/v1/deployments/import` endpoint, which defaults to the CFN stack name
-    // (`!Ref AWS::StackName`) when the property is absent. We always emit it
-    // so the manager-side import row mirrors the CFN stack list verbatim;
-    // customers who want a different identity can rewire the property
+    // Emit an explicit name so imported deployments mirror the CFN stack list
+    // verbatim; callers who want a different identity can rewire the property
     // post-rendering.
     resource.properties = indexmap! {
-        "ServiceToken".to_string() => CfExpression::from(lambda_arn),
-        "DeploymentGroupToken".to_string() => CfExpression::ref_(PARAM_DEPLOYMENT_GROUP_TOKEN),
+        "ServiceToken".to_string() => service_token,
+        "Token".to_string() => CfExpression::ref_(PARAM_TOKEN),
         "DeploymentName".to_string() => CfExpression::ref_("AWS::StackName"),
-        "StackPrefix".to_string() => CfExpression::ref_("AWS::StackName"),
+        "ResourcePrefix".to_string() => CfExpression::ref_("AWS::StackName"),
         "SourceKind".to_string() => CfExpression::from("cloudformation"),
-        "Platform".to_string() => CfExpression::from(Platform::Aws.as_str()),
+        "Platform".to_string() => CfExpression::from(options.target.deployment_platform().as_str()),
         "Region".to_string() => CfExpression::ref_("AWS::Region"),
         "SetupTarget".to_string() => CfExpression::from(options.setup_target.clone()),
+        "SetupImportFormatVersion".to_string() => CfExpression::from(CURRENT_SETUP_IMPORT_FORMAT_VERSION),
         "SetupFingerprint".to_string() => CfExpression::from(options.setup_fingerprint.clone()),
-        "SetupFingerprintVersion".to_string() => CfExpression::from(options.setup_fingerprint_version.to_string()),
+        "SetupFingerprintVersion".to_string() => CfExpression::from(options.setup_fingerprint_version),
         "ManagementConfig".to_string() => management_config,
         "StackSettings".to_string() => stack_settings,
         "Resources".to_string() => resources,
     };
+    if let Some(base_platform) = options.target.base_platform() {
+        resource.properties.insert(
+            "BasePlatform".to_string(),
+            CfExpression::from(base_platform.as_str()),
+        );
+    }
+    if let Some(callback_url) = callback_url.filter(|value| !value.is_empty()) {
+        resource.properties.insert(
+            "CallbackUrl".to_string(),
+            CfExpression::from(callback_url.to_string()),
+        );
+    }
     template
         .resources
         .insert(resource.logical_id.clone(), resource);
@@ -746,10 +1048,19 @@ fn add_outputs(
         OUTPUT_SOURCE_KIND.to_string(),
         output("Setup source kind.", CfExpression::from("cloudformation")),
     );
+    if !matches!(options.registration, RegistrationMode::OutputsFallback) {
+        template.outputs.insert(
+            OUTPUT_DEPLOYMENT_ID.to_string(),
+            output(
+                "Imported deployment ID.",
+                CfExpression::get_att("DeploymentStackImport", "DeploymentId"),
+            ),
+        );
+    }
     template.outputs.insert(
-        OUTPUT_STACK_PREFIX.to_string(),
+        OUTPUT_RESOURCE_PREFIX.to_string(),
         output(
-            "Physical stack prefix.",
+            "Stable physical resource prefix.",
             CfExpression::ref_("AWS::StackName"),
         ),
     );
@@ -757,9 +1068,18 @@ fn add_outputs(
         OUTPUT_PLATFORM.to_string(),
         output(
             "Target platform.",
-            CfExpression::from(Platform::Aws.as_str()),
+            CfExpression::from(options.target.deployment_platform().as_str()),
         ),
     );
+    if let Some(base_platform) = options.target.base_platform() {
+        template.outputs.insert(
+            OUTPUT_BASE_PLATFORM.to_string(),
+            output(
+                "Base cloud platform for a Kubernetes deployment.",
+                CfExpression::from(base_platform.as_str()),
+            ),
+        );
+    }
     template.outputs.insert(
         OUTPUT_REGION.to_string(),
         output("AWS region.", CfExpression::ref_("AWS::Region")),
@@ -779,10 +1099,17 @@ fn add_outputs(
         ),
     );
     template.outputs.insert(
+        OUTPUT_SETUP_IMPORT_FORMAT_VERSION.to_string(),
+        output(
+            "Setup import payload format version.",
+            CfExpression::from(CURRENT_SETUP_IMPORT_FORMAT_VERSION),
+        ),
+    );
+    template.outputs.insert(
         OUTPUT_SETUP_FINGERPRINT_VERSION.to_string(),
         output(
             "Setup fingerprint algorithm version.",
-            CfExpression::from(options.setup_fingerprint_version.to_string()),
+            CfExpression::from(options.setup_fingerprint_version),
         ),
     );
     template.outputs.insert(
@@ -842,6 +1169,19 @@ fn add_resource_outputs(template: &mut CfTemplate, resources: CfExpression) -> R
     Ok(())
 }
 
+fn empty_object() -> CfExpression {
+    CfExpression::Object(IndexMap::new())
+}
+
+fn kubernetes_cluster_namespace(stack: &Stack) -> Option<String> {
+    stack.resources().find_map(|(_resource_id, entry)| {
+        entry
+            .config
+            .downcast_ref::<KubernetesCluster>()
+            .map(|cluster| cluster.namespace.clone())
+    })
+}
+
 fn chunk_resource_expression(resources: CfExpression) -> Result<Vec<CfExpression>> {
     let CfExpression::List(items) = resources else {
         return Ok(vec![resources]);
@@ -884,54 +1224,233 @@ fn chunk_resource_expression(resources: CfExpression) -> Result<Vec<CfExpression
     Ok(chunks)
 }
 
-fn stack_settings_expression(settings: &StackSettings) -> CfExpression {
-    CfExpression::object([
+fn stack_settings_expression(
+    target: CloudFormationTarget,
+    settings: &StackSettings,
+    kubernetes_namespace: Option<CfExpression>,
+) -> CfExpression {
+    let mut values = vec![
         ("deploymentModel", CfExpression::from("push")),
         ("updates", CfExpression::ref_(PARAM_UPDATES_MODE)),
         ("telemetry", CfExpression::ref_(PARAM_TELEMETRY_MODE)),
         ("heartbeats", CfExpression::ref_(PARAM_HEARTBEATS_MODE)),
         ("network", network_expression(settings.network.as_ref())),
         ("domains", domains_expression()),
+    ];
+    if target.is_kubernetes() {
+        values[0] = ("deploymentModel", CfExpression::from("pull"));
+        values.push((
+            "kubernetes",
+            kubernetes_settings_expression(settings.kubernetes.as_ref(), kubernetes_namespace),
+        ));
+    }
+    CfExpression::object(values)
+}
+
+fn kubernetes_settings_expression(
+    settings: Option<&KubernetesSettings>,
+    namespace: Option<CfExpression>,
+) -> CfExpression {
+    let mut expression = default_kubernetes_settings_expression();
+
+    if let Some(settings) = settings {
+        let value = serde_json::to_value(settings)
+            .expect("serializing Kubernetes stack settings should not fail");
+        merge_cf_expression(&mut expression, cf_expression_from_json(value));
+    }
+
+    if let Some(namespace) = namespace {
+        set_kubernetes_namespace_expression(&mut expression, namespace);
+    }
+
+    expression
+}
+
+fn default_kubernetes_settings_expression() -> CfExpression {
+    CfExpression::object([
+        (
+            "cluster",
+            CfExpression::object([
+                ("ownership", CfExpression::from("managed")),
+                ("namespace", CfExpression::from("default")),
+            ]),
+        ),
+        (
+            "exposure",
+            CfExpression::if_(
+                CONDITION_HAS_DOMAIN_NAME,
+                custom_domain_kubernetes_exposure_expression(),
+                generated_load_balancer_kubernetes_exposure_expression(),
+            ),
+        ),
     ])
+}
+
+fn generated_load_balancer_kubernetes_exposure_expression() -> CfExpression {
+    CfExpression::object([
+        ("mode", CfExpression::from("generated")),
+        ("route", aws_alb_kubernetes_route_expression()),
+        (
+            "certificate",
+            CfExpression::object([("mode", CfExpression::from("none"))]),
+        ),
+    ])
+}
+
+fn custom_domain_kubernetes_exposure_expression() -> CfExpression {
+    CfExpression::object([
+        ("mode", CfExpression::from("custom")),
+        ("domain", CfExpression::ref_(PARAM_DOMAIN_NAME)),
+        ("route", aws_alb_kubernetes_route_expression()),
+        (
+            "certificate",
+            CfExpression::object([
+                ("mode", CfExpression::from("awsAcmArn")),
+                ("certificateArn", CfExpression::ref_(PARAM_CERTIFICATE_ARN)),
+            ]),
+        ),
+    ])
+}
+
+fn aws_alb_kubernetes_route_expression() -> CfExpression {
+    CfExpression::object([
+        ("routeApi", CfExpression::from("ingress")),
+        ("controller", CfExpression::from("eks.amazonaws.com/alb")),
+        ("ingressClassName", CfExpression::from("alb")),
+        ("labels", empty_object()),
+        ("annotations", empty_object()),
+        (
+            "provider",
+            CfExpression::object([
+                ("provider", CfExpression::from("awsAlb")),
+                ("scheme", CfExpression::from("internet-facing")),
+                ("targetType", CfExpression::from("ip")),
+                ("subnetIds", CfExpression::list([])),
+            ]),
+        ),
+    ])
+}
+
+fn set_kubernetes_namespace_expression(expression: &mut CfExpression, namespace: CfExpression) {
+    let CfExpression::Object(root) = expression else {
+        return;
+    };
+    let cluster = root
+        .entry("cluster".to_string())
+        .or_insert_with(|| CfExpression::object([("ownership", CfExpression::from("managed"))]));
+    let CfExpression::Object(cluster) = cluster else {
+        *cluster = CfExpression::object([
+            ("ownership", CfExpression::from("managed")),
+            ("namespace", namespace),
+        ]);
+        return;
+    };
+    cluster.insert("namespace".to_string(), namespace);
+}
+
+fn merge_cf_expression(base: &mut CfExpression, overlay: CfExpression) {
+    if is_cloudformation_intrinsic(base) || is_cloudformation_intrinsic(&overlay) {
+        *base = overlay;
+        return;
+    }
+
+    match (base, overlay) {
+        (CfExpression::Object(base), CfExpression::Object(overlay)) => {
+            for (key, value) in overlay {
+                match base.get_mut(&key) {
+                    Some(existing) => merge_cf_expression(existing, value),
+                    None => {
+                        base.insert(key, value);
+                    }
+                }
+            }
+        }
+        (base, overlay) => *base = overlay,
+    }
+}
+
+fn is_cloudformation_intrinsic(expression: &CfExpression) -> bool {
+    let CfExpression::Object(values) = expression else {
+        return false;
+    };
+    values
+        .keys()
+        .any(|key| key == "Ref" || key.starts_with("Fn::"))
+}
+
+fn cf_expression_from_json(value: Value) -> CfExpression {
+    match value {
+        Value::Null => CfExpression::Null,
+        Value::Bool(value) => CfExpression::Bool(value),
+        Value::Number(number) => {
+            if let Some(value) = number.as_i64() {
+                CfExpression::Integer(value)
+            } else {
+                CfExpression::Number(
+                    number
+                        .as_f64()
+                        .expect("serde_json numbers should be representable as f64"),
+                )
+            }
+        }
+        Value::String(value) => CfExpression::String(value),
+        Value::Array(values) => {
+            CfExpression::List(values.into_iter().map(cf_expression_from_json).collect())
+        }
+        Value::Object(values) => CfExpression::Object(
+            values
+                .into_iter()
+                .map(|(key, value)| (key, cf_expression_from_json(value)))
+                .collect(),
+        ),
+    }
 }
 
 fn network_expression(network: Option<&NetworkSettings>) -> CfExpression {
     match network {
         None => CfExpression::no_value(),
-        Some(NetworkSettings::UseDefault) => {
-            CfExpression::object([("type", CfExpression::from("use-default"))])
-        }
-        Some(NetworkSettings::Create { .. }) => CfExpression::object([
-            ("type", CfExpression::from("create")),
-            (
-                "cidr",
-                CfExpression::if_(
-                    CONDITION_HAS_VPC_CIDR,
-                    CfExpression::ref_(PARAM_VPC_CIDR),
-                    CfExpression::no_value(),
+        Some(
+            NetworkSettings::UseDefault
+            | NetworkSettings::Create { .. }
+            | NetworkSettings::ByoVpcAws { .. },
+        ) => CfExpression::if_(
+            CONDITION_NETWORK_MODE_CREATE,
+            CfExpression::object([
+                ("type", CfExpression::from("create")),
+                (
+                    "cidr",
+                    CfExpression::if_(
+                        CONDITION_HAS_VPC_CIDR,
+                        CfExpression::ref_(PARAM_VPC_CIDR),
+                        CfExpression::no_value(),
+                    ),
                 ),
+                (
+                    "availability_zones",
+                    CfExpression::ref_(PARAM_AVAILABILITY_ZONES),
+                ),
+            ]),
+            CfExpression::if_(
+                CONDITION_NETWORK_MODE_USE_EXISTING,
+                CfExpression::object([
+                    ("type", CfExpression::from("byo-vpc-aws")),
+                    ("vpc_id", CfExpression::ref_(PARAM_VPC_ID)),
+                    (
+                        "public_subnet_ids",
+                        CfExpression::ref_(PARAM_PUBLIC_SUBNET_IDS),
+                    ),
+                    (
+                        "private_subnet_ids",
+                        CfExpression::ref_(PARAM_PRIVATE_SUBNET_IDS),
+                    ),
+                    (
+                        "security_group_ids",
+                        CfExpression::ref_(PARAM_SECURITY_GROUP_IDS),
+                    ),
+                ]),
+                CfExpression::object([("type", CfExpression::from("use-default"))]),
             ),
-            (
-                "availabilityZones",
-                CfExpression::ref_(PARAM_AVAILABILITY_ZONES),
-            ),
-        ]),
-        Some(NetworkSettings::ByoVpcAws { .. }) => CfExpression::object([
-            ("type", CfExpression::from("byo-vpc-aws")),
-            ("vpcId", CfExpression::ref_(PARAM_VPC_ID)),
-            (
-                "publicSubnetIds",
-                CfExpression::ref_(PARAM_PUBLIC_SUBNET_IDS),
-            ),
-            (
-                "privateSubnetIds",
-                CfExpression::ref_(PARAM_PRIVATE_SUBNET_IDS),
-            ),
-            (
-                "securityGroupIds",
-                CfExpression::ref_(PARAM_SECURITY_GROUP_IDS),
-            ),
-        ]),
+        ),
         Some(NetworkSettings::ByoVpcGcp { .. } | NetworkSettings::ByoVnetAzure { .. }) => {
             CfExpression::no_value()
         }
@@ -964,7 +1483,7 @@ fn domains_expression() -> CfExpression {
     )
 }
 
-fn management_config_expression() -> CfExpression {
+fn management_config_expression(_target: CloudFormationTarget) -> CfExpression {
     CfExpression::object([
         ("platform", CfExpression::from("aws")),
         (
@@ -1017,6 +1536,10 @@ fn equals_ref(parameter: &str, value: &str) -> CfExpression {
     CfExpression::equals(CfExpression::ref_(parameter), CfExpression::from(value))
 }
 
+fn condition_ref(condition: &str) -> CfExpression {
+    CfExpression::object([("Condition", CfExpression::from(condition))])
+}
+
 fn output(description: &str, value: CfExpression) -> CfOutput {
     CfOutput {
         description: Some(description.to_string()),
@@ -1044,6 +1567,17 @@ fn heartbeats_mode(mode: HeartbeatsMode) -> &'static str {
     match mode {
         HeartbeatsMode::Off => "off",
         HeartbeatsMode::On => "on",
+    }
+}
+
+fn network_mode_default(network: Option<&NetworkSettings>) -> &'static str {
+    match network {
+        Some(NetworkSettings::ByoVpcAws { .. }) => "use-existing",
+        Some(NetworkSettings::UseDefault) => "use-default",
+        None | Some(NetworkSettings::Create { .. }) => "create-new",
+        Some(NetworkSettings::ByoVpcGcp { .. } | NetworkSettings::ByoVnetAzure { .. }) => {
+            "create-new"
+        }
     }
 }
 
@@ -1133,5 +1667,78 @@ impl DomainParameterDefaults {
             domain_name: None,
             certificate_arn: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn merge_replaces_intrinsic_expression_with_structured_overlay() {
+        let mut base = CfExpression::object([(
+            "exposure",
+            CfExpression::if_(
+                CONDITION_HAS_DOMAIN_NAME,
+                CfExpression::object([("mode", CfExpression::from("custom"))]),
+                CfExpression::object([("mode", CfExpression::from("generated"))]),
+            ),
+        )]);
+        let overlay = CfExpression::object([(
+            "exposure",
+            CfExpression::object([
+                ("mode", CfExpression::from("generated")),
+                (
+                    "certificate",
+                    CfExpression::object([("mode", CfExpression::from("none"))]),
+                ),
+            ]),
+        )]);
+
+        merge_cf_expression(&mut base, overlay);
+
+        let CfExpression::Object(root) = base else {
+            panic!("merged expression should remain an object");
+        };
+        let exposure = root
+            .get("exposure")
+            .expect("merged settings should keep exposure");
+        let CfExpression::Object(exposure) = exposure else {
+            panic!("exposure should be the structured overlay");
+        };
+        assert_eq!(exposure.get("mode"), Some(&CfExpression::from("generated")));
+        assert!(
+            !exposure.contains_key("Fn::If"),
+            "intrinsic and structured object keys must not be merged"
+        );
+    }
+
+    #[test]
+    fn merge_replaces_structured_expression_with_intrinsic_overlay() {
+        let mut base = CfExpression::object([(
+            "network",
+            CfExpression::object([("type", CfExpression::from("use-default"))]),
+        )]);
+        let overlay = CfExpression::object([(
+            "network",
+            CfExpression::if_(
+                CONDITION_NETWORK_MODE_CREATE,
+                CfExpression::object([("type", CfExpression::from("create"))]),
+                CfExpression::no_value(),
+            ),
+        )]);
+
+        merge_cf_expression(&mut base, overlay);
+
+        let CfExpression::Object(root) = base else {
+            panic!("merged expression should remain an object");
+        };
+        let network = root
+            .get("network")
+            .expect("merged settings should keep network");
+        assert!(
+            is_cloudformation_intrinsic(network),
+            "intrinsic overlay should replace the structured base"
+        );
     }
 }

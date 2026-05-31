@@ -11,7 +11,9 @@ import * as z from "zod";
 export const PermissionGrantSchema = z.object({
     "actions": z.array(z.string()).describe("AWS IAM actions (only for AWS)").nullish(),
 "dataActions": z.array(z.string()).describe("Azure actions (only for Azure)").nullish(),
-"permissions": z.array(z.string()).describe("GCP permissions (only for GCP)").nullish()
+"permissions": z.array(z.string()).describe("GCP permissions that require an exact residual custom role.").nullish(),
+"predefinedRoles": z.array(z.string()).describe("Provider predefined roles to bind directly.").nullish(),
+"residualPermissions": z.array(z.string()).describe("GCP residual custom permissions to pair with predefined roles.").nullish()
     }).describe("Grant permissions for a specific cloud platform")
 
 export type PermissionGrant = z.infer<typeof PermissionGrantSchema>

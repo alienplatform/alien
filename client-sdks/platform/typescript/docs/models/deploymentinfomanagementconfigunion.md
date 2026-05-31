@@ -31,6 +31,8 @@ const value: models.DeploymentInfoManagementConfigGcp = {
 ```typescript
 const value: models.DeploymentInfoManagementConfigAzure = {
   managingTenantId: "<id>",
+  oidcIssuer: "<value>",
+  oidcSubject: "<value>",
   platform: "azure",
 };
 ```

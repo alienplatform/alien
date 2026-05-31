@@ -31,6 +31,8 @@ const value: models.ManagementConfigGcp = {
 ```typescript
 const value: models.ManagementConfigAzure = {
   managingTenantId: "<id>",
+  oidcIssuer: "<value>",
+  oidcSubject: "<value>",
   platform: "azure",
 };
 ```

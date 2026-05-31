@@ -5,17 +5,23 @@ use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
 use alien_core::permissions::PermissionSet;
 use alien_core::{
-    RemoteStackManagement, RemoteStackManagementOutputs, ResourceOutputs, ResourceStatus,
+    GcpRemoteStackManagementHeartbeatData, HeartbeatBackend, KubernetesCluster, ObservedHealth,
+    Platform, ProviderLifecycleState, RemoteStackManagement, RemoteStackManagementHeartbeatData,
+    RemoteStackManagementHeartbeatStatus, RemoteStackManagementOutputs, ResourceHeartbeat,
+    ResourceHeartbeatData, ResourceOutputs, ResourceStatus,
 };
 use alien_error::{AlienError, Context, ContextError};
 use alien_gcp_clients::iam::{
     Binding, CreateServiceAccountRequest, IamPolicy, ServiceAccount as GcpServiceAccount,
 };
-use alien_macros::{controller, flow_entry, handler, terminal_state};
+use alien_macros::controller;
+#[cfg(test)]
+use alien_permissions::generators::GcpIamBinding;
 use alien_permissions::{
-    generators::GcpRuntimePermissionsGenerator, get_permission_set, BindingTarget,
-    PermissionContext,
+    generators::{GcpBindingTargetScope, GcpRuntimePermissionsGenerator},
+    get_permission_set, list_permission_set_ids, BindingTarget, PermissionContext,
 };
+use chrono::Utc;
 
 /// Generates the GCP service account ID for RemoteStackManagement.
 fn get_gcp_management_service_account_id(prefix: &str) -> String {
@@ -28,10 +34,6 @@ pub struct GcpRemoteStackManagementController {
     pub(crate) service_account_email: Option<String>,
     /// The unique ID of the created management service account.
     pub(crate) service_account_unique_id: Option<String>,
-    /// The name/ID of the created custom management role.
-    pub(crate) custom_role_name: Option<String>,
-    /// Whether the custom role has been created.
-    pub(crate) role_created: bool,
     /// Whether the service account has been bound to the role.
     pub(crate) role_bound: bool,
     /// Whether impersonation permissions have been granted
@@ -64,15 +66,23 @@ impl GcpRemoteStackManagementController {
             "Creating GCP management service account"
         );
 
+        let display_name = match ctx.deployment_name_for_metadata() {
+            Some(deployment_name) => format!("{deployment_name}: Management service account"),
+            None => "Management service account".to_string(),
+        };
+        let description = match ctx.deployment_name_for_metadata() {
+            Some(deployment_name) => format!(
+                "Management cloud identity for {deployment_name}. Resource prefix: {}.",
+                ctx.resource_prefix
+            ),
+            None => format!(
+                "Management cloud identity. Resource prefix: {}.",
+                ctx.resource_prefix
+            ),
+        };
         let service_account = GcpServiceAccount::builder()
-            .display_name(format!(
-                "Alien Management Service Account: {}",
-                ctx.resource_prefix
-            ))
-            .description(format!(
-                "Management service account for Alien stack {}",
-                ctx.resource_prefix
-            ))
+            .display_name(display_name)
+            .description(description)
             .build();
 
         let request = CreateServiceAccountRequest::builder()
@@ -115,7 +125,7 @@ impl GcpRemoteStackManagementController {
         self.service_account_unique_id = Some(unique_id);
 
         Ok(HandlerAction::Continue {
-            state: CreatingCustomRole,
+            state: BindingRole,
             suggested_delay: None,
         })
     }
@@ -129,28 +139,7 @@ impl GcpRemoteStackManagementController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        let permission_sets = Self::resolve_management_permission_sets(ctx)?;
-
-        if permission_sets.is_empty() {
-            info!("No management permission sets to create custom roles for");
-        } else {
-            // All permission sets need custom roles created (both provision and non-provision),
-            // because resource controllers reference non-provision custom roles when applying
-            // resource-level IAM bindings.
-            info!(
-                permission_sets_count = permission_sets.len(),
-                "Ensuring per-permission-set custom roles exist for management"
-            );
-
-            ResourcePermissionsHelper::ensure_gcp_stack_custom_roles(ctx, &permission_sets).await?;
-
-            self.role_created = true;
-        }
-
-        Ok(HandlerAction::Continue {
-            state: BindingRole,
-            suggested_delay: None,
-        })
+        self.binding_role(ctx).await
     }
 
     #[handler(
@@ -177,131 +166,141 @@ impl GcpRemoteStackManagementController {
         // ManagementPermissionProfileMutation to include only what the management SA needs.
         let stack_sets = permission_sets;
 
-        if !stack_sets.is_empty() {
-            info!(
-                service_account_email = %service_account_email,
-                stack_sets_count = stack_sets.len(),
-                "Binding management permission-set roles to service account at project level"
-            );
+        info!(
+            service_account_email = %service_account_email,
+            stack_sets_count = stack_sets.len(),
+            "Reconciling management permission-set roles on service account"
+        );
 
-            let generator = GcpRuntimePermissionsGenerator::new();
-            let gcp_config = ctx.get_gcp_config()?;
+        let generator = GcpRuntimePermissionsGenerator::new();
+        let gcp_config = ctx.get_gcp_config()?;
 
-            // Extract the account ID (part before '@') from the full email.
-            let service_account_id = service_account_email
-                .split('@')
-                .next()
-                .unwrap_or(service_account_email);
+        // Extract the account ID (part before '@') from the full email.
+        let service_account_id = service_account_email
+            .split('@')
+            .next()
+            .unwrap_or(service_account_email);
 
-            let mut permission_context = PermissionContext::new()
-                .with_stack_prefix(ctx.resource_prefix.to_string())
-                .with_project_name(gcp_config.project_id.clone())
-                .with_region(gcp_config.region.clone())
-                .with_service_account_name(service_account_id.to_string());
-            if let Some(ref project_number) = gcp_config.project_number {
-                permission_context = permission_context.with_project_number(project_number.clone());
+        let mut permission_context = PermissionContext::new()
+            .with_stack_prefix(ctx.resource_prefix.to_string())
+            .with_project_name(gcp_config.project_id.clone())
+            .with_region(gcp_config.region.clone())
+            .with_service_account_name(service_account_id.to_string());
+        if let Some(deployment_name) = ctx.deployment_name_for_metadata() {
+            permission_context =
+                permission_context.with_deployment_name(deployment_name.to_string());
+        }
+        if let Some(ref project_number) = gcp_config.project_number {
+            permission_context = permission_context.with_project_number(project_number.clone());
+        }
+
+        let mut new_bindings = Vec::new();
+
+        for permission_set in &stack_sets {
+            let grant_plan = generator
+                .generate_grant_plan(permission_set, BindingTarget::Stack, &permission_context)
+                .context(ErrorData::InfrastructureError {
+                    message: format!(
+                        "Failed to generate IAM grant plan for management permission set '{}'",
+                        permission_set.id
+                    ),
+                    operation: Some("binding_role".to_string()),
+                    resource_id: Some(config.id.clone()),
+                })?;
+
+            let project_bindings = grant_plan.bindings_for_target(GcpBindingTargetScope::Project);
+            if project_bindings.is_empty() {
+                continue;
             }
 
-            let mut new_bindings = Vec::new();
+            let selected_custom_roles = grant_plan.custom_roles_for_bindings(&project_bindings);
+            ResourcePermissionsHelper::ensure_gcp_custom_roles(
+                ctx,
+                &permission_set.id,
+                selected_custom_roles,
+            )
+            .await?;
 
-            for permission_set in &stack_sets {
-                let bindings = generator
-                    .generate_bindings(permission_set, BindingTarget::Stack, &permission_context)
-                    .context(ErrorData::InfrastructureError {
-                        message: format!(
-                            "Failed to generate IAM bindings for management permission set '{}'",
-                            permission_set.id
-                        ),
-                        operation: Some("binding_role".to_string()),
-                        resource_id: Some(config.id.clone()),
-                    })?;
-
-                for binding in bindings.bindings {
-                    new_bindings.push(Binding {
-                        role: binding.role,
-                        members: binding.members,
-                        condition: binding.condition.map(|cond| alien_gcp_clients::iam::Expr {
-                            expression: cond.expression,
-                            title: Some(cond.title),
-                            description: Some(cond.description),
-                            location: None,
-                        }),
-                    });
-                }
-            }
-
-            if !new_bindings.is_empty() {
-                let project_id = &gcp_config.project_id;
-                let rm_client = ctx
-                    .service_provider
-                    .get_gcp_resource_manager_client(gcp_config)?;
-
-                let current_policy = rm_client
-                    .get_project_iam_policy(project_id.clone(), Some(alien_gcp_clients::resource_manager::GetPolicyOptions { requested_policy_version: Some(3) }))
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: "Failed to get project IAM policy before binding management roles. Refusing to proceed to avoid overwriting existing bindings.".to_string(),
-                        resource_id: Some(config.id.clone()),
-                    })?;
-
-                let mut all_bindings = current_policy.bindings;
-
-                // Strip `deleted:` members from all bindings before merging.
-                // GCP marks deleted principals with `deleted:serviceAccount:...?uid=...`.
-                // These are harmless to read but cause `setIamPolicy` to fail when a
-                // recently-deleted SA hasn't been marked as `deleted:` yet — GCP rejects
-                // the policy with "Service account ... does not exist". Stripping them
-                // prevents accumulation of stale bindings from previous deployments.
-                for binding in &mut all_bindings {
-                    binding.members.retain(|m| !m.starts_with("deleted:"));
-                }
-                all_bindings.retain(|b| !b.members.is_empty());
-
-                for new_binding in new_bindings {
-                    let existing = all_bindings.iter_mut().find(|b| {
-                        b.role == new_binding.role
-                            && match (&b.condition, &new_binding.condition) {
-                                (None, None) => true,
-                                (Some(a), Some(b)) => a.expression == b.expression,
-                                _ => false,
-                            }
-                    });
-
-                    if let Some(existing) = existing {
-                        for member in &new_binding.members {
-                            if !existing.members.contains(member) {
-                                existing.members.push(member.clone());
-                            }
-                        }
-                    } else {
-                        all_bindings.push(new_binding);
-                    }
-                }
-
-                let new_policy = IamPolicy::builder()
-                    .version(3)
-                    .bindings(all_bindings)
-                    .maybe_etag(current_policy.etag)
-                    .maybe_kind(current_policy.kind)
-                    .maybe_resource_id(current_policy.resource_id)
-                    .build();
-
-                rm_client
-                    .set_project_iam_policy(project_id.clone(), new_policy, None)
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!("Failed to bind management roles to service account '{}' at project level", service_account_email),
-                        resource_id: Some(config.id.clone()),
-                    })?;
-
-                info!(
-                    service_account_email = %service_account_email,
-                    "Provision permission-set roles bound to service account at project level"
-                );
-
-                self.role_bound = true;
+            for binding in project_bindings {
+                new_bindings.push(Binding {
+                    role: binding.role,
+                    members: binding.members,
+                    condition: binding.condition.map(|cond| alien_gcp_clients::iam::Expr {
+                        expression: cond.expression,
+                        title: Some(cond.title),
+                        description: Some(cond.description),
+                        location: None,
+                    }),
+                });
             }
         }
+
+        let mut owned_role_prefixes = Self::global_management_role_prefixes(&permission_context);
+        Self::append_resource_scoped_management_bindings(
+            ctx,
+            &generator,
+            service_account_id,
+            &mut new_bindings,
+            &mut owned_role_prefixes,
+        )
+        .await?;
+
+        let project_id = &gcp_config.project_id;
+        let rm_client = ctx
+            .service_provider
+            .get_gcp_resource_manager_client(gcp_config)?;
+
+        let current_policy = rm_client
+            .get_project_iam_policy(project_id.clone(), Some(alien_gcp_clients::resource_manager::GetPolicyOptions { requested_policy_version: Some(3) }))
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to get project IAM policy before binding management roles. Refusing to proceed to avoid overwriting existing bindings.".to_string(),
+                resource_id: Some(config.id.clone()),
+            })?;
+
+        let member = format!("serviceAccount:{service_account_email}");
+        let owned_exact_roles = ResourcePermissionsHelper::gcp_predefined_role_names(&new_bindings);
+        let mut all_bindings = current_policy.bindings;
+        let changed = ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
+            &mut all_bindings,
+            new_bindings,
+            &member,
+            &owned_role_prefixes,
+            &owned_exact_roles,
+        );
+
+        if changed {
+            let new_policy = IamPolicy::builder()
+                .version(3)
+                .bindings(all_bindings)
+                .maybe_etag(current_policy.etag)
+                .maybe_kind(current_policy.kind)
+                .maybe_resource_id(current_policy.resource_id)
+                .build();
+
+            rm_client
+                .set_project_iam_policy(project_id.clone(), new_policy, None)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to bind management roles to service account '{}' at project level",
+                        service_account_email
+                    ),
+                    resource_id: Some(config.id.clone()),
+                })?;
+
+            info!(
+                service_account_email = %service_account_email,
+                "Management permission-set roles reconciled on service account"
+            );
+        } else {
+            info!(
+                service_account_email = %service_account_email,
+                "Management permission-set role bindings already reconciled"
+            );
+        }
+
+        self.role_bound = true;
 
         Ok(HandlerAction::Continue {
             state: GrantingImpersonation,
@@ -349,30 +348,41 @@ impl GcpRemoteStackManagementController {
                 resource_id: Some(config.id.clone()),
             })?;
 
-        // Add impersonation bindings
+        // Reconcile impersonation bindings for the configured management service account.
         let mut all_bindings = current_policy.bindings;
-
-        // Grant roles/iam.serviceAccountTokenCreator
-        all_bindings.push(
+        let member = format!("serviceAccount:{management_service_account_email}");
+        let desired_bindings = vec![
             Binding::builder()
                 .role("roles/iam.serviceAccountTokenCreator".to_string())
-                .members(vec![format!(
-                    "serviceAccount:{}",
-                    management_service_account_email
-                )])
+                .members(vec![member.clone()])
                 .build(),
-        );
-
-        // Grant roles/iam.serviceAccountUser
-        all_bindings.push(
             Binding::builder()
                 .role("roles/iam.serviceAccountUser".to_string())
-                .members(vec![format!(
-                    "serviceAccount:{}",
-                    management_service_account_email
-                )])
+                .members(vec![member.clone()])
                 .build(),
+        ];
+        let owned_exact_roles =
+            ResourcePermissionsHelper::gcp_predefined_role_names(&desired_bindings);
+        let changed = ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
+            &mut all_bindings,
+            desired_bindings,
+            &member,
+            &[],
+            &owned_exact_roles,
         );
+
+        if !changed {
+            info!(
+                target_service_account = %service_account_email,
+                management_service_account = %management_service_account_email,
+                "Impersonation permissions already reconciled"
+            );
+            self.impersonation_granted = true;
+            return Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: None,
+            });
+        }
 
         let new_policy = IamPolicy::builder()
             .version(3)
@@ -415,30 +425,6 @@ impl GcpRemoteStackManagementController {
         let client = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
         let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
 
-        // Heartbeat check: verify custom role still exists if we have one
-        if let Some(role_name) = &self.custom_role_name {
-            let role = client.get_role(role_name.clone()).await.context(
-                ErrorData::CloudPlatformError {
-                    message: "Failed to get management custom role during heartbeat check"
-                        .to_string(),
-                    resource_id: Some(config.id.clone()),
-                },
-            )?;
-
-            // Check if role name matches what we expect
-            if let Some(fetched_name) = &role.name {
-                if fetched_name != role_name {
-                    return Err(AlienError::new(ErrorData::ResourceDrift {
-                        resource_id: config.id.clone(),
-                        message: format!(
-                            "Management role name changed from {} to {}",
-                            role_name, fetched_name
-                        ),
-                    }));
-                }
-            }
-        }
-
         // Heartbeat check: verify service account still exists
         if let Some(service_account_email) = &self.service_account_email {
             let sa = client
@@ -464,6 +450,8 @@ impl GcpRemoteStackManagementController {
             }
         }
 
+        emit_gcp_remote_stack_management_heartbeat(ctx, self);
+
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: Some(Duration::from_secs(30)), // Check again in 30 seconds
@@ -486,24 +474,7 @@ impl GcpRemoteStackManagementController {
             "Updating GCP management service account permissions"
         );
 
-        // Ensure per-permission-set custom roles are up-to-date.
-        // All permission sets (both provision and non-provision) need custom roles,
-        // because resource controllers reference non-provision custom roles when applying
-        // resource-level IAM bindings.
-        let permission_sets = Self::resolve_management_permission_sets(ctx)?;
-        if !permission_sets.is_empty() {
-            ResourcePermissionsHelper::ensure_gcp_stack_custom_roles(ctx, &permission_sets).await?;
-
-            info!(
-                config_id = %config.id,
-                "Management per-permission-set custom roles updated successfully"
-            );
-        }
-
-        Ok(HandlerAction::Continue {
-            state: Ready,
-            suggested_delay: None,
-        })
+        self.binding_role(ctx).await
     }
 
     // ─────────────── DELETE FLOW ──────────────────────────────
@@ -540,14 +511,12 @@ impl GcpRemoteStackManagementController {
                     let service_account_member =
                         format!("serviceAccount:{}", service_account_email);
 
-                    // Remove only this SA from each binding's member list,
-                    // then drop bindings that have no members left.
-                    for binding in &mut current_policy.bindings {
-                        binding.members.retain(|m| m != &service_account_member);
-                    }
-                    current_policy
-                        .bindings
-                        .retain(|binding| !binding.members.is_empty());
+                    ResourcePermissionsHelper::remove_gcp_project_member_bindings(
+                        &mut current_policy.bindings,
+                        &service_account_member,
+                        None,
+                        None,
+                    );
 
                     rm_client
                         .set_project_iam_policy(project_id.clone(), current_policy, None)
@@ -590,37 +559,10 @@ impl GcpRemoteStackManagementController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
+        let permission_context =
+            ResourcePermissionsHelper::build_gcp_permission_context(ctx, ctx.resource_prefix)?;
 
-        if let Some(role_name) = &self.custom_role_name {
-            let gcp_config = ctx.get_gcp_config()?;
-            let client = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
-
-            match client.delete_role(role_name.clone()).await {
-                Ok(_) => {
-                    info!(config_id = %config.id, role_name = %role_name, "Management custom role deleted successfully");
-                }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
-                    info!(config_id = %config.id, role_name = %role_name, "Management custom role already deleted");
-                }
-                Err(e) => {
-                    return Err(e.context(ErrorData::CloudPlatformError {
-                        message: format!("Failed to delete management custom role '{}'", role_name),
-                        resource_id: Some(config.id.clone()),
-                    }));
-                }
-            }
-
-            self.custom_role_name = None;
-            self.role_created = false;
-        } else {
-            info!(config_id = %config.id, "No management custom role was created, skipping role deletion");
-        }
+        ResourcePermissionsHelper::delete_gcp_custom_roles(ctx, &permission_context).await?;
 
         Ok(HandlerAction::Continue {
             state: DeletingServiceAccount,
@@ -709,6 +651,46 @@ impl GcpRemoteStackManagementController {
     }
 }
 
+fn emit_gcp_remote_stack_management_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    controller: &GcpRemoteStackManagementController,
+) {
+    let resource_id = ctx
+        .desired_resource_config::<RemoteStackManagement>()
+        .map(|config| config.id.clone())
+        .unwrap_or_else(|_| "remote-stack-management".to_string());
+
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id,
+        resource_type: RemoteStackManagement::RESOURCE_TYPE,
+        controller_platform: Platform::Gcp,
+        backend: HeartbeatBackend::Gcp,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::RemoteStackManagement(
+            RemoteStackManagementHeartbeatData::GcpServiceAccount(
+                GcpRemoteStackManagementHeartbeatData {
+                    status: RemoteStackManagementHeartbeatStatus {
+                        health: ObservedHealth::Healthy,
+                        lifecycle: ProviderLifecycleState::Running,
+                        message: controller.service_account_email.as_ref().map(|email| {
+                            format!("GCP management service account '{}' is reachable", email)
+                        }),
+                        stale: false,
+                        partial: false,
+                        collection_issues: vec![],
+                    },
+                    service_account_email: controller.service_account_email.clone(),
+                    service_account_unique_id: controller.service_account_unique_id.clone(),
+                    role_bound: controller.role_bound,
+                    impersonation_granted: controller.impersonation_granted,
+                },
+            ),
+        ),
+        raw: vec![],
+    });
+}
+
 // Separate impl block for helper methods
 impl GcpRemoteStackManagementController {
     /// Resolve the management permission sets from the stack's management profile.
@@ -742,6 +724,116 @@ impl GcpRemoteStackManagementController {
         Ok(permission_sets)
     }
 
+    fn global_management_role_prefixes(permission_context: &PermissionContext) -> Vec<String> {
+        ResourcePermissionsHelper::gcp_permission_set_custom_role_name_prefixes(
+            permission_context,
+            list_permission_set_ids()
+                .into_iter()
+                // GCP vault management/data grants are reconciled by the vault
+                // controller because they need resource-specific IAM conditions.
+                .filter(|id| !id.starts_with("vault/")),
+        )
+    }
+
+    async fn append_resource_scoped_management_bindings(
+        ctx: &ResourceControllerContext<'_>,
+        generator: &GcpRuntimePermissionsGenerator,
+        service_account_id: &str,
+        new_bindings: &mut Vec<Binding>,
+        owned_role_prefixes: &mut Vec<String>,
+    ) -> Result<()> {
+        let Some(management_profile) = ctx.desired_stack.management().profile() else {
+            return Ok(());
+        };
+
+        for (resource_id, permission_set_refs) in management_profile
+            .0
+            .iter()
+            .filter(|(scope, _)| scope.as_str() != "*")
+        {
+            let Some(resource_entry) = ctx.desired_stack.resources.get(resource_id) else {
+                continue;
+            };
+            let Some(cluster) = resource_entry.config.downcast_ref::<KubernetesCluster>() else {
+                continue;
+            };
+            let permission_context =
+                ResourcePermissionsHelper::gcp_kubernetes_cluster_permission_context(
+                    ctx,
+                    cluster,
+                    Some(service_account_id),
+                )?;
+
+            for permission_set_ref in permission_set_refs {
+                let Some(permission_set) =
+                    permission_set_ref.resolve(|name| get_permission_set(name).cloned())
+                else {
+                    continue;
+                };
+                if permission_set.platforms.gcp.is_none() {
+                    continue;
+                }
+
+                let grant_plan = generator
+                    .generate_grant_plan(
+                        &permission_set,
+                        BindingTarget::Resource,
+                        &permission_context,
+                    )
+                    .context(ErrorData::InfrastructureError {
+                        message: format!(
+                            "Failed to generate resource-scoped IAM grant plan for management permission set '{}'",
+                            permission_set.id
+                        ),
+                        operation: Some("binding_role".to_string()),
+                        resource_id: Some(resource_id.clone()),
+                    })?;
+
+                let project_bindings =
+                    grant_plan.bindings_for_target(GcpBindingTargetScope::Project);
+                if project_bindings.is_empty() {
+                    continue;
+                }
+                let selected_custom_roles = grant_plan.custom_roles_for_bindings(&project_bindings);
+                ResourcePermissionsHelper::ensure_gcp_custom_roles(
+                    ctx,
+                    &permission_set.id,
+                    selected_custom_roles,
+                )
+                .await?;
+                owned_role_prefixes.extend(
+                    ResourcePermissionsHelper::gcp_permission_set_custom_role_name_prefixes(
+                        &permission_context,
+                        std::iter::once(permission_set.id.as_str()),
+                    ),
+                );
+
+                for binding in project_bindings {
+                    new_bindings.push(Binding {
+                        role: binding.role,
+                        members: binding.members,
+                        condition: binding.condition.map(|cond| alien_gcp_clients::iam::Expr {
+                            expression: cond.expression,
+                            title: Some(cond.title),
+                            description: Some(cond.description),
+                            location: None,
+                        }),
+                    });
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn project_management_bindings(bindings: Vec<GcpIamBinding>) -> Vec<GcpIamBinding> {
+        bindings
+            .into_iter()
+            .filter(|binding| binding.target == GcpBindingTargetScope::Project)
+            .collect()
+    }
+
     /// Creates a controller in a ready state with mock values for testing purposes.
     #[cfg(feature = "test-utils")]
     pub fn mock_ready(service_account_name: &str) -> Self {
@@ -752,11 +844,60 @@ impl GcpRemoteStackManagementController {
                 service_account_name
             )),
             service_account_unique_id: Some("123456789012345678901".to_string()),
-            custom_role_name: None,
-            role_created: true,
             role_bound: true,
             impersonation_granted: true,
             _internal_stay_count: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_permission_context() -> PermissionContext {
+        PermissionContext::new()
+            .with_stack_prefix("test-stack".to_string())
+            .with_deployment_name("Test Deployment".to_string())
+            .with_project_name("test-project".to_string())
+            .with_region("us-central1".to_string())
+            .with_project_number("123456789012".to_string())
+    }
+
+    #[test]
+    fn project_management_bindings_skip_resource_scoped_artifact_registry_heartbeat() {
+        let permission_set = get_permission_set("artifact-registry/heartbeat").unwrap();
+        let generator = GcpRuntimePermissionsGenerator::new();
+        let bindings = generator
+            .generate_bindings(
+                permission_set,
+                BindingTarget::Stack,
+                &test_permission_context(),
+            )
+            .unwrap();
+
+        assert!(
+            GcpRemoteStackManagementController::project_management_bindings(bindings.bindings)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn project_management_bindings_keep_project_scoped_storage_heartbeat() {
+        let permission_set = get_permission_set("storage/heartbeat").unwrap();
+        let generator = GcpRuntimePermissionsGenerator::new();
+        let bindings = generator
+            .generate_bindings(
+                permission_set,
+                BindingTarget::Stack,
+                &test_permission_context(),
+            )
+            .unwrap();
+
+        let project_bindings =
+            GcpRemoteStackManagementController::project_management_bindings(bindings.bindings);
+
+        assert_eq!(project_bindings.len(), 1);
+        assert_eq!(project_bindings[0].target, GcpBindingTargetScope::Project);
     }
 }

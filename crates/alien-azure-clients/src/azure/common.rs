@@ -671,11 +671,11 @@ struct AzureErrorDetails {
     message: Option<String>,
 }
 
-/// Attempt to extract the Azure-specific error code from a JSON response body.
-fn parse_azure_error_code(body: &str) -> Option<String> {
+/// Attempt to extract the Azure-specific error details from a JSON response body.
+fn parse_azure_error_details(body: &str) -> Option<AzureErrorDetails> {
     serde_json::from_str::<AzureErrorResponse>(body)
         .ok()
-        .and_then(|r| r.error.code)
+        .map(|r| r.error)
 }
 
 /// Azure error codes that represent transient propagation delays, not actual
@@ -708,28 +708,33 @@ pub fn create_azure_http_error_with_context(
         http_request_text: request_body,
     });
 
-    let azure_error_code = parse_azure_error_code(body);
+    let azure_error = parse_azure_error_details(body);
+    let azure_error_code = azure_error.as_ref().and_then(|error| error.code.as_deref());
+    let azure_error_body = azure_error
+        .as_ref()
+        .and_then(|error| error.message.as_deref())
+        .unwrap_or(body);
 
     // Add service-specific context based on Azure error code and HTTP status
-    let service_context = match (status, azure_error_code.as_deref()) {
+    let service_context = match (status, azure_error_code) {
         // Azure propagation delays — transient, not truly invalid input
         (StatusCode::BAD_REQUEST, Some(code))
             if AZURE_TRANSIENT_BAD_REQUEST_CODES.contains(&code) =>
         {
             ErrorData::RemoteResourceConflict {
                 message: format!(
-                    "Transient Azure error for {res_type} '{res_name}' ({code}): {body}"
+                    "Transient Azure error for {res_type} '{res_name}' ({code}): {azure_error_body}"
                 ),
                 resource_type: res_type.into(),
                 resource_name: res_name.into(),
             }
         }
         (StatusCode::BAD_REQUEST, _) => ErrorData::InvalidInput {
-            message: format!("Bad request for {res_type} '{res_name}': {body}"),
+            message: format!("Bad request for {res_type} '{res_name}': {azure_error_body}"),
             field_name: None,
         },
         (StatusCode::CONFLICT, _) => ErrorData::RemoteResourceConflict {
-            message: format!("Resource conflict for {res_type} '{res_name}': {body}"),
+            message: format!("Resource conflict for {res_type} '{res_name}': {azure_error_body}"),
             resource_type: res_type.into(),
             resource_name: res_name.into(),
         },
@@ -742,22 +747,27 @@ pub fn create_azure_http_error_with_context(
             resource_name: res_name.into(),
         },
         (StatusCode::TOO_MANY_REQUESTS, _) => ErrorData::RateLimitExceeded {
-            message: format!("Rate limit exceeded for {res_type} '{res_name}': {body}"),
+            message: format!("Rate limit exceeded for {res_type} '{res_name}': {azure_error_body}"),
         },
-        (StatusCode::SERVICE_UNAVAILABLE | StatusCode::INTERNAL_SERVER_ERROR, _) => {
-            ErrorData::RemoteServiceUnavailable {
-                message: format!("Service unavailable for {res_type} '{res_name}': {body}"),
-            }
-        }
+        (
+            StatusCode::BAD_GATEWAY
+            | StatusCode::SERVICE_UNAVAILABLE
+            | StatusCode::INTERNAL_SERVER_ERROR,
+            _,
+        ) => ErrorData::RemoteServiceUnavailable {
+            message: format!("Service unavailable for {res_type} '{res_name}': {azure_error_body}"),
+        },
         (StatusCode::REQUEST_TIMEOUT | StatusCode::GATEWAY_TIMEOUT, _) => ErrorData::Timeout {
-            message: format!("Timeout for {res_type} '{res_name}': {body}"),
+            message: format!("Timeout for {res_type} '{res_name}': {azure_error_body}"),
         },
         // 499 is a non-standard status code that indicates "Client Closed Request" - typically due to timeout
         (status, _) if status.as_u16() == 499 => ErrorData::Timeout {
-            message: format!("Client closed request for {res_type} '{res_name}': {body}"),
+            message: format!(
+                "Client closed request for {res_type} '{res_name}': {azure_error_body}"
+            ),
         },
         _ => ErrorData::GenericError {
-            message: format!("Unknown error for {res_type} '{res_name}': {body}"),
+            message: format!("Unknown error for {res_type} '{res_name}': {azure_error_body}"),
         },
     };
 
@@ -809,4 +819,26 @@ pub fn validate_azure_metadata_value(key: &str, value: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bad_gateway_is_retryable_service_unavailable() {
+        let err = create_azure_http_error_with_context(
+            StatusCode::BAD_GATEWAY,
+            "CreateOrUpdateQueue",
+            "Resource",
+            "commands",
+            "Bad Gateway",
+            "https://management.azure.com/test",
+            None,
+        );
+
+        assert_eq!(err.code, "REMOTE_SERVICE_UNAVAILABLE");
+        assert!(err.retryable);
+        assert!(err.message.contains("Bad Gateway"));
+    }
 }

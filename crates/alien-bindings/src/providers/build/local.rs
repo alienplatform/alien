@@ -2,10 +2,7 @@ use crate::{
     error::{ErrorData, Result},
     traits::{Binding, Build},
 };
-use alien_core::{
-    bindings::{BuildBinding, LocalBuildBinding},
-    BuildConfig, BuildExecution, BuildStatus,
-};
+use alien_core::{bindings::BuildBinding, BuildConfig, BuildExecution, BuildStatus};
 use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};

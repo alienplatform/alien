@@ -51,11 +51,13 @@ pub async fn setup_target(
     let target_config = build_initial_setup_target_config(config, platform, &deployment.name)
         .await
         .context("Failed to build initial setup target config")?;
+    let has_remote_management = management_config.is_some();
 
     alien_deploy_cli::commands::push_initial_setup(
         manager.client(),
         &deployment.id,
         platform,
+        None,
         target_config.clone(),
         management_config,
         &manager.public_url,
@@ -66,11 +68,11 @@ pub async fn setup_target(
     .await
     .map_err(|e| anyhow::anyhow!("push_initial_setup failed: {}", e))?;
 
-    // For Azure with shared (external) Container Apps Environment: the management
-    // UAMI now exists but lacks permissions on the shared environment (which is
-    // in a different resource group). Grant them here using target credentials,
-    // before the manager's Provisioning phase starts.
-    if platform == Platform::Azure {
+    // For Azure with shared (external) Container Apps Environment: when remote
+    // stack management is configured, the management UAMI now exists but lacks
+    // permissions on the shared environment (which is in a different resource
+    // group). Grant it before the manager's Provisioning phase starts.
+    if platform == Platform::Azure && has_remote_management {
         if let Some(ref shared_env) = config.azure_resources.shared_container_env {
             grant_shared_env_join_permission(
                 config,

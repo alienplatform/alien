@@ -5,11 +5,11 @@ const RUNTIME_AWS_PERMISSION_SETS: &[&str] = &[
     "artifact-registry/provision",
     "container/provision",
     "container/management",
-    "container-cluster/provision",
-    "container-cluster/management",
-    "container-cluster/execute",
-    "function/provision",
-    "function/management",
+    "compute-cluster/provision",
+    "compute-cluster/management",
+    "compute-cluster/execute",
+    "worker/provision",
+    "worker/management",
     "kv/provision",
     "network/provision",
     "queue/provision",
@@ -64,6 +64,10 @@ fn runtime_aws_system_generated_resources_are_abac_guarded() {
                         continue;
                     }
 
+                    if documented_create_security_group_vpc_authorization(action, binding) {
+                        continue;
+                    }
+
                     let has_request_tag = has_condition_key(binding, "aws:RequestTag/${stackTag}");
                     let has_resource_tag =
                         has_condition_key(binding, "aws:ResourceTag/${stackTag}");
@@ -89,81 +93,141 @@ fn runtime_aws_system_generated_resources_are_abac_guarded() {
 }
 
 #[test]
-fn aws_tag_tamper_protection_denies_alien_tag_mutation() {
-    let permission_set = get_permission_set("aws/tag-tamper-protection")
-        .expect("aws/tag-tamper-protection permission set must exist");
+fn aws_tag_tamper_protection_is_not_a_builtin_boundary_layer() {
+    assert!(
+        get_permission_set("aws/tag-tamper-protection").is_none(),
+        "AWS isolation should be enforced by scoped permission sets, not a compensating tag-tamper Deny"
+    );
+}
+
+#[test]
+fn kv_and_queue_management_do_not_mutate_tags() {
+    let cases: [(&str, &[&str]); 2] = [
+        (
+            "kv/management",
+            &["dynamodb:TagResource", "dynamodb:UntagResource"],
+        ),
+        ("queue/management", &["sqs:TagQueue", "sqs:UntagQueue"]),
+    ];
+
+    for (permission_set_id, forbidden_actions) in cases {
+        let permission_set = get_permission_set(permission_set_id)
+            .unwrap_or_else(|| panic!("missing permission set {permission_set_id}"));
+        let aws_permissions = permission_set
+            .platforms
+            .aws
+            .as_ref()
+            .unwrap_or_else(|| panic!("{permission_set_id} must have AWS permissions"));
+        let actions = aws_permissions
+            .iter()
+            .flat_map(|permission| permission.grant.actions.as_deref().unwrap_or_default())
+            .collect::<Vec<_>>();
+
+        for forbidden_action in forbidden_actions {
+            assert!(
+                !actions
+                    .iter()
+                    .any(|action| action.as_str() == *forbidden_action),
+                "{permission_set_id} should not include tag mutation action {forbidden_action}"
+            );
+        }
+    }
+
+    let queue_management =
+        get_permission_set("queue/management").expect("queue/management permission set must exist");
+    let queue_actions = queue_management
+        .platforms
+        .aws
+        .as_ref()
+        .expect("queue/management must have AWS permissions")
+        .iter()
+        .flat_map(|permission| permission.grant.actions.as_deref().unwrap_or_default())
+        .collect::<Vec<_>>();
+    assert!(
+        queue_actions
+            .iter()
+            .any(|action| action.as_str() == "sqs:PurgeQueue"),
+        "queue/management should retain PurgeQueue"
+    );
+}
+
+#[test]
+fn provision_sets_do_not_grant_tag_removal() {
+    let cases: [(&str, &[&str]); 6] = [
+        ("artifact-registry/provision", &["ecr:UntagResource"]),
+        ("kv/provision", &["dynamodb:UntagResource"]),
+        ("network/provision", &["ec2:DeleteTags"]),
+        ("queue/provision", &["sqs:UntagQueue"]),
+        ("service-account/provision", &["iam:UntagRole"]),
+        ("worker/provision", &["lambda:UntagResource"]),
+    ];
+
+    for (permission_set_id, forbidden_actions) in cases {
+        let permission_set = get_permission_set(permission_set_id)
+            .unwrap_or_else(|| panic!("missing permission set {permission_set_id}"));
+        let aws_permissions = permission_set
+            .platforms
+            .aws
+            .as_ref()
+            .unwrap_or_else(|| panic!("{permission_set_id} must have AWS permissions"));
+        let actions = aws_permissions
+            .iter()
+            .flat_map(|permission| permission.grant.actions.as_deref().unwrap_or_default())
+            .collect::<Vec<_>>();
+
+        for forbidden_action in forbidden_actions {
+            assert!(
+                !actions
+                    .iter()
+                    .any(|action| action.as_str() == *forbidden_action),
+                "{permission_set_id} should not include tag removal action {forbidden_action}"
+            );
+        }
+    }
+}
+
+#[test]
+fn kubernetes_public_endpoint_acm_permissions_are_resource_scoped() {
+    let permission_set = get_permission_set("kubernetes-public-endpoint/management")
+        .expect("permission set must exist");
     let aws_permissions = permission_set
         .platforms
         .aws
         .as_ref()
-        .expect("tag tamper protection must have AWS permissions");
+        .expect("permission set must have AWS permissions");
 
-    assert!(!aws_permissions.is_empty());
-    assert!(
-        aws_permissions
-            .iter()
-            .all(|permission| permission.effect == AwsPermissionEffect::Deny),
-        "tag tamper protection must only contain Deny statements"
-    );
-
-    let actions = aws_permissions
-        .iter()
-        .flat_map(|permission| {
-            permission
-                .grant
-                .actions
-                .as_ref()
-                .expect("tag tamper protection must have actions")
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    for expected in [
-        "acm:RemoveTagsFromCertificate",
-        "autoscaling:DeleteTags",
-        "dynamodb:UntagResource",
-        "ec2:DeleteTags",
-        "elasticloadbalancing:RemoveTags",
-        "events:UntagResource",
-        "lambda:UntagResource",
-        "sqs:UntagQueue",
-    ] {
-        assert!(
-            actions.contains(&expected.to_string()),
-            "tag tamper protection is missing {expected}"
-        );
-    }
-
+    assert_eq!(aws_permissions.len(), 2);
     for permission in aws_permissions {
-        for binding in [
-            permission.binding.stack.as_ref(),
-            permission.binding.resource.as_ref(),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            assert_eq!(binding.resources, vec!["*".to_string()]);
-            assert!(has_condition_key(binding, "aws:TagKeys"));
-        }
-    }
+        assert!(
+            permission.binding.stack.is_none(),
+            "Kubernetes endpoint ACM permissions must be attached to concrete public resources"
+        );
+        let binding = permission
+            .binding
+            .resource
+            .as_ref()
+            .expect("resource binding required");
+        assert_eq!(
+            binding.resources,
+            ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"]
+        );
 
-    let s3_permission = aws_permissions
-        .iter()
-        .find(|permission| {
-            permission
-                .grant
-                .actions
-                .as_ref()
-                .is_some_and(|actions| actions.contains(&"s3:PutBucketTagging".to_string()))
-        })
-        .expect("tag tamper protection must deny s3:PutBucketTagging");
-    for binding in [
-        s3_permission.binding.stack.as_ref(),
-        s3_permission.binding.resource.as_ref(),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        assert!(has_condition_key(binding, "aws:ResourceTag/${stackTag}"));
+        let actions = permission.grant.actions.as_ref().expect("actions required");
+        if actions
+            .iter()
+            .any(|action| action == "acm:DeleteCertificate")
+        {
+            assert!(has_condition_key(binding, "aws:ResourceTag/${stackTag}"));
+            assert!(has_condition_key(binding, "aws:ResourceTag/${resourceTag}"));
+            assert!(has_condition_key(
+                binding,
+                "aws:ResourceTag/${managedByTag}"
+            ));
+        } else {
+            assert!(has_condition_key(binding, "aws:RequestTag/${stackTag}"));
+            assert!(has_condition_key(binding, "aws:RequestTag/${resourceTag}"));
+            assert!(has_condition_key(binding, "aws:RequestTag/${managedByTag}"));
+        }
     }
 }
 
@@ -183,6 +247,12 @@ fn aws_resource_arns_are_stack_or_resource_scoped_unless_documented_external() {
                 continue;
             }
 
+            let actions = permission
+                .grant
+                .actions
+                .as_deref()
+                .unwrap_or_else(|| panic!("{permission_set_id} AWS permission has no actions"));
+
             for binding in [
                 permission.binding.stack.as_ref(),
                 permission.binding.resource.as_ref(),
@@ -196,6 +266,9 @@ fn aws_resource_arns_are_stack_or_resource_scoped_unless_documented_external() {
                         || resource.contains("${resourceName}")
                         || binding.condition.is_some()
                         || documented_external_resource_scope(resource)
+                        || documented_same_account_ecr_metadata_scope(actions, resource)
+                        || documented_run_instances_companion_resource(actions, resource)
+                        || documented_create_security_group_vpc_resource(actions, resource)
                     {
                         continue;
                     }
@@ -219,6 +292,53 @@ fn documented_external_resource_scope(resource: &str) -> bool {
     // Runtime compute pulls images from the manager-owned artifact registry. Target-account
     // isolation is enforced by the repository resource policy that grants this role access.
     resource == "arn:aws:ecr:*:${managingAccountId}:repository/*"
+}
+
+fn documented_same_account_ecr_metadata_scope(actions: &[String], resource: &str) -> bool {
+    resource == "arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/*"
+        && actions
+            .iter()
+            .all(|action| matches!(action.as_str(), "ecr:DescribeRepositories"))
+}
+
+fn documented_run_instances_companion_resource(actions: &[String], resource: &str) -> bool {
+    if actions.iter().any(|action| action != "ec2:RunInstances") {
+        return false;
+    }
+
+    // EC2 Auto Scaling validates launch template use with an ec2:RunInstances
+    // dry run. IAM evaluates that action against the public AMI, selected subnet,
+    // and create-side EC2 resources as well as the tagged launch template.
+    resource == "arn:aws:ec2:${awsRegion}::image/*"
+        || resource == "arn:aws:ec2:${awsRegion}:${awsAccountId}:subnet/*"
+        || resource == "arn:aws:ec2:${awsRegion}:${awsAccountId}:network-interface/*"
+        || resource == "arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"
+}
+
+fn documented_create_security_group_vpc_resource(actions: &[String], resource: &str) -> bool {
+    actions
+        .iter()
+        .all(|action| action == "ec2:CreateSecurityGroup")
+        && documented_create_security_group_authorization_resource(resource)
+}
+
+fn documented_create_security_group_vpc_authorization(
+    action: &str,
+    binding: &AwsBindingSpec,
+) -> bool {
+    action == "ec2:CreateSecurityGroup"
+        && binding
+            .resources
+            .iter()
+            .any(|resource| documented_create_security_group_authorization_resource(resource))
+}
+
+fn documented_create_security_group_authorization_resource(resource: &str) -> bool {
+    matches!(
+        resource,
+        "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"
+            | "arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/*"
+    )
 }
 
 #[test]
@@ -378,8 +498,10 @@ fn action_requires_tag_condition(action: &str) -> bool {
     matches!(
         action,
         "acm:ImportCertificate"
+            | "acm:AddTagsToCertificate"
             | "acm:DeleteCertificate"
             | "apigateway:POST"
+            | "apigateway:PUT"
             | "apigateway:TagResource"
             | "autoscaling:CreateAutoScalingGroup"
             | "autoscaling:DeleteAutoScalingGroup"
@@ -409,7 +531,6 @@ fn action_requires_tag_condition(action: &str) -> bool {
             | "ec2:DeleteRouteTable"
             | "ec2:DeleteSecurityGroup"
             | "ec2:DeleteSubnet"
-            | "ec2:DeleteTags"
             | "ec2:DeleteVolume"
             | "ec2:DeleteVpc"
             | "ec2:DescribeVpcAttribute"
@@ -427,6 +548,7 @@ fn action_requires_tag_condition(action: &str) -> bool {
             | "elasticloadbalancing:DeleteListener"
             | "elasticloadbalancing:DeleteLoadBalancer"
             | "elasticloadbalancing:DeleteTargetGroup"
+            | "elasticloadbalancing:ModifyTargetGroupAttributes"
             | "events:PutRule"
             | "lambda:CreateFunction"
     )

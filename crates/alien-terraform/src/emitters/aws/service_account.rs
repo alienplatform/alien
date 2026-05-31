@@ -11,12 +11,12 @@ use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::aws::helpers::{
-        aws_terraform_permission_context, downcast, emit_iam_role_policy, required_label,
-        service_assume_role_policy, stack_name_template, tags,
+        aws_terraform_permission_context, downcast, emit_iam_role_policy, iam_role_name_template,
+        jsonencode, required_label, service_assume_role_policy, tags,
     },
     expr,
 };
-use alien_core::{import::EmitContext, Build, Function, Result, ServiceAccount};
+use alien_core::{import::EmitContext, Build, ComputeCluster, Result, ServiceAccount, Worker};
 use hcl::expr::Expression;
 use std::collections::BTreeSet;
 
@@ -28,7 +28,10 @@ impl TfEmitter for AwsServiceAccountEmitter {
         let service_account = downcast::<ServiceAccount>(ctx, ServiceAccount::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
 
-        let services = trust_principals(ctx, service_account);
+        let TrustPrincipals {
+            services,
+            compute_role_arns,
+        } = trust_principals(ctx, service_account);
         let services_ref: Vec<&str> = services.iter().copied().collect();
 
         let mut fragment = TfFragment::default();
@@ -36,10 +39,10 @@ impl TfEmitter for AwsServiceAccountEmitter {
             "aws_iam_role",
             label,
             [
-                attr("name", stack_name_template(&service_account.id)),
+                attr("name", iam_role_name_template(&service_account.id)),
                 attr(
                     "assume_role_policy",
-                    service_assume_role_policy(&services_ref),
+                    trust_assume_role_policy(&services_ref, compute_role_arns),
                 ),
                 attr("tags", tags(ctx, "service-account")),
             ],
@@ -73,15 +76,18 @@ impl TfEmitter for AwsServiceAccountEmitter {
     }
 }
 
-fn trust_principals<'a>(
-    ctx: &'a EmitContext<'_>,
-    service_account: &'a ServiceAccount,
-) -> BTreeSet<&'static str> {
+struct TrustPrincipals {
+    services: BTreeSet<&'static str>,
+    compute_role_arns: Vec<Expression>,
+}
+
+fn trust_principals(ctx: &EmitContext<'_>, service_account: &ServiceAccount) -> TrustPrincipals {
     let profile_name = service_account.id.strip_suffix("-sa");
     let mut services: BTreeSet<&'static str> = BTreeSet::new();
+    let mut compute_role_arns = Vec::new();
 
-    for (_id, entry) in ctx.stack.resources() {
-        if let Some(function) = entry.config.downcast_ref::<Function>() {
+    for (id, entry) in ctx.stack.resources() {
+        if let Some(function) = entry.config.downcast_ref::<Worker>() {
             if Some(function.permissions.as_str()) == profile_name {
                 services.insert("lambda.amazonaws.com");
             }
@@ -91,13 +97,60 @@ fn trust_principals<'a>(
                 services.insert("codebuild.amazonaws.com");
             }
         }
+        if entry.config.downcast_ref::<ComputeCluster>().is_some() {
+            if let Some(label) = ctx.name_for(id) {
+                let role_label = format!("{label}_instance");
+                compute_role_arns.push(expr::traversal(["aws_iam_role", &role_label, "arn"]));
+            }
+        }
     }
 
-    if services.is_empty() {
+    if services.is_empty() && compute_role_arns.is_empty() {
         services.insert("lambda.amazonaws.com");
         services.insert("codebuild.amazonaws.com");
         services.insert("ec2.amazonaws.com");
     }
 
-    services
+    TrustPrincipals {
+        services,
+        compute_role_arns,
+    }
+}
+
+fn trust_assume_role_policy(services: &[&str], compute_role_arns: Vec<Expression>) -> Expression {
+    if compute_role_arns.is_empty() {
+        return service_assume_role_policy(services);
+    }
+
+    let mut statements = Vec::new();
+    if !services.is_empty() {
+        let service_principal = if services.len() == 1 {
+            Expression::String(services[0].to_string())
+        } else {
+            Expression::Array(
+                services
+                    .iter()
+                    .map(|service| Expression::String((*service).to_string()))
+                    .collect(),
+            )
+        };
+        statements.push(expr::object([
+            ("Effect", Expression::String("Allow".to_string())),
+            ("Principal", expr::object([("Service", service_principal)])),
+            ("Action", Expression::String("sts:AssumeRole".to_string())),
+        ]));
+    }
+    statements.push(expr::object([
+        ("Effect", Expression::String("Allow".to_string())),
+        (
+            "Principal",
+            expr::object([("AWS", Expression::Array(compute_role_arns))]),
+        ),
+        ("Action", Expression::String("sts:AssumeRole".to_string())),
+    ]));
+
+    jsonencode(expr::object([
+        ("Version", Expression::String("2012-10-17".to_string())),
+        ("Statement", Expression::Array(statements)),
+    ]))
 }

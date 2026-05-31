@@ -275,7 +275,7 @@
 //!
 //! #[alien_event(AlienEvent::BuildingStack { stack: "my-stack".to_string() })]
 //! async fn build_stack() -> Result<()> {
-//!     // Function implementation
+//!     // Worker implementation
 //!     Ok(())
 //! }
 //! ```
@@ -289,7 +289,7 @@
 //!
 //! #[alien_event(AlienEvent::BuildingStack { stack: format!("stack-{}", stack_id) })]
 //! async fn build_dynamic_stack(stack_id: u32) -> Result<()> {
-//!     // Function implementation
+//!     // Worker implementation
 //!     Ok(())
 //! }
 //! ```

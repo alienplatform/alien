@@ -8,7 +8,7 @@
 use crate::error::Result;
 use crate::{CheckResult, DeploymentPrerequisiteCheck};
 use alien_core::{
-    ComputeBackend, Container, ContainerCluster, DeploymentConfig, ExposeProtocol, Platform, Stack,
+    ComputeBackend, ComputeCluster, Container, DeploymentConfig, ExposeProtocol, Platform, Stack,
     StackState,
 };
 
@@ -19,7 +19,7 @@ fn is_cloud_platform(platform: Platform) -> bool {
 fn stack_requires_managed_container_backend(stack: &Stack) -> bool {
     stack.resources().any(|(_, entry)| {
         entry.config.downcast_ref::<Container>().is_some()
-            || entry.config.downcast_ref::<ContainerCluster>().is_some()
+            || entry.config.downcast_ref::<ComputeCluster>().is_some()
     })
 }
 
@@ -73,7 +73,7 @@ impl DeploymentPrerequisiteCheck for ManagedContainerBackendRequiredCheck {
             .resources()
             .filter_map(|(resource_id, entry)| {
                 if entry.config.downcast_ref::<Container>().is_some()
-                    || entry.config.downcast_ref::<ContainerCluster>().is_some()
+                    || entry.config.downcast_ref::<ComputeCluster>().is_some()
                 {
                     Some(resource_id.clone())
                 } else {
@@ -136,8 +136,8 @@ mod tests {
     use alien_core::permissions::PermissionProfile;
     use alien_core::{
         permissions::PermissionsConfig, CertificateStatus, ContainerCode, DnsRecordStatus,
-        DomainMetadata, EnvironmentVariablesSnapshot, Function, FunctionCode, Ingress, Resource,
-        ResourceDomainInfo, ResourceEntry, ResourceLifecycle, ResourceSpec,
+        DomainMetadata, EnvironmentVariablesSnapshot, Ingress, Resource, ResourceDomainInfo,
+        ResourceEntry, ResourceLifecycle, ResourceSpec, Worker, WorkerCode,
     };
     use indexmap::IndexMap;
     use std::collections::HashMap;
@@ -148,6 +148,7 @@ mod tests {
 
     fn deployment_config() -> DeploymentConfig {
         DeploymentConfig {
+            deployment_name: Some("test deployment".to_string()),
             stack_settings: Default::default(),
             management_config: None,
             environment_variables: EnvironmentVariablesSnapshot {
@@ -158,6 +159,7 @@ mod tests {
             allow_frozen_changes: false,
             compute_backend: None,
             external_bindings: Default::default(),
+            base_platform: None,
             public_urls: None,
             domain_metadata: None,
             monitoring: None,
@@ -191,7 +193,7 @@ mod tests {
     fn horizon_backend() -> ComputeBackend {
         ComputeBackend::Horizon(alien_core::HorizonConfig {
             url: "https://containers.example.com".to_string(),
-            worker_image_id: None,
+            horizon_machine_image: None,
             clusters: HashMap::new(),
         })
     }
@@ -263,8 +265,8 @@ mod tests {
     fn create_public_function_entry(id: &str) -> ResourceEntry {
         ResourceEntry {
             config: Resource::new(
-                Function::new(id.to_string())
-                    .code(FunctionCode::Image {
+                Worker::new(id.to_string())
+                    .code(WorkerCode::Image {
                         image: "test:latest".to_string(),
                     })
                     .permissions("default".to_string())

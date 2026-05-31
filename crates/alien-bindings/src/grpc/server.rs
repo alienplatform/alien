@@ -17,10 +17,6 @@ use crate::{
             alien_bindings::control::FILE_DESCRIPTOR_SET as CONTROL_FILE_DESCRIPTOR_SET,
             ControlGrpcServer,
         },
-        function_service::{
-            alien_bindings::function::FILE_DESCRIPTOR_SET as FUNCTION_FILE_DESCRIPTOR_SET,
-            FunctionGrpcServer,
-        },
         kv_service::{
             alien_bindings::kv::FILE_DESCRIPTOR_SET as KV_FILE_DESCRIPTOR_SET, KvGrpcServer,
         },
@@ -43,6 +39,10 @@ use crate::{
         wait_until_service::{
             alien_bindings::wait_until::FILE_DESCRIPTOR_SET as WAIT_UNTIL_FILE_DESCRIPTOR_SET,
             WaitUntilGrpcServer,
+        },
+        worker_service::{
+            alien_bindings::worker::FILE_DESCRIPTOR_SET as WORKER_FILE_DESCRIPTOR_SET,
+            WorkerGrpcServer,
         },
         MAX_GRPC_MESSAGE_SIZE,
     },
@@ -98,7 +98,7 @@ pub async fn run_grpc_server(
         );
     }
 
-    let wait_until_server = Arc::new(WaitUntilGrpcServer::new(provider.clone()));
+    let wait_until_server = Arc::new(WaitUntilGrpcServer::new());
     let wait_until_server_handle = wait_until_server.clone();
 
     let control_server = Arc::new(ControlGrpcServer::new());
@@ -137,7 +137,7 @@ pub async fn run_grpc_server(
                 .max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
         )
         .add_service(
-            FunctionGrpcServer::new(provider.clone())
+            WorkerGrpcServer::new(provider.clone())
                 .into_service()
                 .max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
         )
@@ -172,7 +172,7 @@ pub async fn run_grpc_server(
         .register_encoded_file_descriptor_set(VAULT_FILE_DESCRIPTOR_SET)
         .register_encoded_file_descriptor_set(KV_FILE_DESCRIPTOR_SET)
         .register_encoded_file_descriptor_set(QUEUE_FILE_DESCRIPTOR_SET)
-        .register_encoded_file_descriptor_set(FUNCTION_FILE_DESCRIPTOR_SET)
+        .register_encoded_file_descriptor_set(WORKER_FILE_DESCRIPTOR_SET)
         .register_encoded_file_descriptor_set(CONTAINER_FILE_DESCRIPTOR_SET)
         .register_encoded_file_descriptor_set(SERVICE_ACCOUNT_FILE_DESCRIPTOR_SET)
         .register_encoded_file_descriptor_set(WAIT_UNTIL_FILE_DESCRIPTOR_SET)

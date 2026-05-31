@@ -6,10 +6,9 @@
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
-    ArtifactRegistry, Build, Function, FunctionCode, FunctionTrigger, Ingress, Kv,
-    ManagementPermissions, Network, NetworkSettings, PermissionProfile, Queue,
-    RemoteStackManagement, ResourceLifecycle, ServiceAccount, Stack, StackSettings, Storage,
-    UpdatesMode, Vault,
+    ArtifactRegistry, Build, Ingress, Kv, ManagementPermissions, Network, NetworkSettings,
+    PermissionProfile, Queue, RemoteStackManagement, ResourceLifecycle, ServiceAccount, Stack,
+    StackSettings, Storage, UpdatesMode, Vault, Worker, WorkerCode, WorkerTrigger,
 };
 use alien_terraform::TerraformTarget;
 
@@ -42,8 +41,8 @@ fn gcp_full_stack_renders_audit_ready_module() {
     let metadata = Kv::new("metadata".to_string()).build();
     let secrets = Vault::new("secrets".to_string()).build();
 
-    let public_api = Function::new("public-api".to_string())
-        .code(FunctionCode::Image {
+    let public_api = Worker::new("public-api".to_string())
+        .code(WorkerCode::Image {
             image: "us-central1-docker.pkg.dev/proj/app/api:1.2.3".to_string(),
         })
         .permissions("execution".to_string())
@@ -56,28 +55,20 @@ fn gcp_full_stack_renders_audit_ready_module() {
         .link(&secrets)
         .build();
 
-    let worker = Function::new("worker".to_string())
-        .code(FunctionCode::Image {
+    let worker = Worker::new("worker".to_string())
+        .code(WorkerCode::Image {
             image: "us-central1-docker.pkg.dev/proj/app/worker:1.2.3".to_string(),
         })
         .permissions("execution".to_string())
-        .trigger(FunctionTrigger::queue(&jobs))
-        .trigger(FunctionTrigger::schedule("*/5 * * * *"))
-        .trigger(FunctionTrigger::storage(
-            &assets,
-            vec!["created".to_string()],
-        ))
+        .trigger(WorkerTrigger::queue(&jobs))
+        .trigger(WorkerTrigger::schedule("*/5 * * * *"))
+        .trigger(WorkerTrigger::storage(&assets, vec!["created".to_string()]))
         .build();
 
     let stack = Stack::new("full-gcp".to_string())
         .management(ManagementPermissions::extend(
             PermissionProfile::new()
-                .global([
-                    "function/management",
-                    "storage/heartbeat",
-                    "queue/heartbeat",
-                    "kv/heartbeat",
-                ])
+                .global(["worker/management", "storage/heartbeat", "queue/heartbeat"])
                 .resource("secrets", ["vault/data-write"]),
         ))
         .add(

@@ -78,7 +78,7 @@ pub struct AgentStatus {
 pub struct DevResourceInfo {
     /// Resource URL (e.g., http://localhost:8080)
     pub url: String,
-    /// Resource type ("function" | "container")
+    /// Resource type ("worker" | "container")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resource_type: Option<String>,
 }

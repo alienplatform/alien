@@ -3,6 +3,7 @@
  */
 
 import { syncAcquire } from "../funcs/syncAcquire.js";
+import { syncList } from "../funcs/syncList.js";
 import { syncReconcile } from "../funcs/syncReconcile.js";
 import { syncRelease } from "../funcs/syncRelease.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
@@ -11,6 +12,20 @@ import * as operations from "../models/operations/index.js";
 import { unwrapAsync } from "../types/fp.js";
 
 export class Sync extends ClientSDK {
+  /**
+   * List full deployment records for manager operational loops. This endpoint is intentionally separate from the public deployments list, which returns lightweight UI rows.
+   */
+  async list(
+    request?: operations.SyncListRequest | undefined,
+    options?: RequestOptions,
+  ): Promise<models.SyncListResponse> {
+    return unwrapAsync(syncList(
+      this,
+      request,
+      options,
+    ));
+  }
+
   /**
    * Acquire a batch of deployments for processing. Used by Manager to atomically lock deployments matching filters. Each deployment in the batch must be released after processing.
    */
@@ -29,7 +44,7 @@ export class Sync extends ClientSDK {
    * Reconcile deployment state. Push model (with session) verifies lock ownership. Pull model (no session) verifies the deployment is unlocked. Accepts full DeploymentState after step() execution.
    */
   async reconcile(
-    request?: operations.SyncReconcileRequest | undefined,
+    request: operations.SyncReconcileRequest,
     options?: RequestOptions,
   ): Promise<models.SyncReconcileResponse> {
     return unwrapAsync(syncReconcile(
@@ -43,7 +58,7 @@ export class Sync extends ClientSDK {
    * Release a deployment lock. Must be called after processing an acquired deployment, even if processing failed. This is critical to avoid deadlocks.
    */
   async release(
-    request?: operations.SyncReleaseRequest | undefined,
+    request: operations.SyncReleaseRequest,
     options?: RequestOptions,
   ): Promise<operations.SyncReleaseResponse> {
     return unwrapAsync(syncRelease(

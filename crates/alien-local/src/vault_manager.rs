@@ -119,10 +119,11 @@ impl LocalVaultManager {
         self.state_dir.join("vault").join(id).exists()
     }
 
-    /// Verifies that a vault resource exists and is healthy by actually accessing it.
+    /// Verifies that a vault resource exists and is healthy without inspecting
+    /// secret names or values.
     ///
-    /// This performs a real access operation similar to what bindings do, ensuring
-    /// the vault directory is accessible and readable.
+    /// This checks directory metadata and opens a directory handle without
+    /// iterating entries.
     ///
     /// # Arguments
     /// * `id` - Resource identifier
@@ -149,12 +150,12 @@ impl LocalVaultManager {
             }));
         }
 
-        // Try to actually read the directory to ensure it's accessible
+        // Opening the directory validates basic accessibility without reading entries.
         std::fs::read_dir(&vault_path).into_alien_error().context(
             ErrorData::LocalDirectoryError {
                 path: vault_path.display().to_string(),
-                operation: "read".to_string(),
-                reason: "Failed to read vault directory".to_string(),
+                operation: "open".to_string(),
+                reason: "Failed to open vault directory".to_string(),
             },
         )?;
 

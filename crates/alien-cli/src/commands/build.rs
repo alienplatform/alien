@@ -5,7 +5,7 @@ use crate::output::print_json;
 use crate::ui::{accent, command, contextual_heading, dim_label, success_line};
 use alien_build::settings::{BuildSettings, PlatformBuildSettings};
 use alien_core::events::AlienEvent;
-use alien_core::BinaryTarget;
+use alien_core::{BinaryTarget, Platform};
 use alien_error::{AlienError, Context, IntoAlienError};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
@@ -69,9 +69,19 @@ pub struct BuildArgs {
     #[arg(long)]
     pub aws_managing_account_id: Option<String>,
 
+    /// Base cloud platform for Kubernetes builds. This keeps the output
+    /// platform as Kubernetes while using the managed cluster's default
+    /// architecture.
+    #[arg(long)]
+    pub base_platform: Option<String>,
+
     /// Cache URL for build caching (for example s3://bucket/path)
     #[arg(long)]
     pub cache_url: Option<String>,
+
+    /// Override the runtime base image used for source-built cloud containers.
+    #[arg(long, env = "ALIEN_OVERRIDE_BASE_IMAGE", hide = true)]
+    pub override_base_image: Option<String>,
 
     /// Emit structured JSON output
     #[arg(long)]
@@ -144,11 +154,17 @@ pub async fn build_task(args: &BuildArgs) -> Result<Vec<BuildOutput>> {
         })?;
 
     let mut outputs = Vec::new();
+    let has_kubernetes_platform = args
+        .platforms
+        .iter()
+        .any(|platform| platform.eq_ignore_ascii_case(Platform::Kubernetes.as_str()));
+    let kubernetes_base_platform =
+        parse_kubernetes_base_platform(has_kubernetes_platform, args.base_platform.as_deref())?;
 
     for platform_str in &args.platforms {
         let platform_str = platform_str.to_ascii_lowercase();
 
-        if let Ok(platform) = alien_core::Platform::from_str(&platform_str) {
+        if let Ok(platform) = Platform::from_str(&platform_str) {
             // Check for experimental platforms
             if platform.is_experimental() && !args.experimental {
                 return Err(AlienError::new(ErrorData::ValidationError {
@@ -179,13 +195,25 @@ pub async fn build_task(args: &BuildArgs) -> Result<Vec<BuildOutput>> {
             }
         }
 
+        let parsed_platform = Platform::from_str(&platform_str).map_err(|e| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "platform".to_string(),
+                message: e,
+            })
+        })?;
+        let base_platform = if parsed_platform == Platform::Kubernetes {
+            kubernetes_base_platform
+        } else {
+            None
+        };
+
         let target_platform = match platform_str.as_str() {
             "aws" => PlatformBuildSettings::Aws {
                 managing_account_id: args.aws_managing_account_id.clone(),
             },
             "gcp" => PlatformBuildSettings::Gcp {},
             "azure" => PlatformBuildSettings::Azure {},
-            "kubernetes" => PlatformBuildSettings::Kubernetes {},
+            "kubernetes" => PlatformBuildSettings::Kubernetes { base_platform },
             "local" => PlatformBuildSettings::Local {},
             _ => {
                 return Err(AlienError::new(ErrorData::ValidationError {
@@ -203,7 +231,7 @@ pub async fn build_task(args: &BuildArgs) -> Result<Vec<BuildOutput>> {
             platform: target_platform,
             targets: targets.clone(),
             cache_url: args.cache_url.clone(),
-            override_base_image: None,
+            override_base_image: args.override_base_image.clone(),
             debug_mode: false,
         };
 
@@ -225,6 +253,40 @@ pub async fn build_task(args: &BuildArgs) -> Result<Vec<BuildOutput>> {
         .ok();
 
     Ok(outputs)
+}
+
+fn parse_kubernetes_base_platform(
+    has_kubernetes_platform: bool,
+    base_platform: Option<&str>,
+) -> Result<Option<Platform>> {
+    let Some(base_platform) = base_platform else {
+        return Ok(None);
+    };
+
+    let parsed = Platform::from_str(base_platform).map_err(|e| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "base-platform".to_string(),
+            message: e,
+        })
+    })?;
+
+    if !has_kubernetes_platform {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "base-platform".to_string(),
+            message: "--base-platform is only supported when building --platform kubernetes"
+                .to_string(),
+        }));
+    }
+
+    match parsed {
+        Platform::Aws | Platform::Gcp | Platform::Azure => Ok(Some(parsed)),
+        Platform::Kubernetes | Platform::Local | Platform::Test => {
+            Err(AlienError::new(ErrorData::ValidationError {
+                field: "base-platform".to_string(),
+                message: "--base-platform must be one of: aws, gcp, azure".to_string(),
+            }))
+        }
+    }
 }
 
 fn load_build_output(
@@ -373,6 +435,33 @@ mod tests {
     fn parse_target_rejects_unknown_values() {
         let err = parse_target("solaris-sparc").unwrap_err();
         assert!(err.to_string().contains("Unknown target"));
+    }
+
+    #[test]
+    fn parse_kubernetes_base_platform_accepts_clouds_for_kubernetes_builds() {
+        assert_eq!(
+            parse_kubernetes_base_platform(true, Some("aws")).unwrap(),
+            Some(Platform::Aws)
+        );
+        assert_eq!(
+            parse_kubernetes_base_platform(true, Some("gcp")).unwrap(),
+            Some(Platform::Gcp)
+        );
+        assert_eq!(
+            parse_kubernetes_base_platform(true, Some("azure")).unwrap(),
+            Some(Platform::Azure)
+        );
+    }
+
+    #[test]
+    fn parse_kubernetes_base_platform_rejects_builds_without_kubernetes() {
+        assert!(parse_kubernetes_base_platform(false, Some("aws")).is_err());
+    }
+
+    #[test]
+    fn parse_kubernetes_base_platform_rejects_non_cloud_platforms() {
+        assert!(parse_kubernetes_base_platform(true, Some("kubernetes")).is_err());
+        assert!(parse_kubernetes_base_platform(true, Some("local")).is_err());
     }
 
     #[test]

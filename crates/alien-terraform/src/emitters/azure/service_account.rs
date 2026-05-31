@@ -24,12 +24,13 @@ use crate::{
     emitter::{TfEmitter, TfFragment},
     emitters::azure::helpers::{
         downcast, emit_role_definition_and_assignments, permission_context, required_label,
-        stack_name_template, tags,
+        resource_prefix_template, tags,
     },
     expr,
 };
 use alien_core::{import::EmitContext, Result, ServiceAccount};
 use hcl::expr::Expression;
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AzureServiceAccountEmitter;
@@ -44,7 +45,7 @@ impl TfEmitter for AzureServiceAccountEmitter {
             "azurerm_user_assigned_identity",
             label,
             [
-                attr("name", stack_name_template(&service_account.id)),
+                attr("name", resource_prefix_template(&service_account.id)),
                 attr(
                     "resource_group_name",
                     expr::raw("var.azure_resource_group_name"),
@@ -57,6 +58,7 @@ impl TfEmitter for AzureServiceAccountEmitter {
         let principal_id_expr =
             expr::traversal(["azurerm_user_assigned_identity", label, "principal_id"]);
         let context = permission_context(label);
+        let mut seen_predefined_assignments = HashSet::new();
 
         for (role_index, permission_set) in service_account.stack_permission_sets.iter().enumerate()
         {
@@ -68,6 +70,7 @@ impl TfEmitter for AzureServiceAccountEmitter {
                 principal_id_expr.clone(),
                 permission_set,
                 &context,
+                &mut seen_predefined_assignments,
             )?;
         }
 

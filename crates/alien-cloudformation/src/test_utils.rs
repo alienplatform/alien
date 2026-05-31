@@ -115,10 +115,13 @@ where
         .collect::<Vec<_>>()
         .join(" ");
 
-    let output = Command::new(program)
-        .args(&args)
-        .output()
-        .map_err(|error| error.to_string())?;
+    let output = match Command::new(program).args(&args).output() {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(LinterRun::skipped(program, format!("{program} not found")));
+        }
+        Err(error) => return Err(error.to_string()),
+    };
     let status = if output.status.success() {
         LinterStatus::Passed
     } else {

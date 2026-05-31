@@ -36,8 +36,9 @@ pub struct ImportContext<'a> {
     pub region: &'a str,
     /// Stack settings supplied by the setup artifact.
     pub stack_settings: &'a StackSettings,
-    /// Platform-derived management configuration.
-    pub management_config: &'a ManagementConfig,
+    /// Platform-derived management configuration, when this setup created a
+    /// cross-account/cross-tenant management identity.
+    pub management_config: Option<&'a ManagementConfig>,
     /// Original resource entry from the active stack.
     pub resource: &'a ResourceEntry,
 }

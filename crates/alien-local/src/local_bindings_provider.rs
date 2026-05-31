@@ -2,14 +2,14 @@
 //!
 //! This struct:
 //! - Holds all service managers
-//! - Implements `BindingsProviderApi` for function runtimes
+//! - Implements `BindingsProviderApi` for worker runtimes
 //! - Provides manager accessors for controllers via `PlatformServiceProvider`
 //! - Handles graceful shutdown coordination
 
 use crate::error::Result;
 use crate::{
-    LocalArtifactRegistryManager, LocalContainerManager, LocalFunctionManager, LocalKvManager,
-    LocalQueueManager, LocalStorageManager, LocalVaultManager,
+    LocalArtifactRegistryManager, LocalContainerManager, LocalKvManager, LocalQueueManager,
+    LocalStorageManager, LocalVaultManager, LocalWorkerManager,
 };
 use alien_bindings::{
     error::ErrorData as BindingsErrorData,
@@ -19,8 +19,8 @@ use alien_bindings::{
         storage::local::LocalStorage, vault::local::LocalVault,
     },
     traits::{
-        ArtifactRegistry, BindingsProviderApi, Build, Container, Function, Kv, Queue,
-        ServiceAccount, Storage, Vault,
+        ArtifactRegistry, BindingsProviderApi, Build, Container, Kv, Queue, ServiceAccount,
+        Storage, Vault, Worker,
     },
 };
 use alien_core::bindings::{KvBinding, VaultBinding};
@@ -28,14 +28,13 @@ use alien_error::{AlienError, Context};
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
-use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 /// Local bindings provider - manages all local platform services.
 ///
 /// This is the single entry point for the local platform. It:
 /// - Creates and holds all service managers
-/// - Implements `BindingsProviderApi` for function runtimes to access resources
+/// - Implements `BindingsProviderApi` for worker runtimes to access resources
 /// - Provides manager accessors for controllers via `PlatformServiceProvider`
 /// - Coordinates graceful shutdown of background tasks
 ///
@@ -48,7 +47,7 @@ use tokio::task::JoinHandle;
 /// ├── storage/{resource_id}/     # Storage directories
 /// ├── kv/{resource_id}/          # KV databases  
 /// ├── vault/{resource_id}/       # Vault directories
-/// ├── functions/{function_id}/   # Extracted OCI images + metadata
+/// ├── workers/{worker_id}/   # Extracted OCI images + metadata
 /// └── artifact_registry/{id}/    # Registry data
 /// ```
 #[derive(Debug)]
@@ -60,8 +59,8 @@ pub struct LocalBindingsProvider {
     artifact_registry_manager: Arc<LocalArtifactRegistryManager>,
     /// Container manager for Docker containers (optional - created lazily)
     container_manager: RwLock<Option<Arc<LocalContainerManager>>>,
-    /// Function manager is set after construction to break circular dependency
-    function_manager: RwLock<Option<Arc<LocalFunctionManager>>>,
+    /// Worker manager is set after construction to break circular dependency
+    worker_manager: RwLock<Option<Arc<LocalWorkerManager>>>,
     /// Shutdown signal sender
     shutdown_tx: tokio::sync::broadcast::Sender<()>,
     /// Background task handles for graceful shutdown
@@ -69,7 +68,7 @@ pub struct LocalBindingsProvider {
     /// State directory for creating managers lazily
     state_dir: PathBuf,
     /// Cached queue handles — sled only allows one open handle per database directory.
-    /// Without caching, concurrent calls to `load_queue()` (from the function's gRPC
+    /// Without caching, concurrent calls to `load_queue()` (from the worker's gRPC
     /// server and the trigger service) would fail with a sled lock contention error.
     queue_cache: tokio::sync::Mutex<std::collections::HashMap<String, Arc<dyn Queue>>>,
 }
@@ -83,7 +82,7 @@ impl Clone for LocalBindingsProvider {
             vault_manager: self.vault_manager.clone(),
             artifact_registry_manager: self.artifact_registry_manager.clone(),
             container_manager: RwLock::new(self.container_manager.read().unwrap().clone()),
-            function_manager: RwLock::new(self.function_manager.read().unwrap().clone()),
+            worker_manager: RwLock::new(self.worker_manager.read().unwrap().clone()),
             shutdown_tx: self.shutdown_tx.clone(),
             background_tasks: Mutex::new(Vec::new()), // Don't clone JoinHandles
             state_dir: self.state_dir.clone(),
@@ -138,7 +137,7 @@ impl LocalBindingsProvider {
             );
         let artifact_registry_manager = Arc::new(artifact_registry_manager);
 
-        // Create the provider (without function_manager and container_manager initially)
+        // Create the provider (without worker_manager and container_manager initially)
         let provider = Arc::new(Self {
             storage_manager: storage_manager.clone(),
             kv_manager: kv_manager.clone(),
@@ -146,29 +145,29 @@ impl LocalBindingsProvider {
             vault_manager: vault_manager.clone(),
             artifact_registry_manager: artifact_registry_manager.clone(),
             container_manager: RwLock::new(None),
-            function_manager: RwLock::new(None),
+            worker_manager: RwLock::new(None),
             shutdown_tx: shutdown_tx.clone(),
             background_tasks: Mutex::new(Vec::new()),
             state_dir: state_dir.clone(),
             queue_cache: tokio::sync::Mutex::new(std::collections::HashMap::new()),
         });
 
-        // Create function manager with the provider (for bindings access)
+        // Create worker manager with the provider (for bindings access)
         // ARC polling is configured via environment variables (ALIEN_COMMANDS_POLLING_*, ALIEN_AGENT_ID)
-        let (function_manager, function_task) = LocalFunctionManager::new_with_shutdown(
+        let (worker_manager, worker_task) = LocalWorkerManager::new_with_shutdown(
             state_dir,
             provider.clone(),
             shutdown_tx.subscribe(),
         );
-        let function_manager = Arc::new(function_manager);
+        let worker_manager = Arc::new(worker_manager);
 
         // Complete the circular reference
-        *provider.function_manager.write().unwrap() = Some(function_manager);
+        *provider.worker_manager.write().unwrap() = Some(worker_manager);
 
         // Store background task handles
         {
             let mut tasks = provider.background_tasks.lock().unwrap();
-            if let Some(task) = function_task {
+            if let Some(task) = worker_task {
                 tasks.push(task);
             }
             if let Some(task) = registry_task {
@@ -220,16 +219,16 @@ impl LocalBindingsProvider {
         &self.vault_manager
     }
 
-    /// Returns the function manager.
+    /// Returns the worker manager.
     ///
     /// # Panics
     /// Panics if called before initialization is complete.
-    pub fn function_manager(&self) -> Arc<LocalFunctionManager> {
-        self.function_manager
+    pub fn worker_manager(&self) -> Arc<LocalWorkerManager> {
+        self.worker_manager
             .read()
             .unwrap()
             .clone()
-            .expect("function_manager accessed before initialization")
+            .expect("worker_manager accessed before initialization")
     }
 
     /// Returns the artifact registry manager.
@@ -240,7 +239,7 @@ impl LocalBindingsProvider {
     /// Returns the container manager, creating it lazily if needed.
     ///
     /// The container manager is created lazily because it connects to Docker,
-    /// which may not be available/needed in all scenarios (e.g., function-only stacks).
+    /// which may not be available/needed in all scenarios (e.g., worker-only stacks).
     pub fn container_manager(&self) -> Option<Arc<LocalContainerManager>> {
         // Try to get existing manager
         {
@@ -425,7 +424,7 @@ impl BindingsProviderApi for LocalBindingsProvider {
 
         // Return cached handle if available. sled only allows one open handle
         // per database directory — without caching, concurrent callers (the
-        // function's gRPC server and the trigger service) would deadlock.
+        // worker's gRPC server and the trigger service) would deadlock.
         {
             let cache = self.queue_cache.lock().await;
             if let Some(cached) = cache.get(binding_name) {
@@ -475,38 +474,38 @@ impl BindingsProviderApi for LocalBindingsProvider {
         Ok(queue)
     }
 
-    async fn load_function(
+    async fn load_worker(
         &self,
         binding_name: &str,
-    ) -> alien_bindings::error::Result<Arc<dyn Function>> {
-        let function_manager = {
-            let guard = self.function_manager.read().unwrap();
+    ) -> alien_bindings::error::Result<Arc<dyn Worker>> {
+        let worker_manager = {
+            let guard = self.worker_manager.read().unwrap();
             guard.clone().ok_or_else(|| {
                 AlienError::new(BindingsErrorData::BindingConfigInvalid {
                     binding_name: binding_name.to_string(),
-                    reason: "Function manager not initialized".to_string(),
+                    reason: "Worker manager not initialized".to_string(),
                 })
             })?
         };
 
-        let binding = function_manager.get_binding(binding_name).await.context(
+        let binding = worker_manager.get_binding(binding_name).await.context(
             BindingsErrorData::BindingConfigInvalid {
                 binding_name: binding_name.to_string(),
-                reason: format!("Function '{}' not running", binding_name),
+                reason: format!("Worker '{}' not running", binding_name),
             },
         )?;
 
-        use alien_bindings::providers::function::local::LocalFunction;
-        use alien_core::bindings::FunctionBinding;
+        use alien_bindings::providers::worker::local::LocalWorker;
+        use alien_core::bindings::WorkerBinding;
 
         match binding {
-            FunctionBinding::Local(local_binding) => {
-                let function = LocalFunction::new(local_binding);
-                Ok(Arc::new(function))
+            WorkerBinding::Local(local_binding) => {
+                let worker = LocalWorker::new(local_binding);
+                Ok(Arc::new(worker))
             }
             _ => Err(AlienError::new(BindingsErrorData::BindingConfigInvalid {
                 binding_name: binding_name.to_string(),
-                reason: "Expected Local function binding variant".to_string(),
+                reason: "Expected Local worker binding variant".to_string(),
             })),
         }
     }

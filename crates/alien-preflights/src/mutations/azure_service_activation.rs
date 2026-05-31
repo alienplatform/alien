@@ -1,6 +1,7 @@
 //! Azure Service Activation mutation that enables required Azure services.
 
 use crate::error::Result;
+use crate::mutations::runs_on_platform_or_base;
 use crate::StackMutation;
 use alien_core::{
     DeploymentConfig, Platform, ResourceEntry, ResourceLifecycle, ResourceRef, ServiceActivation,
@@ -13,7 +14,7 @@ use tracing::{debug, info};
 /// Mutation that adds ServiceActivation resources for required Azure services.
 ///
 /// Different Azure resource types require different Azure service providers to be enabled:
-/// - function, build: Microsoft.App
+/// - worker, build: Microsoft.App
 /// - storage, kv: Microsoft.Storage  
 /// - vault: Microsoft.KeyVault
 /// - artifact-registry: Microsoft.ContainerRegistry
@@ -30,15 +31,14 @@ impl StackMutation for AzureServiceActivationMutation {
         &self,
         stack: &Stack,
         stack_state: &StackState,
-        _config: &DeploymentConfig,
+        config: &DeploymentConfig,
     ) -> bool {
-        // Only add for Azure platform
-        if stack_state.platform != Platform::Azure {
+        if !runs_on_platform_or_base(stack_state, config, Platform::Azure) {
             return false;
         }
 
         // Check what resource types exist in the stack that need service activation
-        let required_services = self.get_required_services(stack);
+        let required_services = self.get_required_services(stack, stack_state.platform);
 
         if required_services.is_empty() {
             return false;
@@ -66,12 +66,12 @@ impl StackMutation for AzureServiceActivationMutation {
     async fn mutate(
         &self,
         mut stack: Stack,
-        _stack_state: &StackState,
+        stack_state: &StackState,
         _config: &DeploymentConfig,
     ) -> Result<Stack> {
         info!("Adding Azure ServiceActivation resources");
 
-        let required_services = self.get_required_services(&stack);
+        let required_services = self.get_required_services(&stack, stack_state.platform);
         let resource_group_ref = ResourceRef::new(
             alien_core::AzureResourceGroup::RESOURCE_TYPE,
             "default-resource-group",
@@ -113,13 +113,14 @@ impl StackMutation for AzureServiceActivationMutation {
 
 impl AzureServiceActivationMutation {
     /// Get the mapping of service activation ID to service name based on resources in the stack
-    fn get_required_services(&self, stack: &Stack) -> HashMap<String, String> {
+    fn get_required_services(&self, stack: &Stack, platform: Platform) -> HashMap<String, String> {
         let mut services = HashMap::new();
+        let include_azure_workload_scaffolding = platform == Platform::Azure;
 
         for (_, entry) in &stack.resources {
             let resource_type = entry.config.resource_type();
             match resource_type.as_ref() {
-                "function" | "build" => {
+                "worker" | "build" if include_azure_workload_scaffolding => {
                     services.insert("enable-app".to_string(), "Microsoft.App".to_string());
                 }
                 "storage" | "kv" => {
@@ -144,6 +145,22 @@ impl AzureServiceActivationMutation {
                     services.insert(
                         "enable-servicebus".to_string(),
                         "Microsoft.ServiceBus".to_string(),
+                    );
+                }
+                "kubernetes-cluster" => {
+                    services.insert(
+                        "enable-container-service".to_string(),
+                        "Microsoft.ContainerService".to_string(),
+                    );
+                    services.insert(
+                        "enable-network".to_string(),
+                        "Microsoft.Network".to_string(),
+                    );
+                }
+                "network" => {
+                    services.insert(
+                        "enable-network".to_string(),
+                        "Microsoft.Network".to_string(),
                     );
                 }
                 _ => {}

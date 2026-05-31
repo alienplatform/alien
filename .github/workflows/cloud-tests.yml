@@ -33,6 +33,22 @@ on:
   #     - 'Cargo.toml'
   #     - 'Cargo.lock'
   workflow_dispatch:
+    inputs:
+      aws_target:
+        description: "AWS target account"
+        type: choice
+        default: aws-target-1
+        options: [aws-target-1]
+      gcp_target:
+        description: "GCP target project"
+        type: choice
+        default: gcp-target-3
+        options: [gcp-target-1, gcp-target-2, gcp-target-3]
+      azure_target:
+        description: "Azure target subscription"
+        type: choice
+        default: azure-target-1
+        options: [azure-target-1]
 
 permissions:
   contents: read
@@ -62,6 +78,9 @@ jobs:
         run: |
           echo "::add-mask::${{ vars.TEST_GCP_MGMT_PROJECT_ID }}"
           echo "::add-mask::${{ vars.TEST_GCP_TARGET_PROJECT_ID }}"
+          echo "::add-mask::${{ vars.TEST_GCP_TARGET_1_PROJECT_ID }}"
+          echo "::add-mask::${{ vars.TEST_GCP_TARGET_2_PROJECT_ID }}"
+          echo "::add-mask::${{ vars.TEST_GCP_TARGET_3_PROJECT_ID }}"
 
       - name: Terraform init
         working-directory: infra/test
@@ -82,6 +101,10 @@ jobs:
           TF_VAR_google_management_project_id: ${{ vars.TEST_GCP_MGMT_PROJECT_ID }}
           TF_VAR_google_target_service_account_key: ${{ secrets.TEST_GCP_TARGET_SA_KEY }}
           TF_VAR_google_target_project_id: ${{ vars.TEST_GCP_TARGET_PROJECT_ID }}
+          TF_VAR_google_target_1_service_account_key: ${{ secrets.TEST_GCP_TARGET_1_SA_KEY }}
+          TF_VAR_google_target_1_project_id: ${{ vars.TEST_GCP_TARGET_1_PROJECT_ID }}
+          TF_VAR_google_target_3_service_account_key: ${{ secrets.TEST_GCP_TARGET_3_SA_KEY }}
+          TF_VAR_google_target_3_project_id: ${{ vars.TEST_GCP_TARGET_3_PROJECT_ID }}
           TF_VAR_azure_management_subscription_id: ${{ secrets.TEST_AZURE_MGMT_SUBSCRIPTION_ID }}
           TF_VAR_azure_management_tenant_id: ${{ secrets.TEST_AZURE_MGMT_TENANT_ID }}
           TF_VAR_azure_management_client_id: ${{ secrets.TEST_AZURE_MGMT_CLIENT_ID }}
@@ -163,7 +186,13 @@ jobs:
           echo "AZURE_FEDERATED_TOKEN_FILE=/tmp/azure-oidc-token" >> $GITHUB_ENV
 
       - name: Generate .env.test
-        run: ./scripts/gen-env-test.sh
+        run: |
+          ./scripts/gen-env-test.sh
+          ./scripts/select-e2e-targets.sh \
+            --env-file .env.test \
+            --aws aws-target-1 \
+            --gcp gcp-target-3 \
+            --azure azure-target-1
         env:
           TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
           AXIOM_TOKEN: ${{ secrets.AXIOM_CI_API_KEY }}
@@ -243,6 +272,14 @@ jobs:
             val="${val#\"}" && val="${val%\"}"
             [ -n "$val" ] && echo "::add-mask::$val"
           done < .env.test
+
+      - name: Select E2E targets
+        run: |
+          ./scripts/select-e2e-targets.sh \
+            --env-file .env.test \
+            --aws "${{ inputs.aws_target || 'aws-target-1' }}" \
+            --gcp "${{ inputs.gcp_target || 'gcp-target-3' }}" \
+            --azure "${{ inputs.azure_target || 'azure-target-1' }}"
 
       - uses: dtolnay/rust-toolchain@nightly
 

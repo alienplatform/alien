@@ -4,7 +4,7 @@ const inbox = new alien.Queue("inbox").build()
 const data = new alien.Storage("data").build()
 const events = new alien.Kv("events").build()
 
-const processor = new alien.Function("processor")
+const processor = new alien.Worker("processor")
   .code({ type: "source", src: "./", toolchain: { type: "typescript" } })
   .commandsEnabled(true)
   .ingress("private")

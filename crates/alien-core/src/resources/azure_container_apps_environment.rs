@@ -44,6 +44,9 @@ pub struct AzureContainerAppsEnvironmentOutputs {
     pub default_domain: String,
     /// The static IP address of the environment (if applicable).
     pub static_ip: Option<String>,
+    /// Azure Container Apps custom domain verification ID.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub custom_domain_verification_id: Option<String>,
 }
 
 impl ResourceOutputsDefinition for AzureContainerAppsEnvironmentOutputs {

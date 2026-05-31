@@ -2,7 +2,7 @@
 //! and calls the appropriate check function for each supported binding.
 
 use alien_core::Platform;
-use alien_test::{Binding, DeploymentModel, Language, TestDeployment};
+use alien_test::{Binding, DeploymentModel, TestApp, TestDeployment};
 use tracing::{info, warn};
 
 use super::bindings;
@@ -17,7 +17,7 @@ pub async fn check_all_bindings(
     deployment: &TestDeployment,
     platform: Platform,
     model: DeploymentModel,
-    language: Language,
+    app: TestApp,
 ) -> anyhow::Result<()> {
     let supported = e2e::supported_bindings(platform, model);
     info!(
@@ -29,7 +29,7 @@ pub async fn check_all_bindings(
 
     for binding in &supported {
         // Check for known exclusions
-        if let Some(reason) = e2e::exclusion_reason(platform, model, *binding, language) {
+        if let Some(reason) = e2e::exclusion_reason(platform, model, *binding, app) {
             warn!(
                 binding = %binding,
                 reason = %reason,
@@ -52,7 +52,7 @@ pub async fn check_all_bindings(
             Binding::Kv => bindings::check_kv(deployment).await?,
             Binding::Vault => bindings::check_vault(deployment).await?,
             Binding::Queue => bindings::check_queue(deployment).await?,
-            Binding::Function => bindings::check_function(deployment).await?,
+            Binding::Worker => bindings::check_worker(deployment).await?,
             Binding::Container => bindings::check_container(deployment).await?,
             Binding::WaitUntil => bindings::check_wait_until(deployment).await?,
             Binding::Build => bindings::check_build(deployment).await?,

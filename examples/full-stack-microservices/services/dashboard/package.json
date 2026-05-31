@@ -1,0 +1,25 @@
+{
+  "name": "@full-stack-microservices/dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "start": "vite preview --host 0.0.0.0",
+    "test:ts": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@tanstack/react-router": "^1.139.3",
+    "@tanstack/react-start": "^1.139.3",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.1",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.2",
+    "typescript": "^5.7.3",
+    "vite": "^7.3.0"
+  }
+}

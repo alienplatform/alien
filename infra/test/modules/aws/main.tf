@@ -6,11 +6,440 @@ terraform {
       configuration_aliases = [aws.management, aws.target]
     }
     random = { source = "hashicorp/random", version = "~> 3.0" }
+    tls    = { source = "hashicorp/tls", version = "~> 4.0" }
   }
 }
 
 resource "random_id" "suffix" {
   byte_length = 4
+}
+
+locals {
+  e2e_eks_cluster_name      = var.e2e_eks_cluster_name != "" ? var.e2e_eks_cluster_name : "alien-e2e-${random_id.suffix.hex}"
+  e2e_eks_cluster_role_name = "alien-e2e-eks-cluster-${random_id.suffix.hex}"
+  e2e_eks_node_role_name    = "alien-e2e-eks-node-${random_id.suffix.hex}"
+}
+
+data "aws_availability_zones" "target" {
+  provider = aws.target
+  state    = "available"
+}
+
+# ── Target: reusable E2E network ─────────────────────────────────────────────
+
+resource "aws_vpc" "e2e" {
+  provider             = aws.target
+  cidr_block           = "10.251.0.0/16"
+  enable_dns_hostnames = true
+  enable_dns_support   = true
+
+  tags = {
+    Name = "alien-e2e-${random_id.suffix.hex}"
+  }
+}
+
+resource "aws_internet_gateway" "e2e" {
+  provider = aws.target
+  vpc_id   = aws_vpc.e2e.id
+
+  tags = {
+    Name = "alien-e2e-${random_id.suffix.hex}"
+  }
+}
+
+resource "aws_subnet" "e2e_public" {
+  provider                = aws.target
+  count                   = 2
+  vpc_id                  = aws_vpc.e2e.id
+  cidr_block              = cidrsubnet(aws_vpc.e2e.cidr_block, 8, count.index)
+  availability_zone       = data.aws_availability_zones.target.names[count.index]
+  map_public_ip_on_launch = true
+
+  tags = {
+    Name                                                  = "alien-e2e-public-${count.index + 1}-${random_id.suffix.hex}"
+    "kubernetes.io/cluster/${local.e2e_eks_cluster_name}" = "shared"
+    "kubernetes.io/role/elb"                              = "1"
+  }
+}
+
+resource "aws_subnet" "e2e_private" {
+  provider          = aws.target
+  count             = 2
+  vpc_id            = aws_vpc.e2e.id
+  cidr_block        = cidrsubnet(aws_vpc.e2e.cidr_block, 8, count.index + 10)
+  availability_zone = data.aws_availability_zones.target.names[count.index]
+
+  tags = {
+    Name                                                  = "alien-e2e-private-${count.index + 1}-${random_id.suffix.hex}"
+    "kubernetes.io/cluster/${local.e2e_eks_cluster_name}" = "shared"
+    "kubernetes.io/role/internal-elb"                     = "1"
+  }
+}
+
+resource "aws_eip" "e2e_nat" {
+  provider = aws.target
+  domain   = "vpc"
+
+  tags = {
+    Name = "alien-e2e-nat-${random_id.suffix.hex}"
+  }
+}
+
+resource "aws_nat_gateway" "e2e" {
+  provider      = aws.target
+  allocation_id = aws_eip.e2e_nat.id
+  subnet_id     = aws_subnet.e2e_public[0].id
+
+  tags = {
+    Name = "alien-e2e-${random_id.suffix.hex}"
+  }
+}
+
+resource "aws_route_table" "e2e_public" {
+  provider = aws.target
+  vpc_id   = aws_vpc.e2e.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.e2e.id
+  }
+
+  tags = {
+    Name = "alien-e2e-public-${random_id.suffix.hex}"
+  }
+}
+
+resource "aws_route_table_association" "e2e_public" {
+  provider       = aws.target
+  count          = length(aws_subnet.e2e_public)
+  subnet_id      = aws_subnet.e2e_public[count.index].id
+  route_table_id = aws_route_table.e2e_public.id
+}
+
+resource "aws_route_table" "e2e_private" {
+  provider = aws.target
+  vpc_id   = aws_vpc.e2e.id
+
+  route {
+    cidr_block     = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.e2e.id
+  }
+
+  tags = {
+    Name = "alien-e2e-private-${random_id.suffix.hex}"
+  }
+}
+
+resource "aws_route_table_association" "e2e_private" {
+  provider       = aws.target
+  count          = length(aws_subnet.e2e_private)
+  subnet_id      = aws_subnet.e2e_private[count.index].id
+  route_table_id = aws_route_table.e2e_private.id
+}
+
+resource "aws_security_group" "e2e" {
+  provider    = aws.target
+  name        = "alien-e2e-${random_id.suffix.hex}"
+  description = "Reusable Alien E2E security group"
+  vpc_id      = aws_vpc.e2e.id
+
+  ingress {
+    description = "VPC internal"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = [aws_vpc.e2e.cidr_block]
+  }
+
+  egress {
+    description = "All outbound"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "alien-e2e-${random_id.suffix.hex}"
+  }
+}
+
+# ── Target: shared EKS cluster for Terraform -> Helm E2Es ────────────────────
+
+resource "aws_iam_role" "e2e_eks_cluster" {
+  provider = aws.target
+  name     = local.e2e_eks_cluster_role_name
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "eks.amazonaws.com" }
+      Action    = ["sts:AssumeRole", "sts:TagSession"]
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "e2e_eks_cluster" {
+  provider   = aws.target
+  role       = aws_iam_role.e2e_eks_cluster.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
+}
+
+resource "aws_iam_role_policy_attachment" "e2e_eks_auto_mode_cluster" {
+  provider = aws.target
+  for_each = toset([
+    "arn:aws:iam::aws:policy/AmazonEKSBlockStoragePolicy",
+    "arn:aws:iam::aws:policy/AmazonEKSComputePolicy",
+    "arn:aws:iam::aws:policy/AmazonEKSLoadBalancingPolicy",
+    "arn:aws:iam::aws:policy/AmazonEKSNetworkingPolicy",
+  ])
+
+  role       = aws_iam_role.e2e_eks_cluster.name
+  policy_arn = each.value
+}
+
+resource "aws_iam_role" "e2e_eks_node" {
+  provider = aws.target
+  name     = local.e2e_eks_node_role_name
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "ec2.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "e2e_eks_node" {
+  provider = aws.target
+  for_each = toset([
+    "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy",
+    "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPullOnly",
+    "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy",
+    "arn:aws:iam::aws:policy/AmazonEKSWorkerNodeMinimalPolicy",
+  ])
+
+  role       = aws_iam_role.e2e_eks_node.name
+  policy_arn = each.value
+}
+
+resource "aws_iam_role" "e2e_eks_managed_node" {
+  provider = aws.target
+  name     = "alien-e2e-eks-mng-node-${random_id.suffix.hex}"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "ec2.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "e2e_eks_managed_node" {
+  provider = aws.target
+  for_each = toset([
+    "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy",
+    "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPullOnly",
+    "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy",
+  ])
+
+  role       = aws_iam_role.e2e_eks_managed_node.name
+  policy_arn = each.value
+}
+
+resource "aws_eks_cluster" "e2e" {
+  provider                      = aws.target
+  name                          = local.e2e_eks_cluster_name
+  role_arn                      = "arn:aws:iam::${data.aws_caller_identity.target.account_id}:role/${local.e2e_eks_cluster_role_name}"
+  version                       = var.e2e_eks_kubernetes_version
+  bootstrap_self_managed_addons = false
+
+  vpc_config {
+    subnet_ids              = concat(aws_subnet.e2e_public[*].id, aws_subnet.e2e_private[*].id)
+    endpoint_public_access  = true
+    endpoint_private_access = true
+  }
+
+  access_config {
+    authentication_mode                         = "API_AND_CONFIG_MAP"
+    bootstrap_cluster_creator_admin_permissions = true
+  }
+
+  compute_config {
+    enabled = true
+    # Application images built for AWS/EKS E2E are linux/arm64. Keep Auto Mode
+    # system capacity enabled, but run test workloads on the explicit ARM64
+    # managed node group below instead of EKS's default mixed general-purpose pool.
+    node_pools    = ["system"]
+    node_role_arn = "arn:aws:iam::${data.aws_caller_identity.target.account_id}:role/${local.e2e_eks_node_role_name}"
+  }
+
+  kubernetes_network_config {
+    elastic_load_balancing {
+      enabled = true
+    }
+  }
+
+  storage_config {
+    block_storage {
+      enabled = true
+    }
+  }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.e2e_eks_cluster,
+    aws_iam_role_policy_attachment.e2e_eks_auto_mode_cluster,
+    aws_iam_role_policy_attachment.e2e_eks_node,
+  ]
+}
+
+data "tls_certificate" "e2e_eks_oidc" {
+  url = aws_eks_cluster.e2e.identity[0].oidc[0].issuer
+}
+
+resource "aws_iam_openid_connect_provider" "e2e_eks" {
+  provider = aws.target
+
+  url             = aws_eks_cluster.e2e.identity[0].oidc[0].issuer
+  client_id_list  = ["sts.amazonaws.com"]
+  thumbprint_list = [data.tls_certificate.e2e_eks_oidc.certificates[0].sha1_fingerprint]
+
+  tags = {
+    Name = "alien-e2e-eks-oidc-${random_id.suffix.hex}"
+  }
+}
+
+resource "aws_iam_role" "e2e_eks_ebs_csi" {
+  provider = aws.target
+  name     = "alien-e2e-eks-ebs-csi-${random_id.suffix.hex}"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Federated = aws_iam_openid_connect_provider.e2e_eks.arn
+      }
+      Action = "sts:AssumeRoleWithWebIdentity"
+      Condition = {
+        StringEquals = {
+          "${replace(aws_eks_cluster.e2e.identity[0].oidc[0].issuer, "https://", "")}:aud" = "sts.amazonaws.com"
+          "${replace(aws_eks_cluster.e2e.identity[0].oidc[0].issuer, "https://", "")}:sub" = "system:serviceaccount:kube-system:ebs-csi-controller-sa"
+        }
+      }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "e2e_eks_ebs_csi" {
+  provider   = aws.target
+  role       = aws_iam_role.e2e_eks_ebs_csi.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
+}
+
+resource "aws_eip" "e2e_ingress" {
+  provider = aws.target
+  count    = length(aws_subnet.e2e_public)
+  domain   = "vpc"
+
+  tags = {
+    Name = "alien-e2e-ingress-${count.index + 1}-${random_id.suffix.hex}"
+  }
+}
+
+resource "aws_eks_addon" "e2e_vpc_cni" {
+  provider     = aws.target
+  cluster_name = aws_eks_cluster.e2e.name
+  addon_name   = "vpc-cni"
+
+  depends_on = [
+    aws_eks_cluster.e2e,
+  ]
+}
+
+resource "aws_eks_node_group" "e2e" {
+  provider        = aws.target
+  cluster_name    = aws_eks_cluster.e2e.name
+  node_group_name = "alien-e2e-${random_id.suffix.hex}"
+  node_role_arn   = aws_iam_role.e2e_eks_managed_node.arn
+  subnet_ids      = aws_subnet.e2e_private[*].id
+
+  ami_type       = "AL2023_ARM_64_STANDARD"
+  capacity_type  = "ON_DEMAND"
+  disk_size      = 20
+  instance_types = ["t4g.medium"]
+
+  scaling_config {
+    desired_size = 2
+    max_size     = 3
+    min_size     = 2
+  }
+
+  update_config {
+    max_unavailable = 1
+  }
+
+  depends_on = [
+    aws_eks_addon.e2e_vpc_cni,
+    aws_iam_role_policy_attachment.e2e_eks_managed_node,
+  ]
+}
+
+resource "aws_eks_addon" "e2e_kube_proxy" {
+  provider     = aws.target
+  cluster_name = aws_eks_cluster.e2e.name
+  addon_name   = "kube-proxy"
+
+  depends_on = [
+    aws_eks_node_group.e2e,
+  ]
+}
+
+resource "aws_eks_addon" "e2e_coredns" {
+  provider     = aws.target
+  cluster_name = aws_eks_cluster.e2e.name
+  addon_name   = "coredns"
+
+  depends_on = [
+    aws_eks_node_group.e2e,
+  ]
+}
+
+resource "aws_eks_addon" "e2e_ebs_csi" {
+  provider                 = aws.target
+  cluster_name             = aws_eks_cluster.e2e.name
+  addon_name               = "aws-ebs-csi-driver"
+  service_account_role_arn = aws_iam_role.e2e_eks_ebs_csi.arn
+
+  depends_on = [
+    aws_eks_node_group.e2e,
+    aws_iam_role_policy_attachment.e2e_eks_ebs_csi,
+  ]
+}
+
+resource "aws_eks_access_entry" "e2e_target" {
+  provider      = aws.target
+  cluster_name  = aws_eks_cluster.e2e.name
+  principal_arn = aws_iam_user.target.arn
+  type          = "STANDARD"
+}
+
+resource "aws_eks_access_policy_association" "e2e_target_admin" {
+  provider      = aws.target
+  cluster_name  = aws_eks_cluster.e2e.name
+  principal_arn = aws_iam_user.target.arn
+  policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+
+  access_scope {
+    type = "cluster"
+  }
+
+  depends_on = [aws_eks_access_entry.e2e_target]
 }
 
 # ── Management: IAM user ──────────────────────────────────────────────────────
@@ -46,8 +475,8 @@ resource "aws_iam_policy" "manager" {
         ]
       },
       {
-        Sid      = "AllServices"
-        Effect   = "Allow"
+        Sid    = "AllServices"
+        Effect = "Allow"
         Action = [
           "ec2:*",
           "ecr:*",
@@ -421,7 +850,6 @@ resource "aws_iam_policy" "target" {
           "lambda:ListEventSourceMappings",
           "lambda:UpdateEventSourceMapping",
           "lambda:TagResource",
-          "lambda:UntagResource",
           "lambda:ListTags",
         ]
         Resource = "*"
@@ -443,7 +871,6 @@ resource "aws_iam_policy" "target" {
           "iam:ListRolePolicies",
           "iam:ListAttachedRolePolicies",
           "iam:TagRole",
-          "iam:UntagRole",
         ]
         Resource = "*"
       },
@@ -460,7 +887,6 @@ resource "aws_iam_policy" "target" {
           "sqs:ReceiveMessage",
           "sqs:DeleteMessage",
           "sqs:TagQueue",
-          "sqs:UntagQueue",
         ]
         Resource = "*"
       },
@@ -481,7 +907,6 @@ resource "aws_iam_policy" "target" {
           "dynamodb:UpdateTimeToLive",
           "dynamodb:DescribeTimeToLive",
           "dynamodb:TagResource",
-          "dynamodb:UntagResource",
         ]
         Resource = "*"
       },
@@ -668,7 +1093,7 @@ resource "aws_iam_role_policy" "e2e_ar_push" {
           "ecr:PutImage", "ecr:InitiateLayerUpload", "ecr:UploadLayerPart",
           "ecr:CompleteLayerUpload", "ecr:BatchCheckLayerAvailability",
           "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ecr:ListImages",
-          "ecr:TagResource", "ecr:UntagResource",
+          "ecr:TagResource",
           "ecr:PutLifecyclePolicy", "ecr:DeleteLifecyclePolicy",
           "ecr:PutImageScanningConfiguration", "ecr:PutImageTagMutability",
           "ecr:DescribeImages", "ecr:DescribeImageScanFindings",

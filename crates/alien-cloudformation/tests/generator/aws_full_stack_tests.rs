@@ -7,10 +7,9 @@
 use super::helpers::render_built_ins;
 use alien_cloudformation::RegistrationMode;
 use alien_core::{
-    ArtifactRegistry, Build, Function, FunctionCode, FunctionTrigger, Ingress, Kv,
-    ManagementPermissions, Network, NetworkSettings, PermissionProfile, Queue,
-    RemoteStackManagement, ResourceLifecycle, ServiceAccount, Stack, StackSettings, Storage,
-    UpdatesMode, Vault,
+    ArtifactRegistry, Build, Ingress, Kv, ManagementPermissions, Network, NetworkSettings,
+    PermissionProfile, Queue, RemoteStackManagement, ResourceLifecycle, ServiceAccount, Stack,
+    StackSettings, Storage, UpdatesMode, Vault, Worker, WorkerCode, WorkerTrigger,
 };
 
 const LAMBDA_ARN: &str = "arn:aws:lambda:us-east-1:123456789012:function:alien-import";
@@ -44,8 +43,8 @@ fn aws_full_stack_with_create_network_renders_audit_ready_template() {
     let metadata = Kv::new("metadata".to_string()).build();
     let secrets = Vault::new("secrets".to_string()).build();
 
-    let public_api = Function::new("public-api".to_string())
-        .code(FunctionCode::Image {
+    let public_api = Worker::new("public-api".to_string())
+        .code(WorkerCode::Image {
             image: "123456789012.dkr.ecr.us-east-1.amazonaws.com/app/api:1.2.3".to_string(),
         })
         .permissions("execution".to_string())
@@ -58,19 +57,19 @@ fn aws_full_stack_with_create_network_renders_audit_ready_template() {
         .link(&secrets)
         .build();
 
-    let worker = Function::new("worker".to_string())
-        .code(FunctionCode::Image {
+    let worker = Worker::new("worker".to_string())
+        .code(WorkerCode::Image {
             image: "123456789012.dkr.ecr.us-east-1.amazonaws.com/app/worker:1.2.3".to_string(),
         })
         .permissions("execution".to_string())
-        .trigger(FunctionTrigger::queue(&jobs))
-        .trigger(FunctionTrigger::schedule("*/5 * * * *"))
+        .trigger(WorkerTrigger::queue(&jobs))
+        .trigger(WorkerTrigger::schedule("*/5 * * * *"))
         .build();
 
     let stack = Stack::new("full-aws".to_string())
         .management(ManagementPermissions::extend(
             PermissionProfile::new().global([
-                "function/provision",
+                "worker/provision",
                 "storage/heartbeat",
                 "queue/heartbeat",
                 "kv/heartbeat",
@@ -112,6 +111,7 @@ fn aws_full_stack_with_create_network_renders_audit_ready_template() {
         settings,
         RegistrationMode::Both {
             lambda_arn: LAMBDA_ARN.to_string(),
+            callback_url: None,
         },
         "aws full stack",
     );

@@ -7,21 +7,16 @@ import { DeploymentInfoProject } from "@alienplatform/platform-api/models";
 
 let value: DeploymentInfoProject = {
   name: "<value>",
-  workspace: "<value>",
-  deploymentPageBackground: {
-    type: "gradient-mesh",
-    mode: "dark",
-    colorScheme: "blue",
+  portal: {
+    appearance: {},
   },
 };
 ```
 
 ## Fields
 
-| Field                                                                    | Type                                                                     | Required                                                                 | Description                                                              |
-| ------------------------------------------------------------------------ | ------------------------------------------------------------------------ | ------------------------------------------------------------------------ | ------------------------------------------------------------------------ |
-| `name`                                                                   | *string*                                                                 | :heavy_check_mark:                                                       | N/A                                                                      |
-| `workspace`                                                              | *string*                                                                 | :heavy_check_mark:                                                       | N/A                                                                      |
-| `deploymentPageBackground`                                               | [models.DeploymentPageBackground](../models/deploymentpagebackground.md) | :heavy_minus_sign:                                                       | N/A                                                                      |
-| `deploymentPageLogoUrl`                                                  | *string*                                                                 | :heavy_minus_sign:                                                       | N/A                                                                      |
-| `stackSummary`                                                           | [models.StackSummary](../models/stacksummary.md)                         | :heavy_minus_sign:                                                       | N/A                                                                      |
+| Field                                            | Type                                             | Required                                         | Description                                      |
+| ------------------------------------------------ | ------------------------------------------------ | ------------------------------------------------ | ------------------------------------------------ |
+| `name`                                           | *string*                                         | :heavy_check_mark:                               | N/A                                              |
+| `portal`                                         | [models.Portal](../models/portal.md)             | :heavy_check_mark:                               | N/A                                              |
+| `stackSummary`                                   | [models.StackSummary](../models/stacksummary.md) | :heavy_minus_sign:                               | N/A                                              |

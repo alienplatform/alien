@@ -20,6 +20,7 @@ pub use azure::keyvault::{
 };
 pub use azure::load_balancers::{AzureLoadBalancerClient, LoadBalancerApi};
 pub use azure::long_running_operation::{LongRunningOperationApi, LongRunningOperationClient};
+pub use azure::managed_clusters::{AzureManagedClustersClient, ManagedClustersApi};
 pub use azure::managed_identity::{
     AzureManagedIdentityClient, FederatedCredentialProperties, FederatedIdentityCredential,
     ManagedIdentityApi,

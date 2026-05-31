@@ -37,7 +37,7 @@ use crate::error::{ErrorData, Result};
 use crate::events::azure::{
     azure_storage_cloudevent_to_storage_events, dapr_cloudevent_to_queue_messages,
 };
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::{Context, IntoAlienError};
 
 /// Container App transport
 pub struct ContainerAppTransport {

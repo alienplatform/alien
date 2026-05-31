@@ -13,7 +13,7 @@
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${stackPrefix}-*"
+            "scope": "/subscriptions/${subscriptionId}"
           },
           "resource": {
             "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceName}"

@@ -27,7 +27,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 use serde::Serialize;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 use alien_bindings::traits::{
     ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions,
@@ -201,6 +201,7 @@ pub fn router() -> Router<AppState> {
 /// every HTTP request (~50 requests per image push/pull).
 pub struct CredentialCache {
     entries: std::sync::RwLock<HashMap<String, CachedCredential>>,
+    generation_locks: std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 struct CachedCredential {
@@ -213,6 +214,7 @@ impl CredentialCache {
     pub fn new() -> Self {
         Self {
             entries: std::sync::RwLock::new(HashMap::new()),
+            generation_locks: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -237,6 +239,17 @@ impl CredentialCache {
                 },
             );
         }
+    }
+
+    fn generation_lock(&self, key: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let mut locks = self
+            .generation_locks
+            .lock()
+            .expect("credential cache generation lock poisoned");
+        locks
+            .entry(key.to_string())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
     }
 }
 
@@ -483,36 +496,43 @@ async fn forward_to_upstream(
     let creds = if let Some(cached) = state.credential_cache.get(&cache_key) {
         cached
     } else {
-        let fresh = match artifact_registry
-            .generate_credentials(&repo_name, permissions, Some(3600))
-            .await
-        {
-            Ok(c) => c,
-            Err(e) => {
-                warn!(error = %e, "Failed to generate upstream credentials");
-                return oci_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "INTERNAL_ERROR",
-                    "Failed to generate upstream credentials",
-                );
-            }
-        };
+        let generation_lock = state.credential_cache.generation_lock(&cache_key);
+        let _guard = generation_lock.lock().await;
 
-        // Cache with TTL derived from expiry, or default 5 minutes.
-        let ttl = fresh
-            .expires_at
-            .as_deref()
-            .and_then(|exp| {
-                chrono::DateTime::parse_from_rfc3339(exp).ok().map(|dt| {
-                    let remaining = dt.timestamp() - chrono::Utc::now().timestamp();
-                    // Use 80% of remaining time as TTL (refresh before expiry)
-                    Duration::from_secs((remaining.max(0) as u64) * 4 / 5)
+        if let Some(cached) = state.credential_cache.get(&cache_key) {
+            cached
+        } else {
+            let fresh = match artifact_registry
+                .generate_credentials(&repo_name, permissions, Some(3600))
+                .await
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    warn!(error = %e, "Failed to generate upstream credentials");
+                    return oci_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "INTERNAL_ERROR",
+                        "Failed to generate upstream credentials",
+                    );
+                }
+            };
+
+            // Cache with TTL derived from expiry, or default 5 minutes.
+            let ttl = fresh
+                .expires_at
+                .as_deref()
+                .and_then(|exp| {
+                    chrono::DateTime::parse_from_rfc3339(exp).ok().map(|dt| {
+                        let remaining = dt.timestamp() - chrono::Utc::now().timestamp();
+                        // Use 80% of remaining time as TTL (refresh before expiry)
+                        Duration::from_secs((remaining.max(0) as u64) * 4 / 5)
+                    })
                 })
-            })
-            .unwrap_or(Duration::from_secs(300));
+                .unwrap_or(Duration::from_secs(300));
 
-        state.credential_cache.insert(cache_key, fresh.clone(), ttl);
-        fresh
+            state.credential_cache.insert(cache_key, fresh.clone(), ttl);
+            fresh
+        }
     };
 
     let upstream_url = format!(
@@ -564,34 +584,41 @@ async fn forward_to_upstream_raw(
     let creds = if let Some(cached) = state.credential_cache.get(&cache_key) {
         cached
     } else {
-        let fresh = match artifact_registry
-            .generate_credentials("", permissions, Some(3600))
-            .await
-        {
-            Ok(c) => c,
-            Err(e) => {
-                warn!(error = %e, "Failed to generate upstream credentials for upload session");
-                return oci_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "INTERNAL_ERROR",
-                    "Failed to generate upstream credentials",
-                );
-            }
-        };
+        let generation_lock = state.credential_cache.generation_lock(&cache_key);
+        let _guard = generation_lock.lock().await;
 
-        let ttl = fresh
-            .expires_at
-            .as_deref()
-            .and_then(|exp| {
-                chrono::DateTime::parse_from_rfc3339(exp).ok().map(|dt| {
-                    let remaining = dt.timestamp() - chrono::Utc::now().timestamp();
-                    Duration::from_secs((remaining.max(0) as u64) * 4 / 5)
+        if let Some(cached) = state.credential_cache.get(&cache_key) {
+            cached
+        } else {
+            let fresh = match artifact_registry
+                .generate_credentials("", permissions, Some(3600))
+                .await
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    warn!(error = %e, "Failed to generate upstream credentials for upload session");
+                    return oci_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "INTERNAL_ERROR",
+                        "Failed to generate upstream credentials",
+                    );
+                }
+            };
+
+            let ttl = fresh
+                .expires_at
+                .as_deref()
+                .and_then(|exp| {
+                    chrono::DateTime::parse_from_rfc3339(exp).ok().map(|dt| {
+                        let remaining = dt.timestamp() - chrono::Utc::now().timestamp();
+                        Duration::from_secs((remaining.max(0) as u64) * 4 / 5)
+                    })
                 })
-            })
-            .unwrap_or(Duration::from_secs(300));
+                .unwrap_or(Duration::from_secs(300));
 
-        state.credential_cache.insert(cache_key, fresh.clone(), ttl);
-        fresh
+            state.credential_cache.insert(cache_key, fresh.clone(), ttl);
+            fresh
+        }
     };
 
     let upstream_url = format!("{}{}", upstream_endpoint.trim_end_matches('/'), raw_path);
@@ -769,9 +796,13 @@ async fn validate_pull_access(
         cached_repos
     } else {
         // Cache miss — query DB.
+        // The caller has already been authenticated and scoped to this
+        // deployment. Use the manager's system subject for the metadata lookup
+        // so registry pull auth does not depend on the caller's bearer format.
+        let system = crate::auth::Subject::system();
         let deployment = state
             .deployment_store
-            .get_deployment(subject, deployment_id)
+            .get_deployment(&system, deployment_id)
             .await
             .map_err(|e| {
                 warn!(error = %e, "Failed to get deployment for registry proxy");
@@ -802,7 +833,6 @@ async fn validate_pull_access(
             })?
             .to_string();
 
-        let system = crate::auth::Subject::system();
         let release = state
             .release_store
             .get_release(&system, &release_id)
@@ -854,15 +884,15 @@ async fn validate_pull_access(
 /// Extract the set of repo names from a release's stack.
 fn extract_repo_names(stack: &alien_core::Stack) -> Vec<String> {
     use alien_core::image_rewrite::strip_registry_host;
-    use alien_core::{Container, ContainerCode, Function, FunctionCode};
+    use alien_core::{Container, ContainerCode, Worker, WorkerCode};
 
     let mut repos = Vec::new();
 
     for (_resource_id, entry) in stack.resources() {
-        let image = if let Some(func) = entry.config.downcast_ref::<Function>() {
+        let image = if let Some(func) = entry.config.downcast_ref::<Worker>() {
             match &func.code {
-                FunctionCode::Image { image } => Some(image.as_str()),
-                FunctionCode::Source { .. } => None,
+                WorkerCode::Image { image } => Some(image.as_str()),
+                WorkerCode::Source { .. } => None,
             }
         } else if let Some(container) = entry.config.downcast_ref::<Container>() {
             match &container.code {
@@ -1020,6 +1050,7 @@ async fn load_artifact_registry_for_repo(
 mod tests {
     use super::*;
     use alien_core::image_rewrite::strip_registry_host;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn test_strip_registry_host_gar() {
@@ -1072,6 +1103,48 @@ mod tests {
             extract_repo_name("alien-e2e/blobs/uploads/uuid-123"),
             "alien-e2e"
         );
+    }
+
+    #[tokio::test]
+    async fn credential_cache_serializes_generation_for_same_key() {
+        let cache = Arc::new(CredentialCache::new());
+        let generation_count = Arc::new(AtomicUsize::new(0));
+        let mut tasks = Vec::new();
+
+        for _ in 0..16 {
+            let cache = cache.clone();
+            let generation_count = generation_count.clone();
+            tasks.push(tokio::spawn(async move {
+                let key = "https://ecr.example.test:alien-e2e:PushPull";
+                if cache.get(key).is_none() {
+                    let generation_lock = cache.generation_lock(key);
+                    let _guard = generation_lock.lock().await;
+                    if cache.get(key).is_none() {
+                        generation_count.fetch_add(1, Ordering::SeqCst);
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                        cache.insert(
+                            key.to_string(),
+                            ArtifactRegistryCredentials {
+                                auth_method: alien_bindings::traits::RegistryAuthMethod::Basic,
+                                username: "AWS".to_string(),
+                                password: "token".to_string(),
+                                expires_at: None,
+                            },
+                            Duration::from_secs(300),
+                        );
+                    }
+                }
+            }));
+        }
+
+        for task in tasks {
+            task.await.expect("credential cache task should complete");
+        }
+
+        assert_eq!(generation_count.load(Ordering::SeqCst), 1);
+        assert!(cache
+            .get("https://ecr.example.test:alien-e2e:PushPull")
+            .is_some());
     }
 
     // -----------------------------------------------------------------------

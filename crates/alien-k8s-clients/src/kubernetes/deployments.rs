@@ -4,7 +4,7 @@ use alien_client_core::{ErrorData, Result};
 use alien_error::{Context, IntoAlienError};
 use reqwest::Method;
 
-use k8s_openapi::api::apps::v1::{Deployment, StatefulSet};
+use k8s_openapi::api::apps::v1::{DaemonSet, Deployment, StatefulSet};
 use k8s_openapi::List;
 
 use async_trait::async_trait;
@@ -47,6 +47,16 @@ pub trait DeploymentApi: Send + Sync + std::fmt::Debug {
         statefulset: &StatefulSet,
     ) -> Result<StatefulSet>;
     async fn delete_statefulset(&self, namespace: &str, name: &str) -> Result<()>;
+
+    async fn create_daemonset(&self, namespace: &str, daemonset: &DaemonSet) -> Result<DaemonSet>;
+    async fn get_daemonset(&self, namespace: &str, name: &str) -> Result<DaemonSet>;
+    async fn update_daemonset(
+        &self,
+        namespace: &str,
+        name: &str,
+        daemonset: &DaemonSet,
+    ) -> Result<DaemonSet>;
+    async fn delete_daemonset(&self, namespace: &str, name: &str) -> Result<()>;
 }
 
 impl KubernetesClient {
@@ -252,6 +262,89 @@ impl KubernetesClient {
 
         sign_send_no_response(builder, &self.auth_config()).await
     }
+
+    /// Create a daemonset in the specified namespace
+    pub async fn create_daemonset(
+        &self,
+        namespace: &str,
+        daemonset: &DaemonSet,
+    ) -> Result<DaemonSet> {
+        let body = serde_json::to_string(daemonset)
+            .into_alien_error()
+            .context(ErrorData::SerializationError {
+                message: format!(
+                    "Failed to serialize DaemonSet '{}'",
+                    daemonset.metadata.name.as_deref().unwrap_or("unknown")
+                ),
+            })?;
+
+        let url = format!(
+            "{}/apis/apps/v1/namespaces/{}/daemonsets",
+            self.get_base_url(),
+            urlencoding::encode(namespace)
+        );
+        let builder = self
+            .client()
+            .request(Method::POST, &url)
+            .header("Content-Type", "application/json")
+            .body(body);
+
+        sign_send_json(builder, &self.auth_config()).await
+    }
+
+    /// Get a daemonset by name in the specified namespace
+    pub async fn get_daemonset(&self, namespace: &str, name: &str) -> Result<DaemonSet> {
+        let url = format!(
+            "{}/apis/apps/v1/namespaces/{}/daemonsets/{}",
+            self.get_base_url(),
+            urlencoding::encode(namespace),
+            urlencoding::encode(name)
+        );
+        let builder = self.client().request(Method::GET, &url);
+
+        sign_send_json(builder, &self.auth_config()).await
+    }
+
+    /// Update a daemonset in the specified namespace
+    pub async fn update_daemonset(
+        &self,
+        namespace: &str,
+        name: &str,
+        daemonset: &DaemonSet,
+    ) -> Result<DaemonSet> {
+        let body = serde_json::to_string(daemonset)
+            .into_alien_error()
+            .context(ErrorData::SerializationError {
+                message: format!("Failed to serialize DaemonSet '{}'", name),
+            })?;
+
+        let url = format!(
+            "{}/apis/apps/v1/namespaces/{}/daemonsets/{}",
+            self.get_base_url(),
+            urlencoding::encode(namespace),
+            urlencoding::encode(name)
+        );
+        let builder = self
+            .client()
+            .request(Method::PUT, &url)
+            .header("Content-Type", "application/json")
+            .body(body);
+
+        sign_send_json(builder, &self.auth_config()).await
+    }
+
+    /// Delete a daemonset in the specified namespace
+    pub async fn delete_daemonset(&self, namespace: &str, name: &str) -> Result<()> {
+        let url = format!(
+            "{}/apis/apps/v1/namespaces/{}/daemonsets/{}",
+            self.get_base_url(),
+            urlencoding::encode(namespace),
+            urlencoding::encode(name)
+        );
+        let builder = self.client().request(Method::DELETE, &url);
+
+        sign_send_no_response(builder, &self.auth_config()).await
+    }
 }
 
 #[async_trait]
@@ -314,5 +407,26 @@ impl DeploymentApi for KubernetesClient {
 
     async fn delete_statefulset(&self, namespace: &str, name: &str) -> Result<()> {
         self.delete_statefulset(namespace, name).await
+    }
+
+    async fn create_daemonset(&self, namespace: &str, daemonset: &DaemonSet) -> Result<DaemonSet> {
+        self.create_daemonset(namespace, daemonset).await
+    }
+
+    async fn get_daemonset(&self, namespace: &str, name: &str) -> Result<DaemonSet> {
+        self.get_daemonset(namespace, name).await
+    }
+
+    async fn update_daemonset(
+        &self,
+        namespace: &str,
+        name: &str,
+        daemonset: &DaemonSet,
+    ) -> Result<DaemonSet> {
+        self.update_daemonset(namespace, name, daemonset).await
+    }
+
+    async fn delete_daemonset(&self, namespace: &str, name: &str) -> Result<()> {
+        self.delete_daemonset(namespace, name).await
     }
 }

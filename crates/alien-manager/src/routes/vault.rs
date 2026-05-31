@@ -9,7 +9,7 @@
 
 use alien_bindings::{BindingsProvider, BindingsProviderApi};
 use alien_core::{bindings::VaultBinding, ManagementPermissions, Platform, Stack, StackState};
-use alien_error::{Context, IntoAlienError};
+use alien_error::{Context, ContextError, IntoAlienError};
 use axum::{
     extract::{Path, State},
     http::HeaderMap,
@@ -18,7 +18,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
-use tracing::info;
+use tracing::{error, info};
 
 use super::auth;
 use super::AppState;
@@ -220,12 +220,18 @@ async fn set_secret(
 
     let vault = load_vault_for_deployment(&state, &deployment, &vault_name).await?;
 
-    vault
-        .set_secret(&key, &body.value)
-        .await
-        .context(ErrorData::InternalError {
+    if let Err(err) = vault.set_secret(&key, &body.value).await {
+        error!(
+            error = %err,
+            deployment_id = %deployment_id,
+            vault_name = %vault_name,
+            key = %key,
+            "Failed to set vault secret"
+        );
+        return Err(err.context(ErrorData::InternalError {
             message: "Failed to set secret".to_string(),
-        })?;
+        }));
+    }
 
     info!(deployment_id = %deployment_id, vault_name = %vault_name, key = %key, "Vault secret set");
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -256,12 +262,21 @@ async fn get_secret(
 
     let vault = load_vault_for_deployment(&state, &deployment, &vault_name).await?;
 
-    let value = vault
-        .get_secret(&key)
-        .await
-        .context(ErrorData::InternalError {
-            message: "Failed to get secret".to_string(),
-        })?;
+    let value = match vault.get_secret(&key).await {
+        Ok(value) => value,
+        Err(err) => {
+            error!(
+                error = %err,
+                deployment_id = %deployment_id,
+                vault_name = %vault_name,
+                key = %key,
+                "Failed to get vault secret"
+            );
+            return Err(err.context(ErrorData::InternalError {
+                message: "Failed to get secret".to_string(),
+            }));
+        }
+    };
 
     Ok(Json(GetSecretResponse { value }))
 }

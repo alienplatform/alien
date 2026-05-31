@@ -81,7 +81,7 @@ mod tests {
         let mut profile = PermissionProfile::new();
         profile.0.insert(
             "*".to_string(),
-            vec![PermissionSetReference::from_name("function/execute")],
+            vec![PermissionSetReference::from_name("worker/execute")],
         );
 
         let mut profiles = IndexMap::new();
@@ -117,7 +117,7 @@ mod tests {
         let mut old_profile = PermissionProfile::new();
         old_profile.0.insert(
             "*".to_string(),
-            vec![PermissionSetReference::from_name("function/execute")],
+            vec![PermissionSetReference::from_name("worker/execute")],
         );
 
         let mut new_profile = PermissionProfile::new();
@@ -165,7 +165,7 @@ mod tests {
         let mut new_profile = PermissionProfile::new();
         new_profile.0.insert(
             "*".to_string(),
-            vec![PermissionSetReference::from_name("function/execute")],
+            vec![PermissionSetReference::from_name("worker/execute")],
         );
 
         let mut new_profiles = IndexMap::new();

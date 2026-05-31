@@ -9,7 +9,8 @@ import * as z from "zod";
  * @description GCP Network ImportData — VPC + subnetwork + Cloud NAT topology.
  */
 export const GcpNetworkImportDataSchema = z.object({
-    "isByoVpc": z.boolean().describe("True when the VPC is owned outside this stack."),
+    "cidrBlock": z.string().describe("Primary subnetwork CIDR block used for internal firewall rules.").nullish(),
+"isByoVpc": z.boolean().describe("True when the VPC is owned outside this stack."),
 "natName": z.string().describe("Cloud NAT name (when created).").nullish(),
 "projectId": z.string().describe("Project ID owning the network."),
 "routerSelfLink": z.string().describe("Cloud Router self-link backing Cloud NAT (when created).").nullish(),

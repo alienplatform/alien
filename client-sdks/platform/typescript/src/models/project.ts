@@ -6,6 +6,18 @@ import * as z from "zod/v4";
 import { safeParse } from "../lib/schemas.js";
 import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
+import {
+  DeploymentPortalAccentColor,
+  DeploymentPortalAccentColor$inboundSchema,
+} from "./deploymentportalaccentcolor.js";
+import {
+  DeploymentPortalAppearancePreset,
+  DeploymentPortalAppearancePreset$inboundSchema,
+} from "./deploymentportalappearancepreset.js";
+import {
+  DeploymentPortalDensity,
+  DeploymentPortalDensity$inboundSchema,
+} from "./deploymentportaldensity.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 /**
@@ -20,7 +32,7 @@ export const ProjectTypeGithub = {
 export type ProjectTypeGithub = ClosedEnum<typeof ProjectTypeGithub>;
 
 /**
- * The Git Repository that will be connected to the project. When this is defined, any pushes to the specified connected Git Repository will be automatically deployed
+ * Verified source repository connected to the project. Alien uses this for GitHub Actions setup and source-aware features; releases are still created explicitly by CI or `alien release`.
  */
 export type ProjectGitRepository = {
   /**
@@ -34,65 +46,41 @@ export type ProjectGitRepository = {
 };
 
 /**
- * Type of animated background to display on the deployment page.
+ * Customer-facing deployment portal appearance settings.
  */
-export const ProjectDeploymentPageBackgroundType = {
-  GradientMesh: "gradient-mesh",
-  FloatingOrbs: "floating-orbs",
-  FlickeringGrid: "flickering-grid",
-  BubbleGlow: "bubble-glow",
-  ParticleField: "particle-field",
-} as const;
-/**
- * Type of animated background to display on the deployment page.
- */
-export type ProjectDeploymentPageBackgroundType = ClosedEnum<
-  typeof ProjectDeploymentPageBackgroundType
->;
-
-/**
- * Color mode for the background animation.
- */
-export const ProjectMode = {
-  Dark: "dark",
-  Light: "light",
-} as const;
-/**
- * Color mode for the background animation.
- */
-export type ProjectMode = ClosedEnum<typeof ProjectMode>;
-
-/**
- * Color scheme for the background animation.
- */
-export const ProjectColorScheme = {
-  Blue: "blue",
-  Purple: "purple",
-  Green: "green",
-  Orange: "orange",
-  Pink: "pink",
-} as const;
-/**
- * Color scheme for the background animation.
- */
-export type ProjectColorScheme = ClosedEnum<typeof ProjectColorScheme>;
-
-/**
- * Customization settings for the deployment page background animation.
- */
-export type ProjectDeploymentPageBackground = {
+export type ProjectDeploymentPortalAppearance = {
   /**
-   * Type of animated background to display on the deployment page.
+   * Optional project-specific avatar override for the deployment portal.
    */
-  type: ProjectDeploymentPageBackgroundType;
+  avatarUrl?: string | null | undefined;
   /**
-   * Color mode for the background animation.
+   * Curated visual style for the deployment portal.
    */
-  mode: ProjectMode;
+  preset: DeploymentPortalAppearancePreset;
   /**
-   * Color scheme for the background animation.
+   * Accent color used for highlights and primary actions.
    */
-  colorScheme: ProjectColorScheme;
+  accentColor: DeploymentPortalAccentColor;
+  /**
+   * Optional portal title. Defaults to the project name.
+   */
+  title?: string | null | undefined;
+  /**
+   * Optional customer-facing subtitle.
+   */
+  subtitle?: string | null | undefined;
+  /**
+   * Optional support or contact URL.
+   */
+  supportUrl?: string | null | undefined;
+  /**
+   * Optional documentation URL.
+   */
+  docsUrl?: string | null | undefined;
+  /**
+   * Layout density for portal content.
+   */
+  density: DeploymentPortalDensity;
 };
 
 /**
@@ -121,6 +109,10 @@ export type ProjectCloudformation = {
    * Whether CloudFormation package generation is enabled
    */
   enabled: boolean;
+  /**
+   * Human-friendly application name shown in generated install artifacts
+   */
+  displayName?: string | null | undefined;
 };
 
 /**
@@ -167,6 +159,10 @@ export type ProjectTerraform = {
    * Whether Terraform package generation is enabled
    */
   enabled: boolean;
+  /**
+   * Human-friendly application name shown in generated install artifacts
+   */
+  displayName?: string | null | undefined;
 };
 
 /**
@@ -195,6 +191,32 @@ export type ProjectPackagesConfig = {
   terraform?: ProjectTerraform | null | undefined;
 };
 
+/**
+ * Project default private managers for new push deployments.
+ */
+export type ProjectDefaultManagers = {
+  /**
+   * Unique identifier for a default private manager.
+   */
+  aws?: string | null | undefined;
+  /**
+   * Unique identifier for a default private manager.
+   */
+  gcp?: string | null | undefined;
+  /**
+   * Unique identifier for a default private manager.
+   */
+  azure?: string | null | undefined;
+  /**
+   * Unique identifier for a default private manager.
+   */
+  kubernetes?: string | null | undefined;
+  /**
+   * Unique identifier for a default private manager.
+   */
+  local?: string | null | undefined;
+};
+
 export type Project = {
   /**
    * Unique identifier for the project.
@@ -205,7 +227,7 @@ export type Project = {
    */
   name: string;
   /**
-   * The Git Repository that will be connected to the project. When this is defined, any pushes to the specified connected Git Repository will be automatically deployed
+   * Verified source repository connected to the project. Alien uses this for GitHub Actions setup and source-aware features; releases are still created explicitly by CI or `alien release`.
    */
   gitRepository?: ProjectGitRepository | null | undefined;
   /**
@@ -213,13 +235,12 @@ export type Project = {
    */
   rootDirectory?: string | null | undefined;
   /**
-   * Customization settings for the deployment page background animation.
+   * Customer-facing deployment portal appearance settings.
    */
-  deploymentPageBackground?: ProjectDeploymentPageBackground | null | undefined;
-  /**
-   * Custom logo URL to show on the deployment page.
-   */
-  deploymentPageLogoUrl?: string | null | undefined;
+  deploymentPortalAppearance?:
+    | ProjectDeploymentPortalAppearance
+    | null
+    | undefined;
   /**
    * Configuration for embedded packages (CLI, CloudFormation, Helm, Terraform)
    */
@@ -228,6 +249,10 @@ export type Project = {
    * Selected domain for this project (null = default system domain)
    */
   domainId?: string | null | undefined;
+  /**
+   * Project default private managers for new push deployments.
+   */
+  defaultManagers?: ProjectDefaultManagers | null | undefined;
   createdAt: Date;
   /**
    * Unique identifier for the workspace.
@@ -260,37 +285,27 @@ export function projectGitRepositoryFromJSON(
 }
 
 /** @internal */
-export const ProjectDeploymentPageBackgroundType$inboundSchema: z.ZodEnum<
-  typeof ProjectDeploymentPageBackgroundType
-> = z.enum(ProjectDeploymentPageBackgroundType);
-
-/** @internal */
-export const ProjectMode$inboundSchema: z.ZodEnum<typeof ProjectMode> = z.enum(
-  ProjectMode,
-);
-
-/** @internal */
-export const ProjectColorScheme$inboundSchema: z.ZodEnum<
-  typeof ProjectColorScheme
-> = z.enum(ProjectColorScheme);
-
-/** @internal */
-export const ProjectDeploymentPageBackground$inboundSchema: z.ZodType<
-  ProjectDeploymentPageBackground,
+export const ProjectDeploymentPortalAppearance$inboundSchema: z.ZodType<
+  ProjectDeploymentPortalAppearance,
   unknown
 > = z.object({
-  type: ProjectDeploymentPageBackgroundType$inboundSchema,
-  mode: ProjectMode$inboundSchema,
-  colorScheme: ProjectColorScheme$inboundSchema,
+  avatarUrl: z.nullable(z.string()).optional(),
+  preset: DeploymentPortalAppearancePreset$inboundSchema.default("clean"),
+  accentColor: DeploymentPortalAccentColor$inboundSchema.default("blue"),
+  title: z.nullable(z.string()).optional(),
+  subtitle: z.nullable(z.string()).optional(),
+  supportUrl: z.nullable(z.string()).optional(),
+  docsUrl: z.nullable(z.string()).optional(),
+  density: DeploymentPortalDensity$inboundSchema.default("comfortable"),
 });
 
-export function projectDeploymentPageBackgroundFromJSON(
+export function projectDeploymentPortalAppearanceFromJSON(
   jsonString: string,
-): SafeParseResult<ProjectDeploymentPageBackground, SDKValidationError> {
+): SafeParseResult<ProjectDeploymentPortalAppearance, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => ProjectDeploymentPageBackground$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ProjectDeploymentPageBackground' from JSON`,
+    (x) => ProjectDeploymentPortalAppearance$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectDeploymentPortalAppearance' from JSON`,
   );
 }
 
@@ -318,6 +333,7 @@ export const ProjectCloudformation$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   enabled: z.boolean(),
+  displayName: z.nullable(z.string()).optional(),
 });
 
 export function projectCloudformationFromJSON(
@@ -374,6 +390,7 @@ export const ProjectTerraform$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   enabled: z.boolean(),
+  displayName: z.nullable(z.string()).optional(),
 });
 
 export function projectTerraformFromJSON(
@@ -412,19 +429,43 @@ export function projectPackagesConfigFromJSON(
 }
 
 /** @internal */
+export const ProjectDefaultManagers$inboundSchema: z.ZodType<
+  ProjectDefaultManagers,
+  unknown
+> = z.object({
+  aws: z.nullable(z.string()).optional(),
+  gcp: z.nullable(z.string()).optional(),
+  azure: z.nullable(z.string()).optional(),
+  kubernetes: z.nullable(z.string()).optional(),
+  local: z.nullable(z.string()).optional(),
+});
+
+export function projectDefaultManagersFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectDefaultManagers, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProjectDefaultManagers$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectDefaultManagers' from JSON`,
+  );
+}
+
+/** @internal */
 export const Project$inboundSchema: z.ZodType<Project, unknown> = z.object({
   id: z.string(),
   name: z.string(),
   gitRepository: z.nullable(z.lazy(() => ProjectGitRepository$inboundSchema))
     .optional(),
   rootDirectory: z.nullable(z.string()).optional(),
-  deploymentPageBackground: z.nullable(
-    z.lazy(() => ProjectDeploymentPageBackground$inboundSchema),
+  deploymentPortalAppearance: z.nullable(
+    z.lazy(() => ProjectDeploymentPortalAppearance$inboundSchema),
   ).optional(),
-  deploymentPageLogoUrl: z.nullable(z.string()).optional(),
   packagesConfig: z.nullable(z.lazy(() => ProjectPackagesConfig$inboundSchema))
     .optional(),
   domainId: z.nullable(z.string()).optional(),
+  defaultManagers: z.nullable(
+    z.lazy(() => ProjectDefaultManagers$inboundSchema),
+  ).optional(),
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   workspaceId: z.string(),
 });

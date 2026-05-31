@@ -5,6 +5,8 @@
   "platforms": {
     "aws": [
       {
+        "label": "write-ssm-parameters",
+        "description": "Create, update, and delete application-owned SSM Parameter Store values.",
         "grant": {
           "actions": ["ssm:PutParameter", "ssm:DeleteParameter"]
         },
@@ -13,36 +15,47 @@
             "resources": ["arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-*"]
           },
           "resource": {
-            "resources": [
-              "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${resourceName}-*"
-            ]
+            "resources": ["arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${resourceName}-*"]
           }
         }
       }
     ],
     "gcp": [
       {
+        "label": "create-secret-manager-secrets",
+        "description": "Create application-owned Secret Manager secrets.",
         "grant": {
-          "permissions": [
-            "secretmanager.secrets.get",
-            "secretmanager.secrets.create",
-            "secretmanager.versions.add",
-            "secretmanager.secrets.delete"
-          ]
+          "permissions": ["secretmanager.secrets.create"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
+      },
+      {
+        "label": "write-secret-manager-values",
+        "description": "Add values to application-owned Secret Manager secrets and delete those secrets during cleanup.",
+        "grant": {
+          "predefinedRoles": ["roles/secretmanager.secretVersionAdder"],
+          "residualPermissions": ["secretmanager.secrets.get", "secretmanager.secrets.delete"]
         },
         "binding": {
           "stack": {
             "scope": "projects/${projectName}",
             "condition": {
               "title": "StackVaultSecrets",
-              "expression": "resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-\")"
+              "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-\")"
             }
           },
           "resource": {
             "scope": "projects/${projectName}",
             "condition": {
               "title": "ResourceVaultSecrets",
-              "expression": "resource.name.startsWith(\"projects/${projectNumber}/secrets/${resourceName}-\")"
+              "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${projectNumber}/secrets/${resourceName}-\")"
             }
           }
         }
@@ -50,6 +63,8 @@
     ],
     "azure": [
       {
+        "label": "write-key-vault-secrets",
+        "description": "Create, update, and delete application-owned Azure Key Vault secrets.",
         "grant": {
           "dataActions": [
             "Microsoft.KeyVault/vaults/secrets/setSecret/action",

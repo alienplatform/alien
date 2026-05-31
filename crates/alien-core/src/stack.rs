@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct ResourceEntry {
     /// Resource configuration (can be any type of resource)
     pub config: Resource,
@@ -25,7 +25,7 @@ pub struct ResourceEntry {
 /// A bag of resources, unaware of any cloud.
 #[derive(Builder, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 #[builder(start_fn = new)]
 pub struct Stack {
     /// Unique identifier for the stack
@@ -197,7 +197,7 @@ impl StackBuilder {
     /// // Override auto-derived permissions entirely
     /// Stack::new("my-stack".to_string())
     ///     .management(ManagementPermissions::override_(
-    ///         PermissionProfile::new().global(["storage/heartbeat", "function/provision"])
+    ///         PermissionProfile::new().global(["storage/heartbeat", "worker/provision"])
     ///     ))
     ///     .build();
     /// ```
@@ -235,19 +235,19 @@ impl From<&Stack> for StackRef {
 mod tests {
     use super::*;
     use crate::resource::ResourceLifecycle;
-    use crate::{Function, PermissionSetReference, Storage};
+    use crate::{PermissionSetReference, Storage, Worker};
     use insta::assert_json_snapshot;
 
     #[test]
     fn test_stack_serialization() {
-        use crate::FunctionCode;
+        use crate::WorkerCode;
 
         let storage = Storage::new("my-bucket".to_string())
             .public_read(true)
             .build();
 
-        let function = Function::new("my-function".to_string())
-            .code(FunctionCode::Image {
+        let worker = Worker::new("my-worker".to_string())
+            .code(WorkerCode::Image {
                 image: "rust:latest".to_string(),
             })
             .permissions("execution".to_string())
@@ -268,7 +268,7 @@ mod tests {
 
         let stack_builder = Stack::new("test-stack".to_string())
             .add(storage, ResourceLifecycle::Frozen)
-            .add(function.clone(), ResourceLifecycle::Live);
+            .add(worker.clone(), ResourceLifecycle::Live);
 
         let stack = stack_builder
             .permissions(PermissionsConfig {

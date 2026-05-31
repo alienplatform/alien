@@ -67,6 +67,6 @@ impl TfEmitter for AzureServiceBusNamespaceEmitter {
 /// a trailing hyphen or a reserved suffix.
 fn namespace_name_expr() -> Expression {
     expr::raw(
-        "format(\"%s-bus-%s\", trim(substr(lower(\"a-${var.stack_name}\"), 0, 37), \"-\"), substr(sha1(var.stack_name), 0, 8))",
+        "format(\"%s-bus-%s\", trim(substr(lower(\"a-${local.resource_prefix}\"), 0, 37), \"-\"), substr(sha1(local.resource_prefix), 0, 8))",
     )
 }

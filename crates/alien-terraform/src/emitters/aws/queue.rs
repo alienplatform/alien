@@ -3,10 +3,10 @@
 use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
-    emitters::aws::helpers::{downcast, required_label, stack_name_template, tags},
+    emitters::aws::helpers::{downcast, required_label, resource_prefix_template, tags},
     expr,
 };
-use alien_core::{import::EmitContext, Function, FunctionTrigger, Queue, Result};
+use alien_core::{import::EmitContext, Queue, Result, Worker, WorkerTrigger};
 use hcl::expr::Expression;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -21,7 +21,7 @@ impl TfEmitter for AwsQueueEmitter {
             "aws_sqs_queue",
             label,
             [
-                attr("name", stack_name_template(queue.id())),
+                attr("name", resource_prefix_template(queue.id())),
                 attr("sqs_managed_sse_enabled", Expression::Bool(true)),
                 attr(
                     "visibility_timeout_seconds",
@@ -62,13 +62,13 @@ impl TfEmitter for AwsQueueEmitter {
 fn visibility_timeout(ctx: &EmitContext<'_>) -> u32 {
     let mut max_function_timeout = 0u32;
     for (_id, entry) in ctx.stack.resources() {
-        let Some(function) = entry.config.downcast_ref::<Function>() else {
+        let Some(function) = entry.config.downcast_ref::<Worker>() else {
             continue;
         };
         if function.triggers.iter().any(|trigger| {
             matches!(
                 trigger,
-                FunctionTrigger::Queue { queue }
+                WorkerTrigger::Queue { queue }
                     if queue.resource_type == Queue::RESOURCE_TYPE && queue.id == ctx.resource_id
             )
         }) {

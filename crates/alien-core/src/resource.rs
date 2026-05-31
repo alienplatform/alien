@@ -60,7 +60,7 @@ impl PartialSchema for ResourceType {
                 .schema_type(Type::String)
                 .description(Some("Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior."))
                 .examples([
-                    "function",
+                    "worker",
                     "storage",
                     "queue",
                     "redis",
@@ -97,7 +97,7 @@ pub trait ResourceDefinition: Debug + Send + Sync + 'static {
     /// `{profile}-sa` service account as a declared dependency so the executor
     /// enforces ordering and propagates SA changes automatically.
     ///
-    /// Override in concrete types that carry a `permissions` field (Container, Function).
+    /// Override in concrete types that carry a `permissions` field (Container, Worker).
     fn get_permissions(&self) -> Option<&str> {
         None
     }
@@ -174,16 +174,24 @@ impl<'de> Deserialize<'de> for Resource {
                 serde_json::from_value::<crate::resources::Vault>(value)
                     .map_err(serde::de::Error::custom)?,
             ),
-            "function" => Box::new(
-                serde_json::from_value::<crate::resources::Function>(value)
+            "worker" => Box::new(
+                serde_json::from_value::<crate::resources::Worker>(value)
+                    .map_err(serde::de::Error::custom)?,
+            ),
+            "daemon" => Box::new(
+                serde_json::from_value::<crate::resources::Daemon>(value)
                     .map_err(serde::de::Error::custom)?,
             ),
             "container" => Box::new(
                 serde_json::from_value::<crate::resources::Container>(value)
                     .map_err(serde::de::Error::custom)?,
             ),
-            "container-cluster" => Box::new(
-                serde_json::from_value::<crate::resources::ContainerCluster>(value)
+            "compute-cluster" => Box::new(
+                serde_json::from_value::<crate::resources::ComputeCluster>(value)
+                    .map_err(serde::de::Error::custom)?,
+            ),
+            "kubernetes-cluster" => Box::new(
+                serde_json::from_value::<crate::resources::KubernetesCluster>(value)
                     .map_err(serde::de::Error::custom)?,
             ),
             "storage" => Box::new(
@@ -243,9 +251,11 @@ impl<'de> Deserialize<'de> for Resource {
                     other,
                     &[
                         "vault",
-                        "function",
+                        "worker",
+                        "daemon",
                         "container",
-                        "container-cluster",
+                        "compute-cluster",
+                        "kubernetes-cluster",
                         "storage",
                         "queue",
                         "kv",
@@ -339,14 +349,14 @@ impl Eq for Resource {}
 /// additional properties that vary depending on the concrete resource implementation.
 ///
 /// # Schema Structure
-/// - `type` (required): The resource type identifier (e.g., "function", "storage", "queue")
+/// - `type` (required): The resource type identifier (e.g., "worker", "storage", "queue")
 /// - `id` (required): The unique identifier for this specific resource instance
-/// - Additional properties: Type-specific fields that vary by resource type (e.g., Function has `code`, `memory_mb`, etc.)
+/// - Additional properties: Type-specific fields that vary by resource type (e.g., Worker has `code`, `memory_mb`, etc.)
 ///
 /// # Example JSON
 /// ```json
 /// {
-///   "type": "function",
+///   "type": "worker",
 ///   "id": "my-function",
 ///   "code": { "type": "image", "image": "my-image:latest" },
 ///   "memoryMb": 512,
@@ -500,16 +510,20 @@ impl<'de> Deserialize<'de> for ResourceOutputs {
                 serde_json::from_value::<crate::resources::VaultOutputs>(value)
                     .map_err(serde::de::Error::custom)?,
             ),
-            "function" => Box::new(
-                serde_json::from_value::<crate::resources::FunctionOutputs>(value)
+            "worker" => Box::new(
+                serde_json::from_value::<crate::resources::WorkerOutputs>(value)
+                    .map_err(serde::de::Error::custom)?,
+            ),
+            "daemon" => Box::new(
+                serde_json::from_value::<crate::resources::DaemonOutputs>(value)
                     .map_err(serde::de::Error::custom)?,
             ),
             "container" => Box::new(
                 serde_json::from_value::<crate::resources::ContainerOutputs>(value)
                     .map_err(serde::de::Error::custom)?,
             ),
-            "container-cluster" => Box::new(
-                serde_json::from_value::<crate::resources::ContainerClusterOutputs>(value)
+            "compute-cluster" => Box::new(
+                serde_json::from_value::<crate::resources::ComputeClusterOutputs>(value)
                     .map_err(serde::de::Error::custom)?,
             ),
             "storage" => Box::new(
@@ -548,6 +562,10 @@ impl<'de> Deserialize<'de> for ResourceOutputs {
                 serde_json::from_value::<crate::resources::RemoteStackManagementOutputs>(value)
                     .map_err(serde::de::Error::custom)?,
             ),
+            "kubernetes-cluster" => Box::new(
+                serde_json::from_value::<crate::resources::KubernetesClusterOutputs>(value)
+                    .map_err(serde::de::Error::custom)?,
+            ),
             "azure_resource_group" => Box::new(
                 serde_json::from_value::<crate::resources::AzureResourceGroupOutputs>(value)
                     .map_err(serde::de::Error::custom)?,
@@ -571,9 +589,10 @@ impl<'de> Deserialize<'de> for ResourceOutputs {
                     other,
                     &[
                         "vault",
-                        "function",
+                        "worker",
+                        "daemon",
                         "container",
-                        "container-cluster",
+                        "compute-cluster",
                         "storage",
                         "queue",
                         "kv",
@@ -583,6 +602,7 @@ impl<'de> Deserialize<'de> for ResourceOutputs {
                         "artifact-registry",
                         "service_activation",
                         "remote-stack-management",
+                        "kubernetes-cluster",
                         "azure_resource_group",
                         "azure_storage_account",
                         "azure_container_apps_environment",
@@ -630,13 +650,13 @@ impl Eq for ResourceOutputs {}
 /// additional properties that vary depending on the concrete resource implementation.
 ///
 /// # Schema Structure
-/// - `type` (required): The resource type identifier (e.g., "function", "storage", "queue")
+/// - `type` (required): The resource type identifier (e.g., "worker", "storage", "queue")
 /// - Additional properties: Type-specific output fields that vary by resource type
 ///
 /// # Example JSON
 /// ```json
 /// {
-///   "type": "function",
+///   "type": "worker",
 ///   "functionArn": "arn:aws:lambda:us-east-1:123456789012:function:my-function",
 ///   "functionUrl": "https://abc123.lambda-url.us-east-1.on.aws/"
 /// }

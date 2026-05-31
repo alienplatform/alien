@@ -3,16 +3,14 @@
 //! This module provides unified functionality for resource controllers to apply
 //! resource-scoped permissions on AWS, GCP, and Azure platforms.
 
-use std::collections::HashMap;
-
 use crate::core::{azure_permissions_helper::AzurePermissionsHelper, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
 use alien_azure_clients::authorization::Scope;
 use alien_client_core::ErrorData as CloudClientErrorData;
-use alien_core::permissions::PermissionSetReference;
+use alien_core::permissions::{PermissionProfile, PermissionSetReference};
 use alien_core::PermissionSet;
-use alien_core::RemoteStackManagement;
-use alien_error::{AlienError, Context, ContextError as _, IntoAlienError};
+use alien_core::{KubernetesCluster, RemoteStackManagement};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_gcp_clients::iam::{Binding, IamPolicy};
 use alien_permissions::{generators::*, BindingTarget, PermissionContext};
 
@@ -22,6 +20,118 @@ use tracing::{info, warn};
 pub struct ResourcePermissionsHelper;
 
 impl ResourcePermissionsHelper {
+    pub fn kubernetes_cluster_name_for_permissions(
+        resource_prefix: &str,
+        cluster: &KubernetesCluster,
+    ) -> String {
+        cluster
+            .cloud
+            .as_ref()
+            .and_then(|cloud| cloud.cluster_name.clone())
+            .unwrap_or_else(|| format!("{resource_prefix}-k8s"))
+    }
+
+    pub fn aws_kubernetes_cluster_permission_context(
+        ctx: &ResourceControllerContext<'_>,
+        cluster: &KubernetesCluster,
+    ) -> Result<PermissionContext> {
+        let aws_config = ctx.get_aws_config()?;
+        let cluster_name =
+            Self::kubernetes_cluster_name_for_permissions(ctx.resource_prefix, cluster);
+        let aws_account_id = cluster
+            .cloud
+            .as_ref()
+            .and_then(|cloud| cloud.account_id.clone())
+            .unwrap_or_else(|| aws_config.account_id.clone());
+        let aws_region = cluster
+            .cloud
+            .as_ref()
+            .and_then(|cloud| cloud.region.clone())
+            .unwrap_or_else(|| aws_config.region.clone());
+
+        Ok(PermissionContext::new()
+            .with_aws_account_id(aws_account_id)
+            .with_aws_region(aws_region)
+            .with_stack_prefix(ctx.resource_prefix.to_string())
+            .with_resource_name(cluster_name))
+    }
+
+    pub fn gcp_kubernetes_cluster_permission_context(
+        ctx: &ResourceControllerContext<'_>,
+        cluster: &KubernetesCluster,
+        service_account_name: Option<&str>,
+    ) -> Result<PermissionContext> {
+        let gcp_config = ctx.get_gcp_config()?;
+        let project_id = cluster
+            .cloud
+            .as_ref()
+            .and_then(|cloud| cloud.project_id.clone())
+            .unwrap_or_else(|| gcp_config.project_id.clone());
+        let region = cluster
+            .cloud
+            .as_ref()
+            .and_then(|cloud| cloud.region.clone())
+            .unwrap_or_else(|| gcp_config.region.clone());
+
+        let mut permission_context = PermissionContext::new()
+            .with_stack_prefix(ctx.resource_prefix.to_string())
+            .with_project_name(project_id)
+            .with_region(region)
+            .with_resource_name(Self::kubernetes_cluster_name_for_permissions(
+                ctx.resource_prefix,
+                cluster,
+            ));
+        if let Some(project_number) = &gcp_config.project_number {
+            permission_context = permission_context.with_project_number(project_number.clone());
+        }
+        if let Some(service_account_name) = service_account_name {
+            permission_context =
+                permission_context.with_service_account_name(service_account_name.to_string());
+        }
+        if let Some(deployment_name) = ctx.deployment_name_for_metadata() {
+            permission_context =
+                permission_context.with_deployment_name(deployment_name.to_string());
+        }
+
+        Ok(permission_context)
+    }
+
+    pub fn azure_kubernetes_cluster_permission_context(
+        ctx: &ResourceControllerContext<'_>,
+        cluster: &KubernetesCluster,
+    ) -> Result<PermissionContext> {
+        let azure_config = ctx.get_azure_config()?;
+        let stack_resource_group =
+            crate::infra_requirements::azure_utils::get_resource_group_name(ctx.state)?;
+        let resource_group = cluster
+            .cloud
+            .as_ref()
+            .and_then(|cloud| cloud.resource_group.clone())
+            .unwrap_or_else(|| stack_resource_group.clone());
+        let subscription_id = cluster
+            .cloud
+            .as_ref()
+            .and_then(|cloud| cloud.subscription_id.clone())
+            .unwrap_or_else(|| azure_config.subscription_id.clone());
+
+        let mut permission_context = PermissionContext::new()
+            .with_subscription_id(subscription_id.clone())
+            .with_resource_group(resource_group)
+            .with_stack_prefix(ctx.resource_prefix.to_string())
+            .with_resource_name(Self::kubernetes_cluster_name_for_permissions(
+                ctx.resource_prefix,
+                cluster,
+            ))
+            .with_managing_subscription_id(azure_config.subscription_id.clone())
+            .with_managing_resource_group(stack_resource_group);
+        if let Some(deployment_name) = ctx.deployment_name_for_metadata() {
+            permission_context =
+                permission_context.with_deployment_name(deployment_name.to_string());
+        }
+
+        Ok(permission_context)
+    }
+
     /// Apply resource-scoped permissions for Azure resources
     ///
     /// # Arguments
@@ -90,264 +200,70 @@ impl ResourcePermissionsHelper {
         )
         .await?;
 
-        // Apply consolidated IAM policy if we have any bindings
-        if !all_bindings.is_empty() {
-            let iam_policy = IamPolicy {
-                version: Some(3),
-                bindings: all_bindings,
-                etag: None,
-                kind: None,
-                resource_id: None,
-            };
+        let iam_policy = IamPolicy {
+            version: Some(3),
+            bindings: all_bindings,
+            etag: None,
+            kind: None,
+            resource_id: None,
+        };
 
-            info!(
-                resource_name = %resource_name,
-                resource_type = %resource_type,
-                bindings_count = iam_policy.bindings.len(),
-                "Applying consolidated GCP IAM policy"
-            );
+        info!(
+            resource_name = %resource_name,
+            resource_type = %resource_type,
+            bindings_count = iam_policy.bindings.len(),
+            "Reconciling consolidated GCP IAM policy"
+        );
 
-            apply_policy(iam_resource, iam_policy).await?;
-        }
+        apply_policy(iam_resource, iam_policy).await?;
 
         Ok(())
     }
 
-    /// Idempotently create or update a single GCP custom role from a permission set.
+    /// Setup-only: idempotently create or update GCP custom roles from a permission set.
     ///
-    /// If the role already exists (conflict), it is updated to match the current
-    /// permission set definition. Errors from `generate_custom_role` are propagated
-    /// — if a permission set is expected to produce a GCP custom role but can't
-    /// (e.g., missing GCP platform definition), this is a real error that must surface.
+    /// Live resource reconciliation must bind principals to roles created by
+    /// setup and must not call this helper to repair missing role definitions.
     pub async fn ensure_single_gcp_custom_role(
         ctx: &ResourceControllerContext<'_>,
         permission_set: &PermissionSet,
         permission_context: &PermissionContext,
     ) -> Result<()> {
         let generator = GcpRuntimePermissionsGenerator::new();
-
-        let custom_role = generator
-            .generate_custom_role(permission_set, permission_context)
+        let custom_roles = generator
+            .generate_custom_roles(permission_set, permission_context)
             .context(ErrorData::InfrastructureError {
                 message: format!(
-                    "Failed to generate GCP custom role for permission set '{}'",
-                    permission_set.id,
+                    "Failed to generate GCP custom roles for permission set '{}'",
+                    permission_set.id
                 ),
                 operation: Some("ensure_single_gcp_custom_role".to_string()),
                 resource_id: Some(permission_set.id.clone()),
             })?;
 
+        Self::ensure_gcp_custom_roles(ctx, &permission_set.id, custom_roles).await
+    }
+
+    /// Setup-only: idempotently create or update the selected GCP custom roles.
+    ///
+    /// Terraform/CloudFormation/CLI setup owns role definitions. Runtime
+    /// resource controllers should fail if a required role is missing.
+    pub async fn ensure_gcp_custom_roles(
+        ctx: &ResourceControllerContext<'_>,
+        permission_set_id: &str,
+        custom_roles: Vec<GcpCustomRole>,
+    ) -> Result<()> {
         let gcp_config = ctx.get_gcp_config()?;
         let iam_client = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
 
-        let role_id = custom_role
-            .name
-            .strip_prefix(&format!("projects/{}/roles/", gcp_config.project_id))
-            .unwrap_or(&custom_role.name)
-            .to_string();
-
-        info!(
-            role_id = %role_id,
-            permission_set = %permission_set.id,
-            permissions_count = custom_role.included_permissions.len(),
-            "Ensuring GCP custom role exists"
-        );
-
-        let role_request = alien_gcp_clients::iam::CreateRoleRequest::builder()
-            .role(
-                alien_gcp_clients::iam::Role::builder()
-                    .title(custom_role.title.clone())
-                    .description(custom_role.description.clone())
-                    .included_permissions(custom_role.included_permissions.clone())
-                    .stage(alien_gcp_clients::iam::RoleLaunchStage::Ga)
-                    .build(),
-            )
-            .build();
-
-        let updated_role = alien_gcp_clients::iam::Role::builder()
-            .title(custom_role.title.clone())
-            .description(custom_role.description.clone())
-            .included_permissions(custom_role.included_permissions.clone())
-            .stage(alien_gcp_clients::iam::RoleLaunchStage::Ga)
-            .build();
-
-        match iam_client.get_role(custom_role.name.clone()).await {
-            Ok(_) => {
-                info!(
-                    role_id = %role_id,
-                    "GCP custom role already exists, updating permissions"
-                );
-                iam_client
-                    .patch_role(
-                        custom_role.name.clone(),
-                        updated_role,
-                        Some("includedPermissions,title,description,stage".to_string()),
-                    )
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!("Failed to update existing custom role '{}'", role_id),
-                        resource_id: Some(permission_set.id.clone()),
-                    })?;
-            }
-            Err(e)
-                if matches!(
-                    e.error,
-                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                ) =>
-            {
-                iam_client
-                    .create_role(role_id.clone(), role_request)
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!("Failed to create custom role '{}'", role_id),
-                        resource_id: Some(permission_set.id.clone()),
-                    })?;
-                info!(role_id = %role_id, "GCP custom role created");
-            }
-            Err(e) => {
-                return Err(e.context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to check existence of custom role '{}'", role_id),
-                    resource_id: Some(permission_set.id.clone()),
-                }));
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Ensure GCP custom roles exist for a set of stack-level permission sets.
-    ///
-    /// Used by service account and remote stack management controllers to create
-    /// the per-permission-set roles that `generate_bindings(BindingTarget::Stack)`
-    /// references in its output bindings.
-    pub async fn ensure_gcp_stack_custom_roles(
-        ctx: &ResourceControllerContext<'_>,
-        permission_sets: &[PermissionSet],
-    ) -> Result<()> {
-        if permission_sets.is_empty() {
-            return Ok(());
-        }
-
-        let gcp_config = ctx.get_gcp_config()?;
-        let mut permission_context = PermissionContext::new()
-            .with_project_name(gcp_config.project_id.clone())
-            .with_region(gcp_config.region.clone())
-            .with_stack_prefix(ctx.resource_prefix.to_string());
-        if let Some(ref project_number) = gcp_config.project_number {
-            permission_context = permission_context.with_project_number(project_number.clone());
-        }
-
-        for permission_set in permission_sets {
-            Self::ensure_single_gcp_custom_role(ctx, permission_set, &permission_context).await?;
-        }
-
-        Ok(())
-    }
-
-    /// Ensure all GCP custom roles required for resource-scoped permissions exist.
-    ///
-    /// `generate_bindings(BindingTarget::Resource)` produces IAM bindings that reference
-    /// per-permission-set custom roles (e.g. `projects/{project}/roles/storageDataRead`).
-    /// These roles must exist in the GCP project before the bindings can be applied.
-    /// This method creates them idempotently — if a role already exists it is updated
-    /// to match the current permission set definition.
-    pub async fn ensure_gcp_resource_custom_roles(
-        ctx: &ResourceControllerContext<'_>,
-        resource_id: &str,
-        resource_name: &str,
-        resource_type: &str,
-    ) -> Result<()> {
-        let permission_context = Self::build_gcp_permission_context(ctx, resource_name)?;
-        let generator = GcpRuntimePermissionsGenerator::new();
-
-        // Collect all unique permission sets referenced for this resource across all profiles
-        let mut unique_permission_sets: HashMap<String, PermissionSet> = HashMap::new();
-
-        let type_prefix = format!("{}/", resource_type);
-
-        for (_profile_name, profile) in &ctx.desired_stack.permissions.profiles {
-            // Process resource-specific permissions
-            if let Some(permission_set_refs) = profile.0.get(resource_id) {
-                Self::collect_unique_permission_sets(
-                    permission_set_refs,
-                    resource_id,
-                    &mut unique_permission_sets,
-                )?;
-            }
-
-            // Process wildcard permissions that match this resource type
-            if let Some(wildcard_refs) = profile.0.get("*") {
-                let matching_refs: Vec<_> = wildcard_refs
-                    .iter()
-                    .filter(|r| r.id().starts_with(&type_prefix))
-                    .cloned()
-                    .collect();
-                Self::collect_unique_permission_sets(
-                    &matching_refs,
-                    resource_id,
-                    &mut unique_permission_sets,
-                )?;
-            }
-        }
-
-        // Process management permissions that match this resource type
-        if let Some(management_profile) = ctx.desired_stack.management().profile() {
-            // Check resource-specific management permissions
-            if let Some(permission_set_refs) = management_profile.0.get(resource_id) {
-                Self::collect_unique_permission_sets(
-                    permission_set_refs,
-                    resource_id,
-                    &mut unique_permission_sets,
-                )?;
-            }
-
-            // Check wildcard management permissions matching this resource type
-            if let Some(wildcard_refs) = management_profile.0.get("*") {
-                let matching_refs: Vec<_> = wildcard_refs
-                    .iter()
-                    .filter(|r| r.id().starts_with(&type_prefix))
-                    .cloned()
-                    .collect();
-                Self::collect_unique_permission_sets(
-                    &matching_refs,
-                    resource_id,
-                    &mut unique_permission_sets,
-                )?;
-            }
-        }
-
-        if unique_permission_sets.is_empty() {
-            return Ok(());
-        }
-
-        // Use ensure_single_gcp_custom_role for each, but keep the resource-specific
-        // permission context (with resource_name for variable interpolation)
-        let gcp_config = ctx.get_gcp_config()?;
-        let iam_client = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
-
-        for permission_set in unique_permission_sets.values() {
-            let custom_role = generator
-                .generate_custom_role(permission_set, &permission_context)
-                .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to generate custom role for permission set '{}'",
-                        permission_set.id
-                    ),
-                    resource_id: Some(resource_id.to_string()),
-                })?;
-
-            let role_id = custom_role
-                .name
-                .strip_prefix(&format!("projects/{}/roles/", gcp_config.project_id))
-                .unwrap_or(&custom_role.name)
-                .to_string();
+        for custom_role in custom_roles {
+            let role_id = custom_role.role_id.clone();
 
             info!(
-                resource_id = %resource_id,
                 role_id = %role_id,
-                permission_set = %permission_set.id,
+                permission_set = %permission_set_id,
                 permissions_count = custom_role.included_permissions.len(),
-                "Ensuring GCP custom role exists for resource-scoped permissions"
+                "Ensuring GCP custom role exists"
             );
 
             let role_request = alien_gcp_clients::iam::CreateRoleRequest::builder()
@@ -370,10 +286,6 @@ impl ResourcePermissionsHelper {
 
             match iam_client.get_role(custom_role.name.clone()).await {
                 Ok(_) => {
-                    info!(
-                        role_id = %role_id,
-                        "GCP custom role already exists, updating permissions"
-                    );
                     iam_client
                         .patch_role(
                             custom_role.name.clone(),
@@ -382,11 +294,8 @@ impl ResourcePermissionsHelper {
                         )
                         .await
                         .context(ErrorData::CloudPlatformError {
-                            message: format!(
-                                "Failed to update existing custom role '{}' for resource-scoped permissions",
-                                role_id
-                            ),
-                            resource_id: Some(resource_id.to_string()),
+                            message: format!("Failed to update existing custom role '{}'", role_id),
+                            resource_id: Some(permission_set_id.to_string()),
                         })?;
                 }
                 Err(e)
@@ -399,21 +308,14 @@ impl ResourcePermissionsHelper {
                         .create_role(role_id.clone(), role_request)
                         .await
                         .context(ErrorData::CloudPlatformError {
-                            message: format!(
-                                "Failed to create custom role '{}' for resource-scoped permissions",
-                                role_id
-                            ),
-                            resource_id: Some(resource_id.to_string()),
+                            message: format!("Failed to create custom role '{}'", role_id),
+                            resource_id: Some(permission_set_id.to_string()),
                         })?;
-                    info!(role_id = %role_id, "GCP custom role created for resource-scoped permissions");
                 }
                 Err(e) => {
                     return Err(e.context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to check existence of custom role '{}' for resource-scoped permissions",
-                            role_id
-                        ),
-                        resource_id: Some(resource_id.to_string()),
+                        message: format!("Failed to check existence of custom role '{}'", role_id),
+                        resource_id: Some(permission_set_id.to_string()),
                     }));
                 }
             }
@@ -422,10 +324,231 @@ impl ResourcePermissionsHelper {
         Ok(())
     }
 
-    /// Collect GCP resource-scoped bindings without applying them (for function controllers that need service-level IAM)
+    /// Setup-delete: delete the GCP custom roles generated for the selected permission sets.
     ///
-    /// This method first ensures that all GCP custom roles referenced by the
-    /// resource-scoped bindings exist in the project, then collects the bindings.
+    /// Project IAM/resource IAM bindings must be removed before this runs. Missing
+    /// roles are tolerated so delete stays idempotent.
+    pub async fn delete_gcp_custom_roles(
+        ctx: &ResourceControllerContext<'_>,
+        permission_context: &PermissionContext,
+    ) -> Result<()> {
+        let gcp_config = ctx.get_gcp_config()?;
+        let iam_client = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
+        let role_name_prefix = format!(
+            "projects/{}/roles/{}",
+            gcp_config.project_id,
+            custom_role_prefix(permission_context)
+        );
+        let mut role_names = Vec::new();
+        let mut page_token = None;
+
+        loop {
+            let response = iam_client
+                .list_roles(Some(100), page_token, Some(false))
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to list GCP custom roles before cleanup".to_string(),
+                    resource_id: Some(ctx.resource_prefix.to_string()),
+                })?;
+
+            for role in response.roles {
+                let Some(role_name) = role.name else {
+                    continue;
+                };
+                if role_name.starts_with(&role_name_prefix) {
+                    role_names.push(role_name);
+                }
+            }
+
+            match response.next_page_token {
+                Some(token) if !token.is_empty() => page_token = Some(token),
+                _ => break,
+            }
+        }
+
+        for role_name in role_names {
+            let role_id = role_name
+                .rsplit('/')
+                .next()
+                .unwrap_or(role_name.as_str())
+                .to_string();
+            match iam_client.delete_role(role_name.clone()).await {
+                Ok(_) => {
+                    info!(
+                        role_id = %role_id,
+                        "Deleted GCP custom role"
+                    );
+                }
+                Err(e)
+                    if matches!(
+                        e.error,
+                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                    ) =>
+                {
+                    info!(
+                        role_id = %role_id,
+                        "GCP custom role already deleted"
+                    );
+                }
+                Err(e) => {
+                    return Err(e.context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to delete GCP custom role '{}'", role_id),
+                        resource_id: Some(ctx.resource_prefix.to_string()),
+                    }));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Return the fully-qualified custom-role prefix owned by this stack.
+    pub fn gcp_stack_custom_role_name_prefix(permission_context: &PermissionContext) -> String {
+        let project = permission_context
+            .project_name
+            .as_deref()
+            .unwrap_or("PROJECT_NAME");
+        format!(
+            "projects/{project}/roles/{}",
+            custom_role_prefix(permission_context)
+        )
+    }
+
+    /// Return fully-qualified custom-role prefixes for the permission sets owned
+    /// by one reconciliation caller.
+    pub fn gcp_permission_set_custom_role_name_prefixes<'a>(
+        permission_context: &PermissionContext,
+        permission_set_ids: impl IntoIterator<Item = &'a str>,
+    ) -> Vec<String> {
+        let project = permission_context
+            .project_name
+            .as_deref()
+            .unwrap_or("PROJECT_NAME");
+
+        permission_set_ids
+            .into_iter()
+            .map(|permission_set_id| {
+                format!(
+                    "projects/{project}/roles/{}",
+                    custom_role_permission_set_prefix(permission_set_id, permission_context)
+                )
+            })
+            .collect()
+    }
+
+    /// Return predefined GCP roles present in a desired binding plan.
+    pub fn gcp_predefined_role_names(bindings: &[Binding]) -> Vec<String> {
+        let mut roles = Vec::new();
+        for binding in bindings {
+            if binding.role.starts_with("roles/") && !roles.contains(&binding.role) {
+                roles.push(binding.role.clone());
+            }
+        }
+        roles
+    }
+
+    /// Reconcile project-level IAM bindings for one principal and this stack's
+    /// caller-owned custom roles. Existing caller-owned custom-role bindings for
+    /// the principal are removed before desired bindings are merged, so revoked
+    /// permissions do not remain active under old hash-based role IDs.
+    pub fn reconcile_gcp_project_member_bindings(
+        bindings: &mut Vec<Binding>,
+        desired_bindings: Vec<Binding>,
+        member: &str,
+        owned_role_name_prefixes: &[String],
+        owned_exact_role_names: &[String],
+    ) -> bool {
+        let mut changed = Self::remove_gcp_project_member_bindings(
+            bindings,
+            member,
+            Some(owned_role_name_prefixes),
+            Some(owned_exact_role_names),
+        );
+
+        for desired_binding in desired_bindings {
+            let existing = bindings.iter_mut().find(|binding| {
+                binding.role == desired_binding.role
+                    && Self::gcp_conditions_match(&binding.condition, &desired_binding.condition)
+            });
+
+            if let Some(existing) = existing {
+                for desired_member in desired_binding.members {
+                    if !existing.members.contains(&desired_member) {
+                        existing.members.push(desired_member);
+                        changed = true;
+                    }
+                }
+            } else {
+                bindings.push(desired_binding);
+                changed = true;
+            }
+        }
+
+        changed
+    }
+
+    /// Remove a service-account member from project IAM bindings. When
+    /// `role_name_prefixes` is provided, only bindings for caller-owned custom
+    /// roles are touched, except exact `deleted:` aliases for the same service
+    /// account are removed everywhere because GCP rejects policies containing
+    /// them.
+    pub fn remove_gcp_project_member_bindings(
+        bindings: &mut Vec<Binding>,
+        member: &str,
+        role_name_prefixes: Option<&[String]>,
+        exact_role_names: Option<&[String]>,
+    ) -> bool {
+        let deleted_member_prefix = Self::deleted_gcp_service_account_member_prefix(member);
+        let mut changed = false;
+
+        for binding in bindings.iter_mut() {
+            let role_matches = match (role_name_prefixes, exact_role_names) {
+                (None, None) => true,
+                (prefixes, exact_roles) => {
+                    prefixes.is_some_and(|prefixes| {
+                        prefixes
+                            .iter()
+                            .any(|prefix| binding.role.starts_with(prefix))
+                    }) || exact_roles.is_some_and(|exact_roles| exact_roles.contains(&binding.role))
+                }
+            };
+            let before = binding.members.len();
+            binding.members.retain(|binding_member| {
+                let is_target_member = binding_member == member;
+                let is_deleted_target = deleted_member_prefix
+                    .as_ref()
+                    .is_some_and(|prefix| binding_member.starts_with(prefix));
+
+                !(is_deleted_target || (role_matches && is_target_member))
+            });
+            changed |= binding.members.len() != before;
+        }
+
+        let before_bindings = bindings.len();
+        bindings.retain(|binding| !binding.members.is_empty());
+        changed | (bindings.len() != before_bindings)
+    }
+
+    fn deleted_gcp_service_account_member_prefix(member: &str) -> Option<String> {
+        member
+            .strip_prefix("serviceAccount:")
+            .map(|email| format!("deleted:serviceAccount:{email}?"))
+    }
+
+    fn gcp_conditions_match(
+        left: &Option<alien_gcp_clients::iam::Expr>,
+        right: &Option<alien_gcp_clients::iam::Expr>,
+    ) -> bool {
+        match (left, right) {
+            (None, None) => true,
+            (Some(left), Some(right)) => {
+                left.expression == right.expression && left.title == right.title
+            }
+            _ => false,
+        }
+    }
+
+    /// Collect GCP resource-scoped bindings without applying them (for function controllers that need service-level IAM)
     ///
     /// # Arguments
     /// * `ctx` - Resource controller context
@@ -439,10 +562,35 @@ impl ResourcePermissionsHelper {
         resource_type: &str,
         all_bindings: &mut Vec<Binding>,
     ) -> Result<()> {
-        // Ensure all custom roles referenced by the bindings exist before collecting them
-        Self::ensure_gcp_resource_custom_roles(ctx, resource_id, resource_name, resource_type)
-            .await?;
+        let mut iam_bindings = Vec::new();
+        Self::collect_gcp_resource_scoped_iam_bindings(
+            ctx,
+            resource_id,
+            resource_name,
+            resource_type,
+            &mut iam_bindings,
+        )
+        .await?;
+        all_bindings.extend(
+            iam_bindings
+                .into_iter()
+                .map(Self::gcp_policy_binding_from_iam_binding),
+        );
+        Ok(())
+    }
 
+    /// Collect GCP resource-scoped IAM bindings with generator metadata intact.
+    ///
+    /// This is a live resource reconciliation path. Custom role definitions are
+    /// setup-owned; this helper only returns bindings to roles that setup has
+    /// already created.
+    pub async fn collect_gcp_resource_scoped_iam_bindings(
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+        resource_name: &str,
+        resource_type: &str,
+        all_bindings: &mut Vec<GcpIamBinding>,
+    ) -> Result<()> {
         let permission_context = Self::build_gcp_permission_context(ctx, resource_name)?;
         let generator = GcpRuntimePermissionsGenerator::new();
         let type_prefix = format!("{}/", resource_type);
@@ -482,8 +630,7 @@ impl ResourcePermissionsHelper {
                     "Collecting GCP resource-scoped bindings"
                 );
 
-                // Try to process permissions for this profile, continue on errors
-                if let Err(e) = Self::process_gcp_profile_permissions(
+                Self::process_gcp_profile_permissions(
                     ctx,
                     profile_name,
                     &combined_refs,
@@ -491,16 +638,7 @@ impl ResourcePermissionsHelper {
                     &permission_context,
                     all_bindings,
                 )
-                .await
-                {
-                    warn!(
-                        resource_id = %resource_id,
-                        resource_name = %resource_name,
-                        profile = %profile_name,
-                        error = %e,
-                        "Failed to collect GCP permissions for profile, continuing with other profiles"
-                    );
-                }
+                .await?;
             }
         }
 
@@ -533,11 +671,14 @@ impl ResourcePermissionsHelper {
             .with_resource_group(resource_group.clone())
             .with_stack_prefix(ctx.resource_prefix.to_string())
             .with_resource_name(resource_name.to_string())
-            // Managing subscription/resource group: used by function/execute and
-            // container-cluster/execute permission sets for cross-tenant management.
+            // Managing subscription/resource group: used by worker/execute and
+            // compute-cluster/execute permission sets for cross-tenant management.
             // In single-subscription mode, these are the same as the current values.
             .with_managing_subscription_id(azure_config.subscription_id.clone())
             .with_managing_resource_group(resource_group);
+        if let Some(deployment_name) = ctx.deployment_name_for_metadata() {
+            permission_ctx = permission_ctx.with_deployment_name(deployment_name.to_string());
+        }
 
         // Resolve storage account name from infrastructure outputs if available.
         // Many permission sets (kv/*, storage/*) reference ${storageAccountName}
@@ -556,7 +697,7 @@ impl ResourcePermissionsHelper {
     }
 
     /// Build GCP permission context for a resource
-    fn build_gcp_permission_context(
+    pub(crate) fn build_gcp_permission_context(
         ctx: &ResourceControllerContext<'_>,
         resource_name: &str,
     ) -> Result<PermissionContext> {
@@ -567,6 +708,9 @@ impl ResourcePermissionsHelper {
             .with_region(gcp_config.region.clone())
             .with_stack_prefix(ctx.resource_prefix.to_string())
             .with_resource_name(resource_name.to_string());
+        if let Some(deployment_name) = ctx.deployment_name_for_metadata() {
+            permission_ctx = permission_ctx.with_deployment_name(deployment_name.to_string());
+        }
         if let Some(ref project_number) = gcp_config.project_number {
             permission_ctx = permission_ctx.with_project_number(project_number.clone());
         }
@@ -580,7 +724,7 @@ impl ResourcePermissionsHelper {
         permission_set_refs: &[alien_core::permissions::PermissionSetReference],
         generator: &GcpRuntimePermissionsGenerator,
         permission_context: &PermissionContext,
-        all_bindings: &mut Vec<Binding>,
+        all_bindings: &mut Vec<GcpIamBinding>,
     ) -> Result<()> {
         // Get the service account for this profile
         let service_account_email = Self::get_gcp_service_account_email(ctx, profile_name)?;
@@ -596,31 +740,24 @@ impl ResourcePermissionsHelper {
                     })
                 })?;
 
-            // Generate IAM bindings for resource-scoped permissions
-            let bindings_result = generator
-                .generate_bindings(&permission_set, BindingTarget::Resource, permission_context)
+            let grant_plan = generator
+                .generate_grant_plan(&permission_set, BindingTarget::Resource, permission_context)
                 .context(ErrorData::CloudPlatformError {
                     message: format!(
-                        "Failed to generate IAM bindings for permission set '{}'",
+                        "Failed to generate IAM grant plan for permission set '{}'",
                         permission_set.id
                     ),
                     resource_id: Some(profile_name.to_string()),
                 })?;
+            let selected_bindings =
+                grant_plan.bindings_for_target(GcpBindingTargetScope::CurrentResource);
 
             // Convert and add bindings
             let member = format!("serviceAccount:{}", service_account_email);
-            let bindings_count = bindings_result.bindings.len();
-            for binding in bindings_result.bindings {
-                all_bindings.push(Binding {
-                    role: binding.role,
-                    members: vec![member.clone()],
-                    condition: binding.condition.map(|cond| alien_gcp_clients::iam::Expr {
-                        expression: cond.expression,
-                        title: Some(cond.title),
-                        description: Some(cond.description),
-                        location: None,
-                    }),
-                });
+            let bindings_count = selected_bindings.len();
+            for mut binding in selected_bindings {
+                binding.members = vec![member.clone()];
+                all_bindings.push(binding);
             }
 
             info!(
@@ -672,7 +809,7 @@ impl ResourcePermissionsHelper {
     }
 
     /// Get the GCP management service account email from the remote stack management controller
-    fn get_gcp_management_service_account_email(
+    pub fn get_gcp_management_service_account_email(
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<Option<String>> {
         // Find the remote-stack-management resource in the stack
@@ -690,29 +827,6 @@ impl ResourcePermissionsHelper {
         Ok(None)
     }
 
-    /// Collect unique permission sets from a list of references into a map
-    fn collect_unique_permission_sets(
-        permission_set_refs: &[PermissionSetReference],
-        resource_id: &str,
-        unique_permission_sets: &mut HashMap<String, PermissionSet>,
-    ) -> Result<()> {
-        for permission_set_ref in permission_set_refs {
-            let permission_set = permission_set_ref
-                .resolve(|name| alien_permissions::get_permission_set(name).cloned())
-                .ok_or_else(|| {
-                    AlienError::new(ErrorData::ResourceConfigInvalid {
-                        message: format!("Permission set '{}' not found", permission_set_ref.id()),
-                        resource_id: Some(resource_id.to_string()),
-                    })
-                })?;
-
-            unique_permission_sets
-                .entry(permission_set.id.clone())
-                .or_insert(permission_set);
-        }
-        Ok(())
-    }
-
     /// Collect GCP resource-scoped bindings for the management service account
     ///
     /// Processes management permissions (from `stack.permissions.management`) that match
@@ -725,7 +839,7 @@ impl ResourcePermissionsHelper {
         resource_type: &str,
         generator: &GcpRuntimePermissionsGenerator,
         permission_context: &PermissionContext,
-        all_bindings: &mut Vec<Binding>,
+        all_bindings: &mut Vec<GcpIamBinding>,
     ) -> Result<()> {
         let management_profile = match ctx.desired_stack.management().profile() {
             Some(profile) => profile,
@@ -798,28 +912,22 @@ impl ResourcePermissionsHelper {
                     })
                 })?;
 
-            let bindings_result = generator
-                .generate_bindings(&permission_set, BindingTarget::Resource, permission_context)
+            let grant_plan = generator
+                .generate_grant_plan(&permission_set, BindingTarget::Resource, permission_context)
                 .context(ErrorData::CloudPlatformError {
                     message: format!(
-                        "Failed to generate IAM bindings for management permission set '{}'",
+                        "Failed to generate IAM grant plan for management permission set '{}'",
                         permission_set.id
                     ),
                     resource_id: Some(resource_id.to_string()),
                 })?;
+            let selected_bindings =
+                grant_plan.bindings_for_target(GcpBindingTargetScope::CurrentResource);
 
-            let bindings_count = bindings_result.bindings.len();
-            for binding in bindings_result.bindings {
-                all_bindings.push(Binding {
-                    role: binding.role,
-                    members: vec![member.clone()],
-                    condition: binding.condition.map(|cond| alien_gcp_clients::iam::Expr {
-                        expression: cond.expression,
-                        title: Some(cond.title),
-                        description: Some(cond.description),
-                        location: None,
-                    }),
-                });
+            let bindings_count = selected_bindings.len();
+            for mut binding in selected_bindings {
+                binding.members = vec![member.clone()];
+                all_bindings.push(binding);
             }
 
             info!(
@@ -906,7 +1014,7 @@ impl ResourcePermissionsHelper {
                     "Processing AWS resource-scoped permissions"
                 );
 
-                if let Err(e) = Self::process_aws_profile_permissions(
+                Self::process_aws_profile_permissions(
                     ctx,
                     resource_id,
                     profile_name,
@@ -914,15 +1022,7 @@ impl ResourcePermissionsHelper {
                     &generator,
                     &permission_context,
                 )
-                .await
-                {
-                    warn!(
-                        resource_id = %resource_id,
-                        profile = %profile_name,
-                        error = %e,
-                        "Failed to process AWS permissions for profile, continuing with other profiles"
-                    );
-                }
+                .await?;
             }
         }
 
@@ -1020,7 +1120,7 @@ impl ResourcePermissionsHelper {
         ctx: &ResourceControllerContext<'_>,
         resource_id: &str,
         resource_name: &str,
-        resource_type: &str,
+        _resource_type: &str,
         generator: &AwsRuntimePermissionsGenerator,
         permission_context: &PermissionContext,
     ) -> Result<()> {
@@ -1029,23 +1129,8 @@ impl ResourcePermissionsHelper {
             None => return Ok(()),
         };
 
-        let type_prefix = format!("{}/", resource_type);
-
-        // Combine resource-specific and wildcard management permissions
-        let mut combined_refs: Vec<PermissionSetReference> = Vec::new();
-
-        if let Some(permission_set_refs) = management_profile.0.get(resource_id) {
-            combined_refs.extend(permission_set_refs.iter().cloned());
-        }
-
-        if let Some(wildcard_refs) = management_profile.0.get("*") {
-            combined_refs.extend(
-                wildcard_refs
-                    .iter()
-                    .filter(|r| r.id().starts_with(&type_prefix))
-                    .cloned(),
-            );
-        }
+        let combined_refs =
+            Self::aws_management_resource_permission_refs(management_profile, resource_id);
 
         if combined_refs.is_empty() {
             return Ok(());
@@ -1164,6 +1249,23 @@ impl ResourcePermissionsHelper {
         Ok(())
     }
 
+    fn aws_management_resource_permission_refs(
+        management_profile: &PermissionProfile,
+        resource_id: &str,
+    ) -> Vec<PermissionSetReference> {
+        // On AWS the RemoteStackManagement role policy is the stack-level
+        // grant point for wildcard management permissions. Re-applying those
+        // wildcard-derived permissions as per-resource inline policies duplicates
+        // authority and can exceed IAM's per-role inline policy quota. Resource
+        // controllers only attach management permissions explicitly scoped to
+        // this resource ID.
+        management_profile
+            .0
+            .get(resource_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
     /// Get the AWS IAM role name for a service account permission profile
     fn get_aws_service_account_role_name(
         ctx: &ResourceControllerContext<'_>,
@@ -1214,8 +1316,12 @@ impl ResourcePermissionsHelper {
     }
 
     /// Public method for controllers that manage their own binding collection
-    /// (e.g., function/gcp.rs) to add management SA bindings for pre-computed
+    /// (e.g., worker/gcp.rs) to add management SA bindings for pre-computed
     /// permission set references.
+    ///
+    /// This is a live resource reconciliation path. Custom role definitions are
+    /// setup-owned; this helper only returns bindings to roles that setup has
+    /// already created.
     pub async fn collect_gcp_management_bindings_for(
         ctx: &ResourceControllerContext<'_>,
         resource_id: &str,
@@ -1223,6 +1329,7 @@ impl ResourcePermissionsHelper {
         management_refs: &[PermissionSetReference],
         generator: &GcpRuntimePermissionsGenerator,
         permission_context: &PermissionContext,
+        expected_target: GcpBindingTargetScope,
         all_bindings: &mut Vec<Binding>,
     ) -> Result<()> {
         if management_refs.is_empty() {
@@ -1265,28 +1372,27 @@ impl ResourcePermissionsHelper {
                     })
                 })?;
 
-            let bindings_result = generator
-                .generate_bindings(&permission_set, BindingTarget::Resource, permission_context)
+            let grant_plan = generator
+                .generate_grant_plan(&permission_set, BindingTarget::Resource, permission_context)
                 .context(ErrorData::CloudPlatformError {
                     message: format!(
-                        "Failed to generate IAM bindings for management permission set '{}'",
+                        "Failed to generate IAM grant plan for management permission set '{}'",
                         permission_set.id
                     ),
                     resource_id: Some(resource_id.to_string()),
                 })?;
+            let selected_bindings = grant_plan.bindings_for_target(expected_target);
 
-            let bindings_count = bindings_result.bindings.len();
-            for binding in bindings_result.bindings {
-                all_bindings.push(Binding {
-                    role: binding.role,
-                    members: vec![member.clone()],
-                    condition: binding.condition.map(|cond| alien_gcp_clients::iam::Expr {
-                        expression: cond.expression,
-                        title: Some(cond.title),
-                        description: Some(cond.description),
-                        location: None,
-                    }),
-                });
+            let bindings_count = selected_bindings.len();
+            for binding in selected_bindings {
+                Self::push_gcp_binding_for_target(
+                    all_bindings,
+                    binding,
+                    &member,
+                    expected_target,
+                    &permission_set.id,
+                    resource_id,
+                )?;
             }
 
             info!(
@@ -1298,5 +1404,311 @@ impl ResourcePermissionsHelper {
         }
 
         Ok(())
+    }
+
+    fn push_gcp_binding_for_target(
+        all_bindings: &mut Vec<Binding>,
+        binding: GcpIamBinding,
+        member: &str,
+        expected_target: GcpBindingTargetScope,
+        permission_set_id: &str,
+        resource_id: &str,
+    ) -> Result<()> {
+        if binding.target != expected_target {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: format!(
+                    "GCP permission set '{}' produced a {:?} IAM binding where {:?} was required",
+                    permission_set_id, binding.target, expected_target
+                ),
+                resource_id: Some(resource_id.to_string()),
+            }));
+        }
+
+        all_bindings.push(Binding {
+            role: binding.role,
+            members: vec![member.to_string()],
+            condition: binding.condition.map(|cond| alien_gcp_clients::iam::Expr {
+                expression: cond.expression,
+                title: Some(cond.title),
+                description: Some(cond.description),
+                location: None,
+            }),
+        });
+
+        Ok(())
+    }
+
+    pub fn gcp_policy_binding_from_iam_binding(binding: GcpIamBinding) -> Binding {
+        Binding {
+            role: binding.role,
+            members: binding.members,
+            condition: binding.condition.map(|cond| alien_gcp_clients::iam::Expr {
+                expression: cond.expression,
+                title: Some(cond.title),
+                description: Some(cond.description),
+                location: None,
+            }),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::permissions::{PermissionProfile, PermissionSetReference};
+    use indexmap::IndexMap;
+
+    #[test]
+    fn aws_management_resource_permissions_ignore_wildcard_scope() {
+        let mut profile = IndexMap::new();
+        profile.insert(
+            "*".to_string(),
+            vec![PermissionSetReference::from_name(
+                "worker/heartbeat".to_string(),
+            )],
+        );
+        profile.insert(
+            "worker-a".to_string(),
+            vec![PermissionSetReference::from_name(
+                "worker/invoke".to_string(),
+            )],
+        );
+
+        let refs = ResourcePermissionsHelper::aws_management_resource_permission_refs(
+            &PermissionProfile(profile),
+            "worker-a",
+        );
+
+        let ids: Vec<_> = refs.iter().map(|r| r.id().to_string()).collect();
+        assert_eq!(ids, vec!["worker/invoke"]);
+    }
+
+    #[test]
+    fn aws_management_resource_permissions_empty_without_resource_scope() {
+        let mut profile = IndexMap::new();
+        profile.insert(
+            "*".to_string(),
+            vec![PermissionSetReference::from_name(
+                "worker/heartbeat".to_string(),
+            )],
+        );
+
+        let refs = ResourcePermissionsHelper::aws_management_resource_permission_refs(
+            &PermissionProfile(profile),
+            "worker-a",
+        );
+
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn gcp_project_member_reconciliation_removes_stale_owned_roles_only() {
+        let mut bindings = vec![
+            Binding {
+                role: "projects/p/roles/role_stack_storage_data_read_old".to_string(),
+                members: vec![
+                    "serviceAccount:app@p.iam.gserviceaccount.com".to_string(),
+                    "serviceAccount:other@p.iam.gserviceaccount.com".to_string(),
+                ],
+                condition: None,
+            },
+            Binding {
+                role: "roles/viewer".to_string(),
+                members: vec![
+                    "serviceAccount:app@p.iam.gserviceaccount.com".to_string(),
+                    "deleted:serviceAccount:app@p.iam.gserviceaccount.com?uid=123".to_string(),
+                    "deleted:serviceAccount:someone-else@p.iam.gserviceaccount.com?uid=456"
+                        .to_string(),
+                ],
+                condition: None,
+            },
+        ];
+
+        let owned_role_prefixes = vec!["projects/p/roles/role_stack_storage_data_read".to_string()];
+        let changed = ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
+            &mut bindings,
+            vec![Binding {
+                role: "projects/p/roles/role_stack_storage_data_read".to_string(),
+                members: vec!["serviceAccount:app@p.iam.gserviceaccount.com".to_string()],
+                condition: None,
+            }],
+            "serviceAccount:app@p.iam.gserviceaccount.com",
+            &owned_role_prefixes,
+            &[],
+        );
+
+        assert!(changed);
+        let stale_owned = bindings
+            .iter()
+            .find(|binding| binding.role == "projects/p/roles/role_stack_storage_data_read_old")
+            .expect("stale role binding remains for other members");
+        assert_eq!(
+            stale_owned.members,
+            vec!["serviceAccount:other@p.iam.gserviceaccount.com"]
+        );
+
+        let viewer = bindings
+            .iter()
+            .find(|binding| binding.role == "roles/viewer")
+            .expect("unowned binding remains");
+        assert!(viewer
+            .members
+            .contains(&"serviceAccount:app@p.iam.gserviceaccount.com".to_string()));
+        assert!(viewer.members.contains(
+            &"deleted:serviceAccount:someone-else@p.iam.gserviceaccount.com?uid=456".to_string()
+        ));
+        assert!(!viewer
+            .members
+            .iter()
+            .any(|member| member
+                .starts_with("deleted:serviceAccount:app@p.iam.gserviceaccount.com?")));
+
+        let desired = bindings
+            .iter()
+            .find(|binding| binding.role == "projects/p/roles/role_stack_storage_data_read")
+            .expect("desired role binding was added");
+        assert_eq!(
+            desired.members,
+            vec!["serviceAccount:app@p.iam.gserviceaccount.com"]
+        );
+    }
+
+    #[test]
+    fn gcp_project_member_reconciliation_does_not_clobber_other_management_slices() {
+        let mut bindings = vec![
+            Binding {
+                role: "projects/p/roles/role_stack_worker_management".to_string(),
+                members: vec!["serviceAccount:management@p.iam.gserviceaccount.com".to_string()],
+                condition: None,
+            },
+            Binding {
+                role: "projects/p/roles/role_stack_vault_data_write_old".to_string(),
+                members: vec!["serviceAccount:management@p.iam.gserviceaccount.com".to_string()],
+                condition: None,
+            },
+        ];
+
+        let vault_prefixes = vec!["projects/p/roles/role_stack_vault_data_write".to_string()];
+        let changed = ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
+            &mut bindings,
+            vec![Binding {
+                role: "projects/p/roles/role_stack_vault_data_write".to_string(),
+                members: vec!["serviceAccount:management@p.iam.gserviceaccount.com".to_string()],
+                condition: None,
+            }],
+            "serviceAccount:management@p.iam.gserviceaccount.com",
+            &vault_prefixes,
+            &[],
+        );
+
+        assert!(changed);
+        assert!(bindings.iter().any(|binding| {
+            binding.role == "projects/p/roles/role_stack_worker_management"
+                && binding
+                    .members
+                    .contains(&"serviceAccount:management@p.iam.gserviceaccount.com".to_string())
+        }));
+        assert!(!bindings
+            .iter()
+            .any(|binding| binding.role == "projects/p/roles/role_stack_vault_data_write_old"));
+        assert!(bindings.iter().any(|binding| {
+            binding.role == "projects/p/roles/role_stack_vault_data_write"
+                && binding
+                    .members
+                    .contains(&"serviceAccount:management@p.iam.gserviceaccount.com".to_string())
+        }));
+    }
+
+    #[test]
+    fn gcp_project_member_reconciliation_removes_owned_slice_when_desired_empty() {
+        let mut bindings = vec![
+            Binding {
+                role: "projects/p/roles/role_stack_worker_management".to_string(),
+                members: vec!["serviceAccount:management@p.iam.gserviceaccount.com".to_string()],
+                condition: None,
+            },
+            Binding {
+                role: "projects/p/roles/role_stack_vault_data_write".to_string(),
+                members: vec!["serviceAccount:management@p.iam.gserviceaccount.com".to_string()],
+                condition: None,
+            },
+        ];
+
+        let worker_prefixes = vec!["projects/p/roles/role_stack_worker_management".to_string()];
+        let changed = ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
+            &mut bindings,
+            Vec::new(),
+            "serviceAccount:management@p.iam.gserviceaccount.com",
+            &worker_prefixes,
+            &[],
+        );
+
+        assert!(changed);
+        assert!(!bindings
+            .iter()
+            .any(|binding| binding.role == "projects/p/roles/role_stack_worker_management"));
+        assert!(bindings.iter().any(|binding| {
+            binding.role == "projects/p/roles/role_stack_vault_data_write"
+                && binding
+                    .members
+                    .contains(&"serviceAccount:management@p.iam.gserviceaccount.com".to_string())
+        }));
+    }
+
+    #[test]
+    fn gcp_project_member_reconciliation_removes_stale_owned_predefined_roles() {
+        let mut bindings = vec![
+            Binding {
+                role: "roles/pubsub.publisher".to_string(),
+                members: vec!["serviceAccount:app@p.iam.gserviceaccount.com".to_string()],
+                condition: None,
+            },
+            Binding {
+                role: "roles/pubsub.viewer".to_string(),
+                members: vec!["serviceAccount:app@p.iam.gserviceaccount.com".to_string()],
+                condition: None,
+            },
+            Binding {
+                role: "roles/viewer".to_string(),
+                members: vec!["serviceAccount:app@p.iam.gserviceaccount.com".to_string()],
+                condition: None,
+            },
+        ];
+
+        let owned_exact_roles = vec![
+            "roles/pubsub.publisher".to_string(),
+            "roles/pubsub.viewer".to_string(),
+        ];
+        let changed = ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
+            &mut bindings,
+            vec![Binding {
+                role: "roles/pubsub.publisher".to_string(),
+                members: vec!["serviceAccount:app@p.iam.gserviceaccount.com".to_string()],
+                condition: None,
+            }],
+            "serviceAccount:app@p.iam.gserviceaccount.com",
+            &[],
+            &owned_exact_roles,
+        );
+
+        assert!(changed);
+        assert!(bindings.iter().any(|binding| {
+            binding.role == "roles/pubsub.publisher"
+                && binding
+                    .members
+                    .contains(&"serviceAccount:app@p.iam.gserviceaccount.com".to_string())
+        }));
+        assert!(!bindings.iter().any(|binding| {
+            binding.role == "roles/pubsub.viewer"
+                && binding
+                    .members
+                    .contains(&"serviceAccount:app@p.iam.gserviceaccount.com".to_string())
+        }));
+        assert!(bindings.iter().any(|binding| {
+            binding.role == "roles/viewer"
+                && binding
+                    .members
+                    .contains(&"serviceAccount:app@p.iam.gserviceaccount.com".to_string())
+        }));
     }
 }

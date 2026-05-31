@@ -6,7 +6,7 @@ use crate::ui::{command, contextual_heading, dim_label, success_line};
 use crate::{ErrorData, Result};
 use alien_build::settings::PushSettings;
 use alien_core::{
-    alien_event, AlienEvent, Container, ContainerCode, Function, FunctionCode, Platform, Stack,
+    alien_event, AlienEvent, Container, ContainerCode, Platform, Stack, Worker, WorkerCode,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_manager_api::types::{
@@ -71,10 +71,20 @@ pub struct ReleaseArgs {
     #[arg(long)]
     pub experimental: bool,
 
+    /// Base cloud platform for Kubernetes auto-builds. This keeps the release
+    /// stack under Kubernetes while using the managed cluster's default
+    /// architecture when auto-building missing artifacts.
+    #[arg(long)]
+    pub base_platform: Option<String>,
+
     /// Use pre-built and pre-pushed images. Skips both build and push steps.
     /// Requires that stack.json already contains remote image URIs.
     #[arg(long)]
     pub prebuilt: bool,
+
+    /// Override the runtime base image used for source-built cloud containers.
+    #[arg(long, env = "ALIEN_OVERRIDE_BASE_IMAGE", hide = true)]
+    pub override_base_image: Option<String>,
 
     // Manual registry override options (for manager deployment)
     /// Image repository URL (manual override - skips platform manager)
@@ -227,11 +237,25 @@ async fn load_release_config(
         }
     };
 
+    let has_kubernetes_platform = target_platforms
+        .iter()
+        .any(|platform| platform.eq_ignore_ascii_case(Platform::Kubernetes.as_str()));
+    let kubernetes_base_platform =
+        parse_kubernetes_base_platform(has_kubernetes_platform, args.base_platform.as_deref())?;
+
     // Build for every platform unless --prebuilt is set.
     // Content-hash dedup in the build layer makes this fast when nothing changed.
     if !args.prebuilt {
         for platform_str in &target_platforms {
-            auto_build_for_platform(platform_str, &stack, &output_dir, show_human_output).await?;
+            auto_build_for_platform(
+                platform_str,
+                &stack,
+                &output_dir,
+                show_human_output,
+                args.override_base_image.clone(),
+                kubernetes_base_platform,
+            )
+            .await?;
         }
     }
 
@@ -337,7 +361,6 @@ async fn release_task_core(
         platforms: platforms_to_release,
         ..
     } = config;
-
     // Process each platform: load stack, push images, collect pushed stacks
     let mut stack_by_platform = ManagerStackByPlatform {
         aws: None,
@@ -623,6 +646,8 @@ async fn auto_build_for_platform(
     stack: &Stack,
     output_dir: &PathBuf,
     _show_human_output: bool,
+    override_base_image: Option<String>,
+    kubernetes_base_platform: Option<Platform>,
 ) -> Result<()> {
     let platform = Platform::from_str(platform_str).map_err(|e| {
         AlienError::new(ErrorData::ValidationError {
@@ -637,7 +662,9 @@ async fn auto_build_for_platform(
         },
         Platform::Gcp => alien_build::settings::PlatformBuildSettings::Gcp {},
         Platform::Azure => alien_build::settings::PlatformBuildSettings::Azure {},
-        Platform::Kubernetes => alien_build::settings::PlatformBuildSettings::Kubernetes {},
+        Platform::Kubernetes => alien_build::settings::PlatformBuildSettings::Kubernetes {
+            base_platform: kubernetes_base_platform,
+        },
         Platform::Local => alien_build::settings::PlatformBuildSettings::Local {},
         Platform::Test => alien_build::settings::PlatformBuildSettings::Test {},
     };
@@ -652,7 +679,7 @@ async fn auto_build_for_platform(
         platform: platform_build_settings,
         targets,
         cache_url: None,
-        override_base_image: None,
+        override_base_image,
         debug_mode: false,
     };
 
@@ -742,6 +769,7 @@ fn create_manual_push_settings(args: &ReleaseArgs, image_repo: &str) -> Result<P
 
     Ok(PushSettings {
         repository: image_repo.to_string(),
+        destination_label: Some(format!("custom registry {}", image_repo)),
         options: dockdash::PushOptions {
             auth,
             protocol,
@@ -830,18 +858,23 @@ async fn build_proxy_push_settings(
     // Full repository: host/repo_name (e.g., "manager.alien.dev/alien-e2e")
     let repository = format!("{}/{}", registry_host, repo_name);
 
-    // Auth: use the caller's token as Basic auth password.
-    // The manager validates both Bearer and Basic auth — for OCI clients
-    // (which speak Basic), the password is the token.
-    let auth = match &manager.auth_token {
-        Some(token) => RegistryAuth::Basic("token".to_string(), token.clone()),
-        None => RegistryAuth::Anonymous,
+    // OCI speaks Basic — the token rides in the password slot, the
+    // workspace rides in the username slot. OCI clients can't add custom
+    // headers, and the username slot is exactly where cloud registries
+    // pass tenant/identity info (GCR uses `oauth2accesstoken`, ECR uses
+    // `AWS`). Without a workspace, the username stays as the existing
+    // "token" placeholder.
+    let auth = match (&manager.auth_token, &manager.workspace) {
+        (Some(token), Some(workspace)) => RegistryAuth::Basic(workspace.clone(), token.clone()),
+        (Some(token), None) => RegistryAuth::Basic("token".to_string(), token.clone()),
+        (None, _) => RegistryAuth::Anonymous,
     };
 
     info!("   Pushing through manager proxy at {}", repository);
 
     Ok(PushSettings {
         repository,
+        destination_label: Some(manager_push_destination_label(manager)),
         options: dockdash::PushOptions {
             auth,
             protocol,
@@ -852,6 +885,20 @@ async fn build_proxy_push_settings(
             ..Default::default()
         },
     })
+}
+
+fn manager_push_destination_label(manager: &ManagerContext) -> String {
+    match (
+        manager.manager_name.as_deref(),
+        manager.manager_is_system,
+        manager.manager_cloud.as_deref(),
+    ) {
+        (Some(name), Some(true), _) => format!("{name} (Alien-hosted)"),
+        (Some(name), Some(false), Some(cloud)) => format!("{name} private manager ({cloud})"),
+        (Some(name), Some(false), None) => format!("{name} private manager"),
+        (Some(name), _, _) => name.to_string(),
+        (None, _, _) => manager.manager_url.clone(),
+    }
 }
 
 /// Translate registry URL for CLI access.
@@ -961,12 +1008,46 @@ fn validate_platforms_against_stack(platforms: &[String], stack: &Stack) -> Resu
     Ok(())
 }
 
+fn parse_kubernetes_base_platform(
+    has_kubernetes_platform: bool,
+    base_platform: Option<&str>,
+) -> Result<Option<Platform>> {
+    let Some(base_platform) = base_platform else {
+        return Ok(None);
+    };
+
+    let parsed = Platform::from_str(base_platform).map_err(|e| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "base-platform".to_string(),
+            message: e,
+        })
+    })?;
+
+    if !has_kubernetes_platform {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "base-platform".to_string(),
+            message: "--base-platform is only supported when releasing --platforms kubernetes"
+                .to_string(),
+        }));
+    }
+
+    match parsed {
+        Platform::Aws | Platform::Gcp | Platform::Azure => Ok(Some(parsed)),
+        Platform::Kubernetes | Platform::Local | Platform::Test => {
+            Err(AlienError::new(ErrorData::ValidationError {
+                field: "base-platform".to_string(),
+                message: "--base-platform must be one of: aws, gcp, azure".to_string(),
+            }))
+        }
+    }
+}
+
 /// Validate that all compute resources in the stack have remote image URIs (not local paths).
 /// Used with `--prebuilt` to ensure images were already pushed externally.
 fn validate_prebuilt_stack(stack: &Stack) -> Result<()> {
     for (_resource_id, resource_entry) in stack.resources() {
-        if let Some(func) = resource_entry.config.downcast_ref::<Function>() {
-            if let FunctionCode::Image { ref image } = func.code {
+        if let Some(func) = resource_entry.config.downcast_ref::<Worker>() {
+            if let WorkerCode::Image { ref image } = func.code {
                 let path = PathBuf::from(image);
                 if path.exists() && path.is_dir() {
                     return Err(AlienError::new(ErrorData::ValidationError {
@@ -1085,15 +1166,15 @@ fn apply_push_cache(stack: &mut Stack, cache: &HashMap<String, String>) -> usize
     let mut hits = 0;
 
     for (_resource_id, resource_entry) in stack.resources_mut() {
-        if let Some(func) = resource_entry.config.downcast_mut::<Function>() {
-            if let FunctionCode::Image { ref image } = func.code {
+        if let Some(func) = resource_entry.config.downcast_mut::<Worker>() {
+            if let WorkerCode::Image { ref image } = func.code {
                 if let Some(key) = cache_key_from_path(image) {
                     if let Some(cached_uri) = cache.get(&key) {
                         info!(
                             "Push cache hit for function '{}': {} → {}",
                             func.id, key, cached_uri
                         );
-                        func.code = FunctionCode::Image {
+                        func.code = WorkerCode::Image {
                             image: cached_uri.clone(),
                         };
                         hits += 1;
@@ -1132,8 +1213,8 @@ fn collect_push_cache_entries(
     let pre_push_images: HashMap<String, String> = pre_push_stack
         .resources()
         .filter_map(|(id, entry)| {
-            if let Some(func) = entry.config.downcast_ref::<Function>() {
-                if let FunctionCode::Image { ref image } = func.code {
+            if let Some(func) = entry.config.downcast_ref::<Worker>() {
+                if let WorkerCode::Image { ref image } = func.code {
                     return Some((id.clone(), image.clone()));
                 }
             }
@@ -1147,8 +1228,8 @@ fn collect_push_cache_entries(
         .collect();
 
     for (resource_id, resource_entry) in stack.resources() {
-        let pushed_uri = if let Some(func) = resource_entry.config.downcast_ref::<Function>() {
-            if let FunctionCode::Image { ref image } = func.code {
+        let pushed_uri = if let Some(func) = resource_entry.config.downcast_ref::<Worker>() {
+            if let WorkerCode::Image { ref image } = func.code {
                 Some(image.clone())
             } else {
                 None
@@ -1177,5 +1258,37 @@ fn collect_push_cache_entries(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_kubernetes_base_platform_accepts_clouds_for_kubernetes_releases() {
+        assert_eq!(
+            parse_kubernetes_base_platform(true, Some("aws")).unwrap(),
+            Some(Platform::Aws)
+        );
+        assert_eq!(
+            parse_kubernetes_base_platform(true, Some("gcp")).unwrap(),
+            Some(Platform::Gcp)
+        );
+        assert_eq!(
+            parse_kubernetes_base_platform(true, Some("azure")).unwrap(),
+            Some(Platform::Azure)
+        );
+    }
+
+    #[test]
+    fn parse_kubernetes_base_platform_rejects_releases_without_kubernetes() {
+        assert!(parse_kubernetes_base_platform(false, Some("aws")).is_err());
+    }
+
+    #[test]
+    fn parse_kubernetes_base_platform_rejects_non_cloud_platforms() {
+        assert!(parse_kubernetes_base_platform(true, Some("kubernetes")).is_err());
+        assert!(parse_kubernetes_base_platform(true, Some("local")).is_err());
     }
 }

@@ -2,7 +2,7 @@ import * as alien from "@alienplatform/core"
 
 const events = new alien.Kv("events").build()
 
-const api = new alien.Function("api")
+const api = new alien.Worker("api")
   .code({ type: "source", src: "./", toolchain: { type: "typescript" } })
   .commandsEnabled(true)
   .ingress("public")

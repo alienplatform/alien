@@ -38,7 +38,7 @@ Or [try it with Claude Code, Codex, or Cursor](https://www.alien.dev#prompt).
 ## Features
 
 - **[AWS, GCP, and Azure support](https://www.alien.dev/docs/how-alien-works)** - Deploy to all major clouds. 
-- **[TypeScript & Rust](https://alien.dev/docs/infrastructure/function/toolchains)** — First-class support for both. Python and arbitrary containers coming soon.
+- **[TypeScript & Rust](https://alien.dev/docs/infrastructure/worker/toolchains)** — First-class support for both. Python and arbitrary containers coming soon.
 - **[Real-time Heartbeat](https://alien.dev/docs/how-alien-works)** — Know the instant a deployment goes down. 
 - **[Auto Updates & Rollbacks](https://alien.dev/docs/releases)** — Push a release and every remote environment picks it up automatically. 
 - **[Local-first Development](https://alien.dev/docs/local-development)** — Build and test on your machine. Local equivalents for every cloud resource.
@@ -51,7 +51,7 @@ Or [try it with Claude Code, Codex, or Cursor](https://www.alien.dev#prompt).
 
 ### Push model
 
-**Like sharing a Google Drive folder.** The customer grants least-privilege access to an isolated area in their cloud. You run `alien serve` on your infrastructure and it manages everything through cloud APIs (e.g. AWS `UpdateFunctionCode`). No network connection to their environment needed.
+**Like sharing a Google Drive folder.** The customer grants least-privilege access to an isolated area in their cloud. You run `alien serve` on your infrastructure and it manages everything through cloud APIs (e.g. AWS `UpdateWorkerCode`). No network connection to their environment needed.
 
 ```bash
 alien serve
@@ -65,7 +65,7 @@ alien serve
 ╔═ alien serve ═══════════╗                   ║  ┌─ Isolated Area ──────────────┐   ║
 ║                         ║   cloud APIs      ║  │                              │   ║
 ║  Push updates    ───────╬───────────────────╬─▶│  ┏━━━━━━━━━━┓                │   ║
-║  Collect telemetry ◀────╬───────────────────╬──│  ┃ Function ┃                │   ║
+║  Collect telemetry ◀────╬───────────────────╬──│  ┃ Worker ┃                │   ║
 ║  Run commands    ───────╬───────────────────╬─▶│  ┗━━━━━━━━━━┛                │   ║
 ║                         ║                   ║  │  ┏━━━━━━━━━━┓                │   ║
 ║                         ║                   ║  │  ┃ Storage  ┃                │   ║
@@ -95,7 +95,7 @@ docker run ghcr.io/alienplatform/alien-agent \
 ║                         ║      HTTPS        ║  │                              │   ║
 ║  Releases        ◀──────╬───────────────────╬──│── alien-agent                │   ║
 ║  Telemetry       ◀──────╬───────────────────╬──│──  ┏━━━━━━━━━━┓              │   ║
-║  Commands        ◀──────╬───────────────────╬──│──  ┃ Function ┃              │   ║
+║  Commands        ◀──────╬───────────────────╬──│──  ┃ Worker ┃              │   ║
 ║                         ║                   ║  │    ┗━━━━━━━━━━┛              │   ║
 ║                         ║                   ║  │    ┏━━━━━━━━━━┓              │   ║
 ╚═════════════════════════╝                   ║  │    ┃ Storage  ┃              │   ║
@@ -117,7 +117,7 @@ import * as alien from "@alienplatform/core"
 const data = new alien.Storage("data").build()
 const secrets = new alien.Vault("credentials").build()
 
-const api = new alien.Function("api")
+const api = new alien.Worker("api")
   .code({ type: "source", src: "./api", toolchain: { type: "typescript" } })
   .link(data)
   .link(secrets)
@@ -135,7 +135,7 @@ At deploy time, each resource maps to the cloud's native service:
 
 ```
   ┏━━━━━━━━━━━━┓                    ┏━━━━━━━━━━━━┓
-  ┃  Function  ┃                    ┃  Storage   ┃
+  ┃  Worker  ┃                    ┃  Storage   ┃
   ┗━━━━━┯━━━━━━┛                    ┗━━━━━┯━━━━━━┛
         │                                 │
         ├── AWS ───▶ Lambda               ├── AWS ───▶ S3
@@ -218,7 +218,7 @@ From this definition, Alien derives three layers of permissions:
 **Management** — What Alien uses day-to-day to manage the deployment:
 
 - 🧊 **Frozen** resources: health checks only. No ability to modify, delete, or read data.
-- 🔁 **Live** resources: push code, roll config, redeploy. But still no data access — Alien can call `lambda:UpdateFunctionCode` but never `s3:GetObject`. Management and data access are separate.
+- 🔁 **Live** resources: push code, roll config, redeploy. But still no data access — Alien can call `lambda:UpdateWorkerCode` but never `s3:GetObject`. Management and data access are separate.
 
 **Application runtime** — What the deployed code can access. Only what's declared in permission profiles. The `execution` profile above grants `storage/data-read` and `storage/data-write` on the `data` bucket — nothing else. No declaration, no access.
 

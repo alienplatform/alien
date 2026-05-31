@@ -6,11 +6,91 @@ terraform {
       configuration_aliases = [google.management, google.target]
     }
     random = { source = "hashicorp/random", version = "~> 3.0" }
+    time   = { source = "hashicorp/time", version = "~> 0.13" }
   }
 }
 
 resource "random_id" "suffix" {
   byte_length = 4
+}
+
+locals {
+  e2e_gke_cluster_name = var.e2e_gke_cluster_name != "" ? var.e2e_gke_cluster_name : "alien-e2e-${random_id.suffix.hex}"
+}
+
+# ── Target: reusable E2E network ─────────────────────────────────────────────
+
+resource "google_compute_network" "e2e" {
+  provider                = google.target
+  name                    = "alien-e2e-${random_id.suffix.hex}"
+  auto_create_subnetworks = false
+
+  depends_on = [
+    google_project_service.target_apis,
+    time_sleep.target_role_propagation,
+  ]
+}
+
+resource "google_compute_subnetwork" "e2e" {
+  provider      = google.target
+  name          = "alien-e2e-${random_id.suffix.hex}"
+  ip_cidr_range = "10.252.0.0/20"
+  region        = var.target_region
+  network       = google_compute_network.e2e.id
+}
+
+resource "google_compute_router" "e2e" {
+  provider = google.target
+  name     = "alien-e2e-${random_id.suffix.hex}"
+  region   = var.target_region
+  network  = google_compute_network.e2e.id
+}
+
+resource "google_compute_router_nat" "e2e" {
+  provider                           = google.target
+  name                               = "alien-e2e-${random_id.suffix.hex}"
+  router                             = google_compute_router.e2e.name
+  region                             = google_compute_router.e2e.region
+  nat_ip_allocate_option             = "AUTO_ONLY"
+  source_subnetwork_ip_ranges_to_nat = "ALL_SUBNETWORKS_ALL_IP_RANGES"
+}
+
+# ── Target: shared GKE cluster for Terraform -> Helm E2Es ────────────────────
+
+resource "google_compute_global_address" "e2e_ingress" {
+  provider = google.target
+  name     = "alien-e2e-ingress-${random_id.suffix.hex}"
+
+  depends_on = [google_project_service.target_apis]
+}
+
+resource "google_container_cluster" "e2e" {
+  provider = google.target
+  name     = local.e2e_gke_cluster_name
+  location = var.target_region
+
+  deletion_protection = false
+  enable_autopilot    = true
+  network             = google_compute_network.e2e.name
+  subnetwork          = google_compute_subnetwork.e2e.name
+
+  release_channel {
+    channel = var.e2e_gke_release_channel
+  }
+
+  ip_allocation_policy {}
+
+  workload_identity_config {
+    workload_pool = "${var.target_project_id}.svc.id.goog"
+  }
+
+  master_auth {
+    client_certificate_config {
+      issue_client_certificate = true
+    }
+  }
+
+  depends_on = [google_project_service.target_apis]
 }
 
 # ── Required APIs ─────────────────────────────────────────────────────────────
@@ -30,6 +110,7 @@ resource "google_project_service" "management_apis" {
     "serviceusage.googleapis.com",
     "cloudresourcemanager.googleapis.com",
     "cloudscheduler.googleapis.com",
+    "container.googleapis.com",
   ])
   service            = each.key
   disable_on_destroy = false
@@ -49,6 +130,8 @@ resource "google_project_service" "target_apis" {
     "secretmanager.googleapis.com",
     "pubsub.googleapis.com",
     "firestore.googleapis.com",
+    "cloudscheduler.googleapis.com",
+    "container.googleapis.com",
   ])
   service            = each.key
   disable_on_destroy = false
@@ -56,7 +139,7 @@ resource "google_project_service" "target_apis" {
 
 # ── Manager SA: Execution identity ────────────────────────────────────────────
 # Runs the alien-manager process. Needs permissions for all resource types it
-# provisions, but NOT roles/owner. Uses scoped predefined roles instead.
+# provisions, but NOT roles/owner. Uses scoped bootstrap roles instead.
 
 resource "google_service_account" "manager" {
   provider     = google.management
@@ -86,6 +169,7 @@ locals {
     "roles/datastore.owner",                 # Firestore
     "roles/serviceusage.serviceUsageAdmin",  # Enable/disable APIs
     "roles/compute.admin",                   # All Compute Engine resources
+    "roles/container.admin",                 # GKE clusters
     "roles/artifactregistry.admin",          # Artifact Registry repositories
     "roles/cloudscheduler.admin",            # Cloud Scheduler jobs
   ]
@@ -356,22 +440,26 @@ resource "google_project_iam_member" "target_roles" {
   member   = "serviceAccount:${google_service_account.target.email}"
 }
 
-resource "google_project_iam_custom_role" "target_artifact_registry_iam" {
+resource "google_project_iam_member" "target_provider_container_admin" {
   provider = google.target
-  role_id  = "alien_target_artifact_registry_iam"
-  title    = "Alien Target Artifact Registry IAM"
+  for_each = var.target_provider_email != "" && var.target_provider_email != google_service_account.target.email ? toset([var.target_provider_email]) : toset([])
   project  = var.target_project_id
-  permissions = [
-    "artifactregistry.repositories.getIamPolicy",
-    "artifactregistry.repositories.setIamPolicy",
-  ]
+  role     = "roles/container.admin"
+  member   = "serviceAccount:${each.value}"
 }
 
-resource "google_project_iam_member" "target_artifact_registry_iam" {
-  provider = google.target
-  project  = var.target_project_id
-  role     = google_project_iam_custom_role.target_artifact_registry_iam.id
-  member   = "serviceAccount:${google_service_account.target.email}"
+resource "time_sleep" "target_role_propagation" {
+  create_duration = "90s"
+
+  triggers = {
+    target_provider_email = var.target_provider_email
+    target_roles          = sha1(jsonencode(sort(local.manager_roles)))
+  }
+
+  depends_on = [
+    google_project_iam_member.target_roles,
+    google_project_iam_member.target_provider_container_admin,
+  ]
 }
 
 # The target SA needs limited access to the management project for

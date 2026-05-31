@@ -3,14 +3,15 @@
 use crate::core::StackExecutor;
 use crate::error::Result;
 use alien_core::{
-    ClientConfig, Function, FunctionCode, Platform, Resource, ResourceDefinition, ResourceEntry,
-    ResourceLifecycle, ResourceRef, ResourceStatus, Stack, StackResourceState, StackState, Storage,
+    ClientConfig, Platform, Resource, ResourceDefinition, ResourceEntry, ResourceLifecycle,
+    ResourceRef, ResourceStatus, Stack, StackResourceState, StackState, Storage, Worker,
+    WorkerCode,
 };
 
 /// Create a test function with default settings.
-pub fn test_function(id: &str) -> Function {
-    Function::new(id.to_string())
-        .code(FunctionCode::Image {
+pub fn test_function(id: &str) -> Worker {
+    Worker::new(id.to_string())
+        .code(WorkerCode::Image {
             image: format!("test-image-{}", id),
         })
         .permissions("execution".to_string())
@@ -18,9 +19,9 @@ pub fn test_function(id: &str) -> Function {
 }
 
 /// Create a test function with a specific image.
-pub fn test_function_with_image(id: &str, image: &str) -> Function {
-    Function::new(id.to_string())
-        .code(FunctionCode::Image {
+pub fn test_function_with_image(id: &str, image: &str) -> Worker {
+    Worker::new(id.to_string())
+        .code(WorkerCode::Image {
             image: image.to_string(),
         })
         .permissions("execution".to_string())
@@ -28,9 +29,9 @@ pub fn test_function_with_image(id: &str, image: &str) -> Function {
 }
 
 /// Create a test function linked to another resource.
-pub fn test_function_linked<R: ResourceDefinition>(id: &str, linked_to: &R) -> Function {
-    Function::new(id.to_string())
-        .code(FunctionCode::Image {
+pub fn test_function_linked<R: ResourceDefinition>(id: &str, linked_to: &R) -> Worker {
+    Worker::new(id.to_string())
+        .code(WorkerCode::Image {
             image: format!("test-image-{}", id),
         })
         .permissions("execution".to_string())
@@ -174,7 +175,7 @@ pub async fn run_steps(
 pub fn create_running_function_state(id: &str, image: &str) -> StackResourceState {
     let func = test_function_with_image(id, image);
     let mut state = StackResourceState::new_pending(
-        Function::RESOURCE_TYPE.to_string(),
+        Worker::RESOURCE_TYPE.to_string(),
         Resource::new(func),
         Some(ResourceLifecycle::Live),
         vec![],
@@ -187,7 +188,7 @@ pub fn create_running_function_state(id: &str, image: &str) -> StackResourceStat
 pub fn create_pending_function_state(id: &str) -> StackResourceState {
     let func = test_function(id);
     StackResourceState::new_pending(
-        Function::RESOURCE_TYPE.to_string(),
+        Worker::RESOURCE_TYPE.to_string(),
         Resource::new(func),
         Some(ResourceLifecycle::Live),
         vec![],
@@ -198,7 +199,7 @@ pub fn create_pending_function_state(id: &str) -> StackResourceState {
 pub fn create_deleting_function_state(id: &str) -> StackResourceState {
     let func = test_function(id);
     let mut state = StackResourceState::new_pending(
-        Function::RESOURCE_TYPE.to_string(),
+        Worker::RESOURCE_TYPE.to_string(),
         Resource::new(func),
         Some(ResourceLifecycle::Live),
         vec![],
@@ -211,7 +212,7 @@ pub fn create_deleting_function_state(id: &str) -> StackResourceState {
 pub fn create_deleted_function_state(id: &str) -> StackResourceState {
     let func = test_function(id);
     let mut state = StackResourceState::new_pending(
-        Function::RESOURCE_TYPE.to_string(),
+        Worker::RESOURCE_TYPE.to_string(),
         Resource::new(func),
         Some(ResourceLifecycle::Live),
         vec![],
@@ -224,7 +225,7 @@ pub fn create_deleted_function_state(id: &str) -> StackResourceState {
 pub fn create_provisioning_function_state(id: &str) -> StackResourceState {
     let func = test_function(id);
     let mut state = StackResourceState::new_pending(
-        Function::RESOURCE_TYPE.to_string(),
+        Worker::RESOURCE_TYPE.to_string(),
         Resource::new(func),
         Some(ResourceLifecycle::Live),
         vec![],
@@ -237,7 +238,7 @@ pub fn create_provisioning_function_state(id: &str) -> StackResourceState {
 pub fn create_provision_failed_function_state(id: &str) -> StackResourceState {
     let func = test_function(id);
     let mut state = StackResourceState::new_pending(
-        Function::RESOURCE_TYPE.to_string(),
+        Worker::RESOURCE_TYPE.to_string(),
         Resource::new(func),
         Some(ResourceLifecycle::Live),
         vec![],
@@ -250,7 +251,7 @@ pub fn create_provision_failed_function_state(id: &str) -> StackResourceState {
 pub fn create_update_failed_function_state(id: &str) -> StackResourceState {
     let func = test_function(id);
     let mut state = StackResourceState::new_pending(
-        Function::RESOURCE_TYPE.to_string(),
+        Worker::RESOURCE_TYPE.to_string(),
         Resource::new(func),
         Some(ResourceLifecycle::Live),
         vec![],
@@ -265,7 +266,7 @@ pub fn create_state_with_running(resources: Vec<(&str, ResourceLifecycle)>) -> S
     for (id, lifecycle) in resources {
         let func = test_function(id);
         let mut resource_state = StackResourceState::new_pending(
-            Function::RESOURCE_TYPE.to_string(),
+            Worker::RESOURCE_TYPE.to_string(),
             Resource::new(func),
             Some(lifecycle),
             vec![],

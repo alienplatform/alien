@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct GcpNetworkImportData {
     /// Project ID owning the network.
     pub project_id: String,
@@ -15,6 +15,8 @@ pub struct GcpNetworkImportData {
     pub vpc_name: Option<String>,
     /// Subnetwork self-links across the configured regions.
     pub subnet_self_links: Vec<String>,
+    /// Primary subnetwork CIDR block used for internal firewall rules.
+    pub cidr_block: Option<String>,
     /// Cloud Router self-link backing Cloud NAT (when created).
     pub router_self_link: Option<String>,
     /// Cloud NAT name (when created).

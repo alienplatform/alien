@@ -6,8 +6,8 @@
 use crate::registry::TfRegistry;
 use alien_core::{
     ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup, AzureServiceBusNamespace,
-    AzureStorageAccount, Build, Function, Kv, Network, Platform, Queue, RemoteStackManagement,
-    ServiceAccount, ServiceActivation, Storage, Vault,
+    AzureStorageAccount, Build, KubernetesCluster, Kv, Network, Platform, Queue,
+    RemoteStackManagement, ServiceAccount, ServiceActivation, Storage, Vault, Worker,
 };
 
 pub(crate) fn register_all(registry: &mut TfRegistry) {
@@ -40,7 +40,12 @@ fn register_aws(registry: &mut TfRegistry) {
         aws::AwsArtifactRegistryEmitter,
     );
     registry.register(Build::RESOURCE_TYPE, p, aws::AwsBuildEmitter);
-    registry.register(Function::RESOURCE_TYPE, p, aws::AwsFunctionEmitter);
+    registry.register(Worker::RESOURCE_TYPE, p, aws::AwsWorkerEmitter);
+    registry.register(
+        KubernetesCluster::RESOURCE_TYPE,
+        p,
+        crate::emitters::kubernetes_cluster::AwsKubernetesClusterEmitter,
+    );
 }
 
 fn register_gcp(registry: &mut TfRegistry) {
@@ -67,11 +72,16 @@ fn register_gcp(registry: &mut TfRegistry) {
         gcp::GcpArtifactRegistryEmitter,
     );
     registry.register(Build::RESOURCE_TYPE, p, gcp::GcpBuildEmitter);
-    registry.register(Function::RESOURCE_TYPE, p, gcp::GcpFunctionEmitter);
+    registry.register(Worker::RESOURCE_TYPE, p, gcp::GcpWorkerEmitter);
     registry.register(
         ServiceActivation::RESOURCE_TYPE,
         p,
         gcp::GcpServiceActivationEmitter,
+    );
+    registry.register(
+        KubernetesCluster::RESOURCE_TYPE,
+        p,
+        crate::emitters::kubernetes_cluster::GcpKubernetesClusterEmitter,
     );
 }
 
@@ -101,7 +111,7 @@ fn register_azure(registry: &mut TfRegistry) {
         azure::AzureArtifactRegistryEmitter,
     );
     registry.register(Build::RESOURCE_TYPE, p, azure::AzureBuildEmitter);
-    registry.register(Function::RESOURCE_TYPE, p, azure::AzureFunctionEmitter);
+    registry.register(Worker::RESOURCE_TYPE, p, azure::AzureWorkerEmitter);
     registry.register(
         ServiceActivation::RESOURCE_TYPE,
         p,
@@ -132,5 +142,10 @@ fn register_azure(registry: &mut TfRegistry) {
         AzureServiceBusNamespace::RESOURCE_TYPE,
         p,
         azure::AzureServiceBusNamespaceEmitter,
+    );
+    registry.register(
+        KubernetesCluster::RESOURCE_TYPE,
+        p,
+        crate::emitters::kubernetes_cluster::AzureKubernetesClusterEmitter,
     );
 }

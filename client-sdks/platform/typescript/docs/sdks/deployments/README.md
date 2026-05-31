@@ -7,7 +7,7 @@
 * [list](#list) - Retrieve all deployments.
 * [create](#create) - Create a new deployment. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId.
 * [getStats](#getstats) - Get aggregated deployment statistics. Returns total count and breakdown by status.
-* [listFilterPlatforms](#listfilterplatforms) - List distinct platforms used by deployments. Used for filter dropdowns.
+* [listFilterEnvironments](#listfilterenvironments) - List distinct effective environments used by deployments. Used for filter dropdowns.
 * [listFilterDeploymentGroups](#listfilterdeploymentgroups) - List deployment groups with deployment counts. Used for filter dropdowns.
 * [get](#get) - Retrieve a deployment by ID.
 * [delete](#delete) - Delete a deployment by ID. Non-force deletes enqueue cleanup; force deletes only remove the record.
@@ -261,13 +261,13 @@ run();
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
-## listFilterPlatforms
+## listFilterEnvironments
 
-List distinct platforms used by deployments. Used for filter dropdowns.
+List distinct effective environments used by deployments. Used for filter dropdowns.
 
 ### Example Usage
 
-<!-- UsageSnippet language="typescript" operationID="listDeploymentFilterPlatforms" method="get" path="/v1/deployments/filter-platforms" -->
+<!-- UsageSnippet language="typescript" operationID="listDeploymentFilterEnvironments" method="get" path="/v1/deployments/filter-environments" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -276,7 +276,7 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.deployments.listFilterPlatforms({
+  const result = await alien.deployments.listFilterEnvironments({
     workspace: "my-workspace",
     project: "my-project",
   });
@@ -293,7 +293,7 @@ The standalone function version of this method:
 
 ```typescript
 import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { deploymentsListFilterPlatforms } from "@alienplatform/platform-api/funcs/deploymentsListFilterPlatforms.js";
+import { deploymentsListFilterEnvironments } from "@alienplatform/platform-api/funcs/deploymentsListFilterEnvironments.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -302,7 +302,7 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await deploymentsListFilterPlatforms(alien, {
+  const res = await deploymentsListFilterEnvironments(alien, {
     workspace: "my-workspace",
     project: "my-project",
   });
@@ -310,7 +310,7 @@ async function run() {
     const { value: result } = res;
     console.log(result);
   } else {
-    console.log("deploymentsListFilterPlatforms failed:", res.error);
+    console.log("deploymentsListFilterEnvironments failed:", res.error);
   }
 }
 
@@ -321,14 +321,14 @@ run();
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.ListDeploymentFilterPlatformsRequest](../../models/operations/listdeploymentfilterplatformsrequest.md)                                                             | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `request`                                                                                                                                                                      | [operations.ListDeploymentFilterEnvironmentsRequest](../../models/operations/listdeploymentfilterenvironmentsrequest.md)                                                       | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
 
 ### Response
 
-**Promise\<[operations.ListDeploymentFilterPlatformsResponse](../../models/operations/listdeploymentfilterplatformsresponse.md)\>**
+**Promise\<[operations.ListDeploymentFilterEnvironmentsResponse](../../models/operations/listdeploymentfilterenvironmentsresponse.md)\>**
 
 ### Errors
 
@@ -563,7 +563,7 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 400, 404                 | application/json         |
+| errors.APIError          | 400, 404, 409            | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
@@ -667,11 +667,12 @@ async function run() {
       managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
       source: {
         deploymentName: "<value>",
-        stackPrefix: "<value>",
+        resourcePrefix: "<value>",
         releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
         platform: "gcp",
         region: "<value>",
         setupTarget: "<value>",
+        setupImportFormatVersion: 1,
         setupFingerprint: "<value>",
         setupFingerprintVersion: 994015,
         stackSettings: {},
@@ -722,11 +723,12 @@ async function run() {
       managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
       source: {
         deploymentName: "<value>",
-        stackPrefix: "<value>",
+        resourcePrefix: "<value>",
         releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
         platform: "gcp",
         region: "<value>",
         setupTarget: "<value>",
+        setupImportFormatVersion: 1,
         setupFingerprint: "<value>",
         setupFingerprintVersion: 994015,
         stackSettings: {},
@@ -804,16 +806,19 @@ async function run() {
       responseUrl: "https://candid-formamide.info",
       source: {
         deploymentName: "<value>",
-        stackPrefix: "<value>",
+        resourcePrefix: "<value>",
         releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
         platform: "kubernetes",
         region: "<value>",
         setupTarget: "<value>",
+        setupImportFormatVersion: 1,
         setupFingerprint: "<value>",
         setupFingerprintVersion: 688409,
         stackSettings: {},
         managementConfig: {
           managingTenantId: "<id>",
+          oidcIssuer: "<value>",
+          oidcSubject: "<value>",
           platform: "azure",
         },
         resources: [
@@ -862,16 +867,19 @@ async function run() {
       responseUrl: "https://candid-formamide.info",
       source: {
         deploymentName: "<value>",
-        stackPrefix: "<value>",
+        resourcePrefix: "<value>",
         releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
         platform: "kubernetes",
         region: "<value>",
         setupTarget: "<value>",
+        setupImportFormatVersion: 1,
         setupFingerprint: "<value>",
         setupFingerprintVersion: 688409,
         stackSettings: {},
         managementConfig: {
           managingTenantId: "<id>",
+          oidcIssuer: "<value>",
+          oidcSubject: "<value>",
           platform: "azure",
         },
         resources: [

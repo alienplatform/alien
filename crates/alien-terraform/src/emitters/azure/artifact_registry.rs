@@ -15,7 +15,7 @@
 use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
-    emitters::azure::helpers::{downcast, required_label, stack_name_template, tags},
+    emitters::azure::helpers::{downcast, required_label, resource_prefix_template, tags},
     expr,
 };
 use alien_core::{import::EmitContext, ArtifactRegistry, Result};
@@ -59,7 +59,7 @@ impl TfEmitter for AzureArtifactRegistryEmitter {
                 [
                     attr(
                         "name",
-                        stack_name_template(&format!("{}-{suffix}", registry.id())),
+                        resource_prefix_template(&format!("{}-{suffix}", registry.id())),
                     ),
                     attr(
                         "resource_group_name",
@@ -77,7 +77,7 @@ impl TfEmitter for AzureArtifactRegistryEmitter {
                     attr(
                         "name",
                         expr::raw(format!(
-                            "uuidv5(\"dns\", \"${{var.stack_name}}-{}-{suffix}-${{azurerm_user_assigned_identity.{uami_label}.principal_id}}\")",
+                            "uuidv5(\"dns\", \"${{local.resource_prefix}}-{}-{suffix}-${{azurerm_user_assigned_identity.{uami_label}.principal_id}}\")",
                             registry.id()
                         )),
                     ),
@@ -159,7 +159,7 @@ impl TfEmitter for AzureArtifactRegistryEmitter {
 /// containing them don't break naming validation.
 fn registry_name_expr(registry_id: &str) -> Expression {
     expr::raw(format!(
-        "substr(replace(lower(\"${{var.stack_name}}{}\"), \"-\", \"\"), 0, 50)",
+        "substr(replace(lower(\"${{local.resource_prefix}}{}\"), \"-\", \"\"), 0, 50)",
         registry_id
     ))
 }

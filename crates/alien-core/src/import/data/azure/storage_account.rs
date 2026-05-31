@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct AzureStorageAccountImportData {
     /// Subscription ID containing the storage account.
     pub subscription_id: String,
@@ -14,8 +14,14 @@ pub struct AzureStorageAccountImportData {
     pub resource_group: String,
     /// Storage account name (globally unique).
     pub storage_account_name: String,
+    /// Full Azure resource ID of the storage account.
+    pub resource_id: String,
     /// Primary blob endpoint URL.
     pub blob_endpoint: String,
+    /// Primary file endpoint URL.
+    pub file_endpoint: String,
     /// Primary queue endpoint URL.
     pub queue_endpoint: String,
+    /// Primary table endpoint URL.
+    pub table_endpoint: String,
 }

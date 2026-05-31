@@ -1,7 +1,6 @@
 #![cfg(all(test, feature = "azure"))]
 
 use alien_azure_clients::models::table::{Table, TableAccessPolicy, TableSignedIdentifier};
-use alien_azure_clients::storage_accounts::{AzureStorageAccountsClient, StorageAccountsApi};
 use alien_azure_clients::tables::{
     AzureTableManagementClient, AzureTableStorageClient, EntityQueryOptions, TableEntity,
     TableManagementApi, TableStorageApi,
@@ -76,28 +75,8 @@ impl AsyncTestContext for TableStorageTestContext {
             AzureTokenCache::new(client_config.clone()),
         );
 
-        // Fetch storage account key for the data plane client
-        let storage_accounts_client = AzureStorageAccountsClient::new(
-            Client::new(),
-            AzureTokenCache::new(client_config.clone()),
-        );
-        let keys_result = storage_accounts_client
-            .list_storage_account_keys(&resource_group_name, &storage_account_name)
-            .await
-            .expect("Failed to fetch storage account keys for test");
-
-        let storage_account_key = keys_result
-            .keys
-            .into_iter()
-            .find(|key| key.key_name.as_deref() == Some("key1"))
-            .and_then(|key| key.value)
-            .expect("No access key found for storage account in test");
-
-        let storage_client = AzureTableStorageClient::new(
-            Client::new(),
-            AzureTokenCache::new(client_config),
-            storage_account_key,
-        );
+        let storage_client =
+            AzureTableStorageClient::new(Client::new(), AzureTokenCache::new(client_config));
 
         TableStorageTestContext {
             management_client,

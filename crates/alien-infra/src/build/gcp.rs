@@ -4,10 +4,13 @@ use tracing::{debug, info};
 use crate::core::{EnvironmentVariableBuilder, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
 use alien_core::{
-    Build, BuildOutputs, ResourceOutputs, ResourceRef, ResourceStatus, ServiceAccount,
+    Build, BuildHeartbeatData, BuildHeartbeatStatus, BuildOutputs, GcpCloudBuildHeartbeatData,
+    HeartbeatBackend, ObservedHealth, Platform, ProviderLifecycleState, ResourceHeartbeat,
+    ResourceHeartbeatData, ResourceOutputs, ResourceRef, ResourceStatus, ServiceAccount,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_macros::{controller, flow_entry, handler, terminal_state};
+use alien_macros::controller;
+use chrono::Utc;
 
 #[controller]
 pub struct GcpBuildController {
@@ -93,6 +96,8 @@ impl GcpBuildController {
                 message: "GCP Cloud Build configuration is missing".to_string(),
             }));
         }
+
+        emit_gcp_build_heartbeat(ctx, &config.id, self);
 
         debug!(name = %config.id, "Heartbeat check passed");
         Ok(HandlerAction::Continue {
@@ -201,7 +206,7 @@ impl GcpBuildController {
     }
 
     fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
-        use alien_core::bindings::{BindingValue, BuildBinding};
+        use alien_core::bindings::BuildBinding;
 
         if let (Some(build_env_vars), Some(service_account)) =
             (&self.build_env_vars, &self.service_account)
@@ -293,6 +298,10 @@ impl GcpBuildController {
             .with_region(gcp_config.region.clone())
             .with_stack_prefix(ctx.resource_prefix.to_string())
             .with_resource_name(config.id.clone());
+        if let Some(deployment_name) = ctx.deployment_name_for_metadata() {
+            permission_context =
+                permission_context.with_deployment_name(deployment_name.to_string());
+        }
         if let Some(ref project_number) = gcp_config.project_number {
             permission_context = permission_context.with_project_number(project_number.clone());
         }
@@ -420,6 +429,53 @@ impl GcpBuildController {
                 })
             })
     }
+}
+
+fn emit_gcp_build_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    controller: &GcpBuildController,
+) {
+    let project_id = controller.project_id.clone().unwrap_or_default();
+    let location = controller.location.clone().unwrap_or_default();
+    let build_config_id = controller
+        .build_config_id
+        .clone()
+        .unwrap_or_else(|| resource_id.to_string());
+
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: Build::RESOURCE_TYPE,
+        controller_platform: Platform::Gcp,
+        backend: HeartbeatBackend::Gcp,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::Build(BuildHeartbeatData::GcpCloudBuild(
+            GcpCloudBuildHeartbeatData {
+                status: BuildHeartbeatStatus {
+                    health: ObservedHealth::Healthy,
+                    lifecycle: ProviderLifecycleState::Running,
+                    message: Some(format!(
+                        "GCP Cloud Build configuration '{}' is ready",
+                        build_config_id
+                    )),
+                    stale: false,
+                    partial: false,
+                    collection_issues: vec![],
+                },
+                project_id,
+                location,
+                build_config_id,
+                service_account: controller.service_account.clone(),
+                environment_variable_count: controller
+                    .build_env_vars
+                    .as_ref()
+                    .map(|env_vars| env_vars.len() as u32)
+                    .unwrap_or(0),
+            },
+        )),
+        raw: vec![],
+    });
 }
 
 #[cfg(test)]

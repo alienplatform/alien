@@ -246,12 +246,14 @@ mod tests {
 
     fn deployment(id: &str, dg: &str) -> DeploymentRecord {
         DeploymentRecord {
+            deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
             id: id.to_string(),
             workspace_id: "default".to_string(),
             project_id: "default".to_string(),
             name: id.to_string(),
             deployment_group_id: dg.to_string(),
             platform: alien_core::Platform::Local,
+            base_platform: None,
             status: "pending".to_string(),
             stack_settings: alien_core::StackSettings::default(),
             stack_state: None,
@@ -265,6 +267,7 @@ mod tests {
             setup_fingerprint_version: None,
             user_environment_variables: None,
             management_config: None,
+            deployment_config: None,
             deployment_token: None,
             retry_requested: false,
             locked_by: None,

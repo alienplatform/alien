@@ -11,7 +11,7 @@ export { VaultSchema as VaultConfigSchema } from "./generated/index.js"
  * - GCP: Secret Manager with prefixed secret names
  * - Azure: Key Vault resource
  *
- * The vault acts as a namespace for secrets and controls access permissions for functions and services.
+ * The vault acts as a namespace for secrets and controls access permissions for workers and services.
  */
 export class Vault {
   private _config: Partial<VaultConfig> = {}

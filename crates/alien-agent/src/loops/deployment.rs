@@ -16,6 +16,7 @@ use crate::db::AgentDb;
 use crate::AgentState;
 use alien_core::{
     ClientConfig, DeploymentConfig, DeploymentState, KubernetesClientConfig, Platform,
+    ResourceHeartbeat,
 };
 use alien_deployment::loop_contract::{LoopOperation, LoopOutcome, LoopStopReason};
 use alien_deployment::runner::{RunnerPolicy, RunnerResult};
@@ -28,6 +29,8 @@ use std::time::Duration;
 use tracing::{debug, error, info};
 
 use crate::error::{ErrorData, Result};
+
+const SUGGESTED_DELAY_YIELD_THRESHOLD: Duration = Duration::from_millis(500);
 
 /// Transport implementation that persists state to the agent's local DB
 /// and re-reads config each step to pick up sync loop changes.
@@ -47,6 +50,7 @@ impl DeploymentLoopTransport for AgentTransport {
         _step_error: Option<&AlienError>,
         _update_heartbeat: bool,
         _suggested_delay_ms: Option<u64>,
+        _heartbeats: Vec<ResourceHeartbeat>,
     ) -> std::result::Result<StepReconcileResult, AlienError> {
         // Persist state to local DB after each step
         self.db
@@ -193,6 +197,7 @@ async fn run_deployment_continuously(state: &AgentState) -> Result<usize> {
     // Resolve client config once (it doesn't change between steps)
     let client_config = resolve_client_config(
         current.platform,
+        enriched_config.base_platform.or(state.config.base_platform),
         &state.config.data_dir,
         state.config.namespace.clone(),
         state.config.sync.as_ref(),
@@ -202,7 +207,7 @@ async fn run_deployment_continuously(state: &AgentState) -> Result<usize> {
     let policy = RunnerPolicy {
         max_steps: 100,
         operation,
-        delay_threshold: None,
+        delay_threshold: Some(SUGGESTED_DELAY_YIELD_THRESHOLD),
     };
 
     let transport = AgentTransport {
@@ -231,7 +236,14 @@ async fn run_deployment_continuously(state: &AgentState) -> Result<usize> {
         steps_executed,
     } = result;
 
-    if loop_result.stop_reason != LoopStopReason::Handoff {
+    if loop_result.outcome == LoopOutcome::Neutral {
+        debug!(
+            status = ?loop_result.final_status,
+            stop_reason = ?loop_result.stop_reason,
+            steps = steps_executed,
+            "Deployment step loop yielded"
+        );
+    } else if loop_result.stop_reason != LoopStopReason::Handoff {
         if loop_result.outcome == LoopOutcome::Success {
             debug!("Deployment synced, clearing deployment config");
             state.db.clear_deployment_config().await?;
@@ -268,6 +280,9 @@ async fn enrich_config(
     // Pass through stack settings from agent config (includes external_bindings)
     if let Some(ref stack_settings) = agent_config.stack_settings {
         config.stack_settings = stack_settings.clone();
+    }
+    if config.base_platform.is_none() {
+        config.base_platform = agent_config.base_platform;
     }
 
     // Inject commands polling env vars only for K8s/Local containers.
@@ -342,18 +357,33 @@ async fn enrich_config(
 /// Resolve client config based on platform
 async fn resolve_client_config(
     platform: Platform,
+    base_platform: Option<Platform>,
     data_dir: &str,
     namespace: Option<String>,
     _sync_config: Option<&crate::config::SyncConfig>,
 ) -> Result<ClientConfig> {
     match platform {
         Platform::Kubernetes => {
-            Ok(ClientConfig::Kubernetes(Box::new(
-                KubernetesClientConfig::InCluster {
+            let kubernetes = KubernetesClientConfig::InCluster {
                     namespace,
                     additional_headers: None,
-                },
-            )))
+            };
+            if let Some(base_platform) = base_platform {
+                let cloud = ClientConfig::from_std_env(base_platform)
+                    .await
+                    .context(ErrorData::ConfigurationError {
+                        message: format!(
+                            "Failed to create {} base client config for Kubernetes deployment",
+                            base_platform
+                        ),
+                    })?;
+                Ok(ClientConfig::KubernetesCloud {
+                    kubernetes: Box::new(kubernetes),
+                    cloud: Box::new(cloud),
+                })
+            } else {
+                Ok(ClientConfig::Kubernetes(Box::new(kubernetes)))
+            }
         }
         Platform::Local => {
             // No artifact_registry_config needed — the deployment token for proxy

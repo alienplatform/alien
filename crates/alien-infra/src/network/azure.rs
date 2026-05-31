@@ -30,10 +30,72 @@ use alien_azure_clients::azure::models::{
     },
 };
 use alien_azure_clients::long_running_operation::OperationResult;
-use alien_core::{Network, NetworkSettings, ResourceStatus};
+use alien_core::{
+    AzureVnetNetworkHeartbeatData, HeartbeatBackend, Network, NetworkHeartbeatData,
+    NetworkHeartbeatStatus, NetworkSettings, ObservedHealth, Platform, ProviderLifecycleState,
+    ResourceHeartbeat, ResourceHeartbeatData, ResourceStatus,
+};
 use alien_error::{AlienError, Context};
-use alien_macros::{controller, flow_entry, handler, terminal_state};
-use tracing::{debug, info};
+use alien_macros::controller;
+use chrono::Utc;
+use serde::{Deserialize, Serialize};
+use tracing::{debug, info, warn};
+
+const AZURE_BYO_VNET_RBAC_WAIT_MAX_ATTEMPTS: u32 = 60;
+const AZURE_BYO_VNET_RBAC_WAIT_SECS: u64 = 10;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AzureByoVnetVerificationError {
+    pub code: String,
+    pub message: String,
+}
+
+fn emit_azure_network_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    controller: &AzureNetworkController,
+) {
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: Network::RESOURCE_TYPE,
+        controller_platform: Platform::Azure,
+        backend: HeartbeatBackend::Azure,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::Network(NetworkHeartbeatData::AzureVnet(
+            AzureVnetNetworkHeartbeatData {
+                status: NetworkHeartbeatStatus {
+                    health: ObservedHealth::Healthy,
+                    lifecycle: ProviderLifecycleState::Running,
+                    message: controller
+                        .vnet_name
+                        .as_ref()
+                        .map(|vnet_name| format!("Azure VNet '{}' is reachable", vnet_name)),
+                    stale: false,
+                    partial: false,
+                    collection_issues: vec![],
+                },
+                vnet_name: controller.vnet_name.clone(),
+                vnet_resource_id: controller.vnet_resource_id.clone(),
+                resource_group: controller.resource_group.clone(),
+                location: controller.location.clone(),
+                cidr_block: controller.cidr_block.clone(),
+                public_subnet_name: controller.public_subnet_name.clone(),
+                private_subnet_name: controller.private_subnet_name.clone(),
+                nat_gateway_id: controller.nat_gateway_id.clone(),
+                public_ip_id: controller.public_ip_id.clone(),
+                nsg_id: controller.nsg_id.clone(),
+                is_byo_vnet: controller.is_byo_vnet,
+                last_byo_vnet_verification_error_code: controller
+                    .last_byo_vnet_verification_error
+                    .as_ref()
+                    .map(|error| error.code.clone()),
+            },
+        )),
+        raw: vec![],
+    });
+}
 
 // =============================================================================================
 // Controller
@@ -60,6 +122,7 @@ pub struct AzureNetworkController {
     pub(crate) location: Option<String>,
     pub cidr_block: Option<String>,
     pub(crate) is_byo_vnet: bool,
+    pub(crate) last_byo_vnet_verification_error: Option<AzureByoVnetVerificationError>,
 }
 
 impl AzureNetworkController {
@@ -171,6 +234,7 @@ impl AzureNetworkController {
             location: Some("eastus".to_string()),
             cidr_block: Some("10.0.0.0/16".to_string()),
             is_byo_vnet: false,
+            last_byo_vnet_verification_error: None,
             _internal_stay_count: None,
         }
     }
@@ -267,14 +331,48 @@ impl AzureNetworkController {
                     .service_provider
                     .get_azure_network_client(azure_config)?;
 
-                let vnet = network_client
+                let vnet = match network_client
                     .get_virtual_network(&resource_group, &vnet_name)
                     .await
                     .context(ErrorData::InfrastructureError {
                         message: format!("BYO-VNet '{}' not found", vnet_name),
                         operation: Some("verify_byo_vnet".to_string()),
                         resource_id: Some(config.id.clone()),
-                    })?;
+                    }) {
+                    Ok(vnet) => {
+                        self.last_byo_vnet_verification_error = None;
+                        vnet
+                    }
+                    Err(err) if azure_utils::is_azure_authorization_propagation_error(&err) => {
+                        self.last_byo_vnet_verification_error =
+                            Some(AzureByoVnetVerificationError {
+                                code: err.code.clone(),
+                                message: err.to_string(),
+                            });
+
+                        warn!(
+                            network_id = %config.id,
+                            vnet_name = %vnet_name,
+                            vnet_resource_id = %vnet_resource_id,
+                            error = %err,
+                            "Waiting for Azure Reader role assignment to propagate before verifying BYO-VNet"
+                        );
+
+                        if self._internal_stay_count.unwrap_or_default() + 1
+                            >= AZURE_BYO_VNET_RBAC_WAIT_MAX_ATTEMPTS
+                        {
+                            return Err(err);
+                        }
+
+                        return Ok(HandlerAction::Stay {
+                            max_times: AZURE_BYO_VNET_RBAC_WAIT_MAX_ATTEMPTS,
+                            suggested_delay: Some(std::time::Duration::from_secs(
+                                AZURE_BYO_VNET_RBAC_WAIT_SECS,
+                            )),
+                        });
+                    }
+                    Err(err) => return Err(err),
+                };
 
                 self.location = vnet.location;
                 if let Some(props) = &vnet.properties {
@@ -601,10 +699,10 @@ impl AzureNetworkController {
                 name: Some(PublicIpAddressSkuName::Standard),
                 tier: None,
             }),
-            properties: Some(Box::new(PublicIpAddressPropertiesFormat {
+            properties: Some(PublicIpAddressPropertiesFormat {
                 public_ip_allocation_method: Some(IpAllocationMethod::Static),
                 ..Default::default()
-            })),
+            }),
             tags: [("managed-by".to_string(), "alien".to_string())]
                 .into_iter()
                 .collect(),
@@ -1006,6 +1104,7 @@ impl AzureNetworkController {
         // For BYO-VNet, we don't need to verify
         if self.is_byo_vnet {
             debug!(network_id = %config.id, "BYO-VNet network ready");
+            emit_azure_network_heartbeat(ctx, &config.id, self);
             return Ok(HandlerAction::Continue {
                 state: Ready,
                 suggested_delay: Some(std::time::Duration::from_secs(60)),
@@ -1029,6 +1128,8 @@ impl AzureNetworkController {
 
             debug!(vnet_name = %vnet_name, "VNet exists and is accessible");
         }
+
+        emit_azure_network_heartbeat(ctx, &config.id, self);
 
         Ok(HandlerAction::Continue {
             state: Ready,

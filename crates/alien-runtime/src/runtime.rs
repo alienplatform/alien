@@ -17,6 +17,7 @@ use alien_bindings::{
     },
     BindingsProvider,
 };
+use alien_core::{ENV_ALIEN_BINDINGS_GRPC_ADDRESS, ENV_ALIEN_BINDINGS_MODE};
 use alien_error::{AlienError, Context};
 use reqwest::Url;
 use tokio::{
@@ -338,6 +339,15 @@ fn spawn_transport(
             Ok(tokio::spawn(async move { transport.run().await }))
         }
 
+        TransportType::Http => {
+            let mut transport =
+                LocalTransport::exposed(transport_port, control_server, shutdown_rx);
+            if let Some(port) = app_http_port {
+                transport = transport.with_app_port(port);
+            }
+            Ok(tokio::spawn(async move { transport.run().await }))
+        }
+
         TransportType::Local => {
             let mut transport = LocalTransport::new(transport_port, control_server, shutdown_rx);
             if let Some(port) = app_http_port {
@@ -518,13 +528,15 @@ async fn start_application(
         cmd.current_dir(working_dir);
     }
 
-    // Set bindings address
-    cmd.env("ALIEN_BINDINGS_GRPC_ADDRESS", &config.bindings_address);
-
     // Set custom environment variables
     for (key, value) in &config.env_vars {
         cmd.env(key, value);
     }
+
+    // User applications launched by alien-runtime must use the runtime's gRPC
+    // bindings server. Deployment env can still describe platform/base-platform
+    // for app logic, but direct binding discovery belongs to runtime.
+    configure_application_bindings_env(&mut cmd, config);
 
     // Set secrets loaded from vault
     for (key, value) in secrets {
@@ -564,6 +576,22 @@ async fn start_application(
     }
 
     Ok(child)
+}
+
+fn configure_application_bindings_env(cmd: &mut Command, config: &RuntimeConfig) {
+    for (key, value) in application_bindings_env(config) {
+        cmd.env(key, value);
+    }
+}
+
+fn application_bindings_env(config: &RuntimeConfig) -> [(&'static str, String); 2] {
+    [
+        (
+            ENV_ALIEN_BINDINGS_GRPC_ADDRESS,
+            config.bindings_address.clone(),
+        ),
+        (ENV_ALIEN_BINDINGS_MODE, "grpc".to_string()),
+    ]
 }
 
 /// Stream stdout or stderr from the application.
@@ -696,4 +724,32 @@ pub fn setup_shutdown_on_signals() -> (broadcast::Sender<()>, broadcast::Receive
     }
 
     (tx, rx)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use alien_core::{ENV_ALIEN_BINDINGS_GRPC_ADDRESS, ENV_ALIEN_BINDINGS_MODE};
+
+    use super::{application_bindings_env, RuntimeConfig, TransportType};
+
+    #[test]
+    fn application_bindings_env_forces_runtime_grpc_provider() {
+        let config = RuntimeConfig::builder()
+            .transport(TransportType::Passthrough)
+            .command(vec!["app".to_string()])
+            .bindings_address("127.0.0.1:60000".to_string())
+            .build();
+
+        let env = application_bindings_env(&config)
+            .into_iter()
+            .collect::<HashMap<_, _>>();
+
+        assert_eq!(
+            env.get(ENV_ALIEN_BINDINGS_GRPC_ADDRESS),
+            Some(&"127.0.0.1:60000".to_string())
+        );
+        assert_eq!(env.get(ENV_ALIEN_BINDINGS_MODE), Some(&"grpc".to_string()));
+    }
 }

@@ -13,6 +13,7 @@ mod generator {
     pub mod aws_compute_tests;
     pub mod aws_data_layer_tests;
     pub mod aws_full_stack_tests;
+    pub mod kubernetes_cluster_tests;
     pub mod network_tests;
     pub mod output_chunking_tests;
     pub mod plugin_tests;

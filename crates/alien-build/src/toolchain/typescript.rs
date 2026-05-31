@@ -17,7 +17,7 @@ use tracing::{error, info};
 /// This wrapper:
 /// 1. Imports the user's module
 /// 2. Detects if the default export has a `fetch` method (Hono, Elysia, etc.)
-/// 3. If so, starts Bun.serve() on a random port and registers with the runtime
+/// 3. If so, starts Bun.serve() and registers with the runtime
 /// 4. Enters the event loop via ctx.run()
 const BOOTSTRAP_TEMPLATE: &str = r#"/**
  * Alien Bootstrap - Auto-generated wrapper for TypeScript applications.
@@ -33,6 +33,12 @@ async function __alienBootstrap() {
   // Detect default export with fetch method (Hono, Elysia, Express adapter, etc.)
   const defaultExport = userModule?.default ?? userModule
   const hasFetchHandler = defaultExport && typeof defaultExport === "object" && "fetch" in defaultExport
+  const isPassthrough = process.env.ALIEN_TRANSPORT === "passthrough"
+  const listenPort = isPassthrough ? Number(process.env.PORT ?? "3000") : 0
+
+  if (!Number.isInteger(listenPort) || listenPort < 0 || listenPort > 65535) {
+    throw new Error(`Invalid PORT value for Alien HTTP server: ${process.env.PORT}`)
+  }
 
   if (hasFetchHandler) {
     const fetchHandler = typeof defaultExport.fetch === "function"
@@ -41,7 +47,8 @@ async function __alienBootstrap() {
 
     const server = Bun.serve({
       fetch: fetchHandler,
-      port: 0, // Random available port
+      hostname: isPassthrough ? "0.0.0.0" : "127.0.0.1",
+      port: listenPort,
       idleTimeout: 255, // Max value (seconds) — prevent Bun from closing idle connections during slow operations
     })
 
@@ -50,11 +57,10 @@ async function __alienBootstrap() {
     // No HTTP framework — start a minimal server so the runtime knows we're alive.
     // Commands and event handlers are delivered via gRPC, but the runtime still
     // needs an HTTP port to probe readiness and route health checks.
-    // Bound to 127.0.0.1 so it's only reachable from the local machine.
     const server = Bun.serve({
       fetch: () => new Response("ok"),
-      hostname: "127.0.0.1",
-      port: 0,
+      hostname: isPassthrough ? "0.0.0.0" : "127.0.0.1",
+      port: listenPort,
       idleTimeout: 255,
     })
 
@@ -85,6 +91,23 @@ pub struct TypeScriptToolchain {
 }
 
 impl TypeScriptToolchain {
+    fn absolute_path(path: &Path) -> Result<PathBuf> {
+        if path.is_absolute() {
+            return Ok(path.to_path_buf());
+        }
+
+        let current_dir =
+            std::env::current_dir()
+                .into_alien_error()
+                .context(ErrorData::ImageBuildFailed {
+                    resource_name: "typescript-project".to_string(),
+                    reason: "Failed to resolve current directory".to_string(),
+                    build_output: None,
+                })?;
+
+        Ok(current_dir.join(path))
+    }
+
     /// Check if the source directory contains a valid TypeScript/JavaScript project
     pub fn is_typescript_project(src_dir: &Path) -> bool {
         src_dir.join("package.json").exists()
@@ -102,14 +125,14 @@ impl TypeScriptToolchain {
             .await
             .into_alien_error()
             .context(ErrorData::ImageBuildFailed {
-                function_name: "typescript-project".to_string(),
+                resource_name: "typescript-project".to_string(),
                 reason: "Failed to read package.json".to_string(),
                 build_output: None,
             })?;
 
         let package_json: Value = serde_json::from_str(&content).into_alien_error().context(
             ErrorData::ImageBuildFailed {
-                function_name: "typescript-project".to_string(),
+                resource_name: "typescript-project".to_string(),
                 reason: "Failed to parse package.json".to_string(),
                 build_output: None,
             },
@@ -137,14 +160,14 @@ impl TypeScriptToolchain {
             .await
             .into_alien_error()
             .context(ErrorData::ImageBuildFailed {
-                function_name: "typescript-project".to_string(),
+                resource_name: "typescript-project".to_string(),
                 reason: "Failed to read package.json".to_string(),
                 build_output: None,
             })?;
 
         let package_json: Value = serde_json::from_str(&content).into_alien_error().context(
             ErrorData::ImageBuildFailed {
-                function_name: "typescript-project".to_string(),
+                resource_name: "typescript-project".to_string(),
                 reason: "Failed to parse package.json".to_string(),
                 build_output: None,
             },
@@ -179,7 +202,7 @@ impl TypeScriptToolchain {
         }
 
         Err(AlienError::new(ErrorData::ImageBuildFailed {
-            function_name: "typescript-project".to_string(),
+            resource_name: "typescript-project".to_string(),
             reason:
                 "Could not detect entry point. Set 'main' in package.json or create src/index.ts"
                     .to_string(),
@@ -198,16 +221,20 @@ impl TypeScriptToolchain {
     }
 
     /// Get cache paths for TypeScript builds (dependencies only)
-    fn get_cache_paths(&self, context: &ToolchainContext) -> Vec<PathBuf> {
-        vec![context.src_dir.join("node_modules")]
+    fn get_cache_paths(&self, src_dir: &Path) -> Vec<PathBuf> {
+        vec![src_dir.join("node_modules")]
     }
 
     /// Generate cache key from lock files and package.json
-    async fn generate_cache_key(&self, context: &ToolchainContext) -> Result<String> {
+    async fn generate_cache_key(
+        &self,
+        context: &ToolchainContext,
+        src_dir: &Path,
+    ) -> Result<String> {
         let mut patterns = Self::get_lock_file_patterns().to_vec();
         patterns.push("**/package.json");
 
-        let lock_hash = cache_utils::hash_files(&patterns, &context.src_dir).await?;
+        let lock_hash = cache_utils::hash_files(&patterns, src_dir).await?;
 
         Ok(format!(
             "{}-typescript-{}",
@@ -219,7 +246,7 @@ impl TypeScriptToolchain {
     /// Generate the bootstrap wrapper file that handles automatic HTTP server registration.
     ///
     /// The wrapper imports the user's module, detects `export default` with a `fetch` method,
-    /// starts Bun.serve() on a random port, registers with the runtime, and enters the event loop.
+    /// starts Bun.serve(), registers with the runtime, and enters the event loop.
     async fn generate_bootstrap_wrapper(
         &self,
         _src_dir: &Path,
@@ -231,7 +258,7 @@ impl TypeScriptToolchain {
             .await
             .into_alien_error()
             .context(ErrorData::ImageBuildFailed {
-                function_name: "typescript-project".to_string(),
+                resource_name: "typescript-project".to_string(),
                 reason: "Failed to create bootstrap directory".to_string(),
                 build_output: None,
             })?;
@@ -260,7 +287,7 @@ impl TypeScriptToolchain {
             .await
             .into_alien_error()
             .context(ErrorData::ImageBuildFailed {
-                function_name: "typescript-project".to_string(),
+                resource_name: "typescript-project".to_string(),
                 reason: "Failed to write bootstrap wrapper".to_string(),
                 build_output: None,
             })?;
@@ -280,8 +307,11 @@ impl Toolchain for TypeScriptToolchain {
     async fn build(&self, context: &ToolchainContext) -> Result<ToolchainOutput> {
         info!("Building TypeScript project with bun build --compile");
 
+        let src_dir = Self::absolute_path(&context.src_dir)?;
+        let build_dir = Self::absolute_path(&context.build_dir)?;
+
         // Validate that this is a TypeScript/JavaScript project
-        if !Self::is_typescript_project(&context.src_dir) {
+        if !Self::is_typescript_project(&src_dir) {
             return Err(AlienError::new(ErrorData::InvalidResourceConfig {
                 resource_id: "typescript-project".to_string(),
                 reason: "Source directory does not contain package.json".to_string(),
@@ -289,14 +319,14 @@ impl Toolchain for TypeScriptToolchain {
         }
 
         // Get binary name and entry point
-        let binary_name = self.get_binary_name(&context.src_dir).await?;
-        let entry_point = self.detect_entry_point(&context.src_dir).await?;
+        let binary_name = self.get_binary_name(&src_dir).await?;
+        let entry_point = self.detect_entry_point(&src_dir).await?;
 
         info!("Binary name: {}, Entry point: {}", binary_name, entry_point);
 
         // Generate cache key and setup cache paths
-        let cache_key = self.generate_cache_key(context).await?;
-        let cache_paths = self.get_cache_paths(context);
+        let cache_key = self.generate_cache_key(context, &src_dir).await?;
+        let cache_paths = self.get_cache_paths(&src_dir);
 
         info!("Using cache key: {}", cache_key);
 
@@ -309,10 +339,10 @@ impl Toolchain for TypeScriptToolchain {
         if cache_restored {
             info!("Skipping dependency installation (restored from cache)");
         } else {
-            install_dependencies(&context.src_dir)
+            install_dependencies(&src_dir)
                 .await
                 .context(ErrorData::ImageBuildFailed {
-                    function_name: binary_name.clone(),
+                    resource_name: binary_name.clone(),
                     reason: "Failed to install dependencies".to_string(),
                     build_output: None,
                 })?;
@@ -321,35 +351,35 @@ impl Toolchain for TypeScriptToolchain {
         // Create .alien-build/ inside source directory for the bootstrap file.
         // This location allows bun to resolve node_modules from the source directory.
         // The bootstrap will be cleaned up after the build completes.
-        let bootstrap_dir = context.src_dir.join(".alien-build");
+        let bootstrap_dir = src_dir.join(".alien-build");
         fs::create_dir_all(&bootstrap_dir)
             .await
             .into_alien_error()
             .context(ErrorData::ImageBuildFailed {
-                function_name: binary_name.clone(),
+                resource_name: binary_name.clone(),
                 reason: "Failed to create bootstrap directory".to_string(),
                 build_output: None,
             })?;
 
         // Ensure the final build output directory exists
-        fs::create_dir_all(&context.build_dir)
+        fs::create_dir_all(&build_dir)
             .await
             .into_alien_error()
             .context(ErrorData::ImageBuildFailed {
-                function_name: binary_name.clone(),
+                resource_name: binary_name.clone(),
                 reason: "Failed to create build output directory".to_string(),
                 build_output: None,
             })?;
 
         // Generate bootstrap wrapper that handles automatic HTTP server registration
         let bootstrap_path = self
-            .generate_bootstrap_wrapper(&context.src_dir, &entry_point, &bootstrap_dir)
+            .generate_bootstrap_wrapper(&src_dir, &entry_point, &bootstrap_dir)
             .await?;
 
         // Binary is output directly to the proper build directory (not inside source).
         // On Windows, bun appends .exe to the outfile path automatically.
         let binary_filename = format!("{}{}", binary_name, context.build_target.binary_extension());
-        let binary_path = context.build_dir.join(&binary_filename);
+        let binary_path = build_dir.join(&binary_filename);
 
         // Build bun compile arguments based on target
         let target_arg = context.build_target.bun_target();
@@ -408,13 +438,13 @@ impl Toolchain for TypeScriptToolchain {
 
             let mut child = Command::new("bun")
                 .args(&args)
-                .current_dir(&context.src_dir)
+                .current_dir(&src_dir)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()
                 .into_alien_error()
                 .context(ErrorData::ImageBuildFailed {
-                    function_name: binary_name_clone.clone(),
+                    resource_name: binary_name_clone.clone(),
                     reason: "Failed to execute bun build --compile. Is Bun installed?".to_string(),
                     build_output: None,
                 })?;
@@ -426,7 +456,7 @@ impl Toolchain for TypeScriptToolchain {
 
             while let Some(line) = stderr_reader.next_line().await.into_alien_error().context(
                 ErrorData::ImageBuildFailed {
-                    function_name: binary_name_clone.clone(),
+                    resource_name: binary_name_clone.clone(),
                     reason: "Failed to read bun build output".to_string(),
                     build_output: None,
                 },
@@ -450,7 +480,7 @@ impl Toolchain for TypeScriptToolchain {
                     .await
                     .into_alien_error()
                     .context(ErrorData::ImageBuildFailed {
-                        function_name: binary_name_clone.clone(),
+                        resource_name: binary_name_clone.clone(),
                         reason: "Failed to wait for bun build --compile".to_string(),
                         build_output: None,
                     })?;
@@ -463,7 +493,7 @@ impl Toolchain for TypeScriptToolchain {
                     stderr_output
                 );
                 return Err(AlienError::new(ErrorData::ImageBuildFailed {
-                    function_name: binary_name_clone.clone(),
+                    resource_name: binary_name_clone.clone(),
                     reason: "bun build --compile failed".to_string(),
                     build_output: Some(stderr_output),
                 }));
@@ -483,11 +513,12 @@ impl Toolchain for TypeScriptToolchain {
         // Verify binary was created
         if !binary_path.exists() {
             return Err(AlienError::new(ErrorData::ImageBuildFailed {
-                function_name: binary_name.clone(),
+                resource_name: binary_name.clone(),
                 reason: format!("Compiled binary not found at {}", binary_path.display()),
                 build_output: None,
             }));
         }
+        super::validate_executable_format(&binary_path, context.build_target, &binary_name)?;
 
         info!(
             "Successfully compiled TypeScript to single executable: {}",
@@ -498,12 +529,13 @@ impl Toolchain for TypeScriptToolchain {
         cache_utils::save_cache(context.cache_store.as_deref(), &cache_key, &cache_paths).await?;
 
         // Determine if we need alien-runtime in the image
-        // Functions on local platform use embedded runtime in agent (no runtime in image)
+        // Workers on local platform use embedded runtime in agent (no runtime in image)
         // Everything else (containers on any platform, functions on cloud) needs alien-runtime
-        let needs_runtime_in_image = context.is_container || context.platform_name != "local";
+        let needs_runtime_in_image =
+            context.is_container || context.runtime_platform_name != "local";
 
         if !needs_runtime_in_image {
-            // Function on local platform - runtime is embedded in operator
+            // Worker on local platform - runtime is embedded in operator
             let runtime_command = vec![format!("./{}", binary_filename)];
 
             return Ok(ToolchainOutput {
@@ -532,7 +564,11 @@ impl Toolchain for TypeScriptToolchain {
         Ok(ToolchainOutput {
             build_strategy: super::ImageBuildStrategy::FromBaseImage {
                 base_images,
-                files_to_package: vec![(binary_path, format!("./{}", binary_filename))],
+                files_to_package: vec![super::FileSpec {
+                    host_path: binary_path,
+                    container_path: format!("./{}", binary_filename),
+                    mode: Some(0o755),
+                }],
             },
             runtime_command,
         })
@@ -564,6 +600,15 @@ mod tests {
         )
         .unwrap();
         assert!(TypeScriptToolchain::is_typescript_project(temp_dir.path()));
+    }
+
+    #[test]
+    fn test_absolute_path_resolves_relative_paths() {
+        let relative = Path::new("relative-project");
+        let resolved = TypeScriptToolchain::absolute_path(relative).unwrap();
+
+        assert!(resolved.is_absolute());
+        assert!(resolved.ends_with(relative));
     }
 
     #[tokio::test]

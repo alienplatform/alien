@@ -9,6 +9,9 @@
 * [get](#get) - Retrieve a project by ID or name.
 * [delete](#delete) - Delete a project. The project must have no deployments.
 * [update](#update) - Update a project.
+* [getGcpOAuthProvider](#getgcpoauthprovider) - Retrieve redacted project-level Google Cloud OAuth provider settings.
+* [updateGcpOAuthProvider](#updategcpoauthprovider) - Update project-level Google Cloud OAuth provider settings.
+* [getDeploymentPortalDomain](#getdeploymentportaldomain) - Get the deployment portal domain binding for a project.
 * [createFromTemplate](#createfromtemplate) - Create a project by forking alienplatform/alien into your namespace, then configuring GitHub Actions.
 * [getTemplateUrls](#gettemplateurls) - Get template URLs for deploying setup stacks in this project.
 * [getActiveRelease](#getactiverelease) - Get the active release for this project. Returns the latest release, or the pinned release if deploymentId is provided and that deployment has a pinned release.
@@ -172,7 +175,7 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 409                      | application/json         |
+| errors.APIError          | 400, 401, 403, 409       | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
@@ -348,14 +351,11 @@ async function run() {
   const result = await alien.projects.update({
     idOrName: "my-project",
     workspace: "my-workspace",
-    requestBody: {
+    updateProject: {
       gitRepository: null,
-      deploymentPageBackground: {
-        type: "gradient-mesh",
-        mode: "dark",
-        colorScheme: "blue",
-      },
       domainId: "dom_469m0agk8luj4s16sakmmpdd",
+      defaultManagers: null,
+      portalDomainId: "dom_469m0agk8luj4s16sakmmpdd",
     },
   });
 
@@ -383,14 +383,11 @@ async function run() {
   const res = await projectsUpdate(alien, {
     idOrName: "my-project",
     workspace: "my-workspace",
-    requestBody: {
+    updateProject: {
       gitRepository: null,
-      deploymentPageBackground: {
-        type: "gradient-mesh",
-        mode: "dark",
-        colorScheme: "blue",
-      },
       domainId: "dom_469m0agk8luj4s16sakmmpdd",
+      defaultManagers: null,
+      portalDomainId: "dom_469m0agk8luj4s16sakmmpdd",
     },
   });
   if (res.ok) {
@@ -416,6 +413,245 @@ run();
 ### Response
 
 **Promise\<[models.Project](../../models/project.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 404                      | application/json         |
+| errors.APIError          | 500                      | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
+## getGcpOAuthProvider
+
+Retrieve redacted project-level Google Cloud OAuth provider settings.
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="getProjectGcpOAuthProvider" method="get" path="/v1/projects/{idOrName}/gcp-oauth-provider" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.projects.getGcpOAuthProvider({
+    idOrName: "my-project",
+    workspace: "my-workspace",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsGetGcpOAuthProvider } from "@alienplatform/platform-api/funcs/projectsGetGcpOAuthProvider.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await projectsGetGcpOAuthProvider(alien, {
+    idOrName: "my-project",
+    workspace: "my-workspace",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("projectsGetGcpOAuthProvider failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.GetProjectGcpOAuthProviderRequest](../../models/operations/getprojectgcpoauthproviderrequest.md)                                                                   | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.ProjectGcpOAuthProvider](../../models/projectgcpoauthprovider.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 404                      | application/json         |
+| errors.APIError          | 500                      | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
+## updateGcpOAuthProvider
+
+Update project-level Google Cloud OAuth provider settings.
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="updateProjectGcpOAuthProvider" method="put" path="/v1/projects/{idOrName}/gcp-oauth-provider" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.projects.updateGcpOAuthProvider({
+    idOrName: "my-project",
+    workspace: "my-workspace",
+    updateProjectGcpOAuthProvider: {
+      mode: "custom",
+      clientId: "1234567890-abc123.apps.googleusercontent.com",
+    },
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsUpdateGcpOAuthProvider } from "@alienplatform/platform-api/funcs/projectsUpdateGcpOAuthProvider.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await projectsUpdateGcpOAuthProvider(alien, {
+    idOrName: "my-project",
+    workspace: "my-workspace",
+    updateProjectGcpOAuthProvider: {
+      mode: "custom",
+      clientId: "1234567890-abc123.apps.googleusercontent.com",
+    },
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("projectsUpdateGcpOAuthProvider failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.UpdateProjectGcpOAuthProviderRequest](../../models/operations/updateprojectgcpoauthproviderrequest.md)                                                             | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.ProjectGcpOAuthProvider](../../models/projectgcpoauthprovider.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 400, 404                 | application/json         |
+| errors.APIError          | 500                      | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
+## getDeploymentPortalDomain
+
+Get the deployment portal domain binding for a project.
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="getProjectDeploymentPortalDomain" method="get" path="/v1/projects/{idOrName}/deployment-portal-domain" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.projects.getDeploymentPortalDomain({
+    idOrName: "my-project",
+    workspace: "my-workspace",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsGetDeploymentPortalDomain } from "@alienplatform/platform-api/funcs/projectsGetDeploymentPortalDomain.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await projectsGetDeploymentPortalDomain(alien, {
+    idOrName: "my-project",
+    workspace: "my-workspace",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("projectsGetDeploymentPortalDomain failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.GetProjectDeploymentPortalDomainRequest](../../models/operations/getprojectdeploymentportaldomainrequest.md)                                                       | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.DeploymentPortalDomainResponse](../../models/deploymentportaldomainresponse.md)\>**
 
 ### Errors
 

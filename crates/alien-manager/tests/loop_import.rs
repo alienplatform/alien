@@ -94,7 +94,7 @@ fn make_imported_state(resource_id: &str, bucket: &str) -> StackState {
         resource: &resource_entry,
         platform: Platform::Aws,
         region: "us-east-1",
-        management_config: &management_config,
+        management_config: Some(&management_config),
         stack_settings: &stack_settings,
     };
 
@@ -121,15 +121,18 @@ async fn imported_deployment_round_trips_through_sqlite_with_import_source() {
         .create_with_state(
             &Subject::system(),
             CreateImportedDeploymentParams {
+                deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
                 name: "imported-cf-us-east-1".to_string(),
                 deployment_group_id: dg_id.clone(),
                 platform: Platform::Aws,
+                base_platform: None,
                 stack_settings: StackSettings::default(),
                 stack_state: stack_state.clone(),
                 environment_info: None,
                 runtime_metadata: RuntimeMetadata::default(),
                 status: "provisioning".to_string(),
                 current_release_id: None,
+                desired_release_id: None,
                 import_source: Some(ImportSourceKind::CloudFormation),
                 setup_target: "aws".to_string(),
                 setup_fingerprint: "test".to_string(),
@@ -172,15 +175,18 @@ async fn loop_acquire_picks_up_imported_deployments_in_provisioning_status() {
         .create_with_state(
             &Subject::system(),
             CreateImportedDeploymentParams {
+                deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
                 name: "imported-cf-us-east-1".to_string(),
                 deployment_group_id: dg_id,
                 platform: Platform::Aws,
+                base_platform: None,
                 stack_settings: StackSettings::default(),
                 stack_state,
                 environment_info: None,
                 runtime_metadata: RuntimeMetadata::default(),
                 status: "provisioning".to_string(),
                 current_release_id: None,
+                desired_release_id: None,
                 import_source: Some(ImportSourceKind::CloudFormation),
                 setup_target: "aws".to_string(),
                 setup_fingerprint: "test".to_string(),
@@ -228,9 +234,11 @@ async fn imported_deployment_appears_when_promoted_to_update_pending() {
         .create_with_state(
             &Subject::system(),
             CreateImportedDeploymentParams {
+                deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
                 name: "imported-cf-us-east-1".to_string(),
                 deployment_group_id: dg_id,
                 platform: Platform::Aws,
+                base_platform: None,
                 stack_settings: StackSettings::default(),
                 stack_state,
                 environment_info: None,
@@ -238,6 +246,7 @@ async fn imported_deployment_appears_when_promoted_to_update_pending() {
                 // Force into update-pending to mirror the post-release-roll state.
                 status: "update-pending".to_string(),
                 current_release_id: None,
+                desired_release_id: None,
                 import_source: Some(ImportSourceKind::CloudFormation),
                 setup_target: "aws".to_string(),
                 setup_fingerprint: "test".to_string(),

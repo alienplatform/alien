@@ -9,10 +9,9 @@ import * as z from "zod";
  * @description Azure management configuration extracted from stack settings
  */
 export const AzureManagementConfigSchema = z.object({
-    "managementPrincipalId": z.string().describe("Management service principal object ID for local development fallback").nullish(),
-"managingTenantId": z.string().describe("The managing Azure Tenant ID for cross-tenant access"),
-"oidcIssuer": z.string().describe("OIDC issuer URL for federated identity credential creation").nullish(),
-"oidcSubject": z.string().describe("OIDC subject claim for federated identity credential creation").nullish()
+    "managingTenantId": z.string().describe("The managing Azure Tenant ID for cross-tenant access"),
+"oidcIssuer": z.string().describe("OIDC issuer URL trusted by the target-side managed identity."),
+"oidcSubject": z.string().describe("OIDC subject claim trusted by the target-side managed identity.")
     }).describe("Azure management configuration extracted from stack settings")
 
 export type AzureManagementConfig = z.infer<typeof AzureManagementConfigSchema>

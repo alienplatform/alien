@@ -51,6 +51,9 @@ pub mod managed_environments_dapr_components {
 pub mod managed_identity {
     include!(concat!(env!("OUT_DIR"), "/managed_identity.rs"));
 }
+pub mod managed_clusters {
+    include!(concat!(env!("OUT_DIR"), "/managed_clusters.rs"));
+}
 pub mod nat_gateway {
     include!(concat!(env!("OUT_DIR"), "/nat_gateway.rs"));
 }

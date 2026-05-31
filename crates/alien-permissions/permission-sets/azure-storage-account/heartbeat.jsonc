@@ -5,11 +5,11 @@
     "azure": [
       {
         "grant": {
-          "actions": ["Microsoft.Storage/storageAccounts/read"]
+          "predefinedRoles": ["Reader"]
         },
         "binding": {
           "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${stackPrefix}-*"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
           },
           "resource": {
             "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${resourceName}"

@@ -2,8 +2,13 @@ terraform {
   required_providers {
     azurerm = {
       source                = "hashicorp/azurerm"
-      version               = "~> 3.0"
+      version               = ">= 4.46.0, < 5.0.0"
       configuration_aliases = [azurerm.management, azurerm.target]
+    }
+    azapi = {
+      source                = "Azure/azapi"
+      version               = "~> 2.4"
+      configuration_aliases = [azapi.target]
     }
     azuread = {
       source                = "hashicorp/azuread"
@@ -11,11 +16,16 @@ terraform {
       configuration_aliases = [azuread.management]
     }
     random = { source = "hashicorp/random", version = "~> 3.0" }
+    time   = { source = "hashicorp/time", version = "~> 0.13" }
   }
 }
 
 resource "random_id" "suffix" {
   byte_length = 4
+}
+
+locals {
+  e2e_aks_cluster_name = var.e2e_aks_cluster_name != "" ? var.e2e_aks_cluster_name : "alien-e2e-${random_id.suffix.hex}"
 }
 
 # ── Management: Resource group ────────────────────────────────────────────────
@@ -76,11 +86,162 @@ resource "azurerm_resource_group" "shared_target" {
   location = var.management_region
 }
 
+resource "azurerm_virtual_network" "e2e" {
+  provider            = azurerm.target
+  name                = "alien-e2e-${random_id.suffix.hex}"
+  resource_group_name = azurerm_resource_group.shared_target.name
+  location            = azurerm_resource_group.shared_target.location
+  address_space       = ["10.253.0.0/16"]
+}
+
+resource "azurerm_subnet" "e2e_public" {
+  provider             = azurerm.target
+  name                 = "public"
+  resource_group_name  = azurerm_resource_group.shared_target.name
+  virtual_network_name = azurerm_virtual_network.e2e.name
+  address_prefixes     = ["10.253.0.0/24"]
+}
+
+resource "azurerm_subnet" "e2e_private" {
+  provider             = azurerm.target
+  name                 = "private"
+  resource_group_name  = azurerm_resource_group.shared_target.name
+  virtual_network_name = azurerm_virtual_network.e2e.name
+  address_prefixes     = ["10.253.1.0/24"]
+}
+
+resource "azurerm_public_ip" "e2e_nat" {
+  provider            = azurerm.target
+  name                = "alien-e2e-nat-${random_id.suffix.hex}"
+  resource_group_name = azurerm_resource_group.shared_target.name
+  location            = azurerm_resource_group.shared_target.location
+  allocation_method   = "Static"
+  sku                 = "Standard"
+}
+
+resource "azurerm_nat_gateway" "e2e" {
+  provider            = azurerm.target
+  name                = "alien-e2e-${random_id.suffix.hex}"
+  resource_group_name = azurerm_resource_group.shared_target.name
+  location            = azurerm_resource_group.shared_target.location
+  sku_name            = "Standard"
+}
+
+resource "azurerm_nat_gateway_public_ip_association" "e2e" {
+  provider             = azurerm.target
+  nat_gateway_id       = azurerm_nat_gateway.e2e.id
+  public_ip_address_id = azurerm_public_ip.e2e_nat.id
+}
+
+resource "azurerm_subnet_nat_gateway_association" "e2e_private" {
+  provider       = azurerm.target
+  subnet_id      = azurerm_subnet.e2e_private.id
+  nat_gateway_id = azurerm_nat_gateway.e2e.id
+}
+
 resource "azurerm_container_app_environment" "shared_target" {
   provider            = azurerm.target
   name                = "alien-e2e-shared-${random_id.suffix.hex}"
   resource_group_name = azurerm_resource_group.shared_target.name
   location            = azurerm_resource_group.shared_target.location
+}
+
+# ── Target: shared AKS cluster for Terraform -> Helm E2Es ────────────────────
+
+resource "azurerm_public_ip" "e2e_ingress" {
+  provider            = azurerm.target
+  name                = "alien-e2e-ingress-${random_id.suffix.hex}"
+  resource_group_name = azurerm_resource_group.shared_target.name
+  location            = azurerm_resource_group.shared_target.location
+  allocation_method   = "Static"
+  sku                 = "Standard"
+}
+
+data "azurerm_client_config" "target" {
+  provider = azurerm.target
+}
+
+module "e2e_aks" {
+  source  = "Azure/avm-res-containerservice-managedcluster/azurerm"
+  version = "0.5.6"
+
+  providers = {
+    azapi   = azapi.target
+    azurerm = azurerm.target
+  }
+
+  name      = local.e2e_aks_cluster_name
+  location  = azurerm_resource_group.shared_target.location
+  parent_id = azurerm_resource_group.shared_target.id
+
+  dns_prefix         = "alien-e2e-${random_id.suffix.hex}"
+  enable_telemetry   = false
+  kubernetes_version = var.e2e_aks_kubernetes_version
+
+  aad_profile = {
+    enable_azure_rbac = true
+    managed           = true
+    tenant_id         = var.target_tenant_id
+  }
+
+  default_agent_pool = {
+    count_of       = 3
+    vm_size        = "Standard_D2s_v3"
+    vnet_subnet_id = azurerm_subnet.e2e_private.id
+
+    upgrade_settings = {
+      max_surge = "10%"
+    }
+  }
+
+  sku = {
+    name = "Base"
+    tier = "Standard"
+  }
+
+  network_profile = {
+    load_balancer_sku   = "standard"
+    network_dataplane   = "cilium"
+    network_plugin      = "azure"
+    network_plugin_mode = "overlay"
+    network_policy      = "cilium"
+  }
+
+  ingress_profile = {
+    web_app_routing = {
+      enabled = true
+      nginx = {
+        default_ingress_controller_type = "AnnotationControlled"
+      }
+    }
+  }
+
+  role_assignments = {
+    target_admin = {
+      principal_id               = data.azurerm_client_config.target.object_id
+      role_definition_id_or_name = "Azure Kubernetes Service RBAC Cluster Admin"
+    }
+  }
+}
+
+resource "azurerm_role_assignment" "e2e_aks_network" {
+  provider             = azurerm.target
+  scope                = azurerm_resource_group.shared_target.id
+  role_definition_name = "Network Contributor"
+  principal_id         = module.e2e_aks.identity_principal_id
+}
+
+resource "time_sleep" "e2e_aks_rbac_propagation" {
+  create_duration = "90s"
+
+  depends_on = [
+    azurerm_role_assignment.e2e_aks_network,
+    module.e2e_aks,
+  ]
+}
+
+locals {
+  e2e_aks_kubeconfig = yamldecode(module.e2e_aks.kube_config)
 }
 
 # Custom role that allows using the shared environment. Created once here; the
@@ -126,29 +287,6 @@ resource "azurerm_role_assignment" "manager_acr_push" {
 
 data "azurerm_client_config" "management" {
   provider = azurerm.management
-}
-
-# ── Management: Service Principal ─────────────────────────────────────────
-# Multi-tenant SP used as a local-dev fallback for cross-tenant client_credentials.
-# In production/CI, OIDC token exchange replaces this SP entirely.
-
-resource "azuread_application" "manager" {
-  provider         = azuread.management
-  display_name     = "alien-test-manager"
-  sign_in_audience = "AzureADMultipleOrgs"
-  owners           = [data.azurerm_client_config.management.object_id]
-}
-
-resource "azuread_service_principal" "manager" {
-  provider  = azuread.management
-  client_id = azuread_application.manager.client_id
-  owners    = [data.azurerm_client_config.management.object_id]
-}
-
-resource "azuread_application_password" "manager" {
-  provider       = azuread.management
-  application_id = azuread_application.manager.id
-  display_name   = "alien-test"
 }
 
 # Drop historical managed cloud-pull identities from state without requiring
@@ -207,21 +345,6 @@ resource "azuread_application_federated_identity_credential" "github_environment
   issuer         = "https://token.actions.githubusercontent.com"
   subject        = "repo:alienplatform/alien:environment:e2e-tests"
   audiences      = ["api://AzureADTokenExchange"]
-}
-
-# Scoped to the test resource group instead of subscription-wide Contributor
-resource "azurerm_role_assignment" "mgmt_sp_contributor" {
-  provider             = azurerm.management
-  scope                = azurerm_resource_group.test.id
-  role_definition_name = "Contributor"
-  principal_id         = azuread_service_principal.manager.object_id
-}
-
-resource "azurerm_role_assignment" "mgmt_sp_user_access_admin" {
-  provider             = azurerm.management
-  scope                = azurerm_resource_group.test.id
-  role_definition_name = "User Access Administrator"
-  principal_id         = azuread_service_principal.manager.object_id
 }
 
 # ── ACR Pull/Push SPs (matching production) ──────────────────────────────────

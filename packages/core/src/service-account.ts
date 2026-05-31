@@ -30,14 +30,14 @@ export {
  *
  * @example
  * ```typescript
- * import { ServiceAccount, Function } from "@alien/core"
+ * import { ServiceAccount, Worker } from "@alien/core"
  *
  * // Create a service account with stack-level permissions
  * const dataProcessorAccount = new ServiceAccount("data-processor")
  *   .build()
  *
  * // Link it to a function to use its identity
- * const processor = new Function("processor")
+ * const processor = new Worker("processor")
  *   .code({ type: "image", image: "processor:latest" })
  *   .link(dataProcessorAccount)
  *   .build()

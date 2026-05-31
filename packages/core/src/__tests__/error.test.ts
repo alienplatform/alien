@@ -332,7 +332,7 @@ describe("AlienError.from() with random JS objects", async () => {
 
     expect(alienError.code).toBe("GENERIC_ERROR")
     expect(alienError.context?.errorType).toBe("Function")
-    // Note: Functions get serialized differently by serialize-error
+    // Note: JS functions get serialized differently by serialize-error
   })
 })
 

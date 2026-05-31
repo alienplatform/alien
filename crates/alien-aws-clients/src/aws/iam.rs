@@ -2,10 +2,8 @@ use std::fmt::Debug;
 
 use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsSignConfig};
 use crate::aws::credential_provider::AwsCredentialProvider;
-use alien_client_core::RequestBuilderExt;
 use alien_client_core::{ErrorData, Result};
-use alien_error::{AlienError, ContextError};
-use async_trait::async_trait;
+use alien_error::ContextError;
 use bon::Builder;
 use form_urlencoded;
 
@@ -38,6 +36,11 @@ pub trait IamApi: Send + Sync + Debug {
     async fn delete_role_policy(&self, role_name: &str, policy_name: &str) -> Result<()>;
     async fn update_assume_role_policy(&self, role_name: &str, policy_document: &str)
         -> Result<()>;
+    async fn create_open_id_connect_provider(
+        &self,
+        request: CreateOpenIdConnectProviderRequest,
+    ) -> Result<CreateOpenIdConnectProviderResponse>;
+    async fn delete_open_id_connect_provider(&self, arn: &str) -> Result<()>;
     async fn list_attached_role_policies(
         &self,
         role_name: &str,
@@ -49,6 +52,14 @@ pub trait IamApi: Send + Sync + Debug {
         path: Option<String>,
     ) -> Result<CreatePolicyResponse>;
     async fn delete_policy(&self, policy_arn: &str) -> Result<()>;
+    async fn create_policy_version(
+        &self,
+        policy_arn: &str,
+        policy_document: &str,
+        set_as_default: bool,
+    ) -> Result<CreatePolicyVersionResponse>;
+    async fn delete_policy_version(&self, policy_arn: &str, version_id: &str) -> Result<()>;
+    async fn list_policy_versions(&self, policy_arn: &str) -> Result<ListPolicyVersionsResponse>;
     async fn attach_role_policy(&self, role_name: &str, policy_arn: &str) -> Result<()>;
     async fn detach_role_policy(&self, role_name: &str, policy_arn: &str) -> Result<()>;
     async fn list_role_policies(&self, role_name: &str) -> Result<ListRolePoliciesResponse>;
@@ -321,7 +332,7 @@ impl IamClient {
                     message: error_message,
                 },
                 _ => ErrorData::HttpResponseError {
-                    message: format!("IAM operation failed: {}", error_message),
+                    message: format!("IAM {operation} failed: {error_message}"),
                     url: "iam.amazonaws.com".into(),
                     http_status: status.as_u16(),
                     http_response_text: Some(error_body.into()),
@@ -436,6 +447,46 @@ impl IamApi for IamClient {
             .await
     }
 
+    async fn create_open_id_connect_provider(
+        &self,
+        request: CreateOpenIdConnectProviderRequest,
+    ) -> Result<CreateOpenIdConnectProviderResponse> {
+        let mut params = vec![("Url".to_string(), request.url.clone())];
+        for (index, client_id) in request.client_id_list.iter().enumerate() {
+            params.push((
+                format!("ClientIDList.member.{}", index + 1),
+                client_id.clone(),
+            ));
+        }
+        for (index, thumbprint) in request.thumbprint_list.iter().enumerate() {
+            params.push((
+                format!("ThumbprintList.member.{}", index + 1),
+                thumbprint.clone(),
+            ));
+        }
+        for (index, tag) in request.tags.iter().enumerate() {
+            params.push((format!("Tags.member.{}.Key", index + 1), tag.key.clone()));
+            params.push((
+                format!("Tags.member.{}.Value", index + 1),
+                tag.value.clone(),
+            ));
+        }
+
+        let body = Self::build_form_body("CreateOpenIDConnectProvider", "2010-05-08", params);
+        self.post_xml(body, "CreateOpenIDConnectProvider", &request.url)
+            .await
+    }
+
+    async fn delete_open_id_connect_provider(&self, arn: &str) -> Result<()> {
+        let body = Self::build_form_body(
+            "DeleteOpenIDConnectProvider",
+            "2010-05-08",
+            vec![("OpenIDConnectProviderArn".to_string(), arn.to_string())],
+        );
+        self.post_no_response(body, "DeleteOpenIDConnectProvider", arn)
+            .await
+    }
+
     async fn list_attached_role_policies(
         &self,
         role_name: &str,
@@ -468,6 +519,38 @@ impl IamApi for IamClient {
         let body = Self::build_form_body("DeletePolicy", "2010-05-08", params);
         self.post_no_response(body, "DeletePolicy", policy_arn)
             .await
+    }
+
+    async fn create_policy_version(
+        &self,
+        policy_arn: &str,
+        policy_document: &str,
+        set_as_default: bool,
+    ) -> Result<CreatePolicyVersionResponse> {
+        let params = vec![
+            ("PolicyArn".to_string(), policy_arn.to_string()),
+            ("PolicyDocument".to_string(), policy_document.to_string()),
+            ("SetAsDefault".to_string(), set_as_default.to_string()),
+        ];
+        let body = Self::build_form_body("CreatePolicyVersion", "2010-05-08", params);
+        self.post_xml(body, "CreatePolicyVersion", policy_arn).await
+    }
+
+    async fn delete_policy_version(&self, policy_arn: &str, version_id: &str) -> Result<()> {
+        let params = vec![
+            ("PolicyArn".to_string(), policy_arn.to_string()),
+            ("VersionId".to_string(), version_id.to_string()),
+        ];
+        let body = Self::build_form_body("DeletePolicyVersion", "2010-05-08", params);
+        let resource = format!("{}:{}", policy_arn, version_id);
+        self.post_no_response(body, "DeletePolicyVersion", &resource)
+            .await
+    }
+
+    async fn list_policy_versions(&self, policy_arn: &str) -> Result<ListPolicyVersionsResponse> {
+        let params = vec![("PolicyArn".to_string(), policy_arn.to_string())];
+        let body = Self::build_form_body("ListPolicyVersions", "2010-05-08", params);
+        self.post_xml(body, "ListPolicyVersions", policy_arn).await
     }
 
     async fn detach_role_policy(&self, role_name: &str, policy_arn: &str) -> Result<()> {
@@ -651,6 +734,30 @@ pub struct CreateRoleTag {
     pub value: String,
 }
 
+#[derive(Serialize, Debug, Clone, Builder)]
+#[serde(rename_all = "PascalCase")]
+pub struct CreateOpenIdConnectProviderRequest {
+    pub url: String,
+    #[builder(default)]
+    pub client_id_list: Vec<String>,
+    #[builder(default)]
+    pub thumbprint_list: Vec<String>,
+    #[builder(default)]
+    pub tags: Vec<CreateRoleTag>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "PascalCase")]
+pub struct CreateOpenIdConnectProviderResponse {
+    pub create_open_id_connect_provider_result: CreateOpenIdConnectProviderResult,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "PascalCase")]
+pub struct CreateOpenIdConnectProviderResult {
+    pub open_id_connect_provider_arn: String,
+}
+
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "PascalCase")]
 pub struct CreateRoleResponse {
@@ -757,6 +864,48 @@ pub struct Policy {
     pub is_attachable: Option<bool>,
     pub create_date: Option<String>,
     pub update_date: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "PascalCase")]
+pub struct CreatePolicyVersionResponse {
+    pub create_policy_version_result: CreatePolicyVersionResult,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "PascalCase")]
+pub struct CreatePolicyVersionResult {
+    pub policy_version: PolicyVersion,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "PascalCase")]
+pub struct ListPolicyVersionsResponse {
+    pub list_policy_versions_result: ListPolicyVersionsResult,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "PascalCase")]
+pub struct ListPolicyVersionsResult {
+    pub versions: Option<PolicyVersions>,
+    pub is_truncated: Option<bool>,
+    pub marker: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "PascalCase")]
+pub struct PolicyVersions {
+    #[serde(rename = "member", default)]
+    pub member: Vec<PolicyVersion>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "PascalCase")]
+pub struct PolicyVersion {
+    pub document: Option<String>,
+    pub version_id: String,
+    pub is_default_version: bool,
+    pub create_date: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]

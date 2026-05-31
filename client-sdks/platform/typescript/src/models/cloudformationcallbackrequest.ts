@@ -41,6 +41,24 @@ export type CloudFormationCallbackRequestPlatformEnum = ClosedEnum<
 >;
 
 /**
+ * Base cloud platform for cloud-backed Kubernetes imports.
+ */
+export const CloudFormationCallbackRequestBasePlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Base cloud platform for cloud-backed Kubernetes imports.
+ */
+export type CloudFormationCallbackRequestBasePlatform = ClosedEnum<
+  typeof CloudFormationCallbackRequestBasePlatform
+>;
+
+/**
  * Deployment model: how updates are delivered to the remote environment.
  */
 export const CloudFormationCallbackRequestDeploymentModel = {
@@ -79,12 +97,42 @@ export type CloudFormationCallbackRequestGcpUnion =
   | any;
 
 /**
+ * Namespace-scoped Kubernetes TLS Secret reference.
+ */
+export type CloudFormationCallbackRequestTlsSecretRef = {
+  /**
+   * Secret namespace. Defaults to the release namespace when omitted.
+   */
+  namespace?: string | null | undefined;
+  /**
+   * Secret name.
+   */
+  secretName: string;
+};
+
+export type CloudFormationCallbackRequestDomainsKubernetes = {
+  /**
+   * Namespace-scoped Kubernetes TLS Secret reference.
+   */
+  tlsSecretRef: CloudFormationCallbackRequestTlsSecretRef;
+};
+
+export type CloudFormationCallbackRequestDomainsKubernetesUnion =
+  | CloudFormationCallbackRequestDomainsKubernetes
+  | any;
+
+/**
  * Platform-specific certificate references for custom domains.
  */
-export type CloudFormationCallbackRequestCertificate = {
+export type CloudFormationCallbackRequestDomainsCertificate = {
   aws?: CloudFormationCallbackRequestAws | any | null | undefined;
   azure?: CloudFormationCallbackRequestAzure | any | null | undefined;
   gcp?: CloudFormationCallbackRequestGcp | any | null | undefined;
+  kubernetes?:
+    | CloudFormationCallbackRequestDomainsKubernetes
+    | any
+    | null
+    | undefined;
 };
 
 /**
@@ -94,7 +142,7 @@ export type CloudFormationCallbackRequestCustomDomains = {
   /**
    * Platform-specific certificate references for custom domains.
    */
-  certificate: CloudFormationCallbackRequestCertificate;
+  certificate: CloudFormationCallbackRequestDomainsCertificate;
   /**
    * Fully qualified domain name to use.
    */
@@ -146,6 +194,715 @@ export const CloudFormationCallbackRequestHeartbeats = {
 export type CloudFormationCallbackRequestHeartbeats = ClosedEnum<
   typeof CloudFormationCallbackRequestHeartbeats
 >;
+
+/**
+ * Optional provider-specific identity for a cloud-backed Kubernetes cluster.
+ */
+export type CloudFormationCallbackRequestCloud = {
+  accountId?: string | null | undefined;
+  clusterId?: string | null | undefined;
+  clusterName?: string | null | undefined;
+  projectId?: string | null | undefined;
+  region?: string | null | undefined;
+  resourceGroup?: string | null | undefined;
+  subscriptionId?: string | null | undefined;
+};
+
+export type CloudFormationCallbackRequestCloudUnion =
+  | CloudFormationCallbackRequestCloud
+  | any;
+
+/**
+ * Ownership model for the Kubernetes cluster.
+ */
+export const CloudFormationCallbackRequestOwnership = {
+  Managed: "managed",
+  Existing: "existing",
+  External: "external",
+} as const;
+/**
+ * Ownership model for the Kubernetes cluster.
+ */
+export type CloudFormationCallbackRequestOwnership = ClosedEnum<
+  typeof CloudFormationCallbackRequestOwnership
+>;
+
+/**
+ * Kubernetes cluster setup settings.
+ */
+export type CloudFormationCallbackRequestCluster = {
+  cloud?: CloudFormationCallbackRequestCloud | any | null | undefined;
+  /**
+   * Namespace where the Alien chart and application resources run.
+   */
+  namespace?: string | null | undefined;
+  /**
+   * Ownership model for the Kubernetes cluster.
+   */
+  ownership: CloudFormationCallbackRequestOwnership;
+};
+
+export type CloudFormationCallbackRequestClusterUnion =
+  | CloudFormationCallbackRequestCluster
+  | any;
+
+export type CloudFormationCallbackRequestCertificateNone2 = {
+  mode: "none";
+};
+
+export type CloudFormationCallbackRequestCertificateManagedTLSSecret2 = {
+  mode: "managedTlsSecret";
+  /**
+   * Secret name template. Runtime may substitute resource/deployment tokens.
+   */
+  secretNameTemplate: string;
+};
+
+export type CloudFormationCallbackRequestCertificateAwsAcmArn2 = {
+  /**
+   * Existing ACM certificate ARN.
+   */
+  certificateArn: string;
+  mode: "awsAcmArn";
+};
+
+export type CloudFormationCallbackRequestCertificateManagedAcmImport2 = {
+  mode: "managedAcmImport";
+  /**
+   * ACM region. Defaults to the deployment region when omitted.
+   */
+  region?: string | null | undefined;
+  /**
+   * Tags applied to runtime-imported ACM certificates.
+   */
+  tags?: { [k: string]: string } | undefined;
+};
+
+/**
+ * Namespace-scoped Kubernetes TLS Secret reference.
+ */
+export type CloudFormationCallbackRequestCertificateTLSSecretRef2 = {
+  /**
+   * Secret namespace. Defaults to the release namespace when omitted.
+   */
+  namespace?: string | null | undefined;
+  /**
+   * Secret name.
+   */
+  secretName: string;
+  mode: "tlsSecretRef";
+};
+
+/**
+ * Certificate publication or reference mode for Kubernetes public endpoints.
+ */
+export type CloudFormationCallbackRequestCertificateUnion2 =
+  | CloudFormationCallbackRequestCertificateTLSSecretRef2
+  | CloudFormationCallbackRequestCertificateManagedAcmImport2
+  | CloudFormationCallbackRequestCertificateAwsAcmArn2
+  | CloudFormationCallbackRequestCertificateManagedTLSSecret2
+  | CloudFormationCallbackRequestCertificateNone2;
+
+export const CloudFormationCallbackRequestModeCustom = {
+  Custom: "custom",
+} as const;
+export type CloudFormationCallbackRequestModeCustom = ClosedEnum<
+  typeof CloudFormationCallbackRequestModeCustom
+>;
+
+export const CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainersEnum4 =
+  {
+    AzureApplicationGatewayForContainers:
+      "azureApplicationGatewayForContainers",
+  } as const;
+export type CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainersEnum4 =
+  ClosedEnum<
+    typeof CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainersEnum4
+  >;
+
+export type CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers4 =
+  {
+    /**
+     * Optional ALB name when using BYO Application Gateway resources.
+     */
+    albName?: string | null | undefined;
+    /**
+     * Optional ALB namespace when using BYO Application Gateway resources.
+     */
+    albNamespace?: string | null | undefined;
+    /**
+     * Public or internal frontend exposure.
+     */
+    frontend: string;
+    provider:
+      CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainersEnum4;
+  };
+
+export const CloudFormationCallbackRequestProviderGkeGatewayEnum4 = {
+  GkeGateway: "gkeGateway",
+} as const;
+export type CloudFormationCallbackRequestProviderGkeGatewayEnum4 = ClosedEnum<
+  typeof CloudFormationCallbackRequestProviderGkeGatewayEnum4
+>;
+
+export type CloudFormationCallbackRequestProviderGkeGateway4 = {
+  provider: CloudFormationCallbackRequestProviderGkeGatewayEnum4;
+  /**
+   * Optional static address name for the Gateway frontend.
+   */
+  staticAddressName?: string | null | undefined;
+};
+
+export const CloudFormationCallbackRequestProviderAwsAlbEnum4 = {
+  AwsAlb: "awsAlb",
+} as const;
+export type CloudFormationCallbackRequestProviderAwsAlbEnum4 = ClosedEnum<
+  typeof CloudFormationCallbackRequestProviderAwsAlbEnum4
+>;
+
+export type CloudFormationCallbackRequestProviderAwsAlb4 = {
+  /**
+   * Optional ALB IP address type, such as `dualstack`.
+   */
+  ipAddressType?: string | null | undefined;
+  provider: CloudFormationCallbackRequestProviderAwsAlbEnum4;
+  /**
+   * Internet-facing or internal ALB scheme.
+   */
+  scheme: string;
+  /**
+   * Explicit subnet IDs when the profile cannot rely on controller discovery.
+   */
+  subnetIds?: Array<string> | undefined;
+  /**
+   * ALB target type, usually `ip`.
+   */
+  targetType: string;
+};
+
+export type CloudFormationCallbackRequestProviderUnion4 =
+  | CloudFormationCallbackRequestProviderAwsAlb4
+  | CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers4
+  | CloudFormationCallbackRequestProviderGkeGateway4
+  | any;
+
+/**
+ * Shared Gateway API route profile values.
+ */
+export type CloudFormationCallbackRequestRouteGateway2 = {
+  /**
+   * Annotations applied to route objects.
+   */
+  annotations?: { [k: string]: string } | undefined;
+  /**
+   * Route controller identifier, for example a cloud Gateway controller.
+   */
+  controller?: string | null | undefined;
+  /**
+   * GatewayClass selected for generated Gateways.
+   */
+  gatewayClassName: string;
+  /**
+   * Labels applied to route objects.
+   */
+  labels?: { [k: string]: string } | undefined;
+  /**
+   * Listener port, usually 443.
+   */
+  listenerPort: number;
+  provider?:
+    | CloudFormationCallbackRequestProviderAwsAlb4
+    | CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers4
+    | CloudFormationCallbackRequestProviderGkeGateway4
+    | any
+    | null
+    | undefined;
+  routeApi: "gateway";
+};
+
+export const CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainersEnum3 =
+  {
+    AzureApplicationGatewayForContainers:
+      "azureApplicationGatewayForContainers",
+  } as const;
+export type CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainersEnum3 =
+  ClosedEnum<
+    typeof CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainersEnum3
+  >;
+
+export type CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers3 =
+  {
+    /**
+     * Optional ALB name when using BYO Application Gateway resources.
+     */
+    albName?: string | null | undefined;
+    /**
+     * Optional ALB namespace when using BYO Application Gateway resources.
+     */
+    albNamespace?: string | null | undefined;
+    /**
+     * Public or internal frontend exposure.
+     */
+    frontend: string;
+    provider:
+      CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainersEnum3;
+  };
+
+export const CloudFormationCallbackRequestProviderGkeGatewayEnum3 = {
+  GkeGateway: "gkeGateway",
+} as const;
+export type CloudFormationCallbackRequestProviderGkeGatewayEnum3 = ClosedEnum<
+  typeof CloudFormationCallbackRequestProviderGkeGatewayEnum3
+>;
+
+export type CloudFormationCallbackRequestProviderGkeGateway3 = {
+  provider: CloudFormationCallbackRequestProviderGkeGatewayEnum3;
+  /**
+   * Optional static address name for the Gateway frontend.
+   */
+  staticAddressName?: string | null | undefined;
+};
+
+export const CloudFormationCallbackRequestProviderAwsAlbEnum3 = {
+  AwsAlb: "awsAlb",
+} as const;
+export type CloudFormationCallbackRequestProviderAwsAlbEnum3 = ClosedEnum<
+  typeof CloudFormationCallbackRequestProviderAwsAlbEnum3
+>;
+
+export type CloudFormationCallbackRequestProviderAwsAlb3 = {
+  /**
+   * Optional ALB IP address type, such as `dualstack`.
+   */
+  ipAddressType?: string | null | undefined;
+  provider: CloudFormationCallbackRequestProviderAwsAlbEnum3;
+  /**
+   * Internet-facing or internal ALB scheme.
+   */
+  scheme: string;
+  /**
+   * Explicit subnet IDs when the profile cannot rely on controller discovery.
+   */
+  subnetIds?: Array<string> | undefined;
+  /**
+   * ALB target type, usually `ip`.
+   */
+  targetType: string;
+};
+
+export type CloudFormationCallbackRequestProviderUnion3 =
+  | CloudFormationCallbackRequestProviderAwsAlb3
+  | CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers3
+  | CloudFormationCallbackRequestProviderGkeGateway3
+  | any;
+
+/**
+ * Shared Ingress route profile values.
+ */
+export type CloudFormationCallbackRequestRouteIngress2 = {
+  /**
+   * Annotations applied to route objects.
+   */
+  annotations?: { [k: string]: string } | undefined;
+  /**
+   * Route controller identifier, for example `eks.amazonaws.com/alb`.
+   */
+  controller?: string | null | undefined;
+  /**
+   * `spec.ingressClassName` for generated Ingresses.
+   */
+  ingressClassName: string;
+  /**
+   * Labels applied to route objects.
+   */
+  labels?: { [k: string]: string } | undefined;
+  provider?:
+    | CloudFormationCallbackRequestProviderAwsAlb3
+    | CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers3
+    | CloudFormationCallbackRequestProviderGkeGateway3
+    | any
+    | null
+    | undefined;
+  routeApi: "ingress";
+};
+
+/**
+ * Kubernetes route API selected for public endpoints.
+ */
+export type CloudFormationCallbackRequestRouteUnion2 =
+  | CloudFormationCallbackRequestRouteIngress2
+  | CloudFormationCallbackRequestRouteGateway2;
+
+export type CloudFormationCallbackRequestExposureCustom = {
+  /**
+   * Certificate publication or reference mode for Kubernetes public endpoints.
+   */
+  certificate:
+    | CloudFormationCallbackRequestCertificateTLSSecretRef2
+    | CloudFormationCallbackRequestCertificateManagedAcmImport2
+    | CloudFormationCallbackRequestCertificateAwsAcmArn2
+    | CloudFormationCallbackRequestCertificateManagedTLSSecret2
+    | CloudFormationCallbackRequestCertificateNone2;
+  /**
+   * Hostname routed by the Kubernetes public endpoint.
+   */
+  domain: string;
+  mode: CloudFormationCallbackRequestModeCustom;
+  /**
+   * Kubernetes route API selected for public endpoints.
+   */
+  route:
+    | CloudFormationCallbackRequestRouteIngress2
+    | CloudFormationCallbackRequestRouteGateway2;
+};
+
+export type CloudFormationCallbackRequestCertificateNone1 = {
+  mode: "none";
+};
+
+export type CloudFormationCallbackRequestCertificateManagedTLSSecret1 = {
+  mode: "managedTlsSecret";
+  /**
+   * Secret name template. Runtime may substitute resource/deployment tokens.
+   */
+  secretNameTemplate: string;
+};
+
+export type CloudFormationCallbackRequestCertificateAwsAcmArn1 = {
+  /**
+   * Existing ACM certificate ARN.
+   */
+  certificateArn: string;
+  mode: "awsAcmArn";
+};
+
+export type CloudFormationCallbackRequestCertificateManagedAcmImport1 = {
+  mode: "managedAcmImport";
+  /**
+   * ACM region. Defaults to the deployment region when omitted.
+   */
+  region?: string | null | undefined;
+  /**
+   * Tags applied to runtime-imported ACM certificates.
+   */
+  tags?: { [k: string]: string } | undefined;
+};
+
+/**
+ * Namespace-scoped Kubernetes TLS Secret reference.
+ */
+export type CloudFormationCallbackRequestCertificateTLSSecretRef1 = {
+  /**
+   * Secret namespace. Defaults to the release namespace when omitted.
+   */
+  namespace?: string | null | undefined;
+  /**
+   * Secret name.
+   */
+  secretName: string;
+  mode: "tlsSecretRef";
+};
+
+/**
+ * Certificate publication or reference mode for Kubernetes public endpoints.
+ */
+export type CloudFormationCallbackRequestCertificateUnion1 =
+  | CloudFormationCallbackRequestCertificateTLSSecretRef1
+  | CloudFormationCallbackRequestCertificateManagedAcmImport1
+  | CloudFormationCallbackRequestCertificateAwsAcmArn1
+  | CloudFormationCallbackRequestCertificateManagedTLSSecret1
+  | CloudFormationCallbackRequestCertificateNone1;
+
+export const CloudFormationCallbackRequestModeGenerated = {
+  Generated: "generated",
+} as const;
+export type CloudFormationCallbackRequestModeGenerated = ClosedEnum<
+  typeof CloudFormationCallbackRequestModeGenerated
+>;
+
+export const CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainersEnum2 =
+  {
+    AzureApplicationGatewayForContainers:
+      "azureApplicationGatewayForContainers",
+  } as const;
+export type CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainersEnum2 =
+  ClosedEnum<
+    typeof CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainersEnum2
+  >;
+
+export type CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers2 =
+  {
+    /**
+     * Optional ALB name when using BYO Application Gateway resources.
+     */
+    albName?: string | null | undefined;
+    /**
+     * Optional ALB namespace when using BYO Application Gateway resources.
+     */
+    albNamespace?: string | null | undefined;
+    /**
+     * Public or internal frontend exposure.
+     */
+    frontend: string;
+    provider:
+      CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainersEnum2;
+  };
+
+export const CloudFormationCallbackRequestProviderGkeGatewayEnum2 = {
+  GkeGateway: "gkeGateway",
+} as const;
+export type CloudFormationCallbackRequestProviderGkeGatewayEnum2 = ClosedEnum<
+  typeof CloudFormationCallbackRequestProviderGkeGatewayEnum2
+>;
+
+export type CloudFormationCallbackRequestProviderGkeGateway2 = {
+  provider: CloudFormationCallbackRequestProviderGkeGatewayEnum2;
+  /**
+   * Optional static address name for the Gateway frontend.
+   */
+  staticAddressName?: string | null | undefined;
+};
+
+export const CloudFormationCallbackRequestProviderAwsAlbEnum2 = {
+  AwsAlb: "awsAlb",
+} as const;
+export type CloudFormationCallbackRequestProviderAwsAlbEnum2 = ClosedEnum<
+  typeof CloudFormationCallbackRequestProviderAwsAlbEnum2
+>;
+
+export type CloudFormationCallbackRequestProviderAwsAlb2 = {
+  /**
+   * Optional ALB IP address type, such as `dualstack`.
+   */
+  ipAddressType?: string | null | undefined;
+  provider: CloudFormationCallbackRequestProviderAwsAlbEnum2;
+  /**
+   * Internet-facing or internal ALB scheme.
+   */
+  scheme: string;
+  /**
+   * Explicit subnet IDs when the profile cannot rely on controller discovery.
+   */
+  subnetIds?: Array<string> | undefined;
+  /**
+   * ALB target type, usually `ip`.
+   */
+  targetType: string;
+};
+
+export type CloudFormationCallbackRequestProviderUnion2 =
+  | CloudFormationCallbackRequestProviderAwsAlb2
+  | CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers2
+  | CloudFormationCallbackRequestProviderGkeGateway2
+  | any;
+
+/**
+ * Shared Gateway API route profile values.
+ */
+export type CloudFormationCallbackRequestRouteGateway1 = {
+  /**
+   * Annotations applied to route objects.
+   */
+  annotations?: { [k: string]: string } | undefined;
+  /**
+   * Route controller identifier, for example a cloud Gateway controller.
+   */
+  controller?: string | null | undefined;
+  /**
+   * GatewayClass selected for generated Gateways.
+   */
+  gatewayClassName: string;
+  /**
+   * Labels applied to route objects.
+   */
+  labels?: { [k: string]: string } | undefined;
+  /**
+   * Listener port, usually 443.
+   */
+  listenerPort: number;
+  provider?:
+    | CloudFormationCallbackRequestProviderAwsAlb2
+    | CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers2
+    | CloudFormationCallbackRequestProviderGkeGateway2
+    | any
+    | null
+    | undefined;
+  routeApi: "gateway";
+};
+
+export const CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainersEnum1 =
+  {
+    AzureApplicationGatewayForContainers:
+      "azureApplicationGatewayForContainers",
+  } as const;
+export type CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainersEnum1 =
+  ClosedEnum<
+    typeof CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainersEnum1
+  >;
+
+export type CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers1 =
+  {
+    /**
+     * Optional ALB name when using BYO Application Gateway resources.
+     */
+    albName?: string | null | undefined;
+    /**
+     * Optional ALB namespace when using BYO Application Gateway resources.
+     */
+    albNamespace?: string | null | undefined;
+    /**
+     * Public or internal frontend exposure.
+     */
+    frontend: string;
+    provider:
+      CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainersEnum1;
+  };
+
+export const CloudFormationCallbackRequestProviderGkeGatewayEnum1 = {
+  GkeGateway: "gkeGateway",
+} as const;
+export type CloudFormationCallbackRequestProviderGkeGatewayEnum1 = ClosedEnum<
+  typeof CloudFormationCallbackRequestProviderGkeGatewayEnum1
+>;
+
+export type CloudFormationCallbackRequestProviderGkeGateway1 = {
+  provider: CloudFormationCallbackRequestProviderGkeGatewayEnum1;
+  /**
+   * Optional static address name for the Gateway frontend.
+   */
+  staticAddressName?: string | null | undefined;
+};
+
+export const CloudFormationCallbackRequestProviderAwsAlbEnum1 = {
+  AwsAlb: "awsAlb",
+} as const;
+export type CloudFormationCallbackRequestProviderAwsAlbEnum1 = ClosedEnum<
+  typeof CloudFormationCallbackRequestProviderAwsAlbEnum1
+>;
+
+export type CloudFormationCallbackRequestProviderAwsAlb1 = {
+  /**
+   * Optional ALB IP address type, such as `dualstack`.
+   */
+  ipAddressType?: string | null | undefined;
+  provider: CloudFormationCallbackRequestProviderAwsAlbEnum1;
+  /**
+   * Internet-facing or internal ALB scheme.
+   */
+  scheme: string;
+  /**
+   * Explicit subnet IDs when the profile cannot rely on controller discovery.
+   */
+  subnetIds?: Array<string> | undefined;
+  /**
+   * ALB target type, usually `ip`.
+   */
+  targetType: string;
+};
+
+export type CloudFormationCallbackRequestProviderUnion1 =
+  | CloudFormationCallbackRequestProviderAwsAlb1
+  | CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers1
+  | CloudFormationCallbackRequestProviderGkeGateway1
+  | any;
+
+/**
+ * Shared Ingress route profile values.
+ */
+export type CloudFormationCallbackRequestRouteIngress1 = {
+  /**
+   * Annotations applied to route objects.
+   */
+  annotations?: { [k: string]: string } | undefined;
+  /**
+   * Route controller identifier, for example `eks.amazonaws.com/alb`.
+   */
+  controller?: string | null | undefined;
+  /**
+   * `spec.ingressClassName` for generated Ingresses.
+   */
+  ingressClassName: string;
+  /**
+   * Labels applied to route objects.
+   */
+  labels?: { [k: string]: string } | undefined;
+  provider?:
+    | CloudFormationCallbackRequestProviderAwsAlb1
+    | CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers1
+    | CloudFormationCallbackRequestProviderGkeGateway1
+    | any
+    | null
+    | undefined;
+  routeApi: "ingress";
+};
+
+/**
+ * Kubernetes route API selected for public endpoints.
+ */
+export type CloudFormationCallbackRequestRouteUnion1 =
+  | CloudFormationCallbackRequestRouteIngress1
+  | CloudFormationCallbackRequestRouteGateway1;
+
+export type CloudFormationCallbackRequestExposureGenerated = {
+  /**
+   * Certificate publication or reference mode for Kubernetes public endpoints.
+   */
+  certificate:
+    | CloudFormationCallbackRequestCertificateTLSSecretRef1
+    | CloudFormationCallbackRequestCertificateManagedAcmImport1
+    | CloudFormationCallbackRequestCertificateAwsAcmArn1
+    | CloudFormationCallbackRequestCertificateManagedTLSSecret1
+    | CloudFormationCallbackRequestCertificateNone1;
+  mode: CloudFormationCallbackRequestModeGenerated;
+  /**
+   * Kubernetes route API selected for public endpoints.
+   */
+  route:
+    | CloudFormationCallbackRequestRouteIngress1
+    | CloudFormationCallbackRequestRouteGateway1;
+};
+
+export const CloudFormationCallbackRequestModeDisabled = {
+  Disabled: "disabled",
+} as const;
+export type CloudFormationCallbackRequestModeDisabled = ClosedEnum<
+  typeof CloudFormationCallbackRequestModeDisabled
+>;
+
+export type CloudFormationCallbackRequestExposureDisabled = {
+  mode: CloudFormationCallbackRequestModeDisabled;
+};
+
+export type CloudFormationCallbackRequestExposureUnion =
+  | CloudFormationCallbackRequestExposureCustom
+  | CloudFormationCallbackRequestExposureGenerated
+  | CloudFormationCallbackRequestExposureDisabled
+  | any;
+
+/**
+ * Kubernetes runtime substrate configuration.
+ *
+ * @remarks
+ *
+ * This controls how setup chooses the cluster backing `Platform::Kubernetes`
+ * deployments. When omitted, cloud-backed Kubernetes deployments default to a
+ * managed cluster and generic/on-prem Kubernetes defaults to an external
+ * cluster.
+ */
+export type CloudFormationCallbackRequestKubernetes = {
+  cluster?: CloudFormationCallbackRequestCluster | any | null | undefined;
+  exposure?:
+    | CloudFormationCallbackRequestExposureCustom
+    | CloudFormationCallbackRequestExposureGenerated
+    | CloudFormationCallbackRequestExposureDisabled
+    | any
+    | null
+    | undefined;
+};
+
+export type CloudFormationCallbackRequestKubernetesUnion =
+  | CloudFormationCallbackRequestKubernetes
+  | any;
 
 export const CloudFormationCallbackRequestTypeByoVnetAzure = {
   ByoVnetAzure: "byo-vnet-azure",
@@ -324,6 +1081,7 @@ export type CloudFormationCallbackRequestStackSettings = {
    * How heartbeat health checks are handled.
    */
   heartbeats?: CloudFormationCallbackRequestHeartbeats | undefined;
+  kubernetes?: CloudFormationCallbackRequestKubernetes | any | null | undefined;
   network?:
     | CloudFormationCallbackRequestNetworkByoVpcAws
     | CloudFormationCallbackRequestNetworkByoVpcGcp
@@ -352,21 +1110,17 @@ export type CloudFormationCallbackRequestManagementConfigKubernetes = {
  */
 export type CloudFormationCallbackRequestManagementConfigAzure = {
   /**
-   * Management service principal object ID for local development fallback
-   */
-  managementPrincipalId?: string | null | undefined;
-  /**
    * The managing Azure Tenant ID for cross-tenant access
    */
   managingTenantId: string;
   /**
-   * OIDC issuer URL for federated identity credential creation
+   * OIDC issuer URL trusted by the target-side managed identity.
    */
-  oidcIssuer?: string | null | undefined;
+  oidcIssuer: string;
   /**
-   * OIDC subject claim for federated identity credential creation
+   * OIDC subject claim trusted by the target-side managed identity.
    */
-  oidcSubject?: string | null | undefined;
+  oidcSubject: string;
   platform: "azure";
 };
 
@@ -409,15 +1163,12 @@ export type CloudFormationCallbackRequestManagementConfigUnion =
 /**
  * Resolved setup import payload
  */
-export type Source = {
+export type CloudFormationCallbackRequestSource = {
   /**
    * User-chosen deployment name. Must be unique within the deployment group; the manager returns 409 on collision.
    */
   deploymentName: string;
-  /**
-   * Stable physical-name prefix used by the setup artifact.
-   */
-  stackPrefix: string;
+  resourcePrefix: string;
   /**
    * Source label for observability only — does not affect import behavior.
    */
@@ -431,10 +1182,18 @@ export type Source = {
    */
   platform: CloudFormationCallbackRequestPlatformEnum;
   /**
+   * Base cloud platform for cloud-backed Kubernetes imports.
+   */
+  basePlatform?: CloudFormationCallbackRequestBasePlatform | undefined;
+  /**
    * Region or location reported by the setup artifact
    */
   region: string;
   setupTarget: string;
+  /**
+   * Setup import payload format version embedded in the package
+   */
+  setupImportFormatVersion: number;
   setupFingerprint: string;
   setupFingerprintVersion: number;
   /**
@@ -473,7 +1232,7 @@ export type CloudFormationCallbackRequest = {
   requestType: RequestType;
   responseUrl: string;
   physicalResourceId?: string | null | undefined;
-  source?: Source | null | undefined;
+  source?: CloudFormationCallbackRequestSource | null | undefined;
   serviceTimeoutSeconds?: number | undefined;
 };
 
@@ -486,6 +1245,12 @@ export const RequestType$outboundSchema: z.ZodEnum<typeof RequestType> = z.enum(
 export const CloudFormationCallbackRequestPlatformEnum$outboundSchema:
   z.ZodEnum<typeof CloudFormationCallbackRequestPlatformEnum> = z.enum(
     CloudFormationCallbackRequestPlatformEnum,
+  );
+
+/** @internal */
+export const CloudFormationCallbackRequestBasePlatform$outboundSchema:
+  z.ZodEnum<typeof CloudFormationCallbackRequestBasePlatform> = z.enum(
+    CloudFormationCallbackRequestBasePlatform,
   );
 
 /** @internal */
@@ -637,51 +1402,145 @@ export function cloudFormationCallbackRequestGcpUnionToJSON(
 }
 
 /** @internal */
-export type CloudFormationCallbackRequestCertificate$Outbound = {
-  aws?: CloudFormationCallbackRequestAws$Outbound | any | null | undefined;
-  azure?: CloudFormationCallbackRequestAzure$Outbound | any | null | undefined;
-  gcp?: CloudFormationCallbackRequestGcp$Outbound | any | null | undefined;
+export type CloudFormationCallbackRequestTlsSecretRef$Outbound = {
+  namespace?: string | null | undefined;
+  secretName: string;
 };
 
 /** @internal */
-export const CloudFormationCallbackRequestCertificate$outboundSchema: z.ZodType<
-  CloudFormationCallbackRequestCertificate$Outbound,
-  CloudFormationCallbackRequestCertificate
-> = z.object({
-  aws: z.nullable(
-    z.union([
-      z.lazy(() => CloudFormationCallbackRequestAws$outboundSchema),
-      z.any(),
-    ]),
-  ).optional(),
-  azure: z.nullable(
-    z.union([
-      z.lazy(() => CloudFormationCallbackRequestAzure$outboundSchema),
-      z.any(),
-    ]),
-  ).optional(),
-  gcp: z.nullable(
-    z.union([
-      z.lazy(() => CloudFormationCallbackRequestGcp$outboundSchema),
-      z.any(),
-    ]),
-  ).optional(),
-});
+export const CloudFormationCallbackRequestTlsSecretRef$outboundSchema:
+  z.ZodType<
+    CloudFormationCallbackRequestTlsSecretRef$Outbound,
+    CloudFormationCallbackRequestTlsSecretRef
+  > = z.object({
+    namespace: z.nullable(z.string()).optional(),
+    secretName: z.string(),
+  });
 
-export function cloudFormationCallbackRequestCertificateToJSON(
-  cloudFormationCallbackRequestCertificate:
-    CloudFormationCallbackRequestCertificate,
+export function cloudFormationCallbackRequestTlsSecretRefToJSON(
+  cloudFormationCallbackRequestTlsSecretRef:
+    CloudFormationCallbackRequestTlsSecretRef,
 ): string {
   return JSON.stringify(
-    CloudFormationCallbackRequestCertificate$outboundSchema.parse(
-      cloudFormationCallbackRequestCertificate,
+    CloudFormationCallbackRequestTlsSecretRef$outboundSchema.parse(
+      cloudFormationCallbackRequestTlsSecretRef,
+    ),
+  );
+}
+
+/** @internal */
+export type CloudFormationCallbackRequestDomainsKubernetes$Outbound = {
+  tlsSecretRef: CloudFormationCallbackRequestTlsSecretRef$Outbound;
+};
+
+/** @internal */
+export const CloudFormationCallbackRequestDomainsKubernetes$outboundSchema:
+  z.ZodType<
+    CloudFormationCallbackRequestDomainsKubernetes$Outbound,
+    CloudFormationCallbackRequestDomainsKubernetes
+  > = z.object({
+    tlsSecretRef: z.lazy(() =>
+      CloudFormationCallbackRequestTlsSecretRef$outboundSchema
+    ),
+  });
+
+export function cloudFormationCallbackRequestDomainsKubernetesToJSON(
+  cloudFormationCallbackRequestDomainsKubernetes:
+    CloudFormationCallbackRequestDomainsKubernetes,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestDomainsKubernetes$outboundSchema.parse(
+      cloudFormationCallbackRequestDomainsKubernetes,
+    ),
+  );
+}
+
+/** @internal */
+export type CloudFormationCallbackRequestDomainsKubernetesUnion$Outbound =
+  | CloudFormationCallbackRequestDomainsKubernetes$Outbound
+  | any;
+
+/** @internal */
+export const CloudFormationCallbackRequestDomainsKubernetesUnion$outboundSchema:
+  z.ZodType<
+    CloudFormationCallbackRequestDomainsKubernetesUnion$Outbound,
+    CloudFormationCallbackRequestDomainsKubernetesUnion
+  > = z.union([
+    z.lazy(() => CloudFormationCallbackRequestDomainsKubernetes$outboundSchema),
+    z.any(),
+  ]);
+
+export function cloudFormationCallbackRequestDomainsKubernetesUnionToJSON(
+  cloudFormationCallbackRequestDomainsKubernetesUnion:
+    CloudFormationCallbackRequestDomainsKubernetesUnion,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestDomainsKubernetesUnion$outboundSchema.parse(
+      cloudFormationCallbackRequestDomainsKubernetesUnion,
+    ),
+  );
+}
+
+/** @internal */
+export type CloudFormationCallbackRequestDomainsCertificate$Outbound = {
+  aws?: CloudFormationCallbackRequestAws$Outbound | any | null | undefined;
+  azure?: CloudFormationCallbackRequestAzure$Outbound | any | null | undefined;
+  gcp?: CloudFormationCallbackRequestGcp$Outbound | any | null | undefined;
+  kubernetes?:
+    | CloudFormationCallbackRequestDomainsKubernetes$Outbound
+    | any
+    | null
+    | undefined;
+};
+
+/** @internal */
+export const CloudFormationCallbackRequestDomainsCertificate$outboundSchema:
+  z.ZodType<
+    CloudFormationCallbackRequestDomainsCertificate$Outbound,
+    CloudFormationCallbackRequestDomainsCertificate
+  > = z.object({
+    aws: z.nullable(
+      z.union([
+        z.lazy(() => CloudFormationCallbackRequestAws$outboundSchema),
+        z.any(),
+      ]),
+    ).optional(),
+    azure: z.nullable(
+      z.union([
+        z.lazy(() => CloudFormationCallbackRequestAzure$outboundSchema),
+        z.any(),
+      ]),
+    ).optional(),
+    gcp: z.nullable(
+      z.union([
+        z.lazy(() => CloudFormationCallbackRequestGcp$outboundSchema),
+        z.any(),
+      ]),
+    ).optional(),
+    kubernetes: z.nullable(
+      z.union([
+        z.lazy(() =>
+          CloudFormationCallbackRequestDomainsKubernetes$outboundSchema
+        ),
+        z.any(),
+      ]),
+    ).optional(),
+  });
+
+export function cloudFormationCallbackRequestDomainsCertificateToJSON(
+  cloudFormationCallbackRequestDomainsCertificate:
+    CloudFormationCallbackRequestDomainsCertificate,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestDomainsCertificate$outboundSchema.parse(
+      cloudFormationCallbackRequestDomainsCertificate,
     ),
   );
 }
 
 /** @internal */
 export type CloudFormationCallbackRequestCustomDomains$Outbound = {
-  certificate: CloudFormationCallbackRequestCertificate$Outbound;
+  certificate: CloudFormationCallbackRequestDomainsCertificate$Outbound;
   domain: string;
 };
 
@@ -692,7 +1551,7 @@ export const CloudFormationCallbackRequestCustomDomains$outboundSchema:
     CloudFormationCallbackRequestCustomDomains
   > = z.object({
     certificate: z.lazy(() =>
-      CloudFormationCallbackRequestCertificate$outboundSchema
+      CloudFormationCallbackRequestDomainsCertificate$outboundSchema
     ),
     domain: z.string(),
   });
@@ -790,6 +1649,1607 @@ export function cloudFormationCallbackRequestExternalBindingsToJSON(
 export const CloudFormationCallbackRequestHeartbeats$outboundSchema: z.ZodEnum<
   typeof CloudFormationCallbackRequestHeartbeats
 > = z.enum(CloudFormationCallbackRequestHeartbeats);
+
+/** @internal */
+export type CloudFormationCallbackRequestCloud$Outbound = {
+  accountId?: string | null | undefined;
+  clusterId?: string | null | undefined;
+  clusterName?: string | null | undefined;
+  projectId?: string | null | undefined;
+  region?: string | null | undefined;
+  resourceGroup?: string | null | undefined;
+  subscriptionId?: string | null | undefined;
+};
+
+/** @internal */
+export const CloudFormationCallbackRequestCloud$outboundSchema: z.ZodType<
+  CloudFormationCallbackRequestCloud$Outbound,
+  CloudFormationCallbackRequestCloud
+> = z.object({
+  accountId: z.nullable(z.string()).optional(),
+  clusterId: z.nullable(z.string()).optional(),
+  clusterName: z.nullable(z.string()).optional(),
+  projectId: z.nullable(z.string()).optional(),
+  region: z.nullable(z.string()).optional(),
+  resourceGroup: z.nullable(z.string()).optional(),
+  subscriptionId: z.nullable(z.string()).optional(),
+});
+
+export function cloudFormationCallbackRequestCloudToJSON(
+  cloudFormationCallbackRequestCloud: CloudFormationCallbackRequestCloud,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestCloud$outboundSchema.parse(
+      cloudFormationCallbackRequestCloud,
+    ),
+  );
+}
+
+/** @internal */
+export type CloudFormationCallbackRequestCloudUnion$Outbound =
+  | CloudFormationCallbackRequestCloud$Outbound
+  | any;
+
+/** @internal */
+export const CloudFormationCallbackRequestCloudUnion$outboundSchema: z.ZodType<
+  CloudFormationCallbackRequestCloudUnion$Outbound,
+  CloudFormationCallbackRequestCloudUnion
+> = z.union([
+  z.lazy(() => CloudFormationCallbackRequestCloud$outboundSchema),
+  z.any(),
+]);
+
+export function cloudFormationCallbackRequestCloudUnionToJSON(
+  cloudFormationCallbackRequestCloudUnion:
+    CloudFormationCallbackRequestCloudUnion,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestCloudUnion$outboundSchema.parse(
+      cloudFormationCallbackRequestCloudUnion,
+    ),
+  );
+}
+
+/** @internal */
+export const CloudFormationCallbackRequestOwnership$outboundSchema: z.ZodEnum<
+  typeof CloudFormationCallbackRequestOwnership
+> = z.enum(CloudFormationCallbackRequestOwnership);
+
+/** @internal */
+export type CloudFormationCallbackRequestCluster$Outbound = {
+  cloud?: CloudFormationCallbackRequestCloud$Outbound | any | null | undefined;
+  namespace?: string | null | undefined;
+  ownership: string;
+};
+
+/** @internal */
+export const CloudFormationCallbackRequestCluster$outboundSchema: z.ZodType<
+  CloudFormationCallbackRequestCluster$Outbound,
+  CloudFormationCallbackRequestCluster
+> = z.object({
+  cloud: z.nullable(
+    z.union([
+      z.lazy(() => CloudFormationCallbackRequestCloud$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  namespace: z.nullable(z.string()).optional(),
+  ownership: CloudFormationCallbackRequestOwnership$outboundSchema,
+});
+
+export function cloudFormationCallbackRequestClusterToJSON(
+  cloudFormationCallbackRequestCluster: CloudFormationCallbackRequestCluster,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestCluster$outboundSchema.parse(
+      cloudFormationCallbackRequestCluster,
+    ),
+  );
+}
+
+/** @internal */
+export type CloudFormationCallbackRequestClusterUnion$Outbound =
+  | CloudFormationCallbackRequestCluster$Outbound
+  | any;
+
+/** @internal */
+export const CloudFormationCallbackRequestClusterUnion$outboundSchema:
+  z.ZodType<
+    CloudFormationCallbackRequestClusterUnion$Outbound,
+    CloudFormationCallbackRequestClusterUnion
+  > = z.union([
+    z.lazy(() => CloudFormationCallbackRequestCluster$outboundSchema),
+    z.any(),
+  ]);
+
+export function cloudFormationCallbackRequestClusterUnionToJSON(
+  cloudFormationCallbackRequestClusterUnion:
+    CloudFormationCallbackRequestClusterUnion,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestClusterUnion$outboundSchema.parse(
+      cloudFormationCallbackRequestClusterUnion,
+    ),
+  );
+}
+
+/** @internal */
+export type CloudFormationCallbackRequestCertificateNone2$Outbound = {
+  mode: "none";
+};
+
+/** @internal */
+export const CloudFormationCallbackRequestCertificateNone2$outboundSchema:
+  z.ZodType<
+    CloudFormationCallbackRequestCertificateNone2$Outbound,
+    CloudFormationCallbackRequestCertificateNone2
+  > = z.object({
+    mode: z.literal("none"),
+  });
+
+export function cloudFormationCallbackRequestCertificateNone2ToJSON(
+  cloudFormationCallbackRequestCertificateNone2:
+    CloudFormationCallbackRequestCertificateNone2,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestCertificateNone2$outboundSchema.parse(
+      cloudFormationCallbackRequestCertificateNone2,
+    ),
+  );
+}
+
+/** @internal */
+export type CloudFormationCallbackRequestCertificateManagedTLSSecret2$Outbound =
+  {
+    mode: "managedTlsSecret";
+    secretNameTemplate: string;
+  };
+
+/** @internal */
+export const CloudFormationCallbackRequestCertificateManagedTLSSecret2$outboundSchema:
+  z.ZodType<
+    CloudFormationCallbackRequestCertificateManagedTLSSecret2$Outbound,
+    CloudFormationCallbackRequestCertificateManagedTLSSecret2
+  > = z.object({
+    mode: z.literal("managedTlsSecret"),
+    secretNameTemplate: z.string(),
+  });
+
+export function cloudFormationCallbackRequestCertificateManagedTLSSecret2ToJSON(
+  cloudFormationCallbackRequestCertificateManagedTLSSecret2:
+    CloudFormationCallbackRequestCertificateManagedTLSSecret2,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestCertificateManagedTLSSecret2$outboundSchema
+      .parse(cloudFormationCallbackRequestCertificateManagedTLSSecret2),
+  );
+}
+
+/** @internal */
+export type CloudFormationCallbackRequestCertificateAwsAcmArn2$Outbound = {
+  certificateArn: string;
+  mode: "awsAcmArn";
+};
+
+/** @internal */
+export const CloudFormationCallbackRequestCertificateAwsAcmArn2$outboundSchema:
+  z.ZodType<
+    CloudFormationCallbackRequestCertificateAwsAcmArn2$Outbound,
+    CloudFormationCallbackRequestCertificateAwsAcmArn2
+  > = z.object({
+    certificateArn: z.string(),
+    mode: z.literal("awsAcmArn"),
+  });
+
+export function cloudFormationCallbackRequestCertificateAwsAcmArn2ToJSON(
+  cloudFormationCallbackRequestCertificateAwsAcmArn2:
+    CloudFormationCallbackRequestCertificateAwsAcmArn2,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestCertificateAwsAcmArn2$outboundSchema.parse(
+      cloudFormationCallbackRequestCertificateAwsAcmArn2,
+    ),
+  );
+}
+
+/** @internal */
+export type CloudFormationCallbackRequestCertificateManagedAcmImport2$Outbound =
+  {
+    mode: "managedAcmImport";
+    region?: string | null | undefined;
+    tags?: { [k: string]: string } | undefined;
+  };
+
+/** @internal */
+export const CloudFormationCallbackRequestCertificateManagedAcmImport2$outboundSchema:
+  z.ZodType<
+    CloudFormationCallbackRequestCertificateManagedAcmImport2$Outbound,
+    CloudFormationCallbackRequestCertificateManagedAcmImport2
+  > = z.object({
+    mode: z.literal("managedAcmImport"),
+    region: z.nullable(z.string()).optional(),
+    tags: z.record(z.string(), z.string()).optional(),
+  });
+
+export function cloudFormationCallbackRequestCertificateManagedAcmImport2ToJSON(
+  cloudFormationCallbackRequestCertificateManagedAcmImport2:
+    CloudFormationCallbackRequestCertificateManagedAcmImport2,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestCertificateManagedAcmImport2$outboundSchema
+      .parse(cloudFormationCallbackRequestCertificateManagedAcmImport2),
+  );
+}
+
+/** @internal */
+export type CloudFormationCallbackRequestCertificateTLSSecretRef2$Outbound = {
+  namespace?: string | null | undefined;
+  secretName: string;
+  mode: "tlsSecretRef";
+};
+
+/** @internal */
+export const CloudFormationCallbackRequestCertificateTLSSecretRef2$outboundSchema:
+  z.ZodType<
+    CloudFormationCallbackRequestCertificateTLSSecretRef2$Outbound,
+    CloudFormationCallbackRequestCertificateTLSSecretRef2
+  > = z.object({
+    namespace: z.nullable(z.string()).optional(),
+    secretName: z.string(),
+    mode: z.literal("tlsSecretRef"),
+  });
+
+export function cloudFormationCallbackRequestCertificateTLSSecretRef2ToJSON(
+  cloudFormationCallbackRequestCertificateTLSSecretRef2:
+    CloudFormationCallbackRequestCertificateTLSSecretRef2,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestCertificateTLSSecretRef2$outboundSchema.parse(
+      cloudFormationCallbackRequestCertificateTLSSecretRef2,
+    ),
+  );
+}
+
+/** @internal */
+export type CloudFormationCallbackRequestCertificateUnion2$Outbound =
+  | CloudFormationCallbackRequestCertificateTLSSecretRef2$Outbound
+  | CloudFormationCallbackRequestCertificateManagedAcmImport2$Outbound
+  | CloudFormationCallbackRequestCertificateAwsAcmArn2$Outbound
+  | CloudFormationCallbackRequestCertificateManagedTLSSecret2$Outbound
+  | CloudFormationCallbackRequestCertificateNone2$Outbound;
+
+/** @internal */
+export const CloudFormationCallbackRequestCertificateUnion2$outboundSchema:
+  z.ZodType<
+    CloudFormationCallbackRequestCertificateUnion2$Outbound,
+    CloudFormationCallbackRequestCertificateUnion2
+  > = z.union([
+    z.lazy(() =>
+      CloudFormationCallbackRequestCertificateTLSSecretRef2$outboundSchema
+    ),
+    z.lazy(() =>
+      CloudFormationCallbackRequestCertificateManagedAcmImport2$outboundSchema
+    ),
+    z.lazy(() =>
+      CloudFormationCallbackRequestCertificateAwsAcmArn2$outboundSchema
+    ),
+    z.lazy(() =>
+      CloudFormationCallbackRequestCertificateManagedTLSSecret2$outboundSchema
+    ),
+    z.lazy(() => CloudFormationCallbackRequestCertificateNone2$outboundSchema),
+  ]);
+
+export function cloudFormationCallbackRequestCertificateUnion2ToJSON(
+  cloudFormationCallbackRequestCertificateUnion2:
+    CloudFormationCallbackRequestCertificateUnion2,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestCertificateUnion2$outboundSchema.parse(
+      cloudFormationCallbackRequestCertificateUnion2,
+    ),
+  );
+}
+
+/** @internal */
+export const CloudFormationCallbackRequestModeCustom$outboundSchema: z.ZodEnum<
+  typeof CloudFormationCallbackRequestModeCustom
+> = z.enum(CloudFormationCallbackRequestModeCustom);
+
+/** @internal */
+export const CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainersEnum4$outboundSchema:
+  z.ZodEnum<
+    typeof CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainersEnum4
+  > = z.enum(
+    CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainersEnum4,
+  );
+
+/** @internal */
+export type CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers4$Outbound =
+  {
+    albName?: string | null | undefined;
+    albNamespace?: string | null | undefined;
+    frontend: string;
+    provider: string;
+  };
+
+/** @internal */
+export const CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers4$outboundSchema:
+  z.ZodType<
+    CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers4$Outbound,
+    CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers4
+  > = z.object({
+    albName: z.nullable(z.string()).optional(),
+    albNamespace: z.nullable(z.string()).optional(),
+    frontend: z.string(),
+    provider:
+      CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainersEnum4$outboundSchema,
+  });
+
+export function cloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers4ToJSON(
+  cloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers4:
+    CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers4,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers4$outboundSchema
+      .parse(
+        cloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers4,
+      ),
+  );
+}
+
+/** @internal */
+export const CloudFormationCallbackRequestProviderGkeGatewayEnum4$outboundSchema:
+  z.ZodEnum<typeof CloudFormationCallbackRequestProviderGkeGatewayEnum4> = z
+    .enum(CloudFormationCallbackRequestProviderGkeGatewayEnum4);
+
+/** @internal */
+export type CloudFormationCallbackRequestProviderGkeGateway4$Outbound = {
+  provider: string;
+  staticAddressName?: string | null | undefined;
+};
+
+/** @internal */
+export const CloudFormationCallbackRequestProviderGkeGateway4$outboundSchema:
+  z.ZodType<
+    CloudFormationCallbackRequestProviderGkeGateway4$Outbound,
+    CloudFormationCallbackRequestProviderGkeGateway4
+  > = z.object({
+    provider:
+      CloudFormationCallbackRequestProviderGkeGatewayEnum4$outboundSchema,
+    staticAddressName: z.nullable(z.string()).optional(),
+  });
+
+export function cloudFormationCallbackRequestProviderGkeGateway4ToJSON(
+  cloudFormationCallbackRequestProviderGkeGateway4:
+    CloudFormationCallbackRequestProviderGkeGateway4,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestProviderGkeGateway4$outboundSchema.parse(
+      cloudFormationCallbackRequestProviderGkeGateway4,
+    ),
+  );
+}
+
+/** @internal */
+export const CloudFormationCallbackRequestProviderAwsAlbEnum4$outboundSchema:
+  z.ZodEnum<typeof CloudFormationCallbackRequestProviderAwsAlbEnum4> = z.enum(
+    CloudFormationCallbackRequestProviderAwsAlbEnum4,
+  );
+
+/** @internal */
+export type CloudFormationCallbackRequestProviderAwsAlb4$Outbound = {
+  ipAddressType?: string | null | undefined;
+  provider: string;
+  scheme: string;
+  subnetIds?: Array<string> | undefined;
+  targetType: string;
+};
+
+/** @internal */
+export const CloudFormationCallbackRequestProviderAwsAlb4$outboundSchema:
+  z.ZodType<
+    CloudFormationCallbackRequestProviderAwsAlb4$Outbound,
+    CloudFormationCallbackRequestProviderAwsAlb4
+  > = z.object({
+    ipAddressType: z.nullable(z.string()).optional(),
+    provider: CloudFormationCallbackRequestProviderAwsAlbEnum4$outboundSchema,
+    scheme: z.string(),
+    subnetIds: z.array(z.string()).optional(),
+    targetType: z.string(),
+  });
+
+export function cloudFormationCallbackRequestProviderAwsAlb4ToJSON(
+  cloudFormationCallbackRequestProviderAwsAlb4:
+    CloudFormationCallbackRequestProviderAwsAlb4,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestProviderAwsAlb4$outboundSchema.parse(
+      cloudFormationCallbackRequestProviderAwsAlb4,
+    ),
+  );
+}
+
+/** @internal */
+export type CloudFormationCallbackRequestProviderUnion4$Outbound =
+  | CloudFormationCallbackRequestProviderAwsAlb4$Outbound
+  | CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers4$Outbound
+  | CloudFormationCallbackRequestProviderGkeGateway4$Outbound
+  | any;
+
+/** @internal */
+export const CloudFormationCallbackRequestProviderUnion4$outboundSchema:
+  z.ZodType<
+    CloudFormationCallbackRequestProviderUnion4$Outbound,
+    CloudFormationCallbackRequestProviderUnion4
+  > = z.union([
+    z.lazy(() => CloudFormationCallbackRequestProviderAwsAlb4$outboundSchema),
+    z.lazy(() =>
+      CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers4$outboundSchema
+    ),
+    z.lazy(() =>
+      CloudFormationCallbackRequestProviderGkeGateway4$outboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function cloudFormationCallbackRequestProviderUnion4ToJSON(
+  cloudFormationCallbackRequestProviderUnion4:
+    CloudFormationCallbackRequestProviderUnion4,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestProviderUnion4$outboundSchema.parse(
+      cloudFormationCallbackRequestProviderUnion4,
+    ),
+  );
+}
+
+/** @internal */
+export type CloudFormationCallbackRequestRouteGateway2$Outbound = {
+  annotations?: { [k: string]: string } | undefined;
+  controller?: string | null | undefined;
+  gatewayClassName: string;
+  labels?: { [k: string]: string } | undefined;
+  listenerPort: number;
+  provider?:
+    | CloudFormationCallbackRequestProviderAwsAlb4$Outbound
+    | CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers4$Outbound
+    | CloudFormationCallbackRequestProviderGkeGateway4$Outbound
+    | any
+    | null
+    | undefined;
+  routeApi: "gateway";
+};
+
+/** @internal */
+export const CloudFormationCallbackRequestRouteGateway2$outboundSchema:
+  z.ZodType<
+    CloudFormationCallbackRequestRouteGateway2$Outbound,
+    CloudFormationCallbackRequestRouteGateway2
+  > = z.object({
+    annotations: z.record(z.string(), z.string()).optional(),
+    controller: z.nullable(z.string()).optional(),
+    gatewayClassName: z.string(),
+    labels: z.record(z.string(), z.string()).optional(),
+    listenerPort: z.int(),
+    provider: z.nullable(
+      z.union([
+        z.lazy(() =>
+          CloudFormationCallbackRequestProviderAwsAlb4$outboundSchema
+        ),
+        z.lazy(() =>
+          CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers4$outboundSchema
+        ),
+        z.lazy(() =>
+          CloudFormationCallbackRequestProviderGkeGateway4$outboundSchema
+        ),
+        z.any(),
+      ]),
+    ).optional(),
+    routeApi: z.literal("gateway"),
+  });
+
+export function cloudFormationCallbackRequestRouteGateway2ToJSON(
+  cloudFormationCallbackRequestRouteGateway2:
+    CloudFormationCallbackRequestRouteGateway2,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestRouteGateway2$outboundSchema.parse(
+      cloudFormationCallbackRequestRouteGateway2,
+    ),
+  );
+}
+
+/** @internal */
+export const CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainersEnum3$outboundSchema:
+  z.ZodEnum<
+    typeof CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainersEnum3
+  > = z.enum(
+    CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainersEnum3,
+  );
+
+/** @internal */
+export type CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers3$Outbound =
+  {
+    albName?: string | null | undefined;
+    albNamespace?: string | null | undefined;
+    frontend: string;
+    provider: string;
+  };
+
+/** @internal */
+export const CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers3$outboundSchema:
+  z.ZodType<
+    CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers3$Outbound,
+    CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers3
+  > = z.object({
+    albName: z.nullable(z.string()).optional(),
+    albNamespace: z.nullable(z.string()).optional(),
+    frontend: z.string(),
+    provider:
+      CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainersEnum3$outboundSchema,
+  });
+
+export function cloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers3ToJSON(
+  cloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers3:
+    CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers3,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers3$outboundSchema
+      .parse(
+        cloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers3,
+      ),
+  );
+}
+
+/** @internal */
+export const CloudFormationCallbackRequestProviderGkeGatewayEnum3$outboundSchema:
+  z.ZodEnum<typeof CloudFormationCallbackRequestProviderGkeGatewayEnum3> = z
+    .enum(CloudFormationCallbackRequestProviderGkeGatewayEnum3);
+
+/** @internal */
+export type CloudFormationCallbackRequestProviderGkeGateway3$Outbound = {
+  provider: string;
+  staticAddressName?: string | null | undefined;
+};
+
+/** @internal */
+export const CloudFormationCallbackRequestProviderGkeGateway3$outboundSchema:
+  z.ZodType<
+    CloudFormationCallbackRequestProviderGkeGateway3$Outbound,
+    CloudFormationCallbackRequestProviderGkeGateway3
+  > = z.object({
+    provider:
+      CloudFormationCallbackRequestProviderGkeGatewayEnum3$outboundSchema,
+    staticAddressName: z.nullable(z.string()).optional(),
+  });
+
+export function cloudFormationCallbackRequestProviderGkeGateway3ToJSON(
+  cloudFormationCallbackRequestProviderGkeGateway3:
+    CloudFormationCallbackRequestProviderGkeGateway3,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestProviderGkeGateway3$outboundSchema.parse(
+      cloudFormationCallbackRequestProviderGkeGateway3,
+    ),
+  );
+}
+
+/** @internal */
+export const CloudFormationCallbackRequestProviderAwsAlbEnum3$outboundSchema:
+  z.ZodEnum<typeof CloudFormationCallbackRequestProviderAwsAlbEnum3> = z.enum(
+    CloudFormationCallbackRequestProviderAwsAlbEnum3,
+  );
+
+/** @internal */
+export type CloudFormationCallbackRequestProviderAwsAlb3$Outbound = {
+  ipAddressType?: string | null | undefined;
+  provider: string;
+  scheme: string;
+  subnetIds?: Array<string> | undefined;
+  targetType: string;
+};
+
+/** @internal */
+export const CloudFormationCallbackRequestProviderAwsAlb3$outboundSchema:
+  z.ZodType<
+    CloudFormationCallbackRequestProviderAwsAlb3$Outbound,
+    CloudFormationCallbackRequestProviderAwsAlb3
+  > = z.object({
+    ipAddressType: z.nullable(z.string()).optional(),
+    provider: CloudFormationCallbackRequestProviderAwsAlbEnum3$outboundSchema,
+    scheme: z.string(),
+    subnetIds: z.array(z.string()).optional(),
+    targetType: z.string(),
+  });
+
+export function cloudFormationCallbackRequestProviderAwsAlb3ToJSON(
+  cloudFormationCallbackRequestProviderAwsAlb3:
+    CloudFormationCallbackRequestProviderAwsAlb3,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestProviderAwsAlb3$outboundSchema.parse(
+      cloudFormationCallbackRequestProviderAwsAlb3,
+    ),
+  );
+}
+
+/** @internal */
+export type CloudFormationCallbackRequestProviderUnion3$Outbound =
+  | CloudFormationCallbackRequestProviderAwsAlb3$Outbound
+  | CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers3$Outbound
+  | CloudFormationCallbackRequestProviderGkeGateway3$Outbound
+  | any;
+
+/** @internal */
+export const CloudFormationCallbackRequestProviderUnion3$outboundSchema:
+  z.ZodType<
+    CloudFormationCallbackRequestProviderUnion3$Outbound,
+    CloudFormationCallbackRequestProviderUnion3
+  > = z.union([
+    z.lazy(() => CloudFormationCallbackRequestProviderAwsAlb3$outboundSchema),
+    z.lazy(() =>
+      CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers3$outboundSchema
+    ),
+    z.lazy(() =>
+      CloudFormationCallbackRequestProviderGkeGateway3$outboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function cloudFormationCallbackRequestProviderUnion3ToJSON(
+  cloudFormationCallbackRequestProviderUnion3:
+    CloudFormationCallbackRequestProviderUnion3,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestProviderUnion3$outboundSchema.parse(
+      cloudFormationCallbackRequestProviderUnion3,
+    ),
+  );
+}
+
+/** @internal */
+export type CloudFormationCallbackRequestRouteIngress2$Outbound = {
+  annotations?: { [k: string]: string } | undefined;
+  controller?: string | null | undefined;
+  ingressClassName: string;
+  labels?: { [k: string]: string } | undefined;
+  provider?:
+    | CloudFormationCallbackRequestProviderAwsAlb3$Outbound
+    | CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers3$Outbound
+    | CloudFormationCallbackRequestProviderGkeGateway3$Outbound
+    | any
+    | null
+    | undefined;
+  routeApi: "ingress";
+};
+
+/** @internal */
+export const CloudFormationCallbackRequestRouteIngress2$outboundSchema:
+  z.ZodType<
+    CloudFormationCallbackRequestRouteIngress2$Outbound,
+    CloudFormationCallbackRequestRouteIngress2
+  > = z.object({
+    annotations: z.record(z.string(), z.string()).optional(),
+    controller: z.nullable(z.string()).optional(),
+    ingressClassName: z.string(),
+    labels: z.record(z.string(), z.string()).optional(),
+    provider: z.nullable(
+      z.union([
+        z.lazy(() =>
+          CloudFormationCallbackRequestProviderAwsAlb3$outboundSchema
+        ),
+        z.lazy(() =>
+          CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers3$outboundSchema
+        ),
+        z.lazy(() =>
+          CloudFormationCallbackRequestProviderGkeGateway3$outboundSchema
+        ),
+        z.any(),
+      ]),
+    ).optional(),
+    routeApi: z.literal("ingress"),
+  });
+
+export function cloudFormationCallbackRequestRouteIngress2ToJSON(
+  cloudFormationCallbackRequestRouteIngress2:
+    CloudFormationCallbackRequestRouteIngress2,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestRouteIngress2$outboundSchema.parse(
+      cloudFormationCallbackRequestRouteIngress2,
+    ),
+  );
+}
+
+/** @internal */
+export type CloudFormationCallbackRequestRouteUnion2$Outbound =
+  | CloudFormationCallbackRequestRouteIngress2$Outbound
+  | CloudFormationCallbackRequestRouteGateway2$Outbound;
+
+/** @internal */
+export const CloudFormationCallbackRequestRouteUnion2$outboundSchema: z.ZodType<
+  CloudFormationCallbackRequestRouteUnion2$Outbound,
+  CloudFormationCallbackRequestRouteUnion2
+> = z.union([
+  z.lazy(() => CloudFormationCallbackRequestRouteIngress2$outboundSchema),
+  z.lazy(() => CloudFormationCallbackRequestRouteGateway2$outboundSchema),
+]);
+
+export function cloudFormationCallbackRequestRouteUnion2ToJSON(
+  cloudFormationCallbackRequestRouteUnion2:
+    CloudFormationCallbackRequestRouteUnion2,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestRouteUnion2$outboundSchema.parse(
+      cloudFormationCallbackRequestRouteUnion2,
+    ),
+  );
+}
+
+/** @internal */
+export type CloudFormationCallbackRequestExposureCustom$Outbound = {
+  certificate:
+    | CloudFormationCallbackRequestCertificateTLSSecretRef2$Outbound
+    | CloudFormationCallbackRequestCertificateManagedAcmImport2$Outbound
+    | CloudFormationCallbackRequestCertificateAwsAcmArn2$Outbound
+    | CloudFormationCallbackRequestCertificateManagedTLSSecret2$Outbound
+    | CloudFormationCallbackRequestCertificateNone2$Outbound;
+  domain: string;
+  mode: string;
+  route:
+    | CloudFormationCallbackRequestRouteIngress2$Outbound
+    | CloudFormationCallbackRequestRouteGateway2$Outbound;
+};
+
+/** @internal */
+export const CloudFormationCallbackRequestExposureCustom$outboundSchema:
+  z.ZodType<
+    CloudFormationCallbackRequestExposureCustom$Outbound,
+    CloudFormationCallbackRequestExposureCustom
+  > = z.object({
+    certificate: z.union([
+      z.lazy(() =>
+        CloudFormationCallbackRequestCertificateTLSSecretRef2$outboundSchema
+      ),
+      z.lazy(() =>
+        CloudFormationCallbackRequestCertificateManagedAcmImport2$outboundSchema
+      ),
+      z.lazy(() =>
+        CloudFormationCallbackRequestCertificateAwsAcmArn2$outboundSchema
+      ),
+      z.lazy(() =>
+        CloudFormationCallbackRequestCertificateManagedTLSSecret2$outboundSchema
+      ),
+      z.lazy(() =>
+        CloudFormationCallbackRequestCertificateNone2$outboundSchema
+      ),
+    ]),
+    domain: z.string(),
+    mode: CloudFormationCallbackRequestModeCustom$outboundSchema,
+    route: z.union([
+      z.lazy(() => CloudFormationCallbackRequestRouteIngress2$outboundSchema),
+      z.lazy(() => CloudFormationCallbackRequestRouteGateway2$outboundSchema),
+    ]),
+  });
+
+export function cloudFormationCallbackRequestExposureCustomToJSON(
+  cloudFormationCallbackRequestExposureCustom:
+    CloudFormationCallbackRequestExposureCustom,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestExposureCustom$outboundSchema.parse(
+      cloudFormationCallbackRequestExposureCustom,
+    ),
+  );
+}
+
+/** @internal */
+export type CloudFormationCallbackRequestCertificateNone1$Outbound = {
+  mode: "none";
+};
+
+/** @internal */
+export const CloudFormationCallbackRequestCertificateNone1$outboundSchema:
+  z.ZodType<
+    CloudFormationCallbackRequestCertificateNone1$Outbound,
+    CloudFormationCallbackRequestCertificateNone1
+  > = z.object({
+    mode: z.literal("none"),
+  });
+
+export function cloudFormationCallbackRequestCertificateNone1ToJSON(
+  cloudFormationCallbackRequestCertificateNone1:
+    CloudFormationCallbackRequestCertificateNone1,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestCertificateNone1$outboundSchema.parse(
+      cloudFormationCallbackRequestCertificateNone1,
+    ),
+  );
+}
+
+/** @internal */
+export type CloudFormationCallbackRequestCertificateManagedTLSSecret1$Outbound =
+  {
+    mode: "managedTlsSecret";
+    secretNameTemplate: string;
+  };
+
+/** @internal */
+export const CloudFormationCallbackRequestCertificateManagedTLSSecret1$outboundSchema:
+  z.ZodType<
+    CloudFormationCallbackRequestCertificateManagedTLSSecret1$Outbound,
+    CloudFormationCallbackRequestCertificateManagedTLSSecret1
+  > = z.object({
+    mode: z.literal("managedTlsSecret"),
+    secretNameTemplate: z.string(),
+  });
+
+export function cloudFormationCallbackRequestCertificateManagedTLSSecret1ToJSON(
+  cloudFormationCallbackRequestCertificateManagedTLSSecret1:
+    CloudFormationCallbackRequestCertificateManagedTLSSecret1,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestCertificateManagedTLSSecret1$outboundSchema
+      .parse(cloudFormationCallbackRequestCertificateManagedTLSSecret1),
+  );
+}
+
+/** @internal */
+export type CloudFormationCallbackRequestCertificateAwsAcmArn1$Outbound = {
+  certificateArn: string;
+  mode: "awsAcmArn";
+};
+
+/** @internal */
+export const CloudFormationCallbackRequestCertificateAwsAcmArn1$outboundSchema:
+  z.ZodType<
+    CloudFormationCallbackRequestCertificateAwsAcmArn1$Outbound,
+    CloudFormationCallbackRequestCertificateAwsAcmArn1
+  > = z.object({
+    certificateArn: z.string(),
+    mode: z.literal("awsAcmArn"),
+  });
+
+export function cloudFormationCallbackRequestCertificateAwsAcmArn1ToJSON(
+  cloudFormationCallbackRequestCertificateAwsAcmArn1:
+    CloudFormationCallbackRequestCertificateAwsAcmArn1,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestCertificateAwsAcmArn1$outboundSchema.parse(
+      cloudFormationCallbackRequestCertificateAwsAcmArn1,
+    ),
+  );
+}
+
+/** @internal */
+export type CloudFormationCallbackRequestCertificateManagedAcmImport1$Outbound =
+  {
+    mode: "managedAcmImport";
+    region?: string | null | undefined;
+    tags?: { [k: string]: string } | undefined;
+  };
+
+/** @internal */
+export const CloudFormationCallbackRequestCertificateManagedAcmImport1$outboundSchema:
+  z.ZodType<
+    CloudFormationCallbackRequestCertificateManagedAcmImport1$Outbound,
+    CloudFormationCallbackRequestCertificateManagedAcmImport1
+  > = z.object({
+    mode: z.literal("managedAcmImport"),
+    region: z.nullable(z.string()).optional(),
+    tags: z.record(z.string(), z.string()).optional(),
+  });
+
+export function cloudFormationCallbackRequestCertificateManagedAcmImport1ToJSON(
+  cloudFormationCallbackRequestCertificateManagedAcmImport1:
+    CloudFormationCallbackRequestCertificateManagedAcmImport1,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestCertificateManagedAcmImport1$outboundSchema
+      .parse(cloudFormationCallbackRequestCertificateManagedAcmImport1),
+  );
+}
+
+/** @internal */
+export type CloudFormationCallbackRequestCertificateTLSSecretRef1$Outbound = {
+  namespace?: string | null | undefined;
+  secretName: string;
+  mode: "tlsSecretRef";
+};
+
+/** @internal */
+export const CloudFormationCallbackRequestCertificateTLSSecretRef1$outboundSchema:
+  z.ZodType<
+    CloudFormationCallbackRequestCertificateTLSSecretRef1$Outbound,
+    CloudFormationCallbackRequestCertificateTLSSecretRef1
+  > = z.object({
+    namespace: z.nullable(z.string()).optional(),
+    secretName: z.string(),
+    mode: z.literal("tlsSecretRef"),
+  });
+
+export function cloudFormationCallbackRequestCertificateTLSSecretRef1ToJSON(
+  cloudFormationCallbackRequestCertificateTLSSecretRef1:
+    CloudFormationCallbackRequestCertificateTLSSecretRef1,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestCertificateTLSSecretRef1$outboundSchema.parse(
+      cloudFormationCallbackRequestCertificateTLSSecretRef1,
+    ),
+  );
+}
+
+/** @internal */
+export type CloudFormationCallbackRequestCertificateUnion1$Outbound =
+  | CloudFormationCallbackRequestCertificateTLSSecretRef1$Outbound
+  | CloudFormationCallbackRequestCertificateManagedAcmImport1$Outbound
+  | CloudFormationCallbackRequestCertificateAwsAcmArn1$Outbound
+  | CloudFormationCallbackRequestCertificateManagedTLSSecret1$Outbound
+  | CloudFormationCallbackRequestCertificateNone1$Outbound;
+
+/** @internal */
+export const CloudFormationCallbackRequestCertificateUnion1$outboundSchema:
+  z.ZodType<
+    CloudFormationCallbackRequestCertificateUnion1$Outbound,
+    CloudFormationCallbackRequestCertificateUnion1
+  > = z.union([
+    z.lazy(() =>
+      CloudFormationCallbackRequestCertificateTLSSecretRef1$outboundSchema
+    ),
+    z.lazy(() =>
+      CloudFormationCallbackRequestCertificateManagedAcmImport1$outboundSchema
+    ),
+    z.lazy(() =>
+      CloudFormationCallbackRequestCertificateAwsAcmArn1$outboundSchema
+    ),
+    z.lazy(() =>
+      CloudFormationCallbackRequestCertificateManagedTLSSecret1$outboundSchema
+    ),
+    z.lazy(() => CloudFormationCallbackRequestCertificateNone1$outboundSchema),
+  ]);
+
+export function cloudFormationCallbackRequestCertificateUnion1ToJSON(
+  cloudFormationCallbackRequestCertificateUnion1:
+    CloudFormationCallbackRequestCertificateUnion1,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestCertificateUnion1$outboundSchema.parse(
+      cloudFormationCallbackRequestCertificateUnion1,
+    ),
+  );
+}
+
+/** @internal */
+export const CloudFormationCallbackRequestModeGenerated$outboundSchema:
+  z.ZodEnum<typeof CloudFormationCallbackRequestModeGenerated> = z.enum(
+    CloudFormationCallbackRequestModeGenerated,
+  );
+
+/** @internal */
+export const CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainersEnum2$outboundSchema:
+  z.ZodEnum<
+    typeof CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainersEnum2
+  > = z.enum(
+    CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainersEnum2,
+  );
+
+/** @internal */
+export type CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers2$Outbound =
+  {
+    albName?: string | null | undefined;
+    albNamespace?: string | null | undefined;
+    frontend: string;
+    provider: string;
+  };
+
+/** @internal */
+export const CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers2$outboundSchema:
+  z.ZodType<
+    CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers2$Outbound,
+    CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers2
+  > = z.object({
+    albName: z.nullable(z.string()).optional(),
+    albNamespace: z.nullable(z.string()).optional(),
+    frontend: z.string(),
+    provider:
+      CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainersEnum2$outboundSchema,
+  });
+
+export function cloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers2ToJSON(
+  cloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers2:
+    CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers2,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers2$outboundSchema
+      .parse(
+        cloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers2,
+      ),
+  );
+}
+
+/** @internal */
+export const CloudFormationCallbackRequestProviderGkeGatewayEnum2$outboundSchema:
+  z.ZodEnum<typeof CloudFormationCallbackRequestProviderGkeGatewayEnum2> = z
+    .enum(CloudFormationCallbackRequestProviderGkeGatewayEnum2);
+
+/** @internal */
+export type CloudFormationCallbackRequestProviderGkeGateway2$Outbound = {
+  provider: string;
+  staticAddressName?: string | null | undefined;
+};
+
+/** @internal */
+export const CloudFormationCallbackRequestProviderGkeGateway2$outboundSchema:
+  z.ZodType<
+    CloudFormationCallbackRequestProviderGkeGateway2$Outbound,
+    CloudFormationCallbackRequestProviderGkeGateway2
+  > = z.object({
+    provider:
+      CloudFormationCallbackRequestProviderGkeGatewayEnum2$outboundSchema,
+    staticAddressName: z.nullable(z.string()).optional(),
+  });
+
+export function cloudFormationCallbackRequestProviderGkeGateway2ToJSON(
+  cloudFormationCallbackRequestProviderGkeGateway2:
+    CloudFormationCallbackRequestProviderGkeGateway2,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestProviderGkeGateway2$outboundSchema.parse(
+      cloudFormationCallbackRequestProviderGkeGateway2,
+    ),
+  );
+}
+
+/** @internal */
+export const CloudFormationCallbackRequestProviderAwsAlbEnum2$outboundSchema:
+  z.ZodEnum<typeof CloudFormationCallbackRequestProviderAwsAlbEnum2> = z.enum(
+    CloudFormationCallbackRequestProviderAwsAlbEnum2,
+  );
+
+/** @internal */
+export type CloudFormationCallbackRequestProviderAwsAlb2$Outbound = {
+  ipAddressType?: string | null | undefined;
+  provider: string;
+  scheme: string;
+  subnetIds?: Array<string> | undefined;
+  targetType: string;
+};
+
+/** @internal */
+export const CloudFormationCallbackRequestProviderAwsAlb2$outboundSchema:
+  z.ZodType<
+    CloudFormationCallbackRequestProviderAwsAlb2$Outbound,
+    CloudFormationCallbackRequestProviderAwsAlb2
+  > = z.object({
+    ipAddressType: z.nullable(z.string()).optional(),
+    provider: CloudFormationCallbackRequestProviderAwsAlbEnum2$outboundSchema,
+    scheme: z.string(),
+    subnetIds: z.array(z.string()).optional(),
+    targetType: z.string(),
+  });
+
+export function cloudFormationCallbackRequestProviderAwsAlb2ToJSON(
+  cloudFormationCallbackRequestProviderAwsAlb2:
+    CloudFormationCallbackRequestProviderAwsAlb2,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestProviderAwsAlb2$outboundSchema.parse(
+      cloudFormationCallbackRequestProviderAwsAlb2,
+    ),
+  );
+}
+
+/** @internal */
+export type CloudFormationCallbackRequestProviderUnion2$Outbound =
+  | CloudFormationCallbackRequestProviderAwsAlb2$Outbound
+  | CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers2$Outbound
+  | CloudFormationCallbackRequestProviderGkeGateway2$Outbound
+  | any;
+
+/** @internal */
+export const CloudFormationCallbackRequestProviderUnion2$outboundSchema:
+  z.ZodType<
+    CloudFormationCallbackRequestProviderUnion2$Outbound,
+    CloudFormationCallbackRequestProviderUnion2
+  > = z.union([
+    z.lazy(() => CloudFormationCallbackRequestProviderAwsAlb2$outboundSchema),
+    z.lazy(() =>
+      CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers2$outboundSchema
+    ),
+    z.lazy(() =>
+      CloudFormationCallbackRequestProviderGkeGateway2$outboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function cloudFormationCallbackRequestProviderUnion2ToJSON(
+  cloudFormationCallbackRequestProviderUnion2:
+    CloudFormationCallbackRequestProviderUnion2,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestProviderUnion2$outboundSchema.parse(
+      cloudFormationCallbackRequestProviderUnion2,
+    ),
+  );
+}
+
+/** @internal */
+export type CloudFormationCallbackRequestRouteGateway1$Outbound = {
+  annotations?: { [k: string]: string } | undefined;
+  controller?: string | null | undefined;
+  gatewayClassName: string;
+  labels?: { [k: string]: string } | undefined;
+  listenerPort: number;
+  provider?:
+    | CloudFormationCallbackRequestProviderAwsAlb2$Outbound
+    | CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers2$Outbound
+    | CloudFormationCallbackRequestProviderGkeGateway2$Outbound
+    | any
+    | null
+    | undefined;
+  routeApi: "gateway";
+};
+
+/** @internal */
+export const CloudFormationCallbackRequestRouteGateway1$outboundSchema:
+  z.ZodType<
+    CloudFormationCallbackRequestRouteGateway1$Outbound,
+    CloudFormationCallbackRequestRouteGateway1
+  > = z.object({
+    annotations: z.record(z.string(), z.string()).optional(),
+    controller: z.nullable(z.string()).optional(),
+    gatewayClassName: z.string(),
+    labels: z.record(z.string(), z.string()).optional(),
+    listenerPort: z.int(),
+    provider: z.nullable(
+      z.union([
+        z.lazy(() =>
+          CloudFormationCallbackRequestProviderAwsAlb2$outboundSchema
+        ),
+        z.lazy(() =>
+          CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers2$outboundSchema
+        ),
+        z.lazy(() =>
+          CloudFormationCallbackRequestProviderGkeGateway2$outboundSchema
+        ),
+        z.any(),
+      ]),
+    ).optional(),
+    routeApi: z.literal("gateway"),
+  });
+
+export function cloudFormationCallbackRequestRouteGateway1ToJSON(
+  cloudFormationCallbackRequestRouteGateway1:
+    CloudFormationCallbackRequestRouteGateway1,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestRouteGateway1$outboundSchema.parse(
+      cloudFormationCallbackRequestRouteGateway1,
+    ),
+  );
+}
+
+/** @internal */
+export const CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainersEnum1$outboundSchema:
+  z.ZodEnum<
+    typeof CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainersEnum1
+  > = z.enum(
+    CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainersEnum1,
+  );
+
+/** @internal */
+export type CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers1$Outbound =
+  {
+    albName?: string | null | undefined;
+    albNamespace?: string | null | undefined;
+    frontend: string;
+    provider: string;
+  };
+
+/** @internal */
+export const CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers1$outboundSchema:
+  z.ZodType<
+    CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers1$Outbound,
+    CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers1
+  > = z.object({
+    albName: z.nullable(z.string()).optional(),
+    albNamespace: z.nullable(z.string()).optional(),
+    frontend: z.string(),
+    provider:
+      CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainersEnum1$outboundSchema,
+  });
+
+export function cloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers1ToJSON(
+  cloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers1:
+    CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers1,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers1$outboundSchema
+      .parse(
+        cloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers1,
+      ),
+  );
+}
+
+/** @internal */
+export const CloudFormationCallbackRequestProviderGkeGatewayEnum1$outboundSchema:
+  z.ZodEnum<typeof CloudFormationCallbackRequestProviderGkeGatewayEnum1> = z
+    .enum(CloudFormationCallbackRequestProviderGkeGatewayEnum1);
+
+/** @internal */
+export type CloudFormationCallbackRequestProviderGkeGateway1$Outbound = {
+  provider: string;
+  staticAddressName?: string | null | undefined;
+};
+
+/** @internal */
+export const CloudFormationCallbackRequestProviderGkeGateway1$outboundSchema:
+  z.ZodType<
+    CloudFormationCallbackRequestProviderGkeGateway1$Outbound,
+    CloudFormationCallbackRequestProviderGkeGateway1
+  > = z.object({
+    provider:
+      CloudFormationCallbackRequestProviderGkeGatewayEnum1$outboundSchema,
+    staticAddressName: z.nullable(z.string()).optional(),
+  });
+
+export function cloudFormationCallbackRequestProviderGkeGateway1ToJSON(
+  cloudFormationCallbackRequestProviderGkeGateway1:
+    CloudFormationCallbackRequestProviderGkeGateway1,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestProviderGkeGateway1$outboundSchema.parse(
+      cloudFormationCallbackRequestProviderGkeGateway1,
+    ),
+  );
+}
+
+/** @internal */
+export const CloudFormationCallbackRequestProviderAwsAlbEnum1$outboundSchema:
+  z.ZodEnum<typeof CloudFormationCallbackRequestProviderAwsAlbEnum1> = z.enum(
+    CloudFormationCallbackRequestProviderAwsAlbEnum1,
+  );
+
+/** @internal */
+export type CloudFormationCallbackRequestProviderAwsAlb1$Outbound = {
+  ipAddressType?: string | null | undefined;
+  provider: string;
+  scheme: string;
+  subnetIds?: Array<string> | undefined;
+  targetType: string;
+};
+
+/** @internal */
+export const CloudFormationCallbackRequestProviderAwsAlb1$outboundSchema:
+  z.ZodType<
+    CloudFormationCallbackRequestProviderAwsAlb1$Outbound,
+    CloudFormationCallbackRequestProviderAwsAlb1
+  > = z.object({
+    ipAddressType: z.nullable(z.string()).optional(),
+    provider: CloudFormationCallbackRequestProviderAwsAlbEnum1$outboundSchema,
+    scheme: z.string(),
+    subnetIds: z.array(z.string()).optional(),
+    targetType: z.string(),
+  });
+
+export function cloudFormationCallbackRequestProviderAwsAlb1ToJSON(
+  cloudFormationCallbackRequestProviderAwsAlb1:
+    CloudFormationCallbackRequestProviderAwsAlb1,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestProviderAwsAlb1$outboundSchema.parse(
+      cloudFormationCallbackRequestProviderAwsAlb1,
+    ),
+  );
+}
+
+/** @internal */
+export type CloudFormationCallbackRequestProviderUnion1$Outbound =
+  | CloudFormationCallbackRequestProviderAwsAlb1$Outbound
+  | CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers1$Outbound
+  | CloudFormationCallbackRequestProviderGkeGateway1$Outbound
+  | any;
+
+/** @internal */
+export const CloudFormationCallbackRequestProviderUnion1$outboundSchema:
+  z.ZodType<
+    CloudFormationCallbackRequestProviderUnion1$Outbound,
+    CloudFormationCallbackRequestProviderUnion1
+  > = z.union([
+    z.lazy(() => CloudFormationCallbackRequestProviderAwsAlb1$outboundSchema),
+    z.lazy(() =>
+      CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers1$outboundSchema
+    ),
+    z.lazy(() =>
+      CloudFormationCallbackRequestProviderGkeGateway1$outboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function cloudFormationCallbackRequestProviderUnion1ToJSON(
+  cloudFormationCallbackRequestProviderUnion1:
+    CloudFormationCallbackRequestProviderUnion1,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestProviderUnion1$outboundSchema.parse(
+      cloudFormationCallbackRequestProviderUnion1,
+    ),
+  );
+}
+
+/** @internal */
+export type CloudFormationCallbackRequestRouteIngress1$Outbound = {
+  annotations?: { [k: string]: string } | undefined;
+  controller?: string | null | undefined;
+  ingressClassName: string;
+  labels?: { [k: string]: string } | undefined;
+  provider?:
+    | CloudFormationCallbackRequestProviderAwsAlb1$Outbound
+    | CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers1$Outbound
+    | CloudFormationCallbackRequestProviderGkeGateway1$Outbound
+    | any
+    | null
+    | undefined;
+  routeApi: "ingress";
+};
+
+/** @internal */
+export const CloudFormationCallbackRequestRouteIngress1$outboundSchema:
+  z.ZodType<
+    CloudFormationCallbackRequestRouteIngress1$Outbound,
+    CloudFormationCallbackRequestRouteIngress1
+  > = z.object({
+    annotations: z.record(z.string(), z.string()).optional(),
+    controller: z.nullable(z.string()).optional(),
+    ingressClassName: z.string(),
+    labels: z.record(z.string(), z.string()).optional(),
+    provider: z.nullable(
+      z.union([
+        z.lazy(() =>
+          CloudFormationCallbackRequestProviderAwsAlb1$outboundSchema
+        ),
+        z.lazy(() =>
+          CloudFormationCallbackRequestProviderAzureApplicationGatewayForContainers1$outboundSchema
+        ),
+        z.lazy(() =>
+          CloudFormationCallbackRequestProviderGkeGateway1$outboundSchema
+        ),
+        z.any(),
+      ]),
+    ).optional(),
+    routeApi: z.literal("ingress"),
+  });
+
+export function cloudFormationCallbackRequestRouteIngress1ToJSON(
+  cloudFormationCallbackRequestRouteIngress1:
+    CloudFormationCallbackRequestRouteIngress1,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestRouteIngress1$outboundSchema.parse(
+      cloudFormationCallbackRequestRouteIngress1,
+    ),
+  );
+}
+
+/** @internal */
+export type CloudFormationCallbackRequestRouteUnion1$Outbound =
+  | CloudFormationCallbackRequestRouteIngress1$Outbound
+  | CloudFormationCallbackRequestRouteGateway1$Outbound;
+
+/** @internal */
+export const CloudFormationCallbackRequestRouteUnion1$outboundSchema: z.ZodType<
+  CloudFormationCallbackRequestRouteUnion1$Outbound,
+  CloudFormationCallbackRequestRouteUnion1
+> = z.union([
+  z.lazy(() => CloudFormationCallbackRequestRouteIngress1$outboundSchema),
+  z.lazy(() => CloudFormationCallbackRequestRouteGateway1$outboundSchema),
+]);
+
+export function cloudFormationCallbackRequestRouteUnion1ToJSON(
+  cloudFormationCallbackRequestRouteUnion1:
+    CloudFormationCallbackRequestRouteUnion1,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestRouteUnion1$outboundSchema.parse(
+      cloudFormationCallbackRequestRouteUnion1,
+    ),
+  );
+}
+
+/** @internal */
+export type CloudFormationCallbackRequestExposureGenerated$Outbound = {
+  certificate:
+    | CloudFormationCallbackRequestCertificateTLSSecretRef1$Outbound
+    | CloudFormationCallbackRequestCertificateManagedAcmImport1$Outbound
+    | CloudFormationCallbackRequestCertificateAwsAcmArn1$Outbound
+    | CloudFormationCallbackRequestCertificateManagedTLSSecret1$Outbound
+    | CloudFormationCallbackRequestCertificateNone1$Outbound;
+  mode: string;
+  route:
+    | CloudFormationCallbackRequestRouteIngress1$Outbound
+    | CloudFormationCallbackRequestRouteGateway1$Outbound;
+};
+
+/** @internal */
+export const CloudFormationCallbackRequestExposureGenerated$outboundSchema:
+  z.ZodType<
+    CloudFormationCallbackRequestExposureGenerated$Outbound,
+    CloudFormationCallbackRequestExposureGenerated
+  > = z.object({
+    certificate: z.union([
+      z.lazy(() =>
+        CloudFormationCallbackRequestCertificateTLSSecretRef1$outboundSchema
+      ),
+      z.lazy(() =>
+        CloudFormationCallbackRequestCertificateManagedAcmImport1$outboundSchema
+      ),
+      z.lazy(() =>
+        CloudFormationCallbackRequestCertificateAwsAcmArn1$outboundSchema
+      ),
+      z.lazy(() =>
+        CloudFormationCallbackRequestCertificateManagedTLSSecret1$outboundSchema
+      ),
+      z.lazy(() =>
+        CloudFormationCallbackRequestCertificateNone1$outboundSchema
+      ),
+    ]),
+    mode: CloudFormationCallbackRequestModeGenerated$outboundSchema,
+    route: z.union([
+      z.lazy(() => CloudFormationCallbackRequestRouteIngress1$outboundSchema),
+      z.lazy(() => CloudFormationCallbackRequestRouteGateway1$outboundSchema),
+    ]),
+  });
+
+export function cloudFormationCallbackRequestExposureGeneratedToJSON(
+  cloudFormationCallbackRequestExposureGenerated:
+    CloudFormationCallbackRequestExposureGenerated,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestExposureGenerated$outboundSchema.parse(
+      cloudFormationCallbackRequestExposureGenerated,
+    ),
+  );
+}
+
+/** @internal */
+export const CloudFormationCallbackRequestModeDisabled$outboundSchema:
+  z.ZodEnum<typeof CloudFormationCallbackRequestModeDisabled> = z.enum(
+    CloudFormationCallbackRequestModeDisabled,
+  );
+
+/** @internal */
+export type CloudFormationCallbackRequestExposureDisabled$Outbound = {
+  mode: string;
+};
+
+/** @internal */
+export const CloudFormationCallbackRequestExposureDisabled$outboundSchema:
+  z.ZodType<
+    CloudFormationCallbackRequestExposureDisabled$Outbound,
+    CloudFormationCallbackRequestExposureDisabled
+  > = z.object({
+    mode: CloudFormationCallbackRequestModeDisabled$outboundSchema,
+  });
+
+export function cloudFormationCallbackRequestExposureDisabledToJSON(
+  cloudFormationCallbackRequestExposureDisabled:
+    CloudFormationCallbackRequestExposureDisabled,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestExposureDisabled$outboundSchema.parse(
+      cloudFormationCallbackRequestExposureDisabled,
+    ),
+  );
+}
+
+/** @internal */
+export type CloudFormationCallbackRequestExposureUnion$Outbound =
+  | CloudFormationCallbackRequestExposureCustom$Outbound
+  | CloudFormationCallbackRequestExposureGenerated$Outbound
+  | CloudFormationCallbackRequestExposureDisabled$Outbound
+  | any;
+
+/** @internal */
+export const CloudFormationCallbackRequestExposureUnion$outboundSchema:
+  z.ZodType<
+    CloudFormationCallbackRequestExposureUnion$Outbound,
+    CloudFormationCallbackRequestExposureUnion
+  > = z.union([
+    z.lazy(() => CloudFormationCallbackRequestExposureCustom$outboundSchema),
+    z.lazy(() => CloudFormationCallbackRequestExposureGenerated$outboundSchema),
+    z.lazy(() => CloudFormationCallbackRequestExposureDisabled$outboundSchema),
+    z.any(),
+  ]);
+
+export function cloudFormationCallbackRequestExposureUnionToJSON(
+  cloudFormationCallbackRequestExposureUnion:
+    CloudFormationCallbackRequestExposureUnion,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestExposureUnion$outboundSchema.parse(
+      cloudFormationCallbackRequestExposureUnion,
+    ),
+  );
+}
+
+/** @internal */
+export type CloudFormationCallbackRequestKubernetes$Outbound = {
+  cluster?:
+    | CloudFormationCallbackRequestCluster$Outbound
+    | any
+    | null
+    | undefined;
+  exposure?:
+    | CloudFormationCallbackRequestExposureCustom$Outbound
+    | CloudFormationCallbackRequestExposureGenerated$Outbound
+    | CloudFormationCallbackRequestExposureDisabled$Outbound
+    | any
+    | null
+    | undefined;
+};
+
+/** @internal */
+export const CloudFormationCallbackRequestKubernetes$outboundSchema: z.ZodType<
+  CloudFormationCallbackRequestKubernetes$Outbound,
+  CloudFormationCallbackRequestKubernetes
+> = z.object({
+  cluster: z.nullable(
+    z.union([
+      z.lazy(() => CloudFormationCallbackRequestCluster$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  exposure: z.nullable(
+    z.union([
+      z.lazy(() => CloudFormationCallbackRequestExposureCustom$outboundSchema),
+      z.lazy(() =>
+        CloudFormationCallbackRequestExposureGenerated$outboundSchema
+      ),
+      z.lazy(() =>
+        CloudFormationCallbackRequestExposureDisabled$outboundSchema
+      ),
+      z.any(),
+    ]),
+  ).optional(),
+});
+
+export function cloudFormationCallbackRequestKubernetesToJSON(
+  cloudFormationCallbackRequestKubernetes:
+    CloudFormationCallbackRequestKubernetes,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestKubernetes$outboundSchema.parse(
+      cloudFormationCallbackRequestKubernetes,
+    ),
+  );
+}
+
+/** @internal */
+export type CloudFormationCallbackRequestKubernetesUnion$Outbound =
+  | CloudFormationCallbackRequestKubernetes$Outbound
+  | any;
+
+/** @internal */
+export const CloudFormationCallbackRequestKubernetesUnion$outboundSchema:
+  z.ZodType<
+    CloudFormationCallbackRequestKubernetesUnion$Outbound,
+    CloudFormationCallbackRequestKubernetesUnion
+  > = z.union([
+    z.lazy(() => CloudFormationCallbackRequestKubernetes$outboundSchema),
+    z.any(),
+  ]);
+
+export function cloudFormationCallbackRequestKubernetesUnionToJSON(
+  cloudFormationCallbackRequestKubernetesUnion:
+    CloudFormationCallbackRequestKubernetesUnion,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestKubernetesUnion$outboundSchema.parse(
+      cloudFormationCallbackRequestKubernetesUnion,
+    ),
+  );
+}
 
 /** @internal */
 export const CloudFormationCallbackRequestTypeByoVnetAzure$outboundSchema:
@@ -1050,6 +3510,11 @@ export type CloudFormationCallbackRequestStackSettings$Outbound = {
     | null
     | undefined;
   heartbeats?: string | undefined;
+  kubernetes?:
+    | CloudFormationCallbackRequestKubernetes$Outbound
+    | any
+    | null
+    | undefined;
   network?:
     | CloudFormationCallbackRequestNetworkByoVpcAws$Outbound
     | CloudFormationCallbackRequestNetworkByoVpcGcp$Outbound
@@ -1084,6 +3549,12 @@ export const CloudFormationCallbackRequestStackSettings$outboundSchema:
     ).optional(),
     heartbeats: CloudFormationCallbackRequestHeartbeats$outboundSchema
       .optional(),
+    kubernetes: z.nullable(
+      z.union([
+        z.lazy(() => CloudFormationCallbackRequestKubernetes$outboundSchema),
+        z.any(),
+      ]),
+    ).optional(),
     network: z.nullable(
       z.union([
         z.lazy(() =>
@@ -1143,10 +3614,9 @@ export function cloudFormationCallbackRequestManagementConfigKubernetesToJSON(
 
 /** @internal */
 export type CloudFormationCallbackRequestManagementConfigAzure$Outbound = {
-  managementPrincipalId?: string | null | undefined;
   managingTenantId: string;
-  oidcIssuer?: string | null | undefined;
-  oidcSubject?: string | null | undefined;
+  oidcIssuer: string;
+  oidcSubject: string;
   platform: "azure";
 };
 
@@ -1156,10 +3626,9 @@ export const CloudFormationCallbackRequestManagementConfigAzure$outboundSchema:
     CloudFormationCallbackRequestManagementConfigAzure$Outbound,
     CloudFormationCallbackRequestManagementConfigAzure
   > = z.object({
-    managementPrincipalId: z.nullable(z.string()).optional(),
     managingTenantId: z.string(),
-    oidcIssuer: z.nullable(z.string()).optional(),
-    oidcSubject: z.nullable(z.string()).optional(),
+    oidcIssuer: z.string(),
+    oidcSubject: z.string(),
     platform: z.literal("azure"),
   });
 
@@ -1267,14 +3736,16 @@ export function cloudFormationCallbackRequestManagementConfigUnionToJSON(
 }
 
 /** @internal */
-export type Source$Outbound = {
+export type CloudFormationCallbackRequestSource$Outbound = {
   deploymentName: string;
-  stackPrefix: string;
+  resourcePrefix: string;
   sourceKind?: string | undefined;
   releaseId?: string | undefined;
   platform: string;
+  basePlatform?: string | undefined;
   region: string;
   setupTarget: string;
+  setupImportFormatVersion: number;
   setupFingerprint: string;
   setupFingerprintVersion: number;
   stackSettings: CloudFormationCallbackRequestStackSettings$Outbound;
@@ -1287,39 +3758,50 @@ export type Source$Outbound = {
 };
 
 /** @internal */
-export const Source$outboundSchema: z.ZodType<Source$Outbound, Source> = z
-  .object({
-    deploymentName: z.string(),
-    stackPrefix: z.string(),
-    sourceKind: ImportSourceKind$outboundSchema.optional(),
-    releaseId: z.string().optional(),
-    platform: CloudFormationCallbackRequestPlatformEnum$outboundSchema,
-    region: z.string(),
-    setupTarget: z.string(),
-    setupFingerprint: z.string(),
-    setupFingerprintVersion: z.int(),
-    stackSettings: z.lazy(() =>
-      CloudFormationCallbackRequestStackSettings$outboundSchema
+export const CloudFormationCallbackRequestSource$outboundSchema: z.ZodType<
+  CloudFormationCallbackRequestSource$Outbound,
+  CloudFormationCallbackRequestSource
+> = z.object({
+  deploymentName: z.string(),
+  resourcePrefix: z.string(),
+  sourceKind: ImportSourceKind$outboundSchema.optional(),
+  releaseId: z.string().optional(),
+  platform: CloudFormationCallbackRequestPlatformEnum$outboundSchema,
+  basePlatform: CloudFormationCallbackRequestBasePlatform$outboundSchema
+    .optional(),
+  region: z.string(),
+  setupTarget: z.string(),
+  setupImportFormatVersion: z.int(),
+  setupFingerprint: z.string(),
+  setupFingerprintVersion: z.int(),
+  stackSettings: z.lazy(() =>
+    CloudFormationCallbackRequestStackSettings$outboundSchema
+  ),
+  managementConfig: z.union([
+    z.lazy(() =>
+      CloudFormationCallbackRequestManagementConfigAws$outboundSchema
     ),
-    managementConfig: z.union([
-      z.lazy(() =>
-        CloudFormationCallbackRequestManagementConfigAws$outboundSchema
-      ),
-      z.lazy(() =>
-        CloudFormationCallbackRequestManagementConfigGcp$outboundSchema
-      ),
-      z.lazy(() =>
-        CloudFormationCallbackRequestManagementConfigAzure$outboundSchema
-      ),
-      z.lazy(() =>
-        CloudFormationCallbackRequestManagementConfigKubernetes$outboundSchema
-      ),
-    ]),
-    resources: z.array(ImportedResource$outboundSchema),
-  });
+    z.lazy(() =>
+      CloudFormationCallbackRequestManagementConfigGcp$outboundSchema
+    ),
+    z.lazy(() =>
+      CloudFormationCallbackRequestManagementConfigAzure$outboundSchema
+    ),
+    z.lazy(() =>
+      CloudFormationCallbackRequestManagementConfigKubernetes$outboundSchema
+    ),
+  ]),
+  resources: z.array(ImportedResource$outboundSchema),
+});
 
-export function sourceToJSON(source: Source): string {
-  return JSON.stringify(Source$outboundSchema.parse(source));
+export function cloudFormationCallbackRequestSourceToJSON(
+  cloudFormationCallbackRequestSource: CloudFormationCallbackRequestSource,
+): string {
+  return JSON.stringify(
+    CloudFormationCallbackRequestSource$outboundSchema.parse(
+      cloudFormationCallbackRequestSource,
+    ),
+  );
 }
 
 /** @internal */
@@ -1330,7 +3812,7 @@ export type CloudFormationCallbackRequest$Outbound = {
   requestType: string;
   responseUrl: string;
   physicalResourceId?: string | null | undefined;
-  source?: Source$Outbound | null | undefined;
+  source?: CloudFormationCallbackRequestSource$Outbound | null | undefined;
   serviceTimeoutSeconds: number;
 };
 
@@ -1345,7 +3827,9 @@ export const CloudFormationCallbackRequest$outboundSchema: z.ZodType<
   requestType: RequestType$outboundSchema,
   responseUrl: z.string(),
   physicalResourceId: z.nullable(z.string()).optional(),
-  source: z.nullable(z.lazy(() => Source$outboundSchema)).optional(),
+  source: z.nullable(
+    z.lazy(() => CloudFormationCallbackRequestSource$outboundSchema),
+  ).optional(),
   serviceTimeoutSeconds: z.int().default(3300),
 });
 

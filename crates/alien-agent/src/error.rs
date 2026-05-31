@@ -8,6 +8,20 @@ pub type Result<T> = alien_error::Result<T, ErrorData>;
 #[serde(rename_all = "camelCase")]
 pub enum ErrorData {
     #[error(
+        code = "INCOMPATIBLE_AGENT_STATE",
+        message = "Agent state schema version {found_version} is not supported; this agent supports {min_supported_version} through {current_version}. {repair}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 500
+    )]
+    IncompatibleAgentState {
+        found_version: u32,
+        min_supported_version: u32,
+        current_version: u32,
+        repair: String,
+    },
+
+    #[error(
         code = "CONFIGURATION_ERROR",
         message = "{message}",
         retryable = "false",

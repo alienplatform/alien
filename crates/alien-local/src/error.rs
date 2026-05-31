@@ -121,7 +121,7 @@ pub enum ErrorData {
     ServiceResourceNotFound {
         /// Resource identifier
         resource_id: String,
-        /// Type of resource (function, registry, etc.)
+        /// Type of resource (worker, registry, etc.)
         resource_type: String,
     },
 
@@ -135,20 +135,20 @@ pub enum ErrorData {
     ServiceResourceAlreadyExists {
         /// Resource identifier
         resource_id: String,
-        /// Type of resource (function, registry, etc.)
+        /// Type of resource (worker, registry, etc.)
         resource_type: String,
     },
 
     /// Failed to load runtime configuration file.
     #[error(
         code = "RUNTIME_CONFIG_LOAD_FAILED",
-        message = "Failed to load runtime configuration for function '{function_id}' from '{config_path}': {reason}",
+        message = "Failed to load runtime configuration for worker '{worker_id}' from '{config_path}': {reason}",
         retryable = "false",
         internal = "false"
     )]
     RuntimeConfigLoadFailed {
-        /// Function identifier
-        function_id: String,
+        /// Worker identifier
+        worker_id: String,
         /// Path to the configuration file
         config_path: String,
         /// Reason for the failure
@@ -158,13 +158,13 @@ pub enum ErrorData {
     /// Failed to build or apply runtime configuration.
     #[error(
         code = "RUNTIME_CONFIG_INVALID",
-        message = "Invalid runtime configuration for function '{function_id}': {reason}",
+        message = "Invalid runtime configuration for worker '{worker_id}': {reason}",
         retryable = "false",
         internal = "false"
     )]
     RuntimeConfigInvalid {
-        /// Function identifier
-        function_id: String,
+        /// Worker identifier
+        worker_id: String,
         /// Reason why the configuration is invalid
         reason: String,
     },
@@ -177,9 +177,9 @@ pub enum ErrorData {
         internal = "false"
     )]
     AddressParseFailed {
-        /// Service identifier (function ID, etc.)
+        /// Service identifier (worker ID, etc.)
         service_id: String,
-        /// Type of service (function, registry, etc.)
+        /// Type of service (worker, registry, etc.)
         service_type: String,
         /// The address that failed to parse
         address: String,
@@ -190,13 +190,13 @@ pub enum ErrorData {
     /// Runtime configuration file not found at expected location.
     #[error(
         code = "RUNTIME_CONFIG_NOT_FOUND",
-        message = "Runtime configuration not found for function '{function_id}' at expected location: {expected_path}",
+        message = "Runtime configuration not found for worker '{worker_id}' at expected location: {expected_path}",
         retryable = "false",
         internal = "false"
     )]
     RuntimeConfigNotFound {
-        /// Function identifier
-        function_id: String,
+        /// Worker identifier
+        worker_id: String,
         /// Expected path where config should exist
         expected_path: String,
     },

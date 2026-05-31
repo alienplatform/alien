@@ -4,16 +4,19 @@
 //! Platform::Aws)` pair maps to one of the per-resource importers under
 //! `crate::<resource>::Aws<Resource>Importer`.
 //!
-//! `container-cluster` is intentionally absent — that controller lives in
+//! `compute-cluster` is intentionally absent — that controller lives in
 //! `alien-platform-controllers` (per the OSS / platform split) and is added
 //! by `register_platform_importers` at boot.
 
-use alien_core::{ArtifactRegistry, Build, Function, Kv, Network, Platform, Queue, Storage, Vault};
+#[cfg(feature = "kubernetes")]
+use alien_core::KubernetesCluster;
+use alien_core::{ArtifactRegistry, Build, Kv, Network, Platform, Queue, Storage, Vault, Worker};
 use alien_core::{RemoteStackManagement, ServiceAccount};
 
 use crate::artifact_registry::AwsArtifactRegistryImporter;
 use crate::build::AwsBuildImporter;
-use crate::function::AwsFunctionImporter;
+#[cfg(feature = "kubernetes")]
+use crate::kubernetes_cluster::KubernetesClusterImporter;
 use crate::kv::AwsKvImporter;
 use crate::network::AwsNetworkImporter;
 use crate::queue::AwsQueueImporter;
@@ -21,6 +24,7 @@ use crate::remote_stack_management::AwsRemoteStackManagementImporter;
 use crate::service_account::AwsServiceAccountImporter;
 use crate::storage::AwsStorageImporter;
 use crate::vault::AwsVaultImporter;
+use crate::worker::AwsWorkerImporter;
 use crate::ImporterRegistry;
 
 /// Register every OSS AWS importer with `registry`.
@@ -47,5 +51,11 @@ pub fn register(registry: &mut ImporterRegistry) {
             Platform::Aws,
             AwsArtifactRegistryImporter,
         )
-        .register(Function::RESOURCE_TYPE, Platform::Aws, AwsFunctionImporter);
+        .register(Worker::RESOURCE_TYPE, Platform::Aws, AwsWorkerImporter);
+    #[cfg(feature = "kubernetes")]
+    registry.register(
+        KubernetesCluster::RESOURCE_TYPE,
+        Platform::Aws,
+        KubernetesClusterImporter,
+    );
 }

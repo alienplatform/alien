@@ -523,6 +523,11 @@ pub enum ClientConfig {
     Gcp(Box<GcpClientConfig>),
     Azure(Box<AzureClientConfig>),
     Kubernetes(Box<KubernetesClientConfig>),
+    KubernetesCloud {
+        kubernetes: Box<KubernetesClientConfig>,
+        #[cfg_attr(feature = "openapi", schema(value_type = Object))]
+        cloud: Box<ClientConfig>,
+    },
     Local {
         /// State directory for local resources and deployment state
         state_directory: String,
@@ -540,8 +545,25 @@ impl ClientConfig {
             ClientConfig::Gcp(_) => Platform::Gcp,
             ClientConfig::Azure(_) => Platform::Azure,
             ClientConfig::Kubernetes(_) => Platform::Kubernetes,
+            ClientConfig::KubernetesCloud { .. } => Platform::Kubernetes,
             ClientConfig::Local { .. } => Platform::Local,
             ClientConfig::Test => Platform::Test,
+        }
+    }
+
+    pub fn config_for_platform(&self, platform: Platform) -> Option<ClientConfig> {
+        match self {
+            ClientConfig::KubernetesCloud { cloud, .. } => {
+                if platform == Platform::Kubernetes {
+                    Some(self.clone())
+                } else if cloud.platform() == platform {
+                    Some((**cloud).clone())
+                } else {
+                    None
+                }
+            }
+            config if config.platform() == platform => Some(config.clone()),
+            _ => None,
         }
     }
 
@@ -549,6 +571,7 @@ impl ClientConfig {
     pub fn aws_config(&self) -> Option<&AwsClientConfig> {
         match self {
             ClientConfig::Aws(config) => Some(config),
+            ClientConfig::KubernetesCloud { cloud, .. } => cloud.aws_config(),
             _ => None,
         }
     }
@@ -557,6 +580,7 @@ impl ClientConfig {
     pub fn gcp_config(&self) -> Option<&GcpClientConfig> {
         match self {
             ClientConfig::Gcp(config) => Some(config),
+            ClientConfig::KubernetesCloud { cloud, .. } => cloud.gcp_config(),
             _ => None,
         }
     }
@@ -565,6 +589,7 @@ impl ClientConfig {
     pub fn azure_config(&self) -> Option<&AzureClientConfig> {
         match self {
             ClientConfig::Azure(config) => Some(config),
+            ClientConfig::KubernetesCloud { cloud, .. } => cloud.azure_config(),
             _ => None,
         }
     }
@@ -573,7 +598,119 @@ impl ClientConfig {
     pub fn kubernetes_config(&self) -> Option<&KubernetesClientConfig> {
         match self {
             ClientConfig::Kubernetes(config) => Some(config),
+            ClientConfig::KubernetesCloud { kubernetes, .. } => Some(kubernetes),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        AwsClientConfig, AwsCredentials, AzureClientConfig, AzureCredentials, ClientConfig,
+        GcpClientConfig, GcpCredentials, KubernetesClientConfig,
+    };
+
+    #[test]
+    fn kubernetes_cloud_exposes_nested_aws_config() {
+        let config = ClientConfig::KubernetesCloud {
+            kubernetes: Box::new(KubernetesClientConfig::InCluster {
+                namespace: Some("test".to_string()),
+                additional_headers: None,
+            }),
+            cloud: Box::new(ClientConfig::Aws(Box::new(AwsClientConfig {
+                account_id: "123456789012".to_string(),
+                region: "us-east-2".to_string(),
+                credentials: AwsCredentials::AccessKeys {
+                    access_key_id: "access".to_string(),
+                    secret_access_key: "secret".to_string(),
+                    session_token: None,
+                },
+                service_overrides: None,
+            }))),
+        };
+
+        assert_eq!(config.platform(), crate::Platform::Kubernetes);
+        assert!(config.kubernetes_config().is_some());
+        assert_eq!(config.aws_config().unwrap().region, "us-east-2");
+        assert!(config.gcp_config().is_none());
+        assert!(config.azure_config().is_none());
+    }
+
+    #[test]
+    fn kubernetes_cloud_preserves_cloud_config_for_kubernetes_controllers() {
+        let config = ClientConfig::KubernetesCloud {
+            kubernetes: Box::new(KubernetesClientConfig::InCluster {
+                namespace: Some("test".to_string()),
+                additional_headers: None,
+            }),
+            cloud: Box::new(ClientConfig::Aws(Box::new(AwsClientConfig {
+                account_id: "123456789012".to_string(),
+                region: "us-east-2".to_string(),
+                credentials: AwsCredentials::AccessKeys {
+                    access_key_id: "access".to_string(),
+                    secret_access_key: "secret".to_string(),
+                    session_token: None,
+                },
+                service_overrides: None,
+            }))),
+        };
+
+        let kubernetes_config = config
+            .config_for_platform(crate::Platform::Kubernetes)
+            .unwrap();
+
+        assert!(matches!(
+            kubernetes_config,
+            ClientConfig::KubernetesCloud { .. }
+        ));
+        assert!(kubernetes_config.kubernetes_config().is_some());
+        assert_eq!(kubernetes_config.aws_config().unwrap().region, "us-east-2");
+    }
+
+    #[test]
+    fn kubernetes_cloud_exposes_nested_gcp_config() {
+        let config = ClientConfig::KubernetesCloud {
+            kubernetes: Box::new(KubernetesClientConfig::InCluster {
+                namespace: Some("test".to_string()),
+                additional_headers: None,
+            }),
+            cloud: Box::new(ClientConfig::Gcp(Box::new(GcpClientConfig {
+                project_id: "project".to_string(),
+                region: "us-central1".to_string(),
+                credentials: GcpCredentials::AccessToken {
+                    token: "token".to_string(),
+                },
+                service_overrides: None,
+                project_number: None,
+            }))),
+        };
+
+        assert_eq!(config.gcp_config().unwrap().project_id, "project");
+        assert!(config.aws_config().is_none());
+        assert!(config.azure_config().is_none());
+    }
+
+    #[test]
+    fn kubernetes_cloud_exposes_nested_azure_config() {
+        let config = ClientConfig::KubernetesCloud {
+            kubernetes: Box::new(KubernetesClientConfig::InCluster {
+                namespace: Some("test".to_string()),
+                additional_headers: None,
+            }),
+            cloud: Box::new(ClientConfig::Azure(Box::new(AzureClientConfig {
+                subscription_id: "sub".to_string(),
+                tenant_id: "tenant".to_string(),
+                region: Some("eastus".to_string()),
+                credentials: AzureCredentials::AccessToken {
+                    token: "token".to_string(),
+                },
+                service_overrides: None,
+            }))),
+        };
+
+        assert_eq!(config.azure_config().unwrap().subscription_id, "sub");
+        assert!(config.aws_config().is_none());
+        assert!(config.gcp_config().is_none());
     }
 }

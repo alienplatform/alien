@@ -1,26 +1,25 @@
-use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
-use std::any::Any;
 use std::collections::HashMap;
-use std::fmt::Debug;
 use std::time::Duration;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 use crate::azure_utils::{azure_storage_account_resource_id, get_resource_group_name};
-use crate::core::{ResourceController, ResourceControllerContext, ResourceControllerStepResult};
+use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_azure_clients::models::storage::{
-    StorageAccount, StorageAccountCreateParameters, StorageAccountPropertiesProvisioningState,
+    Endpoints, StorageAccount, StorageAccountCreateParameters,
+    StorageAccountPropertiesProvisioningState,
 };
-use alien_azure_clients::storage_accounts::{AzureStorageAccountsClient, StorageAccountsApi};
 use alien_azure_clients::AzureClientConfig;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    AzureStorageAccount, AzureStorageAccountOutputs, Resource, ResourceDefinition, ResourceOutputs,
-    ResourceStatus,
+    AzureStorageAccount, AzureStorageAccountEndpoints, AzureStorageAccountHeartbeatData,
+    AzureStorageAccountOutputs, HeartbeatBackend, ObservedHealth, Platform, ProviderLifecycleState,
+    ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs, ResourceStatus,
+    StorageHeartbeatStatus,
 };
 use alien_error::{AlienError, Context, ContextError};
-use alien_macros::{controller, flow_entry, handler, terminal_state};
+use alien_macros::controller;
+use chrono::Utc;
 
 #[controller]
 pub struct AzureStorageAccountController {
@@ -28,10 +27,6 @@ pub struct AzureStorageAccountController {
     pub(crate) account_name: Option<String>,
     /// The Azure resource ID of the storage account.
     pub(crate) resource_id: Option<String>,
-    /// The primary access key for the storage account.
-    pub(crate) primary_access_key: Option<String>,
-    /// The connection string for the storage account.
-    pub(crate) connection_string: Option<String>,
     /// The primary blob endpoint.
     pub(crate) primary_blob_endpoint: Option<String>,
     /// The primary file endpoint.
@@ -122,18 +117,6 @@ impl AzureStorageAccountController {
                         StorageAccountPropertiesProvisioningState::Succeeded => {
                             info!(account_name=%account_name, "Storage account creation completed, retrieving details");
 
-                            // Get storage account keys and details now that creation is complete
-                            let keys = client
-                                .list_storage_account_keys(&resource_group_name, account_name)
-                                .await
-                                .context(ErrorData::CloudPlatformError {
-                                    message: format!(
-                                        "Failed to list storage account keys for '{}'.",
-                                        account_name
-                                    ),
-                                    resource_id: Some(config.id.clone()),
-                                })?;
-
                             // Extract details from the response
                             self.resource_id = account_info.id.or_else(|| {
                                 Some(azure_storage_account_resource_id(
@@ -159,22 +142,6 @@ impl AzureStorageAccountController {
                                 .as_ref()
                                 .and_then(|e| e.table.clone())
                                 .or_else(|| Some(azure_storage_endpoint(account_name, "table")));
-
-                            // Extract primary key
-                            self.primary_access_key =
-                                keys.keys.first().and_then(|key| key.value.clone());
-
-                            // Generate connection string
-                            self.connection_string = Some(match &self.primary_access_key {
-                                Some(key) => format!(
-                                    "DefaultEndpointsProtocol=https;AccountName={};AccountKey={};EndpointSuffix=core.windows.net",
-                                    account_name, key
-                                ),
-                                None => format!(
-                                    "DefaultEndpointsProtocol=https;AccountName={};EndpointSuffix=core.windows.net",
-                                    account_name
-                                ),
-                            });
 
                             info!(account_name=%account_name, "Successfully retrieved storage account details");
 
@@ -280,7 +247,14 @@ impl AzureStorageAccountController {
                     resource_id: Some(config.id.clone()),
                 })?;
 
-            if let Some(properties) = storage_account.properties {
+            emit_azure_storage_account_heartbeat(
+                ctx,
+                &config.id,
+                &resource_group_name,
+                &storage_account,
+            );
+
+            if let Some(properties) = &storage_account.properties {
                 if properties.provisioning_state
                     != Some(StorageAccountPropertiesProvisioningState::Succeeded)
                 {
@@ -441,7 +415,6 @@ impl AzureStorageAccountController {
         if let (
             Some(account_name),
             Some(resource_id),
-            Some(connection_string),
             Some(primary_blob_endpoint),
             Some(primary_file_endpoint),
             Some(primary_queue_endpoint),
@@ -449,7 +422,6 @@ impl AzureStorageAccountController {
         ) = (
             &self.account_name,
             &self.resource_id,
-            &self.connection_string,
             &self.primary_blob_endpoint,
             &self.primary_file_endpoint,
             &self.primary_queue_endpoint,
@@ -462,8 +434,6 @@ impl AzureStorageAccountController {
                 primary_file_endpoint: primary_file_endpoint.clone(),
                 primary_queue_endpoint: primary_queue_endpoint.clone(),
                 primary_table_endpoint: primary_table_endpoint.clone(),
-                primary_access_key: self.primary_access_key.clone().unwrap_or_default(),
-                connection_string: connection_string.clone(),
             }))
         } else {
             None
@@ -473,6 +443,114 @@ impl AzureStorageAccountController {
 
 fn azure_storage_endpoint(account_name: &str, service: &str) -> String {
     format!("https://{account_name}.{service}.core.windows.net/")
+}
+
+fn emit_azure_storage_account_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    resource_group_name: &str,
+    account: &StorageAccount,
+) {
+    let properties = account.properties.as_ref();
+    let provisioning_state = properties.and_then(|p| p.provisioning_state.as_ref());
+    let (health, lifecycle) = match provisioning_state {
+        Some(StorageAccountPropertiesProvisioningState::Succeeded) => {
+            (ObservedHealth::Healthy, ProviderLifecycleState::Running)
+        }
+        Some(_) => (ObservedHealth::Unhealthy, ProviderLifecycleState::Failed),
+        None => (ObservedHealth::Unknown, ProviderLifecycleState::Unknown),
+    };
+    let name = account
+        .name
+        .clone()
+        .unwrap_or_else(|| resource_id.to_string());
+
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: AzureStorageAccount::RESOURCE_TYPE,
+        controller_platform: Platform::Azure,
+        backend: HeartbeatBackend::Azure,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::AzureStorageAccount(AzureStorageAccountHeartbeatData {
+            status: StorageHeartbeatStatus {
+                health,
+                lifecycle,
+                message: Some(format!(
+                    "Azure storage account '{}' provisioning state is {}",
+                    name,
+                    provisioning_state
+                        .map(ToString::to_string)
+                        .as_deref()
+                        .unwrap_or("unknown")
+                )),
+                stale: false,
+                partial: false,
+                collection_issues: vec![],
+            },
+            name,
+            resource_id: account.id.clone(),
+            resource_group: Some(resource_group_name.to_string()),
+            location: Some(account.location.clone()),
+            kind: account.kind.as_ref().map(ToString::to_string),
+            sku_name: account.sku.as_ref().map(|sku| sku.name.to_string()),
+            sku_tier: account
+                .sku
+                .as_ref()
+                .and_then(|sku| sku.tier.as_ref().map(ToString::to_string)),
+            provisioning_state: provisioning_state.map(ToString::to_string),
+            primary_endpoints: storage_account_endpoints(
+                properties.and_then(|p| p.primary_endpoints.as_ref()),
+            ),
+            secondary_endpoints: storage_account_endpoints(
+                properties.and_then(|p| p.secondary_endpoints.as_ref()),
+            ),
+            public_network_access: properties
+                .and_then(|p| p.public_network_access.as_ref())
+                .map(ToString::to_string),
+            allow_blob_public_access: properties.and_then(|p| p.allow_blob_public_access),
+            allow_shared_key_access: properties.and_then(|p| p.allow_shared_key_access),
+            minimum_tls_version: properties
+                .and_then(|p| p.minimum_tls_version.as_ref())
+                .map(ToString::to_string),
+            supports_https_traffic_only: properties.and_then(|p| p.supports_https_traffic_only),
+            encryption_key_source: properties
+                .and_then(|p| p.encryption.as_ref())
+                .map(|encryption| encryption.key_source.to_string()),
+            require_infrastructure_encryption: properties
+                .and_then(|p| p.encryption.as_ref())
+                .and_then(|encryption| encryption.require_infrastructure_encryption),
+            network_default_action: properties
+                .and_then(|p| p.network_acls.as_ref())
+                .map(|rules| rules.default_action.to_string()),
+            network_bypass: properties
+                .and_then(|p| p.network_acls.as_ref())
+                .map(|rules| rules.bypass.to_string()),
+            network_ip_rule_count: properties
+                .and_then(|p| p.network_acls.as_ref())
+                .map(|rules| rules.ip_rules.len() as u32),
+            network_virtual_network_rule_count: properties
+                .and_then(|p| p.network_acls.as_ref())
+                .map(|rules| rules.virtual_network_rules.len() as u32),
+            network_resource_access_rule_count: properties
+                .and_then(|p| p.network_acls.as_ref())
+                .map(|rules| rules.resource_access_rules.len() as u32),
+        }),
+        raw: vec![],
+    });
+}
+
+fn storage_account_endpoints(endpoints: Option<&Endpoints>) -> AzureStorageAccountEndpoints {
+    endpoints
+        .map(|endpoints| AzureStorageAccountEndpoints {
+            blob: endpoints.blob.clone(),
+            dfs: endpoints.dfs.clone(),
+            file: endpoints.file.clone(),
+            queue: endpoints.queue.clone(),
+            table: endpoints.table.clone(),
+            web: endpoints.web.clone(),
+        })
+        .unwrap_or_default()
 }
 
 // Separate impl block for helper methods
@@ -536,8 +614,6 @@ impl AzureStorageAccountController {
     fn clear_state(&mut self) {
         self.account_name = None;
         self.resource_id = None;
-        self.primary_access_key = None;
-        self.connection_string = None;
         self.primary_blob_endpoint = None;
         self.primary_file_endpoint = None;
         self.primary_queue_endpoint = None;
@@ -560,12 +636,16 @@ impl AzureStorageAccountController {
         // Build permission context for this specific storage account resource
         let resource_group =
             crate::infra_requirements::azure_utils::get_resource_group_name(ctx.state)?;
-        let permission_context = PermissionContext::new()
+        let mut permission_context = PermissionContext::new()
             .with_subscription_id(azure_config.subscription_id.clone())
             .with_resource_group(resource_group)
             .with_storage_account_name(account_name.to_string())
             .with_stack_prefix(ctx.resource_prefix.to_string())
             .with_resource_name(account_name.to_string());
+        if let Some(deployment_name) = ctx.deployment_name_for_metadata() {
+            permission_context =
+                permission_context.with_deployment_name(deployment_name.to_string());
+        }
 
         // Build Azure resource scope for the storage account
         let resource_scope = Scope::Resource {
@@ -591,13 +671,10 @@ impl AzureStorageAccountController {
     /// Creates a controller in a ready state with mock values for testing purposes.
     #[cfg(feature = "test-utils")]
     pub fn mock_ready(account_name: &str) -> Self {
-        let mock_key = "YWJjZGVmZ2hpams="; // Mock base64 key
         Self {
                 state: AzureStorageAccountState::Ready,
                 account_name: Some(account_name.to_string()),
                 resource_id: Some(format!("/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/mock-rg/providers/Microsoft.Storage/storageAccounts/{}", account_name)),
-                primary_access_key: Some(mock_key.to_string()),
-                connection_string: Some(format!("DefaultEndpointsProtocol=https;AccountName={};AccountKey={};EndpointSuffix=core.windows.net", account_name, mock_key)),
                 primary_blob_endpoint: Some(format!("https://{}.blob.core.windows.net/", account_name)),
                 primary_file_endpoint: Some(format!("https://{}.file.core.windows.net/", account_name)),
                 primary_queue_endpoint: Some(format!("https://{}.queue.core.windows.net/", account_name)),

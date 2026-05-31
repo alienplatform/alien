@@ -7,6 +7,7 @@ use crate::ui::{
     heading, make_table, print_table, render_human_error, status_cell, success_line,
 };
 use alien_cli_common::network::{self, NetworkArgs};
+use alien_core::{is_valid_resource_prefix, RESOURCE_PREFIX_ERROR_MESSAGE};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_manager_api::types::DeploymentResponse;
 use alien_manager_api::SdkResultExt as ManagerSdkResultExt;
@@ -58,6 +59,11 @@ pub enum DeploymentsCmd {
         /// Platform (aws, gcp, azure)
         #[arg(long)]
         platform: String,
+
+        /// Physical-name prefix for generated cloud resources.
+        /// Omit to let the manager generate one.
+        #[arg(long, value_parser = parse_resource_prefix)]
+        resource_prefix: Option<String>,
 
         /// Plain environment variables in KEY=VALUE format (can be used multiple times)
         #[arg(long)]
@@ -141,6 +147,14 @@ pub enum DeploymentsCmd {
     },
 }
 
+pub(crate) fn parse_resource_prefix(value: &str) -> std::result::Result<String, String> {
+    if is_valid_resource_prefix(value) {
+        Ok(value.to_string())
+    } else {
+        Err(RESOURCE_PREFIX_ERROR_MESSAGE.to_string())
+    }
+}
+
 pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Result<()> {
     if let DeploymentsCmd::Delete { yes, .. } = &args.cmd {
         delete_confirmation_mode(*yes)?;
@@ -177,6 +191,7 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             project,
             deployment_group,
             platform,
+            resource_prefix,
             env,
             secret,
             env_targeted,
@@ -207,6 +222,7 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
                 &project,
                 &deployment_group,
                 &platform,
+                resource_prefix.as_deref(),
                 env,
                 secret,
                 env_targeted,
@@ -550,6 +566,7 @@ async fn create_deployment_task(
     project_name: &str,
     deployment_group_id: &str,
     platform_str: &str,
+    resource_prefix: Option<&str>,
     env_vars: Vec<String>,
     secret_vars: Vec<String>,
     env_targeted_vars: Vec<String>,
@@ -796,6 +813,7 @@ async fn create_deployment_task(
         network: sdk_network,
         domains: None,
         external_bindings: None,
+        kubernetes: None,
     };
 
     let request = NewDeploymentRequest {
@@ -815,6 +833,14 @@ async fn create_deployment_task(
         })?,
         platform,
         deployment_group_id: Some(deployment_group_id.to_string()),
+        resource_prefix: resource_prefix
+            .map(TryInto::try_into)
+            .transpose()
+            .into_alien_error()
+            .context(ErrorData::ValidationError {
+                field: "resource_prefix".to_string(),
+                message: "Invalid resource prefix".to_string(),
+            })?,
         stack_settings: Some(stack_settings),
         environment_variables: if variables.is_empty() {
             None

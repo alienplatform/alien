@@ -6,7 +6,7 @@ React to things happening in the customer's environment -- queue messages, file 
 
 | Resource | Type | Description |
 |----------|------|-------------|
-| `processor` | Function (live) | Handles queue messages, storage events, and cron triggers |
+| `processor` | Worker (live) | Handles queue messages, storage events, and cron triggers |
 | `inbox` | Queue (frozen) | Message queue (SQS / Pub/Sub / Service Bus) |
 | `data` | Storage (frozen) | Object storage -- triggers on file creation |
 | `events` | KV (frozen) | Logs processed events for querying |
@@ -63,6 +63,6 @@ bun test
 
 ## Learn more
 
-- [Events & Triggers](https://alien.dev/docs/infrastructure/function/events-and-triggers)
+- [Events & Triggers](https://alien.dev/docs/infrastructure/worker/events-and-triggers)
 - [Queue reference](https://alien.dev/docs/infrastructure/queue)
 - [Storage reference](https://alien.dev/docs/infrastructure/storage)

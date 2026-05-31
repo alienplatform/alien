@@ -75,6 +75,7 @@ pub async fn handle_update_pending(
         error: None,
         suggested_delay_ms: None,
         update_heartbeat: false,
+        heartbeats: vec![],
     })
 }
 
@@ -119,11 +120,6 @@ pub async fn handle_updating(
         })
     })?;
 
-    // Stamp deployment-config values onto ContainerCluster template inputs.
-    // Runs every step (not just during preflights) so the executor sees the latest
-    // DeploymentConfig values — e.g., a new worker image ID.
-    crate::helpers::stamp_worker_template(&mut target_stack, &config)?;
-
     // Inject environment variables into the prepared stack
     crate::helpers::inject_environment_variables(&mut target_stack, &config)?;
 
@@ -132,7 +128,7 @@ pub async fn handle_updating(
         crate::helpers::inject_monitoring_environment_variables(&mut target_stack, monitoring)?;
     }
 
-    // Sync secrets to vault before updating functions
+    // Sync secrets to vault before updating workload resources.
     // The vault is Running and secrets may have been updated
     // This checks the hash and only syncs if needed
     info!("Syncing secrets to vault before updating live resources");
@@ -202,6 +198,7 @@ pub async fn handle_updating(
             error: None,
             suggested_delay_ms: None,
             update_heartbeat: false,
+            heartbeats: vec![],
         }
     } else if stack_status == StackStatus::Failure {
         info!("Update failed");
@@ -242,6 +239,7 @@ pub async fn handle_updating(
             error,
             suggested_delay_ms: None,
             update_heartbeat: false,
+            heartbeats: vec![],
         }
     } else {
         // Still in progress
@@ -253,6 +251,7 @@ pub async fn handle_updating(
             error: None,
             suggested_delay_ms: step_result.suggested_delay_ms,
             update_heartbeat: false,
+            heartbeats: step_result.heartbeats,
         }
     };
 
@@ -289,6 +288,7 @@ pub async fn handle_update_failed(
             error: None,
             suggested_delay_ms: None,
             update_heartbeat: false,
+            heartbeats: vec![],
         });
     }
 
@@ -320,5 +320,6 @@ pub async fn handle_update_failed(
         error: None,
         suggested_delay_ms: None,
         update_heartbeat: false,
+        heartbeats: vec![],
     })
 }

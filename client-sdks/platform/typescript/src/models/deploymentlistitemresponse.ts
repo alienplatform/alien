@@ -306,6 +306,10 @@ export type DeploymentListItemResponse = {
    */
   platform: DeploymentListItemResponsePlatform;
   /**
+   * DeploymentState protocol version owned by the runtime/manager
+   */
+  deploymentProtocolVersion: number;
+  /**
    * ID of deployment group this deployment belongs to
    */
   deploymentGroupId: string;
@@ -604,6 +608,7 @@ export const DeploymentListItemResponse$inboundSchema: z.ZodType<
   status: DeploymentListItemResponseStatus$inboundSchema,
   projectId: z.string(),
   platform: DeploymentListItemResponsePlatform$inboundSchema,
+  deploymentProtocolVersion: z.int(),
   deploymentGroupId: z.string(),
   environmentInfo: z.nullable(
     z.union([

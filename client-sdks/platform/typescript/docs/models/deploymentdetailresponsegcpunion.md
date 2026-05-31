@@ -3,10 +3,10 @@
 
 ## Supported Types
 
-### `models.DeploymentDetailResponseDomainsGcp`
+### `models.DeploymentDetailResponseGcpStackSettings`
 
 ```typescript
-const value: models.DeploymentDetailResponseDomainsGcp = {
+const value: models.DeploymentDetailResponseGcpStackSettings = {
   certificateName: "<value>",
 };
 ```

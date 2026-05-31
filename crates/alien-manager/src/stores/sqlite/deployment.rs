@@ -34,12 +34,19 @@ impl SqliteDeploymentStore {
         Self { db }
     }
 
+    fn stale_lock_condition_sql() -> String {
+        "\"locked_at\" IS NOT NULL AND julianday(\"locked_at\") < julianday('now', '-5 minutes')"
+            .to_string()
+    }
+
     /// All columns needed for deployment queries (must match parse_deployment order).
-    const DEPLOYMENT_COLUMNS: [Deployments; 25] = [
+    const DEPLOYMENT_COLUMNS: [Deployments; 27] = [
         Deployments::Id,
         Deployments::Name,
         Deployments::DeploymentGroupId,
         Deployments::Platform,
+        Deployments::DeploymentProtocolVersion,
+        Deployments::BasePlatform,
         Deployments::Status,
         Deployments::StackSettings,
         Deployments::StackState,
@@ -67,10 +74,20 @@ impl SqliteDeploymentStore {
         let p = RowParser::new(row);
         let platform_str: String = p.string(3, "platform")?;
         let platform: Platform = platform_str.parse().map_err(|e: String| db_error(&e))?;
+        let deployment_protocol_version =
+            u32::try_from(p.i64(4, "deployment_protocol_version")?)
+                .map_err(|_| db_error("deployment_protocol_version must be a positive u32"))?;
+        if deployment_protocol_version == 0 {
+            return Err(db_error("deployment_protocol_version must be positive"));
+        }
+        let base_platform = p
+            .optional_string(5, "base_platform")?
+            .map(|value| value.parse().map_err(|e: String| db_error(&e)))
+            .transpose()?;
 
         // Parse user environment variables from JSON TEXT column
         let import_source = p
-            .optional_string(11, "import_source")?
+            .optional_string(13, "import_source")?
             .map(|source| serde_json::from_value(serde_json::Value::String(source)))
             .transpose()
             .into_alien_error()
@@ -79,42 +96,45 @@ impl SqliteDeploymentStore {
             })?;
 
         let user_environment_variables: Option<Vec<EnvironmentVariable>> =
-            p.optional_json(15, "environment_variables")?;
+            p.optional_json(17, "environment_variables")?;
 
-        let retry_requested_int: i64 = p.optional_i64(17, "retry_requested")?.unwrap_or(0);
+        let retry_requested_int: i64 = p.optional_i64(19, "retry_requested")?.unwrap_or(0);
 
         Ok(DeploymentRecord {
             id: p.string(0, "id")?,
             name: p.string(1, "name")?,
             deployment_group_id: p.string(2, "deployment_group_id")?,
             platform,
-            status: p.string(4, "status")?,
-            stack_settings: p.json(5, "stack_settings")?,
-            stack_state: p.optional_json(6, "stack_state")?,
-            environment_info: p.optional_json(7, "environment_info")?,
-            runtime_metadata: p.optional_json(8, "runtime_metadata")?,
-            current_release_id: p.optional_string(9, "current_release_id")?,
-            desired_release_id: p.optional_string(10, "desired_release_id")?,
+            deployment_protocol_version,
+            base_platform,
+            status: p.string(6, "status")?,
+            stack_settings: p.json(7, "stack_settings")?,
+            stack_state: p.optional_json(8, "stack_state")?,
+            environment_info: p.optional_json(9, "environment_info")?,
+            runtime_metadata: p.optional_json(10, "runtime_metadata")?,
+            current_release_id: p.optional_string(11, "current_release_id")?,
+            desired_release_id: p.optional_string(12, "desired_release_id")?,
             import_source,
-            setup_target: p.optional_string(12, "setup_target")?,
-            setup_fingerprint: p.optional_string(13, "setup_fingerprint")?,
+            setup_target: p.optional_string(14, "setup_target")?,
+            setup_fingerprint: p.optional_string(15, "setup_fingerprint")?,
             setup_fingerprint_version: p
-                .optional_i64(14, "setup_fingerprint_version")?
+                .optional_i64(16, "setup_fingerprint_version")?
                 .map(|value| value as u32),
             user_environment_variables,
-            deployment_token: p.optional_string(16, "deployment_token")?,
+            deployment_token: p.optional_string(18, "deployment_token")?,
             management_config: None,
+            deployment_config: None,
             retry_requested: retry_requested_int != 0,
-            locked_by: p.optional_string(18, "locked_by")?,
-            locked_at: p.optional_datetime(19, "locked_at")?,
-            created_at: p.datetime(20, "created_at")?,
-            updated_at: p.optional_datetime(21, "updated_at")?,
-            error: p.optional_json(22, "error")?,
+            locked_by: p.optional_string(20, "locked_by")?,
+            locked_at: p.optional_datetime(21, "locked_at")?,
+            created_at: p.datetime(22, "created_at")?,
+            updated_at: p.optional_datetime(23, "updated_at")?,
+            error: p.optional_json(24, "error")?,
             workspace_id: p
-                .optional_string(23, "workspace_id")?
+                .optional_string(25, "workspace_id")?
                 .unwrap_or_else(|| "default".to_string()),
             project_id: p
-                .optional_string(24, "project_id")?
+                .optional_string(26, "project_id")?
                 .unwrap_or_else(|| "default".to_string()),
         })
     }
@@ -134,6 +154,20 @@ impl SqliteDeploymentStore {
                 .optional_string(6, "project_id")?
                 .unwrap_or_else(|| "default".to_string()),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SqliteDeploymentStore;
+
+    #[test]
+    fn stale_lock_condition_parses_rfc3339_timestamps() {
+        let condition = SqliteDeploymentStore::stale_lock_condition_sql();
+
+        assert!(condition.contains("julianday(\"locked_at\")"));
+        assert!(condition.contains("julianday('now', '-5 minutes')"));
+        assert!(!condition.contains("\"locked_at\" < datetime"));
     }
 }
 
@@ -163,6 +197,15 @@ impl DeploymentStore for SqliteDeploymentStore {
             .context(GenericError {
                 message: "Failed to serialize stack_settings".to_string(),
             })?;
+        let stack_state_json: Option<String> = params
+            .stack_state
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to serialize stack_state".to_string(),
+            })?;
 
         let env_vars_json: Option<String> = params
             .environment_variables
@@ -182,6 +225,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                 Deployments::Name,
                 Deployments::DeploymentGroupId,
                 Deployments::Platform,
+                Deployments::DeploymentProtocolVersion,
                 Deployments::Status,
                 Deployments::StackSettings,
                 Deployments::RetryRequested,
@@ -192,6 +236,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                 params.name.clone().into(),
                 params.deployment_group_id.clone().into(),
                 params.platform.as_str().to_string().into(),
+                (params.deployment_protocol_version as i64).into(),
                 "pending".to_string().into(),
                 stack_settings_json.into(),
                 0i64.into(),
@@ -201,6 +246,11 @@ impl DeploymentStore for SqliteDeploymentStore {
             if let Some(ref ev_json) = env_vars_json {
                 columns.push(Deployments::EnvironmentVariables);
                 values.push(ev_json.clone().into());
+            }
+
+            if let Some(ref state_json) = stack_state_json {
+                columns.push(Deployments::StackState);
+                values.push(state_json.clone().into());
             }
 
             if let Some(ref token) = params.deployment_token {
@@ -225,9 +275,11 @@ impl DeploymentStore for SqliteDeploymentStore {
             name: params.name,
             deployment_group_id: params.deployment_group_id,
             platform: params.platform,
+            deployment_protocol_version: params.deployment_protocol_version,
+            base_platform: None,
             status: "pending".to_string(),
             stack_settings: params.stack_settings,
-            stack_state: None,
+            stack_state: params.stack_state,
             environment_info: None,
             runtime_metadata: None,
             current_release_id: None,
@@ -239,6 +291,7 @@ impl DeploymentStore for SqliteDeploymentStore {
             user_environment_variables: params.environment_variables,
             deployment_token: params.deployment_token,
             management_config: None,
+            deployment_config: None,
             retry_requested: false,
             locked_by: None,
             locked_at: None,
@@ -300,6 +353,8 @@ impl DeploymentStore for SqliteDeploymentStore {
                 Deployments::Name,
                 Deployments::DeploymentGroupId,
                 Deployments::Platform,
+                Deployments::DeploymentProtocolVersion,
+                Deployments::BasePlatform,
                 Deployments::Status,
                 Deployments::StackSettings,
                 Deployments::StackState,
@@ -315,6 +370,11 @@ impl DeploymentStore for SqliteDeploymentStore {
                 params.name.clone().into(),
                 params.deployment_group_id.clone().into(),
                 params.platform.as_str().to_string().into(),
+                (params.deployment_protocol_version as i64).into(),
+                params
+                    .base_platform
+                    .map(|platform| platform.as_str().to_string())
+                    .into(),
                 params.status.clone().into(),
                 stack_settings_json.into(),
                 stack_state_json.into(),
@@ -328,6 +388,10 @@ impl DeploymentStore for SqliteDeploymentStore {
 
             if let Some(ref release_id) = params.current_release_id {
                 columns.push(Deployments::CurrentReleaseId);
+                values.push(release_id.clone().into());
+            }
+            if let Some(ref release_id) = params.desired_release_id {
+                columns.push(Deployments::DesiredReleaseId);
                 values.push(release_id.clone().into());
             }
 
@@ -368,13 +432,15 @@ impl DeploymentStore for SqliteDeploymentStore {
             name: params.name,
             deployment_group_id: params.deployment_group_id,
             platform: params.platform,
+            deployment_protocol_version: params.deployment_protocol_version,
+            base_platform: params.base_platform,
             status: params.status,
             stack_settings: params.stack_settings,
             stack_state: Some(params.stack_state),
             environment_info: params.environment_info,
             runtime_metadata: Some(params.runtime_metadata),
             current_release_id: params.current_release_id,
-            desired_release_id: None,
+            desired_release_id: params.desired_release_id,
             import_source: params.import_source,
             setup_target: Some(params.setup_target),
             setup_fingerprint: Some(params.setup_fingerprint),
@@ -382,6 +448,7 @@ impl DeploymentStore for SqliteDeploymentStore {
             user_environment_variables: None,
             deployment_token: params.deployment_token,
             management_config: params.management_config,
+            deployment_config: None,
             retry_requested: false,
             locked_by: None,
             locked_at: None,
@@ -716,13 +783,14 @@ impl DeploymentStore for SqliteDeploymentStore {
         let failed_statuses = [
             "initial-setup-failed",
             "provisioning-failed",
+            "refresh-failed",
             "update-failed",
             "delete-failed",
         ];
 
         // Stale lock threshold: 5 minutes. If a manager crashed mid-processing,
         // the lock will self-heal after this period.
-        let stale_lock_threshold = "datetime('now', '-5 minutes')";
+        let stale_lock_condition = Self::stale_lock_condition_sql();
 
         // SELECT deployments that need work AND are either unlocked or stale-locked
         let select_sql = {
@@ -743,10 +811,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                 .cond_where(
                     sea_query::Cond::any()
                         .add(Expr::col(Deployments::LockedBy).is_null())
-                        .add(Expr::cust(format!(
-                            "\"locked_at\" < {}",
-                            stale_lock_threshold
-                        ))),
+                        .add(Expr::cust(stale_lock_condition.clone())),
                 );
 
             if let Some(dg_id) = &filter.deployment_group_id {
@@ -798,14 +863,21 @@ impl DeploymentStore for SqliteDeploymentStore {
                     .table(Deployments::Table)
                     .value(Deployments::LockedBy, session)
                     .value(Deployments::LockedAt, now.to_rfc3339())
+                    .value(Deployments::RetryRequested, 0i64)
                     .and_where(Expr::col(Deployments::Id).eq(dep.id.as_str()))
                     .cond_where(
                         sea_query::Cond::any()
+                            .add(Expr::col(Deployments::Status).is_in(work_statuses))
+                            .add(
+                                sea_query::Cond::all()
+                                    .add(Expr::col(Deployments::Status).is_in(failed_statuses))
+                                    .add(Expr::col(Deployments::RetryRequested).eq(1)),
+                            ),
+                    )
+                    .cond_where(
+                        sea_query::Cond::any()
                             .add(Expr::col(Deployments::LockedBy).is_null())
-                            .add(Expr::cust(format!(
-                                "\"locked_at\" < {}",
-                                stale_lock_threshold
-                            ))),
+                            .add(Expr::cust(stale_lock_condition.clone())),
                     )
                     .to_string(SqliteQueryBuilder)
             };
@@ -909,6 +981,10 @@ impl DeploymentStore for SqliteDeploymentStore {
             query
                 .table(Deployments::Table)
                 .value(Deployments::Status, &status_str as &str)
+                .value(
+                    Deployments::DeploymentProtocolVersion,
+                    state.protocol_version as i64,
+                )
                 .value(Deployments::RetryRequested, 0i64)
                 .value(Deployments::UpdatedAt, now.to_rfc3339());
 
@@ -957,6 +1033,17 @@ impl DeploymentStore for SqliteDeploymentStore {
         };
 
         self.db.execute(&sql).await?;
+
+        // Keep the active lease alive while a caller is making progress.
+        // Long cloud waits can legitimately exceed the stale-lock window; a
+        // reconcile from the lock owner is the durable progress signal.
+        let lock_heartbeat_sql = Query::update()
+            .table(Deployments::Table)
+            .value(Deployments::LockedAt, now.to_rfc3339())
+            .and_where(Expr::col(Deployments::Id).eq(&data.deployment_id as &str))
+            .and_where(Expr::col(Deployments::LockedBy).eq(&data.session as &str))
+            .to_string(SqliteQueryBuilder);
+        self.db.execute(&lock_heartbeat_sql).await?;
 
         // Fetch and return the updated deployment
         self.get_deployment(caller, &data.deployment_id)

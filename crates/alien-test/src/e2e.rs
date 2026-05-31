@@ -14,16 +14,18 @@ use tracing::info;
 use crate::build_push::build_and_push_stack;
 use crate::config::TestConfig;
 use crate::deployment::TestDeployment;
+use crate::helm_values::{runtime_image_pull_secrets, to_helm_values_yaml};
+use crate::managed_secret::provision_managed_test_secret;
 use crate::manager::TestManager;
 
 // ---------------------------------------------------------------------------
 // Enums
 // ---------------------------------------------------------------------------
 
-/// Deployment model: push (serverless function) or pull (container / agent).
+/// Deployment model: push (serverless worker) or pull (container / agent).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeploymentModel {
-    /// Serverless / function-based deployment (Lambda, Cloud Run function, etc.)
+    /// Serverless / worker-based deployment (Lambda, Cloud Run worker, etc.)
     Push,
     /// Container-based deployment (managed cloud, Kubernetes, local Docker)
     Pull,
@@ -34,6 +36,8 @@ pub enum DeploymentModel {
 pub enum DistributionFlow {
     /// CloudFormation creates AWS infrastructure and registers the stack.
     CloudFormationAwsPush,
+    /// CloudFormation creates AWS-side infra, Helm installs the K8s runtime on EKS.
+    CloudFormationEksHelmPull,
     /// Terraform creates AWS infrastructure and registers the stack.
     TerraformAwsPush,
     /// Terraform creates GCP infrastructure and registers the stack.
@@ -59,10 +63,30 @@ impl DistributionFlow {
             }
             DistributionFlow::TerraformGcpPush => Platform::Gcp,
             DistributionFlow::TerraformAzurePush => Platform::Azure,
-            DistributionFlow::TerraformEksHelmPull
+            DistributionFlow::CloudFormationEksHelmPull
+            | DistributionFlow::TerraformEksHelmPull
             | DistributionFlow::TerraformGkeHelmPull
             | DistributionFlow::TerraformAksHelmPull
             | DistributionFlow::TerraformOnpremHelmPull => Platform::Kubernetes,
+        }
+    }
+
+    /// Base cloud for managed Kubernetes setup targets.
+    ///
+    /// This is not the runtime platform. The runtime platform remains
+    /// Kubernetes; the base cloud only selects cloud setup emitters, registry
+    /// access, credentials, and managed-cluster architecture defaults.
+    pub fn kubernetes_base_platform(self) -> Option<Platform> {
+        match self {
+            DistributionFlow::CloudFormationEksHelmPull
+            | DistributionFlow::TerraformEksHelmPull => Some(Platform::Aws),
+            DistributionFlow::TerraformGkeHelmPull => Some(Platform::Gcp),
+            DistributionFlow::TerraformAksHelmPull => Some(Platform::Azure),
+            DistributionFlow::CloudFormationAwsPush
+            | DistributionFlow::TerraformAwsPush
+            | DistributionFlow::TerraformGcpPush
+            | DistributionFlow::TerraformAzurePush
+            | DistributionFlow::TerraformOnpremHelmPull => None,
         }
     }
 
@@ -73,7 +97,8 @@ impl DistributionFlow {
             | DistributionFlow::TerraformAwsPush
             | DistributionFlow::TerraformGcpPush
             | DistributionFlow::TerraformAzurePush => DeploymentModel::Push,
-            DistributionFlow::TerraformEksHelmPull
+            DistributionFlow::CloudFormationEksHelmPull
+            | DistributionFlow::TerraformEksHelmPull
             | DistributionFlow::TerraformGkeHelmPull
             | DistributionFlow::TerraformAksHelmPull
             | DistributionFlow::TerraformOnpremHelmPull => DeploymentModel::Pull,
@@ -83,6 +108,7 @@ impl DistributionFlow {
     pub fn name(self) -> &'static str {
         match self {
             DistributionFlow::CloudFormationAwsPush => "cloudformation_aws_push",
+            DistributionFlow::CloudFormationEksHelmPull => "cloudformation_eks_helm_pull",
             DistributionFlow::TerraformAwsPush => "terraform_aws_push",
             DistributionFlow::TerraformGcpPush => "terraform_gcp_push",
             DistributionFlow::TerraformAzurePush => "terraform_azure_push",
@@ -103,18 +129,20 @@ impl std::fmt::Display for DeploymentModel {
     }
 }
 
-/// Supported application languages for test apps.
+/// Supported E2E application fixtures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Language {
-    Rust,
-    TypeScript,
+pub enum TestApp {
+    ComprehensiveRust,
+    ComprehensiveTs,
+    FullStackMicroservices,
 }
 
-impl std::fmt::Display for Language {
+impl std::fmt::Display for TestApp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Language::Rust => write!(f, "rust"),
-            Language::TypeScript => write!(f, "typescript"),
+            TestApp::ComprehensiveRust => write!(f, "comprehensive-rust"),
+            TestApp::ComprehensiveTs => write!(f, "comprehensive-ts"),
+            TestApp::FullStackMicroservices => write!(f, "full-stack-microservices"),
         }
     }
 }
@@ -130,8 +158,8 @@ pub enum Binding {
     Vault,
     /// Message queue (SQS, Pub/Sub, Service Bus)
     Queue,
-    /// Direct function-to-function invocation
-    Function,
+    /// Direct worker-to-worker invocation
+    Worker,
     /// Container-to-container communication
     Container,
     /// Background tasks that outlive the request
@@ -165,7 +193,7 @@ impl std::fmt::Display for Binding {
             Binding::Kv => write!(f, "kv"),
             Binding::Vault => write!(f, "vault"),
             Binding::Queue => write!(f, "queue"),
-            Binding::Function => write!(f, "function"),
+            Binding::Worker => write!(f, "worker"),
             Binding::Container => write!(f, "container"),
             Binding::WaitUntil => write!(f, "wait-until"),
             Binding::Health => write!(f, "health"),
@@ -232,11 +260,11 @@ pub fn supported_bindings(platform: Platform, model: DeploymentModel) -> Vec<Bin
         _ => {}
     }
 
-    // Function binding only for push (serverless) deployments on cloud
+    // Worker binding only for push (serverless) deployments on cloud
     if model == DeploymentModel::Push {
         match platform {
             Platform::Aws | Platform::Gcp | Platform::Azure => {
-                bindings.push(Binding::Function);
+                bindings.push(Binding::Worker);
             }
             _ => {}
         }
@@ -254,10 +282,10 @@ pub fn exclusion_reason(
     platform: Platform,
     _model: DeploymentModel,
     binding: Binding,
-    language: Language,
+    app: TestApp,
 ) -> Option<&'static str> {
     match binding {
-        Binding::Function => Some("Function binding test app endpoint not yet implemented"),
+        Binding::Worker => Some("Worker binding test app endpoint not yet implemented"),
         Binding::Container => Some("Container binding requires managed container infrastructure"),
         Binding::Build => Some("Build binding not yet stable across all platforms"),
         Binding::ServiceAccount if platform == Platform::Local => {
@@ -268,7 +296,7 @@ pub fn exclusion_reason(
         // All other gRPC bindings work; only background tasks are affected.
         Binding::WaitUntil
             if platform == Platform::Local
-                && language == Language::TypeScript
+                && app == TestApp::ComprehensiveTs
                 && cfg!(target_os = "windows") =>
         {
             Some("Bun-on-Windows runtime issue: detached async tasks in waitUntil don't execute")
@@ -281,11 +309,12 @@ pub fn exclusion_reason(
 // Path helpers
 // ---------------------------------------------------------------------------
 
-/// Returns the relative path to the test app directory for a given language.
-pub(crate) fn test_app_path(language: Language) -> &'static str {
-    match language {
-        Language::Rust => "test-apps/comprehensive-rust",
-        Language::TypeScript => "test-apps/comprehensive-typescript",
+/// Returns the relative path to the test app directory for a given app.
+pub(crate) fn test_app_path(app: TestApp) -> &'static str {
+    match app {
+        TestApp::ComprehensiveRust => "test-apps/comprehensive-rust",
+        TestApp::ComprehensiveTs => "test-apps/comprehensive-typescript",
+        TestApp::FullStackMicroservices => "../../examples/full-stack-microservices",
     }
 }
 
@@ -293,6 +322,27 @@ pub(crate) fn test_app_path(language: Language) -> &'static str {
 ///
 /// The default alien config file name used by all test apps.
 const CONFIG_FILE: &str = "alien.ts";
+
+fn deployment_environment_variables(
+    app: TestApp,
+) -> Option<Vec<alien_manager_api::types::EnvironmentVariable>> {
+    match app {
+        TestApp::ComprehensiveRust | TestApp::ComprehensiveTs => None,
+        TestApp::FullStackMicroservices => {
+            Some(vec![alien_manager_api::types::EnvironmentVariable {
+                name: "APP_SECRET".to_string(),
+                value: "e2e-full-stack-internal-token".to_string(),
+                type_: alien_manager_api::types::EnvironmentVariableType::Secret,
+                target_resources: Some(vec![
+                    "api".to_string(),
+                    "worker".to_string(),
+                    "scheduler".to_string(),
+                    "dashboard".to_string(),
+                ]),
+            }])
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Platform mapping
@@ -325,8 +375,8 @@ pub struct TestContext {
     pub platform: Platform,
     /// Deployment model (push/pull).
     pub model: DeploymentModel,
-    /// Test app language.
-    pub language: Language,
+    /// Test app app.
+    pub app: TestApp,
     /// Alien-agent handle (pull model only).
     pub agent: Option<crate::agent::TestAlienAgent>,
     /// Distribution artifacts that must be destroyed outside the native
@@ -432,13 +482,20 @@ impl TestContext {
 /// Evaluate a TypeScript alien config file using `bun` and return the Stack JSON.
 ///
 /// The config file (alien.ts) uses the `@alienplatform/core` SDK to define
-/// stacks. This function evaluates it via bun and captures the serialized
+/// stacks. This worker evaluates it via bun and captures the serialized
 /// JSON output.
 pub(crate) async fn load_stack_json(
     app_dir: &std::path::Path,
     config_file: &str,
     platform: Platform,
 ) -> anyhow::Result<serde_json::Value> {
+    if !app_dir.is_dir() {
+        anyhow::bail!("Test app directory does not exist: {}", app_dir.display());
+    }
+
+    let bun_binary = std::env::var_os("ALIEN_TEST_BUN_BINARY")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("bun"));
     let script = format!(
         r#"
 const mod = await import('./{config_file}');
@@ -447,12 +504,17 @@ console.log(JSON.stringify(stack));
 "#,
     );
 
-    let output = tokio::process::Command::new("bun")
+    let output = tokio::process::Command::new(&bun_binary)
         .current_dir(app_dir)
         .args(["-e", &script])
         .output()
         .await
-        .context("Failed to run bun to evaluate config file")?;
+        .with_context(|| {
+            format!(
+                "Failed to run bun to evaluate config file using {}",
+                bun_binary.display()
+            )
+        })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -506,23 +568,31 @@ async fn start_generated_helm_agent(
     }
 
     let (repository, tag) = split_image_tag(agent_image)?;
+    let mut runtime = serde_json::json!({
+        "image": {
+            "repository": repository,
+            "tag": tag,
+            "pullPolicy": "IfNotPresent",
+        },
+        "encryption": {
+            "key": crate::agent::generate_encryption_key(),
+        }
+    });
+    if let Some(image_pull_secrets) = runtime_image_pull_secrets(&repository) {
+        runtime["imagePullSecrets"] = image_pull_secrets;
+    }
+
     let values = serde_json::json!({
         "management": {
             "token": deployment.token.clone(),
             "name": deployment.name.clone(),
-            "url": manager.url.clone(),
+            "url": manager.public_url.clone(),
             "deploymentId": deployment.id.clone(),
             "updates": "auto",
             "telemetry": "auto",
             "healthChecks": "on",
         },
-        "runtime": {
-            "image": {
-                "repository": repository,
-                "tag": tag,
-                "pullPolicy": "IfNotPresent",
-            }
-        },
+        "runtime": runtime,
         "stackSettings": {
             "deploymentModel": "pull",
             "updates": "auto",
@@ -532,7 +602,7 @@ async fn start_generated_helm_agent(
         "infrastructure": null,
     });
     let values_path = chart_dir.path().join("values.e2e.yaml");
-    tokio::fs::write(&values_path, serde_yaml::to_string(&values)?).await?;
+    tokio::fs::write(&values_path, to_helm_values_yaml(&values)?).await?;
 
     crate::agent::TestAlienAgent::helm_install_with_values(
         chart_dir.path(),
@@ -540,6 +610,8 @@ async fn start_generated_helm_agent(
         &format!("e2e-agent-{}", &uuid::Uuid::new_v4().to_string()[..8]),
         "alien-test",
         None,
+        None,
+        &[],
     )
     .await
     .map_err(|error| {
@@ -616,17 +688,17 @@ pub(crate) fn e2e_test_apps_root() -> anyhow::Result<PathBuf> {
 // Deploy orchestration
 // ---------------------------------------------------------------------------
 
-/// Deploy a test app to the given platform with the specified model and language.
+/// Deploy a test app to the given platform with the specified model and app.
 ///
-/// Extract ECR image tags from a pushed stack's function resources.
+/// Extract ECR image tags from a pushed stack's worker resources.
 pub(crate) fn extract_ecr_image_tags(stack: &Stack) -> Vec<String> {
-    use alien_core::Function;
+    use alien_core::Worker;
 
     stack
         .resources()
         .filter_map(|(_, entry)| {
-            let func = entry.config.downcast_ref::<Function>()?;
-            if let alien_core::FunctionCode::Image { ref image } = func.code {
+            let func = entry.config.downcast_ref::<Worker>()?;
+            if let alien_core::WorkerCode::Image { ref image } = func.code {
                 // Image URI: "123.dkr.ecr.us-east-1.amazonaws.com/repo:tag"
                 image.split(':').last().map(|t| t.to_string())
             } else {
@@ -646,17 +718,17 @@ pub async fn deploy_test_app(
     manager: &Arc<TestManager>,
     platform: Platform,
     model: DeploymentModel,
-    language: Language,
+    app: TestApp,
 ) -> anyhow::Result<(TestDeployment, Stack)> {
     let e2e_root = e2e_test_apps_root()?;
-    let app_path = e2e_root.join(test_app_path(language));
+    let app_path = e2e_root.join(test_app_path(app));
     let cfg_file = CONFIG_FILE;
 
     let deployment_name = format!(
         "e2e-{}-{}-{}-{}",
         model,
         platform.as_str(),
-        language,
+        app,
         &uuid::Uuid::new_v4().to_string()[..8],
     );
 
@@ -678,7 +750,7 @@ pub async fn deploy_test_app(
     //
     // This mirrors the production flow: `alien build` compiles source into OCI
     // image tarballs, then `alien release` pushes them to the cloud registry.
-    // After push, the stack has FunctionCode::Image with pushed URIs.
+    // After push, the stack has WorkerCode::Image with pushed URIs.
     let platform_key = platform.as_str();
     let stack_json = stack_by_platform_json
         .get(platform_key)
@@ -748,6 +820,15 @@ pub async fn deploy_test_app(
     if model == DeploymentModel::Pull {
         stack_settings.deployment_model = Some(alien_manager_api::types::DeploymentModel::Pull);
     }
+    if let Some(network) = config.e2e_network_settings(platform)? {
+        stack_settings.network = Some(
+            serde_json::from_value(
+                serde_json::to_value(network)
+                    .context("Failed to serialize E2E network settings")?,
+            )
+            .context("Failed to convert E2E network settings to SDK type")?,
+        );
+    }
 
     // Inject shared Container Apps Environment as an external binding (Azure only).
     // This avoids creating a new environment per test, preventing quota exhaustion.
@@ -777,12 +858,16 @@ pub async fn deploy_test_app(
         }
     }
 
+    let resource_prefix = crate::config::e2e_resource_prefix()?;
+    info!(%resource_prefix, "Using E2E resource prefix");
+
     let create_body = alien_manager_api::types::CreateDeploymentRequest {
         name: deployment_name.clone(),
         platform: api_platform,
         deployment_group_id: Some(group_id.to_string()),
         stack_settings: Some(stack_settings),
-        environment_variables: None,
+        environment_variables: deployment_environment_variables(app),
+        resource_prefix: Some(resource_prefix),
     };
 
     let resp = manager
@@ -831,10 +916,10 @@ pub struct DeveloperSetupResult {
 pub async fn developer_setup(
     manager: &Arc<TestManager>,
     platform: Platform,
-    language: Language,
+    app: TestApp,
 ) -> anyhow::Result<DeveloperSetupResult> {
     let e2e_root = e2e_test_apps_root()?;
-    let app_path = e2e_root.join(test_app_path(language));
+    let app_path = e2e_root.join(test_app_path(app));
     let cfg_file = CONFIG_FILE;
 
     info!(
@@ -1229,12 +1314,12 @@ pub async fn run_alien_deploy_up(
 // Platform availability
 // ---------------------------------------------------------------------------
 
-/// Check if a platform is available and supported for the given deployment model and language.
+/// Check if a platform is available and supported for the given deployment model and app.
 pub fn is_platform_available(
     config: &TestConfig,
     platform: Platform,
     model: DeploymentModel,
-    _language: Language,
+    _app: TestApp,
 ) -> bool {
     match platform {
         Platform::Local => {
@@ -1264,64 +1349,41 @@ pub fn is_platform_available(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Managed test secret provisioning
-// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-/// Provision the `MANAGED_TEST_SECRET` in the deployment's preflight-managed
-/// `secrets` vault via the manager's vault API. This is an Alien-managed test
-/// secret, not a customer-owned external vault secret.
-async fn provision_managed_test_secret(
-    manager: &Arc<TestManager>,
-    deployment: &TestDeployment,
-) -> anyhow::Result<()> {
-    let http = manager.http_client();
-    let vault_name = "secrets";
-    let secret_key = "MANAGED_TEST_SECRET";
-    let secret_value = "e2e-test-managed-secret-value";
-
-    let url = format!(
-        "{}/v1/deployments/{}/vault/{}/secrets/{}",
-        manager.url, deployment.id, vault_name, secret_key,
-    );
-
-    info!(
-        deployment_id = %deployment.id,
-        vault_name,
-        secret_key,
-        "Provisioning managed test secret via manager vault API"
-    );
-
-    let resp = http
-        .put(&url)
-        .json(&serde_json::json!({ "value": secret_value }))
-        .send()
-        .await
-        .context("Failed to call vault set secret API")?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!(
-            "Failed to provision managed test secret ({}): {}",
-            status,
-            body
-        );
+    #[test]
+    fn managed_kubernetes_flows_use_kubernetes_runtime_with_cloud_base() {
+        for (flow, base_platform) in [
+            (DistributionFlow::CloudFormationEksHelmPull, Platform::Aws),
+            (DistributionFlow::TerraformEksHelmPull, Platform::Aws),
+            (DistributionFlow::TerraformGkeHelmPull, Platform::Gcp),
+            (DistributionFlow::TerraformAksHelmPull, Platform::Azure),
+        ] {
+            assert_eq!(flow.platform(), Platform::Kubernetes);
+            assert_eq!(flow.kubernetes_base_platform(), Some(base_platform));
+        }
     }
 
-    info!(
-        deployment_id = %deployment.id,
-        "Managed test secret provisioned"
-    );
-
-    Ok(())
+    #[test]
+    fn onprem_kubernetes_flow_has_no_managed_cloud_base() {
+        assert_eq!(
+            DistributionFlow::TerraformOnpremHelmPull.platform(),
+            Platform::Kubernetes
+        );
+        assert_eq!(
+            DistributionFlow::TerraformOnpremHelmPull.kubernetes_base_platform(),
+            None
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Main entry point
 // ---------------------------------------------------------------------------
 
-/// Run the full E2E test flow for a given platform, model, and language.
+/// Run the full E2E test flow for a given platform, model, and app.
 ///
 /// This is the primary entry point that each individual test calls.
 /// It:
@@ -1336,16 +1398,16 @@ async fn provision_managed_test_secret(
 pub async fn setup(
     platform: Platform,
     model: DeploymentModel,
-    language: Language,
+    app: TestApp,
 ) -> anyhow::Result<TestContext> {
     init_tracing();
 
-    let test_name = format!("{}_{}_{}", model, platform.as_str(), language);
+    let test_name = format!("{}_{}_{}", model, platform.as_str(), app);
     info!(%test_name, "Starting E2E test setup");
 
     // Skip if platform credentials are not available
     let config = TestConfig::from_env();
-    if !is_platform_available(&config, platform, model, language) {
+    if !is_platform_available(&config, platform, model, app) {
         anyhow::bail!(
             "Skipping {}: platform credentials not available or platform not supported for this model",
             test_name,
@@ -1399,7 +1461,7 @@ pub async fn setup(
         // ── alien-deploy deploy flow (local pull) ─────────────────────────
         //
         // Developer side: build, push, release, create DG + DG token.
-        let dev = developer_setup(&manager, platform, language).await?;
+        let dev = developer_setup(&manager, platform, app).await?;
 
         // Customer side: alien-deploy deploy installs alien-agent as OS service.
         let deployment =
@@ -1437,7 +1499,7 @@ pub async fn setup(
             );
         }
 
-        let (deployment, stack) = deploy_test_app(&manager, platform, model, language).await?;
+        let (deployment, stack) = deploy_test_app(&manager, platform, model, app).await?;
         info!(
             deployment_id = %deployment.id,
             "Deployment created, waiting for running status"
@@ -1540,7 +1602,7 @@ pub async fn setup(
         manager,
         platform,
         model,
-        language,
+        app,
         agent,
         distribution_cleanups: Vec::new(),
     })
@@ -1553,11 +1615,11 @@ pub async fn setup(
 /// its own initial infrastructure path before reusing the common assertions.
 pub async fn setup_distribution(
     flow: DistributionFlow,
-    language: Language,
+    app: TestApp,
 ) -> anyhow::Result<TestContext> {
     init_tracing();
 
-    crate::distribution::setup_distribution(flow, language).await
+    crate::distribution::setup_distribution(flow, app).await
 }
 
 /// Best-effort cleanup when setup() fails after creating a deployment/agent.
@@ -1617,7 +1679,7 @@ async fn cleanup_failed_setup(
 pub async fn run_e2e_test(
     platform: Platform,
     model: DeploymentModel,
-    language: Language,
+    app: TestApp,
 ) -> anyhow::Result<TestContext> {
-    setup(platform, model, language).await
+    setup(platform, model, app).await
 }

@@ -13,11 +13,12 @@
 //!    [`alien_infra::ImporterRegistry`] to produce a typed
 //!    [`StackResourceState`] form.
 //! 4. Merges setup-owned state into the imported deployment's stack state. New
-//!    imports start at `provisioning` so the manager can complete Live work.
+//!    imports with pending setup resources start at `initial-setup`; otherwise
+//!    they start at `provisioning` so the manager can complete Live work.
 //!
 //! Naming. The caller supplies `deploymentName` for the deployment row and
-//! `stackPrefix` for physical resource names. Setup drivers typically
-//! use the same value, but the manager treats them as separate contracts. If a
+//! `resourcePrefix` for physical resource names. Setup drivers may use the
+//! same value, but the manager treats them as separate contracts. If a
 //! deployment with that name already exists in the deployment group and was
 //! also imported, the handler merges setup state. A collision
 //! with a native deployment returns 409.
@@ -33,9 +34,14 @@ use axum::{
 };
 
 use alien_core::{
-    import::{ImportContext, StackImportRequest, StackImportResponse},
-    AwsEnvironmentInfo, AzureEnvironmentInfo, EnvironmentInfo, GcpEnvironmentInfo, Platform,
-    RuntimeMetadata, Stack, StackResourceState, StackState,
+    import::{
+        ImportContext, StackImportRequest, StackImportResponse,
+        CURRENT_SETUP_IMPORT_FORMAT_VERSION, MIN_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION,
+    },
+    is_valid_resource_prefix, AwsEnvironmentInfo, AzureEnvironmentInfo, DeploymentConfig,
+    DeploymentStatus, EnvironmentInfo, EnvironmentVariablesSnapshot, ExternalBindings,
+    GcpEnvironmentInfo, KubernetesCluster, Platform, ResourceLifecycle, ResourceStatus,
+    RuntimeMetadata, Stack, StackResourceState, StackState, RESOURCE_PREFIX_ERROR_MESSAGE,
 };
 use alien_error::AlienError;
 
@@ -77,8 +83,13 @@ pub fn router() -> Router<AppState> {
 pub async fn stack_import(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(req): Json<StackImportRequest>,
+    Json(raw_req): Json<serde_json::Value>,
 ) -> Response {
+    let req = match parse_stack_import_request(raw_req) {
+        Ok(req) => req,
+        Err(e) => return e.into_response(),
+    };
+
     let subject = match auth::require_auth(&state, &headers).await {
         Ok(s) => s,
         Err(e) => return e.into_response(),
@@ -115,9 +126,12 @@ pub async fn stack_import(
         )
         .into_response();
     }
-    if req.stack_prefix.trim().is_empty() {
-        return ErrorData::bad_request("Stack import payload must include a non-empty stackPrefix")
-            .into_response();
+    let resource_prefix = req.resource_prefix.trim().to_string();
+    if !is_valid_resource_prefix(&resource_prefix) {
+        return ErrorData::bad_request(RESOURCE_PREFIX_ERROR_MESSAGE).into_response();
+    }
+    if let Err(e) = assert_supported_import_region(&state.config, &req) {
+        return e.into_response();
     }
 
     let dg = match state
@@ -149,17 +163,22 @@ pub async fn stack_import(
         },
     };
 
-    let stack = match resolve_stack(&release, req.platform) {
+    let source_stack = match resolve_stack(&release, req.platform) {
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
 
-    let stack_state = match build_stack_state(&state, &subject, &req, stack) {
+    let prepared_stack = match prepare_import_stack(source_stack.clone(), &req).await {
+        Ok(stack) => stack,
+        Err(e) => return e.into_response(),
+    };
+
+    let stack_state = match build_stack_state(&state, &subject, &req, &prepared_stack) {
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
     let environment_info = infer_import_environment_info(&req);
-    let runtime_metadata = import_runtime_metadata(stack);
+    let runtime_metadata = import_runtime_metadata(&prepared_stack);
 
     match state
         .deployment_store
@@ -253,6 +272,7 @@ pub async fn stack_import(
                 StatusCode::OK,
                 Json(StackImportResponse {
                     deployment_id: updated.id,
+                    deployment_token: updated.deployment_token,
                     stack_settings: updated.stack_settings,
                     stack_state,
                 }),
@@ -283,21 +303,24 @@ pub async fn stack_import(
     let (raw_token, key_prefix, key_hash) = ids::generate_token(TokenType::Deployment.prefix());
 
     let params = CreateImportedDeploymentParams {
+        deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
         name: deployment_name,
         deployment_group_id: deployment_group_id.clone(),
         platform: req.platform,
+        base_platform: req.base_platform,
         stack_settings: req.stack_settings.clone(),
         stack_state: stack_state.clone(),
         environment_info,
         runtime_metadata,
-        status: "provisioning".to_string(),
-        current_release_id: Some(release.id.clone()),
+        status: initial_import_status(&prepared_stack, &stack_state),
+        current_release_id: None,
+        desired_release_id: Some(release.id.clone()),
         import_source: req.source_kind,
         setup_target: req.setup_target.clone(),
         setup_fingerprint: req.setup_fingerprint.clone(),
         setup_fingerprint_version: req.setup_fingerprint_version,
         deployment_token: Some(raw_token.clone()),
-        management_config: Some(req.management_config.clone()),
+        management_config: req.management_config.clone(),
     };
 
     let created = match state
@@ -327,11 +350,71 @@ pub async fn stack_import(
         StatusCode::CREATED,
         Json(StackImportResponse {
             deployment_id: created.id,
+            deployment_token: Some(raw_token),
             stack_settings: created.stack_settings,
             stack_state,
         }),
     )
         .into_response()
+}
+
+fn assert_supported_import_region(
+    config: &crate::config::ManagerConfig,
+    req: &StackImportRequest,
+) -> crate::error::Result<()> {
+    let setup_platform = req.base_platform.unwrap_or(req.platform);
+    if setup_platform != Platform::Aws || config.supported_aws_regions.is_empty() {
+        return Ok(());
+    }
+
+    if config
+        .supported_aws_regions
+        .iter()
+        .any(|supported| supported == &req.region)
+    {
+        return Ok(());
+    }
+
+    Err(ErrorData::bad_request(format!(
+        "Unsupported AWS region '{}' for stack import. Supported regions: {}",
+        req.region,
+        config.supported_aws_regions.join(", ")
+    )))
+}
+
+fn parse_stack_import_request(raw: serde_json::Value) -> crate::error::Result<StackImportRequest> {
+    let found_version = raw
+        .get("setupImportFormatVersion")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .filter(|version| *version > 0)
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::IncompatibleSetupImport {
+                found_version: 0,
+                min_supported_version: MIN_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION,
+                current_version: CURRENT_SETUP_IMPORT_FORMAT_VERSION,
+                repair: "Use a setup package that emits setupImportFormatVersion, or upgrade the setup package."
+                    .to_string(),
+            })
+        })?;
+
+    if !(MIN_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION..=CURRENT_SETUP_IMPORT_FORMAT_VERSION)
+        .contains(&found_version)
+    {
+        return Err(AlienError::new(ErrorData::IncompatibleSetupImport {
+            found_version,
+            min_supported_version: MIN_SUPPORTED_SETUP_IMPORT_FORMAT_VERSION,
+            current_version: CURRENT_SETUP_IMPORT_FORMAT_VERSION,
+            repair: "Use a setup package compatible with this manager, or upgrade the manager."
+                .to_string(),
+        }));
+    }
+
+    serde_json::from_value(raw).map_err(|err| {
+        AlienError::new(ErrorData::BadRequest {
+            reason: format!("Invalid stack import payload: {err}"),
+        })
+    })
 }
 
 fn setup_contract_lane_matches(existing: &DeploymentRecord, req: &StackImportRequest) -> bool {
@@ -353,7 +436,7 @@ fn can_accept_reimport(
         existing.status.as_str(),
         "initial-setup" | "provisioning" | "update-pending" | "updating"
     ) {
-        return idempotent;
+        return true;
     }
 
     matches!(
@@ -374,6 +457,45 @@ fn reconciliation_already_scheduled(deployment: &DeploymentRecord) -> bool {
         deployment.status.as_str(),
         "provisioning" | "update-pending" | "updating"
     )
+}
+
+fn initial_import_status(prepared_stack: &Stack, stack_state: &StackState) -> String {
+    let has_pending_setup = prepared_stack
+        .resources()
+        .filter(|(_, entry)| entry.lifecycle == ResourceLifecycle::Frozen)
+        .any(|(resource_id, _)| {
+            stack_state
+                .resources
+                .get(resource_id)
+                .is_none_or(|resource| resource.status != ResourceStatus::Running)
+        });
+
+    if has_pending_setup {
+        deployment_status_string(DeploymentStatus::InitialSetup)
+    } else {
+        deployment_status_string(DeploymentStatus::Provisioning)
+    }
+}
+
+fn deployment_status_string(status: DeploymentStatus) -> String {
+    match status {
+        DeploymentStatus::Pending => "pending",
+        DeploymentStatus::InitialSetup => "initial-setup",
+        DeploymentStatus::InitialSetupFailed => "initial-setup-failed",
+        DeploymentStatus::Provisioning => "provisioning",
+        DeploymentStatus::ProvisioningFailed => "provisioning-failed",
+        DeploymentStatus::Running => "running",
+        DeploymentStatus::RefreshFailed => "refresh-failed",
+        DeploymentStatus::UpdatePending => "update-pending",
+        DeploymentStatus::Updating => "updating",
+        DeploymentStatus::UpdateFailed => "update-failed",
+        DeploymentStatus::DeletePending => "delete-pending",
+        DeploymentStatus::Deleting => "deleting",
+        DeploymentStatus::DeleteFailed => "delete-failed",
+        DeploymentStatus::Deleted => "deleted",
+        DeploymentStatus::Error => "error",
+    }
+    .to_string()
 }
 
 fn import_changes_deployment(
@@ -419,8 +541,61 @@ fn import_runtime_metadata(stack: &Stack) -> RuntimeMetadata {
     }
 }
 
+async fn prepare_import_stack(
+    source_stack: Stack,
+    req: &StackImportRequest,
+) -> crate::error::Result<Stack> {
+    let runner = alien_preflights::runner::PreflightRunner::new();
+    let mutation_platform = req.platform;
+    runner
+        .run_template_preflights(&source_stack, mutation_platform)
+        .await
+        .map_err(|err| {
+            AlienError::new(ErrorData::BadRequest {
+                reason: format!(
+                    "Source stack failed setup import preflights: {}",
+                    err.message
+                ),
+            })
+        })?;
+
+    let stack_state = StackState::new(mutation_platform);
+    let config = DeploymentConfig {
+        deployment_name: Some(req.deployment_name.clone()),
+        stack_settings: req.stack_settings.clone(),
+        management_config: req.management_config.clone(),
+        environment_variables: EnvironmentVariablesSnapshot {
+            variables: Vec::new(),
+            hash: "empty".to_string(),
+            created_at: "1970-01-01T00:00:00Z".to_string(),
+        },
+        allow_frozen_changes: false,
+        compute_backend: None,
+        external_bindings: ExternalBindings::default(),
+        base_platform: req.base_platform,
+        public_urls: None,
+        domain_metadata: None,
+        monitoring: None,
+        manager_url: None,
+        deployment_token: None,
+        native_image_host: None,
+    };
+
+    runner
+        .apply_mutations(source_stack, &stack_state, &config)
+        .await
+        .map_err(|err| {
+            AlienError::new(ErrorData::BadRequest {
+                reason: format!(
+                    "Failed to derive expected setup stack from import settings: {}",
+                    err.message
+                ),
+            })
+        })
+}
+
 fn infer_import_environment_info(req: &StackImportRequest) -> Option<EnvironmentInfo> {
-    match req.platform {
+    match req.base_platform.unwrap_or(req.platform) {
         Platform::Aws => infer_aws_account_id(req).map(|account_id| {
             EnvironmentInfo::Aws(AwsEnvironmentInfo {
                 account_id,
@@ -513,10 +688,9 @@ fn parse_aws_account_id_from_arn(value: &str) -> Option<String> {
     }
 }
 
-/// Look up the stack for the platform being imported. Releases carry
-/// per-platform stacks (the AWS+GCP+Azure rendering of a single `alien
-/// release`); the importer can only land on whichever one the artifact
-/// produced.
+/// Look up the stack for the runtime platform being imported. For managed
+/// Kubernetes, `basePlatform` selects the setup cloud and importers, but the
+/// release stack is still keyed by `kubernetes`.
 fn resolve_stack(
     release: &ReleaseRecord,
     platform: alien_core::Platform,
@@ -545,12 +719,13 @@ fn build_stack_state(
     let mut resources: HashMap<String, StackResourceState> = HashMap::new();
 
     for imported in &req.resources {
+        let import_platform = import_platform_for_resource(state, req, &imported.resource_type);
         let entry = stack.resources.get(&imported.id).ok_or_else(|| {
             AlienError::new(ErrorData::BadRequest {
                 reason: format!(
                     "Imported resource '{}' is not present in the active stack \
                      for platform '{}' — release the stack before importing it",
-                    imported.id, req.platform
+                    imported.id, import_platform
                 ),
             })
         })?;
@@ -563,18 +738,18 @@ fn build_stack_state(
         // by stringifying once rather than introducing a passthrough variant
         // on the manager's surface that would have to be kept in sync with
         // every importer-side error code.
-        let resource_state = state
+        let mut resource_state = state
             .import_registry
             .run(
                 &imported.resource_type,
-                req.platform,
+                import_platform,
                 imported.import_data.clone(),
                 &ImportContext {
                     resource_id: &imported.id,
-                    platform: req.platform,
+                    platform: import_platform,
                     region: &req.region,
                     stack_settings: &req.stack_settings,
-                    management_config: &req.management_config,
+                    management_config: req.management_config.as_ref(),
                     resource: entry,
                 },
             )
@@ -582,16 +757,43 @@ fn build_stack_state(
                 AlienError::new(ErrorData::BadRequest {
                     reason: format!(
                         "Failed to import resource '{}' (type='{}', platform='{}'): {}",
-                        imported.id, imported.resource_type, req.platform, err.message
+                        imported.id, imported.resource_type, import_platform, err.message
                     ),
                 })
             })?;
+        resource_state.controller_platform = Some(import_platform);
 
         resources.insert(imported.id.clone(), resource_state);
     }
 
     let mut stack_state =
-        StackState::with_resource_prefix(req.platform, req.stack_prefix.trim().to_string());
+        StackState::with_resource_prefix(req.platform, req.resource_prefix.trim().to_string());
     stack_state.resources = resources;
     Ok(stack_state)
+}
+
+fn import_platform_for_resource(
+    state: &AppState,
+    req: &StackImportRequest,
+    resource_type: &alien_core::ResourceType,
+) -> Platform {
+    if req.platform != Platform::Kubernetes {
+        return req.base_platform.unwrap_or(req.platform);
+    }
+
+    if resource_type == &KubernetesCluster::RESOURCE_TYPE {
+        return req.base_platform.unwrap_or(Platform::Kubernetes);
+    }
+
+    if let Some(base_platform) = req.base_platform {
+        if state
+            .import_registry
+            .importer(resource_type, base_platform)
+            .is_some()
+        {
+            return base_platform;
+        }
+    }
+
+    Platform::Kubernetes
 }

@@ -5,6 +5,8 @@
 //! resolution) lives here so per-resource emitters stay focused on the
 //! Terraform their cloud team would write.
 
+use std::collections::HashSet;
+
 use crate::{
     block::{attr, block, nested, resource_block},
     emitter::TfFragment,
@@ -17,7 +19,8 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{
-    generators::AwsRuntimePermissionsGenerator, BindingTarget, PermissionContext,
+    generators::{AwsIamStatement, AwsRuntimePermissionsGenerator},
+    BindingTarget, PermissionContext,
 };
 use hcl::{
     expr::Expression,
@@ -61,26 +64,58 @@ pub fn label_for_ref<'a>(ctx: &'a EmitContext<'_>, reference: &ResourceRef) -> R
     })
 }
 
-/// `${var.stack_name}-{suffix}` HCL template expression.
-pub fn stack_name_template(suffix: &str) -> Expression {
-    expr::template(format!("${{var.stack_name}}-{suffix}"))
+/// `${local.resource_prefix}-{suffix}` HCL template expression.
+pub fn resource_prefix_template(suffix: &str) -> Expression {
+    expr::template(format!("${{local.resource_prefix}}-{suffix}"))
 }
 
-/// Standard Alien tags block. `alien_resource_type` is the Alien
-/// resource-type slug ("storage", "queue", …).
+/// IAM role names are capped at 64 characters. Keep the normal
+/// resource-prefixed name while it fits; otherwise preserve a readable
+/// prefix and append a stable hash to avoid collisions.
+pub fn iam_role_name_template(suffix: &str) -> Expression {
+    const IAM_ROLE_NAME_MAX_LEN: usize = 64;
+    const HASH_LEN: usize = 8;
+    const HASH_SEPARATOR_LEN: usize = 1;
+    const PREFIX_LEN: usize = IAM_ROLE_NAME_MAX_LEN - HASH_SEPARATOR_LEN - HASH_LEN;
+
+    let suffix_literal = serde_json::to_string(suffix).expect("serializing a string cannot fail");
+    let full_name = format!("format(\"%s-%s\", local.resource_prefix, {suffix_literal})");
+    expr::raw(format!(
+        "length({full_name}) <= {IAM_ROLE_NAME_MAX_LEN} ? {full_name} : format(\"%s-%s\", substr({full_name}, 0, {PREFIX_LEN}), substr(sha1({full_name}), 0, {HASH_LEN}))"
+    ))
+}
+
+/// IAM customer-managed policy names are capped at 128 characters and
+/// must be unique in an account. Keep the resource-prefixed name while it
+/// fits; otherwise preserve a readable prefix and append a stable hash.
+pub fn iam_managed_policy_name_template(suffix: &str) -> Expression {
+    const IAM_POLICY_NAME_MAX_LEN: usize = 128;
+    const HASH_LEN: usize = 8;
+    const HASH_SEPARATOR_LEN: usize = 1;
+    const PREFIX_LEN: usize = IAM_POLICY_NAME_MAX_LEN - HASH_SEPARATOR_LEN - HASH_LEN;
+
+    let suffix_literal = serde_json::to_string(suffix).expect("serializing a string cannot fail");
+    let full_name = format!("format(\"%s-%s\", local.resource_prefix, {suffix_literal})");
+    expr::raw(format!(
+        "length({full_name}) <= {IAM_POLICY_NAME_MAX_LEN} ? {full_name} : format(\"%s-%s\", substr({full_name}, 0, {PREFIX_LEN}), substr(sha1({full_name}), 0, {HASH_LEN}))"
+    ))
+}
+
+/// Standard tags block. `alien_resource_type` is the resource-type slug
+/// ("storage", "queue", ...).
 pub fn tags(ctx: &EmitContext<'_>, alien_resource_type: &'static str) -> Expression {
     expr::object([
         (
             ALIEN_MANAGED_BY_TAG_KEY,
             Expression::String(ALIEN_MANAGED_BY_TAG_VALUE.to_string()),
         ),
-        (ALIEN_STACK_TAG_KEY, expr::raw("var.stack_name")),
+        (ALIEN_STACK_TAG_KEY, expr::raw("local.resource_prefix")),
         (
             ALIEN_RESOURCE_TAG_KEY,
             Expression::String(ctx.resource_id.to_string()),
         ),
         (
-            "AlienResourceType",
+            "resource-type",
             Expression::String(alien_resource_type.to_string()),
         ),
     ])
@@ -156,7 +191,7 @@ pub fn jsonencode(value: Expression) -> Expression {
 ///
 /// `AwsRuntimePermissionsGenerator` produces fully-interpolated policy
 /// strings whose contents may already embed Terraform templates like
-/// `${var.stack_name}` (when called with an HCL-flavored
+/// `${local.resource_prefix}` (when called with an HCL-flavored
 /// [`PermissionContext`]). This helper preserves that interpolation
 /// when translating to HCL.
 pub fn json_value_to_expression(value: serde_json::Value) -> Expression {
@@ -236,7 +271,7 @@ pub fn iam_policy_name_sanitize(input: &str) -> String {
 /// [`crate::emitters::gcp::helpers::permission_context`].
 pub fn aws_terraform_permission_context() -> PermissionContext {
     PermissionContext::new()
-        .with_stack_prefix("${var.stack_name}")
+        .with_stack_prefix("${local.resource_prefix}")
         .with_aws_region("${data.aws_region.current.region}")
         .with_aws_account_id("${data.aws_caller_identity.current.account_id}")
         .with_managing_account_id("${var.managing_account_id}")
@@ -250,7 +285,7 @@ pub fn aws_terraform_permission_context() -> PermissionContext {
 /// [`AwsRuntimePermissionsGenerator::generate_policy`] produces the
 /// policy document; the emitter wraps it in `jsonencode(...)` and
 /// pushes a sibling `aws_iam_role_policy` resource. Symmetric with the
-/// GCP [`crate::emitters::gcp::helpers::emit_custom_role_and_bindings`]
+/// GCP custom-role binding helper
 /// helper.
 ///
 /// `policy_label_index` is appended to both the Terraform resource
@@ -337,13 +372,144 @@ pub fn emit_iam_role_policy_for_target_with_label(
     Ok(())
 }
 
+pub fn emit_iam_managed_policy_chunks(
+    fragment: &mut TfFragment,
+    role_label: &str,
+    base_label: &str,
+    base_name: &str,
+    statements: Vec<AwsIamStatement>,
+) -> Result<()> {
+    const MAX_MANAGED_POLICY_BYTES: usize = 5_500;
+
+    let mut statements = statements;
+    ensure_unique_statement_sids(&mut statements);
+    let chunks = chunk_iam_statements(statements, MAX_MANAGED_POLICY_BYTES)?;
+    for (idx, chunk) in chunks.into_iter().enumerate() {
+        let policy_label = format!("{base_label}_{idx}");
+        let attachment_label = format!("{policy_label}_attachment");
+        let policy_name = format!("{base_name}-{idx}");
+        let policy_expr = policy_document_expr(chunk)?;
+
+        fragment.resource_blocks.push(resource_block(
+            "aws_iam_policy",
+            &policy_label,
+            [
+                attr("name", iam_managed_policy_name_template(&policy_name)),
+                attr("policy", policy_expr),
+            ],
+        ));
+        fragment.resource_blocks.push(resource_block(
+            "aws_iam_role_policy_attachment",
+            &attachment_label,
+            [
+                attr(
+                    "role",
+                    expr::traversal(["aws_iam_role", role_label, "name"]),
+                ),
+                attr(
+                    "policy_arn",
+                    expr::traversal(["aws_iam_policy", policy_label.as_str(), "arn"]),
+                ),
+            ],
+        ));
+    }
+
+    Ok(())
+}
+
+fn ensure_unique_statement_sids(statements: &mut [AwsIamStatement]) {
+    let mut used = HashSet::new();
+
+    for statement in statements {
+        if used.insert(statement.sid.clone()) {
+            continue;
+        }
+
+        let base = statement.sid.clone();
+        let mut suffix = 2usize;
+        loop {
+            let candidate = suffixed_statement_sid(&base, suffix);
+            if used.insert(candidate.clone()) {
+                statement.sid = candidate;
+                break;
+            }
+            suffix += 1;
+        }
+    }
+}
+
+fn suffixed_statement_sid(base: &str, suffix: usize) -> String {
+    let suffix = suffix.to_string();
+    let max_base_len = 128usize.saturating_sub(suffix.len());
+    let trimmed = base.chars().take(max_base_len).collect::<String>();
+    format!("{trimmed}{suffix}")
+}
+
+fn chunk_iam_statements(
+    statements: Vec<AwsIamStatement>,
+    max_policy_bytes: usize,
+) -> Result<Vec<Vec<AwsIamStatement>>> {
+    let mut chunks = Vec::new();
+    let mut current = Vec::new();
+
+    for statement in statements {
+        let mut candidate = current.clone();
+        candidate.push(statement.clone());
+        if policy_document_size(&candidate)? <= max_policy_bytes {
+            current = candidate;
+            continue;
+        }
+
+        if current.is_empty() {
+            return Err(AlienError::new(ErrorData::GenericError {
+                message: format!(
+                    "AWS IAM statement '{}' is too large for a managed policy",
+                    statement.sid
+                ),
+            }));
+        }
+
+        chunks.push(current);
+        current = vec![statement];
+    }
+
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+
+    Ok(chunks)
+}
+
+fn policy_document_size(statements: &[AwsIamStatement]) -> Result<usize> {
+    serde_json::to_string(&policy_document_json(statements)?)
+        .into_alien_error()
+        .context(ErrorData::TemplateSerializationFailed {
+            format: "Terraform IAM policy".to_string(),
+            reason: "Failed to serialize IAM policy".to_string(),
+        })
+        .map(|policy| policy.len())
+}
+
+fn policy_document_expr(statements: Vec<AwsIamStatement>) -> Result<Expression> {
+    Ok(jsonencode_policy_value(policy_document_json(&statements)?))
+}
+
+fn policy_document_json(statements: &[AwsIamStatement]) -> Result<serde_json::Value> {
+    Ok(serde_json::json!({
+        "Version": "2012-10-17",
+        "Statement": statements,
+    }))
+}
+
 /// VPC-config private subnet ids expression.
 pub fn private_subnet_ids_expr(ctx: &EmitContext<'_>) -> Expression {
     let Some((label, network)) = default_network(ctx) else {
         return expr::raw("[]");
     };
     match &network.settings {
-        NetworkSettings::Create { .. } => expr::raw(format!("aws_subnet.{label}_private[*].id")),
+        NetworkSettings::Create { .. } => expr::raw(format!(
+            "var.network_mode == \"create-new\" ? aws_subnet.{label}_private[*].id : var.network_mode == \"use-existing\" ? var.private_subnet_ids : []"
+        )),
         NetworkSettings::ByoVpcAws { .. } => expr::raw(format!("var.{label}_private_subnet_ids")),
         _ => expr::raw("[]"),
     }
@@ -355,24 +521,24 @@ pub fn security_group_ids_expr(ctx: &EmitContext<'_>) -> Expression {
         return expr::raw("[]");
     };
     match &network.settings {
-        NetworkSettings::Create { .. } => Expression::Array(vec![expr::traversal([
-            "aws_security_group",
-            &format!("{label}_workload"),
-            "id",
-        ])]),
+        NetworkSettings::Create { .. } => expr::raw(format!(
+            "var.network_mode == \"create-new\" ? [aws_security_group.{label}_workload[0].id] : var.network_mode == \"use-existing\" ? var.security_group_ids : []"
+        )),
         NetworkSettings::ByoVpcAws { .. } => expr::raw(format!("var.{label}_security_group_ids")),
         _ => expr::raw("[]"),
     }
 }
 
-/// VPC ID expression — created VPC when this stack creates the VPC, BYO
+/// VPC ID expression: created VPC when this stack creates the VPC, existing
 /// variable otherwise.
 pub fn vpc_id_expr(ctx: &EmitContext<'_>) -> Expression {
     let Some((label, network)) = default_network(ctx) else {
         return expr::raw("null");
     };
     match &network.settings {
-        NetworkSettings::Create { .. } => expr::traversal(["aws_vpc", label, "id"]),
+        NetworkSettings::Create { .. } => expr::raw(format!(
+            "var.network_mode == \"create-new\" ? aws_vpc.{label}[0].id : var.network_mode == \"use-existing\" ? var.vpc_id : null"
+        )),
         NetworkSettings::ByoVpcAws { .. } => expr::raw(format!("var.{label}_vpc_id")),
         _ => expr::raw("null"),
     }
@@ -441,4 +607,50 @@ pub fn iam_role_managed_policy_attachment(
 /// directly so callers can pass into block bodies.
 pub fn nested_block(name: &str, body: Vec<Structure>) -> Structure {
     nested(block(name, body))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn statement(sid: &str) -> AwsIamStatement {
+        AwsIamStatement {
+            sid: sid.to_string(),
+            effect: "Allow".to_string(),
+            action: vec!["s3:GetObject".to_string()],
+            resource: vec!["*".to_string()],
+            condition: None,
+        }
+    }
+
+    #[test]
+    fn emit_iam_managed_policy_chunks_uniquifies_duplicate_sids() {
+        let mut statements = vec![
+            statement("Duplicate"),
+            statement("Duplicate"),
+            statement("Other"),
+            statement("Duplicate"),
+        ];
+
+        ensure_unique_statement_sids(&mut statements);
+
+        let sids = statements
+            .into_iter()
+            .map(|statement| statement.sid)
+            .collect::<Vec<_>>();
+        assert_eq!(sids, ["Duplicate", "Duplicate2", "Other", "Duplicate3"]);
+    }
+
+    #[test]
+    fn emit_iam_managed_policy_chunks_trims_long_duplicate_sids() {
+        let long_sid = "A".repeat(128);
+        let mut statements = vec![statement(&long_sid), statement(&long_sid)];
+
+        ensure_unique_statement_sids(&mut statements);
+
+        assert_eq!(statements[0].sid.len(), 128);
+        assert_eq!(statements[1].sid.len(), 128);
+        assert!(statements[1].sid.ends_with('2'));
+        assert_eq!(statements[1].sid.chars().filter(|c| *c == 'A').count(), 127);
+    }
 }

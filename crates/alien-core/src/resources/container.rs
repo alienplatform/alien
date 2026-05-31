@@ -1,6 +1,6 @@
 //! Container resource for long-running container workloads.
 //!
-//! A Container represents a deployable unit that runs on a ContainerCluster.
+//! A Container represents a deployable unit that runs on a ComputeCluster.
 //! It defines the container image, resource requirements, scaling configuration,
 //! and networking settings.
 //!
@@ -13,7 +13,7 @@
 
 use crate::error::{ErrorData, Result};
 use crate::resource::{ResourceDefinition, ResourceOutputsDefinition, ResourceRef, ResourceType};
-use crate::resources::{ContainerCluster, ToolchainConfig};
+use crate::resources::{ComputeCluster, ToolchainConfig};
 use crate::LoadBalancerEndpoint;
 use alien_error::AlienError;
 use bon::Builder;
@@ -75,15 +75,6 @@ pub struct PersistentStorage {
     pub size: String,
     /// Mount path inside the container
     pub mount_path: String,
-    /// Storage type (e.g., "gp3", "io2" for AWS, "pd-ssd" for GCP)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub storage_type: Option<String>,
-    /// IOPS (for storage types that support it)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub iops: Option<u32>,
-    /// Throughput in MiB/s (for storage types that support it)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub throughput: Option<u32>,
 }
 
 /// Autoscaling configuration for stateless containers.
@@ -174,7 +165,7 @@ pub struct ContainerPort {
 
 /// Container resource for running long-running container workloads.
 ///
-/// A Container defines a deployable unit that runs on a ContainerCluster.
+/// A Container defines a deployable unit that runs on a ComputeCluster.
 /// The managed container backend handles scheduling replicas across machines,
 /// autoscaling based on various metrics, and service discovery.
 ///
@@ -222,8 +213,8 @@ pub struct Container {
     #[builder(field)]
     pub ports: Vec<ContainerPort>,
 
-    /// ContainerCluster resource ID that this container runs on.
-    /// If None, will be auto-assigned by ContainerClusterMutation at deployment time.
+    /// ComputeCluster resource ID that this container runs on.
+    /// If None, will be auto-assigned by ComputeClusterMutation at deployment time.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cluster: Option<String>,
 
@@ -304,14 +295,6 @@ impl Container {
 
     /// Validates the ports configuration.
     fn validate_ports(&self) -> Result<()> {
-        // Ports cannot be empty
-        if self.ports.is_empty() {
-            return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
-                resource_id: self.id.clone(),
-                reason: "at least one port must be specified".to_string(),
-            }));
-        }
-
         // At most one HTTP port is allowed
         let http_ports: Vec<_> = self
             .ports
@@ -455,10 +438,10 @@ impl ResourceDefinition for Container {
     fn get_dependencies(&self) -> Vec<ResourceRef> {
         let mut deps = self.links.clone();
         // Add dependency on the container cluster if explicitly specified.
-        // If None, ContainerClusterMutation will auto-assign at deployment time.
+        // If None, ComputeClusterMutation will auto-assign at deployment time.
         if let Some(cluster) = &self.cluster {
             deps.push(ResourceRef::new(
-                ContainerCluster::RESOURCE_TYPE.clone(),
+                ComputeCluster::RESOURCE_TYPE.clone(),
                 cluster,
             ));
         }
@@ -609,9 +592,6 @@ mod tests {
             .persistent_storage(PersistentStorage {
                 size: "100Gi".to_string(),
                 mount_path: "/var/lib/postgresql/data".to_string(),
-                storage_type: Some("gp3".to_string()),
-                iops: Some(3000),
-                throughput: Some(125),
             })
             .permissions("database".to_string())
             .build();
@@ -855,8 +835,7 @@ mod tests {
 
     #[test]
     fn test_container_empty_ports_validation() {
-        // Build container with at least one port, then manually clear for testing
-        let mut container = Container::new("no-ports".to_string())
+        let container = Container::new("no-ports".to_string())
             .cluster("compute".to_string())
             .code(ContainerCode::Image {
                 image: "test:latest".to_string(),
@@ -869,13 +848,10 @@ mod tests {
                 min: "1Gi".to_string(),
                 desired: "1Gi".to_string(),
             })
-            .port(8080) // Need at least one port to build
             .replicas(1)
             .permissions("test".to_string())
             .build();
 
-        // Clear ports to test validation
-        container.ports.clear();
-        assert!(container.validate_ports().is_err());
+        assert!(container.validate_ports().is_ok());
     }
 }

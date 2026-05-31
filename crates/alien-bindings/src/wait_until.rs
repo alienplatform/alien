@@ -14,11 +14,7 @@ use std::{
     },
     time::Duration,
 };
-use tokio::{
-    sync::{oneshot, Mutex},
-    task::JoinHandle,
-    time::timeout,
-};
+use tokio::{sync::Mutex, task::JoinHandle, time::timeout};
 #[cfg(feature = "grpc")]
 use tonic::transport::Channel;
 use tracing::{debug, error, info, warn};
@@ -29,8 +25,8 @@ use utoipa::ToSchema;
 
 #[cfg(feature = "grpc")]
 use crate::grpc::wait_until_service::alien_bindings::wait_until::{
-    wait_until_service_client::WaitUntilServiceClient, GetTaskCountRequest,
-    NotifyDrainCompleteRequest, NotifyTaskRegisteredRequest, WaitForDrainSignalRequest,
+    wait_until_service_client::WaitUntilServiceClient, NotifyDrainCompleteRequest,
+    NotifyTaskRegisteredRequest, WaitForDrainSignalRequest,
 };
 
 /// Response from drain operations.

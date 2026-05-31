@@ -8,7 +8,7 @@ import { ClosedEnum } from "../../types/enums.js";
 /**
  * Represents the target cloud platform.
  */
-export const GetDeploymentStatsPlatform = {
+export const GetDeploymentStatsEnvironment = {
   Aws: "aws",
   Gcp: "gcp",
   Azure: "azure",
@@ -19,8 +19,8 @@ export const GetDeploymentStatsPlatform = {
 /**
  * Represents the target cloud platform.
  */
-export type GetDeploymentStatsPlatform = ClosedEnum<
-  typeof GetDeploymentStatsPlatform
+export type GetDeploymentStatsEnvironment = ClosedEnum<
+  typeof GetDeploymentStatsEnvironment
 >;
 
 /**
@@ -68,9 +68,9 @@ export type GetDeploymentStatsRequest = {
    */
   managerId?: string | undefined;
   /**
-   * Filter deployments by platform
+   * Filter deployments by effective environment
    */
-  platform?: Array<GetDeploymentStatsPlatform> | undefined;
+  environment?: Array<GetDeploymentStatsEnvironment> | undefined;
   /**
    * Filter deployments by status
    */
@@ -82,9 +82,9 @@ export type GetDeploymentStatsRequest = {
 };
 
 /** @internal */
-export const GetDeploymentStatsPlatform$outboundSchema: z.ZodEnum<
-  typeof GetDeploymentStatsPlatform
-> = z.enum(GetDeploymentStatsPlatform);
+export const GetDeploymentStatsEnvironment$outboundSchema: z.ZodEnum<
+  typeof GetDeploymentStatsEnvironment
+> = z.enum(GetDeploymentStatsEnvironment);
 
 /** @internal */
 export const GetDeploymentStatsStatus$outboundSchema: z.ZodEnum<
@@ -97,7 +97,7 @@ export type GetDeploymentStatsRequest$Outbound = {
   project?: string | undefined;
   deploymentGroup?: string | undefined;
   managerId?: string | undefined;
-  platform?: Array<string> | undefined;
+  environment?: Array<string> | undefined;
   status?: Array<string> | undefined;
   search?: string | undefined;
 };
@@ -111,7 +111,7 @@ export const GetDeploymentStatsRequest$outboundSchema: z.ZodType<
   project: z.string().optional(),
   deploymentGroup: z.string().optional(),
   managerId: z.string().optional(),
-  platform: z.array(GetDeploymentStatsPlatform$outboundSchema).optional(),
+  environment: z.array(GetDeploymentStatsEnvironment$outboundSchema).optional(),
   status: z.array(GetDeploymentStatsStatus$outboundSchema).optional(),
   search: z.string().optional(),
 });

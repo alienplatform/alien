@@ -15,6 +15,13 @@ use super::{is_false, ComputeBackend, DomainMetadata, EnvironmentVariablesSnapsh
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct DeploymentConfig {
+    /// Human-readable deployment name for cloud console metadata.
+    ///
+    /// This is separate from the physical resource prefix in StackState. It is
+    /// used only for display text such as IAM role descriptions, service
+    /// account descriptions, and custom role titles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deployment_name: Option<String>,
     /// User-customizable deployment settings (network, deployment model, approvals).
     /// Provided by customer via CloudFormation, Terraform, CLI, or Helm.
     #[serde(default)]
@@ -30,7 +37,7 @@ pub struct DeploymentConfig {
     /// This requires running with elevated cloud credentials.
     #[serde(default, skip_serializing_if = "is_false")]
     pub allow_frozen_changes: bool,
-    /// Compute backend for Container and Function resources.
+    /// Compute backend for Container and Worker resources.
     /// When None, the platform default is used for cloud platforms.
     /// Contains cluster IDs and management tokens for container orchestration.
     /// Worker runtime credentials are provided through cloud identity and vault-backed secrets.
@@ -41,23 +48,31 @@ pub struct DeploymentConfig {
     /// Optional for cloud platforms (override specific resources).
     #[serde(default)]
     pub external_bindings: ExternalBindings,
-    /// Public URLs for exposed resources (optional override for all platforms).
+    /// Cloud platform that owns imported base infrastructure for a Kubernetes
+    /// runtime deployment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_platform: Option<crate::Platform>,
+    /// Public URLs for exposed resources (optional override).
     ///
-    /// - **Kubernetes**: Pre-computed by Helm from services config (highly recommended)
-    /// - **Cloud**: Optional override of domain_metadata or load balancer DNS
-    /// - **Local**: Optional override of dynamic localhost URLs
+    /// Use this only when a caller already knows the public URL. Managed public
+    /// endpoint flows should prefer `domain_metadata` plus controller-reported
+    /// load balancer outputs so DNS, certificate renewal, and route readiness
+    /// stay tied to the resource state.
     ///
     /// If not set, platforms determine public URLs from other sources:
-    /// - Cloud: domain_metadata FQDN or load balancer DNS
-    /// - Local: http://localhost:{allocated_port}
-    /// - Kubernetes: None (unless provided by Helm)
+    /// - Managed DNS/TLS flows: `domain_metadata` FQDN or load balancer DNS
+    /// - Local: `http://localhost:{allocated_port}`
+    /// - Custom or disabled exposure: no public URL unless a controller reports one
     ///
     /// Key: resource ID, Value: public URL (e.g., "https://api.acme.com")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub public_urls: Option<HashMap<String, String>>,
-    /// Domain metadata for auto-managed public resources (AWS/GCP/Azure).
-    /// Contains certificate data for cloud provider import and renewal detection.
-    /// Not used by Kubernetes (uses TLS Secrets) or Local (no TLS) platforms.
+    /// Domain metadata for auto-managed public resources.
+    ///
+    /// Contains generated hostnames, DNS record state, certificate material,
+    /// and renewal markers for platforms that use managed public endpoints.
+    /// Kubernetes uses this only when its exposure mode is `generated`; BYO and
+    /// disabled Kubernetes exposure do not receive managed domain metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub domain_metadata: Option<DomainMetadata>,
     /// OTLP observability configuration for log export (optional).
@@ -84,8 +99,9 @@ pub struct DeploymentConfig {
     pub deployment_token: Option<String>,
     /// Native image registry host+prefix for platforms that require it.
     ///
-    /// Only Lambda (ECR) and Cloud Run (GAR) require native registry URIs.
-    /// All other platforms pull through the manager's proxy.
+    /// Lambda (ECR) and Cloud Run (GAR) require native registry URIs. Other
+    /// runtimes, including Azure Container Apps, pull through the manager's
+    /// registry proxy.
     ///
     /// Derived by the manager from the artifact registry binding:
     /// - ECR: `{account_id}.dkr.ecr.{region}.amazonaws.com/{repository_prefix}`
@@ -117,7 +133,7 @@ pub struct OtlpConfig {
     /// into all containers. It must be plain (not a vault secret) because alien-runtime
     /// reads `OTEL_EXPORTER_OTLP_HEADERS` at tracing-init time, before vault secrets load.
     ///
-    /// Worker VMs do NOT use this field directly. The ContainerCluster infra
+    /// Worker VMs do NOT use this field directly. The ComputeCluster infra
     /// controller writes the same value to the cloud vault used by the worker
     /// image (GCP: Secret Manager, AWS: Secrets Manager, Azure: Key Vault).
     ///

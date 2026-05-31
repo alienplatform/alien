@@ -4,11 +4,16 @@ use tracing::{debug, info};
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_client_core::ErrorData as CloudClientErrorData;
-use alien_core::{Kv, KvOutputs, ResourceOutputs, ResourceStatus};
+use alien_core::{
+    GcpFirestoreKvHeartbeatData, HeartbeatBackend, Kv, KvHeartbeatData, KvHeartbeatStatus,
+    KvOutputs, ObservedHealth, Platform, ProviderLifecycleState, ResourceHeartbeat,
+    ResourceHeartbeatData, ResourceOutputs, ResourceStatus,
+};
 use alien_error::{AlienError, Context, ContextError as _, IntoAlienError};
-use alien_gcp_clients::firestore::{Database, DatabaseType, FirestoreApi};
+use alien_gcp_clients::firestore::{Database, DatabaseType};
 use alien_gcp_clients::longrunning::OperationResult;
-use alien_macros::{controller, flow_entry, handler, terminal_state};
+use alien_macros::controller;
+use chrono::Utc;
 
 /// Generates the Firestore database name for the KV store.
 ///
@@ -229,10 +234,19 @@ impl GcpKvController {
 
         // Heartbeat: verify Firestore database is still accessible
         match client.get_database(database_name.clone()).await {
-            Ok(_) => Ok(HandlerAction::Continue {
-                state: Ready,
-                suggested_delay: Some(Duration::from_secs(30)),
-            }),
+            Ok(database) => {
+                emit_gcp_firestore_kv_heartbeat(
+                    ctx,
+                    &config.id,
+                    database_name,
+                    database,
+                    &self.project_id,
+                );
+                Ok(HandlerAction::Continue {
+                    state: Ready,
+                    suggested_delay: Some(Duration::from_secs(30)),
+                })
+            }
             Err(e)
                 if matches!(
                     e.error,
@@ -351,6 +365,100 @@ impl GcpKvController {
             )?,
         ))
     }
+}
+
+fn emit_gcp_firestore_kv_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    configured_database_name: &str,
+    database: Database,
+    project_id: &Option<String>,
+) {
+    let database_name = database
+        .name
+        .clone()
+        .unwrap_or_else(|| configured_database_name.to_string());
+    let lifecycle = if database.delete_time.is_some() {
+        ProviderLifecycleState::Deleted
+    } else {
+        ProviderLifecycleState::Running
+    };
+    let health = if database.delete_time.is_some() {
+        ObservedHealth::Unhealthy
+    } else {
+        ObservedHealth::Healthy
+    };
+    let message = Some(match (&database.r#type, &database.location_id) {
+        (Some(database_type), Some(location_id)) => format!(
+            "Firestore database type is {} in {}",
+            serialize_enum(database_type).unwrap_or_else(|| "unknown".to_string()),
+            location_id
+        ),
+        (Some(database_type), None) => format!(
+            "Firestore database type is {}",
+            serialize_enum(database_type).unwrap_or_else(|| "unknown".to_string())
+        ),
+        (None, Some(location_id)) => format!("Firestore database is in {}", location_id),
+        (None, None) => "Firestore database metadata is available".to_string(),
+    });
+
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: Kv::RESOURCE_TYPE,
+        controller_platform: Platform::Gcp,
+        backend: HeartbeatBackend::Gcp,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::Kv(KvHeartbeatData::GcpFirestore(
+            GcpFirestoreKvHeartbeatData {
+                status: KvHeartbeatStatus {
+                    health,
+                    lifecycle,
+                    message,
+                    stale: false,
+                    partial: false,
+                    collection_issues: vec![],
+                },
+                database_name,
+                project_id: project_id.clone(),
+                endpoint: project_id.as_ref().map(|project_id| {
+                    format!(
+                        "https://firestore.googleapis.com/v1/projects/{}/databases/{}",
+                        project_id, configured_database_name
+                    )
+                }),
+                location_id: database.location_id,
+                database_type: serialize_enum_opt(database.r#type),
+                concurrency_mode: serialize_enum_opt(database.concurrency_mode),
+                app_engine_integration_mode: serialize_enum_opt(
+                    database.app_engine_integration_mode,
+                ),
+                delete_protection_state: serialize_enum_opt(database.delete_protection_state),
+                point_in_time_recovery_enablement: serialize_enum_opt(
+                    database.point_in_time_recovery_enablement,
+                ),
+                version_retention_period: database.version_retention_period,
+                earliest_version_time: database.earliest_version_time,
+                create_time: database.create_time,
+                update_time: database.update_time,
+                delete_time: database.delete_time,
+                database_edition: serialize_enum_opt(database.database_edition),
+                cmek_enabled: database.cmek_config.is_some(),
+                source_info_present: database.source_info.is_some(),
+            },
+        )),
+        raw: vec![],
+    });
+}
+
+fn serialize_enum<T: serde::Serialize>(value: &T) -> Option<String> {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|value| value.as_str().map(ToString::to_string))
+}
+
+fn serialize_enum_opt<T: serde::Serialize>(value: Option<T>) -> Option<String> {
+    value.and_then(|value| serialize_enum(&value))
 }
 
 // Separate impl block for helper methods

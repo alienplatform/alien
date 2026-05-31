@@ -18,9 +18,9 @@ use crate::{
     Binding,
 };
 
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::AlienError;
 use async_trait::async_trait;
-use tonic::{transport::Channel, Request, Status};
+use tonic::{transport::Channel, Request};
 
 /// gRPC implementation of the `ArtifactRegistry` trait.
 ///
@@ -63,7 +63,7 @@ impl GrpcArtifactRegistry {
                     .allowed_service_types
                     .iter()
                     .map(|st| match st {
-                        ComputeServiceType::Function => ProtoComputeServiceType::Function as i32,
+                        ComputeServiceType::Worker => ProtoComputeServiceType::Worker as i32,
                     })
                     .collect();
 
@@ -83,7 +83,7 @@ impl GrpcArtifactRegistry {
                     .allowed_service_types
                     .iter()
                     .map(|st| match st {
-                        ComputeServiceType::Function => ProtoComputeServiceType::Function as i32,
+                        ComputeServiceType::Worker => ProtoComputeServiceType::Worker as i32,
                     })
                     .collect();
 
@@ -117,7 +117,7 @@ impl GrpcArtifactRegistry {
             Some(crate::grpc::artifact_registry_service::alien_bindings::artifact_registry::cross_account_access::Access::Aws(aws)) => {
                 let service_types: Vec<ComputeServiceType> = aws.allowed_service_types.iter()
                     .filter_map(|&st| match ProtoComputeServiceType::try_from(st) {
-                        Ok(ProtoComputeServiceType::Function) => Some(ComputeServiceType::Function),
+                        Ok(ProtoComputeServiceType::Worker) => Some(ComputeServiceType::Worker),
                         _ => None,
                     })
                     .collect();
@@ -132,7 +132,7 @@ impl GrpcArtifactRegistry {
             Some(crate::grpc::artifact_registry_service::alien_bindings::artifact_registry::cross_account_access::Access::Gcp(gcp)) => {
                 let service_types: Vec<ComputeServiceType> = gcp.allowed_service_types.iter()
                     .filter_map(|&st| match ProtoComputeServiceType::try_from(st) {
-                        Ok(ProtoComputeServiceType::Function) => Some(ComputeServiceType::Function),
+                        Ok(ProtoComputeServiceType::Worker) => Some(ComputeServiceType::Worker),
                         _ => None,
                     })
                     .collect();

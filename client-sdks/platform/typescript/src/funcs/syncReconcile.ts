@@ -31,7 +31,7 @@ import { Result } from "../types/fp.js";
  */
 export function syncReconcile(
   client: AlienCore,
-  request?: operations.SyncReconcileRequest | undefined,
+  request: operations.SyncReconcileRequest,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -56,7 +56,7 @@ export function syncReconcile(
 
 async function $do(
   client: AlienCore,
-  request?: operations.SyncReconcileRequest | undefined,
+  request: operations.SyncReconcileRequest,
   options?: RequestOptions,
 ): Promise<
   [
@@ -77,22 +77,21 @@ async function $do(
 > {
   const parsed = safeParse(
     request,
-    (value) =>
-      operations.SyncReconcileRequest$outboundSchema.optional().parse(value),
+    (value) => operations.SyncReconcileRequest$outboundSchema.parse(value),
     "Input validation failed",
   );
   if (!parsed.ok) {
     return [parsed, { status: "invalid" }];
   }
   const payload = parsed.value;
-  const body = encodeJSON("body", payload?.SyncReconcileRequest, {
+  const body = encodeJSON("body", payload.SyncReconcileRequest, {
     explode: true,
   });
 
   const path = pathToFunc("/v1/sync/reconcile")();
 
   const query = encodeFormQuery({
-    "workspace": payload?.workspace,
+    "workspace": payload.workspace,
   });
 
   const headers = new Headers(compactMap({

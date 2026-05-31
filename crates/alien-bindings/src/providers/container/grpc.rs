@@ -21,7 +21,6 @@ use proto::{
 
 /// gRPC-based Container implementation that forwards calls to a remote Container service
 pub struct GrpcContainer {
-    client: ContainerServiceClient<Channel>,
     binding_name: String,
     // Cached values for synchronous getters
     internal_url: String,
@@ -101,7 +100,6 @@ impl GrpcContainer {
         };
 
         Ok(Self {
-            client,
             binding_name,
             internal_url,
             public_url,

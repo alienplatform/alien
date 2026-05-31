@@ -5,6 +5,8 @@
   "platforms": {
     "aws": [
       {
+        "label": "send-sqs-messages",
+        "description": "Send, acknowledge, and inspect messages in application-owned SQS queues.",
         "grant": {
           "actions": [
             "sqs:SendMessage",
@@ -26,30 +28,38 @@
     ],
     "gcp": [
       {
+        "label": "publish-pubsub-messages",
+        "description": "Publish messages to application-owned Pub/Sub topics.",
         "grant": {
-          "permissions": [
-            "pubsub.topics.publish",
-            "pubsub.subscriptions.consume",
-            "pubsub.subscriptions.get"
-          ]
+          "predefinedRoles": ["roles/pubsub.publisher"]
         },
-        // GCP IAM conditions with resource.type/resource.name do not evaluate correctly
-        // for pubsub.topics.publish and pubsub.subscriptions.consume at runtime.
-        // Access is scoped per-stack via the service account identity instead.
         "binding": {
           "stack": { "scope": "projects/${projectName}" },
-          "resource": { "scope": "projects/${projectName}" }
+          "resource": {
+            "scope": "projects/${projectName}/topics/${resourceName}"
+          }
+        }
+      },
+      {
+        "label": "acknowledge-pubsub-messages",
+        "description": "Acknowledge and inspect messages on application-owned Pub/Sub subscriptions.",
+        "grant": {
+          "predefinedRoles": ["roles/pubsub.subscriber", "roles/pubsub.viewer"]
+        },
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": {
+            "scope": "projects/${projectName}/subscriptions/${resourceName}"
+          }
         }
       }
     ],
     "azure": [
       {
+        "label": "send-service-bus-messages",
+        "description": "Send messages to application-owned Azure Service Bus queues.",
         "grant": {
-          "actions": [
-            "Microsoft.ServiceBus/namespaces/read",
-            "Microsoft.ServiceBus/namespaces/queues/read"
-          ],
-          "dataActions": ["Microsoft.ServiceBus/namespaces/messages/send/action"]
+          "predefinedRoles": ["Azure Service Bus Data Sender"]
         },
         "binding": {
           "stack": {

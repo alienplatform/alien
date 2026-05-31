@@ -10,7 +10,7 @@ use alien_core::{Container, Platform, ResourceLifecycle, Stack};
 /// - Certificate renewal (if public)
 /// - Scaling
 ///
-/// Unlike functions, containers cannot be "setup once and frozen" - they are
+/// Unlike workers, containers cannot be "setup once and frozen" - they are
 /// long-running processes that require ongoing management.
 ///
 /// **Rule:** All containers must have `Live` lifecycle.

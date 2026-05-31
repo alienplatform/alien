@@ -4971,6 +4971,57 @@ pub struct ManagedInstanceLastAttemptErrorsErrors {
     /// Error message.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+
+    /// Structured error details, including quota information when present.
+    #[builder(default)]
+    #[serde(
+        default,
+        rename = "errorDetails",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub error_details: Vec<ManagedInstanceLastAttemptErrorDetail>,
+}
+
+/// Structured details for a managed instance last-attempt error.
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedInstanceLastAttemptErrorDetail {
+    /// Quota details for quota-related errors.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quota_info: Option<ManagedInstanceLastAttemptQuotaInfo>,
+    /// Localized error message.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub localized_message: Option<ManagedInstanceLastAttemptLocalizedMessage>,
+}
+
+/// Quota details for a managed instance last-attempt error.
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedInstanceLastAttemptQuotaInfo {
+    /// Compute Engine quota metric name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metric_name: Option<String>,
+    /// Compute Engine quota limit name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit_name: Option<String>,
+    /// Current effective quota limit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<f64>,
+    /// Future quota limit being rolled out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub future_limit: Option<f64>,
+}
+
+/// Localized message for a managed instance last-attempt error.
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedInstanceLastAttemptLocalizedMessage {
+    /// Message locale.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub locale: Option<String>,
+    /// Localized message text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 /// Version information for a managed instance.

@@ -8,10 +8,12 @@
 //! 5. Releases the lock (via `DeploymentStore::release`)
 
 use std::collections::HashMap;
+use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use futures::{stream, FutureExt, StreamExt};
 use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
 
@@ -35,8 +37,20 @@ use crate::transports::ManagerTransport;
 
 /// Maximum number of step() calls per deployment per tick.
 const MAX_STEPS_PER_TICK: usize = 100;
+/// Maximum number of deployments to process concurrently per tick.
+const MAX_CONCURRENT_DEPLOYMENTS: usize = 4;
 /// Suggested delay threshold (ms) — if step suggests waiting longer, yield.
 const SUGGESTED_DELAY_THRESHOLD_MS: u64 = 500;
+
+fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> &str {
+    if let Some(message) = payload.downcast_ref::<&'static str>() {
+        message
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.as_str()
+    } else {
+        "<non-string panic payload>"
+    }
+}
 
 fn active_work_statuses() -> Vec<String> {
     vec![
@@ -51,6 +65,25 @@ fn active_work_statuses() -> Vec<String> {
     .into_iter()
     .map(String::from)
     .collect()
+}
+
+fn retryable_failed_statuses() -> Vec<String> {
+    vec![
+        "initial-setup-failed",
+        "provisioning-failed",
+        "refresh-failed",
+        "update-failed",
+        "delete-failed",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect()
+}
+
+fn manager_candidate_statuses() -> Vec<String> {
+    let mut statuses = active_work_statuses();
+    statuses.extend(retryable_failed_statuses());
+    statuses
 }
 
 fn get_or_create_local_bindings_provider(
@@ -122,7 +155,12 @@ impl DeploymentLoop {
         );
 
         loop {
-            self.tick().await;
+            if let Err(payload) = AssertUnwindSafe(self.tick()).catch_unwind().await {
+                error!(
+                    panic = panic_payload_message(payload.as_ref()),
+                    "Deployment loop tick panicked"
+                );
+            }
             tokio::time::sleep(Duration::from_secs(self.config.deployment_interval_secs)).await;
         }
     }
@@ -133,7 +171,7 @@ impl DeploymentLoop {
 
         // Acquire deployments that need work.
         let filter = DeploymentFilter {
-            statuses: Some(active_work_statuses()),
+            statuses: Some(manager_candidate_statuses()),
             platforms: if self.config.targets.is_empty() {
                 None
             } else {
@@ -155,9 +193,11 @@ impl DeploymentLoop {
                 if !acquired.is_empty() {
                     debug!(count = acquired.len(), session = %session, "Acquired deployments");
                 }
-                for item in acquired {
-                    self.process_deployment(item.deployment, &session).await;
-                }
+                stream::iter(acquired)
+                    .for_each_concurrent(MAX_CONCURRENT_DEPLOYMENTS, |item| async {
+                        self.process_deployment(item.deployment, &session).await;
+                    })
+                    .await;
             }
             Err(e) => {
                 error!(error = %e, "Failed to acquire deployments");
@@ -308,19 +348,8 @@ impl DeploymentLoop {
             environment_info: deployment.environment_info.clone(),
             runtime_metadata: deployment.runtime_metadata.clone(),
             retry_requested: deployment.retry_requested,
-            protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+            protocol_version: deployment.deployment_protocol_version,
         };
-
-        // Clear retry_requested flag before running. Loop context — no
-        // inbound caller; `Subject::system()` is the documented synthetic
-        // operator for these calls.
-        if deployment.retry_requested {
-            let caller = Subject::system();
-            self.deployment_store
-                .set_retry_requested(&caller, &deployment_id)
-                .await?;
-            state.retry_requested = true;
-        }
 
         // 4. Build environment variables.
         let environment_variables = self
@@ -351,35 +380,50 @@ impl DeploymentLoop {
             }
         };
 
-        // Deployment token for registry pull auth.
-        // Source of truth: DeploymentRecord.deployment_token field.
-        // - Standalone: set during deployment creation (POST /deployments)
-        // - Platform: extracted from sync/acquire response
-        // - Agent: set from Authorization header in sync handler
-        let deployment_token = deployment.deployment_token.clone();
+        let native_image_host = crate::registry_access::derive_native_image_host(
+            &self.server_bindings.bindings_provider,
+            &self.server_bindings.target_bindings_providers,
+            &deployment.platform,
+        )
+        .await;
 
-        let config = DeploymentConfig {
-            stack_settings: deployment.stack_settings.clone(),
-            management_config,
-            environment_variables,
-            allow_frozen_changes: false,
-            compute_backend: None,
-            external_bindings: deployment
-                .stack_settings
-                .external_bindings
-                .clone()
-                .unwrap_or_default(),
-            public_urls: None,
-            domain_metadata: None,
-            monitoring: None,
-            manager_url: Some(self.config.base_url()),
-            deployment_token,
-            native_image_host: crate::registry_access::derive_native_image_host(
-                &self.server_bindings.bindings_provider,
-                &self.server_bindings.target_bindings_providers,
-                &deployment.platform,
-            )
-            .await,
+        let config = if let Some(mut config) = deployment.deployment_config.clone() {
+            if config.deployment_name.is_none() {
+                config.deployment_name = Some(deployment.name.clone());
+            }
+            if config.management_config.is_none() {
+                config.management_config = management_config;
+            }
+            if config.deployment_token.is_none() {
+                config.deployment_token = deployment.deployment_token.clone();
+            }
+            if config.base_platform.is_none() {
+                config.base_platform = deployment.base_platform;
+            }
+            config.manager_url = Some(self.config.base_url());
+            config.native_image_host = native_image_host;
+            config
+        } else {
+            DeploymentConfig {
+                deployment_name: Some(deployment.name.clone()),
+                stack_settings: deployment.stack_settings.clone(),
+                management_config,
+                environment_variables,
+                allow_frozen_changes: false,
+                compute_backend: None,
+                external_bindings: deployment
+                    .stack_settings
+                    .external_bindings
+                    .clone()
+                    .unwrap_or_default(),
+                base_platform: deployment.base_platform,
+                public_urls: None,
+                domain_metadata: None,
+                monitoring: None,
+                manager_url: Some(self.config.base_url()),
+                deployment_token: deployment.deployment_token.clone(),
+                native_image_host,
+            }
         };
 
         // 6. Build service provider.
@@ -497,7 +541,7 @@ impl DeploymentLoop {
     /// Derive the native image host for Lambda/Cloud Run deployments.
     ///
     /// Lambda requires ECR URIs and Cloud Run requires GAR URIs — they can't pull
-    /// Build the environment variables snapshot injected into containers/functions.
+    /// Build the environment variables snapshot injected into containers/workers.
     ///
     /// Includes:
     /// - `ALIEN_DEPLOYMENT_ID`
@@ -542,7 +586,7 @@ impl DeploymentLoop {
         }
 
         // 3. Commands configuration — only inject polling for K8s/Local.
-        // Cloud functions (Lambda, Cloud Run, Container Apps) receive commands via
+        // Cloud workers (Lambda, Cloud Run, Container Apps) receive commands via
         // platform-native push (InvokeFunction, Pub/Sub, Service Bus) — no polling needed,
         // regardless of deployment model. K8s/Local run as containers that must poll.
         let needs_polling = matches!(
@@ -608,8 +652,8 @@ impl DeploymentLoop {
 #[cfg(test)]
 mod tests {
     use super::{
-        active_work_statuses, get_or_create_local_bindings_provider, needs_provision_capability,
-        parse_status,
+        active_work_statuses, get_or_create_local_bindings_provider, manager_candidate_statuses,
+        needs_provision_capability, parse_status, retryable_failed_statuses,
     };
     use alien_core::DeploymentStatus;
     use alien_deployment::loop_contract::{classify_status, LoopOperation};
@@ -646,13 +690,44 @@ mod tests {
             "deleted",
             "initial-setup-failed",
             "provisioning-failed",
+            "refresh-failed",
             "update-failed",
             "delete-failed",
-            "refresh-failed",
         ] {
             assert!(
                 !statuses.iter().any(|s| s == excluded),
                 "{excluded} should NOT be in active_work_statuses"
+            );
+        }
+    }
+
+    #[test]
+    fn retryable_failed_statuses_include_manual_retry_candidates() {
+        let statuses = retryable_failed_statuses();
+        for included in [
+            "initial-setup-failed",
+            "provisioning-failed",
+            "refresh-failed",
+            "update-failed",
+            "delete-failed",
+        ] {
+            assert!(
+                statuses.iter().any(|s| s == included),
+                "{included} should be a retryable failed status"
+            );
+        }
+    }
+
+    #[test]
+    fn manager_candidate_statuses_are_active_plus_retryable_failed() {
+        let active = active_work_statuses();
+        let retryable = retryable_failed_statuses();
+        let candidates = manager_candidate_statuses();
+
+        for status in active.iter().chain(retryable.iter()) {
+            assert!(
+                candidates.iter().any(|candidate| candidate == status),
+                "{status} should be a manager acquisition candidate"
             );
         }
     }
@@ -689,9 +764,9 @@ mod tests {
     #[test]
     fn only_bootstrap_statuses_need_provision_capability() {
         assert!(needs_provision_capability(DeploymentStatus::Pending));
-        assert!(needs_provision_capability(DeploymentStatus::InitialSetup));
 
         for status in [
+            DeploymentStatus::InitialSetup,
             DeploymentStatus::Provisioning,
             DeploymentStatus::UpdatePending,
             DeploymentStatus::Updating,
@@ -767,10 +842,7 @@ mod tests {
 }
 
 fn needs_provision_capability(status: DeploymentStatus) -> bool {
-    matches!(
-        status,
-        DeploymentStatus::Pending | DeploymentStatus::InitialSetup
-    )
+    matches!(status, DeploymentStatus::Pending)
 }
 
 /// Parse a status string (kebab-case, as stored in the DB) to `DeploymentStatus`.

@@ -23,7 +23,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     core::{
-        state_utils::StackResourceStateExt, DefaultPlatformServiceProvider,
+        state_utils::StackResourceStateExt, DefaultPlatformServiceProvider, HeartbeatCollector,
         PlatformServiceProvider, ResourceControllerContext, ResourceControllerStepResult,
         ResourceRegistry,
     },
@@ -31,8 +31,8 @@ use crate::{
 };
 use alien_core::ClientConfig;
 use alien_core::{
-    alien_event, AlienEvent, Resource, ResourceLifecycle, ResourceRef, ResourceStatus, Stack,
-    StackResourceState, StackState,
+    alien_event, AlienEvent, Platform, Resource, ResourceHeartbeat, ResourceLifecycle, ResourceRef,
+    ResourceStatus, Stack, StackResourceState, StackState,
 };
 
 /// Represents the outcome of a planning phase, identifying necessary changes.
@@ -59,6 +59,9 @@ pub struct StepResult {
     /// This is the minimum delay suggested by any resource processed in this step,
     /// so we poll again as soon as the fastest resource is ready.
     pub suggested_delay_ms: Option<u64>,
+    /// Typed heartbeats emitted while executing this stack step.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub heartbeats: Vec<ResourceHeartbeat>,
 }
 
 /// Result of run_until_synced that includes the final state even on failure
@@ -113,10 +116,7 @@ pub struct StackExecutor {
     id_to_node_index: HashMap<String, NodeIndex>,
     node_index_to_id: HashMap<NodeIndex, String>,
     lifecycle_filter: Option<HashSet<ResourceLifecycle>>,
-    /// Resource IDs that were excluded by the lifecycle filter but ARE in the
-    /// desired stack. These must not be removed from state — other in-scope
-    /// resources may depend on them.
-    filtered_out_ids: HashSet<String>,
+    step_running_resources: bool,
     desired_stack: Stack,
 
     // --- Stored from config for use during step() ---
@@ -127,6 +127,28 @@ pub struct StackExecutor {
 }
 
 const MAX_RETRIES: u32 = 10;
+
+fn controller_platform_for_entry(
+    stack_platform: Platform,
+    base_platform: Option<Platform>,
+    lifecycle: ResourceLifecycle,
+) -> Platform {
+    if stack_platform == Platform::Kubernetes && lifecycle == ResourceLifecycle::Frozen {
+        base_platform.unwrap_or(stack_platform)
+    } else {
+        stack_platform
+    }
+}
+
+fn controller_platform_for_state(stack_platform: Platform, state: &StackResourceState) -> Platform {
+    state.controller_platform.unwrap_or_else(|| {
+        controller_platform_for_entry(
+            stack_platform,
+            None,
+            state.lifecycle.unwrap_or(ResourceLifecycle::Live),
+        )
+    })
+}
 
 fn is_best_effort_delete_error(err: &AlienError<ErrorData>) -> bool {
     is_best_effort_delete_code(&err.code, err.http_status_code)
@@ -147,6 +169,18 @@ fn is_best_effort_delete_source(err: &AlienError<GenericError>) -> bool {
 fn is_best_effort_delete_code(code: &str, http_status_code: Option<u16>) -> bool {
     matches!(http_status_code, Some(401 | 403 | 404))
         || matches!(code, "REMOTE_RESOURCE_NOT_FOUND" | "REMOTE_ACCESS_DENIED")
+}
+
+fn validate_stack_controller_state_versions(state: &StackState) -> Result<()> {
+    for (resource_id, resource_state) in &state.resources {
+        if let Some(value) = &resource_state.internal_state {
+            crate::core::validate_controller_state_value(value, Some(resource_id))?;
+        }
+        if let Some(value) = &resource_state.last_failed_state {
+            crate::core::validate_controller_state_value(value, Some(resource_id))?;
+        }
+    }
+    Ok(())
 }
 
 /// Configuration for creating a [`StackExecutor`] via the builder pattern.
@@ -174,6 +208,10 @@ pub struct StackExecutorConfig<'a> {
 
     /// Lifecycle filter - only resources with matching lifecycle are processed
     lifecycle_filter: Option<Vec<ResourceLifecycle>>,
+
+    /// Whether resources that are already Running should execute their Ready handler.
+    #[builder(default = true)]
+    step_running_resources: bool,
 
     /// Custom resource registry (defaults to built-in registry)
     #[builder(default = Arc::new(ResourceRegistry::with_built_ins()))]
@@ -249,7 +287,9 @@ impl StackExecutor {
         let service_provider = config.service_provider;
         let deployment_config = config.deployment_config.clone();
         let lifecycle_filter = config.lifecycle_filter;
+        let step_running_resources = config.step_running_resources;
         let platform = client_config.platform();
+        let base_platform = deployment_config.base_platform;
 
         let mut graph = DiGraph::<String, ()>::new();
         let mut resource_map = HashMap::new();
@@ -312,11 +352,13 @@ impl StackExecutor {
 
             // Ensure that a controller exists for the resource on the specified platform.
             let resource_type = resource_entry.config.resource_type();
+            let controller_platform =
+                controller_platform_for_entry(platform, base_platform, resource_entry.lifecycle);
             resource_registry
-                .get_controller(resource_type.clone(), platform)
+                .get_controller(resource_type.clone(), controller_platform)
                 .context(ErrorData::ControllerNotAvailable {
                     resource_type,
-                    platform,
+                    platform: controller_platform,
                 })?;
         }
 
@@ -374,7 +416,7 @@ impl StackExecutor {
             id_to_node_index: id_to_node,
             node_index_to_id: node_to_id,
             lifecycle_filter: filter_set,
-            filtered_out_ids,
+            step_running_resources,
             desired_stack: stack.clone(),
             client_config,
             resource_registry,
@@ -458,7 +500,7 @@ impl StackExecutor {
                         if matches!(
                             view.status,
                             ResourceStatus::Running | ResourceStatus::Deleted
-                        ) => {}
+                        ) || self.should_step_out_of_scope_resource(dep_id, view) => {}
                     _ => {
                         return Err(AlienError::new(ErrorData::DependencyNotReady {
                             resource_id: res_id.to_string(),
@@ -687,16 +729,16 @@ impl StackExecutor {
                                 );
                             }
                             ResourceStatus::Provisioning => {
-                                // Delete-then-recreate: the resource is stuck mid-provisioning
-                                // with stale config. Since transition_to_delete_start() is now
-                                // unconditional, we can safely interrupt it.
+                                // Do not interrupt a create that is already in flight. Desired
+                                // config can legitimately drift while a controller is still
+                                // provisioning, for example when deployment-level env injection
+                                // gains concrete runtime values. Let the create finish or fail;
+                                // once stable, the normal update/failure recovery path reconciles
+                                // the latest desired config.
                                 info!(
-                                    "Config changed for '{}' during Provisioning, planning delete-then-recreate",
+                                    "Config changed for '{}' during Provisioning, deferring until resource is stable",
                                     resource_id
                                 );
-                                plan_result.deletes.push(resource_id.clone());
-                                plan_result.creates.retain(|id| id != resource_id);
-                                plan_result.updates.remove(resource_id);
                             }
                             _ => {
                                 // Updating, Deleting -- wait for stable before acting
@@ -800,6 +842,25 @@ impl StackExecutor {
         Ok(plan_result)
     }
 
+    fn should_step_out_of_scope_resource(
+        &self,
+        resource_id: &str,
+        resource_view: &StackResourceState,
+    ) -> bool {
+        if self.lifecycle_filter.is_none()
+            || self.resources.contains_key(resource_id)
+            || self.is_external_binding_resource(resource_id)
+        {
+            return false;
+        }
+
+        if resource_view.status == ResourceStatus::Running {
+            return self.step_running_resources;
+        }
+
+        resource_view.status != ResourceStatus::Pending && !resource_view.status.is_terminal()
+    }
+
     /// Performs one *incremental* reconciliation iteration.
     ///
     /// 1. Runs [`plan`] to identify high-level transitions and inject them into
@@ -823,6 +884,8 @@ impl StackExecutor {
         suggested_delay_ms: None,
     })]
     pub async fn step(&self, state: StackState) -> Result<StepResult> {
+        validate_stack_controller_state_versions(&state)?;
+
         let mut next_state = state.clone(); // Clone the input state to modify
 
         // --- Planning Phase ---
@@ -912,6 +975,12 @@ impl StackExecutor {
                 resource_lifecycle,
                 desired_config.dependencies.clone(),
             );
+            let mut pending_view = pending_view;
+            pending_view.controller_platform = Some(controller_platform_for_entry(
+                next_state.platform,
+                self.deployment_config.base_platform,
+                desired_config.lifecycle,
+            ));
             initial_transitions.insert(resource_id.clone(), pending_view);
         }
 
@@ -932,6 +1001,7 @@ impl StackExecutor {
                     // so we can interrupt a mid-provisioning resource when its config changed.
                     ResourceStatus::Running
                     | ResourceStatus::Provisioning
+                    | ResourceStatus::Updating
                     | ResourceStatus::ProvisionFailed
                     | ResourceStatus::UpdateFailed
                     | ResourceStatus::DeleteFailed => {
@@ -1035,7 +1105,6 @@ impl StackExecutor {
                             resource_state.status
                         );
                     }
-                    // Updating - let the current operation finish or fail first.
                     _ => {
                         warn!(
                             "Planned delete for resource in {:?} status, waiting for stabilization",
@@ -1192,17 +1261,19 @@ impl StackExecutor {
                 }
             }
 
-            // When a lifecycle filter is active, only step resources in that scope.
-            // Live-only deletes must not continue a frozen resource delete that was
-            // started by a previous full cleanup attempt; the current credentials may
-            // not have access to that resource.
+            // Lifecycle filters define mutation scope. Already-running managed
+            // resources can still run Ready handlers because their health and
+            // management work may be required by in-scope dependents.
+            let should_step_out_of_scope_resource =
+                self.should_step_out_of_scope_resource(resource_id, current_resource_view);
+
             if let Some(filter_set) = &self.lifecycle_filter {
                 let resource_in_scope = self.resources.contains_key(resource_id)
                     || current_resource_view
                         .lifecycle
                         .is_some_and(|lifecycle| filter_set.contains(&lifecycle));
 
-                if !resource_in_scope {
+                if !resource_in_scope && !should_step_out_of_scope_resource {
                     continue;
                 }
             }
@@ -1223,6 +1294,8 @@ impl StackExecutor {
                 // Running resources should always be stepped to run their Ready handler.
                 // This is important for local platform where ephemeral state (ports, URLs)
                 // needs to be refreshed after restart, even if config hasn't changed.
+                self.step_running_resources
+            } else if should_step_out_of_scope_resource {
                 true
             } else {
                 // Check dependencies only if the resource is defined in the target graph
@@ -1246,6 +1319,7 @@ impl StackExecutor {
         }
 
         // Process each ready resource by stepping its state machine
+        let heartbeat_collector = HeartbeatCollector::default();
         for resource_id in ready_resource_ids {
             // Get current resource state (may be updated during initialization)
             let mut current_resource_state = next_state
@@ -1284,9 +1358,11 @@ impl StackExecutor {
 
                 // Get the controller for this resource type
                 let resource_type = context_resource.resource_type();
+                let controller_platform =
+                    controller_platform_for_state(next_state.platform, &current_resource_state);
                 let controller = self
                     .resource_registry
-                    .get_controller(resource_type, next_state.platform)?;
+                    .get_controller(resource_type, controller_platform)?;
 
                 // Controllers now implement Default, so we get a fresh instance with the default state
                 let initial_status = controller.get_status();
@@ -1296,6 +1372,7 @@ impl StackExecutor {
                 current_resource_state.set_internal_controller(Some(controller))?;
                 current_resource_state.status = initial_status;
                 current_resource_state.outputs = initial_outputs;
+                current_resource_state.controller_platform = Some(controller_platform);
                 current_resource_state.error = None;
                 current_resource_state.retry_attempt = 0;
 
@@ -1322,16 +1399,29 @@ impl StackExecutor {
                 continue;
             }
 
+            let controller_platform =
+                controller_platform_for_state(next_state.platform, &current_resource_state);
+            let controller_client_config = self
+                .client_config
+                .config_for_platform(controller_platform)
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::ClientConfigMismatch {
+                        required_platform: controller_platform,
+                        found_platform: self.client_config.platform(),
+                    })
+                })?;
+
             let context = ResourceControllerContext {
                 desired_config: &context_resource,
-                platform: next_state.platform,
-                client_config: self.client_config.clone(),
+                platform: controller_platform,
+                client_config: controller_client_config,
                 state: &next_state,
                 resource_prefix: &next_state.resource_prefix,
                 registry: &self.resource_registry,
                 desired_stack: &self.desired_stack,
                 service_provider: &self.service_provider,
                 deployment_config: &self.deployment_config,
+                heartbeat_collector: heartbeat_collector.clone(),
             };
 
             // Use the *original* current_resource_state (before potential initialization changes below)
@@ -1519,6 +1609,7 @@ impl StackExecutor {
         let step_result = StepResult {
             next_state: next_state.clone(),
             suggested_delay_ms: min_delay.map(|d| d.as_millis() as u64),
+            heartbeats: heartbeat_collector.drain(),
         };
 
         // Update the event with final results
@@ -1846,7 +1937,7 @@ impl StackExecutor {
                 Some(filter_set) => {
                     if !filter_set.contains(&lifecycle) {
                         // Resource outside filter – executor not responsible.
-                        true
+                        !self.should_step_out_of_scope_resource(res_id, view)
                     } else if view.status == ResourceStatus::Deleted
                         || view.status == ResourceStatus::DeleteFailed
                     {

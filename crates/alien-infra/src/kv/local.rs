@@ -3,9 +3,14 @@ use tracing::{debug, info};
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use alien_core::{Kv, KvOutputs, ResourceOutputs, ResourceStatus};
+use alien_core::{
+    HeartbeatBackend, HeartbeatCollectionIssueReason, Kv, KvHeartbeatData, KvHeartbeatStatus,
+    KvOutputs, LocalKvHeartbeatData, ObservedHealth, Platform, ProviderLifecycleState,
+    ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs, ResourceStatus,
+};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_macros::controller;
+use chrono::Utc;
 
 #[controller]
 pub struct LocalKvController {
@@ -80,6 +85,15 @@ impl LocalKvController {
                 message: format!("KV health check failed for '{}'", config.id),
                 resource_id: Some(config.id.clone()),
             })?;
+
+        let kv_path = self.kv_path.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                resource_id: Some(config.id.clone()),
+                message: "KV path not set in state".to_string(),
+            })
+        })?;
+
+        emit_local_kv_heartbeat(ctx, &config.id, kv_path);
 
         debug!(kv_id=%config.id, "KV health check passed");
 
@@ -191,6 +205,54 @@ impl LocalKvController {
             Ok(None)
         }
     }
+}
+
+fn emit_local_kv_heartbeat(ctx: &ResourceControllerContext<'_>, resource_id: &str, kv_path: &str) {
+    let metadata = std::fs::metadata(kv_path).ok();
+    let path_exists = metadata.is_some();
+    let is_directory = metadata.as_ref().map(|metadata| metadata.is_dir());
+    let path_message = if path_exists {
+        "Local KV backing path is reachable"
+    } else {
+        "Local KV manager is healthy, but backing path metadata is not reachable"
+    };
+
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: Kv::RESOURCE_TYPE,
+        controller_platform: Platform::Local,
+        backend: HeartbeatBackend::Local,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::Kv(KvHeartbeatData::Local(LocalKvHeartbeatData {
+            status: KvHeartbeatStatus {
+                health: ObservedHealth::Healthy,
+                lifecycle: ProviderLifecycleState::Running,
+                message: Some(path_message.to_string()),
+                stale: false,
+                partial: !path_exists,
+                collection_issues: if path_exists {
+                    vec![]
+                } else {
+                    vec![alien_core::HeartbeatCollectionIssue {
+                        source: "path-metadata".to_string(),
+                        reason: HeartbeatCollectionIssueReason::CollectionFailed,
+                        severity: alien_core::HeartbeatIssueSeverity::Warning,
+                        message: format!(
+                            "Failed to read metadata for local KV backing path '{}'",
+                            kv_path
+                        ),
+                    }]
+                },
+            },
+            name: resource_id.to_string(),
+            path: kv_path.to_string(),
+            path_exists,
+            is_directory,
+            cloud_metadata_supported: false,
+        })),
+        raw: vec![],
+    });
 }
 
 impl LocalKvController {

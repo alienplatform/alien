@@ -7,15 +7,15 @@
 
 use crate::template::{CfExpression, CfResource};
 use alien_core::{
-    import::EmitContext, ErrorData, Function, Network, NetworkSettings, Queue, ResourceDefinition,
-    ResourceRef, ResourceType, Result, ServiceAccount, Storage, Vault, ALIEN_MANAGED_BY_TAG_KEY,
+    import::EmitContext, ErrorData, Network, NetworkSettings, ResourceDefinition, ResourceRef,
+    ResourceType, Result, ServiceAccount, Storage, Worker, ALIEN_MANAGED_BY_TAG_KEY,
     ALIEN_MANAGED_BY_TAG_VALUE, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
 };
 use alien_error::AlienError;
 use indexmap::IndexMap;
 use serde_json::Value as JsonValue;
+use std::collections::BTreeSet;
 
-pub const PARAM_DEPLOYMENT_GROUP_TOKEN: &str = "DeploymentGroupToken";
 pub const PARAM_MANAGING_ROLE_ARN: &str = "ManagingRoleArn";
 pub const PARAM_MANAGING_ACCOUNT_ID: &str = "ManagingAccountId";
 pub const PARAM_VPC_CIDR: &str = "VpcCidr";
@@ -25,9 +25,13 @@ pub const PARAM_SECURITY_GROUP_IDS: &str = "SecurityGroupIds";
 
 pub const CONDITION_NETWORK_CREATE_AZ2: &str = "NetworkCreateUseAz2";
 pub const CONDITION_NETWORK_CREATE_AZ3: &str = "NetworkCreateUseAz3";
+const CONDITION_NETWORK_AZ2: &str = "NetworkUseAz2";
+const CONDITION_NETWORK_AZ3: &str = "NetworkUseAz3";
 pub const CONDITION_HAS_VPC_CIDR: &str = "HasVpcCidr";
+const CONDITION_NETWORK_MODE_CREATE: &str = "NetworkModeCreate";
+const CONDITION_NETWORK_MODE_USE_EXISTING: &str = "NetworkModeUseExisting";
 
-pub const INLINE_POLICY_NAME: &str = "alien-managed-policy";
+pub const INLINE_POLICY_NAME: &str = "deployment-permissions";
 
 /// Downcast `ctx.resource.config` to the typed resource definition or return
 /// a typed `UnexpectedResourceType` error.
@@ -77,14 +81,14 @@ pub fn stack_name(suffix: &str) -> CfExpression {
     CfExpression::sub(format!("${{AWS::StackName}}-{suffix}"))
 }
 
-/// Standard Alien resource tags.
+/// Standard resource tags.
 pub fn tags(ctx: &EmitContext<'_>) -> CfExpression {
     CfExpression::list([
         tag(ALIEN_MANAGED_BY_TAG_KEY, ALIEN_MANAGED_BY_TAG_VALUE),
         tag_expr(ALIEN_STACK_TAG_KEY, CfExpression::ref_("AWS::StackName")),
         tag(ALIEN_RESOURCE_TAG_KEY, ctx.resource_id),
         tag(
-            "AlienResourceType",
+            "resource-type",
             ctx.resource.config.resource_type().as_ref(),
         ),
     ])
@@ -125,6 +129,37 @@ where
             ])]),
         ),
     ])
+}
+
+pub fn uniquify_iam_statement_sids(statements: Vec<CfExpression>) -> Vec<CfExpression> {
+    let mut used_sids = BTreeSet::new();
+
+    statements
+        .into_iter()
+        .map(|statement| {
+            let CfExpression::Object(mut statement_object) = statement else {
+                return statement;
+            };
+            let Some(CfExpression::String(sid)) = statement_object.get_mut("Sid") else {
+                return CfExpression::Object(statement_object);
+            };
+
+            let base_sid = sid.clone();
+            if used_sids.insert(base_sid.clone()) {
+                return CfExpression::Object(statement_object);
+            }
+
+            let mut suffix = 2usize;
+            loop {
+                let candidate = format!("{base_sid}{suffix}");
+                if used_sids.insert(candidate.clone()) {
+                    *sid = candidate;
+                    return CfExpression::Object(statement_object);
+                }
+                suffix += 1;
+            }
+        })
+        .collect()
 }
 
 /// `Fn::GetAZs` → list of availability zones for the active region.
@@ -178,25 +213,33 @@ pub fn availability_zone_names() -> CfExpression {
     CfExpression::list([
         select(0, get_azs()),
         CfExpression::if_(
-            CONDITION_NETWORK_CREATE_AZ2,
+            CONDITION_NETWORK_AZ2,
             select(1, get_azs()),
             CfExpression::no_value(),
         ),
         CfExpression::if_(
-            CONDITION_NETWORK_CREATE_AZ3,
+            CONDITION_NETWORK_AZ3,
             select(2, get_azs()),
             CfExpression::no_value(),
         ),
     ])
 }
 
-/// VPC ID expression — created VPC ref, BYO VPC parameter, or nothing.
+/// VPC ID expression: created VPC ref, existing VPC parameter, or nothing.
 pub fn vpc_id_expr(ctx: &EmitContext<'_>) -> CfExpression {
     let Some((network_id, network)) = default_network(ctx) else {
         return CfExpression::ref_("VpcId");
     };
     match &network.settings {
-        NetworkSettings::Create { .. } => CfExpression::ref_(format!("{network_id}Vpc")),
+        NetworkSettings::Create { .. } => CfExpression::if_(
+            CONDITION_NETWORK_MODE_CREATE,
+            CfExpression::ref_(format!("{network_id}Vpc")),
+            CfExpression::if_(
+                CONDITION_NETWORK_MODE_USE_EXISTING,
+                CfExpression::ref_("VpcId"),
+                CfExpression::no_value(),
+            ),
+        ),
         NetworkSettings::UseDefault
         | NetworkSettings::ByoVpcAws { .. }
         | NetworkSettings::ByoVpcGcp { .. }
@@ -205,13 +248,21 @@ pub fn vpc_id_expr(ctx: &EmitContext<'_>) -> CfExpression {
 }
 
 /// Private subnet IDs expression — uses created VPC subnets when this
-/// stack creates the VPC, BYO parameter otherwise.
+/// stack creates the VPC, existing subnet parameter otherwise.
 pub fn private_subnet_ids_expr(ctx: &EmitContext<'_>) -> CfExpression {
     let Some((network_id, network)) = default_network(ctx) else {
         return CfExpression::ref_(PARAM_PRIVATE_SUBNET_IDS);
     };
     match &network.settings {
-        NetworkSettings::Create { .. } => subnet_refs(network_id, "PrivateSubnet"),
+        NetworkSettings::Create { .. } => CfExpression::if_(
+            CONDITION_NETWORK_MODE_CREATE,
+            subnet_refs(network_id, "PrivateSubnet"),
+            CfExpression::if_(
+                CONDITION_NETWORK_MODE_USE_EXISTING,
+                CfExpression::ref_(PARAM_PRIVATE_SUBNET_IDS),
+                CfExpression::no_value(),
+            ),
+        ),
         NetworkSettings::UseDefault
         | NetworkSettings::ByoVpcAws { .. }
         | NetworkSettings::ByoVpcGcp { .. }
@@ -219,15 +270,48 @@ pub fn private_subnet_ids_expr(ctx: &EmitContext<'_>) -> CfExpression {
     }
 }
 
-/// Security-group IDs expression — created SG ref or BYO parameter.
+/// Public subnet IDs expression — uses created VPC subnets when this
+/// stack creates the VPC, existing subnet parameter otherwise.
+pub fn public_subnet_ids_expr(ctx: &EmitContext<'_>) -> CfExpression {
+    let Some((network_id, network)) = default_network(ctx) else {
+        return CfExpression::ref_(PARAM_PUBLIC_SUBNET_IDS);
+    };
+    match &network.settings {
+        NetworkSettings::Create { .. } => CfExpression::if_(
+            CONDITION_NETWORK_MODE_CREATE,
+            subnet_refs(network_id, "PublicSubnet"),
+            CfExpression::if_(
+                CONDITION_NETWORK_MODE_USE_EXISTING,
+                CfExpression::ref_(PARAM_PUBLIC_SUBNET_IDS),
+                CfExpression::no_value(),
+            ),
+        ),
+        NetworkSettings::UseDefault
+        | NetworkSettings::ByoVpcAws { .. }
+        | NetworkSettings::ByoVpcGcp { .. }
+        | NetworkSettings::ByoVnetAzure { .. } => CfExpression::ref_(PARAM_PUBLIC_SUBNET_IDS),
+    }
+}
+
+/// Security-group IDs expression: created security group ID or existing
+/// security group ID parameter.
 pub fn security_group_ids_expr(ctx: &EmitContext<'_>) -> CfExpression {
     let Some((network_id, network)) = default_network(ctx) else {
         return CfExpression::ref_(PARAM_SECURITY_GROUP_IDS);
     };
     match &network.settings {
-        NetworkSettings::Create { .. } => {
-            CfExpression::list([CfExpression::ref_(format!("{network_id}SecurityGroup"))])
-        }
+        NetworkSettings::Create { .. } => CfExpression::if_(
+            CONDITION_NETWORK_MODE_CREATE,
+            CfExpression::list([CfExpression::get_att(
+                format!("{network_id}SecurityGroup"),
+                "GroupId",
+            )]),
+            CfExpression::if_(
+                CONDITION_NETWORK_MODE_USE_EXISTING,
+                CfExpression::ref_(PARAM_SECURITY_GROUP_IDS),
+                CfExpression::no_value(),
+            ),
+        ),
         NetworkSettings::UseDefault
         | NetworkSettings::ByoVpcAws { .. }
         | NetworkSettings::ByoVpcGcp { .. }
@@ -259,102 +343,6 @@ pub fn service_account_role_id(ctx: &EmitContext<'_>, profile_name: &str) -> Opt
 
 /// IAM permissions for a function's link to another resource. Returns one
 /// or more statement objects ready to splice into a policy document.
-pub fn link_permission_statements(
-    ctx: &EmitContext<'_>,
-    link: &ResourceRef,
-) -> Result<Vec<CfExpression>> {
-    let logical_id = logical_id_for_ref(ctx, link)?;
-    if link.resource_type == Storage::RESOURCE_TYPE {
-        Ok(vec![CfExpression::object([
-            (
-                "Sid",
-                CfExpression::from(format!("AccessStorage{}", logical_id)),
-            ),
-            ("Effect", CfExpression::from("Allow")),
-            (
-                "Action",
-                CfExpression::list([
-                    CfExpression::from("s3:GetObject"),
-                    CfExpression::from("s3:PutObject"),
-                    CfExpression::from("s3:DeleteObject"),
-                    CfExpression::from("s3:ListBucket"),
-                ]),
-            ),
-            (
-                "Resource",
-                CfExpression::list([
-                    CfExpression::get_att(logical_id, "Arn"),
-                    CfExpression::sub(format!("${{{logical_id}.Arn}}/*")),
-                ]),
-            ),
-        ])])
-    } else if link.resource_type == Queue::RESOURCE_TYPE {
-        Ok(vec![CfExpression::object([
-            (
-                "Sid",
-                CfExpression::from(format!("AccessQueue{}", logical_id)),
-            ),
-            ("Effect", CfExpression::from("Allow")),
-            (
-                "Action",
-                CfExpression::list([
-                    CfExpression::from("sqs:SendMessage"),
-                    CfExpression::from("sqs:ReceiveMessage"),
-                    CfExpression::from("sqs:DeleteMessage"),
-                    CfExpression::from("sqs:GetQueueAttributes"),
-                ]),
-            ),
-            ("Resource", CfExpression::get_att(logical_id, "Arn")),
-        ])])
-    } else if link.resource_type == alien_core::Kv::RESOURCE_TYPE {
-        Ok(vec![CfExpression::object([
-            (
-                "Sid",
-                CfExpression::from(format!("AccessTable{}", logical_id)),
-            ),
-            ("Effect", CfExpression::from("Allow")),
-            (
-                "Action",
-                CfExpression::list([
-                    CfExpression::from("dynamodb:GetItem"),
-                    CfExpression::from("dynamodb:PutItem"),
-                    CfExpression::from("dynamodb:UpdateItem"),
-                    CfExpression::from("dynamodb:DeleteItem"),
-                    CfExpression::from("dynamodb:Query"),
-                    CfExpression::from("dynamodb:Scan"),
-                ]),
-            ),
-            ("Resource", CfExpression::get_att(logical_id, "Arn")),
-        ])])
-    } else if link.resource_type == Vault::RESOURCE_TYPE {
-        Ok(vec![CfExpression::object([
-            (
-                "Sid",
-                CfExpression::from(format!("AccessVault{}", logical_id)),
-            ),
-            ("Effect", CfExpression::from("Allow")),
-            (
-                "Action",
-                CfExpression::list([
-                    CfExpression::from("ssm:GetParameter"),
-                    CfExpression::from("ssm:GetParameters"),
-                    CfExpression::from("ssm:PutParameter"),
-                    CfExpression::from("ssm:DeleteParameter"),
-                ]),
-            ),
-            (
-                "Resource",
-                CfExpression::sub(format!(
-                    "arn:${{AWS::Partition}}:ssm:${{AWS::Region}}:${{AWS::AccountId}}:parameter/${{AWS::StackName}}-{}/*",
-                    link.id
-                )),
-            ),
-        ])])
-    } else {
-        Ok(vec![])
-    }
-}
-
 /// Result of [`role_for_profile_or_fallback`] — either the SA role's ARN
 /// expression and no extra resources, or a fallback role's ARN expression
 /// with the role resource that backs it.
@@ -438,13 +426,63 @@ pub fn cf_from_json(value: JsonValue) -> Result<CfExpression> {
                 .map(cf_from_json)
                 .collect::<Result<Vec<_>>>()?,
         ),
-        JsonValue::Object(values) => CfExpression::Object(
-            values
-                .into_iter()
-                .map(|(key, value)| Ok((key, cf_from_json(value)?)))
-                .collect::<Result<IndexMap<_, _>>>()?,
-        ),
+        JsonValue::Object(values) => {
+            let mut entries = values.into_iter().collect::<Vec<_>>();
+            entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+
+            CfExpression::Object(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| Ok((key, cf_from_json(value)?)))
+                    .collect::<Result<IndexMap<_, _>>>()?,
+            )
+        }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn uniquify_iam_statement_sids_suffixes_duplicates_without_colliding() {
+        let statements = uniquify_iam_statement_sids(vec![
+            CfExpression::object([("Sid", CfExpression::from("Read"))]),
+            CfExpression::object([("Sid", CfExpression::from("Read"))]),
+            CfExpression::object([("Sid", CfExpression::from("Read2"))]),
+            CfExpression::object([("Sid", CfExpression::from("Read"))]),
+        ]);
+
+        let sids: Vec<String> = statements
+            .into_iter()
+            .map(|statement| match statement {
+                CfExpression::Object(object) => match object.get("Sid") {
+                    Some(CfExpression::String(sid)) => sid.clone(),
+                    _ => panic!("statement should have a Sid"),
+                },
+                _ => panic!("statement should be an object"),
+            })
+            .collect();
+
+        assert_eq!(sids, ["Read", "Read2", "Read22", "Read3"]);
+    }
+
+    #[test]
+    fn cf_from_json_sorts_object_keys_for_stable_yaml() {
+        let expression = cf_from_json(serde_json::json!({
+            "Sid": "Read",
+            "Effect": "Allow",
+            "Action": ["s3:GetObject"]
+        }))
+        .expect("json should convert");
+
+        let CfExpression::Object(object) = expression else {
+            panic!("expression should be an object");
+        };
+
+        let keys = object.keys().map(String::as_str).collect::<Vec<_>>();
+        assert_eq!(keys, ["Action", "Effect", "Sid"]);
+    }
 }
 
 /// Notification configuration for a storage resource based on the
@@ -453,14 +491,14 @@ pub fn cf_from_json(value: JsonValue) -> Result<CfExpression> {
 pub fn storage_notification_configuration(ctx: &EmitContext<'_>) -> Result<Option<CfExpression>> {
     let mut lambda_configurations = Vec::new();
     for (_id, entry) in ctx.stack.resources() {
-        let Some(function) = entry.config.downcast_ref::<Function>() else {
+        let Some(function) = entry.config.downcast_ref::<Worker>() else {
             continue;
         };
         let Some(function_logical_id) = ctx.name_for(function.id()) else {
             continue;
         };
         for trigger in &function.triggers {
-            let alien_core::FunctionTrigger::Storage { storage, events } = trigger else {
+            let alien_core::WorkerTrigger::Storage { storage, events } = trigger else {
                 continue;
             };
             if storage.resource_type == Storage::RESOURCE_TYPE && storage.id == ctx.resource_id {
@@ -493,7 +531,7 @@ pub fn storage_notification_configuration(ctx: &EmitContext<'_>) -> Result<Optio
 pub fn storage_notification_dependencies(ctx: &EmitContext<'_>) -> Vec<String> {
     let mut dependencies = Vec::new();
     for (_id, entry) in ctx.stack.resources() {
-        let Some(function) = entry.config.downcast_ref::<Function>() else {
+        let Some(function) = entry.config.downcast_ref::<Worker>() else {
             continue;
         };
         let Some(function_logical_id) = ctx.name_for(function.id()) else {
@@ -502,7 +540,7 @@ pub fn storage_notification_dependencies(ctx: &EmitContext<'_>) -> Vec<String> {
         if function.triggers.iter().any(|trigger| {
             matches!(
                 trigger,
-                alien_core::FunctionTrigger::Storage { storage, .. }
+                alien_core::WorkerTrigger::Storage { storage, .. }
                     if storage.resource_type == Storage::RESOURCE_TYPE && storage.id == ctx.resource_id
             )
         }) {

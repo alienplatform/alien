@@ -1,6 +1,5 @@
 #![cfg(feature = "grpc")]
 
-use crate::BindingsProviderApi;
 use alien_error::AlienError;
 use async_trait::async_trait;
 use std::{collections::HashMap, sync::Arc};
@@ -35,15 +34,13 @@ struct ApplicationState {
 
 #[derive(Clone)]
 pub struct WaitUntilGrpcServer {
-    provider: Arc<dyn BindingsProviderApi>,
     /// Track application states by application_id.
     applications: Arc<Mutex<HashMap<String, ApplicationState>>>,
 }
 
 impl WaitUntilGrpcServer {
-    pub fn new(provider: Arc<dyn BindingsProviderApi>) -> Self {
+    pub fn new() -> Self {
         Self {
-            provider,
             applications: Arc::new(Mutex::new(HashMap::new())),
         }
     }

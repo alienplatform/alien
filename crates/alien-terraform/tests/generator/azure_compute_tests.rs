@@ -6,8 +6,8 @@
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
-    ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup, Build, Function,
-    FunctionCode, Ingress, ResourceLifecycle, Stack, StackSettings,
+    ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup, Build, Ingress,
+    ResourceLifecycle, Stack, StackSettings, Worker, WorkerCode,
 };
 use alien_core::{ContainerAppsEnvironmentBinding, ExternalBinding, ExternalBindings};
 use alien_terraform::TerraformTarget;
@@ -61,8 +61,8 @@ fn azure_function_basic_container_app() {
         .add(resource_group(), ResourceLifecycle::Frozen)
         .add(container_apps_environment(), ResourceLifecycle::Frozen)
         .add(
-            Function::new("api".to_string())
-                .code(FunctionCode::Image {
+            Worker::new("api".to_string())
+                .code(WorkerCode::Image {
                     image: "acmeprod.azurecr.io/api:1".to_string(),
                 })
                 .permissions("execution".to_string())
@@ -83,8 +83,8 @@ fn azure_function_public_ingress_enables_external_ingress() {
         .add(resource_group(), ResourceLifecycle::Frozen)
         .add(container_apps_environment(), ResourceLifecycle::Frozen)
         .add(
-            Function::new("public-api".to_string())
-                .code(FunctionCode::Image {
+            Worker::new("public-api".to_string())
+                .code(WorkerCode::Image {
                     image: "acmeprod.azurecr.io/api:1".to_string(),
                 })
                 .permissions("execution".to_string())
@@ -106,8 +106,8 @@ fn azure_function_reuses_external_container_apps_environment() {
         .add(resource_group(), ResourceLifecycle::Frozen)
         .add(container_apps_environment(), ResourceLifecycle::Frozen)
         .add(
-            Function::new("api".to_string())
-                .code(FunctionCode::Image {
+            Worker::new("api".to_string())
+                .code(WorkerCode::Image {
                     image: "acmeprod.azurecr.io/api:1".to_string(),
                 })
                 .permissions("execution".to_string())
@@ -143,9 +143,12 @@ fn azure_function_reuses_external_container_apps_environment() {
     assert!(rendered.contains(
         "/subscriptions/sub-123/resourceGroups/shared-rg/providers/Microsoft.App/managedEnvironments/shared-env"
     ));
-    assert!(rendered.contains("environmentName = \"shared-env\""));
-    assert!(rendered.contains("resourceGroup   = \"shared-rg\""));
+    assert!(rendered.contains("environmentName"));
+    assert!(rendered.contains("\"shared-env\""));
+    assert!(rendered.contains("resourceGroup"));
+    assert!(rendered.contains("\"shared-rg\""));
     assert!(rendered.contains("resourceGroupName"));
-    assert!(rendered.contains("defaultDomain   = \"shared.example.azurecontainerapps.io\""));
+    assert!(rendered.contains("defaultDomain"));
+    assert!(rendered.contains("\"shared.example.azurecontainerapps.io\""));
     assert_terraform_valid(&module, "azure_function_shared_env");
 }

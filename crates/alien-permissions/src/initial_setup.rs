@@ -5,6 +5,8 @@
 //! credentials. This module generates the setup permission set for that first
 //! Frozen-resource phase.
 
+use std::collections::HashSet;
+
 use alien_core::{ownership_policy_for_resource_type, Stack};
 
 use crate::generators::{AwsIamPolicy, AwsRuntimePermissionsGenerator};
@@ -97,20 +99,50 @@ pub fn generate_aws_initial_setup_policy(
         }
     }
 
+    ensure_unique_statement_sids(&mut all_statements);
+
     Ok(AwsIamPolicy {
         version: "2012-10-17".to_string(),
         statement: all_statements,
     })
 }
 
+fn ensure_unique_statement_sids(statements: &mut [crate::generators::AwsIamStatement]) {
+    let mut used = HashSet::new();
+
+    for statement in statements {
+        if used.insert(statement.sid.clone()) {
+            continue;
+        }
+
+        let base = statement.sid.clone();
+        let mut suffix = 2usize;
+        loop {
+            let candidate = suffixed_statement_sid(&base, suffix);
+            if used.insert(candidate.clone()) {
+                statement.sid = candidate;
+                break;
+            }
+            suffix += 1;
+        }
+    }
+}
+
+fn suffixed_statement_sid(base: &str, suffix: usize) -> String {
+    let suffix = suffix.to_string();
+    let max_base_len = 128usize.saturating_sub(suffix.len());
+    let trimmed = base.chars().take(max_base_len).collect::<String>();
+    format!("{trimmed}{suffix}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::{Function, FunctionCode, ResourceLifecycle, Storage};
+    use alien_core::{ResourceLifecycle, Storage, Worker, WorkerCode};
 
-    fn test_function(name: &str) -> Function {
-        Function::new(name.to_string())
-            .code(FunctionCode::Image {
+    fn test_function(name: &str) -> Worker {
+        Worker::new(name.to_string())
+            .code(WorkerCode::Image {
                 image: "rust:latest".to_string(),
             })
             .permissions("execution".to_string())
@@ -119,16 +151,16 @@ mod tests {
 
     #[test]
     fn live_function_stack_excludes_function_provision() {
-        let function = test_function("my-fn");
+        let worker = test_function("my-fn");
 
         let stack = Stack::new("test-stack".to_string())
-            .add(function, ResourceLifecycle::Live)
+            .add(worker, ResourceLifecycle::Live)
             .build();
 
         let ids = initial_setup_permission_set_ids(&stack);
         assert!(
-            !ids.contains(&"function/provision".to_string()),
-            "function/provision belongs to management permissions, got {ids:?}"
+            !ids.contains(&"worker/provision".to_string()),
+            "worker/provision belongs to management permissions, got {ids:?}"
         );
     }
 
@@ -178,16 +210,16 @@ mod tests {
 
     #[test]
     fn combined_stack_includes_all_resource_types() {
-        let function = test_function("my-fn");
+        let worker = test_function("my-fn");
         let storage = Storage::new("my-bucket".to_string()).build();
 
         let stack = Stack::new("test-stack".to_string())
-            .add(function, ResourceLifecycle::Live)
+            .add(worker, ResourceLifecycle::Live)
             .add(storage, ResourceLifecycle::Frozen)
             .build();
 
         let ids = initial_setup_permission_set_ids(&stack);
-        assert!(!ids.contains(&"function/provision".to_string()));
+        assert!(!ids.contains(&"worker/provision".to_string()));
         assert!(ids.contains(&"storage/provision".to_string()));
         assert!(ids.contains(&"service-account/provision".to_string()));
     }
@@ -209,11 +241,55 @@ mod tests {
 
         assert!(
             !actions.contains(&&"lambda:CreateFunction".to_string()),
-            "setup policy must not include live function provision actions"
+            "setup policy must not include live worker provision actions"
         );
         assert!(
             actions.iter().any(|action| action.starts_with("s3:")),
             "setup policy should still include frozen-capable resource actions"
+        );
+    }
+
+    #[test]
+    fn complete_aws_initial_setup_policy_has_unique_statement_sids() {
+        let context = PermissionContext::new()
+            .with_aws_region("us-east-1")
+            .with_aws_account_id("123456789012")
+            .with_stack_prefix("test-stack")
+            .with_resource_name("test");
+
+        let policy = generate_aws_initial_setup_policy(&context).unwrap();
+        let mut seen = HashSet::new();
+
+        for statement in policy.statement {
+            assert!(
+                seen.insert(statement.sid.clone()),
+                "duplicate AWS IAM statement Sid: {}",
+                statement.sid
+            );
+        }
+    }
+
+    #[test]
+    fn complete_aws_initial_setup_policy_can_create_remote_management_policies() {
+        let context = PermissionContext::new()
+            .with_aws_region("us-east-1")
+            .with_aws_account_id("123456789012")
+            .with_stack_prefix("test-stack")
+            .with_resource_name("test");
+
+        let policy = generate_aws_initial_setup_policy(&context).unwrap();
+        let statements = policy
+            .statement
+            .iter()
+            .filter(|statement| statement.action.contains(&"iam:CreatePolicy".to_string()))
+            .collect::<Vec<_>>();
+
+        assert!(
+            statements.iter().any(|statement| statement.resource.contains(
+                &"arn:aws:iam::123456789012:policy/test-stack-deployment-management-*"
+                    .to_string()
+            )),
+            "initial setup policy must be able to create remote-stack-management managed policies, got {statements:?}"
         );
     }
 }

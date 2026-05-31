@@ -523,38 +523,38 @@ pub async fn check_queue(deployment: &TestDeployment) -> anyhow::Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// Function
+// Worker
 // ---------------------------------------------------------------------------
 
-/// Check function binding: invoke a sibling function and verify the response.
-pub async fn check_function(deployment: &TestDeployment) -> anyhow::Result<()> {
+/// Check worker binding: invoke a sibling worker and verify the response.
+pub async fn check_worker(deployment: &TestDeployment) -> anyhow::Result<()> {
     let url = deployment_url(deployment)?;
-    info!("Checking function binding");
+    info!("Checking worker binding");
 
     let resp = reqwest::Client::new()
-        .post(format!("{}/function-invoke", url))
+        .post(format!("{}/worker-invoke", url))
         .json(&serde_json::json!({
             "targetPath": "/hello",
         }))
         .send()
         .await
-        .context("Function invoke test request failed")?;
+        .context("Worker invoke test request failed")?;
 
     let status = resp.status();
     if !status.is_success() {
         let body = resp.text().await.unwrap_or_default();
-        bail!("Function invoke test returned {}: {}", status, body);
+        bail!("Worker invoke test returned {}: {}", status, body);
     }
 
     let data: serde_json::Value = resp
         .json()
         .await
-        .context("Failed to parse function response")?;
+        .context("Failed to parse worker response")?;
     if data.get("success") != Some(&serde_json::Value::Bool(true)) {
-        bail!("Function invoke test reported failure: {:?}", data);
+        bail!("Worker invoke test reported failure: {:?}", data);
     }
 
-    info!("Function binding check passed");
+    info!("Worker binding check passed");
     Ok(())
 }
 

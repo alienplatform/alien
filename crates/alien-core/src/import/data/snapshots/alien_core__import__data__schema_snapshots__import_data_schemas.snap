@@ -78,10 +78,10 @@ expression: schemas
     "title": "AwsBuildImportData",
     "type": "object"
   },
-  "aws_container_cluster": {
+  "aws_compute_cluster": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
-    "description": "AWS ContainerCluster ImportData.",
+    "description": "AWS ComputeCluster ImportData.",
     "properties": {
       "clusterId": {
         "description": "Cluster identifier used by container orchestration.",
@@ -101,13 +101,13 @@ expression: schemas
       "instanceProfileArn",
       "securityGroupId"
     ],
-    "title": "AwsContainerClusterImportData",
+    "title": "AwsComputeClusterImportData",
     "type": "object"
   },
   "aws_function": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
-    "description": "AWS Function ImportData.",
+    "description": "AWS Worker ImportData.",
     "properties": {
       "apiId": {
         "description": "API Gateway HTTP API ID, when public ingress is enabled.",
@@ -189,7 +189,7 @@ expression: schemas
       "functionName",
       "s3PermissionStatementIds"
     ],
-    "title": "AwsFunctionImportData",
+    "title": "AwsWorkerImportData",
     "type": "object"
   },
   "aws_kv": {
@@ -519,6 +519,13 @@ expression: schemas
     "additionalProperties": false,
     "description": "Azure ContainerAppsEnvironment ImportData — parent environment for Container Apps in this stack. Realized once per stack.",
     "properties": {
+      "customDomainVerificationId": {
+        "description": "Domain verification ID required for Azure Container Apps custom domain DNS ownership records.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
       "defaultDomain": {
         "description": "Default domain (`<env>.<region>.azurecontainerapps.io`).",
         "type": "string"
@@ -550,10 +557,10 @@ expression: schemas
     "title": "AzureContainerAppsEnvironmentImportData",
     "type": "object"
   },
-  "azure_container_cluster": {
+  "azure_compute_cluster": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
-    "description": "Azure ContainerCluster ImportData — AKS node pool identity / network.",
+    "description": "Azure ComputeCluster ImportData — AKS node pool identity / network.",
     "properties": {
       "clusterId": {
         "description": "Cluster identifier used by the controller.",
@@ -573,13 +580,13 @@ expression: schemas
       "clusterIdentityPrincipalId",
       "kubeletIdentityClientId"
     ],
-    "title": "AzureContainerClusterImportData",
+    "title": "AzureComputeClusterImportData",
     "type": "object"
   },
   "azure_function": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
-    "description": "Azure Function ImportData — a Container App backed by the stack's Container Apps Environment.",
+    "description": "Azure Worker ImportData — a Container App backed by the stack's Container Apps Environment.",
     "properties": {
       "containerAppName": {
         "description": "Container App name.",
@@ -606,7 +613,7 @@ expression: schemas
       "resourceGroup",
       "subscriptionId"
     ],
-    "title": "AzureFunctionImportData",
+    "title": "AzureWorkerImportData",
     "type": "object"
   },
   "azure_kv": {
@@ -1072,6 +1079,10 @@ expression: schemas
         "description": "Region where the trigger runs.",
         "type": "string"
       },
+      "serviceAccountEmail": {
+        "description": "Service account email Cloud Build uses when running builds.",
+        "type": "string"
+      },
       "triggerId": {
         "description": "Cloud Build trigger ID.",
         "type": "string"
@@ -1085,16 +1096,17 @@ expression: schemas
       "buildEnvVars",
       "projectId",
       "region",
+      "serviceAccountEmail",
       "triggerId",
       "triggerName"
     ],
     "title": "GcpBuildImportData",
     "type": "object"
   },
-  "gcp_container_cluster": {
+  "gcp_compute_cluster": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
-    "description": "GCP ContainerCluster ImportData — GKE node pool identity + network.",
+    "description": "GCP ComputeCluster ImportData — GKE node pool identity + network.",
     "properties": {
       "clusterId": {
         "description": "Cluster identifier used by the controller.",
@@ -1114,13 +1126,13 @@ expression: schemas
       "networkTag",
       "nodeServiceAccountEmail"
     ],
-    "title": "GcpContainerClusterImportData",
+    "title": "GcpComputeClusterImportData",
     "type": "object"
   },
   "gcp_function": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
-    "description": "GCP Function ImportData — a Cloud Run service.",
+    "description": "GCP Worker ImportData — a Cloud Run service.",
     "properties": {
       "commandsSubscriptionName": {
         "description": "Pub/Sub push-subscription name created for commands delivery.",
@@ -1185,7 +1197,7 @@ expression: schemas
       "schedulerJobNames",
       "serviceName"
     ],
-    "title": "GcpFunctionImportData",
+    "title": "GcpWorkerImportData",
     "type": "object"
   },
   "gcp_kv": {
@@ -1219,6 +1231,13 @@ expression: schemas
     "additionalProperties": false,
     "description": "GCP Network ImportData — VPC + subnetwork + Cloud NAT topology.",
     "properties": {
+      "cidrBlock": {
+        "description": "Primary subnetwork CIDR block used for internal firewall rules.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
       "isByoVpc": {
         "description": "True when the VPC is owned outside this stack.",
         "type": "boolean"

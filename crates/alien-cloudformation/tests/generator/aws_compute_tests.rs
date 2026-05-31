@@ -1,5 +1,5 @@
 //! AWS compute & artifacts — function / build / artifact-registry /
-//! container-cluster.
+//! compute-cluster.
 //!
 //! Mirrors the per-resource coverage in
 //! `alien-terraform/tests/generator/aws_compute_tests.rs`. Each
@@ -10,8 +10,8 @@
 use super::helpers::render_built_ins;
 use alien_cloudformation::{generate_cloudformation_template, CfRegistry, RegistrationMode};
 use alien_core::{
-    ArtifactRegistry, Build, CapacityGroup, ContainerCluster, ErrorData, Function, FunctionCode,
-    Ingress, Network, NetworkSettings, Platform, ResourceLifecycle, Stack, StackSettings,
+    ArtifactRegistry, Build, CapacityGroup, ComputeCluster, ErrorData, Ingress, Network,
+    NetworkSettings, Platform, ResourceLifecycle, Stack, StackSettings, Worker, WorkerCode,
 };
 
 #[test]
@@ -55,8 +55,8 @@ fn aws_build_renders_codebuild_project() {
 fn aws_function_basic_lambda() {
     let stack = Stack::new("acme-fn".to_string())
         .add(
-            Function::new("api".to_string())
-                .code(FunctionCode::Image {
+            Worker::new("api".to_string())
+                .code(WorkerCode::Image {
                     image: "123456789012.dkr.ecr.us-east-1.amazonaws.com/app:1".to_string(),
                 })
                 .permissions("execution".to_string())
@@ -79,8 +79,8 @@ fn aws_function_basic_lambda() {
 fn aws_function_public_ingress_emits_apigw_v2() {
     let stack = Stack::new("acme-public".to_string())
         .add(
-            Function::new("public-api".to_string())
-                .code(FunctionCode::Image {
+            Worker::new("public-api".to_string())
+                .code(WorkerCode::Image {
                     image: "123456789012.dkr.ecr.us-east-1.amazonaws.com/app:1".to_string(),
                 })
                 .permissions("execution".to_string())
@@ -102,7 +102,7 @@ fn aws_function_public_ingress_emits_apigw_v2() {
 
 #[test]
 fn aws_container_cluster_without_platform_extension_errors_cleanly() {
-    // OSS no longer registers `ContainerCluster` — Phase 6c moved the
+    // OSS no longer registers `ComputeCluster` — Phase 6c moved the
     // emitter to `alien-cloudformationx`. Plugins (or the platform
     // setup package) wire it back in via `register_platform_extensions`.
     // Confirm the OSS error path is the typed `ImportRegistrationMissing`
@@ -123,7 +123,7 @@ fn aws_container_cluster_without_platform_extension_errors_cleanly() {
             ResourceLifecycle::Frozen,
         )
         .add(
-            ContainerCluster::new("compute".to_string())
+            ComputeCluster::new("compute".to_string())
                 .capacity_group(CapacityGroup {
                     group_id: "general".to_string(),
                     instance_type: Some("m7g.large".to_string()),
@@ -141,6 +141,7 @@ fn aws_container_cluster_without_platform_extension_errors_cleanly() {
         &stack,
         alien_cloudformation::CloudFormationOptions {
             registry: &registry,
+            target: alien_cloudformation::CloudFormationTarget::Aws,
             stack_settings: settings,
             setup_target: "aws".to_string(),
             setup_fingerprint: "test".to_string(),
@@ -157,7 +158,7 @@ fn aws_container_cluster_without_platform_extension_errors_cleanly() {
             platform,
             ..
         } => {
-            assert_eq!(resource_type.as_ref(), "container-cluster");
+            assert_eq!(resource_type.as_ref(), "compute-cluster");
             assert_eq!(*platform, Platform::Aws);
         }
         other => panic!("expected ImportRegistrationMissing, got {other:?}"),

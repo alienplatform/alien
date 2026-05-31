@@ -9,11 +9,9 @@
 use super::helpers::{many_sample_resources, sample_registry, sample_stack};
 use alien_cloudformation::{
     generate_cloudformation_template, to_yaml, CfExpression, CfOutput, CloudFormationOptions,
-    RegistrationMode,
+    CloudFormationTarget, RegistrationMode,
 };
-use alien_core::{
-    Function, FunctionCode, ResourceLifecycle, Stack, StackSettings, ToolchainConfig,
-};
+use alien_core::{ResourceLifecycle, Stack, StackSettings, ToolchainConfig, Worker, WorkerCode};
 
 const OUTPUT_RESOURCES: &str = "DeploymentResources";
 
@@ -25,6 +23,7 @@ fn outputs_fallback_chunks_large_resource_payload() {
         &stack,
         CloudFormationOptions {
             registry: &registry,
+            target: CloudFormationTarget::Aws,
             stack_settings: StackSettings::default(),
             setup_target: "aws".to_string(),
             setup_fingerprint: "test".to_string(),
@@ -70,6 +69,7 @@ fn small_payload_emits_single_resources_output() {
         &sample_stack(),
         CloudFormationOptions {
             registry: &registry,
+            target: CloudFormationTarget::Aws,
             stack_settings: StackSettings::default(),
             setup_target: "aws".to_string(),
             setup_fingerprint: "test".to_string(),
@@ -95,8 +95,8 @@ fn small_payload_emits_single_resources_output() {
 
 #[test]
 fn source_function_returns_typed_error() {
-    let function = Function::new("source-fn".to_string())
-        .code(FunctionCode::Source {
+    let function = Worker::new("source-fn".to_string())
+        .code(WorkerCode::Source {
             src: ".".to_string(),
             toolchain: ToolchainConfig::Rust {
                 binary_name: "app".to_string(),
@@ -112,6 +112,7 @@ fn source_function_returns_typed_error() {
         &stack,
         CloudFormationOptions {
             registry: &registry,
+            target: CloudFormationTarget::Aws,
             stack_settings: StackSettings::default(),
             setup_target: "aws".to_string(),
             setup_fingerprint: "test".to_string(),

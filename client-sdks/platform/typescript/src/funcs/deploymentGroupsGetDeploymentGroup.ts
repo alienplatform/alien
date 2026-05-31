@@ -95,6 +95,7 @@ async function $do(
   const path = pathToFunc("/v1/deployment-groups/{id}")(pathParams);
 
   const query = encodeFormQuery({
+    "include": payload.include,
     "workspace": payload.workspace,
   });
 

@@ -11,24 +11,33 @@ terraform {
       source  = "hashicorp/azurerm"
       version = ">= 3.100"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = ">= 3.6"
+    }
   }
 }
 
 === variables.tf ===
-variable "stack_name" {
+variable "resource_prefix" {
   type        = string
-  description = "Stable physical-name prefix for resources created by this module."
-}
-
-variable "deployment_name" {
-  type        = string
-  description = "Deployment name used when registering the resolved stack import. Defaults to stack_name."
+  description = "Optional stable physical resource prefix. Leave empty to generate one."
   default     = ""
+
+  validation {
+    condition     = var.resource_prefix == "" || (can(regex("^[a-z][a-z0-9-]{1,38}[a-z0-9]$", var.resource_prefix)) && length(regexall("--", var.resource_prefix)) == 0)
+    error_message = "resource_prefix must be 3-40 characters: lowercase letters, numbers, and hyphens; start with a letter; end with a letter or number; and not contain consecutive hyphens."
+  }
 }
 
-variable "deployment_group_token" {
+variable "name" {
   type        = string
-  description = "Deployment group token used when registering the resolved stack import."
+  description = "Human-readable application name shown in setup and cloud IAM review metadata."
+}
+
+variable "token" {
+  type        = string
+  description = "Install token from the application setup page. This is the same token used by the deploy CLI --token flag."
   sensitive   = true
 }
 
@@ -61,30 +70,6 @@ variable "azure_resource_group_name" {
   description = "Azure resource group name."
 }
 
-variable "azure_managing_tenant_id" {
-  type        = string
-  description = "Azure tenant ID the manager uses for cross-tenant access."
-  default     = ""
-}
-
-variable "azure_management_principal_id" {
-  type        = string
-  description = "Optional service-principal object ID for local development fallback role assignment."
-  default     = ""
-}
-
-variable "azure_oidc_issuer" {
-  type        = string
-  description = "OIDC issuer URL for Azure Federated Identity Credential. Empty disables FIC creation."
-  default     = ""
-}
-
-variable "azure_oidc_subject" {
-  type        = string
-  description = "OIDC subject claim for Azure Federated Identity Credential. Empty disables FIC creation."
-  default     = ""
-}
-
 === providers.tf ===
 provider "azurerm" {
   resource_provider_registrations = "none"
@@ -92,19 +77,20 @@ provider "azurerm" {
   features {}
 }
 
+=== resource_prefix.tf ===
+resource "random_id" "resource_prefix" {
+  byte_length = 4
+}
+
 === locals.tf ===
 locals {
-  deployment_platform = "azure"
-  deployment_target   = "azure"
-  deployment_region   = var.azure_location
-  deployment_management_config = {
-    platform              = "azure"
-    managingTenantId      = var.azure_managing_tenant_id
-    managementPrincipalId = var.azure_management_principal_id == "" ? null : var.azure_management_principal_id
-    oidcIssuer            = var.azure_oidc_issuer == "" ? null : var.azure_oidc_issuer
-    oidcSubject           = var.azure_oidc_subject == "" ? null : var.azure_oidc_subject
-  }
-  deployment_stack_settings = jsondecode(var.stack_settings_json)
+  resource_prefix              = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
+  deployment_name              = var.name
+  deployment_platform          = "azure"
+  deployment_target            = "azure"
+  deployment_region            = var.azure_location
+  deployment_management_config = null
+  deployment_settings          = jsondecode(var.stack_settings_json)
   deployment_resources = [
     {
       id   = "default-resource-group"
@@ -144,16 +130,16 @@ resource "azurerm_resource_group" "default_resource_group" {
   name     = var.azure_resource_group_name
   location = var.azure_location
   tags = {
-    "managed-by"          = "alien-dev"
-    "alien-stack-id"      = var.stack_name
-    "alien-resource-id"   = "default-resource-group"
-    "alien-resource-type" = "resource-group"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "default-resource-group"
+    "resource-type" = "resource-group"
   }
 }
 
 === default_storage_account.tf ===
 resource "azurerm_storage_account" "default_storage_account" {
-  name                            = substr(replace(lower("${var.stack_name}default"), "-", ""), 0, 24)
+  name                            = substr(replace(lower("${local.resource_prefix}default"), "-", ""), 0, 24)
   resource_group_name             = var.azure_resource_group_name
   location                        = var.azure_location
   account_tier                    = "Standard"
@@ -164,10 +150,10 @@ resource "azurerm_storage_account" "default_storage_account" {
   allow_nested_items_to_be_public = false
   https_traffic_only_enabled      = true
   tags = {
-    "managed-by"          = "alien-dev"
-    "alien-stack-id"      = var.stack_name
-    "alien-resource-id"   = "default-storage-account"
-    "alien-resource-type" = "storage-account"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "default-storage-account"
+    "resource-type" = "storage-account"
   }
 
   blob_properties {
@@ -182,7 +168,7 @@ resource "azurerm_storage_account" "default_storage_account" {
 
 === data.tf ===
 resource "azurerm_storage_container" "data" {
-  name                  = replace(lower("${var.stack_name}-data"), "_", "-")
+  name                  = replace(lower("${local.resource_prefix}-data"), "_", "-")
   storage_account_name  = azurerm_storage_account.default_storage_account.name
   container_access_type = "private"
   depends_on = [
@@ -191,16 +177,20 @@ resource "azurerm_storage_container" "data" {
 }
 
 === import.tf ===
-resource "terraform_data" "deployment_stack_import" {
+resource "terraform_data" "deployment_import" {
   input = {
-    platform               = local.deployment_platform
-    deployment_group_token = var.deployment_group_token
-    deployment_name        = var.deployment_name == "" ? var.stack_name : var.deployment_name
-    stack_prefix           = var.stack_name
-    manager_url            = var.manager_url
-    management_config      = local.deployment_management_config
-    stack_settings         = local.deployment_stack_settings
-    resources              = local.deployment_resources
+    platform                    = local.deployment_platform
+    token                       = var.token
+    name                        = var.name
+    resource_prefix             = local.resource_prefix
+    setup_target                = ""
+    setup_import_format_version = 1
+    setup_fingerprint           = ""
+    setup_fingerprint_version   = 0
+    manager_url                 = var.manager_url
+    management_config           = local.deployment_management_config
+    stack_settings              = local.deployment_settings
+    resources                   = local.deployment_resources
   }
   depends_on = [
     azurerm_resource_group.default_resource_group,
@@ -215,9 +205,9 @@ output "deployment_target" {
   description = "Terraform module target."
 }
 
-output "deployment_stack_prefix" {
-  value       = var.stack_name
-  description = "Physical stack prefix."
+output "deployment_resource_prefix" {
+  value       = local.resource_prefix
+  description = "Physical resource prefix."
 }
 
 output "deployment_platform" {
@@ -230,13 +220,33 @@ output "deployment_region" {
   description = "Target cloud region or location."
 }
 
+output "deployment_setup_target" {
+  value       = ""
+  description = "Setup target."
+}
+
+output "deployment_setup_import_format_version" {
+  value       = 1
+  description = "Setup import payload format version."
+}
+
+output "deployment_setup_fingerprint" {
+  value       = ""
+  description = "Setup compatibility fingerprint."
+}
+
+output "deployment_setup_fingerprint_version" {
+  value       = 0
+  description = "Setup fingerprint algorithm version."
+}
+
 output "deployment_management_config" {
   value       = jsonencode(local.deployment_management_config)
   description = "Manager import ManagementConfig JSON."
 }
 
 output "deployment_stack_settings" {
-  value       = jsonencode(local.deployment_stack_settings)
+  value       = jsonencode(local.deployment_settings)
   description = "Manager import StackSettings JSON."
   sensitive   = true
 }
@@ -256,7 +266,7 @@ Run:
 ```bash
 terraform init -backend=false
 terraform validate
-terraform apply -var='stack_name=acme-prod' -var='deployment_group_token=...'
+terraform apply -var='name=acme-prod' -var='token=...'
 ```
 
 This module exposes `deployment_management_config` / `deployment_stack_settings` / `deployment_resources` for external registration flows.

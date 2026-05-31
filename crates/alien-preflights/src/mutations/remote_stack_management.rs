@@ -30,11 +30,20 @@ impl StackMutation for RemoteStackManagementMutation {
     ) -> bool {
         let platform = stack_state.platform;
 
-        // Only add RemoteStackManagement for cross-account platforms (and test for development)
+        // Only add RemoteStackManagement for cross-account platforms (and test
+        // for development). Kubernetes setup can also need a cloud management
+        // identity for Helm pull mode; in that case the cloud is carried as the
+        // deployment config's base platform.
+        let base_platform = config.base_platform.unwrap_or(platform);
         if !matches!(
             platform,
             Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Test
-        ) {
+        ) && !(platform == Platform::Kubernetes
+            && matches!(
+                base_platform,
+                Platform::Aws | Platform::Gcp | Platform::Azure
+            ))
+        {
             return false;
         }
 

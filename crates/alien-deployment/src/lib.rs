@@ -91,6 +91,21 @@ pub async fn step(
     client_config: alien_core::ClientConfig,
     service_provider: Option<std::sync::Arc<dyn alien_infra::PlatformServiceProvider>>,
 ) -> Result<DeploymentStepResult> {
+    if current.protocol_version < alien_core::MIN_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION
+        || current.protocol_version > alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION
+    {
+        return Err(alien_error::AlienError::new(
+            ErrorData::IncompatibleDeploymentProtocol {
+                found_version: current.protocol_version,
+                min_supported_version: alien_core::MIN_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION,
+                current_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                repair:
+                    "Upgrade the deployment actor or repair the deployment state before retrying."
+                        .to_string(),
+            },
+        ));
+    }
+
     info!(
         "Executing deployment step (status: {:?}, platform: {:?})",
         current.status, current.platform
@@ -225,6 +240,7 @@ pub async fn step(
                 error: None,
                 suggested_delay_ms: None,
                 update_heartbeat: false,
+                heartbeats: vec![],
             }
         }
         DeploymentStatus::Error => {
@@ -234,6 +250,7 @@ pub async fn step(
                 error: None,
                 suggested_delay_ms: None,
                 update_heartbeat: false,
+                heartbeats: vec![],
             }
         }
     };

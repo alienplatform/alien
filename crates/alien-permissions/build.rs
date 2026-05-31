@@ -10,8 +10,7 @@ fn main() {
     // Path to permission sets directory
     let permission_sets_dir = Path::new(&manifest_dir).join("permission-sets");
 
-    // Tell cargo to rerun if permission sets change
-    println!("cargo:rerun-if-changed={}", permission_sets_dir.display());
+    emit_rerun_if_changed(&permission_sets_dir);
 
     // Read all JSONC files and generate registry
     let registry_code = generate_permission_set_registry(&permission_sets_dir);
@@ -164,6 +163,19 @@ fn scan_permission_sets(dir: &Path, permission_sets: &mut HashMap<String, String
                 }
             }
         }
+    }
+}
+
+fn emit_rerun_if_changed(path: &Path) {
+    println!("cargo:rerun-if-changed={}", path.display());
+
+    if !path.is_dir() {
+        return;
+    }
+
+    for entry in fs::read_dir(path).unwrap() {
+        let entry = entry.unwrap();
+        emit_rerun_if_changed(&entry.path());
     }
 }
 

@@ -7,10 +7,17 @@
 use crate::{
     block::{attr, block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
-    emitters::aws::helpers::{downcast, required_label, stack_name_template, tags},
+    emitters::aws::helpers::{
+        aws_terraform_permission_context, downcast, emit_iam_role_policy_for_target_with_label,
+        iam_policy_name_sanitize, required_label, resource_prefix_template, tags,
+    },
     expr,
 };
-use alien_core::{import::EmitContext, LifecycleRule, Result, Storage};
+use alien_core::{
+    import::EmitContext, LifecycleRule, PermissionProfile, PermissionSetReference,
+    RemoteStackManagement, Result, ServiceAccount, Storage,
+};
+use alien_permissions::BindingTarget;
 use hcl::expr::Expression;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -38,6 +45,7 @@ impl TfEmitter for AwsStorageEmitter {
                 .resource_blocks
                 .push(lifecycle(label, &storage.lifecycle_rules));
         }
+        emit_storage_iam(ctx, &mut fragment, label)?;
 
         Ok(fragment)
     }
@@ -73,7 +81,7 @@ fn bucket(label: &str, ctx: &EmitContext<'_>, storage: &Storage) -> hcl::structu
         "aws_s3_bucket",
         label,
         [
-            attr("bucket", stack_name_template(storage.id())),
+            attr("bucket", resource_prefix_template(storage.id())),
             attr("force_destroy", Expression::Bool(true)),
             attr("tags", tags(ctx, "storage")),
         ],
@@ -222,4 +230,121 @@ fn lifecycle(label: &str, rules: &[LifecycleRule]) -> hcl::structure::Block {
 
 fn bucket_id(label: &str) -> Expression {
     expr::traversal(["aws_s3_bucket", label, "id"])
+}
+
+fn emit_storage_iam(ctx: &EmitContext<'_>, fragment: &mut TfFragment, label: &str) -> Result<()> {
+    for (owner_label, permission_refs) in storage_permission_owners(ctx) {
+        let context = aws_terraform_permission_context()
+            .with_resource_name(format!("${{aws_s3_bucket.{label}.bucket}}"));
+
+        for (idx, permission_ref) in permission_refs.iter().enumerate() {
+            let Some(permission_set) =
+                permission_ref.resolve(|name| alien_permissions::get_permission_set(name).cloned())
+            else {
+                continue;
+            };
+            if !permission_set.id.starts_with("storage/") {
+                continue;
+            }
+
+            let policy_label = format!(
+                "{label}_{owner_label}_{}_{idx}",
+                iam_policy_name_sanitize(&permission_set.id)
+            );
+            let policy_name = iam_policy_name_sanitize(&format!(
+                "{}-{}-{idx}",
+                ctx.resource_id, permission_set.id
+            ));
+
+            emit_iam_role_policy_for_target_with_label(
+                fragment,
+                &owner_label,
+                &permission_set,
+                &policy_label,
+                &policy_name,
+                &context,
+                BindingTarget::Resource,
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
+fn storage_permission_owners(ctx: &EmitContext<'_>) -> Vec<(String, Vec<PermissionSetReference>)> {
+    let mut owners = Vec::new();
+    for (profile_name, profile) in ctx.stack.permission_profiles() {
+        let refs = storage_permission_refs(profile, ctx.resource_id);
+        if refs.is_empty() {
+            continue;
+        }
+
+        let service_account_id = format!("{profile_name}-sa");
+        if let Some((label, _service_account)) = service_account_for_id(ctx, &service_account_id) {
+            owners.push((label.to_string(), refs));
+        }
+    }
+
+    if let Some(profile) = ctx.stack.management().profile() {
+        let refs = storage_permission_refs(profile, ctx.resource_id);
+        if !refs.is_empty() {
+            if let Some(label) = remote_stack_management_label(ctx) {
+                owners.push((label.to_string(), refs));
+            }
+        }
+    }
+
+    owners
+}
+
+fn storage_permission_refs(
+    profile: &PermissionProfile,
+    resource_id: &str,
+) -> Vec<PermissionSetReference> {
+    let mut refs = Vec::new();
+    let mut seen_ids = std::collections::HashSet::new();
+
+    if let Some(resource_refs) = profile.0.get(resource_id) {
+        for permission_ref in resource_refs {
+            if seen_ids.insert(permission_ref.id().to_string()) {
+                refs.push(permission_ref.clone());
+            }
+        }
+    }
+
+    if let Some(wildcard_refs) = profile.0.get("*") {
+        for permission_ref in wildcard_refs
+            .iter()
+            .filter(|permission_ref| permission_ref.id().starts_with("storage/"))
+        {
+            if seen_ids.insert(permission_ref.id().to_string()) {
+                refs.push(permission_ref.clone());
+            }
+        }
+    }
+
+    refs
+}
+
+fn service_account_for_id<'a>(
+    ctx: &'a EmitContext<'_>,
+    service_account_id: &str,
+) -> Option<(&'a str, &'a ServiceAccount)> {
+    let (_id, entry) = ctx
+        .stack
+        .resources()
+        .find(|(id, _entry)| id.as_str() == service_account_id)?;
+    let service_account = entry.config.downcast_ref::<ServiceAccount>()?;
+    let label = ctx.name_for(service_account_id)?;
+    Some((label, service_account))
+}
+
+fn remote_stack_management_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
+    ctx.stack.resources().find_map(|(id, entry)| {
+        if entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE {
+            ctx.name_for(id)
+        } else {
+            None
+        }
+    })
 }

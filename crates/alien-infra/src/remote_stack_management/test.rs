@@ -1,11 +1,9 @@
-use serde::{Deserialize, Serialize};
-
-use crate::core::{ResourceController, ResourceControllerContext, ResourceControllerStepResult};
+use crate::core::ResourceControllerContext;
 use crate::error::Result;
 use alien_core::{
     RemoteStackManagement, RemoteStackManagementOutputs, ResourceOutputs, ResourceStatus,
 };
-use alien_macros::{controller, flow_entry, handler, terminal_state};
+use alien_macros::controller;
 use tracing::info;
 
 #[controller]

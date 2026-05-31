@@ -63,11 +63,6 @@ pub async fn handle_provisioning(
         })
     })?;
 
-    // Stamp deployment-config values onto ContainerCluster template inputs.
-    // Runs every step (not just during preflights) so the executor sees the latest
-    // DeploymentConfig values — e.g., a new worker image ID.
-    crate::helpers::stamp_worker_template(&mut target_stack, &config)?;
-
     // Inject environment variables into the prepared stack
     crate::helpers::inject_environment_variables(&mut target_stack, &config)?;
 
@@ -76,7 +71,7 @@ pub async fn handle_provisioning(
         crate::helpers::inject_monitoring_environment_variables(&mut target_stack, monitoring)?;
     }
 
-    // Sync secrets to vault before deploying functions.
+    // Sync secrets to vault before deploying workload resources.
     // The vault was deployed during InitialSetup and is now Running.
     // Hash check inside sync_secrets_to_vault prevents redundant cloud calls.
     let synced = crate::helpers::sync_secrets_to_vault(
@@ -91,7 +86,8 @@ pub async fn handle_provisioning(
         info!("Secrets synced to vault successfully");
     }
 
-    // Create executor for live resources only
+    // Create executor for live resources. Lifecycle filtering limits mutation
+    // scope; already-running managed dependencies still run Ready handlers.
     let executor = StackExecutor::builder(&target_stack, client_config)
         .deployment_config(&config)
         .lifecycle_filter(vec![ResourceLifecycle::Live])
@@ -136,6 +132,7 @@ pub async fn handle_provisioning(
             error: None,
             suggested_delay_ms: None,
             update_heartbeat: false,
+            heartbeats: vec![],
         }
     } else if stack_status == StackStatus::Failure {
         info!("Live resource deployment failed");
@@ -178,6 +175,7 @@ pub async fn handle_provisioning(
             error,
             suggested_delay_ms: None,
             update_heartbeat: false,
+            heartbeats: vec![],
         }
     } else {
         // Still in progress
@@ -189,6 +187,7 @@ pub async fn handle_provisioning(
             error: None,
             suggested_delay_ms: step_result.suggested_delay_ms,
             update_heartbeat: false,
+            heartbeats: step_result.heartbeats,
         }
     };
 
@@ -222,6 +221,7 @@ pub async fn handle_provisioning_failed(
             error: None,
             suggested_delay_ms: None,
             update_heartbeat: false,
+            heartbeats: vec![],
         });
     }
 
@@ -253,5 +253,6 @@ pub async fn handle_provisioning_failed(
         error: None,
         suggested_delay_ms: None,
         update_heartbeat: false,
+        heartbeats: vec![],
     })
 }

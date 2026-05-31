@@ -9,5 +9,6 @@
 
 pub mod aws;
 pub mod azure;
-pub mod function_environment;
 pub mod gcp;
+pub mod kubernetes_cluster;
+pub mod worker_environment;

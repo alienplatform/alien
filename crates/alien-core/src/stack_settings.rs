@@ -5,6 +5,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::{KubernetesCloudReference, KubernetesClusterOwnership};
+
 /// AWS management configuration extracted from stack settings
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -30,15 +32,10 @@ pub struct GcpManagementConfig {
 pub struct AzureManagementConfig {
     /// The managing Azure Tenant ID for cross-tenant access
     pub managing_tenant_id: String,
-    /// OIDC issuer URL for federated identity credential creation
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub oidc_issuer: Option<String>,
-    /// OIDC subject claim for federated identity credential creation
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub oidc_subject: Option<String>,
-    /// Management service principal object ID for local development fallback
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub management_principal_id: Option<String>,
+    /// OIDC issuer URL trusted by the target-side managed identity.
+    pub oidc_issuer: String,
+    /// OIDC subject claim trusted by the target-side managed identity.
+    pub oidc_subject: String,
 }
 
 /// Management configuration for different cloud platforms.
@@ -266,6 +263,9 @@ pub struct CustomCertificateConfig {
     /// Azure Key Vault certificate ID
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub azure: Option<AzureCustomCertificateConfig>,
+    /// Kubernetes TLS Secret reference for Secret-backed route profiles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kubernetes: Option<KubernetesCustomCertificateConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -287,6 +287,213 @@ pub struct GcpCustomCertificateConfig {
 #[serde(rename_all = "camelCase")]
 pub struct AzureCustomCertificateConfig {
     pub key_vault_certificate_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct KubernetesCustomCertificateConfig {
+    /// Existing TLS Secret containing `tls.crt` and `tls.key`.
+    pub tls_secret_ref: KubernetesTlsSecretRef,
+}
+
+/// Kubernetes runtime substrate configuration.
+///
+/// This controls how setup chooses the cluster backing `Platform::Kubernetes`
+/// deployments. When omitted, cloud-backed Kubernetes deployments default to a
+/// managed cluster and generic/on-prem Kubernetes defaults to an external
+/// cluster.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct KubernetesSettings {
+    /// Cluster selection or creation settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cluster: Option<KubernetesClusterSettings>,
+    /// Public HTTPS exposure contract shared by setup, Helm, and runtime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exposure: Option<KubernetesExposureSettings>,
+}
+
+/// Kubernetes cluster setup settings.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct KubernetesClusterSettings {
+    /// Whether Alien should create the cluster, use a setup-owned existing
+    /// cluster, or bind to an external/on-prem cluster.
+    pub ownership: KubernetesClusterOwnership,
+    /// Namespace where the Alien chart and application resources run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    /// Optional provider-specific cloud identity for existing clusters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud: Option<KubernetesCloudReference>,
+}
+
+/// Kubernetes public HTTPS exposure mode.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", tag = "mode")]
+pub enum KubernetesExposureSettings {
+    /// Do not create Alien-managed external routing.
+    Disabled,
+    /// Use Alien-generated DNS and Platform-managed certificate material.
+    Generated {
+        /// Runtime route profile to materialize.
+        route: KubernetesRouteProfile,
+        /// How managed certificate material reaches the route profile.
+        certificate: KubernetesCertificateMode,
+    },
+    /// Use a customer hostname and customer-owned certificate reference.
+    Custom {
+        /// Hostname routed by the Kubernetes public endpoint.
+        domain: String,
+        /// Runtime route profile to materialize.
+        route: KubernetesRouteProfile,
+        /// Customer-owned certificate reference consumed by the route profile.
+        certificate: KubernetesCertificateMode,
+    },
+}
+
+/// Kubernetes route API selected for public endpoints.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", tag = "routeApi")]
+pub enum KubernetesRouteProfile {
+    /// `networking.k8s.io/v1` Ingress route profile.
+    Ingress(KubernetesIngressRouteProfile),
+    /// Gateway API `Gateway` + `HTTPRoute` route profile.
+    Gateway(KubernetesGatewayRouteProfile),
+}
+
+/// Shared Ingress route profile values.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct KubernetesIngressRouteProfile {
+    /// Route controller identifier, for example `eks.amazonaws.com/alb`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controller: Option<String>,
+    /// `spec.ingressClassName` for generated Ingresses.
+    pub ingress_class_name: String,
+    /// Labels applied to route objects.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub labels: HashMap<String, String>,
+    /// Annotations applied to route objects.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub annotations: HashMap<String, String>,
+    /// Provider-specific route options that are required by the selected class.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<KubernetesRouteProviderOptions>,
+}
+
+/// Shared Gateway API route profile values.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct KubernetesGatewayRouteProfile {
+    /// Route controller identifier, for example a cloud Gateway controller.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controller: Option<String>,
+    /// GatewayClass selected for generated Gateways.
+    pub gateway_class_name: String,
+    /// Listener port, usually 443.
+    pub listener_port: u16,
+    /// Labels applied to route objects.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub labels: HashMap<String, String>,
+    /// Annotations applied to route objects.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub annotations: HashMap<String, String>,
+    /// Provider-specific route options that are required by the selected class.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<KubernetesRouteProviderOptions>,
+}
+
+/// Provider-specific route options required by supported managed profiles.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", tag = "provider")]
+pub enum KubernetesRouteProviderOptions {
+    /// AWS ALB route options for EKS.
+    #[serde(rename_all = "camelCase")]
+    AwsAlb {
+        /// Internet-facing or internal ALB scheme.
+        scheme: String,
+        /// ALB target type, usually `ip`.
+        target_type: String,
+        /// Optional ALB IP address type, such as `dualstack`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ip_address_type: Option<String>,
+        /// Explicit subnet IDs when the profile cannot rely on controller discovery.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        subnet_ids: Vec<String>,
+    },
+    /// GKE Gateway route options.
+    #[serde(rename_all = "camelCase")]
+    GkeGateway {
+        /// Optional static address name for the Gateway frontend.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        static_address_name: Option<String>,
+    },
+    /// Azure Application Gateway for Containers route options.
+    #[serde(rename_all = "camelCase")]
+    AzureApplicationGatewayForContainers {
+        /// Optional ALB namespace when using BYO Application Gateway resources.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        alb_namespace: Option<String>,
+        /// Optional ALB name when using BYO Application Gateway resources.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        alb_name: Option<String>,
+        /// Public or internal frontend exposure.
+        frontend: String,
+    },
+}
+
+/// Certificate publication or reference mode for Kubernetes public endpoints.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", tag = "mode")]
+pub enum KubernetesCertificateMode {
+    /// Platform-managed cert imported into AWS ACM by the runtime.
+    #[serde(rename_all = "camelCase")]
+    ManagedAcmImport {
+        /// ACM region. Defaults to the deployment region when omitted.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        region: Option<String>,
+        /// Tags applied to runtime-imported ACM certificates.
+        #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+        tags: HashMap<String, String>,
+    },
+    /// Customer-provided AWS ACM certificate ARN.
+    #[serde(rename_all = "camelCase")]
+    AwsAcmArn {
+        /// Existing ACM certificate ARN.
+        certificate_arn: String,
+    },
+    /// Platform-managed cert written to a Kubernetes TLS Secret.
+    #[serde(rename_all = "camelCase")]
+    ManagedTlsSecret {
+        /// Secret name template. Runtime may substitute resource/deployment tokens.
+        secret_name_template: String,
+    },
+    /// Customer-provided Kubernetes TLS Secret.
+    TlsSecretRef(KubernetesTlsSecretRef),
+    /// No TLS certificate should be configured by Alien.
+    None,
+}
+
+/// Namespace-scoped Kubernetes TLS Secret reference.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct KubernetesTlsSecretRef {
+    /// Secret name.
+    pub secret_name: String,
+    /// Secret namespace. Defaults to the release namespace when omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
 }
 
 /// User-customizable deployment settings specified at deploy time.
@@ -313,6 +520,10 @@ pub struct StackSettings {
     /// Domain configuration (future).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub domains: Option<DomainSettings>,
+
+    /// Kubernetes runtime substrate configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kubernetes: Option<KubernetesSettings>,
 
     /// Deployment model: push (Manager) or pull (Agent).
     /// Default: Push.

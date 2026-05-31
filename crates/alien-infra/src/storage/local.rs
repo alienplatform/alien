@@ -3,9 +3,14 @@ use tracing::{debug, info};
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use alien_core::{ResourceOutputs, ResourceStatus, Storage, StorageOutputs};
+use alien_core::{
+    HeartbeatBackend, LocalStorageHeartbeatData, ObservedHealth, Platform, ProviderLifecycleState,
+    ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs, ResourceStatus, Storage,
+    StorageHeartbeatData, StorageHeartbeatStatus, StorageOutputs,
+};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_macros::controller;
+use chrono::{DateTime, Utc};
 
 #[controller]
 pub struct LocalStorageController {
@@ -84,6 +89,10 @@ impl LocalStorageController {
                 message: format!("Storage health check failed for '{}'", config.id),
                 resource_id: Some(config.id.clone()),
             })?;
+
+        if let Some(storage_path) = &self.storage_path {
+            emit_local_storage_heartbeat(ctx, &config.id, storage_path);
+        }
 
         debug!(storage_id=%config.id, "Storage health check passed");
 
@@ -195,6 +204,66 @@ impl LocalStorageController {
             Ok(None)
         }
     }
+}
+
+fn emit_local_storage_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    storage_path: &str,
+) {
+    let metadata = std::fs::metadata(storage_path).ok();
+    let path_exists = metadata.is_some();
+    let is_directory = metadata.as_ref().map(|metadata| metadata.is_dir());
+    let readonly = metadata
+        .as_ref()
+        .map(|metadata| metadata.permissions().readonly());
+    let modified_at = metadata
+        .and_then(|metadata| metadata.modified().ok())
+        .map(DateTime::<Utc>::from);
+    let path_message = if path_exists {
+        "Local storage backing path is reachable"
+    } else {
+        "Local storage manager is healthy, but backing path metadata is not reachable"
+    };
+
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: Storage::RESOURCE_TYPE,
+        controller_platform: Platform::Local,
+        backend: HeartbeatBackend::Local,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::Storage(StorageHeartbeatData::Local(
+            LocalStorageHeartbeatData {
+                status: StorageHeartbeatStatus {
+                    health: ObservedHealth::Healthy,
+                    lifecycle: ProviderLifecycleState::Running,
+                    message: Some(path_message.to_string()),
+                    stale: false,
+                    partial: !path_exists,
+                    collection_issues: if path_exists {
+                        vec![]
+                    } else {
+                        vec![alien_core::HeartbeatCollectionIssue {
+                            source: "path-metadata".to_string(),
+                            reason: alien_core::HeartbeatCollectionIssueReason::CollectionFailed,
+                            severity: alien_core::HeartbeatIssueSeverity::Warning,
+                            message: format!(
+                                "Failed to read metadata for local storage backing path '{}'",
+                                storage_path
+                            ),
+                        }]
+                    },
+                },
+                path: storage_path.to_string(),
+                path_exists,
+                is_directory,
+                readonly,
+                modified_at,
+            },
+        )),
+        raw: vec![],
+    });
 }
 
 impl LocalStorageController {

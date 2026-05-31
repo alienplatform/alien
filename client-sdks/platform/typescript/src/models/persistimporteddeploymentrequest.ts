@@ -10,12 +10,10 @@ import {
   ImportSourceKind$outboundSchema,
 } from "./importsourcekind.js";
 
-export const PersistImportedDeploymentRequestMode = {
+export const ModePersist = {
   Persist: "persist",
 } as const;
-export type PersistImportedDeploymentRequestMode = ClosedEnum<
-  typeof PersistImportedDeploymentRequestMode
->;
+export type ModePersist = ClosedEnum<typeof ModePersist>;
 
 /**
  * Represents the target cloud platform.
@@ -57,29 +55,67 @@ export type PersistImportedDeploymentRequestAwsUnion =
   | PersistImportedDeploymentRequestAws
   | any;
 
-export type PersistImportedDeploymentRequestDomainsAzure = {
+export type PersistImportedDeploymentRequestAzureStackSettings = {
   keyVaultCertificateId: string;
 };
 
 export type PersistImportedDeploymentRequestAzureUnion =
-  | PersistImportedDeploymentRequestDomainsAzure
+  | PersistImportedDeploymentRequestAzureStackSettings
   | any;
 
-export type PersistImportedDeploymentRequestDomainsGcp = {
+export type PersistImportedDeploymentRequestGcpStackSettings = {
   certificateName: string;
 };
 
 export type PersistImportedDeploymentRequestGcpUnion =
-  | PersistImportedDeploymentRequestDomainsGcp
+  | PersistImportedDeploymentRequestGcpStackSettings
+  | any;
+
+/**
+ * Namespace-scoped Kubernetes TLS Secret reference.
+ */
+export type PersistImportedDeploymentRequestTlsSecretRef = {
+  /**
+   * Secret namespace. Defaults to the release namespace when omitted.
+   */
+  namespace?: string | null | undefined;
+  /**
+   * Secret name.
+   */
+  secretName: string;
+};
+
+export type PersistImportedDeploymentRequestDomainsKubernetes = {
+  /**
+   * Namespace-scoped Kubernetes TLS Secret reference.
+   */
+  tlsSecretRef: PersistImportedDeploymentRequestTlsSecretRef;
+};
+
+export type PersistImportedDeploymentRequestDomainsKubernetesUnion =
+  | PersistImportedDeploymentRequestDomainsKubernetes
   | any;
 
 /**
  * Platform-specific certificate references for custom domains.
  */
-export type PersistImportedDeploymentRequestCertificate = {
+export type PersistImportedDeploymentRequestDomainsCertificate = {
   aws?: PersistImportedDeploymentRequestAws | any | null | undefined;
-  azure?: PersistImportedDeploymentRequestDomainsAzure | any | null | undefined;
-  gcp?: PersistImportedDeploymentRequestDomainsGcp | any | null | undefined;
+  azure?:
+    | PersistImportedDeploymentRequestAzureStackSettings
+    | any
+    | null
+    | undefined;
+  gcp?:
+    | PersistImportedDeploymentRequestGcpStackSettings
+    | any
+    | null
+    | undefined;
+  kubernetes?:
+    | PersistImportedDeploymentRequestDomainsKubernetes
+    | any
+    | null
+    | undefined;
 };
 
 /**
@@ -89,7 +125,7 @@ export type PersistImportedDeploymentRequestCustomDomains = {
   /**
    * Platform-specific certificate references for custom domains.
    */
-  certificate: PersistImportedDeploymentRequestCertificate;
+  certificate: PersistImportedDeploymentRequestDomainsCertificate;
   /**
    * Fully qualified domain name to use.
    */
@@ -141,6 +177,711 @@ export const PersistImportedDeploymentRequestHeartbeats = {
 export type PersistImportedDeploymentRequestHeartbeats = ClosedEnum<
   typeof PersistImportedDeploymentRequestHeartbeats
 >;
+
+/**
+ * Optional provider-specific identity for a cloud-backed Kubernetes cluster.
+ */
+export type PersistImportedDeploymentRequestCloud = {
+  accountId?: string | null | undefined;
+  clusterId?: string | null | undefined;
+  clusterName?: string | null | undefined;
+  projectId?: string | null | undefined;
+  region?: string | null | undefined;
+  resourceGroup?: string | null | undefined;
+  subscriptionId?: string | null | undefined;
+};
+
+export type PersistImportedDeploymentRequestCloudUnion =
+  | PersistImportedDeploymentRequestCloud
+  | any;
+
+/**
+ * Ownership model for the Kubernetes cluster.
+ */
+export const PersistImportedDeploymentRequestOwnership = {
+  Managed: "managed",
+  Existing: "existing",
+  External: "external",
+} as const;
+/**
+ * Ownership model for the Kubernetes cluster.
+ */
+export type PersistImportedDeploymentRequestOwnership = ClosedEnum<
+  typeof PersistImportedDeploymentRequestOwnership
+>;
+
+/**
+ * Kubernetes cluster setup settings.
+ */
+export type PersistImportedDeploymentRequestCluster = {
+  cloud?: PersistImportedDeploymentRequestCloud | any | null | undefined;
+  /**
+   * Namespace where the Alien chart and application resources run.
+   */
+  namespace?: string | null | undefined;
+  /**
+   * Ownership model for the Kubernetes cluster.
+   */
+  ownership: PersistImportedDeploymentRequestOwnership;
+};
+
+export type PersistImportedDeploymentRequestClusterUnion =
+  | PersistImportedDeploymentRequestCluster
+  | any;
+
+export type PersistImportedDeploymentRequestCertificateNone2 = {
+  mode: "none";
+};
+
+export type PersistImportedDeploymentRequestCertificateManagedTLSSecret2 = {
+  mode: "managedTlsSecret";
+  /**
+   * Secret name template. Runtime may substitute resource/deployment tokens.
+   */
+  secretNameTemplate: string;
+};
+
+export type PersistImportedDeploymentRequestCertificateAwsAcmArn2 = {
+  /**
+   * Existing ACM certificate ARN.
+   */
+  certificateArn: string;
+  mode: "awsAcmArn";
+};
+
+export type PersistImportedDeploymentRequestCertificateManagedAcmImport2 = {
+  mode: "managedAcmImport";
+  /**
+   * ACM region. Defaults to the deployment region when omitted.
+   */
+  region?: string | null | undefined;
+  /**
+   * Tags applied to runtime-imported ACM certificates.
+   */
+  tags?: { [k: string]: string } | undefined;
+};
+
+/**
+ * Namespace-scoped Kubernetes TLS Secret reference.
+ */
+export type PersistImportedDeploymentRequestCertificateTLSSecretRef2 = {
+  /**
+   * Secret namespace. Defaults to the release namespace when omitted.
+   */
+  namespace?: string | null | undefined;
+  /**
+   * Secret name.
+   */
+  secretName: string;
+  mode: "tlsSecretRef";
+};
+
+/**
+ * Certificate publication or reference mode for Kubernetes public endpoints.
+ */
+export type PersistImportedDeploymentRequestCertificateUnion2 =
+  | PersistImportedDeploymentRequestCertificateTLSSecretRef2
+  | PersistImportedDeploymentRequestCertificateManagedAcmImport2
+  | PersistImportedDeploymentRequestCertificateAwsAcmArn2
+  | PersistImportedDeploymentRequestCertificateManagedTLSSecret2
+  | PersistImportedDeploymentRequestCertificateNone2;
+
+export const PersistImportedDeploymentRequestModeCustom = {
+  Custom: "custom",
+} as const;
+export type PersistImportedDeploymentRequestModeCustom = ClosedEnum<
+  typeof PersistImportedDeploymentRequestModeCustom
+>;
+
+export const PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainersEnum4 =
+  {
+    AzureApplicationGatewayForContainers:
+      "azureApplicationGatewayForContainers",
+  } as const;
+export type PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainersEnum4 =
+  ClosedEnum<
+    typeof PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainersEnum4
+  >;
+
+export type PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers4 =
+  {
+    /**
+     * Optional ALB name when using BYO Application Gateway resources.
+     */
+    albName?: string | null | undefined;
+    /**
+     * Optional ALB namespace when using BYO Application Gateway resources.
+     */
+    albNamespace?: string | null | undefined;
+    /**
+     * Public or internal frontend exposure.
+     */
+    frontend: string;
+    provider:
+      PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainersEnum4;
+  };
+
+export const PersistImportedDeploymentRequestProviderGkeGatewayEnum4 = {
+  GkeGateway: "gkeGateway",
+} as const;
+export type PersistImportedDeploymentRequestProviderGkeGatewayEnum4 =
+  ClosedEnum<typeof PersistImportedDeploymentRequestProviderGkeGatewayEnum4>;
+
+export type PersistImportedDeploymentRequestProviderGkeGateway4 = {
+  provider: PersistImportedDeploymentRequestProviderGkeGatewayEnum4;
+  /**
+   * Optional static address name for the Gateway frontend.
+   */
+  staticAddressName?: string | null | undefined;
+};
+
+export const PersistImportedDeploymentRequestProviderAwsAlbEnum4 = {
+  AwsAlb: "awsAlb",
+} as const;
+export type PersistImportedDeploymentRequestProviderAwsAlbEnum4 = ClosedEnum<
+  typeof PersistImportedDeploymentRequestProviderAwsAlbEnum4
+>;
+
+export type PersistImportedDeploymentRequestProviderAwsAlb4 = {
+  /**
+   * Optional ALB IP address type, such as `dualstack`.
+   */
+  ipAddressType?: string | null | undefined;
+  provider: PersistImportedDeploymentRequestProviderAwsAlbEnum4;
+  /**
+   * Internet-facing or internal ALB scheme.
+   */
+  scheme: string;
+  /**
+   * Explicit subnet IDs when the profile cannot rely on controller discovery.
+   */
+  subnetIds?: Array<string> | undefined;
+  /**
+   * ALB target type, usually `ip`.
+   */
+  targetType: string;
+};
+
+export type PersistImportedDeploymentRequestProviderUnion4 =
+  | PersistImportedDeploymentRequestProviderAwsAlb4
+  | PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers4
+  | PersistImportedDeploymentRequestProviderGkeGateway4
+  | any;
+
+/**
+ * Shared Gateway API route profile values.
+ */
+export type PersistImportedDeploymentRequestRouteGateway2 = {
+  /**
+   * Annotations applied to route objects.
+   */
+  annotations?: { [k: string]: string } | undefined;
+  /**
+   * Route controller identifier, for example a cloud Gateway controller.
+   */
+  controller?: string | null | undefined;
+  /**
+   * GatewayClass selected for generated Gateways.
+   */
+  gatewayClassName: string;
+  /**
+   * Labels applied to route objects.
+   */
+  labels?: { [k: string]: string } | undefined;
+  /**
+   * Listener port, usually 443.
+   */
+  listenerPort: number;
+  provider?:
+    | PersistImportedDeploymentRequestProviderAwsAlb4
+    | PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers4
+    | PersistImportedDeploymentRequestProviderGkeGateway4
+    | any
+    | null
+    | undefined;
+  routeApi: "gateway";
+};
+
+export const PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainersEnum3 =
+  {
+    AzureApplicationGatewayForContainers:
+      "azureApplicationGatewayForContainers",
+  } as const;
+export type PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainersEnum3 =
+  ClosedEnum<
+    typeof PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainersEnum3
+  >;
+
+export type PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers3 =
+  {
+    /**
+     * Optional ALB name when using BYO Application Gateway resources.
+     */
+    albName?: string | null | undefined;
+    /**
+     * Optional ALB namespace when using BYO Application Gateway resources.
+     */
+    albNamespace?: string | null | undefined;
+    /**
+     * Public or internal frontend exposure.
+     */
+    frontend: string;
+    provider:
+      PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainersEnum3;
+  };
+
+export const PersistImportedDeploymentRequestProviderGkeGatewayEnum3 = {
+  GkeGateway: "gkeGateway",
+} as const;
+export type PersistImportedDeploymentRequestProviderGkeGatewayEnum3 =
+  ClosedEnum<typeof PersistImportedDeploymentRequestProviderGkeGatewayEnum3>;
+
+export type PersistImportedDeploymentRequestProviderGkeGateway3 = {
+  provider: PersistImportedDeploymentRequestProviderGkeGatewayEnum3;
+  /**
+   * Optional static address name for the Gateway frontend.
+   */
+  staticAddressName?: string | null | undefined;
+};
+
+export const PersistImportedDeploymentRequestProviderAwsAlbEnum3 = {
+  AwsAlb: "awsAlb",
+} as const;
+export type PersistImportedDeploymentRequestProviderAwsAlbEnum3 = ClosedEnum<
+  typeof PersistImportedDeploymentRequestProviderAwsAlbEnum3
+>;
+
+export type PersistImportedDeploymentRequestProviderAwsAlb3 = {
+  /**
+   * Optional ALB IP address type, such as `dualstack`.
+   */
+  ipAddressType?: string | null | undefined;
+  provider: PersistImportedDeploymentRequestProviderAwsAlbEnum3;
+  /**
+   * Internet-facing or internal ALB scheme.
+   */
+  scheme: string;
+  /**
+   * Explicit subnet IDs when the profile cannot rely on controller discovery.
+   */
+  subnetIds?: Array<string> | undefined;
+  /**
+   * ALB target type, usually `ip`.
+   */
+  targetType: string;
+};
+
+export type PersistImportedDeploymentRequestProviderUnion3 =
+  | PersistImportedDeploymentRequestProviderAwsAlb3
+  | PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers3
+  | PersistImportedDeploymentRequestProviderGkeGateway3
+  | any;
+
+/**
+ * Shared Ingress route profile values.
+ */
+export type PersistImportedDeploymentRequestRouteIngress2 = {
+  /**
+   * Annotations applied to route objects.
+   */
+  annotations?: { [k: string]: string } | undefined;
+  /**
+   * Route controller identifier, for example `eks.amazonaws.com/alb`.
+   */
+  controller?: string | null | undefined;
+  /**
+   * `spec.ingressClassName` for generated Ingresses.
+   */
+  ingressClassName: string;
+  /**
+   * Labels applied to route objects.
+   */
+  labels?: { [k: string]: string } | undefined;
+  provider?:
+    | PersistImportedDeploymentRequestProviderAwsAlb3
+    | PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers3
+    | PersistImportedDeploymentRequestProviderGkeGateway3
+    | any
+    | null
+    | undefined;
+  routeApi: "ingress";
+};
+
+/**
+ * Kubernetes route API selected for public endpoints.
+ */
+export type PersistImportedDeploymentRequestRouteUnion2 =
+  | PersistImportedDeploymentRequestRouteIngress2
+  | PersistImportedDeploymentRequestRouteGateway2;
+
+export type PersistImportedDeploymentRequestExposureCustom = {
+  /**
+   * Certificate publication or reference mode for Kubernetes public endpoints.
+   */
+  certificate:
+    | PersistImportedDeploymentRequestCertificateTLSSecretRef2
+    | PersistImportedDeploymentRequestCertificateManagedAcmImport2
+    | PersistImportedDeploymentRequestCertificateAwsAcmArn2
+    | PersistImportedDeploymentRequestCertificateManagedTLSSecret2
+    | PersistImportedDeploymentRequestCertificateNone2;
+  /**
+   * Hostname routed by the Kubernetes public endpoint.
+   */
+  domain: string;
+  mode: PersistImportedDeploymentRequestModeCustom;
+  /**
+   * Kubernetes route API selected for public endpoints.
+   */
+  route:
+    | PersistImportedDeploymentRequestRouteIngress2
+    | PersistImportedDeploymentRequestRouteGateway2;
+};
+
+export type PersistImportedDeploymentRequestCertificateNone1 = {
+  mode: "none";
+};
+
+export type PersistImportedDeploymentRequestCertificateManagedTLSSecret1 = {
+  mode: "managedTlsSecret";
+  /**
+   * Secret name template. Runtime may substitute resource/deployment tokens.
+   */
+  secretNameTemplate: string;
+};
+
+export type PersistImportedDeploymentRequestCertificateAwsAcmArn1 = {
+  /**
+   * Existing ACM certificate ARN.
+   */
+  certificateArn: string;
+  mode: "awsAcmArn";
+};
+
+export type PersistImportedDeploymentRequestCertificateManagedAcmImport1 = {
+  mode: "managedAcmImport";
+  /**
+   * ACM region. Defaults to the deployment region when omitted.
+   */
+  region?: string | null | undefined;
+  /**
+   * Tags applied to runtime-imported ACM certificates.
+   */
+  tags?: { [k: string]: string } | undefined;
+};
+
+/**
+ * Namespace-scoped Kubernetes TLS Secret reference.
+ */
+export type PersistImportedDeploymentRequestCertificateTLSSecretRef1 = {
+  /**
+   * Secret namespace. Defaults to the release namespace when omitted.
+   */
+  namespace?: string | null | undefined;
+  /**
+   * Secret name.
+   */
+  secretName: string;
+  mode: "tlsSecretRef";
+};
+
+/**
+ * Certificate publication or reference mode for Kubernetes public endpoints.
+ */
+export type PersistImportedDeploymentRequestCertificateUnion1 =
+  | PersistImportedDeploymentRequestCertificateTLSSecretRef1
+  | PersistImportedDeploymentRequestCertificateManagedAcmImport1
+  | PersistImportedDeploymentRequestCertificateAwsAcmArn1
+  | PersistImportedDeploymentRequestCertificateManagedTLSSecret1
+  | PersistImportedDeploymentRequestCertificateNone1;
+
+export const PersistImportedDeploymentRequestModeGenerated = {
+  Generated: "generated",
+} as const;
+export type PersistImportedDeploymentRequestModeGenerated = ClosedEnum<
+  typeof PersistImportedDeploymentRequestModeGenerated
+>;
+
+export const PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainersEnum2 =
+  {
+    AzureApplicationGatewayForContainers:
+      "azureApplicationGatewayForContainers",
+  } as const;
+export type PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainersEnum2 =
+  ClosedEnum<
+    typeof PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainersEnum2
+  >;
+
+export type PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers2 =
+  {
+    /**
+     * Optional ALB name when using BYO Application Gateway resources.
+     */
+    albName?: string | null | undefined;
+    /**
+     * Optional ALB namespace when using BYO Application Gateway resources.
+     */
+    albNamespace?: string | null | undefined;
+    /**
+     * Public or internal frontend exposure.
+     */
+    frontend: string;
+    provider:
+      PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainersEnum2;
+  };
+
+export const PersistImportedDeploymentRequestProviderGkeGatewayEnum2 = {
+  GkeGateway: "gkeGateway",
+} as const;
+export type PersistImportedDeploymentRequestProviderGkeGatewayEnum2 =
+  ClosedEnum<typeof PersistImportedDeploymentRequestProviderGkeGatewayEnum2>;
+
+export type PersistImportedDeploymentRequestProviderGkeGateway2 = {
+  provider: PersistImportedDeploymentRequestProviderGkeGatewayEnum2;
+  /**
+   * Optional static address name for the Gateway frontend.
+   */
+  staticAddressName?: string | null | undefined;
+};
+
+export const PersistImportedDeploymentRequestProviderAwsAlbEnum2 = {
+  AwsAlb: "awsAlb",
+} as const;
+export type PersistImportedDeploymentRequestProviderAwsAlbEnum2 = ClosedEnum<
+  typeof PersistImportedDeploymentRequestProviderAwsAlbEnum2
+>;
+
+export type PersistImportedDeploymentRequestProviderAwsAlb2 = {
+  /**
+   * Optional ALB IP address type, such as `dualstack`.
+   */
+  ipAddressType?: string | null | undefined;
+  provider: PersistImportedDeploymentRequestProviderAwsAlbEnum2;
+  /**
+   * Internet-facing or internal ALB scheme.
+   */
+  scheme: string;
+  /**
+   * Explicit subnet IDs when the profile cannot rely on controller discovery.
+   */
+  subnetIds?: Array<string> | undefined;
+  /**
+   * ALB target type, usually `ip`.
+   */
+  targetType: string;
+};
+
+export type PersistImportedDeploymentRequestProviderUnion2 =
+  | PersistImportedDeploymentRequestProviderAwsAlb2
+  | PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers2
+  | PersistImportedDeploymentRequestProviderGkeGateway2
+  | any;
+
+/**
+ * Shared Gateway API route profile values.
+ */
+export type PersistImportedDeploymentRequestRouteGateway1 = {
+  /**
+   * Annotations applied to route objects.
+   */
+  annotations?: { [k: string]: string } | undefined;
+  /**
+   * Route controller identifier, for example a cloud Gateway controller.
+   */
+  controller?: string | null | undefined;
+  /**
+   * GatewayClass selected for generated Gateways.
+   */
+  gatewayClassName: string;
+  /**
+   * Labels applied to route objects.
+   */
+  labels?: { [k: string]: string } | undefined;
+  /**
+   * Listener port, usually 443.
+   */
+  listenerPort: number;
+  provider?:
+    | PersistImportedDeploymentRequestProviderAwsAlb2
+    | PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers2
+    | PersistImportedDeploymentRequestProviderGkeGateway2
+    | any
+    | null
+    | undefined;
+  routeApi: "gateway";
+};
+
+export const PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainersEnum1 =
+  {
+    AzureApplicationGatewayForContainers:
+      "azureApplicationGatewayForContainers",
+  } as const;
+export type PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainersEnum1 =
+  ClosedEnum<
+    typeof PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainersEnum1
+  >;
+
+export type PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers1 =
+  {
+    /**
+     * Optional ALB name when using BYO Application Gateway resources.
+     */
+    albName?: string | null | undefined;
+    /**
+     * Optional ALB namespace when using BYO Application Gateway resources.
+     */
+    albNamespace?: string | null | undefined;
+    /**
+     * Public or internal frontend exposure.
+     */
+    frontend: string;
+    provider:
+      PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainersEnum1;
+  };
+
+export const PersistImportedDeploymentRequestProviderGkeGatewayEnum1 = {
+  GkeGateway: "gkeGateway",
+} as const;
+export type PersistImportedDeploymentRequestProviderGkeGatewayEnum1 =
+  ClosedEnum<typeof PersistImportedDeploymentRequestProviderGkeGatewayEnum1>;
+
+export type PersistImportedDeploymentRequestProviderGkeGateway1 = {
+  provider: PersistImportedDeploymentRequestProviderGkeGatewayEnum1;
+  /**
+   * Optional static address name for the Gateway frontend.
+   */
+  staticAddressName?: string | null | undefined;
+};
+
+export const PersistImportedDeploymentRequestProviderAwsAlbEnum1 = {
+  AwsAlb: "awsAlb",
+} as const;
+export type PersistImportedDeploymentRequestProviderAwsAlbEnum1 = ClosedEnum<
+  typeof PersistImportedDeploymentRequestProviderAwsAlbEnum1
+>;
+
+export type PersistImportedDeploymentRequestProviderAwsAlb1 = {
+  /**
+   * Optional ALB IP address type, such as `dualstack`.
+   */
+  ipAddressType?: string | null | undefined;
+  provider: PersistImportedDeploymentRequestProviderAwsAlbEnum1;
+  /**
+   * Internet-facing or internal ALB scheme.
+   */
+  scheme: string;
+  /**
+   * Explicit subnet IDs when the profile cannot rely on controller discovery.
+   */
+  subnetIds?: Array<string> | undefined;
+  /**
+   * ALB target type, usually `ip`.
+   */
+  targetType: string;
+};
+
+export type PersistImportedDeploymentRequestProviderUnion1 =
+  | PersistImportedDeploymentRequestProviderAwsAlb1
+  | PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers1
+  | PersistImportedDeploymentRequestProviderGkeGateway1
+  | any;
+
+/**
+ * Shared Ingress route profile values.
+ */
+export type PersistImportedDeploymentRequestRouteIngress1 = {
+  /**
+   * Annotations applied to route objects.
+   */
+  annotations?: { [k: string]: string } | undefined;
+  /**
+   * Route controller identifier, for example `eks.amazonaws.com/alb`.
+   */
+  controller?: string | null | undefined;
+  /**
+   * `spec.ingressClassName` for generated Ingresses.
+   */
+  ingressClassName: string;
+  /**
+   * Labels applied to route objects.
+   */
+  labels?: { [k: string]: string } | undefined;
+  provider?:
+    | PersistImportedDeploymentRequestProviderAwsAlb1
+    | PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers1
+    | PersistImportedDeploymentRequestProviderGkeGateway1
+    | any
+    | null
+    | undefined;
+  routeApi: "ingress";
+};
+
+/**
+ * Kubernetes route API selected for public endpoints.
+ */
+export type PersistImportedDeploymentRequestRouteUnion1 =
+  | PersistImportedDeploymentRequestRouteIngress1
+  | PersistImportedDeploymentRequestRouteGateway1;
+
+export type PersistImportedDeploymentRequestExposureGenerated = {
+  /**
+   * Certificate publication or reference mode for Kubernetes public endpoints.
+   */
+  certificate:
+    | PersistImportedDeploymentRequestCertificateTLSSecretRef1
+    | PersistImportedDeploymentRequestCertificateManagedAcmImport1
+    | PersistImportedDeploymentRequestCertificateAwsAcmArn1
+    | PersistImportedDeploymentRequestCertificateManagedTLSSecret1
+    | PersistImportedDeploymentRequestCertificateNone1;
+  mode: PersistImportedDeploymentRequestModeGenerated;
+  /**
+   * Kubernetes route API selected for public endpoints.
+   */
+  route:
+    | PersistImportedDeploymentRequestRouteIngress1
+    | PersistImportedDeploymentRequestRouteGateway1;
+};
+
+export const PersistImportedDeploymentRequestModeDisabled = {
+  Disabled: "disabled",
+} as const;
+export type PersistImportedDeploymentRequestModeDisabled = ClosedEnum<
+  typeof PersistImportedDeploymentRequestModeDisabled
+>;
+
+export type PersistImportedDeploymentRequestExposureDisabled = {
+  mode: PersistImportedDeploymentRequestModeDisabled;
+};
+
+export type PersistImportedDeploymentRequestExposureUnion =
+  | PersistImportedDeploymentRequestExposureCustom
+  | PersistImportedDeploymentRequestExposureGenerated
+  | PersistImportedDeploymentRequestExposureDisabled
+  | any;
+
+/**
+ * Kubernetes runtime substrate configuration.
+ *
+ * @remarks
+ *
+ * This controls how setup chooses the cluster backing `Platform::Kubernetes`
+ * deployments. When omitted, cloud-backed Kubernetes deployments default to a
+ * managed cluster and generic/on-prem Kubernetes defaults to an external
+ * cluster.
+ */
+export type PersistImportedDeploymentRequestKubernetes = {
+  cluster?: PersistImportedDeploymentRequestCluster | any | null | undefined;
+  exposure?:
+    | PersistImportedDeploymentRequestExposureCustom
+    | PersistImportedDeploymentRequestExposureGenerated
+    | PersistImportedDeploymentRequestExposureDisabled
+    | any
+    | null
+    | undefined;
+};
+
+export type PersistImportedDeploymentRequestKubernetesUnion =
+  | PersistImportedDeploymentRequestKubernetes
+  | any;
 
 export const PersistImportedDeploymentRequestTypeByoVnetAzure = {
   ByoVnetAzure: "byo-vnet-azure",
@@ -319,6 +1060,11 @@ export type PersistImportedDeploymentRequestStackSettings = {
    * How heartbeat health checks are handled.
    */
   heartbeats?: PersistImportedDeploymentRequestHeartbeats | undefined;
+  kubernetes?:
+    | PersistImportedDeploymentRequestKubernetes
+    | any
+    | null
+    | undefined;
   network?:
     | PersistImportedDeploymentRequestNetworkByoVpcAws
     | PersistImportedDeploymentRequestNetworkByoVpcGcp
@@ -498,6 +1244,38 @@ export type PersistImportedDeploymentRequestDeleteScopeUnion =
   | PersistImportedDeploymentRequestDeleteScopeEnum
   | any;
 
+/**
+ * Scope for a delete operation.
+ *
+ * @remarks
+ *
+ * Full deletes are setup/admin owned and may remove both Frozen and Live
+ * resources. Live-only deletes are used by setup handoff resources
+ * (Terraform/CloudFormation) so Alien removes only the resources it owns
+ * before setup tears down Frozen resources.
+ */
+export const PersistImportedDeploymentRequestPendingDeleteScopeEnum = {
+  Full: "full",
+  LiveOnly: "liveOnly",
+} as const;
+/**
+ * Scope for a delete operation.
+ *
+ * @remarks
+ *
+ * Full deletes are setup/admin owned and may remove both Frozen and Live
+ * resources. Live-only deletes are used by setup handoff resources
+ * (Terraform/CloudFormation) so Alien removes only the resources it owns
+ * before setup tears down Frozen resources.
+ */
+export type PersistImportedDeploymentRequestPendingDeleteScopeEnum = ClosedEnum<
+  typeof PersistImportedDeploymentRequestPendingDeleteScopeEnum
+>;
+
+export type PersistImportedDeploymentRequestPendingDeleteScopeUnion =
+  | PersistImportedDeploymentRequestPendingDeleteScopeEnum
+  | any;
+
 export const PersistImportedDeploymentRequestManagementEnum = {
   Auto: "auto",
 } as const;
@@ -574,9 +1352,17 @@ export type PersistImportedDeploymentRequestOverrideAwGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -588,6 +1374,10 @@ export type PersistImportedDeploymentRequestOverrideAw = {
    */
   binding: PersistImportedDeploymentRequestOverrideAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: PersistImportedDeploymentRequestOverrideEffect | undefined;
@@ -595,6 +1385,10 @@ export type PersistImportedDeploymentRequestOverrideAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: PersistImportedDeploymentRequestOverrideAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -644,9 +1438,17 @@ export type PersistImportedDeploymentRequestOverrideAzureGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -658,9 +1460,17 @@ export type PersistImportedDeploymentRequestOverrideAzure = {
    */
   binding: PersistImportedDeploymentRequestOverrideAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: PersistImportedDeploymentRequestOverrideAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -744,9 +1554,17 @@ export type PersistImportedDeploymentRequestOverrideGcpGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -758,9 +1576,17 @@ export type PersistImportedDeploymentRequestOverrideGcp = {
    */
   binding: PersistImportedDeploymentRequestOverrideGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: PersistImportedDeploymentRequestOverrideGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -890,9 +1716,17 @@ export type PersistImportedDeploymentRequestExtendAwGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -904,6 +1738,10 @@ export type PersistImportedDeploymentRequestExtendAw = {
    */
   binding: PersistImportedDeploymentRequestExtendAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: PersistImportedDeploymentRequestExtendEffect | undefined;
@@ -911,6 +1749,10 @@ export type PersistImportedDeploymentRequestExtendAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: PersistImportedDeploymentRequestExtendAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -960,9 +1802,17 @@ export type PersistImportedDeploymentRequestExtendAzureGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -974,9 +1824,17 @@ export type PersistImportedDeploymentRequestExtendAzure = {
    */
   binding: PersistImportedDeploymentRequestExtendAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: PersistImportedDeploymentRequestExtendAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -1060,9 +1918,17 @@ export type PersistImportedDeploymentRequestExtendGcpGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -1074,9 +1940,17 @@ export type PersistImportedDeploymentRequestExtendGcp = {
    */
   binding: PersistImportedDeploymentRequestExtendGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: PersistImportedDeploymentRequestExtendGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -1211,9 +2085,17 @@ export type PersistImportedDeploymentRequestProfileAwGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -1225,6 +2107,10 @@ export type PersistImportedDeploymentRequestProfileAw = {
    */
   binding: PersistImportedDeploymentRequestProfileAwBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * IAM effect. Defaults to Allow.
    */
   effect?: PersistImportedDeploymentRequestProfileEffect | undefined;
@@ -1232,6 +2118,10 @@ export type PersistImportedDeploymentRequestProfileAw = {
    * Grant permissions for a specific cloud platform
    */
   grant: PersistImportedDeploymentRequestProfileAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -1281,9 +2171,17 @@ export type PersistImportedDeploymentRequestProfileAzureGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -1295,9 +2193,17 @@ export type PersistImportedDeploymentRequestProfileAzure = {
    */
   binding: PersistImportedDeploymentRequestProfileAzureBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: PersistImportedDeploymentRequestProfileAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -1381,9 +2287,17 @@ export type PersistImportedDeploymentRequestProfileGcpGrant = {
    */
   dataActions?: Array<string> | null | undefined;
   /**
-   * GCP permissions (only for GCP)
+   * GCP permissions that require an exact residual custom role.
    */
   permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /**
@@ -1395,9 +2309,17 @@ export type PersistImportedDeploymentRequestProfileGcp = {
    */
   binding: PersistImportedDeploymentRequestProfileGcpBinding;
   /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
    * Grant permissions for a specific cloud platform
    */
   grant: PersistImportedDeploymentRequestProfileGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
 };
 
 /**
@@ -1607,6 +2529,11 @@ export type PersistImportedDeploymentRequestRuntimeMetadata = {
    * Used to avoid redundant sync operations during incremental deployment
    */
   lastSyncedEnvVarsHash?: string | null | undefined;
+  pendingDeleteScope?:
+    | PersistImportedDeploymentRequestPendingDeleteScopeEnum
+    | any
+    | null
+    | undefined;
   preparedStack?:
     | PersistImportedDeploymentRequestPreparedStack
     | any
@@ -1659,21 +2586,17 @@ export type PersistImportedDeploymentRequestManagementConfigKubernetes = {
  */
 export type PersistImportedDeploymentRequestManagementConfigAzure = {
   /**
-   * Management service principal object ID for local development fallback
-   */
-  managementPrincipalId?: string | null | undefined;
-  /**
    * The managing Azure Tenant ID for cross-tenant access
    */
   managingTenantId: string;
   /**
-   * OIDC issuer URL for federated identity credential creation
+   * OIDC issuer URL trusted by the target-side managed identity.
    */
-  oidcIssuer?: string | null | undefined;
+  oidcIssuer: string;
   /**
-   * OIDC subject claim for federated identity credential creation
+   * OIDC subject claim trusted by the target-side managed identity.
    */
-  oidcSubject?: string | null | undefined;
+  oidcSubject: string;
   platform: "azure";
 };
 
@@ -1714,7 +2637,7 @@ export type PersistImportedDeploymentRequestManagementConfigUnion =
   | PersistImportedDeploymentRequestManagementConfigKubernetes;
 
 export type PersistImportedDeploymentRequest = {
-  mode: PersistImportedDeploymentRequestMode;
+  mode: ModePersist;
   /**
    * Deployment name. Must be unique within the deployment group.
    */
@@ -1763,6 +2686,10 @@ export type PersistImportedDeploymentRequest = {
    */
   runtimeMetadata: PersistImportedDeploymentRequestRuntimeMetadata;
   /**
+   * DeploymentState protocol version owned by the runtime/manager
+   */
+  deploymentProtocolVersion: number;
+  /**
    * Deployment status in the deployment lifecycle
    */
   status?: PersistImportedDeploymentRequestStatus | undefined;
@@ -1770,6 +2697,10 @@ export type PersistImportedDeploymentRequest = {
    * Unique identifier for the release.
    */
   currentReleaseId?: string | undefined;
+  /**
+   * Unique identifier for the release.
+   */
+  desiredReleaseId?: string | undefined;
   importSource?: ImportSourceKind | undefined;
   /**
    * Stable target key for the setup contract, e.g. aws/us-east-1
@@ -1801,9 +2732,9 @@ export type PersistImportedDeploymentRequest = {
 };
 
 /** @internal */
-export const PersistImportedDeploymentRequestMode$outboundSchema: z.ZodEnum<
-  typeof PersistImportedDeploymentRequestMode
-> = z.enum(PersistImportedDeploymentRequestMode);
+export const ModePersist$outboundSchema: z.ZodEnum<typeof ModePersist> = z.enum(
+  ModePersist,
+);
 
 /** @internal */
 export const PersistImportedDeploymentRequestPlatformEnum$outboundSchema:
@@ -1866,33 +2797,33 @@ export function persistImportedDeploymentRequestAwsUnionToJSON(
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestDomainsAzure$Outbound = {
+export type PersistImportedDeploymentRequestAzureStackSettings$Outbound = {
   keyVaultCertificateId: string;
 };
 
 /** @internal */
-export const PersistImportedDeploymentRequestDomainsAzure$outboundSchema:
+export const PersistImportedDeploymentRequestAzureStackSettings$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestDomainsAzure$Outbound,
-    PersistImportedDeploymentRequestDomainsAzure
+    PersistImportedDeploymentRequestAzureStackSettings$Outbound,
+    PersistImportedDeploymentRequestAzureStackSettings
   > = z.object({
     keyVaultCertificateId: z.string(),
   });
 
-export function persistImportedDeploymentRequestDomainsAzureToJSON(
-  persistImportedDeploymentRequestDomainsAzure:
-    PersistImportedDeploymentRequestDomainsAzure,
+export function persistImportedDeploymentRequestAzureStackSettingsToJSON(
+  persistImportedDeploymentRequestAzureStackSettings:
+    PersistImportedDeploymentRequestAzureStackSettings,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestDomainsAzure$outboundSchema.parse(
-      persistImportedDeploymentRequestDomainsAzure,
+    PersistImportedDeploymentRequestAzureStackSettings$outboundSchema.parse(
+      persistImportedDeploymentRequestAzureStackSettings,
     ),
   );
 }
 
 /** @internal */
 export type PersistImportedDeploymentRequestAzureUnion$Outbound =
-  | PersistImportedDeploymentRequestDomainsAzure$Outbound
+  | PersistImportedDeploymentRequestAzureStackSettings$Outbound
   | any;
 
 /** @internal */
@@ -1901,7 +2832,9 @@ export const PersistImportedDeploymentRequestAzureUnion$outboundSchema:
     PersistImportedDeploymentRequestAzureUnion$Outbound,
     PersistImportedDeploymentRequestAzureUnion
   > = z.union([
-    z.lazy(() => PersistImportedDeploymentRequestDomainsAzure$outboundSchema),
+    z.lazy(() =>
+      PersistImportedDeploymentRequestAzureStackSettings$outboundSchema
+    ),
     z.any(),
   ]);
 
@@ -1917,33 +2850,33 @@ export function persistImportedDeploymentRequestAzureUnionToJSON(
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestDomainsGcp$Outbound = {
+export type PersistImportedDeploymentRequestGcpStackSettings$Outbound = {
   certificateName: string;
 };
 
 /** @internal */
-export const PersistImportedDeploymentRequestDomainsGcp$outboundSchema:
+export const PersistImportedDeploymentRequestGcpStackSettings$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestDomainsGcp$Outbound,
-    PersistImportedDeploymentRequestDomainsGcp
+    PersistImportedDeploymentRequestGcpStackSettings$Outbound,
+    PersistImportedDeploymentRequestGcpStackSettings
   > = z.object({
     certificateName: z.string(),
   });
 
-export function persistImportedDeploymentRequestDomainsGcpToJSON(
-  persistImportedDeploymentRequestDomainsGcp:
-    PersistImportedDeploymentRequestDomainsGcp,
+export function persistImportedDeploymentRequestGcpStackSettingsToJSON(
+  persistImportedDeploymentRequestGcpStackSettings:
+    PersistImportedDeploymentRequestGcpStackSettings,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestDomainsGcp$outboundSchema.parse(
-      persistImportedDeploymentRequestDomainsGcp,
+    PersistImportedDeploymentRequestGcpStackSettings$outboundSchema.parse(
+      persistImportedDeploymentRequestGcpStackSettings,
     ),
   );
 }
 
 /** @internal */
 export type PersistImportedDeploymentRequestGcpUnion$Outbound =
-  | PersistImportedDeploymentRequestDomainsGcp$Outbound
+  | PersistImportedDeploymentRequestGcpStackSettings$Outbound
   | any;
 
 /** @internal */
@@ -1951,7 +2884,7 @@ export const PersistImportedDeploymentRequestGcpUnion$outboundSchema: z.ZodType<
   PersistImportedDeploymentRequestGcpUnion$Outbound,
   PersistImportedDeploymentRequestGcpUnion
 > = z.union([
-  z.lazy(() => PersistImportedDeploymentRequestDomainsGcp$outboundSchema),
+  z.lazy(() => PersistImportedDeploymentRequestGcpStackSettings$outboundSchema),
   z.any(),
 ]);
 
@@ -1967,25 +2900,112 @@ export function persistImportedDeploymentRequestGcpUnionToJSON(
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestCertificate$Outbound = {
+export type PersistImportedDeploymentRequestTlsSecretRef$Outbound = {
+  namespace?: string | null | undefined;
+  secretName: string;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestTlsSecretRef$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestTlsSecretRef$Outbound,
+    PersistImportedDeploymentRequestTlsSecretRef
+  > = z.object({
+    namespace: z.nullable(z.string()).optional(),
+    secretName: z.string(),
+  });
+
+export function persistImportedDeploymentRequestTlsSecretRefToJSON(
+  persistImportedDeploymentRequestTlsSecretRef:
+    PersistImportedDeploymentRequestTlsSecretRef,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestTlsSecretRef$outboundSchema.parse(
+      persistImportedDeploymentRequestTlsSecretRef,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestDomainsKubernetes$Outbound = {
+  tlsSecretRef: PersistImportedDeploymentRequestTlsSecretRef$Outbound;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestDomainsKubernetes$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestDomainsKubernetes$Outbound,
+    PersistImportedDeploymentRequestDomainsKubernetes
+  > = z.object({
+    tlsSecretRef: z.lazy(() =>
+      PersistImportedDeploymentRequestTlsSecretRef$outboundSchema
+    ),
+  });
+
+export function persistImportedDeploymentRequestDomainsKubernetesToJSON(
+  persistImportedDeploymentRequestDomainsKubernetes:
+    PersistImportedDeploymentRequestDomainsKubernetes,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestDomainsKubernetes$outboundSchema.parse(
+      persistImportedDeploymentRequestDomainsKubernetes,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestDomainsKubernetesUnion$Outbound =
+  | PersistImportedDeploymentRequestDomainsKubernetes$Outbound
+  | any;
+
+/** @internal */
+export const PersistImportedDeploymentRequestDomainsKubernetesUnion$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestDomainsKubernetesUnion$Outbound,
+    PersistImportedDeploymentRequestDomainsKubernetesUnion
+  > = z.union([
+    z.lazy(() =>
+      PersistImportedDeploymentRequestDomainsKubernetes$outboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function persistImportedDeploymentRequestDomainsKubernetesUnionToJSON(
+  persistImportedDeploymentRequestDomainsKubernetesUnion:
+    PersistImportedDeploymentRequestDomainsKubernetesUnion,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestDomainsKubernetesUnion$outboundSchema.parse(
+      persistImportedDeploymentRequestDomainsKubernetesUnion,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestDomainsCertificate$Outbound = {
   aws?: PersistImportedDeploymentRequestAws$Outbound | any | null | undefined;
   azure?:
-    | PersistImportedDeploymentRequestDomainsAzure$Outbound
+    | PersistImportedDeploymentRequestAzureStackSettings$Outbound
     | any
     | null
     | undefined;
   gcp?:
-    | PersistImportedDeploymentRequestDomainsGcp$Outbound
+    | PersistImportedDeploymentRequestGcpStackSettings$Outbound
+    | any
+    | null
+    | undefined;
+  kubernetes?:
+    | PersistImportedDeploymentRequestDomainsKubernetes$Outbound
     | any
     | null
     | undefined;
 };
 
 /** @internal */
-export const PersistImportedDeploymentRequestCertificate$outboundSchema:
+export const PersistImportedDeploymentRequestDomainsCertificate$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestCertificate$Outbound,
-    PersistImportedDeploymentRequestCertificate
+    PersistImportedDeploymentRequestDomainsCertificate$Outbound,
+    PersistImportedDeploymentRequestDomainsCertificate
   > = z.object({
     aws: z.nullable(
       z.union([
@@ -1996,33 +3016,43 @@ export const PersistImportedDeploymentRequestCertificate$outboundSchema:
     azure: z.nullable(
       z.union([
         z.lazy(() =>
-          PersistImportedDeploymentRequestDomainsAzure$outboundSchema
+          PersistImportedDeploymentRequestAzureStackSettings$outboundSchema
         ),
         z.any(),
       ]),
     ).optional(),
     gcp: z.nullable(
       z.union([
-        z.lazy(() => PersistImportedDeploymentRequestDomainsGcp$outboundSchema),
+        z.lazy(() =>
+          PersistImportedDeploymentRequestGcpStackSettings$outboundSchema
+        ),
+        z.any(),
+      ]),
+    ).optional(),
+    kubernetes: z.nullable(
+      z.union([
+        z.lazy(() =>
+          PersistImportedDeploymentRequestDomainsKubernetes$outboundSchema
+        ),
         z.any(),
       ]),
     ).optional(),
   });
 
-export function persistImportedDeploymentRequestCertificateToJSON(
-  persistImportedDeploymentRequestCertificate:
-    PersistImportedDeploymentRequestCertificate,
+export function persistImportedDeploymentRequestDomainsCertificateToJSON(
+  persistImportedDeploymentRequestDomainsCertificate:
+    PersistImportedDeploymentRequestDomainsCertificate,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestCertificate$outboundSchema.parse(
-      persistImportedDeploymentRequestCertificate,
+    PersistImportedDeploymentRequestDomainsCertificate$outboundSchema.parse(
+      persistImportedDeploymentRequestDomainsCertificate,
     ),
   );
 }
 
 /** @internal */
 export type PersistImportedDeploymentRequestCustomDomains$Outbound = {
-  certificate: PersistImportedDeploymentRequestCertificate$Outbound;
+  certificate: PersistImportedDeploymentRequestDomainsCertificate$Outbound;
   domain: string;
 };
 
@@ -2033,7 +3063,7 @@ export const PersistImportedDeploymentRequestCustomDomains$outboundSchema:
     PersistImportedDeploymentRequestCustomDomains
   > = z.object({
     certificate: z.lazy(() =>
-      PersistImportedDeploymentRequestCertificate$outboundSchema
+      PersistImportedDeploymentRequestDomainsCertificate$outboundSchema
     ),
     domain: z.string(),
   });
@@ -2135,6 +3165,1644 @@ export const PersistImportedDeploymentRequestHeartbeats$outboundSchema:
   z.ZodEnum<typeof PersistImportedDeploymentRequestHeartbeats> = z.enum(
     PersistImportedDeploymentRequestHeartbeats,
   );
+
+/** @internal */
+export type PersistImportedDeploymentRequestCloud$Outbound = {
+  accountId?: string | null | undefined;
+  clusterId?: string | null | undefined;
+  clusterName?: string | null | undefined;
+  projectId?: string | null | undefined;
+  region?: string | null | undefined;
+  resourceGroup?: string | null | undefined;
+  subscriptionId?: string | null | undefined;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestCloud$outboundSchema: z.ZodType<
+  PersistImportedDeploymentRequestCloud$Outbound,
+  PersistImportedDeploymentRequestCloud
+> = z.object({
+  accountId: z.nullable(z.string()).optional(),
+  clusterId: z.nullable(z.string()).optional(),
+  clusterName: z.nullable(z.string()).optional(),
+  projectId: z.nullable(z.string()).optional(),
+  region: z.nullable(z.string()).optional(),
+  resourceGroup: z.nullable(z.string()).optional(),
+  subscriptionId: z.nullable(z.string()).optional(),
+});
+
+export function persistImportedDeploymentRequestCloudToJSON(
+  persistImportedDeploymentRequestCloud: PersistImportedDeploymentRequestCloud,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestCloud$outboundSchema.parse(
+      persistImportedDeploymentRequestCloud,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestCloudUnion$Outbound =
+  | PersistImportedDeploymentRequestCloud$Outbound
+  | any;
+
+/** @internal */
+export const PersistImportedDeploymentRequestCloudUnion$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestCloudUnion$Outbound,
+    PersistImportedDeploymentRequestCloudUnion
+  > = z.union([
+    z.lazy(() => PersistImportedDeploymentRequestCloud$outboundSchema),
+    z.any(),
+  ]);
+
+export function persistImportedDeploymentRequestCloudUnionToJSON(
+  persistImportedDeploymentRequestCloudUnion:
+    PersistImportedDeploymentRequestCloudUnion,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestCloudUnion$outboundSchema.parse(
+      persistImportedDeploymentRequestCloudUnion,
+    ),
+  );
+}
+
+/** @internal */
+export const PersistImportedDeploymentRequestOwnership$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestOwnership> = z.enum(
+    PersistImportedDeploymentRequestOwnership,
+  );
+
+/** @internal */
+export type PersistImportedDeploymentRequestCluster$Outbound = {
+  cloud?:
+    | PersistImportedDeploymentRequestCloud$Outbound
+    | any
+    | null
+    | undefined;
+  namespace?: string | null | undefined;
+  ownership: string;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestCluster$outboundSchema: z.ZodType<
+  PersistImportedDeploymentRequestCluster$Outbound,
+  PersistImportedDeploymentRequestCluster
+> = z.object({
+  cloud: z.nullable(
+    z.union([
+      z.lazy(() => PersistImportedDeploymentRequestCloud$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  namespace: z.nullable(z.string()).optional(),
+  ownership: PersistImportedDeploymentRequestOwnership$outboundSchema,
+});
+
+export function persistImportedDeploymentRequestClusterToJSON(
+  persistImportedDeploymentRequestCluster:
+    PersistImportedDeploymentRequestCluster,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestCluster$outboundSchema.parse(
+      persistImportedDeploymentRequestCluster,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestClusterUnion$Outbound =
+  | PersistImportedDeploymentRequestCluster$Outbound
+  | any;
+
+/** @internal */
+export const PersistImportedDeploymentRequestClusterUnion$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestClusterUnion$Outbound,
+    PersistImportedDeploymentRequestClusterUnion
+  > = z.union([
+    z.lazy(() => PersistImportedDeploymentRequestCluster$outboundSchema),
+    z.any(),
+  ]);
+
+export function persistImportedDeploymentRequestClusterUnionToJSON(
+  persistImportedDeploymentRequestClusterUnion:
+    PersistImportedDeploymentRequestClusterUnion,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestClusterUnion$outboundSchema.parse(
+      persistImportedDeploymentRequestClusterUnion,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestCertificateNone2$Outbound = {
+  mode: "none";
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestCertificateNone2$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestCertificateNone2$Outbound,
+    PersistImportedDeploymentRequestCertificateNone2
+  > = z.object({
+    mode: z.literal("none"),
+  });
+
+export function persistImportedDeploymentRequestCertificateNone2ToJSON(
+  persistImportedDeploymentRequestCertificateNone2:
+    PersistImportedDeploymentRequestCertificateNone2,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestCertificateNone2$outboundSchema.parse(
+      persistImportedDeploymentRequestCertificateNone2,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestCertificateManagedTLSSecret2$Outbound =
+  {
+    mode: "managedTlsSecret";
+    secretNameTemplate: string;
+  };
+
+/** @internal */
+export const PersistImportedDeploymentRequestCertificateManagedTLSSecret2$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestCertificateManagedTLSSecret2$Outbound,
+    PersistImportedDeploymentRequestCertificateManagedTLSSecret2
+  > = z.object({
+    mode: z.literal("managedTlsSecret"),
+    secretNameTemplate: z.string(),
+  });
+
+export function persistImportedDeploymentRequestCertificateManagedTLSSecret2ToJSON(
+  persistImportedDeploymentRequestCertificateManagedTLSSecret2:
+    PersistImportedDeploymentRequestCertificateManagedTLSSecret2,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestCertificateManagedTLSSecret2$outboundSchema
+      .parse(persistImportedDeploymentRequestCertificateManagedTLSSecret2),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestCertificateAwsAcmArn2$Outbound = {
+  certificateArn: string;
+  mode: "awsAcmArn";
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestCertificateAwsAcmArn2$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestCertificateAwsAcmArn2$Outbound,
+    PersistImportedDeploymentRequestCertificateAwsAcmArn2
+  > = z.object({
+    certificateArn: z.string(),
+    mode: z.literal("awsAcmArn"),
+  });
+
+export function persistImportedDeploymentRequestCertificateAwsAcmArn2ToJSON(
+  persistImportedDeploymentRequestCertificateAwsAcmArn2:
+    PersistImportedDeploymentRequestCertificateAwsAcmArn2,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestCertificateAwsAcmArn2$outboundSchema.parse(
+      persistImportedDeploymentRequestCertificateAwsAcmArn2,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestCertificateManagedAcmImport2$Outbound =
+  {
+    mode: "managedAcmImport";
+    region?: string | null | undefined;
+    tags?: { [k: string]: string } | undefined;
+  };
+
+/** @internal */
+export const PersistImportedDeploymentRequestCertificateManagedAcmImport2$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestCertificateManagedAcmImport2$Outbound,
+    PersistImportedDeploymentRequestCertificateManagedAcmImport2
+  > = z.object({
+    mode: z.literal("managedAcmImport"),
+    region: z.nullable(z.string()).optional(),
+    tags: z.record(z.string(), z.string()).optional(),
+  });
+
+export function persistImportedDeploymentRequestCertificateManagedAcmImport2ToJSON(
+  persistImportedDeploymentRequestCertificateManagedAcmImport2:
+    PersistImportedDeploymentRequestCertificateManagedAcmImport2,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestCertificateManagedAcmImport2$outboundSchema
+      .parse(persistImportedDeploymentRequestCertificateManagedAcmImport2),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestCertificateTLSSecretRef2$Outbound =
+  {
+    namespace?: string | null | undefined;
+    secretName: string;
+    mode: "tlsSecretRef";
+  };
+
+/** @internal */
+export const PersistImportedDeploymentRequestCertificateTLSSecretRef2$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestCertificateTLSSecretRef2$Outbound,
+    PersistImportedDeploymentRequestCertificateTLSSecretRef2
+  > = z.object({
+    namespace: z.nullable(z.string()).optional(),
+    secretName: z.string(),
+    mode: z.literal("tlsSecretRef"),
+  });
+
+export function persistImportedDeploymentRequestCertificateTLSSecretRef2ToJSON(
+  persistImportedDeploymentRequestCertificateTLSSecretRef2:
+    PersistImportedDeploymentRequestCertificateTLSSecretRef2,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestCertificateTLSSecretRef2$outboundSchema
+      .parse(persistImportedDeploymentRequestCertificateTLSSecretRef2),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestCertificateUnion2$Outbound =
+  | PersistImportedDeploymentRequestCertificateTLSSecretRef2$Outbound
+  | PersistImportedDeploymentRequestCertificateManagedAcmImport2$Outbound
+  | PersistImportedDeploymentRequestCertificateAwsAcmArn2$Outbound
+  | PersistImportedDeploymentRequestCertificateManagedTLSSecret2$Outbound
+  | PersistImportedDeploymentRequestCertificateNone2$Outbound;
+
+/** @internal */
+export const PersistImportedDeploymentRequestCertificateUnion2$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestCertificateUnion2$Outbound,
+    PersistImportedDeploymentRequestCertificateUnion2
+  > = z.union([
+    z.lazy(() =>
+      PersistImportedDeploymentRequestCertificateTLSSecretRef2$outboundSchema
+    ),
+    z.lazy(() =>
+      PersistImportedDeploymentRequestCertificateManagedAcmImport2$outboundSchema
+    ),
+    z.lazy(() =>
+      PersistImportedDeploymentRequestCertificateAwsAcmArn2$outboundSchema
+    ),
+    z.lazy(() =>
+      PersistImportedDeploymentRequestCertificateManagedTLSSecret2$outboundSchema
+    ),
+    z.lazy(() =>
+      PersistImportedDeploymentRequestCertificateNone2$outboundSchema
+    ),
+  ]);
+
+export function persistImportedDeploymentRequestCertificateUnion2ToJSON(
+  persistImportedDeploymentRequestCertificateUnion2:
+    PersistImportedDeploymentRequestCertificateUnion2,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestCertificateUnion2$outboundSchema.parse(
+      persistImportedDeploymentRequestCertificateUnion2,
+    ),
+  );
+}
+
+/** @internal */
+export const PersistImportedDeploymentRequestModeCustom$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestModeCustom> = z.enum(
+    PersistImportedDeploymentRequestModeCustom,
+  );
+
+/** @internal */
+export const PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainersEnum4$outboundSchema:
+  z.ZodEnum<
+    typeof PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainersEnum4
+  > = z.enum(
+    PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainersEnum4,
+  );
+
+/** @internal */
+export type PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers4$Outbound =
+  {
+    albName?: string | null | undefined;
+    albNamespace?: string | null | undefined;
+    frontend: string;
+    provider: string;
+  };
+
+/** @internal */
+export const PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers4$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers4$Outbound,
+    PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers4
+  > = z.object({
+    albName: z.nullable(z.string()).optional(),
+    albNamespace: z.nullable(z.string()).optional(),
+    frontend: z.string(),
+    provider:
+      PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainersEnum4$outboundSchema,
+  });
+
+export function persistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers4ToJSON(
+  persistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers4:
+    PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers4,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers4$outboundSchema
+      .parse(
+        persistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers4,
+      ),
+  );
+}
+
+/** @internal */
+export const PersistImportedDeploymentRequestProviderGkeGatewayEnum4$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestProviderGkeGatewayEnum4> = z
+    .enum(PersistImportedDeploymentRequestProviderGkeGatewayEnum4);
+
+/** @internal */
+export type PersistImportedDeploymentRequestProviderGkeGateway4$Outbound = {
+  provider: string;
+  staticAddressName?: string | null | undefined;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestProviderGkeGateway4$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestProviderGkeGateway4$Outbound,
+    PersistImportedDeploymentRequestProviderGkeGateway4
+  > = z.object({
+    provider:
+      PersistImportedDeploymentRequestProviderGkeGatewayEnum4$outboundSchema,
+    staticAddressName: z.nullable(z.string()).optional(),
+  });
+
+export function persistImportedDeploymentRequestProviderGkeGateway4ToJSON(
+  persistImportedDeploymentRequestProviderGkeGateway4:
+    PersistImportedDeploymentRequestProviderGkeGateway4,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestProviderGkeGateway4$outboundSchema.parse(
+      persistImportedDeploymentRequestProviderGkeGateway4,
+    ),
+  );
+}
+
+/** @internal */
+export const PersistImportedDeploymentRequestProviderAwsAlbEnum4$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestProviderAwsAlbEnum4> = z
+    .enum(PersistImportedDeploymentRequestProviderAwsAlbEnum4);
+
+/** @internal */
+export type PersistImportedDeploymentRequestProviderAwsAlb4$Outbound = {
+  ipAddressType?: string | null | undefined;
+  provider: string;
+  scheme: string;
+  subnetIds?: Array<string> | undefined;
+  targetType: string;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestProviderAwsAlb4$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestProviderAwsAlb4$Outbound,
+    PersistImportedDeploymentRequestProviderAwsAlb4
+  > = z.object({
+    ipAddressType: z.nullable(z.string()).optional(),
+    provider:
+      PersistImportedDeploymentRequestProviderAwsAlbEnum4$outboundSchema,
+    scheme: z.string(),
+    subnetIds: z.array(z.string()).optional(),
+    targetType: z.string(),
+  });
+
+export function persistImportedDeploymentRequestProviderAwsAlb4ToJSON(
+  persistImportedDeploymentRequestProviderAwsAlb4:
+    PersistImportedDeploymentRequestProviderAwsAlb4,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestProviderAwsAlb4$outboundSchema.parse(
+      persistImportedDeploymentRequestProviderAwsAlb4,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestProviderUnion4$Outbound =
+  | PersistImportedDeploymentRequestProviderAwsAlb4$Outbound
+  | PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers4$Outbound
+  | PersistImportedDeploymentRequestProviderGkeGateway4$Outbound
+  | any;
+
+/** @internal */
+export const PersistImportedDeploymentRequestProviderUnion4$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestProviderUnion4$Outbound,
+    PersistImportedDeploymentRequestProviderUnion4
+  > = z.union([
+    z.lazy(() =>
+      PersistImportedDeploymentRequestProviderAwsAlb4$outboundSchema
+    ),
+    z.lazy(() =>
+      PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers4$outboundSchema
+    ),
+    z.lazy(() =>
+      PersistImportedDeploymentRequestProviderGkeGateway4$outboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function persistImportedDeploymentRequestProviderUnion4ToJSON(
+  persistImportedDeploymentRequestProviderUnion4:
+    PersistImportedDeploymentRequestProviderUnion4,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestProviderUnion4$outboundSchema.parse(
+      persistImportedDeploymentRequestProviderUnion4,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestRouteGateway2$Outbound = {
+  annotations?: { [k: string]: string } | undefined;
+  controller?: string | null | undefined;
+  gatewayClassName: string;
+  labels?: { [k: string]: string } | undefined;
+  listenerPort: number;
+  provider?:
+    | PersistImportedDeploymentRequestProviderAwsAlb4$Outbound
+    | PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers4$Outbound
+    | PersistImportedDeploymentRequestProviderGkeGateway4$Outbound
+    | any
+    | null
+    | undefined;
+  routeApi: "gateway";
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestRouteGateway2$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestRouteGateway2$Outbound,
+    PersistImportedDeploymentRequestRouteGateway2
+  > = z.object({
+    annotations: z.record(z.string(), z.string()).optional(),
+    controller: z.nullable(z.string()).optional(),
+    gatewayClassName: z.string(),
+    labels: z.record(z.string(), z.string()).optional(),
+    listenerPort: z.int(),
+    provider: z.nullable(
+      z.union([
+        z.lazy(() =>
+          PersistImportedDeploymentRequestProviderAwsAlb4$outboundSchema
+        ),
+        z.lazy(() =>
+          PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers4$outboundSchema
+        ),
+        z.lazy(() =>
+          PersistImportedDeploymentRequestProviderGkeGateway4$outboundSchema
+        ),
+        z.any(),
+      ]),
+    ).optional(),
+    routeApi: z.literal("gateway"),
+  });
+
+export function persistImportedDeploymentRequestRouteGateway2ToJSON(
+  persistImportedDeploymentRequestRouteGateway2:
+    PersistImportedDeploymentRequestRouteGateway2,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestRouteGateway2$outboundSchema.parse(
+      persistImportedDeploymentRequestRouteGateway2,
+    ),
+  );
+}
+
+/** @internal */
+export const PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainersEnum3$outboundSchema:
+  z.ZodEnum<
+    typeof PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainersEnum3
+  > = z.enum(
+    PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainersEnum3,
+  );
+
+/** @internal */
+export type PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers3$Outbound =
+  {
+    albName?: string | null | undefined;
+    albNamespace?: string | null | undefined;
+    frontend: string;
+    provider: string;
+  };
+
+/** @internal */
+export const PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers3$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers3$Outbound,
+    PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers3
+  > = z.object({
+    albName: z.nullable(z.string()).optional(),
+    albNamespace: z.nullable(z.string()).optional(),
+    frontend: z.string(),
+    provider:
+      PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainersEnum3$outboundSchema,
+  });
+
+export function persistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers3ToJSON(
+  persistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers3:
+    PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers3,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers3$outboundSchema
+      .parse(
+        persistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers3,
+      ),
+  );
+}
+
+/** @internal */
+export const PersistImportedDeploymentRequestProviderGkeGatewayEnum3$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestProviderGkeGatewayEnum3> = z
+    .enum(PersistImportedDeploymentRequestProviderGkeGatewayEnum3);
+
+/** @internal */
+export type PersistImportedDeploymentRequestProviderGkeGateway3$Outbound = {
+  provider: string;
+  staticAddressName?: string | null | undefined;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestProviderGkeGateway3$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestProviderGkeGateway3$Outbound,
+    PersistImportedDeploymentRequestProviderGkeGateway3
+  > = z.object({
+    provider:
+      PersistImportedDeploymentRequestProviderGkeGatewayEnum3$outboundSchema,
+    staticAddressName: z.nullable(z.string()).optional(),
+  });
+
+export function persistImportedDeploymentRequestProviderGkeGateway3ToJSON(
+  persistImportedDeploymentRequestProviderGkeGateway3:
+    PersistImportedDeploymentRequestProviderGkeGateway3,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestProviderGkeGateway3$outboundSchema.parse(
+      persistImportedDeploymentRequestProviderGkeGateway3,
+    ),
+  );
+}
+
+/** @internal */
+export const PersistImportedDeploymentRequestProviderAwsAlbEnum3$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestProviderAwsAlbEnum3> = z
+    .enum(PersistImportedDeploymentRequestProviderAwsAlbEnum3);
+
+/** @internal */
+export type PersistImportedDeploymentRequestProviderAwsAlb3$Outbound = {
+  ipAddressType?: string | null | undefined;
+  provider: string;
+  scheme: string;
+  subnetIds?: Array<string> | undefined;
+  targetType: string;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestProviderAwsAlb3$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestProviderAwsAlb3$Outbound,
+    PersistImportedDeploymentRequestProviderAwsAlb3
+  > = z.object({
+    ipAddressType: z.nullable(z.string()).optional(),
+    provider:
+      PersistImportedDeploymentRequestProviderAwsAlbEnum3$outboundSchema,
+    scheme: z.string(),
+    subnetIds: z.array(z.string()).optional(),
+    targetType: z.string(),
+  });
+
+export function persistImportedDeploymentRequestProviderAwsAlb3ToJSON(
+  persistImportedDeploymentRequestProviderAwsAlb3:
+    PersistImportedDeploymentRequestProviderAwsAlb3,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestProviderAwsAlb3$outboundSchema.parse(
+      persistImportedDeploymentRequestProviderAwsAlb3,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestProviderUnion3$Outbound =
+  | PersistImportedDeploymentRequestProviderAwsAlb3$Outbound
+  | PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers3$Outbound
+  | PersistImportedDeploymentRequestProviderGkeGateway3$Outbound
+  | any;
+
+/** @internal */
+export const PersistImportedDeploymentRequestProviderUnion3$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestProviderUnion3$Outbound,
+    PersistImportedDeploymentRequestProviderUnion3
+  > = z.union([
+    z.lazy(() =>
+      PersistImportedDeploymentRequestProviderAwsAlb3$outboundSchema
+    ),
+    z.lazy(() =>
+      PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers3$outboundSchema
+    ),
+    z.lazy(() =>
+      PersistImportedDeploymentRequestProviderGkeGateway3$outboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function persistImportedDeploymentRequestProviderUnion3ToJSON(
+  persistImportedDeploymentRequestProviderUnion3:
+    PersistImportedDeploymentRequestProviderUnion3,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestProviderUnion3$outboundSchema.parse(
+      persistImportedDeploymentRequestProviderUnion3,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestRouteIngress2$Outbound = {
+  annotations?: { [k: string]: string } | undefined;
+  controller?: string | null | undefined;
+  ingressClassName: string;
+  labels?: { [k: string]: string } | undefined;
+  provider?:
+    | PersistImportedDeploymentRequestProviderAwsAlb3$Outbound
+    | PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers3$Outbound
+    | PersistImportedDeploymentRequestProviderGkeGateway3$Outbound
+    | any
+    | null
+    | undefined;
+  routeApi: "ingress";
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestRouteIngress2$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestRouteIngress2$Outbound,
+    PersistImportedDeploymentRequestRouteIngress2
+  > = z.object({
+    annotations: z.record(z.string(), z.string()).optional(),
+    controller: z.nullable(z.string()).optional(),
+    ingressClassName: z.string(),
+    labels: z.record(z.string(), z.string()).optional(),
+    provider: z.nullable(
+      z.union([
+        z.lazy(() =>
+          PersistImportedDeploymentRequestProviderAwsAlb3$outboundSchema
+        ),
+        z.lazy(() =>
+          PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers3$outboundSchema
+        ),
+        z.lazy(() =>
+          PersistImportedDeploymentRequestProviderGkeGateway3$outboundSchema
+        ),
+        z.any(),
+      ]),
+    ).optional(),
+    routeApi: z.literal("ingress"),
+  });
+
+export function persistImportedDeploymentRequestRouteIngress2ToJSON(
+  persistImportedDeploymentRequestRouteIngress2:
+    PersistImportedDeploymentRequestRouteIngress2,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestRouteIngress2$outboundSchema.parse(
+      persistImportedDeploymentRequestRouteIngress2,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestRouteUnion2$Outbound =
+  | PersistImportedDeploymentRequestRouteIngress2$Outbound
+  | PersistImportedDeploymentRequestRouteGateway2$Outbound;
+
+/** @internal */
+export const PersistImportedDeploymentRequestRouteUnion2$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestRouteUnion2$Outbound,
+    PersistImportedDeploymentRequestRouteUnion2
+  > = z.union([
+    z.lazy(() => PersistImportedDeploymentRequestRouteIngress2$outboundSchema),
+    z.lazy(() => PersistImportedDeploymentRequestRouteGateway2$outboundSchema),
+  ]);
+
+export function persistImportedDeploymentRequestRouteUnion2ToJSON(
+  persistImportedDeploymentRequestRouteUnion2:
+    PersistImportedDeploymentRequestRouteUnion2,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestRouteUnion2$outboundSchema.parse(
+      persistImportedDeploymentRequestRouteUnion2,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestExposureCustom$Outbound = {
+  certificate:
+    | PersistImportedDeploymentRequestCertificateTLSSecretRef2$Outbound
+    | PersistImportedDeploymentRequestCertificateManagedAcmImport2$Outbound
+    | PersistImportedDeploymentRequestCertificateAwsAcmArn2$Outbound
+    | PersistImportedDeploymentRequestCertificateManagedTLSSecret2$Outbound
+    | PersistImportedDeploymentRequestCertificateNone2$Outbound;
+  domain: string;
+  mode: string;
+  route:
+    | PersistImportedDeploymentRequestRouteIngress2$Outbound
+    | PersistImportedDeploymentRequestRouteGateway2$Outbound;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestExposureCustom$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestExposureCustom$Outbound,
+    PersistImportedDeploymentRequestExposureCustom
+  > = z.object({
+    certificate: z.union([
+      z.lazy(() =>
+        PersistImportedDeploymentRequestCertificateTLSSecretRef2$outboundSchema
+      ),
+      z.lazy(() =>
+        PersistImportedDeploymentRequestCertificateManagedAcmImport2$outboundSchema
+      ),
+      z.lazy(() =>
+        PersistImportedDeploymentRequestCertificateAwsAcmArn2$outboundSchema
+      ),
+      z.lazy(() =>
+        PersistImportedDeploymentRequestCertificateManagedTLSSecret2$outboundSchema
+      ),
+      z.lazy(() =>
+        PersistImportedDeploymentRequestCertificateNone2$outboundSchema
+      ),
+    ]),
+    domain: z.string(),
+    mode: PersistImportedDeploymentRequestModeCustom$outboundSchema,
+    route: z.union([
+      z.lazy(() =>
+        PersistImportedDeploymentRequestRouteIngress2$outboundSchema
+      ),
+      z.lazy(() =>
+        PersistImportedDeploymentRequestRouteGateway2$outboundSchema
+      ),
+    ]),
+  });
+
+export function persistImportedDeploymentRequestExposureCustomToJSON(
+  persistImportedDeploymentRequestExposureCustom:
+    PersistImportedDeploymentRequestExposureCustom,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestExposureCustom$outboundSchema.parse(
+      persistImportedDeploymentRequestExposureCustom,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestCertificateNone1$Outbound = {
+  mode: "none";
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestCertificateNone1$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestCertificateNone1$Outbound,
+    PersistImportedDeploymentRequestCertificateNone1
+  > = z.object({
+    mode: z.literal("none"),
+  });
+
+export function persistImportedDeploymentRequestCertificateNone1ToJSON(
+  persistImportedDeploymentRequestCertificateNone1:
+    PersistImportedDeploymentRequestCertificateNone1,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestCertificateNone1$outboundSchema.parse(
+      persistImportedDeploymentRequestCertificateNone1,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestCertificateManagedTLSSecret1$Outbound =
+  {
+    mode: "managedTlsSecret";
+    secretNameTemplate: string;
+  };
+
+/** @internal */
+export const PersistImportedDeploymentRequestCertificateManagedTLSSecret1$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestCertificateManagedTLSSecret1$Outbound,
+    PersistImportedDeploymentRequestCertificateManagedTLSSecret1
+  > = z.object({
+    mode: z.literal("managedTlsSecret"),
+    secretNameTemplate: z.string(),
+  });
+
+export function persistImportedDeploymentRequestCertificateManagedTLSSecret1ToJSON(
+  persistImportedDeploymentRequestCertificateManagedTLSSecret1:
+    PersistImportedDeploymentRequestCertificateManagedTLSSecret1,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestCertificateManagedTLSSecret1$outboundSchema
+      .parse(persistImportedDeploymentRequestCertificateManagedTLSSecret1),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestCertificateAwsAcmArn1$Outbound = {
+  certificateArn: string;
+  mode: "awsAcmArn";
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestCertificateAwsAcmArn1$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestCertificateAwsAcmArn1$Outbound,
+    PersistImportedDeploymentRequestCertificateAwsAcmArn1
+  > = z.object({
+    certificateArn: z.string(),
+    mode: z.literal("awsAcmArn"),
+  });
+
+export function persistImportedDeploymentRequestCertificateAwsAcmArn1ToJSON(
+  persistImportedDeploymentRequestCertificateAwsAcmArn1:
+    PersistImportedDeploymentRequestCertificateAwsAcmArn1,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestCertificateAwsAcmArn1$outboundSchema.parse(
+      persistImportedDeploymentRequestCertificateAwsAcmArn1,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestCertificateManagedAcmImport1$Outbound =
+  {
+    mode: "managedAcmImport";
+    region?: string | null | undefined;
+    tags?: { [k: string]: string } | undefined;
+  };
+
+/** @internal */
+export const PersistImportedDeploymentRequestCertificateManagedAcmImport1$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestCertificateManagedAcmImport1$Outbound,
+    PersistImportedDeploymentRequestCertificateManagedAcmImport1
+  > = z.object({
+    mode: z.literal("managedAcmImport"),
+    region: z.nullable(z.string()).optional(),
+    tags: z.record(z.string(), z.string()).optional(),
+  });
+
+export function persistImportedDeploymentRequestCertificateManagedAcmImport1ToJSON(
+  persistImportedDeploymentRequestCertificateManagedAcmImport1:
+    PersistImportedDeploymentRequestCertificateManagedAcmImport1,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestCertificateManagedAcmImport1$outboundSchema
+      .parse(persistImportedDeploymentRequestCertificateManagedAcmImport1),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestCertificateTLSSecretRef1$Outbound =
+  {
+    namespace?: string | null | undefined;
+    secretName: string;
+    mode: "tlsSecretRef";
+  };
+
+/** @internal */
+export const PersistImportedDeploymentRequestCertificateTLSSecretRef1$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestCertificateTLSSecretRef1$Outbound,
+    PersistImportedDeploymentRequestCertificateTLSSecretRef1
+  > = z.object({
+    namespace: z.nullable(z.string()).optional(),
+    secretName: z.string(),
+    mode: z.literal("tlsSecretRef"),
+  });
+
+export function persistImportedDeploymentRequestCertificateTLSSecretRef1ToJSON(
+  persistImportedDeploymentRequestCertificateTLSSecretRef1:
+    PersistImportedDeploymentRequestCertificateTLSSecretRef1,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestCertificateTLSSecretRef1$outboundSchema
+      .parse(persistImportedDeploymentRequestCertificateTLSSecretRef1),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestCertificateUnion1$Outbound =
+  | PersistImportedDeploymentRequestCertificateTLSSecretRef1$Outbound
+  | PersistImportedDeploymentRequestCertificateManagedAcmImport1$Outbound
+  | PersistImportedDeploymentRequestCertificateAwsAcmArn1$Outbound
+  | PersistImportedDeploymentRequestCertificateManagedTLSSecret1$Outbound
+  | PersistImportedDeploymentRequestCertificateNone1$Outbound;
+
+/** @internal */
+export const PersistImportedDeploymentRequestCertificateUnion1$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestCertificateUnion1$Outbound,
+    PersistImportedDeploymentRequestCertificateUnion1
+  > = z.union([
+    z.lazy(() =>
+      PersistImportedDeploymentRequestCertificateTLSSecretRef1$outboundSchema
+    ),
+    z.lazy(() =>
+      PersistImportedDeploymentRequestCertificateManagedAcmImport1$outboundSchema
+    ),
+    z.lazy(() =>
+      PersistImportedDeploymentRequestCertificateAwsAcmArn1$outboundSchema
+    ),
+    z.lazy(() =>
+      PersistImportedDeploymentRequestCertificateManagedTLSSecret1$outboundSchema
+    ),
+    z.lazy(() =>
+      PersistImportedDeploymentRequestCertificateNone1$outboundSchema
+    ),
+  ]);
+
+export function persistImportedDeploymentRequestCertificateUnion1ToJSON(
+  persistImportedDeploymentRequestCertificateUnion1:
+    PersistImportedDeploymentRequestCertificateUnion1,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestCertificateUnion1$outboundSchema.parse(
+      persistImportedDeploymentRequestCertificateUnion1,
+    ),
+  );
+}
+
+/** @internal */
+export const PersistImportedDeploymentRequestModeGenerated$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestModeGenerated> = z.enum(
+    PersistImportedDeploymentRequestModeGenerated,
+  );
+
+/** @internal */
+export const PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainersEnum2$outboundSchema:
+  z.ZodEnum<
+    typeof PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainersEnum2
+  > = z.enum(
+    PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainersEnum2,
+  );
+
+/** @internal */
+export type PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers2$Outbound =
+  {
+    albName?: string | null | undefined;
+    albNamespace?: string | null | undefined;
+    frontend: string;
+    provider: string;
+  };
+
+/** @internal */
+export const PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers2$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers2$Outbound,
+    PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers2
+  > = z.object({
+    albName: z.nullable(z.string()).optional(),
+    albNamespace: z.nullable(z.string()).optional(),
+    frontend: z.string(),
+    provider:
+      PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainersEnum2$outboundSchema,
+  });
+
+export function persistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers2ToJSON(
+  persistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers2:
+    PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers2,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers2$outboundSchema
+      .parse(
+        persistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers2,
+      ),
+  );
+}
+
+/** @internal */
+export const PersistImportedDeploymentRequestProviderGkeGatewayEnum2$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestProviderGkeGatewayEnum2> = z
+    .enum(PersistImportedDeploymentRequestProviderGkeGatewayEnum2);
+
+/** @internal */
+export type PersistImportedDeploymentRequestProviderGkeGateway2$Outbound = {
+  provider: string;
+  staticAddressName?: string | null | undefined;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestProviderGkeGateway2$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestProviderGkeGateway2$Outbound,
+    PersistImportedDeploymentRequestProviderGkeGateway2
+  > = z.object({
+    provider:
+      PersistImportedDeploymentRequestProviderGkeGatewayEnum2$outboundSchema,
+    staticAddressName: z.nullable(z.string()).optional(),
+  });
+
+export function persistImportedDeploymentRequestProviderGkeGateway2ToJSON(
+  persistImportedDeploymentRequestProviderGkeGateway2:
+    PersistImportedDeploymentRequestProviderGkeGateway2,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestProviderGkeGateway2$outboundSchema.parse(
+      persistImportedDeploymentRequestProviderGkeGateway2,
+    ),
+  );
+}
+
+/** @internal */
+export const PersistImportedDeploymentRequestProviderAwsAlbEnum2$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestProviderAwsAlbEnum2> = z
+    .enum(PersistImportedDeploymentRequestProviderAwsAlbEnum2);
+
+/** @internal */
+export type PersistImportedDeploymentRequestProviderAwsAlb2$Outbound = {
+  ipAddressType?: string | null | undefined;
+  provider: string;
+  scheme: string;
+  subnetIds?: Array<string> | undefined;
+  targetType: string;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestProviderAwsAlb2$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestProviderAwsAlb2$Outbound,
+    PersistImportedDeploymentRequestProviderAwsAlb2
+  > = z.object({
+    ipAddressType: z.nullable(z.string()).optional(),
+    provider:
+      PersistImportedDeploymentRequestProviderAwsAlbEnum2$outboundSchema,
+    scheme: z.string(),
+    subnetIds: z.array(z.string()).optional(),
+    targetType: z.string(),
+  });
+
+export function persistImportedDeploymentRequestProviderAwsAlb2ToJSON(
+  persistImportedDeploymentRequestProviderAwsAlb2:
+    PersistImportedDeploymentRequestProviderAwsAlb2,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestProviderAwsAlb2$outboundSchema.parse(
+      persistImportedDeploymentRequestProviderAwsAlb2,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestProviderUnion2$Outbound =
+  | PersistImportedDeploymentRequestProviderAwsAlb2$Outbound
+  | PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers2$Outbound
+  | PersistImportedDeploymentRequestProviderGkeGateway2$Outbound
+  | any;
+
+/** @internal */
+export const PersistImportedDeploymentRequestProviderUnion2$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestProviderUnion2$Outbound,
+    PersistImportedDeploymentRequestProviderUnion2
+  > = z.union([
+    z.lazy(() =>
+      PersistImportedDeploymentRequestProviderAwsAlb2$outboundSchema
+    ),
+    z.lazy(() =>
+      PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers2$outboundSchema
+    ),
+    z.lazy(() =>
+      PersistImportedDeploymentRequestProviderGkeGateway2$outboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function persistImportedDeploymentRequestProviderUnion2ToJSON(
+  persistImportedDeploymentRequestProviderUnion2:
+    PersistImportedDeploymentRequestProviderUnion2,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestProviderUnion2$outboundSchema.parse(
+      persistImportedDeploymentRequestProviderUnion2,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestRouteGateway1$Outbound = {
+  annotations?: { [k: string]: string } | undefined;
+  controller?: string | null | undefined;
+  gatewayClassName: string;
+  labels?: { [k: string]: string } | undefined;
+  listenerPort: number;
+  provider?:
+    | PersistImportedDeploymentRequestProviderAwsAlb2$Outbound
+    | PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers2$Outbound
+    | PersistImportedDeploymentRequestProviderGkeGateway2$Outbound
+    | any
+    | null
+    | undefined;
+  routeApi: "gateway";
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestRouteGateway1$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestRouteGateway1$Outbound,
+    PersistImportedDeploymentRequestRouteGateway1
+  > = z.object({
+    annotations: z.record(z.string(), z.string()).optional(),
+    controller: z.nullable(z.string()).optional(),
+    gatewayClassName: z.string(),
+    labels: z.record(z.string(), z.string()).optional(),
+    listenerPort: z.int(),
+    provider: z.nullable(
+      z.union([
+        z.lazy(() =>
+          PersistImportedDeploymentRequestProviderAwsAlb2$outboundSchema
+        ),
+        z.lazy(() =>
+          PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers2$outboundSchema
+        ),
+        z.lazy(() =>
+          PersistImportedDeploymentRequestProviderGkeGateway2$outboundSchema
+        ),
+        z.any(),
+      ]),
+    ).optional(),
+    routeApi: z.literal("gateway"),
+  });
+
+export function persistImportedDeploymentRequestRouteGateway1ToJSON(
+  persistImportedDeploymentRequestRouteGateway1:
+    PersistImportedDeploymentRequestRouteGateway1,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestRouteGateway1$outboundSchema.parse(
+      persistImportedDeploymentRequestRouteGateway1,
+    ),
+  );
+}
+
+/** @internal */
+export const PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainersEnum1$outboundSchema:
+  z.ZodEnum<
+    typeof PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainersEnum1
+  > = z.enum(
+    PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainersEnum1,
+  );
+
+/** @internal */
+export type PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers1$Outbound =
+  {
+    albName?: string | null | undefined;
+    albNamespace?: string | null | undefined;
+    frontend: string;
+    provider: string;
+  };
+
+/** @internal */
+export const PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers1$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers1$Outbound,
+    PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers1
+  > = z.object({
+    albName: z.nullable(z.string()).optional(),
+    albNamespace: z.nullable(z.string()).optional(),
+    frontend: z.string(),
+    provider:
+      PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainersEnum1$outboundSchema,
+  });
+
+export function persistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers1ToJSON(
+  persistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers1:
+    PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers1,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers1$outboundSchema
+      .parse(
+        persistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers1,
+      ),
+  );
+}
+
+/** @internal */
+export const PersistImportedDeploymentRequestProviderGkeGatewayEnum1$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestProviderGkeGatewayEnum1> = z
+    .enum(PersistImportedDeploymentRequestProviderGkeGatewayEnum1);
+
+/** @internal */
+export type PersistImportedDeploymentRequestProviderGkeGateway1$Outbound = {
+  provider: string;
+  staticAddressName?: string | null | undefined;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestProviderGkeGateway1$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestProviderGkeGateway1$Outbound,
+    PersistImportedDeploymentRequestProviderGkeGateway1
+  > = z.object({
+    provider:
+      PersistImportedDeploymentRequestProviderGkeGatewayEnum1$outboundSchema,
+    staticAddressName: z.nullable(z.string()).optional(),
+  });
+
+export function persistImportedDeploymentRequestProviderGkeGateway1ToJSON(
+  persistImportedDeploymentRequestProviderGkeGateway1:
+    PersistImportedDeploymentRequestProviderGkeGateway1,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestProviderGkeGateway1$outboundSchema.parse(
+      persistImportedDeploymentRequestProviderGkeGateway1,
+    ),
+  );
+}
+
+/** @internal */
+export const PersistImportedDeploymentRequestProviderAwsAlbEnum1$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestProviderAwsAlbEnum1> = z
+    .enum(PersistImportedDeploymentRequestProviderAwsAlbEnum1);
+
+/** @internal */
+export type PersistImportedDeploymentRequestProviderAwsAlb1$Outbound = {
+  ipAddressType?: string | null | undefined;
+  provider: string;
+  scheme: string;
+  subnetIds?: Array<string> | undefined;
+  targetType: string;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestProviderAwsAlb1$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestProviderAwsAlb1$Outbound,
+    PersistImportedDeploymentRequestProviderAwsAlb1
+  > = z.object({
+    ipAddressType: z.nullable(z.string()).optional(),
+    provider:
+      PersistImportedDeploymentRequestProviderAwsAlbEnum1$outboundSchema,
+    scheme: z.string(),
+    subnetIds: z.array(z.string()).optional(),
+    targetType: z.string(),
+  });
+
+export function persistImportedDeploymentRequestProviderAwsAlb1ToJSON(
+  persistImportedDeploymentRequestProviderAwsAlb1:
+    PersistImportedDeploymentRequestProviderAwsAlb1,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestProviderAwsAlb1$outboundSchema.parse(
+      persistImportedDeploymentRequestProviderAwsAlb1,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestProviderUnion1$Outbound =
+  | PersistImportedDeploymentRequestProviderAwsAlb1$Outbound
+  | PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers1$Outbound
+  | PersistImportedDeploymentRequestProviderGkeGateway1$Outbound
+  | any;
+
+/** @internal */
+export const PersistImportedDeploymentRequestProviderUnion1$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestProviderUnion1$Outbound,
+    PersistImportedDeploymentRequestProviderUnion1
+  > = z.union([
+    z.lazy(() =>
+      PersistImportedDeploymentRequestProviderAwsAlb1$outboundSchema
+    ),
+    z.lazy(() =>
+      PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers1$outboundSchema
+    ),
+    z.lazy(() =>
+      PersistImportedDeploymentRequestProviderGkeGateway1$outboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function persistImportedDeploymentRequestProviderUnion1ToJSON(
+  persistImportedDeploymentRequestProviderUnion1:
+    PersistImportedDeploymentRequestProviderUnion1,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestProviderUnion1$outboundSchema.parse(
+      persistImportedDeploymentRequestProviderUnion1,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestRouteIngress1$Outbound = {
+  annotations?: { [k: string]: string } | undefined;
+  controller?: string | null | undefined;
+  ingressClassName: string;
+  labels?: { [k: string]: string } | undefined;
+  provider?:
+    | PersistImportedDeploymentRequestProviderAwsAlb1$Outbound
+    | PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers1$Outbound
+    | PersistImportedDeploymentRequestProviderGkeGateway1$Outbound
+    | any
+    | null
+    | undefined;
+  routeApi: "ingress";
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestRouteIngress1$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestRouteIngress1$Outbound,
+    PersistImportedDeploymentRequestRouteIngress1
+  > = z.object({
+    annotations: z.record(z.string(), z.string()).optional(),
+    controller: z.nullable(z.string()).optional(),
+    ingressClassName: z.string(),
+    labels: z.record(z.string(), z.string()).optional(),
+    provider: z.nullable(
+      z.union([
+        z.lazy(() =>
+          PersistImportedDeploymentRequestProviderAwsAlb1$outboundSchema
+        ),
+        z.lazy(() =>
+          PersistImportedDeploymentRequestProviderAzureApplicationGatewayForContainers1$outboundSchema
+        ),
+        z.lazy(() =>
+          PersistImportedDeploymentRequestProviderGkeGateway1$outboundSchema
+        ),
+        z.any(),
+      ]),
+    ).optional(),
+    routeApi: z.literal("ingress"),
+  });
+
+export function persistImportedDeploymentRequestRouteIngress1ToJSON(
+  persistImportedDeploymentRequestRouteIngress1:
+    PersistImportedDeploymentRequestRouteIngress1,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestRouteIngress1$outboundSchema.parse(
+      persistImportedDeploymentRequestRouteIngress1,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestRouteUnion1$Outbound =
+  | PersistImportedDeploymentRequestRouteIngress1$Outbound
+  | PersistImportedDeploymentRequestRouteGateway1$Outbound;
+
+/** @internal */
+export const PersistImportedDeploymentRequestRouteUnion1$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestRouteUnion1$Outbound,
+    PersistImportedDeploymentRequestRouteUnion1
+  > = z.union([
+    z.lazy(() => PersistImportedDeploymentRequestRouteIngress1$outboundSchema),
+    z.lazy(() => PersistImportedDeploymentRequestRouteGateway1$outboundSchema),
+  ]);
+
+export function persistImportedDeploymentRequestRouteUnion1ToJSON(
+  persistImportedDeploymentRequestRouteUnion1:
+    PersistImportedDeploymentRequestRouteUnion1,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestRouteUnion1$outboundSchema.parse(
+      persistImportedDeploymentRequestRouteUnion1,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestExposureGenerated$Outbound = {
+  certificate:
+    | PersistImportedDeploymentRequestCertificateTLSSecretRef1$Outbound
+    | PersistImportedDeploymentRequestCertificateManagedAcmImport1$Outbound
+    | PersistImportedDeploymentRequestCertificateAwsAcmArn1$Outbound
+    | PersistImportedDeploymentRequestCertificateManagedTLSSecret1$Outbound
+    | PersistImportedDeploymentRequestCertificateNone1$Outbound;
+  mode: string;
+  route:
+    | PersistImportedDeploymentRequestRouteIngress1$Outbound
+    | PersistImportedDeploymentRequestRouteGateway1$Outbound;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestExposureGenerated$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestExposureGenerated$Outbound,
+    PersistImportedDeploymentRequestExposureGenerated
+  > = z.object({
+    certificate: z.union([
+      z.lazy(() =>
+        PersistImportedDeploymentRequestCertificateTLSSecretRef1$outboundSchema
+      ),
+      z.lazy(() =>
+        PersistImportedDeploymentRequestCertificateManagedAcmImport1$outboundSchema
+      ),
+      z.lazy(() =>
+        PersistImportedDeploymentRequestCertificateAwsAcmArn1$outboundSchema
+      ),
+      z.lazy(() =>
+        PersistImportedDeploymentRequestCertificateManagedTLSSecret1$outboundSchema
+      ),
+      z.lazy(() =>
+        PersistImportedDeploymentRequestCertificateNone1$outboundSchema
+      ),
+    ]),
+    mode: PersistImportedDeploymentRequestModeGenerated$outboundSchema,
+    route: z.union([
+      z.lazy(() =>
+        PersistImportedDeploymentRequestRouteIngress1$outboundSchema
+      ),
+      z.lazy(() =>
+        PersistImportedDeploymentRequestRouteGateway1$outboundSchema
+      ),
+    ]),
+  });
+
+export function persistImportedDeploymentRequestExposureGeneratedToJSON(
+  persistImportedDeploymentRequestExposureGenerated:
+    PersistImportedDeploymentRequestExposureGenerated,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestExposureGenerated$outboundSchema.parse(
+      persistImportedDeploymentRequestExposureGenerated,
+    ),
+  );
+}
+
+/** @internal */
+export const PersistImportedDeploymentRequestModeDisabled$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestModeDisabled> = z.enum(
+    PersistImportedDeploymentRequestModeDisabled,
+  );
+
+/** @internal */
+export type PersistImportedDeploymentRequestExposureDisabled$Outbound = {
+  mode: string;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestExposureDisabled$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestExposureDisabled$Outbound,
+    PersistImportedDeploymentRequestExposureDisabled
+  > = z.object({
+    mode: PersistImportedDeploymentRequestModeDisabled$outboundSchema,
+  });
+
+export function persistImportedDeploymentRequestExposureDisabledToJSON(
+  persistImportedDeploymentRequestExposureDisabled:
+    PersistImportedDeploymentRequestExposureDisabled,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestExposureDisabled$outboundSchema.parse(
+      persistImportedDeploymentRequestExposureDisabled,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestExposureUnion$Outbound =
+  | PersistImportedDeploymentRequestExposureCustom$Outbound
+  | PersistImportedDeploymentRequestExposureGenerated$Outbound
+  | PersistImportedDeploymentRequestExposureDisabled$Outbound
+  | any;
+
+/** @internal */
+export const PersistImportedDeploymentRequestExposureUnion$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestExposureUnion$Outbound,
+    PersistImportedDeploymentRequestExposureUnion
+  > = z.union([
+    z.lazy(() => PersistImportedDeploymentRequestExposureCustom$outboundSchema),
+    z.lazy(() =>
+      PersistImportedDeploymentRequestExposureGenerated$outboundSchema
+    ),
+    z.lazy(() =>
+      PersistImportedDeploymentRequestExposureDisabled$outboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function persistImportedDeploymentRequestExposureUnionToJSON(
+  persistImportedDeploymentRequestExposureUnion:
+    PersistImportedDeploymentRequestExposureUnion,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestExposureUnion$outboundSchema.parse(
+      persistImportedDeploymentRequestExposureUnion,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestKubernetes$Outbound = {
+  cluster?:
+    | PersistImportedDeploymentRequestCluster$Outbound
+    | any
+    | null
+    | undefined;
+  exposure?:
+    | PersistImportedDeploymentRequestExposureCustom$Outbound
+    | PersistImportedDeploymentRequestExposureGenerated$Outbound
+    | PersistImportedDeploymentRequestExposureDisabled$Outbound
+    | any
+    | null
+    | undefined;
+};
+
+/** @internal */
+export const PersistImportedDeploymentRequestKubernetes$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestKubernetes$Outbound,
+    PersistImportedDeploymentRequestKubernetes
+  > = z.object({
+    cluster: z.nullable(
+      z.union([
+        z.lazy(() => PersistImportedDeploymentRequestCluster$outboundSchema),
+        z.any(),
+      ]),
+    ).optional(),
+    exposure: z.nullable(
+      z.union([
+        z.lazy(() =>
+          PersistImportedDeploymentRequestExposureCustom$outboundSchema
+        ),
+        z.lazy(() =>
+          PersistImportedDeploymentRequestExposureGenerated$outboundSchema
+        ),
+        z.lazy(() =>
+          PersistImportedDeploymentRequestExposureDisabled$outboundSchema
+        ),
+        z.any(),
+      ]),
+    ).optional(),
+  });
+
+export function persistImportedDeploymentRequestKubernetesToJSON(
+  persistImportedDeploymentRequestKubernetes:
+    PersistImportedDeploymentRequestKubernetes,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestKubernetes$outboundSchema.parse(
+      persistImportedDeploymentRequestKubernetes,
+    ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestKubernetesUnion$Outbound =
+  | PersistImportedDeploymentRequestKubernetes$Outbound
+  | any;
+
+/** @internal */
+export const PersistImportedDeploymentRequestKubernetesUnion$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestKubernetesUnion$Outbound,
+    PersistImportedDeploymentRequestKubernetesUnion
+  > = z.union([
+    z.lazy(() => PersistImportedDeploymentRequestKubernetes$outboundSchema),
+    z.any(),
+  ]);
+
+export function persistImportedDeploymentRequestKubernetesUnionToJSON(
+  persistImportedDeploymentRequestKubernetesUnion:
+    PersistImportedDeploymentRequestKubernetesUnion,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestKubernetesUnion$outboundSchema.parse(
+      persistImportedDeploymentRequestKubernetesUnion,
+    ),
+  );
+}
 
 /** @internal */
 export const PersistImportedDeploymentRequestTypeByoVnetAzure$outboundSchema:
@@ -2403,6 +5071,11 @@ export type PersistImportedDeploymentRequestStackSettings$Outbound = {
     | null
     | undefined;
   heartbeats?: string | undefined;
+  kubernetes?:
+    | PersistImportedDeploymentRequestKubernetes$Outbound
+    | any
+    | null
+    | undefined;
   network?:
     | PersistImportedDeploymentRequestNetworkByoVpcAws$Outbound
     | PersistImportedDeploymentRequestNetworkByoVpcGcp$Outbound
@@ -2437,6 +5110,12 @@ export const PersistImportedDeploymentRequestStackSettings$outboundSchema:
     ).optional(),
     heartbeats: PersistImportedDeploymentRequestHeartbeats$outboundSchema
       .optional(),
+    kubernetes: z.nullable(
+      z.union([
+        z.lazy(() => PersistImportedDeploymentRequestKubernetes$outboundSchema),
+        z.any(),
+      ]),
+    ).optional(),
     network: z.nullable(
       z.union([
         z.lazy(() =>
@@ -2730,6 +5409,36 @@ export function persistImportedDeploymentRequestDeleteScopeUnionToJSON(
 }
 
 /** @internal */
+export const PersistImportedDeploymentRequestPendingDeleteScopeEnum$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestPendingDeleteScopeEnum> = z
+    .enum(PersistImportedDeploymentRequestPendingDeleteScopeEnum);
+
+/** @internal */
+export type PersistImportedDeploymentRequestPendingDeleteScopeUnion$Outbound =
+  | string
+  | any;
+
+/** @internal */
+export const PersistImportedDeploymentRequestPendingDeleteScopeUnion$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestPendingDeleteScopeUnion$Outbound,
+    PersistImportedDeploymentRequestPendingDeleteScopeUnion
+  > = z.union([
+    PersistImportedDeploymentRequestPendingDeleteScopeEnum$outboundSchema,
+    z.any(),
+  ]);
+
+export function persistImportedDeploymentRequestPendingDeleteScopeUnionToJSON(
+  persistImportedDeploymentRequestPendingDeleteScopeUnion:
+    PersistImportedDeploymentRequestPendingDeleteScopeUnion,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestPendingDeleteScopeUnion$outboundSchema
+      .parse(persistImportedDeploymentRequestPendingDeleteScopeUnion),
+  );
+}
+
+/** @internal */
 export const PersistImportedDeploymentRequestManagementEnum$outboundSchema:
   z.ZodEnum<typeof PersistImportedDeploymentRequestManagementEnum> = z.enum(
     PersistImportedDeploymentRequestManagementEnum,
@@ -2837,6 +5546,8 @@ export type PersistImportedDeploymentRequestOverrideAwGrant$Outbound = {
   actions?: Array<string> | null | undefined;
   dataActions?: Array<string> | null | undefined;
   permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /** @internal */
@@ -2848,6 +5559,8 @@ export const PersistImportedDeploymentRequestOverrideAwGrant$outboundSchema:
     actions: z.nullable(z.array(z.string())).optional(),
     dataActions: z.nullable(z.array(z.string())).optional(),
     permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
   });
 
 export function persistImportedDeploymentRequestOverrideAwGrantToJSON(
@@ -2864,8 +5577,10 @@ export function persistImportedDeploymentRequestOverrideAwGrantToJSON(
 /** @internal */
 export type PersistImportedDeploymentRequestOverrideAw$Outbound = {
   binding: PersistImportedDeploymentRequestOverrideAwBinding$Outbound;
+  description?: string | null | undefined;
   effect?: string | undefined;
   grant: PersistImportedDeploymentRequestOverrideAwGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -2877,11 +5592,13 @@ export const PersistImportedDeploymentRequestOverrideAw$outboundSchema:
     binding: z.lazy(() =>
       PersistImportedDeploymentRequestOverrideAwBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     effect: PersistImportedDeploymentRequestOverrideEffect$outboundSchema
       .optional(),
     grant: z.lazy(() =>
       PersistImportedDeploymentRequestOverrideAwGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function persistImportedDeploymentRequestOverrideAwToJSON(
@@ -2985,6 +5702,8 @@ export type PersistImportedDeploymentRequestOverrideAzureGrant$Outbound = {
   actions?: Array<string> | null | undefined;
   dataActions?: Array<string> | null | undefined;
   permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /** @internal */
@@ -2996,6 +5715,8 @@ export const PersistImportedDeploymentRequestOverrideAzureGrant$outboundSchema:
     actions: z.nullable(z.array(z.string())).optional(),
     dataActions: z.nullable(z.array(z.string())).optional(),
     permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
   });
 
 export function persistImportedDeploymentRequestOverrideAzureGrantToJSON(
@@ -3012,7 +5733,9 @@ export function persistImportedDeploymentRequestOverrideAzureGrantToJSON(
 /** @internal */
 export type PersistImportedDeploymentRequestOverrideAzure$Outbound = {
   binding: PersistImportedDeploymentRequestOverrideAzureBinding$Outbound;
+  description?: string | null | undefined;
   grant: PersistImportedDeploymentRequestOverrideAzureGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -3024,9 +5747,11 @@ export const PersistImportedDeploymentRequestOverrideAzure$outboundSchema:
     binding: z.lazy(() =>
       PersistImportedDeploymentRequestOverrideAzureBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       PersistImportedDeploymentRequestOverrideAzureGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function persistImportedDeploymentRequestOverrideAzureToJSON(
@@ -3262,6 +5987,8 @@ export type PersistImportedDeploymentRequestOverrideGcpGrant$Outbound = {
   actions?: Array<string> | null | undefined;
   dataActions?: Array<string> | null | undefined;
   permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /** @internal */
@@ -3273,6 +6000,8 @@ export const PersistImportedDeploymentRequestOverrideGcpGrant$outboundSchema:
     actions: z.nullable(z.array(z.string())).optional(),
     dataActions: z.nullable(z.array(z.string())).optional(),
     permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
   });
 
 export function persistImportedDeploymentRequestOverrideGcpGrantToJSON(
@@ -3289,7 +6018,9 @@ export function persistImportedDeploymentRequestOverrideGcpGrantToJSON(
 /** @internal */
 export type PersistImportedDeploymentRequestOverrideGcp$Outbound = {
   binding: PersistImportedDeploymentRequestOverrideGcpBinding$Outbound;
+  description?: string | null | undefined;
   grant: PersistImportedDeploymentRequestOverrideGcpGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -3301,9 +6032,11 @@ export const PersistImportedDeploymentRequestOverrideGcp$outboundSchema:
     binding: z.lazy(() =>
       PersistImportedDeploymentRequestOverrideGcpBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       PersistImportedDeploymentRequestOverrideGcpGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function persistImportedDeploymentRequestOverrideGcpToJSON(
@@ -3560,6 +6293,8 @@ export type PersistImportedDeploymentRequestExtendAwGrant$Outbound = {
   actions?: Array<string> | null | undefined;
   dataActions?: Array<string> | null | undefined;
   permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /** @internal */
@@ -3571,6 +6306,8 @@ export const PersistImportedDeploymentRequestExtendAwGrant$outboundSchema:
     actions: z.nullable(z.array(z.string())).optional(),
     dataActions: z.nullable(z.array(z.string())).optional(),
     permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
   });
 
 export function persistImportedDeploymentRequestExtendAwGrantToJSON(
@@ -3587,8 +6324,10 @@ export function persistImportedDeploymentRequestExtendAwGrantToJSON(
 /** @internal */
 export type PersistImportedDeploymentRequestExtendAw$Outbound = {
   binding: PersistImportedDeploymentRequestExtendAwBinding$Outbound;
+  description?: string | null | undefined;
   effect?: string | undefined;
   grant: PersistImportedDeploymentRequestExtendAwGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -3599,11 +6338,13 @@ export const PersistImportedDeploymentRequestExtendAw$outboundSchema: z.ZodType<
   binding: z.lazy(() =>
     PersistImportedDeploymentRequestExtendAwBinding$outboundSchema
   ),
+  description: z.nullable(z.string()).optional(),
   effect: PersistImportedDeploymentRequestExtendEffect$outboundSchema
     .optional(),
   grant: z.lazy(() =>
     PersistImportedDeploymentRequestExtendAwGrant$outboundSchema
   ),
+  label: z.nullable(z.string()).optional(),
 });
 
 export function persistImportedDeploymentRequestExtendAwToJSON(
@@ -3705,6 +6446,8 @@ export type PersistImportedDeploymentRequestExtendAzureGrant$Outbound = {
   actions?: Array<string> | null | undefined;
   dataActions?: Array<string> | null | undefined;
   permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /** @internal */
@@ -3716,6 +6459,8 @@ export const PersistImportedDeploymentRequestExtendAzureGrant$outboundSchema:
     actions: z.nullable(z.array(z.string())).optional(),
     dataActions: z.nullable(z.array(z.string())).optional(),
     permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
   });
 
 export function persistImportedDeploymentRequestExtendAzureGrantToJSON(
@@ -3732,7 +6477,9 @@ export function persistImportedDeploymentRequestExtendAzureGrantToJSON(
 /** @internal */
 export type PersistImportedDeploymentRequestExtendAzure$Outbound = {
   binding: PersistImportedDeploymentRequestExtendAzureBinding$Outbound;
+  description?: string | null | undefined;
   grant: PersistImportedDeploymentRequestExtendAzureGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -3744,9 +6491,11 @@ export const PersistImportedDeploymentRequestExtendAzure$outboundSchema:
     binding: z.lazy(() =>
       PersistImportedDeploymentRequestExtendAzureBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       PersistImportedDeploymentRequestExtendAzureGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function persistImportedDeploymentRequestExtendAzureToJSON(
@@ -3981,6 +6730,8 @@ export type PersistImportedDeploymentRequestExtendGcpGrant$Outbound = {
   actions?: Array<string> | null | undefined;
   dataActions?: Array<string> | null | undefined;
   permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /** @internal */
@@ -3992,6 +6743,8 @@ export const PersistImportedDeploymentRequestExtendGcpGrant$outboundSchema:
     actions: z.nullable(z.array(z.string())).optional(),
     dataActions: z.nullable(z.array(z.string())).optional(),
     permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
   });
 
 export function persistImportedDeploymentRequestExtendGcpGrantToJSON(
@@ -4008,7 +6761,9 @@ export function persistImportedDeploymentRequestExtendGcpGrantToJSON(
 /** @internal */
 export type PersistImportedDeploymentRequestExtendGcp$Outbound = {
   binding: PersistImportedDeploymentRequestExtendGcpBinding$Outbound;
+  description?: string | null | undefined;
   grant: PersistImportedDeploymentRequestExtendGcpGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -4020,9 +6775,11 @@ export const PersistImportedDeploymentRequestExtendGcp$outboundSchema:
     binding: z.lazy(() =>
       PersistImportedDeploymentRequestExtendGcpBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       PersistImportedDeploymentRequestExtendGcpGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function persistImportedDeploymentRequestExtendGcpToJSON(
@@ -4307,6 +7064,8 @@ export type PersistImportedDeploymentRequestProfileAwGrant$Outbound = {
   actions?: Array<string> | null | undefined;
   dataActions?: Array<string> | null | undefined;
   permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /** @internal */
@@ -4318,6 +7077,8 @@ export const PersistImportedDeploymentRequestProfileAwGrant$outboundSchema:
     actions: z.nullable(z.array(z.string())).optional(),
     dataActions: z.nullable(z.array(z.string())).optional(),
     permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
   });
 
 export function persistImportedDeploymentRequestProfileAwGrantToJSON(
@@ -4334,8 +7095,10 @@ export function persistImportedDeploymentRequestProfileAwGrantToJSON(
 /** @internal */
 export type PersistImportedDeploymentRequestProfileAw$Outbound = {
   binding: PersistImportedDeploymentRequestProfileAwBinding$Outbound;
+  description?: string | null | undefined;
   effect?: string | undefined;
   grant: PersistImportedDeploymentRequestProfileAwGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -4347,11 +7110,13 @@ export const PersistImportedDeploymentRequestProfileAw$outboundSchema:
     binding: z.lazy(() =>
       PersistImportedDeploymentRequestProfileAwBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     effect: PersistImportedDeploymentRequestProfileEffect$outboundSchema
       .optional(),
     grant: z.lazy(() =>
       PersistImportedDeploymentRequestProfileAwGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function persistImportedDeploymentRequestProfileAwToJSON(
@@ -4455,6 +7220,8 @@ export type PersistImportedDeploymentRequestProfileAzureGrant$Outbound = {
   actions?: Array<string> | null | undefined;
   dataActions?: Array<string> | null | undefined;
   permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /** @internal */
@@ -4466,6 +7233,8 @@ export const PersistImportedDeploymentRequestProfileAzureGrant$outboundSchema:
     actions: z.nullable(z.array(z.string())).optional(),
     dataActions: z.nullable(z.array(z.string())).optional(),
     permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
   });
 
 export function persistImportedDeploymentRequestProfileAzureGrantToJSON(
@@ -4482,7 +7251,9 @@ export function persistImportedDeploymentRequestProfileAzureGrantToJSON(
 /** @internal */
 export type PersistImportedDeploymentRequestProfileAzure$Outbound = {
   binding: PersistImportedDeploymentRequestProfileAzureBinding$Outbound;
+  description?: string | null | undefined;
   grant: PersistImportedDeploymentRequestProfileAzureGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -4494,9 +7265,11 @@ export const PersistImportedDeploymentRequestProfileAzure$outboundSchema:
     binding: z.lazy(() =>
       PersistImportedDeploymentRequestProfileAzureBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       PersistImportedDeploymentRequestProfileAzureGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function persistImportedDeploymentRequestProfileAzureToJSON(
@@ -4732,6 +7505,8 @@ export type PersistImportedDeploymentRequestProfileGcpGrant$Outbound = {
   actions?: Array<string> | null | undefined;
   dataActions?: Array<string> | null | undefined;
   permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
 };
 
 /** @internal */
@@ -4743,6 +7518,8 @@ export const PersistImportedDeploymentRequestProfileGcpGrant$outboundSchema:
     actions: z.nullable(z.array(z.string())).optional(),
     dataActions: z.nullable(z.array(z.string())).optional(),
     permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
   });
 
 export function persistImportedDeploymentRequestProfileGcpGrantToJSON(
@@ -4759,7 +7536,9 @@ export function persistImportedDeploymentRequestProfileGcpGrantToJSON(
 /** @internal */
 export type PersistImportedDeploymentRequestProfileGcp$Outbound = {
   binding: PersistImportedDeploymentRequestProfileGcpBinding$Outbound;
+  description?: string | null | undefined;
   grant: PersistImportedDeploymentRequestProfileGcpGrant$Outbound;
+  label?: string | null | undefined;
 };
 
 /** @internal */
@@ -4771,9 +7550,11 @@ export const PersistImportedDeploymentRequestProfileGcp$outboundSchema:
     binding: z.lazy(() =>
       PersistImportedDeploymentRequestProfileGcpBinding$outboundSchema
     ),
+    description: z.nullable(z.string()).optional(),
     grant: z.lazy(() =>
       PersistImportedDeploymentRequestProfileGcpGrant$outboundSchema
     ),
+    label: z.nullable(z.string()).optional(),
   });
 
 export function persistImportedDeploymentRequestProfileGcpToJSON(
@@ -5126,6 +7907,7 @@ export function persistImportedDeploymentRequestPreparedStackUnionToJSON(
 export type PersistImportedDeploymentRequestRuntimeMetadata$Outbound = {
   deleteScope?: string | any | null | undefined;
   lastSyncedEnvVarsHash?: string | null | undefined;
+  pendingDeleteScope?: string | any | null | undefined;
   preparedStack?:
     | PersistImportedDeploymentRequestPreparedStack$Outbound
     | any
@@ -5147,6 +7929,12 @@ export const PersistImportedDeploymentRequestRuntimeMetadata$outboundSchema:
       ]),
     ).optional(),
     lastSyncedEnvVarsHash: z.nullable(z.string()).optional(),
+    pendingDeleteScope: z.nullable(
+      z.union([
+        PersistImportedDeploymentRequestPendingDeleteScopeEnum$outboundSchema,
+        z.any(),
+      ]),
+    ).optional(),
     preparedStack: z.nullable(
       z.union([
         z.lazy(() =>
@@ -5201,10 +7989,9 @@ export function persistImportedDeploymentRequestManagementConfigKubernetesToJSON
 
 /** @internal */
 export type PersistImportedDeploymentRequestManagementConfigAzure$Outbound = {
-  managementPrincipalId?: string | null | undefined;
   managingTenantId: string;
-  oidcIssuer?: string | null | undefined;
-  oidcSubject?: string | null | undefined;
+  oidcIssuer: string;
+  oidcSubject: string;
   platform: "azure";
 };
 
@@ -5214,10 +8001,9 @@ export const PersistImportedDeploymentRequestManagementConfigAzure$outboundSchem
     PersistImportedDeploymentRequestManagementConfigAzure$Outbound,
     PersistImportedDeploymentRequestManagementConfigAzure
   > = z.object({
-    managementPrincipalId: z.nullable(z.string()).optional(),
     managingTenantId: z.string(),
-    oidcIssuer: z.nullable(z.string()).optional(),
-    oidcSubject: z.nullable(z.string()).optional(),
+    oidcIssuer: z.string(),
+    oidcSubject: z.string(),
     platform: z.literal("azure"),
   });
 
@@ -5343,8 +8129,10 @@ export type PersistImportedDeploymentRequest$Outbound = {
     | null
     | undefined;
   runtimeMetadata: PersistImportedDeploymentRequestRuntimeMetadata$Outbound;
+  deploymentProtocolVersion: number;
   status: string;
   currentReleaseId?: string | undefined;
+  desiredReleaseId?: string | undefined;
   importSource?: string | undefined;
   setupTarget: string;
   setupFingerprint: string;
@@ -5363,7 +8151,7 @@ export const PersistImportedDeploymentRequest$outboundSchema: z.ZodType<
   PersistImportedDeploymentRequest$Outbound,
   PersistImportedDeploymentRequest
 > = z.object({
-  mode: PersistImportedDeploymentRequestMode$outboundSchema,
+  mode: ModePersist$outboundSchema,
   name: z.string(),
   deploymentGroupId: z.string(),
   managerId: z.string(),
@@ -5395,10 +8183,12 @@ export const PersistImportedDeploymentRequest$outboundSchema: z.ZodType<
   runtimeMetadata: z.lazy(() =>
     PersistImportedDeploymentRequestRuntimeMetadata$outboundSchema
   ),
+  deploymentProtocolVersion: z.int(),
   status: PersistImportedDeploymentRequestStatus$outboundSchema.default(
     "provisioning",
   ),
   currentReleaseId: z.string().optional(),
+  desiredReleaseId: z.string().optional(),
   importSource: ImportSourceKind$outboundSchema.optional(),
   setupTarget: z.string(),
   setupFingerprint: z.string(),

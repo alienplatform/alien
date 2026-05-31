@@ -1,0 +1,535 @@
+{
+  "id": "worker/management",
+  "description": "Allows managing function configuration, versions, aliases, and monitoring",
+  "platforms": {
+    "aws": [
+      {
+        "label": "update-lambda-functions",
+        "description": "Update Lambda code, configuration, versions, aliases, function URLs, and event source mappings owned by this application.",
+        "grant": {
+          "actions": [
+            "lambda:UpdateFunctionCode",
+            "lambda:UpdateFunctionConfiguration",
+            "lambda:PublishVersion",
+            "lambda:CreateAlias",
+            "lambda:DeleteAlias",
+            "lambda:UpdateAlias",
+            "lambda:PutFunctionConcurrency",
+            "lambda:DeleteFunctionConcurrency",
+            "lambda:PutFunctionEventInvokeConfig",
+            "lambda:DeleteFunctionEventInvokeConfig",
+            "lambda:GetFunction",
+            "lambda:GetFunctionConfiguration",
+            "lambda:ListVersionsByFunction",
+            "lambda:ListAliases",
+            "lambda:GetPolicy",
+            "lambda:ListTags",
+            "lambda:GetFunctionUrlConfig",
+            "lambda:GetCodeSigningConfig",
+            "lambda:GetFunctionEventInvokeConfig",
+            "lambda:AddPermission",
+            "lambda:RemovePermission",
+            "lambda:GetEventSourceMapping",
+            "lambda:ListEventSourceMappings",
+            "lambda:UpdateEventSourceMapping"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "deployment"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${resourceName}"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:ResourceTag/${managedByTag}": "deployment"
+              }
+            }
+          }
+        }
+      },
+      {
+        // iam:PassRole remains name-scoped. AWS PassRole is evaluated against
+        // the role being passed and does not give us the same reliable
+        // resource-tag boundary as EC2/ELB/Lambda resources.
+        "label": "pass-lambda-execution-roles",
+        "description": "Allow Lambda to use application-owned IAM execution roles.",
+        "grant": {
+          "actions": ["iam:PassRole"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-sa"]
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-sa"]
+          }
+        }
+      },
+      {
+        "label": "get-ecr-login-token",
+        "description": "Get an ECR authorization token so Lambda can pull deployment container images.",
+        "grant": {
+          "actions": ["ecr:GetAuthorizationToken"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
+          }
+        }
+      },
+      {
+        "label": "read-deployment-container-images",
+        "description": "Read deployment container images from ECR for Lambda updates.",
+        "grant": {
+          "actions": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ecr:*:${managingAccountId}:repository/*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:ecr:*:${managingAccountId}:repository/*"]
+          }
+        }
+      },
+      {
+        "label": "import-tls-certificates",
+        "description": "Import TLS certificates for application-owned HTTPS endpoints.",
+        "grant": {
+          "actions": ["acm:ImportCertificate", "acm:AddTagsToCertificate"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "deployment"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}",
+                "aws:RequestTag/${managedByTag}": "deployment"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "manage-tls-certificates",
+        "description": "Inspect and delete TLS certificates owned by this application.",
+        "grant": {
+          "actions": [
+            "acm:ImportCertificate",
+            "acm:AddTagsToCertificate",
+            "acm:DeleteCertificate",
+            "acm:DescribeCertificate"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "deployment"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:acm:${awsRegion}:${awsAccountId}:certificate/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:ResourceTag/${managedByTag}": "deployment"
+              }
+            }
+          }
+        }
+      },
+      {
+        // API Gateway V2 API/domain creation. The request must carry boundary tags.
+        "label": "create-http-api-endpoints",
+        "description": "Create API Gateway HTTP APIs and custom domain names for application-owned public endpoints.",
+        "grant": {
+          "actions": ["apigateway:POST", "apigateway:PUT"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:apigateway:${awsRegion}::/apis",
+              "arn:aws:apigateway:${awsRegion}::/domainnames",
+              "arn:aws:apigateway:${awsRegion}::/tags/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "deployment"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:apigateway:${awsRegion}::/apis",
+              "arn:aws:apigateway:${awsRegion}::/domainnames",
+              "arn:aws:apigateway:${awsRegion}::/tags/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}",
+                "aws:RequestTag/${managedByTag}": "deployment"
+              }
+            }
+          }
+        }
+      },
+      {
+        // API Gateway V2 child creates run under already-tagged APIs/domains.
+        "label": "create-http-api-routes",
+        "description": "Create routes and mappings under API Gateway HTTP APIs and domain names owned by this application.",
+        "grant": {
+          "actions": ["apigateway:POST"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:apigateway:${awsRegion}::/apis/*",
+              "arn:aws:apigateway:${awsRegion}::/domainnames/*",
+              "arn:aws:apigateway:${awsRegion}::/domainnames/*/apimappings"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "deployment"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:apigateway:${awsRegion}::/apis/*",
+              "arn:aws:apigateway:${awsRegion}::/domainnames/*",
+              "arn:aws:apigateway:${awsRegion}::/domainnames/*/apimappings"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:ResourceTag/${managedByTag}": "deployment"
+              }
+            }
+          }
+        }
+      },
+      {
+        // API Gateway V2 tagged creates can perform implicit TagResource calls.
+        "label": "tag-http-api-endpoints",
+        "description": "Apply deployment tags to API Gateway HTTP API resources created for public endpoints.",
+        "grant": {
+          "actions": ["apigateway:TagResource", "apigateway:PUT"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:apigateway:${awsRegion}::/apis/*",
+              "arn:aws:apigateway:${awsRegion}::/apis/*/stages",
+              "arn:aws:apigateway:${awsRegion}::/apis/*/stages/*",
+              "arn:aws:apigateway:${awsRegion}::/domainnames/*",
+              "arn:aws:apigateway:${awsRegion}::/tags/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "deployment"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:apigateway:${awsRegion}::/apis/*",
+              "arn:aws:apigateway:${awsRegion}::/apis/*/stages",
+              "arn:aws:apigateway:${awsRegion}::/apis/*/stages/*",
+              "arn:aws:apigateway:${awsRegion}::/domainnames/*",
+              "arn:aws:apigateway:${awsRegion}::/tags/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}",
+                "aws:RequestTag/${managedByTag}": "deployment"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "manage-http-api-endpoints",
+        "description": "Read, update, and delete API Gateway HTTP APIs, custom domain names, and mappings owned by this application.",
+        "grant": {
+          "actions": ["apigateway:GET", "apigateway:DELETE", "apigateway:PATCH", "apigateway:PUT"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:apigateway:${awsRegion}::/apis/*",
+              "arn:aws:apigateway:${awsRegion}::/domainnames/*",
+              "arn:aws:apigateway:${awsRegion}::/domainnames/*/apimappings",
+              "arn:aws:apigateway:${awsRegion}::/domainnames/*/apimappings/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "deployment"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:apigateway:${awsRegion}::/apis/*",
+              "arn:aws:apigateway:${awsRegion}::/domainnames/*",
+              "arn:aws:apigateway:${awsRegion}::/domainnames/*/apimappings",
+              "arn:aws:apigateway:${awsRegion}::/domainnames/*/apimappings/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:ResourceTag/${managedByTag}": "deployment"
+              }
+            }
+          }
+        }
+      },
+      {
+        // EventBridge schedule rules are created with Alien boundary tags.
+        "label": "create-eventbridge-schedules",
+        "description": "Create EventBridge schedule rules for application-owned scheduled functions.",
+        "grant": {
+          "actions": ["events:PutRule", "events:TagResource"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:events:${awsRegion}:${awsAccountId}:rule/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "deployment"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:events:${awsRegion}:${awsAccountId}:rule/${stackPrefix}-${resourceName}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}",
+                "aws:RequestTag/${managedByTag}": "deployment"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "manage-eventbridge-schedules",
+        "description": "Read, update, and delete EventBridge schedule rules and targets owned by this application.",
+        "grant": {
+          "actions": [
+            "events:DeleteRule",
+            "events:DescribeRule",
+            "events:PutTargets",
+            "events:RemoveTargets"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:events:${awsRegion}:${awsAccountId}:rule/${stackPrefix}-*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "deployment"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:events:${awsRegion}:${awsAccountId}:rule/${stackPrefix}-${resourceName}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${resourceTag}": "${resourceName}",
+                "aws:ResourceTag/${managedByTag}": "deployment"
+              }
+            }
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "label": "manage-cloud-run-services",
+        "description": "Update Cloud Run services, jobs, schedulers, Pub/Sub triggers, and IAM bindings owned by this application.",
+        "grant": {
+          "permissions": [
+            "run.services.get",
+            "run.services.list",
+            "run.services.getIamPolicy",
+            "run.revisions.get",
+            "run.revisions.list",
+            "run.operations.get",
+            "run.operations.list",
+            "run.locations.list",
+            "run.configurations.get",
+            "run.configurations.list",
+            "run.routes.get",
+            "run.routes.list",
+            "run.executions.get",
+            "run.executions.list",
+            "run.tasks.get",
+            "run.tasks.list",
+            "run.services.listEffectiveTags",
+            "run.services.listTagBindings",
+            "resourcemanager.projects.get",
+            "run.services.update",
+            "run.services.setIamPolicy",
+            "run.jobs.update",
+            "run.jobs.getIamPolicy",
+            "run.jobs.setIamPolicy",
+            "run.operations.delete",
+            "run.revisions.delete",
+            "run.executions.delete",
+            "run.services.createTagBinding",
+            "run.services.deleteTagBinding",
+            "run.jobs.createTagBinding",
+            "run.jobs.deleteTagBinding",
+            "pubsub.topics.create",
+            "pubsub.topics.delete",
+            "pubsub.topics.get",
+            "pubsub.topics.update",
+            "pubsub.topics.attachSubscription",
+            "pubsub.subscriptions.create",
+            "pubsub.subscriptions.delete",
+            "iam.serviceAccounts.actAs",
+            "pubsub.subscriptions.get",
+            "pubsub.subscriptions.update",
+            "iam.serviceAccounts.getIamPolicy",
+            "iam.serviceAccounts.setIamPolicy"
+          ]
+        },
+        // This permission set covers Cloud Run, Pub/Sub, IAM, and related
+        // project-level APIs. It cannot be attached to a Cloud Run service IAM
+        // policy; resource-targeted grants are still bound at project scope and
+        // are limited by the stack role/prefix contract.
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": { "scope": "projects/${projectName}" }
+        }
+      },
+      {
+        "label": "manage-cloud-run-https-endpoints",
+        "description": "Create, update, and delete Google Cloud HTTPS load-balancer resources used by Cloud Run public endpoints.",
+        "grant": {
+          "permissions": [
+            "compute.sslCertificates.create",
+            "compute.sslCertificates.delete",
+            "compute.sslCertificates.get",
+            "compute.regionNetworkEndpointGroups.create",
+            "compute.regionNetworkEndpointGroups.delete",
+            "compute.regionNetworkEndpointGroups.get",
+            "compute.regionNetworkEndpointGroups.use",
+            "compute.backendServices.create",
+            "compute.backendServices.delete",
+            "compute.backendServices.get",
+            "compute.backendServices.update",
+            "compute.backendServices.use",
+            "compute.urlMaps.create",
+            "compute.urlMaps.delete",
+            "compute.urlMaps.get",
+            "compute.urlMaps.use",
+            "compute.targetHttpsProxies.create",
+            "compute.targetHttpsProxies.delete",
+            "compute.targetHttpsProxies.get",
+            "compute.targetHttpsProxies.use",
+            "compute.globalAddresses.create",
+            "compute.globalAddresses.delete",
+            "compute.globalAddresses.get",
+            "compute.globalForwardingRules.create",
+            "compute.globalForwardingRules.delete",
+            "compute.globalForwardingRules.get"
+          ]
+        },
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": { "scope": "projects/${projectName}" }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "label": "manage-container-apps",
+        "description": "Update Azure Container Apps, queues, identities, certificates, and role assignments owned by this application.",
+        "grant": {
+          "actions": [
+            "Microsoft.App/containerApps/read",
+            "Microsoft.App/containerApps/write",
+            "Microsoft.App/containerApps/revisions/read",
+            "Microsoft.App/containerApps/revisions/replicas/read",
+            "Microsoft.App/containerApps/authConfigs/read",
+            "Microsoft.App/containerApps/authConfigs/write",
+            "Microsoft.App/containerApps/sourceControls/read",
+            "Microsoft.App/containerApps/revisions/activate/action",
+            "Microsoft.App/containerApps/revisions/deactivate/action",
+            "Microsoft.App/containerApps/revisions/restart/action",
+            "Microsoft.App/managedEnvironments/daprComponents/read",
+            "Microsoft.App/managedEnvironments/daprComponents/write",
+            "Microsoft.App/managedEnvironments/daprComponents/delete",
+            "Microsoft.App/managedEnvironments/read",
+            "Microsoft.App/managedEnvironments/join/action",
+            "Microsoft.ManagedIdentity/userAssignedIdentities/assign/action",
+            "Microsoft.ServiceBus/namespaces/read",
+            "Microsoft.ServiceBus/namespaces/queues/read",
+            "Microsoft.ServiceBus/namespaces/queues/write",
+            "Microsoft.ServiceBus/namespaces/queues/delete",
+            "Microsoft.Authorization/roleDefinitions/read",
+            "Microsoft.Authorization/roleAssignments/read",
+            "Microsoft.Authorization/roleAssignments/write",
+            "Microsoft.Authorization/roleAssignments/delete"
+          ],
+          "dataActions": [
+            "Microsoft.ServiceBus/namespaces/messages/send/action",
+            "Microsoft.KeyVault/vaults/certificates/import/action",
+            "Microsoft.KeyVault/vaults/certificates/read"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/containerApps/${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

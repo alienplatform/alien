@@ -6,7 +6,7 @@ Query databases behind the customer's firewall. Connection credentials stay in t
 
 | Resource | Type | Description |
 |----------|------|-------------|
-| `connector` | Function (live) | Runs queries and returns results via commands |
+| `connector` | Worker (live) | Runs queries and returns results via commands |
 | `credentials` | Vault (frozen) | Database connection strings, stored in the customer's secret manager |
 | `cache` | KV (frozen) | Query result cache to avoid repeated round-trips |
 

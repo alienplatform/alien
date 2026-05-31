@@ -31,6 +31,8 @@ const value: models.ImportSourceManagementConfigGcp = {
 ```typescript
 const value: models.ImportSourceManagementConfigAzure = {
   managingTenantId: "<id>",
+  oidcIssuer: "<value>",
+  oidcSubject: "<value>",
   platform: "azure",
 };
 ```

@@ -57,16 +57,14 @@ impl CompileTimeCheck for ResourceReferencesExistCheck {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::{
-        Function, FunctionCode, ResourceEntry, ResourceLifecycle, ResourceRef, Storage,
-    };
+    use alien_core::{ResourceEntry, ResourceLifecycle, ResourceRef, Storage, Worker, WorkerCode};
     use indexmap::IndexMap;
 
     #[tokio::test]
     async fn test_valid_references_success() {
         let storage = Storage::new("storage".to_string()).build();
-        let function = Function::new("function".to_string())
-            .code(FunctionCode::Image {
+        let worker = Worker::new("worker".to_string())
+            .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
             })
             .permissions("test".to_string())
@@ -84,9 +82,9 @@ mod tests {
             },
         );
         resources.insert(
-            "function".to_string(),
+            "worker".to_string(),
             ResourceEntry {
-                config: alien_core::Resource::new(function),
+                config: alien_core::Resource::new(worker),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
@@ -107,8 +105,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_invalid_reference_failure() {
-        let function = Function::new("function".to_string())
-            .code(FunctionCode::Image {
+        let worker = Worker::new("worker".to_string())
+            .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
             })
             .permissions("test".to_string())
@@ -116,9 +114,9 @@ mod tests {
 
         let mut resources = IndexMap::new();
         resources.insert(
-            "function".to_string(),
+            "worker".to_string(),
             ResourceEntry {
-                config: alien_core::Resource::new(function),
+                config: alien_core::Resource::new(worker),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: vec![ResourceRef::new(
                     alien_core::ResourceType::from("storage"),

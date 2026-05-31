@@ -1,6 +1,6 @@
 # @alienplatform/sdk
 
-TypeScript SDK for Alien bindings. Provides gRPC clients for Storage, KV, Queue, Vault, Build, ArtifactRegistry, Function, and ServiceAccount.
+TypeScript SDK for Alien bindings. Provides gRPC clients for Storage, KV, Queue, Vault, Build, ArtifactRegistry, Worker, and ServiceAccount.
 
 ## Commands
 

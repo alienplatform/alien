@@ -5,19 +5,23 @@
 //! locally. This module provides helpers to start and stop such agents during
 //! E2E tests.
 
-use std::{path::Path, sync::Arc};
+use std::{path::Path, process::Stdio, sync::Arc};
 
 use alien_core::{ClientConfig, Platform};
+use tokio::io::AsyncWriteExt;
 use tracing::info;
 
-use crate::manager::TestManager;
+use crate::{
+    helm_values::{ghcr_pull_credentials, GHCR_PULL_SECRET_NAME},
+    manager::TestManager,
+};
 
 /// Default Docker label applied to test alien-agent containers so they can be
 /// cleaned up afterwards.
 pub const TEST_AGENT_LABEL: &str = "alien-test-agent=true";
 
 /// Generate a random 64-character hex string for use as an encryption key.
-fn generate_encryption_key() -> String {
+pub(crate) fn generate_encryption_key() -> String {
     use rand::Rng;
     let mut rng = rand::rng();
     let bytes: Vec<u8> = (0..32).map(|_| rng.random::<u8>()).collect();
@@ -91,6 +95,10 @@ pub struct TestAlienAgent {
     pub helm_namespace: Option<String>,
     /// Kubeconfig path for Helm installs.
     pub kubeconfig: Option<String>,
+    /// Kube context for Helm installs.
+    pub kube_context: Option<String>,
+    /// Extra environment needed by Kubernetes CLI auth plugins.
+    pub kubernetes_command_env: Vec<(String, String)>,
     /// Native process child handle (if started via `start_local_process`).
     pub child_process: Option<tokio::process::Child>,
     /// Temp data directory for native agent (cleaned up on drop).
@@ -182,6 +190,8 @@ impl TestAlienAgent {
             helm_release: None,
             helm_namespace: None,
             kubeconfig: None,
+            kube_context: None,
+            kubernetes_command_env: Vec::new(),
             child_process: None,
             data_dir: None,
             sync_token_file: None,
@@ -267,6 +277,8 @@ impl TestAlienAgent {
             helm_release: None,
             helm_namespace: None,
             kubeconfig: None,
+            kube_context: None,
+            kubernetes_command_env: Vec::new(),
             child_process: Some(child),
             data_dir: Some(data_dir),
             sync_token_file: Some(sync_token_file),
@@ -292,7 +304,7 @@ impl TestAlienAgent {
             %release_name,
             %namespace,
             %chart,
-            manager_url = %manager.url,
+            manager_url = %manager.public_url,
             "installing alien-agent via helm"
         );
 
@@ -307,7 +319,7 @@ impl TestAlienAgent {
             namespace,
             "--create-namespace",
             "--set",
-            &format!("syncUrl={}", manager.url),
+            &format!("syncUrl={}", manager.public_url),
             "--set",
             &format!("syncToken={}", manager.admin_token),
             "--set",
@@ -335,6 +347,8 @@ impl TestAlienAgent {
             helm_release: Some(release_name.to_string()),
             helm_namespace: Some(namespace.to_string()),
             kubeconfig: kubeconfig.map(String::from),
+            kube_context: None,
+            kubernetes_command_env: Vec::new(),
             child_process: None,
             data_dir: None,
             sync_token_file: None,
@@ -356,6 +370,8 @@ impl TestAlienAgent {
         release_name: &str,
         namespace: &str,
         kubeconfig: Option<&str>,
+        kube_context: Option<&str>,
+        command_env: &[(String, String)],
     ) -> Result<Self, Box<dyn std::error::Error>> {
         info!(
             %release_name,
@@ -381,6 +397,12 @@ impl TestAlienAgent {
         if let Some(kc) = kubeconfig {
             cmd.env("KUBECONFIG", kc);
         }
+        if let Some(context) = kube_context {
+            cmd.arg("--kube-context").arg(context);
+        }
+        apply_command_env(&mut cmd, command_env);
+
+        ensure_ghcr_pull_secret(namespace, kubeconfig, kube_context, command_env).await?;
 
         let output = cmd.output().await?;
 
@@ -396,6 +418,8 @@ impl TestAlienAgent {
             helm_release: Some(release_name.to_string()),
             helm_namespace: Some(namespace.to_string()),
             kubeconfig: kubeconfig.map(String::from),
+            kube_context: kube_context.map(String::from),
+            kubernetes_command_env: command_env.to_vec(),
             child_process: None,
             data_dir: None,
             sync_token_file: None,
@@ -442,7 +466,91 @@ impl TestAlienAgent {
             .as_deref()
             .ok_or("Missing Helm namespace")?;
 
-        crate::cleanup::cleanup_helm_release(release, namespace, self.kubeconfig.as_deref()).await
+        crate::cleanup::cleanup_helm_release(
+            release,
+            namespace,
+            self.kubeconfig.as_deref(),
+            self.kube_context.as_deref(),
+            &self.kubernetes_command_env,
+        )
+        .await
+    }
+}
+
+async fn ensure_ghcr_pull_secret(
+    namespace: &str,
+    kubeconfig: Option<&str>,
+    kube_context: Option<&str>,
+    command_env: &[(String, String)],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let Some((username, token)) = ghcr_pull_credentials() else {
+        return Ok(());
+    };
+
+    let mut namespace_cmd = kubectl(kubeconfig, kube_context);
+    namespace_cmd.args(["create", "namespace", namespace]);
+    apply_command_env(&mut namespace_cmd, command_env);
+    let namespace_output = namespace_cmd.output().await?;
+    if !namespace_output.status.success() {
+        let stderr = String::from_utf8_lossy(&namespace_output.stderr);
+        if !stderr.contains("AlreadyExists") {
+            return Err(format!("Failed to create Kubernetes namespace: {stderr}").into());
+        }
+    }
+
+    let mut create_cmd = kubectl(kubeconfig, kube_context);
+    create_cmd.args([
+        "-n",
+        namespace,
+        "create",
+        "secret",
+        "docker-registry",
+        GHCR_PULL_SECRET_NAME,
+        "--docker-server=ghcr.io",
+        &format!("--docker-username={username}"),
+        &format!("--docker-password={token}"),
+        "--dry-run=client",
+        "-o",
+        "yaml",
+    ]);
+    apply_command_env(&mut create_cmd, command_env);
+    let secret_yaml = create_cmd.output().await?;
+    if !secret_yaml.status.success() {
+        let stderr = String::from_utf8_lossy(&secret_yaml.stderr);
+        return Err(format!("Failed to render GHCR image pull secret: {stderr}").into());
+    }
+
+    let mut apply_cmd = kubectl(kubeconfig, kube_context);
+    apply_cmd.args(["apply", "-f", "-"]);
+    apply_cmd.stdin(Stdio::piped());
+    apply_command_env(&mut apply_cmd, command_env);
+    let mut child = apply_cmd.spawn()?;
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin.write_all(&secret_yaml.stdout).await?;
+    }
+    let output = child.wait_with_output().await?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Failed to apply GHCR image pull secret: {stderr}").into());
+    }
+
+    Ok(())
+}
+
+fn kubectl(kubeconfig: Option<&str>, kube_context: Option<&str>) -> tokio::process::Command {
+    let mut cmd = tokio::process::Command::new("kubectl");
+    if let Some(kc) = kubeconfig {
+        cmd.env("KUBECONFIG", kc);
+    }
+    if let Some(context) = kube_context {
+        cmd.arg("--context").arg(context);
+    }
+    cmd
+}
+
+fn apply_command_env(cmd: &mut tokio::process::Command, env: &[(String, String)]) {
+    for (key, value) in env {
+        cmd.env(key, value);
     }
 }
 
@@ -454,6 +562,8 @@ impl TestAlienAgent {
             helm_release: None,
             helm_namespace: None,
             kubeconfig: None,
+            kube_context: None,
+            kubernetes_command_env: Vec::new(),
             child_process: None,
             data_dir: None,
             sync_token_file: None,

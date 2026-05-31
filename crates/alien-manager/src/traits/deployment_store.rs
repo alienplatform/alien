@@ -3,8 +3,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use alien_core::{
-    import::ImportSourceKind, DeleteScope, DeploymentState, EnvironmentInfo, EnvironmentVariable,
-    ManagementConfig, Platform, RuntimeMetadata, StackSettings, StackState,
+    import::ImportSourceKind, DeleteScope, DeploymentConfig, DeploymentState, EnvironmentInfo,
+    EnvironmentVariable, ManagementConfig, Platform, ResourceHeartbeat, RuntimeMetadata,
+    StackSettings, StackState,
 };
 use alien_error::AlienError;
 
@@ -22,6 +23,9 @@ pub struct DeploymentRecord {
     pub name: String,
     pub deployment_group_id: String,
     pub platform: Platform,
+    pub deployment_protocol_version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_platform: Option<Platform>,
     pub status: String,
     pub stack_settings: StackSettings,
     pub stack_state: Option<StackState>,
@@ -43,6 +47,14 @@ pub struct DeploymentRecord {
     /// In standalone/E2E mode this is None — the credential resolver derives it from bindings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub management_config: Option<ManagementConfig>,
+    /// Full config supplied by an external control plane.
+    ///
+    /// Platform mode builds deployment config from database-backed domain,
+    /// monitoring, Horizon, and token state. The manager must preserve that
+    /// config instead of reconstructing a standalone config from the flattened
+    /// record fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deployment_config: Option<DeploymentConfig>,
     /// Raw deployment token for proxy pull auth.
     /// Set during deployment creation. Used by the deployment loop to
     /// configure registry credentials (Container App secrets, K8s imagePullSecrets).
@@ -63,6 +75,10 @@ impl std::fmt::Debug for DeploymentRecord {
             .field("name", &self.name)
             .field("deployment_group_id", &self.deployment_group_id)
             .field("platform", &self.platform)
+            .field(
+                "deployment_protocol_version",
+                &self.deployment_protocol_version,
+            )
             .field("status", &self.status)
             .field("stack_settings", &self.stack_settings)
             .field("stack_state", &self.stack_state)
@@ -79,6 +95,10 @@ impl std::fmt::Debug for DeploymentRecord {
                 &self.user_environment_variables,
             )
             .field("management_config", &self.management_config)
+            .field(
+                "deployment_config",
+                &self.deployment_config.as_ref().map(|_| "[PRESENT]"),
+            )
             .field(
                 "deployment_token",
                 &self.deployment_token.as_ref().map(|_| "[REDACTED]"),
@@ -99,7 +119,10 @@ pub struct CreateDeploymentParams {
     pub name: String,
     pub deployment_group_id: String,
     pub platform: Platform,
+    pub deployment_protocol_version: u32,
+    pub base_platform: Option<Platform>,
     pub stack_settings: StackSettings,
+    pub stack_state: Option<StackState>,
     pub environment_variables: Option<Vec<EnvironmentVariable>>,
     /// Raw deployment token for proxy pull auth.
     pub deployment_token: Option<String>,
@@ -112,6 +135,8 @@ pub struct CreateImportedDeploymentParams {
     pub name: String,
     pub deployment_group_id: String,
     pub platform: Platform,
+    pub deployment_protocol_version: u32,
+    pub base_platform: Option<Platform>,
     pub stack_settings: StackSettings,
     pub stack_state: StackState,
     pub environment_info: Option<EnvironmentInfo>,
@@ -120,6 +145,7 @@ pub struct CreateImportedDeploymentParams {
     /// `"provisioning"` so the manager can complete layer-3 runtime work.
     pub status: String,
     pub current_release_id: Option<String>,
+    pub desired_release_id: Option<String>,
     pub import_source: Option<ImportSourceKind>,
     pub setup_target: String,
     pub setup_fingerprint: String,
@@ -177,6 +203,7 @@ pub struct ReconcileData {
     pub update_heartbeat: bool,
     pub error: Option<serde_json::Value>,
     pub suggested_delay_ms: Option<u64>,
+    pub heartbeats: Vec<ResourceHeartbeat>,
 }
 
 /// Persistence for deployments and deployment groups.

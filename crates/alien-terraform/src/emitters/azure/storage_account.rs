@@ -8,7 +8,7 @@
 //!
 //! The emitter mirrors that controller surface:
 //!
-//! * Name derived deterministically from `${var.stack_name}` — see
+//! * Name derived deterministically from `${local.resource_prefix}` — see
 //!   [`super::helpers::storage_account_name_local`]. Push and pull paths
 //!   converge on the same name without an extra round-trip.
 //! * Standard / LRS / Hot tier — production-safe defaults, customers
@@ -81,12 +81,24 @@ impl TfEmitter for AzureStorageAccountEmitter {
                 expr::traversal(["azurerm_storage_account", label, "name"]),
             ),
             (
+                "resourceId",
+                expr::traversal(["azurerm_storage_account", label, "id"]),
+            ),
+            (
                 "blobEndpoint",
                 expr::traversal(["azurerm_storage_account", label, "primary_blob_endpoint"]),
             ),
             (
+                "fileEndpoint",
+                expr::traversal(["azurerm_storage_account", label, "primary_file_endpoint"]),
+            ),
+            (
                 "queueEndpoint",
                 expr::traversal(["azurerm_storage_account", label, "primary_queue_endpoint"]),
+            ),
+            (
+                "tableEndpoint",
+                expr::traversal(["azurerm_storage_account", label, "primary_table_endpoint"]),
             ),
         ]))
     }

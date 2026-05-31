@@ -1,0 +1,1 @@
+{"type":"string","enum":["info","warning","error"],"x-readme-ref-name":"HeartbeatIssueSeverity"}

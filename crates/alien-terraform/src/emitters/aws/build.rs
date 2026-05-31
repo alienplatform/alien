@@ -4,8 +4,8 @@ use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::aws::helpers::{
-        downcast, jsonencode, nested_block, required_label, service_account_role_arn,
-        service_assume_role_policy, stack_name_template, tags,
+        downcast, iam_role_name_template, jsonencode, nested_block, required_label,
+        resource_prefix_template, service_account_role_arn, service_assume_role_policy, tags,
     },
     expr,
 };
@@ -29,7 +29,10 @@ impl TfEmitter for AwsBuildEmitter {
                     "aws_iam_role",
                     &role_label,
                     [
-                        attr("name", stack_name_template(&format!("{}-build", build.id))),
+                        attr(
+                            "name",
+                            iam_role_name_template(&format!("{}-build", build.id)),
+                        ),
                         attr(
                             "assume_role_policy",
                             service_assume_role_policy(&["codebuild.amazonaws.com"]),
@@ -43,7 +46,7 @@ impl TfEmitter for AwsBuildEmitter {
                     [
                         attr(
                             "name",
-                            Expression::String("alien-managed-policy".to_string()),
+                            Expression::String("deployment-permissions".to_string()),
                         ),
                         attr("role", expr::traversal(["aws_iam_role", &role_label, "id"])),
                         attr("policy", logs_policy()),
@@ -60,7 +63,10 @@ impl TfEmitter for AwsBuildEmitter {
             [
                 attr(
                     "name",
-                    expr::template(format!("/aws/codebuild/${{var.stack_name}}-{}", build.id)),
+                    expr::template(format!(
+                        "/aws/codebuild/${{local.resource_prefix}}-{}",
+                        build.id
+                    )),
                 ),
                 attr(
                     "retention_in_days",
@@ -83,7 +89,7 @@ impl TfEmitter for AwsBuildEmitter {
             "aws_codebuild_project",
             label,
             [
-                attr("name", stack_name_template(&build.id)),
+                attr("name", resource_prefix_template(&build.id)),
                 attr("service_role", role_arn),
                 nested_block(
                     "artifacts",

@@ -4,9 +4,16 @@
 
 import * as z from "zod/v4";
 import { safeParse } from "../../lib/schemas.js";
+import { ClosedEnum } from "../../types/enums.js";
 import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
-import * as models from "../index.js";
+
+export const ListDeploymentGroupsInclude = {
+  Project: "project",
+} as const;
+export type ListDeploymentGroupsInclude = ClosedEnum<
+  typeof ListDeploymentGroupsInclude
+>;
 
 export type ListDeploymentGroupsRequest = {
   /**
@@ -22,6 +29,10 @@ export type ListDeploymentGroupsRequest = {
    */
   search?: string | undefined;
   /**
+   * Optional fields to include: project
+   */
+  include?: Array<ListDeploymentGroupsInclude> | undefined;
+  /**
    * Maximum number of items to return per page
    */
   limit?: number | undefined;
@@ -32,13 +43,55 @@ export type ListDeploymentGroupsRequest = {
 };
 
 /**
+ * Project info, included when ?include=project is used
+ */
+export type ListDeploymentGroupsProject = {
+  /**
+   * Project ID
+   */
+  id: string;
+  /**
+   * Project name
+   */
+  name: string;
+};
+
+export type ListDeploymentGroupsItem = {
+  /**
+   * Unique identifier for the deployment group.
+   */
+  id: string;
+  /**
+   * Deployment group name.
+   */
+  name: string;
+  /**
+   * Unique identifier for the project.
+   */
+  projectId: string;
+  /**
+   * Unique identifier for the workspace.
+   */
+  workspaceId: string;
+  /**
+   * Maximum number of deployments allowed in this deployment group
+   */
+  maxDeployments: number;
+  createdAt: Date;
+  /**
+   * Project info, included when ?include=project is used
+   */
+  project?: ListDeploymentGroupsProject | null | undefined;
+};
+
+/**
  * Paginated response
  */
 export type ListDeploymentGroupsResponse = {
   /**
    * Items in this page
    */
-  items: Array<models.DeploymentGroup>;
+  items: Array<ListDeploymentGroupsItem>;
   /**
    * Cursor for the next page, null if last page
    */
@@ -46,10 +99,16 @@ export type ListDeploymentGroupsResponse = {
 };
 
 /** @internal */
+export const ListDeploymentGroupsInclude$outboundSchema: z.ZodEnum<
+  typeof ListDeploymentGroupsInclude
+> = z.enum(ListDeploymentGroupsInclude);
+
+/** @internal */
 export type ListDeploymentGroupsRequest$Outbound = {
   workspace?: string | undefined;
   project?: string | undefined;
   search?: string | undefined;
+  include?: Array<string> | undefined;
   limit: number;
   cursor?: string | undefined;
 };
@@ -62,6 +121,7 @@ export const ListDeploymentGroupsRequest$outboundSchema: z.ZodType<
   workspace: z.string().optional(),
   project: z.string().optional(),
   search: z.string().optional(),
+  include: z.array(ListDeploymentGroupsInclude$outboundSchema).optional(),
   limit: z.int().default(20),
   cursor: z.string().optional(),
 });
@@ -77,11 +137,55 @@ export function listDeploymentGroupsRequestToJSON(
 }
 
 /** @internal */
+export const ListDeploymentGroupsProject$inboundSchema: z.ZodType<
+  ListDeploymentGroupsProject,
+  unknown
+> = z.object({
+  id: z.string(),
+  name: z.string(),
+});
+
+export function listDeploymentGroupsProjectFromJSON(
+  jsonString: string,
+): SafeParseResult<ListDeploymentGroupsProject, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ListDeploymentGroupsProject$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ListDeploymentGroupsProject' from JSON`,
+  );
+}
+
+/** @internal */
+export const ListDeploymentGroupsItem$inboundSchema: z.ZodType<
+  ListDeploymentGroupsItem,
+  unknown
+> = z.object({
+  id: z.string(),
+  name: z.string(),
+  projectId: z.string(),
+  workspaceId: z.string(),
+  maxDeployments: z.int().default(100),
+  createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  project: z.nullable(z.lazy(() => ListDeploymentGroupsProject$inboundSchema))
+    .optional(),
+});
+
+export function listDeploymentGroupsItemFromJSON(
+  jsonString: string,
+): SafeParseResult<ListDeploymentGroupsItem, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ListDeploymentGroupsItem$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ListDeploymentGroupsItem' from JSON`,
+  );
+}
+
+/** @internal */
 export const ListDeploymentGroupsResponse$inboundSchema: z.ZodType<
   ListDeploymentGroupsResponse,
   unknown
 > = z.object({
-  items: z.array(models.DeploymentGroup$inboundSchema),
+  items: z.array(z.lazy(() => ListDeploymentGroupsItem$inboundSchema)),
   nextCursor: z.nullable(z.string()),
 });
 

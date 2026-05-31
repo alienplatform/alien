@@ -1,13 +1,11 @@
 use crate::gcp::api_client::{GcpClientBase, GcpServiceConfig};
 use crate::gcp::GcpClientConfig;
-use crate::gcp::GcpClientConfigExt;
 use alien_client_core::Result;
 use bon::Builder;
 use reqwest::{Client, Method};
 use serde::{Deserialize, Serialize};
 use urlencoding;
 
-use async_trait::async_trait;
 #[cfg(feature = "test-utils")]
 use mockall::automock;
 use std::fmt::Debug;
@@ -93,6 +91,13 @@ pub trait IamApi: Send + Sync + Debug {
     async fn delete_role(&self, role_name: String) -> Result<Role>;
 
     async fn get_role(&self, role_name: String) -> Result<Role>;
+
+    async fn list_roles(
+        &self,
+        page_size: Option<i32>,
+        page_token: Option<String>,
+        show_deleted: Option<bool>,
+    ) -> Result<ListRolesResponse>;
 
     async fn patch_role(
         &self,
@@ -322,6 +327,37 @@ impl IamApi for IamClient {
             .await
     }
 
+    /// Lists custom roles.
+    /// See: https://cloud.google.com/iam/docs/reference/rest/v1/projects.roles/list
+    async fn list_roles(
+        &self,
+        page_size: Option<i32>,
+        page_token: Option<String>,
+        show_deleted: Option<bool>,
+    ) -> Result<ListRolesResponse> {
+        let path = format!("projects/{}/roles", self.project_id);
+        let mut query_params = Vec::new();
+        if let Some(size) = page_size {
+            query_params.push(("pageSize", size.to_string()));
+        }
+        if let Some(token) = page_token {
+            query_params.push(("pageToken", token));
+        }
+        if let Some(show_deleted) = show_deleted {
+            query_params.push(("showDeleted", show_deleted.to_string()));
+        }
+
+        self.base
+            .execute_request(
+                Method::GET,
+                &path,
+                Some(query_params).filter(|v| !v.is_empty()),
+                Option::<()>::None,
+                "roles",
+            )
+            .await
+    }
+
     /// Updates (patches) a custom role.
     /// See: https://cloud.google.com/iam/docs/reference/rest/v1/projects.roles/patch
     async fn patch_role(
@@ -538,6 +574,20 @@ pub struct Role {
     /// Output only. The current deleted state of the role.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deleted: Option<bool>,
+}
+
+/// Response for the ListRoles method.
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct ListRolesResponse {
+    /// The custom roles visible to the caller.
+    #[builder(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub roles: Vec<Role>,
+
+    /// If set, more roles can be retrieved with the next request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_page_token: Option<String>,
 }
 
 /// Request message for creating a role.

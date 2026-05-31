@@ -25,6 +25,18 @@ let value: CreateAPIKeyResponse = {
     expiresAt: new Date("2024-02-24T06:55:32.074Z"),
     lastUsedAt: new Date("2024-06-18T02:25:10.121Z"),
     revokedAt: new Date("2026-05-07T23:47:05.462Z"),
+    deploymentSetupConfig: {
+      metadata: {
+        "key": "<value>",
+      },
+      policy: {
+        allowedPlatforms: [],
+        allowedSetupMethods: [
+          "google-oauth",
+        ],
+      },
+      environmentVariables: [],
+    },
   },
 };
 ```

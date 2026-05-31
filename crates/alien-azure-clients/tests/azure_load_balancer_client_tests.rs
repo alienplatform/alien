@@ -312,7 +312,7 @@ async fn test_comprehensive_load_balancer_lifecycle(
             name: Some(PublicIpAddressSkuName::Standard),
             tier: Some(PublicIpAddressSkuTier::Regional),
         }),
-        properties: Some(Box::new(PublicIpAddressPropertiesFormat {
+        properties: Some(PublicIpAddressPropertiesFormat {
             public_ip_allocation_method: Some(IpAllocationMethod::Static),
             idle_timeout_in_minutes: Some(4),
             ddos_settings: None,
@@ -329,7 +329,7 @@ async fn test_comprehensive_load_balancer_lifecycle(
             public_ip_prefix: None,
             resource_guid: None,
             service_public_ip_address: None,
-        })),
+        }),
         tags: [
             ("Purpose".to_string(), "AlienIntegrationTest".to_string()),
             ("TestType".to_string(), "LoadBalancerLifecycle".to_string()),

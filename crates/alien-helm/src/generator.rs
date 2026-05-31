@@ -10,10 +10,11 @@ use crate::{
     registry::HelmRegistry,
 };
 use alien_core::{
-    import::EmitContext, ErrorData, Function, Ingress, Platform, ResourceLifecycle, Result, Stack,
-    StackSettings,
+    import::EmitContext, AzureResourceGroupOutputs, Container, ContainerCode, Daemon, DaemonCode,
+    ErrorData, ExposeProtocol, Ingress, Platform, RemoteStackManagementOutputs, ResourceLifecycle,
+    Result, ServiceAccount, ServiceAccountOutputs, Stack, StackSettings, Worker, WorkerCode,
 };
-use alien_error::{Context, IntoAlienError};
+use alien_error::{AlienError, Context, IntoAlienError};
 use indexmap::IndexMap;
 use std::collections::BTreeSet;
 
@@ -34,6 +35,21 @@ pub struct HelmOptions<'a> {
     pub chart_name: String,
 }
 
+/// Inputs for rendering the manager-fetch `values.yaml` used after setup import.
+pub struct ManagerFetchHelmValuesOptions<'a> {
+    pub deployment_id: &'a str,
+    pub deployment_name: &'a str,
+    pub manager_url: &'a str,
+    pub deployment_token: &'a str,
+    pub stack: &'a Stack,
+    pub stack_state: &'a alien_core::StackState,
+    pub stack_settings: &'a StackSettings,
+    pub base_platform: Option<Platform>,
+    pub region: Option<&'a str>,
+    pub gcp_project_id: Option<&'a str>,
+    pub azure_location: Option<&'a str>,
+}
+
 /// Generate a Helm chart for `stack`.
 pub fn generate_helm_chart(stack: &Stack, options: HelmOptions<'_>) -> Result<HelmChart> {
     let chart_name = sanitize_chart_name(&options.chart_name);
@@ -52,7 +68,10 @@ pub fn generate_helm_chart(stack: &Stack, options: HelmOptions<'_>) -> Result<He
 
     let mut files = IndexMap::new();
     files.insert("Chart.yaml".to_string(), chart_yaml(&chart_name, stack));
-    files.insert("values.yaml".to_string(), values_yaml(&analysis));
+    files.insert(
+        "values.yaml".to_string(),
+        values_yaml(&analysis, &options.stack_settings)?,
+    );
     files.insert("values.schema.json".to_string(), values_schema_json());
     files.insert("templates/_helpers.tpl".to_string(), helpers_tpl());
     files.insert(
@@ -61,10 +80,29 @@ pub fn generate_helm_chart(stack: &Stack, options: HelmOptions<'_>) -> Result<He
     );
     files.insert("templates/role.yaml".to_string(), role_tpl());
     files.insert("templates/rolebinding.yaml".to_string(), rolebinding_tpl());
+    files.insert("templates/clusterrole.yaml".to_string(), clusterrole_tpl());
+    files.insert(
+        "templates/clusterrolebinding.yaml".to_string(),
+        clusterrolebinding_tpl(),
+    );
     files.insert("templates/secret.yaml".to_string(), secret_tpl());
     files.insert("templates/configmap.yaml".to_string(), configmap_tpl());
     files.insert("templates/deployment.yaml".to_string(), deployment_tpl());
+    files.insert("templates/pvc.yaml".to_string(), pvc_tpl());
     files.insert("templates/service.yaml".to_string(), service_tpl());
+    files.insert("templates/app-service.yaml".to_string(), app_service_tpl());
+    files.insert(
+        "templates/cluster-bootstrap.yaml".to_string(),
+        cluster_bootstrap_tpl(),
+    );
+    files.insert(
+        "templates/poddisruptionbudget.yaml".to_string(),
+        poddisruptionbudget_tpl(),
+    );
+    files.insert(
+        "templates/networkpolicy.yaml".to_string(),
+        networkpolicy_tpl(),
+    );
 
     // Per-resource extra templates contributed by emitters.
     for (path, contents) in &analysis.extra_templates {
@@ -104,6 +142,100 @@ pub fn generate_helm_chart(stack: &Stack, options: HelmOptions<'_>) -> Result<He
     })
 }
 
+/// Render one complete manager-fetch values file from imported deployment state.
+pub fn render_manager_fetch_values(options: ManagerFetchHelmValuesOptions<'_>) -> Result<String> {
+    let registry = HelmRegistry::built_in();
+    let analysis = ChartAnalysis::from_stack(options.stack, &registry)?;
+    let mut yaml = String::new();
+
+    yaml.push_str("management:\n");
+    yaml.push_str(&format!(
+        "  token: {}\n",
+        yaml_string(options.deployment_token)
+    ));
+    yaml.push_str(&format!(
+        "  name: {}\n",
+        yaml_string(options.deployment_name)
+    ));
+    yaml.push_str(&format!("  url: {}\n", yaml_string(options.manager_url)));
+    yaml.push_str(&format!(
+        "  deploymentId: {}\n",
+        yaml_string(options.deployment_id)
+    ));
+    yaml.push_str(&format!(
+        "  updates: {}\n",
+        yaml_string(updates_mode_value(options.stack_settings.updates))
+    ));
+    yaml.push_str(&format!(
+        "  telemetry: {}\n",
+        yaml_string(telemetry_mode_value(options.stack_settings.telemetry))
+    ));
+    yaml.push_str(&format!(
+        "  healthChecks: {}\n\n",
+        yaml_string(heartbeats_mode_value(options.stack_settings.heartbeats))
+    ));
+
+    append_stack_settings(&mut yaml, options.stack_settings)?;
+    yaml.push_str("\ninfrastructure: null\n\n");
+
+    match options.base_platform {
+        Some(platform) => yaml.push_str(&format!(
+            "basePlatform: {}\n",
+            yaml_string(platform.as_str())
+        )),
+        None => yaml.push_str("basePlatform: null\n"),
+    }
+    yaml.push_str("basePlatformConfig:\n");
+    yaml.push_str("  gcp:\n");
+    yaml.push_str(&format!(
+        "    projectId: {}\n",
+        yaml_string(options.gcp_project_id.unwrap_or(""))
+    ));
+    yaml.push_str(&format!(
+        "    region: {}\n",
+        yaml_string(options.region.unwrap_or(""))
+    ));
+    yaml.push_str("  aws:\n");
+    yaml.push_str(&format!(
+        "    region: {}\n",
+        yaml_string(options.region.unwrap_or(""))
+    ));
+    yaml.push_str("  azure:\n");
+    yaml.push_str(&format!(
+        "    location: {}\n",
+        yaml_string(options.azure_location.or(options.region).unwrap_or(""))
+    ));
+    if let Some(azure_config) =
+        azure_base_platform_config(options.stack_state, options.base_platform)?
+    {
+        yaml.push_str(&format!(
+            "    subscriptionId: {}\n",
+            yaml_string(&azure_config.subscription_id)
+        ));
+        if let Some(tenant_id) = azure_config.tenant_id {
+            yaml.push_str(&format!("    tenantId: {}\n", yaml_string(&tenant_id)));
+        }
+    }
+    yaml.push_str(&format!(
+        "serviceAccountPrefix: {}\n",
+        yaml_string(&options.stack_state.resource_prefix)
+    ));
+
+    append_manager_service_account(&mut yaml, options.stack_state, options.base_platform)?;
+    append_imported_service_accounts(
+        &mut yaml,
+        &analysis,
+        options.stack_state,
+        options.base_platform,
+    );
+    append_runtime_cloud_identity(&mut yaml, options.base_platform);
+    append_cluster_bootstrap(&mut yaml, options.stack_state, options.base_platform);
+    append_services(&mut yaml, &analysis);
+    yaml.push_str("\npublicUrls: {}\n");
+
+    Ok(yaml)
+}
+
 /// Result of dispatching every stack resource through the
 /// `HelmRegistry`. Aggregated values land in `values.yaml`; extra
 /// templates land under `templates/`.
@@ -129,16 +261,36 @@ impl ChartAnalysis {
         let stack_settings = StackSettings::default();
 
         for (resource_id, entry) in stack.resources() {
-            if let Some(function) = entry.config.downcast_ref::<Function>() {
+            if let Some(function) = entry.config.downcast_ref::<Worker>() {
+                fail_if_worker_source_remains(resource_id, function)?;
                 service_accounts.insert(function.permissions.clone());
                 if function.ingress == Ingress::Public {
                     analysis.services.push(ServiceValue {
                         id: resource_id.clone(),
+                        component: "worker".to_string(),
+                        target_port: 8080,
+                    });
+                }
+            }
+            if let Some(container) = entry.config.downcast_ref::<Container>() {
+                fail_if_container_source_remains(resource_id, container)?;
+                if let Some(port) = container
+                    .ports
+                    .iter()
+                    .find(|port| port.expose == Some(ExposeProtocol::Http))
+                {
+                    analysis.services.push(ServiceValue {
+                        id: resource_id.clone(),
+                        component: "container".to_string(),
+                        target_port: port.port,
                     });
                 }
             }
             if let Some(build) = entry.config.downcast_ref::<alien_core::Build>() {
                 service_accounts.insert(build.permissions.clone());
+            }
+            if let Some(daemon) = entry.config.downcast_ref::<Daemon>() {
+                fail_if_daemon_source_remains(resource_id, daemon)?;
             }
 
             // Frozen resources contribute agent-local infrastructure bindings; live
@@ -177,9 +329,44 @@ impl ChartAnalysis {
     }
 }
 
+fn fail_if_worker_source_remains(resource_id: &str, worker: &Worker) -> Result<()> {
+    if matches!(&worker.code, WorkerCode::Source { .. }) {
+        return Err(AlienError::new(ErrorData::GenericError {
+            message: format!(
+                "Worker '{resource_id}' still has source code before Helm chart generation; build and inject an image first"
+            ),
+        }));
+    }
+    Ok(())
+}
+
+fn fail_if_container_source_remains(resource_id: &str, container: &Container) -> Result<()> {
+    if matches!(&container.code, ContainerCode::Source { .. }) {
+        return Err(AlienError::new(ErrorData::GenericError {
+            message: format!(
+                "Container '{resource_id}' still has source code before Helm chart generation; build and inject an image first"
+            ),
+        }));
+    }
+    Ok(())
+}
+
+fn fail_if_daemon_source_remains(resource_id: &str, daemon: &Daemon) -> Result<()> {
+    if matches!(&daemon.code, DaemonCode::Source { .. }) {
+        return Err(AlienError::new(ErrorData::GenericError {
+            message: format!(
+                "Daemon '{resource_id}' still has source code before Helm chart generation; build and inject an image first"
+            ),
+        }));
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 struct ServiceValue {
     id: String,
+    component: String,
+    target_port: u16,
 }
 
 fn chart_yaml(chart_name: &str, stack: &Stack) -> String {
@@ -189,11 +376,14 @@ fn chart_yaml(chart_name: &str, stack: &Stack) -> String {
     )
 }
 
-fn values_yaml(analysis: &ChartAnalysis) -> String {
+fn values_yaml(analysis: &ChartAnalysis, stack_settings: &StackSettings) -> Result<String> {
     let mut yaml = String::new();
     yaml.push_str(
         r#"management:
   token: ""
+  existingSecret:
+    name: ""
+    tokenKey: sync-token
   name: ""
   url: ""
   deploymentId: "dep_replace_me"
@@ -206,8 +396,16 @@ runtime:
     repository: ghcr.io/alienplatform/alien-agent
     tag: latest
     pullPolicy: IfNotPresent
-  # Optional 64-character hex key. If empty, Helm generates one at install time.
-  encryptionKey: ""
+  imagePullSecrets: []
+  podLabels: {}
+  podAnnotations: {}
+  automountServiceAccountToken: true
+  encryption:
+    # Set this explicitly, or reference an existing Secret below.
+    key: "replace-me-with-a-stable-64-character-encryption-secret"
+    existingSecret:
+      name: ""
+      key: encryption-key
   replicas: 1
   resources:
     requests:
@@ -217,15 +415,118 @@ runtime:
       memory: 512Mi
   api:
     enabled: false
+    bindHost: 0.0.0.0
     port: 8080
     service:
       type: ClusterIP
+  probes:
+    liveness:
+      enabled: true
+      path: /health
+      initialDelaySeconds: 10
+      periodSeconds: 10
+      timeoutSeconds: 2
+      failureThreshold: 3
+    readiness:
+      enabled: true
+      path: /health
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      timeoutSeconds: 2
+      failureThreshold: 3
+  security:
+    podSecurityContext:
+      runAsNonRoot: true
+      runAsUser: 10001
+      runAsGroup: 10001
+      fsGroup: 10001
+      seccompProfile:
+        type: RuntimeDefault
+    containerSecurityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop:
+          - ALL
+  tmp:
+    enabled: true
+    sizeLimit: 256Mi
+  data:
+    mountPath: /var/lib/alien-agent
+    persistence:
+      enabled: false
+      existingClaim: ""
+      storageClassName: ""
+      accessModes:
+        - ReadWriteOnce
+      size: 1Gi
+  scheduling:
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    topologySpreadConstraints: []
+    priorityClassName: ""
+    runtimeClassName: ""
+  pdb:
+    enabled: false
+    minAvailable: 1
+  networkPolicy:
+    enabled: false
+    ingress:
+      enabled: true
+    egress:
+      enabled: true
+
+heartbeat:
+  collection:
+    nodes:
+      enabled: true
+
+clusterBootstrap:
+  metricsServer:
+    enabled: false
+    image: registry.k8s.io/metrics-server/metrics-server:v0.8.1
+  storageClass:
+    default:
+      enabled: false
+      name: ""
+      provisioner: ""
+      parameters: {}
+  ingress:
+    eksAutoMode:
+      enabled: false
+      name: alb
+      controller: eks.amazonaws.com/alb
+      scheme: internet-facing
+      subnetIds: []
+    azureApplicationGatewayForContainers:
+      enabled: false
+      applicationLoadBalancer:
+        name: ""
+        namespace: ""
+        associationSubnetId: ""
+  compute:
+    eksAutoMode:
+      arm64NodePool:
+        enabled: false
+        name: general-purpose-arm64
+        nodeClassName: default
+        capacityType: on-demand
+        instanceCategories:
+          - c
+          - m
+          - r
+        minInstanceGeneration: "5"
+        limits:
+          cpu: "1000"
+          memory: 1000Gi
 
 "#,
     );
 
     append_service_accounts(&mut yaml, analysis);
-    yaml.push_str("\nstackSettings: null\n\ninfrastructure: null\n");
+    append_stack_settings(&mut yaml, stack_settings)?;
+    yaml.push_str("\ninfrastructure: null\n\nbasePlatform: null\nbasePlatformConfig:\n  gcp:\n    projectId: \"\"\n    region: \"\"\n  aws:\n    region: \"\"\n  azure:\n    location: \"\"\n    subscriptionId: \"\"\n    tenantId: \"\"\nserviceAccountPrefix: \"\"\nmanagerServiceAccount:\n  annotations: {}\n  labels: {}\n");
     append_services(&mut yaml, analysis);
     yaml.push_str("\npublicUrls: {}\n");
 
@@ -238,7 +539,38 @@ ephemeralStorage:
   nodeSelector: {}
 "#,
     );
-    yaml
+    Ok(yaml)
+}
+
+fn append_stack_settings(yaml: &mut String, stack_settings: &StackSettings) -> Result<()> {
+    if stack_settings == &StackSettings::default() {
+        yaml.push_str("\nstackSettings: null\n");
+        return Ok(());
+    }
+
+    let serialized = serde_yaml::to_string(stack_settings)
+        .into_alien_error()
+        .context(ErrorData::JsonSerializationFailed {
+            reason: "failed to serialize stack settings into chart values".to_string(),
+        })?;
+    let serialized = serialized
+        .strip_prefix("---\n")
+        .unwrap_or(&serialized)
+        .trim_end();
+
+    if serialized == "{}" || serialized.is_empty() {
+        yaml.push_str("\nstackSettings: null\n");
+        return Ok(());
+    }
+
+    yaml.push_str("\nstackSettings:\n");
+    for line in serialized.lines() {
+        yaml.push_str("  ");
+        yaml.push_str(line);
+        yaml.push('\n');
+    }
+
+    Ok(())
 }
 
 fn append_service_accounts(yaml: &mut String, analysis: &ChartAnalysis) {
@@ -252,6 +584,327 @@ fn append_service_accounts(yaml: &mut String, analysis: &ChartAnalysis) {
                 yaml_key(name)
             ));
         }
+    }
+}
+
+fn append_imported_service_accounts(
+    yaml: &mut String,
+    analysis: &ChartAnalysis,
+    stack_state: &alien_core::StackState,
+    base_platform: Option<Platform>,
+) {
+    yaml.push_str("serviceAccounts:\n");
+    if analysis.service_accounts.is_empty() {
+        yaml.push_str("  {}\n");
+        return;
+    }
+
+    for name in &analysis.service_accounts {
+        yaml.push_str(&format!("  {}:\n", yaml_key(name)));
+        match service_account_identity_for_profile(stack_state, name) {
+            Some(identity) => {
+                yaml.push_str("    annotations:\n");
+                yaml.push_str(&format!(
+                    "      {}: {}\n",
+                    yaml_key(identity_annotation_key(base_platform)),
+                    yaml_string(identity)
+                ));
+            }
+            None => yaml.push_str("    annotations: {}\n"),
+        }
+        yaml.push_str("    labels: {}\n");
+    }
+}
+
+fn append_manager_service_account(
+    yaml: &mut String,
+    stack_state: &alien_core::StackState,
+    base_platform: Option<Platform>,
+) -> Result<()> {
+    yaml.push_str("managerServiceAccount:\n");
+    match remote_stack_management_identity(stack_state, base_platform)? {
+        Some(identity) => {
+            yaml.push_str("  annotations:\n");
+            yaml.push_str(&format!(
+                "    {}: {}\n",
+                yaml_key(identity_annotation_key(base_platform)),
+                yaml_string(&identity)
+            ));
+        }
+        None => yaml.push_str("  annotations: {}\n"),
+    }
+    yaml.push_str("  labels: {}\n");
+    Ok(())
+}
+
+fn append_runtime_cloud_identity(yaml: &mut String, base_platform: Option<Platform>) {
+    if base_platform != Some(Platform::Azure) {
+        return;
+    }
+
+    yaml.push_str("runtime:\n");
+    yaml.push_str("  podLabels:\n");
+    yaml.push_str("    azure.workload.identity/use: 'true'\n");
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AzureBasePlatformConfig {
+    subscription_id: String,
+    tenant_id: Option<String>,
+}
+
+fn azure_base_platform_config(
+    stack_state: &alien_core::StackState,
+    base_platform: Option<Platform>,
+) -> Result<Option<AzureBasePlatformConfig>> {
+    if base_platform != Some(Platform::Azure) {
+        return Ok(None);
+    }
+
+    let subscription_id = stack_state
+        .resources
+        .values()
+        .find_map(|resource| {
+            resource
+                .outputs
+                .as_ref()
+                .and_then(|outputs| outputs.downcast_ref::<RemoteStackManagementOutputs>())
+                .and_then(|outputs| {
+                    azure_subscription_id_from_resource_id(&outputs.management_resource_id)
+                })
+        })
+        .or_else(|| {
+            stack_state.resources.values().find_map(|resource| {
+                resource
+                    .outputs
+                    .as_ref()
+                    .and_then(|outputs| outputs.downcast_ref::<AzureResourceGroupOutputs>())
+                    .and_then(|outputs| {
+                        azure_subscription_id_from_resource_id(&outputs.resource_id)
+                    })
+            })
+        });
+
+    let tenant_id = azure_remote_stack_management_access_config(stack_state)?
+        .and_then(|access_config| access_config.tenant_id);
+
+    Ok(
+        subscription_id.map(|subscription_id| AzureBasePlatformConfig {
+            subscription_id,
+            tenant_id,
+        }),
+    )
+}
+
+fn azure_subscription_id_from_resource_id(resource_id: &str) -> Option<String> {
+    let mut parts = resource_id.split('/').filter(|part| !part.is_empty());
+    while let Some(part) = parts.next() {
+        if part.eq_ignore_ascii_case("subscriptions") {
+            return parts.next().map(str::to_string);
+        }
+    }
+    None
+}
+
+fn append_cluster_bootstrap(
+    yaml: &mut String,
+    stack_state: &alien_core::StackState,
+    base_platform: Option<Platform>,
+) {
+    let eks_managed = base_platform == Some(Platform::Aws)
+        && stack_state.resources.values().any(|resource| {
+            resource
+                .outputs
+                .as_ref()
+                .and_then(|outputs| outputs.downcast_ref::<alien_core::KubernetesClusterOutputs>())
+                .is_some_and(|outputs| {
+                    outputs.provider == alien_core::KubernetesClusterProvider::Eks
+                        && outputs.ownership == alien_core::KubernetesClusterOwnership::Managed
+                })
+        });
+
+    yaml.push_str("clusterBootstrap:\n");
+    yaml.push_str("  metricsServer:\n");
+    yaml.push_str(&format!("    enabled: {}\n", eks_managed));
+    yaml.push_str("    image: registry.k8s.io/metrics-server/metrics-server:v0.8.1\n");
+    yaml.push_str("  storageClass:\n");
+    yaml.push_str("    default:\n");
+    yaml.push_str(&format!("      enabled: {}\n", eks_managed));
+    yaml.push_str("      name: \"gp3\"\n");
+    yaml.push_str("      provisioner: \"ebs.csi.aws.com\"\n");
+    yaml.push_str("      parameters:\n");
+    yaml.push_str("        type: \"gp3\"\n");
+    yaml.push_str("        fsType: \"ext4\"\n");
+    yaml.push_str("        encrypted: \"true\"\n");
+    yaml.push_str("  ingress:\n");
+    yaml.push_str("    eksAutoMode:\n");
+    yaml.push_str(&format!("      enabled: {}\n", eks_managed));
+    yaml.push_str("      name: alb\n");
+    yaml.push_str("      controller: eks.amazonaws.com/alb\n");
+    yaml.push_str("      scheme: internet-facing\n");
+    yaml.push_str("      subnetIds: []\n");
+    yaml.push_str("    azureApplicationGatewayForContainers:\n");
+    match azure_application_gateway_for_containers_bootstrap(stack_state) {
+        Some(bootstrap) => {
+            yaml.push_str("      enabled: true\n");
+            yaml.push_str("      applicationLoadBalancer:\n");
+            yaml.push_str(&format!(
+                "        name: {}\n",
+                yaml_string(&bootstrap.alb_name)
+            ));
+            yaml.push_str(&format!(
+                "        namespace: {}\n",
+                yaml_string(&bootstrap.alb_namespace)
+            ));
+            yaml.push_str(&format!(
+                "        associationSubnetId: {}\n",
+                yaml_string(&bootstrap.association_subnet_id)
+            ));
+        }
+        None => {
+            yaml.push_str("      enabled: false\n");
+            yaml.push_str("      applicationLoadBalancer:\n");
+            yaml.push_str("        name: \"\"\n");
+            yaml.push_str("        namespace: \"\"\n");
+            yaml.push_str("        associationSubnetId: \"\"\n");
+        }
+    }
+    yaml.push_str("  compute:\n");
+    yaml.push_str("    eksAutoMode:\n");
+    yaml.push_str("      arm64NodePool:\n");
+    yaml.push_str(&format!("        enabled: {}\n", eks_managed));
+    yaml.push_str("        name: general-purpose-arm64\n");
+    yaml.push_str("        nodeClassName: default\n");
+    yaml.push_str("        capacityType: on-demand\n");
+    yaml.push_str("        instanceCategories:\n");
+    yaml.push_str("          - c\n");
+    yaml.push_str("          - m\n");
+    yaml.push_str("          - r\n");
+    yaml.push_str("        minInstanceGeneration: \"5\"\n");
+    yaml.push_str("        limits:\n");
+    yaml.push_str("          cpu: \"1000\"\n");
+    yaml.push_str("          memory: 1000Gi\n");
+}
+
+fn azure_application_gateway_for_containers_bootstrap(
+    stack_state: &alien_core::StackState,
+) -> Option<&alien_core::import::data::AzureApplicationGatewayForContainersBootstrap> {
+    stack_state.resources.values().find_map(|resource| {
+        resource
+            .outputs
+            .as_ref()
+            .and_then(|outputs| outputs.downcast_ref::<alien_core::KubernetesClusterOutputs>())
+            .and_then(|outputs| outputs.azure_application_gateway_for_containers.as_ref())
+    })
+}
+
+fn service_account_identity_for_profile<'a>(
+    stack_state: &'a alien_core::StackState,
+    profile: &str,
+) -> Option<&'a str> {
+    stack_state
+        .resources
+        .iter()
+        .find_map(|(resource_id, resource)| {
+            let outputs = resource
+                .outputs
+                .as_ref()
+                .and_then(|outputs| outputs.downcast_ref::<ServiceAccountOutputs>())?;
+            let service_account = resource.config.downcast_ref::<ServiceAccount>()?;
+            let account_profile =
+                alien_core::permission_profile_from_service_account_id(service_account.id());
+            (account_profile == profile || resource_id == profile)
+                .then_some(outputs.identity.as_str())
+        })
+}
+
+fn remote_stack_management_identity(
+    stack_state: &alien_core::StackState,
+    base_platform: Option<Platform>,
+) -> Result<Option<String>> {
+    let Some(outputs) = stack_state.resources.values().find_map(|resource| {
+        resource
+            .outputs
+            .as_ref()
+            .and_then(|outputs| outputs.downcast_ref::<RemoteStackManagementOutputs>())
+    }) else {
+        return Ok(None);
+    };
+
+    if base_platform == Some(Platform::Azure) {
+        let Some(access_config) = azure_remote_stack_management_access_config(stack_state)? else {
+            return Ok(None);
+        };
+        return Ok(Some(access_config.uami_client_id));
+    }
+
+    Ok(Some(outputs.management_resource_id.clone()))
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AzureRemoteStackManagementAccessConfig {
+    uami_client_id: String,
+    tenant_id: Option<String>,
+}
+
+fn azure_remote_stack_management_access_config(
+    stack_state: &alien_core::StackState,
+) -> Result<Option<AzureRemoteStackManagementAccessConfig>> {
+    let Some(outputs) = stack_state.resources.values().find_map(|resource| {
+        resource
+            .outputs
+            .as_ref()
+            .and_then(|outputs| outputs.downcast_ref::<RemoteStackManagementOutputs>())
+    }) else {
+        return Ok(None);
+    };
+
+    let access_config: AzureRemoteStackManagementAccessConfig =
+        serde_json::from_str(&outputs.access_configuration)
+            .into_alien_error()
+            .context(ErrorData::GenericError {
+                message: "Failed to parse Azure remote-stack-management access configuration"
+                    .to_string(),
+            })?;
+
+    if access_config.uami_client_id.is_empty() {
+        return Err(AlienError::new(ErrorData::GenericError {
+            message: "Azure remote-stack-management access configuration is missing uamiClientId"
+                .to_string(),
+        }));
+    }
+
+    Ok(Some(access_config))
+}
+
+fn identity_annotation_key(base_platform: Option<Platform>) -> &'static str {
+    match base_platform {
+        Some(Platform::Gcp) => "iam.gke.io/gcp-service-account",
+        Some(Platform::Azure) => "azure.workload.identity/client-id",
+        _ => "eks.amazonaws.com/role-arn",
+    }
+}
+
+fn updates_mode_value(mode: alien_core::UpdatesMode) -> &'static str {
+    match mode {
+        alien_core::UpdatesMode::Auto => "auto",
+        alien_core::UpdatesMode::ApprovalRequired => "approval-required",
+    }
+}
+
+fn telemetry_mode_value(mode: alien_core::TelemetryMode) -> &'static str {
+    match mode {
+        alien_core::TelemetryMode::Off => "off",
+        alien_core::TelemetryMode::Auto => "auto",
+        alien_core::TelemetryMode::ApprovalRequired => "approval-required",
+    }
+}
+
+fn heartbeats_mode_value(mode: alien_core::HeartbeatsMode) -> &'static str {
+    match mode {
+        alien_core::HeartbeatsMode::Off => "off",
+        alien_core::HeartbeatsMode::On => "on",
     }
 }
 
@@ -286,25 +939,37 @@ fn append_services(yaml: &mut String, analysis: &ChartAnalysis) {
     } else {
         for service in &analysis.services {
             yaml.push_str(&format!(
-                "  {}:\n    type: clusterIp\n    port: 80\n    targetPort: 8080\n    host: \"\"\n    tls:\n      enabled: false\n      secretName: \"\"\n    ingress:\n      className: \"\"\n      annotations: {{}}\n",
-                yaml_key(&service.id)
+                "  {}:\n    type: clusterIp\n    port: 80\n    targetPort: {}\n    component: {}\n",
+                yaml_key(&service.id),
+                service.target_port,
+                yaml_string(&service.component)
             ));
         }
     }
 }
 
 fn values_schema_json() -> String {
-    r#"{
+    r##"{
   "$schema": "https://json-schema.org/draft-07/schema#",
   "type": "object",
   "additionalProperties": false,
   "properties": {
+    "nameOverride": { "type": "string" },
+    "fullnameOverride": { "type": "string" },
     "management": {
       "type": "object",
       "additionalProperties": false,
       "required": ["token", "updates", "telemetry", "healthChecks"],
       "properties": {
         "token": { "type": "string" },
+        "existingSecret": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": { "type": "string" },
+            "tokenKey": { "type": "string", "minLength": 1 }
+          }
+        },
         "name": { "type": "string" },
         "url": { "type": "string" },
         "deploymentId": { "type": ["string", "null"] },
@@ -313,7 +978,153 @@ fn values_schema_json() -> String {
         "healthChecks": { "type": "string", "enum": ["on", "off"] }
       }
     },
-    "runtime": { "type": "object" },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "repository": { "type": "string", "minLength": 1 },
+            "tag": { "type": "string", "minLength": 1 },
+            "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+          }
+        },
+        "imagePullSecrets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name"],
+            "properties": { "name": { "type": "string", "minLength": 1 } }
+          }
+        },
+        "podLabels": { "type": "object", "additionalProperties": { "type": "string" } },
+        "podAnnotations": { "type": "object", "additionalProperties": { "type": "string" } },
+        "automountServiceAccountToken": { "type": "boolean" },
+        "encryption": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "key": { "type": "string" },
+            "existingSecret": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "name": { "type": "string" },
+                "key": { "type": "string", "minLength": 1 }
+              }
+            }
+          }
+        },
+        "replicas": { "type": "integer", "minimum": 1 },
+        "resources": { "type": "object" },
+        "api": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "bindHost": { "type": "string" },
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "service": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "type": { "type": "string", "enum": ["ClusterIP", "NodePort", "LoadBalancer"] }
+              }
+            }
+          }
+        },
+        "probes": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "liveness": { "$ref": "#/definitions/httpProbe" },
+            "readiness": { "$ref": "#/definitions/httpProbe" }
+          }
+        },
+        "security": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "podSecurityContext": { "type": "object" },
+            "containerSecurityContext": { "type": "object" }
+          }
+        },
+        "tmp": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "sizeLimit": { "type": "string" }
+          }
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mountPath": { "type": "string", "minLength": 1 },
+            "persistence": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "existingClaim": { "type": "string" },
+                "storageClassName": { "type": "string" },
+                "accessModes": { "type": "array", "items": { "type": "string" } },
+                "size": { "type": "string" }
+              }
+            }
+          }
+        },
+        "scheduling": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "nodeSelector": { "type": "object", "additionalProperties": { "type": "string" } },
+            "tolerations": { "type": "array" },
+            "affinity": { "type": "object" },
+            "topologySpreadConstraints": { "type": "array" },
+            "priorityClassName": { "type": "string" },
+            "runtimeClassName": { "type": "string" }
+          }
+        },
+        "pdb": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "minAvailable": { "type": ["integer", "string"] },
+            "maxUnavailable": { "type": ["integer", "string"] }
+          }
+        },
+        "networkPolicy": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "ingress": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": { "enabled": { "type": "boolean" } }
+            },
+            "egress": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": { "enabled": { "type": "boolean" } }
+            }
+          }
+        }
+      }
+    },
+    "managerServiceAccount": {
+      "type": "object",
+      "properties": {
+        "annotations": { "type": "object", "additionalProperties": { "type": "string" } },
+        "labels": { "type": "object", "additionalProperties": { "type": "string" } }
+      }
+    },
     "serviceAccounts": {
       "type": "object",
       "additionalProperties": {
@@ -335,10 +1146,188 @@ fn values_schema_json() -> String {
       "additionalProperties": true
     },
     "infrastructure": { "type": ["object", "null"] },
-    "services": { "type": "object" },
+    "basePlatform": { "type": ["string", "null"], "enum": ["aws", "gcp", "azure", null] },
+    "basePlatformConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "gcp": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "projectId": { "type": "string" },
+            "region": { "type": "string" }
+          }
+        },
+        "aws": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "region": { "type": "string" }
+          }
+        },
+        "azure": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "location": { "type": "string" },
+            "subscriptionId": { "type": "string" },
+            "tenantId": { "type": "string" }
+          }
+        }
+      }
+    },
+    "heartbeat": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "collection": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "nodes": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "clusterBootstrap": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "metricsServer": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "image": { "type": "string" }
+          }
+        },
+        "storageClass": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "default": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "name": { "type": "string" },
+                "provisioner": { "type": "string" },
+                "parameters": { "type": "object", "additionalProperties": { "type": "string" } }
+              }
+            }
+          }
+        },
+        "ingress": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "eksAutoMode": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "name": { "type": "string" },
+                "controller": { "type": "string" },
+                "scheme": { "type": "string" },
+                "subnetIds": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                }
+              }
+            },
+            "azureApplicationGatewayForContainers": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "applicationLoadBalancer": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": { "type": "string" },
+                    "namespace": { "type": "string" },
+                    "associationSubnetId": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "compute": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "eksAutoMode": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "arm64NodePool": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "enabled": { "type": "boolean" },
+                    "name": { "type": "string" },
+                    "nodeClassName": { "type": "string" },
+                    "capacityType": { "type": "string" },
+                    "instanceCategories": {
+                      "type": "array",
+                      "items": { "type": "string" }
+                    },
+                    "minInstanceGeneration": { "type": "string" },
+                    "limits": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "cpu": { "type": "string" },
+                        "memory": { "type": "string" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "serviceAccountPrefix": { "type": "string" },
+    "services": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "type": { "type": "string", "enum": ["clusterIp", "loadBalancer"] },
+          "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+          "targetPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+          "component": { "type": "string" }
+        }
+      }
+    },
     "publicUrls": { "type": "object", "additionalProperties": { "type": "string" } },
     "persistentStorage": { "type": "object" },
     "ephemeralStorage": { "type": "object" }
+  },
+  "definitions": {
+    "httpProbe": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "path": { "type": "string", "minLength": 1 },
+        "initialDelaySeconds": { "type": "integer", "minimum": 0 },
+        "periodSeconds": { "type": "integer", "minimum": 1 },
+        "timeoutSeconds": { "type": "integer", "minimum": 1 },
+        "failureThreshold": { "type": "integer", "minimum": 1 }
+      }
+    }
   },
   "oneOf": [
     {
@@ -369,7 +1358,7 @@ fn values_schema_json() -> String {
     }
   ]
 }
-"#
+"##
     .to_string()
 }
 
@@ -382,7 +1371,7 @@ fn helpers_tpl() -> String {
 {{- if .Values.fullnameOverride -}}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
-{{- printf "%s-%s" .Release.Name (include "alien.name" .) | trunc 63 | trimSuffix "-" -}}
+{{- .Release.Name | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 {{- end -}}
 
@@ -394,11 +1383,40 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- end -}}
 
 {{- define "alien.managerServiceAccountName" -}}
-{{ include "alien.fullname" . }}-manager
+{{- $prefix := default (include "alien.fullname" .) .Values.serviceAccountPrefix -}}
+{{- $raw := printf "%s-manager-sa" $prefix | lower -}}
+{{- regexReplaceAll "[^a-z0-9-]" $raw "-" | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
 {{- define "alien.serviceAccountName" -}}
-{{- printf "%s-%s" (include "alien.fullname" .root) .name | trunc 63 | trimSuffix "-" -}}
+{{- $prefix := default (include "alien.fullname" .root) .root.Values.serviceAccountPrefix -}}
+{{- $raw := printf "%s-%s-sa" $prefix .name | lower -}}
+{{- regexReplaceAll "[^a-z0-9-]" $raw "-" | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{- define "alien.resourceName" -}}
+{{- $raw := .name | lower -}}
+{{- regexReplaceAll "[^a-z0-9-]" $raw "-" | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{- define "alien.managementSecretName" -}}
+{{- default (include "alien.fullname" .) .Values.management.existingSecret.name -}}
+{{- end -}}
+
+{{- define "alien.managementSecretTokenKey" -}}
+{{- default "sync-token" .Values.management.existingSecret.tokenKey -}}
+{{- end -}}
+
+{{- define "alien.encryptionSecretName" -}}
+{{- default (include "alien.fullname" .) .Values.runtime.encryption.existingSecret.name -}}
+{{- end -}}
+
+{{- define "alien.encryptionSecretKey" -}}
+{{- default "encryption-key" .Values.runtime.encryption.existingSecret.key -}}
+{{- end -}}
+
+{{- define "alien.heartbeatNodeClusterRoleName" -}}
+{{- printf "%s-heartbeat-nodes" (include "alien.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 "#
     .to_string()
@@ -411,6 +1429,13 @@ metadata:
   name: {{ include "alien.managerServiceAccountName" . }}
   labels:
     {{- include "alien.labels" . | nindent 4 }}
+    {{- with .Values.managerServiceAccount.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.managerServiceAccount.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 ---
 {{- range $name, $account := .Values.serviceAccounts }}
 apiVersion: v1
@@ -433,7 +1458,12 @@ metadata:
 }
 
 fn role_tpl() -> String {
-    r#"apiVersion: rbac.authorization.k8s.io/v1
+    r#"{{- $stackSettings := default dict .Values.stackSettings -}}
+{{- $exposure := dig "kubernetes" "exposure" dict $stackSettings -}}
+{{- $exposureMode := dig "mode" "" $exposure -}}
+{{- $route := dig "route" dict $exposure -}}
+{{- $routeApi := dig "routeApi" "" $route -}}
+apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: {{ include "alien.fullname" . }}
@@ -443,15 +1473,37 @@ rules:
   - apiGroups: [""]
     resources: ["configmaps", "secrets", "services", "pods", "pods/log", "persistentvolumeclaims"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
   - apiGroups: ["apps"]
-    resources: ["deployments", "statefulsets"]
+    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
   - apiGroups: ["batch"]
     resources: ["jobs"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["networking.k8s.io"]
-    resources: ["ingresses", "networkpolicies"]
+    resources: ["networkpolicies"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  {{- if and (ne $exposureMode "disabled") (eq $routeApi "ingress") }}
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  {{- end }}
+  {{- if and (ne $exposureMode "disabled") (eq $routeApi "gateway") }}
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["gateways", "httproutes"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["networking.gke.io"]
+    resources: ["healthcheckpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["alb.networking.azure.io"]
+    resources: ["healthcheckpolicy"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  {{- end }}
 "#
     .to_string()
 }
@@ -474,8 +1526,54 @@ roleRef:
     .to_string()
 }
 
+fn clusterrole_tpl() -> String {
+    r#"{{- $nodeCollectionEnabled := dig "collection" "nodes" "enabled" true (default dict .Values.heartbeat) -}}
+{{- if $nodeCollectionEnabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "alien.heartbeatNodeClusterRoleName" . }}
+  labels:
+    {{- include "alien.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+{{- end }}
+"#
+    .to_string()
+}
+
+fn clusterrolebinding_tpl() -> String {
+    r#"{{- $nodeCollectionEnabled := dig "collection" "nodes" "enabled" true (default dict .Values.heartbeat) -}}
+{{- if $nodeCollectionEnabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "alien.heartbeatNodeClusterRoleName" . }}
+  labels:
+    {{- include "alien.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "alien.managerServiceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "alien.heartbeatNodeClusterRoleName" . }}
+{{- end }}
+"#
+    .to_string()
+}
+
 fn secret_tpl() -> String {
-    r#"apiVersion: v1
+    r#"{{- $createManagementSecret := not .Values.management.existingSecret.name -}}
+{{- $createEncryptionSecret := not .Values.runtime.encryption.existingSecret.name -}}
+{{- if or $createManagementSecret $createEncryptionSecret .Values.infrastructure }}
+apiVersion: v1
 kind: Secret
 metadata:
   name: {{ include "alien.fullname" . }}
@@ -483,30 +1581,22 @@ metadata:
     {{- include "alien.labels" . | nindent 4 }}
 type: Opaque
 stringData:
+  {{- if $createManagementSecret }}
   sync-token: {{ .Values.management.token | quote }}
-  {{- $existingSecret := lookup "v1" "Secret" .Release.Namespace (include "alien.fullname" .) }}
-  {{- if .Values.runtime.encryptionKey }}
-  encryption-key: {{ .Values.runtime.encryptionKey | quote }}
-  {{- else if and $existingSecret (index $existingSecret.data "encryption-key") }}
-  encryption-key: {{ index $existingSecret.data "encryption-key" | b64dec | quote }}
-  {{- else }}
-  encryption-key: {{ randAlphaNum 64 | sha256sum | quote }}
+  {{- end }}
+  {{- if $createEncryptionSecret }}
+  encryption-key: {{ required "runtime.encryption.key or runtime.encryption.existingSecret.name is required" .Values.runtime.encryption.key | quote }}
   {{- end }}
   {{- if .Values.infrastructure }}
   external-bindings.json: {{ toJson .Values.infrastructure | quote }}
   {{- end }}
+{{- end }}
 "#
     .to_string()
 }
 
 fn configmap_tpl() -> String {
     r#"{{- $defaultStackSettings := dict "deploymentModel" "pull" "updates" .Values.management.updates "telemetry" .Values.management.telemetry "heartbeats" .Values.management.healthChecks -}}
-{{- $publicUrls := dict -}}
-{{- range $id, $service := .Values.services -}}
-{{- if $service.host -}}
-{{- $_ := set $publicUrls $id (printf "https://%s" $service.host) -}}
-{{- end -}}
-{{- end -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -518,7 +1608,7 @@ data:
 {{ .Files.Get "files/stack.json" | indent 4 }}
   stack-settings.json: {{ toJson (default $defaultStackSettings .Values.stackSettings) | quote }}
   services.json: {{ toJson .Values.services | quote }}
-  public-urls.json: {{ toJson (default $publicUrls .Values.publicUrls) | quote }}
+  public-urls.json: {{ toJson (default dict .Values.publicUrls) | quote }}
 "#
     .to_string()
 }
@@ -540,15 +1630,79 @@ spec:
     metadata:
       labels:
         {{- include "alien.labels" . | nindent 8 }}
+        {{- with .Values.runtime.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.runtime.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
     spec:
       serviceAccountName: {{ include "alien.managerServiceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.runtime.automountServiceAccountToken }}
+      securityContext:
+        {{- toYaml .Values.runtime.security.podSecurityContext | nindent 8 }}
+      {{- with .Values.runtime.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.runtime.scheduling.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.runtime.scheduling.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.runtime.scheduling.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.runtime.scheduling.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.runtime.scheduling.priorityClassName }}
+      priorityClassName: {{ .Values.runtime.scheduling.priorityClassName | quote }}
+      {{- end }}
+      {{- if .Values.runtime.scheduling.runtimeClassName }}
+      runtimeClassName: {{ .Values.runtime.scheduling.runtimeClassName | quote }}
+      {{- end }}
       containers:
         - name: agent
           image: "{{ .Values.runtime.image.repository }}:{{ .Values.runtime.image.tag }}"
           imagePullPolicy: {{ .Values.runtime.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.runtime.security.containerSecurityContext | nindent 12 }}
           env:
             - name: PLATFORM
               value: kubernetes
+            {{- if .Values.basePlatform }}
+            - name: BASE_PLATFORM
+              value: {{ .Values.basePlatform | quote }}
+            {{- end }}
+            {{- if and (eq .Values.basePlatform "gcp") .Values.basePlatformConfig.gcp.projectId }}
+            - name: GCP_PROJECT_ID
+              value: {{ .Values.basePlatformConfig.gcp.projectId | quote }}
+            - name: GOOGLE_CLOUD_PROJECT
+              value: {{ .Values.basePlatformConfig.gcp.projectId | quote }}
+            {{- end }}
+            {{- if and (eq .Values.basePlatform "gcp") .Values.basePlatformConfig.gcp.region }}
+            - name: GCP_REGION
+              value: {{ .Values.basePlatformConfig.gcp.region | quote }}
+            {{- end }}
+            {{- if and (eq .Values.basePlatform "azure") .Values.basePlatformConfig.azure.subscriptionId }}
+            - name: AZURE_SUBSCRIPTION_ID
+              value: {{ .Values.basePlatformConfig.azure.subscriptionId | quote }}
+            {{- end }}
+            {{- if and (eq .Values.basePlatform "azure") .Values.basePlatformConfig.azure.tenantId }}
+            - name: AZURE_TENANT_ID
+              value: {{ .Values.basePlatformConfig.azure.tenantId | quote }}
+            {{- end }}
+            {{- if and (eq .Values.basePlatform "azure") .Values.basePlatformConfig.azure.location }}
+            - name: AZURE_REGION
+              value: {{ .Values.basePlatformConfig.azure.location | quote }}
+            {{- end }}
             - name: SYNC_URL
               value: {{ .Values.management.url | quote }}
             - name: AGENT_NAME
@@ -575,26 +1729,93 @@ spec:
               value: "30"
             - name: OTLP_PORT
               value: {{ .Values.runtime.api.port | quote }}
+            - name: OTLP_HOST
+              value: {{ .Values.runtime.api.bindHost | quote }}
           ports:
             - name: otlp
               containerPort: {{ .Values.runtime.api.port }}
+          {{- if .Values.runtime.probes.liveness.enabled }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.runtime.probes.liveness.path | quote }}
+              port: otlp
+            initialDelaySeconds: {{ .Values.runtime.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.runtime.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.runtime.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.runtime.probes.liveness.failureThreshold }}
+          {{- end }}
+          {{- if .Values.runtime.probes.readiness.enabled }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.runtime.probes.readiness.path | quote }}
+              port: otlp
+            initialDelaySeconds: {{ .Values.runtime.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.runtime.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.runtime.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.runtime.probes.readiness.failureThreshold }}
+          {{- end }}
           volumeMounts:
             - name: config
               mountPath: /etc/alien/config
               readOnly: true
-            - name: secrets
-              mountPath: /etc/alien/secrets
+            - name: management-token
+              mountPath: /etc/alien/secrets/sync-token
+              subPath: sync-token
               readOnly: true
+            - name: encryption-key
+              mountPath: /etc/alien/secrets/encryption-key
+              subPath: {{ include "alien.encryptionSecretKey" . }}
+              readOnly: true
+            {{- if .Values.infrastructure }}
+            - name: external-bindings
+              mountPath: /etc/alien/secrets/external-bindings.json
+              subPath: external-bindings.json
+              readOnly: true
+            {{- end }}
+            {{- if .Values.runtime.tmp.enabled }}
+            - name: tmp
+              mountPath: /tmp
+            {{- end }}
+            - name: runtime-data
+              mountPath: {{ .Values.runtime.data.mountPath | quote }}
           resources:
             {{- toYaml .Values.runtime.resources | nindent 12 }}
       volumes:
         - name: config
           configMap:
             name: {{ include "alien.fullname" . }}
-        - name: secrets
+        - name: management-token
+          secret:
+            secretName: {{ include "alien.managementSecretName" . }}
+            items:
+              - key: {{ include "alien.managementSecretTokenKey" . }}
+                path: sync-token
+            defaultMode: 384
+        - name: encryption-key
+          secret:
+            secretName: {{ include "alien.encryptionSecretName" . }}
+            defaultMode: 384
+        {{- if .Values.infrastructure }}
+        - name: external-bindings
           secret:
             secretName: {{ include "alien.fullname" . }}
+            items:
+              - key: external-bindings.json
+                path: external-bindings.json
             defaultMode: 384
+        {{- end }}
+        {{- if .Values.runtime.tmp.enabled }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: {{ .Values.runtime.tmp.sizeLimit | quote }}
+        {{- end }}
+        - name: runtime-data
+          {{- if .Values.runtime.data.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ default (printf "%s-runtime-data" (include "alien.fullname" .)) .Values.runtime.data.persistence.existingClaim }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
 "#
     .to_string()
 }
@@ -615,7 +1836,421 @@ spec:
   ports:
     - name: http
       port: {{ .Values.runtime.api.port }}
-      targetPort: http
+      targetPort: otlp
+{{- end }}
+"#
+    .to_string()
+}
+
+fn pvc_tpl() -> String {
+    r#"{{- if and .Values.runtime.data.persistence.enabled (not .Values.runtime.data.persistence.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ printf "%s-runtime-data" (include "alien.fullname" .) }}
+  labels:
+    {{- include "alien.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.runtime.data.persistence.accessModes | nindent 4 }}
+  {{- if .Values.runtime.data.persistence.storageClassName }}
+  storageClassName: {{ .Values.runtime.data.persistence.storageClassName | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.runtime.data.persistence.size | quote }}
+{{- end }}
+"#
+    .to_string()
+}
+
+fn poddisruptionbudget_tpl() -> String {
+    r#"{{- if .Values.runtime.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "alien.fullname" . }}
+  labels:
+    {{- include "alien.labels" . | nindent 4 }}
+spec:
+  {{- if hasKey .Values.runtime.pdb "maxUnavailable" }}
+  maxUnavailable: {{ .Values.runtime.pdb.maxUnavailable }}
+  {{- else }}
+  minAvailable: {{ .Values.runtime.pdb.minAvailable }}
+  {{- end }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "alien.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
+"#
+    .to_string()
+}
+
+fn networkpolicy_tpl() -> String {
+    r#"{{- if .Values.runtime.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "alien.fullname" . }}
+  labels:
+    {{- include "alien.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "alien.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes:
+    {{- if .Values.runtime.networkPolicy.ingress.enabled }}
+    - Ingress
+    {{- end }}
+    {{- if .Values.runtime.networkPolicy.egress.enabled }}
+    - Egress
+    {{- end }}
+  {{- if .Values.runtime.networkPolicy.ingress.enabled }}
+  ingress:
+    - {}
+  {{- end }}
+  {{- if .Values.runtime.networkPolicy.egress.enabled }}
+  egress:
+    - {}
+  {{- end }}
+{{- end }}
+"#
+    .to_string()
+}
+
+fn app_service_tpl() -> String {
+    r#"{{- range $id, $service := .Values.services }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "alien.resourceName" (dict "root" $ "name" $id) }}
+  labels:
+    {{- include "alien.labels" $ | nindent 4 }}
+    alien.dev/resource-id: {{ $id | quote }}
+spec:
+  type: {{ if eq $service.type "loadBalancer" }}LoadBalancer{{ else }}ClusterIP{{ end }}
+  selector:
+    app: {{ include "alien.resourceName" (dict "root" $ "name" $id) }}
+    managed-by: alien
+    component: {{ $service.component | quote }}
+  ports:
+    - name: http
+      port: {{ default 80 $service.port }}
+      targetPort: {{ default 8080 $service.targetPort }}
+---
+{{- end }}
+"#
+    .to_string()
+}
+
+fn cluster_bootstrap_tpl() -> String {
+    r#"{{- $bootstrap := default dict .Values.clusterBootstrap -}}
+{{- $storage := dig "storageClass" "default" dict $bootstrap -}}
+{{- if dig "enabled" false $storage }}
+{{- $storageName := required "clusterBootstrap.storageClass.default.name is required when enabled" $storage.name -}}
+{{- $provisioner := required "clusterBootstrap.storageClass.default.provisioner is required when enabled" $storage.provisioner -}}
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ $storageName | quote }}
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+  labels:
+    {{- include "alien.labels" . | nindent 4 }}
+provisioner: {{ $provisioner | quote }}
+{{ with $storage.parameters }}
+parameters:
+  {{ range $key, $value := . }}
+  {{ $key }}: {{ $value | quote }}
+  {{ end }}
+{{ end }}
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+{{ end }}
+{{- $eksAlb := dig "ingress" "eksAutoMode" dict $bootstrap -}}
+{{- if dig "enabled" false $eksAlb }}
+{{- $ingressClassName := required "clusterBootstrap.ingress.eksAutoMode.name is required when enabled" $eksAlb.name -}}
+{{- $controller := required "clusterBootstrap.ingress.eksAutoMode.controller is required when enabled" $eksAlb.controller -}}
+---
+apiVersion: eks.amazonaws.com/v1
+kind: IngressClassParams
+metadata:
+  name: {{ $ingressClassName | quote }}
+  labels:
+    {{- include "alien.labels" . | nindent 4 }}
+spec:
+  scheme: {{ default "internet-facing" $eksAlb.scheme | quote }}
+  {{ with $eksAlb.subnetIds }}
+  subnets:
+    ids:
+      {{ range . }}
+      - {{ . | quote }}
+      {{ end }}
+  {{ end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  name: {{ $ingressClassName | quote }}
+  labels:
+    {{- include "alien.labels" . | nindent 4 }}
+spec:
+  controller: {{ $controller | quote }}
+  parameters:
+    apiGroup: eks.amazonaws.com
+    kind: IngressClassParams
+    name: {{ $ingressClassName | quote }}
+{{ end }}
+{{- $azureAgc := dig "ingress" "azureApplicationGatewayForContainers" dict $bootstrap -}}
+{{- if dig "enabled" false $azureAgc }}
+{{- $azureAlb := required "clusterBootstrap.ingress.azureApplicationGatewayForContainers.applicationLoadBalancer is required when enabled" $azureAgc.applicationLoadBalancer -}}
+{{- $azureAlbName := required "clusterBootstrap.ingress.azureApplicationGatewayForContainers.applicationLoadBalancer.name is required when enabled" $azureAlb.name -}}
+{{- $azureAlbNamespace := required "clusterBootstrap.ingress.azureApplicationGatewayForContainers.applicationLoadBalancer.namespace is required when enabled" $azureAlb.namespace -}}
+{{- $azureAssociationSubnetId := required "clusterBootstrap.ingress.azureApplicationGatewayForContainers.applicationLoadBalancer.associationSubnetId is required when enabled" $azureAlb.associationSubnetId -}}
+---
+apiVersion: alb.networking.azure.io/v1
+kind: ApplicationLoadBalancer
+metadata:
+  name: {{ $azureAlbName | quote }}
+  namespace: {{ $azureAlbNamespace | quote }}
+  labels:
+    {{- include "alien.labels" . | nindent 4 }}
+spec:
+  associations:
+    - {{ $azureAssociationSubnetId | quote }}
+{{ end }}
+{{- $eksArm64NodePool := dig "compute" "eksAutoMode" "arm64NodePool" dict $bootstrap -}}
+{{- if dig "enabled" false $eksArm64NodePool }}
+{{- $nodePoolName := required "clusterBootstrap.compute.eksAutoMode.arm64NodePool.name is required when enabled" $eksArm64NodePool.name -}}
+{{- $nodeClassName := required "clusterBootstrap.compute.eksAutoMode.arm64NodePool.nodeClassName is required when enabled" $eksArm64NodePool.nodeClassName -}}
+---
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: {{ $nodePoolName | quote }}
+  labels:
+    {{- include "alien.labels" . | nindent 4 }}
+spec:
+  template:
+    spec:
+      nodeClassRef:
+        group: eks.amazonaws.com
+        kind: NodeClass
+        name: {{ $nodeClassName | quote }}
+      requirements:
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values:
+            - {{ default "on-demand" $eksArm64NodePool.capacityType | quote }}
+        - key: kubernetes.io/arch
+          operator: In
+          values:
+            - "arm64"
+        - key: eks.amazonaws.com/instance-category
+          operator: In
+          values:
+            {{ range (default (list "c" "m" "r") $eksArm64NodePool.instanceCategories) }}
+            - {{ . | quote }}
+            {{ end }}
+        - key: eks.amazonaws.com/instance-generation
+          operator: Gt
+          values:
+            - {{ default "5" $eksArm64NodePool.minInstanceGeneration | quote }}
+  {{ with $eksArm64NodePool.limits }}
+  limits:
+    {{ with .cpu }}
+    cpu: {{ . | quote }}
+    {{ end }}
+    {{ with .memory }}
+    memory: {{ . | quote }}
+    {{ end }}
+  {{ end }}
+{{ end }}
+{{- $metrics := dig "metricsServer" dict $bootstrap -}}
+{{- if dig "enabled" false $metrics }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: metrics-server
+  namespace: kube-system
+  labels:
+    k8s-app: metrics-server
+    {{- include "alien.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: system:aggregated-metrics-reader
+  labels:
+    k8s-app: metrics-server
+    rbac.authorization.k8s.io/aggregate-to-admin: "true"
+    rbac.authorization.k8s.io/aggregate-to-edit: "true"
+    rbac.authorization.k8s.io/aggregate-to-view: "true"
+    {{- include "alien.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods", "nodes"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: system:metrics-server
+  labels:
+    k8s-app: metrics-server
+    {{- include "alien.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["nodes/metrics"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["pods", "nodes"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: metrics-server-auth-reader
+  namespace: kube-system
+  labels:
+    k8s-app: metrics-server
+    {{- include "alien.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: extension-apiserver-authentication-reader
+subjects:
+  - kind: ServiceAccount
+    name: metrics-server
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: metrics-server:system:auth-delegator
+  labels:
+    k8s-app: metrics-server
+    {{- include "alien.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+  - kind: ServiceAccount
+    name: metrics-server
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: system:metrics-server
+  labels:
+    k8s-app: metrics-server
+    {{- include "alien.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:metrics-server
+subjects:
+  - kind: ServiceAccount
+    name: metrics-server
+    namespace: kube-system
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: metrics-server
+  namespace: kube-system
+  labels:
+    k8s-app: metrics-server
+    {{- include "alien.labels" . | nindent 4 }}
+spec:
+  selector:
+    k8s-app: metrics-server
+  ports:
+    - name: https
+      port: 443
+      protocol: TCP
+      targetPort: https
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: metrics-server
+  namespace: kube-system
+  labels:
+    k8s-app: metrics-server
+    {{- include "alien.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      k8s-app: metrics-server
+  template:
+    metadata:
+      labels:
+        k8s-app: metrics-server
+    spec:
+      serviceAccountName: metrics-server
+      containers:
+        - name: metrics-server
+          image: {{ default "registry.k8s.io/metrics-server/metrics-server:v0.8.1" $metrics.image | quote }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - --cert-dir=/tmp
+            - --secure-port=10250
+            - --kubelet-preferred-address-types=InternalIP,ExternalIP,Hostname
+            - --kubelet-use-node-status-port
+            - --metric-resolution=15s
+          ports:
+            - name: https
+              containerPort: 10250
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1000
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata:
+  name: v1beta1.metrics.k8s.io
+  labels:
+    k8s-app: metrics-server
+    {{- include "alien.labels" . | nindent 4 }}
+spec:
+  service:
+    name: metrics-server
+    namespace: kube-system
+  group: metrics.k8s.io
+  version: v1beta1
+  insecureSkipTLSVerify: true
+  groupPriorityMinimum: 100
+  versionPriority: 100
 {{- end }}
 "#
     .to_string()
@@ -722,7 +2357,7 @@ stackSettings:
 
 fn readme_md(chart_name: &str, stack: &Stack) -> String {
     format!(
-        "# {chart_name}\n\nInstall this chart into an existing Kubernetes cluster:\n\n```bash\nhelm install {chart_name} ./{} --namespace production --create-namespace --values values.yaml\n```\n\nThe generated `values.yaml` contains placeholders for management, service-account identity annotations, agent-local infrastructure bindings, and public service exposure. See `examples/<target>.yaml` for ready-to-use values matching EKS / GKE / AKS / on-prem.\n",
+        "# {chart_name}\n\nInstall this chart into an existing Kubernetes cluster:\n\n```bash\nhelm install {chart_name} ./{} --namespace production --create-namespace --values values.yaml\n```\n\nThe generated `values.yaml` contains placeholders for management, service-account identity annotations, agent-local infrastructure bindings, and the Kubernetes exposure profile. The chart no longer renders per-app public `Ingress` objects from `services.*.host` or hostless ingress values; public endpoints are runtime-owned through `stackSettings.kubernetes.exposure`.\n\nSee `examples/<target>.yaml` for ready-to-use values matching EKS / GKE / AKS / on-prem.\n",
         stack.id()
     )
 }
@@ -780,20 +2415,23 @@ fn ensure_trailing_newline(mut value: String) -> String {
 mod tests {
     use super::*;
     use alien_core::{
-        FunctionCode, FunctionTrigger, PermissionProfile, Queue, ResourceLifecycle, Storage,
+        import::data::AzureApplicationGatewayForContainersBootstrap, KubernetesCluster,
+        KubernetesClusterOutputs, KubernetesClusterOwnership, KubernetesClusterProvider,
+        PermissionProfile, Queue, RemoteStackManagement, Resource, ResourceLifecycle,
+        ResourceOutputs, ResourceStatus, StackResourceState, Storage, WorkerCode, WorkerTrigger,
     };
 
     fn sample_stack() -> Stack {
         let storage = Storage::new("assets".to_string()).versioning(true).build();
         let queue = Queue::new("jobs".to_string()).build();
-        let function = Function::new("api".to_string())
-            .code(FunctionCode::Image {
+        let function = Worker::new("api".to_string())
+            .code(WorkerCode::Image {
                 image: "example.com/api:1".to_string(),
             })
             .permissions("runtime".to_string())
             .ingress(Ingress::Public)
             .link(&storage)
-            .trigger(FunctionTrigger::queue(&queue))
+            .trigger(WorkerTrigger::queue(&queue))
             .build();
 
         Stack::new("sample-stack".to_string())
@@ -826,5 +2464,131 @@ mod tests {
             .assert_ok("helm template manager-fetch path");
         crate::test_utils::helm_template_and_validate(&files, Some(&files["examples/onprem.yaml"]))
             .assert_ok("helm template external-bindings initialize path");
+    }
+
+    #[test]
+    fn manager_fetch_values_use_azure_workload_identity_client_id() {
+        let mut stack_state =
+            alien_core::StackState::with_resource_prefix(Platform::Kubernetes, "e2e123".into());
+        let rsm = RemoteStackManagement::new("remote-stack-management".to_string()).build();
+        stack_state.resources.insert(
+            "remote-stack-management".to_string(),
+            StackResourceState::new_pending(
+                RemoteStackManagement::RESOURCE_TYPE.to_string(),
+                Resource::new(rsm),
+                Some(ResourceLifecycle::Frozen),
+                Vec::new(),
+            )
+            .with_updates(|state| {
+                state.status = ResourceStatus::Running;
+                state.outputs = Some(ResourceOutputs::new(RemoteStackManagementOutputs {
+                    management_resource_id: "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/manager".to_string(),
+                    access_configuration: serde_json::json!({
+                        "uamiClientId": "11111111-2222-3333-4444-555555555555",
+                        "tenantId": "tenant"
+                    })
+                    .to_string(),
+                }));
+            }),
+        );
+
+        let values = render_manager_fetch_values(ManagerFetchHelmValuesOptions {
+            deployment_id: "dep_123",
+            deployment_name: "deployment",
+            manager_url: "https://manager.example.com",
+            deployment_token: "token",
+            stack: &sample_stack(),
+            stack_state: &stack_state,
+            stack_settings: &StackSettings::default(),
+            base_platform: Some(Platform::Azure),
+            region: Some("eastus"),
+            gcp_project_id: None,
+            azure_location: Some("eastus"),
+        })
+        .expect("manager-fetch values should render");
+
+        assert!(values.contains(
+            "'azure.workload.identity/client-id': '11111111-2222-3333-4444-555555555555'"
+        ));
+        assert!(!values.contains("'azure.workload.identity/client-id': '/subscriptions/sub"));
+        assert!(values.contains("azure.workload.identity/use: 'true'"));
+        assert!(values.contains("subscriptionId: 'sub'"));
+        assert!(values.contains("tenantId: 'tenant'"));
+    }
+
+    #[test]
+    fn manager_fetch_values_include_azure_agc_cluster_bootstrap() {
+        let mut stack_state =
+            alien_core::StackState::with_resource_prefix(Platform::Kubernetes, "e2e123".into());
+        let cluster = KubernetesCluster::new("kubernetes".to_string())
+            .provider(KubernetesClusterProvider::Aks)
+            .ownership(KubernetesClusterOwnership::Managed)
+            .namespace("alien-test".to_string())
+            .heartbeat_mode(alien_core::KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+            .build();
+        stack_state.resources.insert(
+            "kubernetes".to_string(),
+            StackResourceState::new_pending(
+                KubernetesCluster::RESOURCE_TYPE.to_string(),
+                Resource::new(cluster),
+                Some(ResourceLifecycle::Frozen),
+                Vec::new(),
+            )
+            .with_updates(|state| {
+                state.status = ResourceStatus::Running;
+                state.outputs = Some(ResourceOutputs::new(KubernetesClusterOutputs {
+                    provider: KubernetesClusterProvider::Aks,
+                    ownership: KubernetesClusterOwnership::Managed,
+                    namespace: "alien-test".to_string(),
+                    cluster_name: Some("e2e-k8s".to_string()),
+                    cluster_id: Some("e2e-k8s".to_string()),
+                    kubernetes_api_reachable: true,
+                    namespace_ready: true,
+                    rbac_ready: true,
+                    agent_ready: false,
+                    cloud_metadata_ready: Some(true),
+                    azure_application_gateway_for_containers: Some(
+                        AzureApplicationGatewayForContainersBootstrap {
+                            alb_name: "e2e-alb".to_string(),
+                            alb_namespace: "alien-test".to_string(),
+                            association_subnet_id: "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/virtualNetworks/vnet/subnets/alb".to_string(),
+                        },
+                    ),
+                    version: None,
+                    status_message: None,
+                }));
+            }),
+        );
+
+        let values = render_manager_fetch_values(ManagerFetchHelmValuesOptions {
+            deployment_id: "dep_123",
+            deployment_name: "deployment",
+            manager_url: "https://manager.example.com",
+            deployment_token: "token",
+            stack: &sample_stack(),
+            stack_state: &stack_state,
+            stack_settings: &StackSettings::default(),
+            base_platform: Some(Platform::Azure),
+            region: Some("eastus"),
+            gcp_project_id: None,
+            azure_location: Some("eastus"),
+        })
+        .expect("manager-fetch values should render");
+
+        assert!(values.contains("azureApplicationGatewayForContainers:"));
+        assert!(values.contains("enabled: true"));
+        assert!(values.contains("name: 'e2e-alb'"));
+        assert!(values.contains("namespace: 'alien-test'"));
+        assert!(values.contains(
+            "associationSubnetId: '/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/virtualNetworks/vnet/subnets/alb'"
+        ));
+    }
+
+    #[test]
+    fn fullname_defaults_to_release_name() {
+        let helpers = helpers_tpl();
+
+        assert!(helpers.contains("{{- .Release.Name | trunc 63 | trimSuffix \"-\" -}}"));
+        assert!(!helpers.contains("printf \"%s-%s\" .Release.Name"));
     }
 }

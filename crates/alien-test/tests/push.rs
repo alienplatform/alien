@@ -9,13 +9,13 @@
 //! `teardown()` runs and destroys the deployment + cloud resources.
 //!
 //! Run a single test:
-//!   cargo nextest run -p alien-test --test push push_aws_rust
+//!   cargo nextest run -p alien-test --test push push_aws_comprehensive_rust
 //!
 //! Run all push tests:
 //!   cargo nextest run -p alien-test --test push
 
 use alien_core::Platform;
-use alien_test::{DeploymentModel, Language};
+use alien_test::{DeploymentModel, TestApp};
 use test_context::test_context;
 
 mod common;
@@ -29,17 +29,17 @@ e2e_test_context!(
     AwsPushRust,
     Platform::Aws,
     DeploymentModel::Push,
-    Language::Rust
+    TestApp::ComprehensiveRust
 );
 
 #[test_context(AwsPushRust)]
 #[tokio::test]
-async fn push_aws_rust(ctx: &mut AwsPushRust) {
+async fn push_aws_comprehensive_rust(ctx: &mut AwsPushRust) {
     common::runner::check_all_bindings(
         &ctx.ctx.deployment,
         ctx.ctx.platform,
         ctx.ctx.model,
-        ctx.ctx.language,
+        ctx.ctx.app,
     )
     .await
     .expect("binding checks failed");
@@ -52,17 +52,17 @@ e2e_test_context!(
     AwsPushTypeScript,
     Platform::Aws,
     DeploymentModel::Push,
-    Language::TypeScript
+    TestApp::ComprehensiveTs
 );
 
 #[test_context(AwsPushTypeScript)]
 #[tokio::test]
-async fn push_aws_typescript(ctx: &mut AwsPushTypeScript) {
+async fn push_aws_comprehensive_ts(ctx: &mut AwsPushTypeScript) {
     common::runner::check_all_bindings(
         &ctx.ctx.deployment,
         ctx.ctx.platform,
         ctx.ctx.model,
-        ctx.ctx.language,
+        ctx.ctx.app,
     )
     .await
     .expect("binding checks failed");
@@ -79,17 +79,17 @@ e2e_test_context!(
     GcpPushRust,
     Platform::Gcp,
     DeploymentModel::Push,
-    Language::Rust
+    TestApp::ComprehensiveRust
 );
 
 #[test_context(GcpPushRust)]
 #[tokio::test]
-async fn push_gcp_rust(ctx: &mut GcpPushRust) {
+async fn push_gcp_comprehensive_rust(ctx: &mut GcpPushRust) {
     common::runner::check_all_bindings(
         &ctx.ctx.deployment,
         ctx.ctx.platform,
         ctx.ctx.model,
-        ctx.ctx.language,
+        ctx.ctx.app,
     )
     .await
     .expect("binding checks failed");
@@ -102,17 +102,17 @@ e2e_test_context!(
     GcpPushTypeScript,
     Platform::Gcp,
     DeploymentModel::Push,
-    Language::TypeScript
+    TestApp::ComprehensiveTs
 );
 
 #[test_context(GcpPushTypeScript)]
 #[tokio::test]
-async fn push_gcp_typescript(ctx: &mut GcpPushTypeScript) {
+async fn push_gcp_comprehensive_ts(ctx: &mut GcpPushTypeScript) {
     common::runner::check_all_bindings(
         &ctx.ctx.deployment,
         ctx.ctx.platform,
         ctx.ctx.model,
-        ctx.ctx.language,
+        ctx.ctx.app,
     )
     .await
     .expect("binding checks failed");
@@ -129,17 +129,17 @@ e2e_test_context!(
     AzurePushRust,
     Platform::Azure,
     DeploymentModel::Push,
-    Language::Rust
+    TestApp::ComprehensiveRust
 );
 
 #[test_context(AzurePushRust)]
 #[tokio::test]
-async fn push_azure_rust(ctx: &mut AzurePushRust) {
+async fn push_azure_comprehensive_rust(ctx: &mut AzurePushRust) {
     common::runner::check_all_bindings(
         &ctx.ctx.deployment,
         ctx.ctx.platform,
         ctx.ctx.model,
-        ctx.ctx.language,
+        ctx.ctx.app,
     )
     .await
     .expect("binding checks failed");
@@ -152,17 +152,17 @@ e2e_test_context!(
     AzurePushTypeScript,
     Platform::Azure,
     DeploymentModel::Push,
-    Language::TypeScript
+    TestApp::ComprehensiveTs
 );
 
 #[test_context(AzurePushTypeScript)]
 #[tokio::test]
-async fn push_azure_typescript(ctx: &mut AzurePushTypeScript) {
+async fn push_azure_comprehensive_ts(ctx: &mut AzurePushTypeScript) {
     common::runner::check_all_bindings(
         &ctx.ctx.deployment,
         ctx.ctx.platform,
         ctx.ctx.model,
-        ctx.ctx.language,
+        ctx.ctx.app,
     )
     .await
     .expect("binding checks failed");
@@ -172,5 +172,5 @@ async fn push_azure_typescript(ctx: &mut AzurePushTypeScript) {
 }
 
 // Note: Local push tests are not included because the local platform only
-// supports pull (container) model through the manager pipeline. Push (function)
+// supports pull (container) model through the manager pipeline. Push (worker)
 // model on local requires `alien dev` which bypasses the deployment pipeline.

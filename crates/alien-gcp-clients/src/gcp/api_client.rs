@@ -1,7 +1,6 @@
 use crate::gcp::gcp_request_utils::{auth_send_json, auth_send_no_response, GcpAuthConfig};
 use crate::gcp::GcpClientConfig;
 use crate::gcp::GcpClientConfigExt;
-use alien_client_core::RequestBuilderExt;
 use alien_client_core::{ErrorData, Result};
 use alien_error::AlienError;
 use reqwest::{Client, Method};

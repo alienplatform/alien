@@ -18,7 +18,7 @@ Your Cloud                          Customer's Cloud
 
 | Resource | Type | Description |
 |----------|------|-------------|
-| `worker` | Function (live) | Serverless function with command handlers |
+| `worker` | Worker (live) | Serverless worker with command handlers |
 | `files` | Storage (frozen) | Private file storage per customer (S3 / Cloud Storage / Blob Storage) |
 
 ### Commands

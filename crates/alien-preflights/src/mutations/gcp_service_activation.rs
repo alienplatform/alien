@@ -1,6 +1,7 @@
 //! GCP Service Activation mutation that enables required GCP APIs.
 
 use crate::error::Result;
+use crate::mutations::runs_on_platform_or_base;
 use crate::StackMutation;
 use alien_core::{
     DeploymentConfig, Platform, ResourceEntry, ResourceLifecycle, ServiceActivation, Stack,
@@ -13,7 +14,7 @@ use tracing::{debug, info};
 /// Mutation that adds ServiceActivation resources for required GCP APIs.
 ///
 /// Different GCP resource types require different APIs to be enabled:
-/// - function: run.googleapis.com (Cloud Run)
+/// - worker: run.googleapis.com (Cloud Run)
 /// - build: cloudbuild.googleapis.com (Cloud Build)
 /// - storage: storage.googleapis.com (Cloud Storage)
 /// - role: iam.googleapis.com + cloudresourcemanager.googleapis.com
@@ -22,7 +23,7 @@ use tracing::{debug, info};
 /// - queue: pubsub.googleapis.com (Pub/Sub)
 /// - vault: secretmanager.googleapis.com (Secret Manager)
 /// - network: compute.googleapis.com (Compute Engine)
-/// - container-cluster: compute.googleapis.com (Compute Engine)
+/// - compute-cluster: compute.googleapis.com (Compute Engine)
 pub struct GcpServiceActivationMutation;
 
 #[async_trait]
@@ -35,10 +36,9 @@ impl StackMutation for GcpServiceActivationMutation {
         &self,
         stack: &Stack,
         stack_state: &StackState,
-        _config: &DeploymentConfig,
+        config: &DeploymentConfig,
     ) -> bool {
-        // Only add for GCP platform
-        if stack_state.platform != Platform::Gcp {
+        if !runs_on_platform_or_base(stack_state, config, Platform::Gcp) {
             return false;
         }
 
@@ -120,7 +120,7 @@ impl GcpServiceActivationMutation {
         for (_, entry) in &stack.resources {
             let resource_type = entry.config.resource_type();
             match resource_type.as_ref() {
-                "function" => {
+                "worker" => {
                     services.insert(
                         "enable-cloud-run".to_string(),
                         "run.googleapis.com".to_string(),
@@ -175,13 +175,27 @@ impl GcpServiceActivationMutation {
                         "compute.googleapis.com".to_string(),
                     );
                 }
-                "container-cluster" => {
+                "compute-cluster" => {
                     services.insert(
                         "enable-compute-engine".to_string(),
                         "compute.googleapis.com".to_string(),
                     );
                     // Required for the IMDS metadata proxy to impersonate service accounts on
                     // behalf of containers via generateAccessToken.
+                    services.insert(
+                        "enable-iam-credentials".to_string(),
+                        "iamcredentials.googleapis.com".to_string(),
+                    );
+                }
+                "kubernetes-cluster" => {
+                    services.insert(
+                        "enable-container".to_string(),
+                        "container.googleapis.com".to_string(),
+                    );
+                    services.insert(
+                        "enable-compute-engine".to_string(),
+                        "compute.googleapis.com".to_string(),
+                    );
                     services.insert(
                         "enable-iam-credentials".to_string(),
                         "iamcredentials.googleapis.com".to_string(),

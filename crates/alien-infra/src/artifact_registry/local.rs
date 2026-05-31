@@ -3,9 +3,15 @@ use tracing::{debug, info};
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use alien_core::{ArtifactRegistry, ArtifactRegistryOutputs, ResourceOutputs, ResourceStatus};
+use alien_core::{
+    ArtifactRegistry, ArtifactRegistryHeartbeatData, ArtifactRegistryHeartbeatStatus,
+    ArtifactRegistryOutputs, HeartbeatBackend, LocalArtifactRegistryHeartbeatData, ObservedHealth,
+    Platform, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
+    ResourceStatus,
+};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_macros::controller;
+use chrono::Utc;
 
 #[controller]
 pub struct LocalArtifactRegistryController {
@@ -107,6 +113,9 @@ impl LocalArtifactRegistryController {
         }
 
         debug!(registry_id=%config.id, "Registry health check passed");
+        if let Some(registry_url) = &self.registry_url {
+            emit_local_artifact_registry_heartbeat(ctx, &config.id, registry_url);
+        }
 
         Ok(HandlerAction::Continue {
             state: Ready,
@@ -279,4 +288,34 @@ impl LocalArtifactRegistryController {
             _internal_stay_count: None,
         }
     }
+}
+
+fn emit_local_artifact_registry_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    registry_url: &str,
+) {
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: ArtifactRegistry::RESOURCE_TYPE,
+        controller_platform: Platform::Local,
+        backend: HeartbeatBackend::Local,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::ArtifactRegistry(ArtifactRegistryHeartbeatData::Local(
+            LocalArtifactRegistryHeartbeatData {
+                status: ArtifactRegistryHeartbeatStatus {
+                    health: ObservedHealth::Healthy,
+                    lifecycle: ProviderLifecycleState::Running,
+                    message: Some("Local artifact registry is reachable".to_string()),
+                    stale: false,
+                    partial: false,
+                    collection_issues: vec![],
+                },
+                registry_url: registry_url.to_string(),
+                reachable: true,
+            },
+        )),
+        raw: vec![],
+    });
 }

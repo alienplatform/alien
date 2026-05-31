@@ -1,78 +1,184 @@
 use crate::{
     error::{ErrorData, Result},
+    generators::labels::{
+        entry_description, entry_snake_label, entry_title_label, has_explicit_label,
+    },
     variables::VariableInterpolator,
     BindingTarget, PermissionContext,
 };
-use alien_core::PermissionSet;
+use alien_core::{GcpBindingSpec, PermissionGrant, PermissionSet};
 use serde::{Deserialize, Serialize};
 
-/// GCP custom role definition
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct GcpCustomRole {
-    /// Human-readable role title
-    pub title: String,
-    /// Description of what the role allows
-    pub description: String,
-    /// Role stage (GA, BETA, ALPHA)
-    pub stage: String,
-    /// List of GCP permissions included in this role
-    pub included_permissions: Vec<String>,
-    /// Full GCP role name (projects/{project}/roles/{roleId})
-    pub name: String,
-}
+const GCP_CUSTOM_ROLE_ID_MAX_LEN: usize = 64;
+const ROLE_ID_HASH_LEN: usize = 8;
 
-/// GCP IAM binding condition
+/// GCP IAM binding condition.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct GcpIamCondition {
-    /// Human-readable condition title
+    /// Human-readable condition title.
     pub title: String,
-    /// Description of the condition
+    /// Description of the condition.
     pub description: String,
-    /// CEL expression for the condition
+    /// CEL expression for the condition.
     pub expression: String,
 }
 
-/// GCP IAM policy binding
+/// GCP custom role definition.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GcpCustomRole {
+    /// GCP role ID.
+    pub role_id: String,
+    /// Fully-qualified role name.
+    pub name: String,
+    /// Human-readable title.
+    pub title: String,
+    /// Role description.
+    pub description: String,
+    /// Permissions included in the custom role.
+    pub included_permissions: Vec<String>,
+    /// Role launch stage.
+    pub stage: String,
+}
+
+/// Scope where a GCP IAM role binding should be applied.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum GcpBindingTargetScope {
+    /// Bind the role on the target project.
+    Project,
+    /// Bind the role on the current resource IAM policy.
+    CurrentResource,
+}
+
+/// Resource family for current-resource IAM bindings that need provider-specific routing.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum GcpBindingResourceKind {
+    /// Pub/Sub topic IAM policy.
+    PubsubTopic,
+    /// Pub/Sub subscription IAM policy.
+    PubsubSubscription,
+    /// Artifact Registry repository IAM policy.
+    ArtifactRegistryRepository,
+}
+
+/// GCP IAM policy binding.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct GcpIamBinding {
-    /// Role to bind to members
+    /// Role to bind to members.
     pub role: String,
-    /// List of members (users, service accounts, groups)
+    /// List of members (users, service accounts, groups).
     pub members: Vec<String>,
-    /// Optional condition for conditional IAM
+    /// IAM policy scope where this role should be bound.
+    pub target: GcpBindingTargetScope,
+    /// Resource family for current-resource IAM policy routing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resource_kind: Option<GcpBindingResourceKind>,
+    /// Optional condition for conditional IAM.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub condition: Option<GcpIamCondition>,
 }
 
-/// GCP IAM bindings wrapper
+/// GCP IAM bindings wrapper.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct GcpIamBindings {
-    /// List of IAM bindings
+    /// List of IAM bindings.
     pub bindings: Vec<GcpIamBinding>,
 }
 
-/// GCP runtime permissions generator for custom roles and IAM bindings
+/// GCP grant plan generated from a permission set.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GcpGrantPlan {
+    /// Predefined and generated custom-role bindings.
+    pub bindings: Vec<GcpIamBinding>,
+    /// Residual custom roles that must exist before their bindings are applied.
+    pub custom_roles: Vec<GcpCustomRole>,
+}
+
+impl GcpGrantPlan {
+    /// Return IAM bindings selected for one binding target scope.
+    pub fn bindings_for_target(&self, target: GcpBindingTargetScope) -> Vec<GcpIamBinding> {
+        self.bindings
+            .iter()
+            .filter(|binding| binding.target == target)
+            .cloned()
+            .collect()
+    }
+
+    /// Return only the custom roles referenced by `bindings`.
+    pub fn custom_roles_for_bindings(&self, bindings: &[GcpIamBinding]) -> Vec<GcpCustomRole> {
+        self.custom_roles
+            .iter()
+            .filter(|custom_role| {
+                bindings
+                    .iter()
+                    .any(|binding| binding.role == custom_role.name)
+            })
+            .cloned()
+            .collect()
+    }
+}
+
+/// GCP custom-role planner.
 pub struct GcpRuntimePermissionsGenerator;
 
 impl GcpRuntimePermissionsGenerator {
-    /// Create a new GCP runtime permissions generator
+    /// Create a new GCP runtime permissions generator.
     pub fn new() -> Self {
         Self
     }
 
-    /// Generate a GCP custom role from a permission set
+    /// Generate a custom role from a permission set.
     ///
-    /// Takes a PermissionSet and produces GCP custom role definitions
-    /// that can be created at runtime.
+    /// GCP uses project custom roles for exact permission-set semantics. The
+    /// role ID is derived from the deployment namespace and permission-set ID,
+    /// so different service accounts in the same deployment share one role per
+    /// permission-set entry without sharing roles across deployments.
     pub fn generate_custom_role(
         &self,
         permission_set: &PermissionSet,
         context: &PermissionContext,
     ) -> Result<GcpCustomRole> {
+        let roles = self.generate_custom_roles(permission_set, context)?;
+        if roles.len() == 1 {
+            return Ok(roles.into_iter().next().expect("single role"));
+        }
+        if roles.is_empty() {
+            return Err(alien_error::AlienError::new(ErrorData::GeneratorError {
+                platform: "gcp".to_string(),
+                message: format!(
+                    "GCP permission set '{}' has no residual custom role",
+                    permission_set.id
+                ),
+            }));
+        }
+
+        Err(alien_error::AlienError::new(ErrorData::GeneratorError {
+            platform: "gcp".to_string(),
+            message: format!(
+                "GCP permission set '{}' generates multiple custom roles; use generate_custom_roles() to preserve binding scopes",
+                permission_set.id
+            ),
+        }))
+    }
+
+    /// Generate one custom role per unique GCP permission entry.
+    ///
+    /// Permission-set JSONC can split GCP permissions into multiple entries
+    /// when some permissions must be bound at project scope and others at a
+    /// resource scope. Keeping those entries as separate custom roles prevents
+    /// project-scoped helper permissions from broadening resource permissions,
+    /// and vice versa.
+    pub fn generate_custom_roles(
+        &self,
+        permission_set: &PermissionSet,
+        context: &PermissionContext,
+    ) -> Result<Vec<GcpCustomRole>> {
         let gcp_platform_permissions = permission_set.platforms.gcp.as_ref().ok_or_else(|| {
             alien_error::AlienError::new(ErrorData::PlatformNotSupported {
                 platform: "gcp".to_string(),
@@ -80,48 +186,105 @@ impl GcpRuntimePermissionsGenerator {
             })
         })?;
 
-        // For custom role generation, we aggregate all permissions from all platform permissions
-        let mut all_permissions = Vec::new();
-
-        for platform_permission in gcp_platform_permissions {
-            if let Some(permissions) = &platform_permission.grant.permissions {
-                all_permissions.extend(permissions.clone());
-            }
-        }
-
-        if all_permissions.is_empty() {
+        if gcp_platform_permissions.is_empty() {
             return Err(alien_error::AlienError::new(ErrorData::GeneratorError {
                 platform: "gcp".to_string(),
-                message: "GCP permission grant must have 'permissions' field".to_string(),
+                message: format!(
+                    "GCP permission set '{}' has no platform entries",
+                    permission_set.id
+                ),
             }));
         }
 
-        let role_name = self.generate_role_name(&permission_set.id);
-        let role_id = self.generate_role_id(&permission_set.id);
+        let mut roles: Vec<GcpCustomRole> = Vec::new();
+        let residual_entry_count = gcp_platform_permissions
+            .iter()
+            .filter(|entry| gcp_residual_permissions(&entry.grant).is_some_and(|p| !p.is_empty()))
+            .count();
+        let has_multiple_entries = residual_entry_count > 1;
+        for (index, platform_permission) in gcp_platform_permissions.iter().enumerate() {
+            validate_gcp_grant(permission_set, index, &platform_permission.grant)?;
 
-        // Get project from context for full role name
+            let Some(permissions) = gcp_residual_permissions(&platform_permission.grant) else {
+                continue;
+            };
+            if permissions.is_empty() {
+                continue;
+            }
+            let role = self.custom_role_for_permissions(
+                permission_set,
+                permissions.clone(),
+                context,
+                role_suffix(
+                    &platform_permission.grant,
+                    platform_permission.label.as_deref(),
+                    has_multiple_entries,
+                ),
+                platform_permission.label.as_deref(),
+                platform_permission.description.as_deref(),
+            )?;
+            if !roles
+                .iter()
+                .any(|existing| existing.role_id == role.role_id)
+            {
+                roles.push(role);
+            }
+        }
+
+        Ok(roles)
+    }
+
+    fn custom_role_for_permissions(
+        &self,
+        permission_set: &PermissionSet,
+        mut included_permissions: Vec<String>,
+        context: &PermissionContext,
+        suffix: Option<String>,
+        explicit_label: Option<&str>,
+        entry_description_override: Option<&str>,
+    ) -> Result<GcpCustomRole> {
+        included_permissions.sort();
+        included_permissions.dedup();
+
         let project = context.project_name.as_deref().unwrap_or("PROJECT_NAME");
-        let full_role_name = format!("projects/{}/roles/{}", project, role_id);
+        let role_id = generate_role_id(permission_set, context, suffix.as_deref(), explicit_label);
+        let role_name = format!("projects/{project}/roles/{role_id}");
 
         Ok(GcpCustomRole {
-            title: role_name,
-            description: permission_set.description.clone(),
+            role_id: role_id.clone(),
+            name: role_name,
+            title: custom_role_title(permission_set, context, suffix.as_deref(), explicit_label),
+            description: custom_role_description(
+                permission_set,
+                context,
+                entry_description_override,
+            ),
+            included_permissions,
             stage: "GA".to_string(),
-            included_permissions: all_permissions,
-            name: full_role_name,
         })
     }
 
-    /// Generate IAM bindings from permission set and binding target
-    ///
-    /// Takes a PermissionSet and binding target, produces GCP IAM bindings
-    /// that can be applied to resources at runtime.
+    /// Generate IAM bindings from a permission set and binding target.
     pub fn generate_bindings(
         &self,
         permission_set: &PermissionSet,
         binding_target: BindingTarget,
         context: &PermissionContext,
     ) -> Result<GcpIamBindings> {
+        Ok(GcpIamBindings {
+            bindings: self
+                .generate_grant_plan(permission_set, binding_target, context)?
+                .bindings,
+        })
+    }
+
+    /// Generate the full GCP grant plan from a permission set and binding target.
+    pub fn generate_grant_plan(
+        &self,
+        permission_set: &PermissionSet,
+        binding_target: BindingTarget,
+        context: &PermissionContext,
+    ) -> Result<GcpGrantPlan> {
         let gcp_platform_permissions = permission_set.platforms.gcp.as_ref().ok_or_else(|| {
             alien_error::AlienError::new(ErrorData::PlatformNotSupported {
                 platform: "gcp".to_string(),
@@ -129,11 +292,17 @@ impl GcpRuntimePermissionsGenerator {
             })
         })?;
 
-        let role_id = self.generate_role_id(&permission_set.id);
-        let project = context.project_name.as_deref().unwrap_or("PROJECT_NAME");
-        let full_role_name = format!("projects/{}/roles/{}", project, role_id);
+        if gcp_platform_permissions.is_empty() {
+            return Err(alien_error::AlienError::new(ErrorData::GeneratorError {
+                platform: "gcp".to_string(),
+                message: format!(
+                    "GCP permission set '{}' has no platform entries",
+                    permission_set.id
+                ),
+            }));
+        }
 
-        // For this example, we'll use a placeholder service account
+        let project = context.project_name.as_deref().unwrap_or("PROJECT_NAME");
         let service_account = format!(
             "serviceAccount:{}@{}.iam.gserviceaccount.com",
             context
@@ -143,108 +312,99 @@ impl GcpRuntimePermissionsGenerator {
             project
         );
 
-        let mut bindings: Vec<GcpIamBinding> = Vec::new();
+        let mut bindings = Vec::new();
+        let mut custom_roles = Vec::new();
+        let residual_entry_count = gcp_platform_permissions
+            .iter()
+            .filter(|entry| gcp_residual_permissions(&entry.grant).is_some_and(|p| !p.is_empty()))
+            .count();
+        let has_multiple_entries = residual_entry_count > 1;
+        for (index, platform_permission) in gcp_platform_permissions.iter().enumerate() {
+            validate_gcp_grant(permission_set, index, &platform_permission.grant)?;
 
-        // All entries in a permission set share the same custom role. We only
-        // need one binding per unique condition — entries without conditions
-        // collapse into a single unconditional binding.
-        let mut has_unconditional = false;
-
-        for platform_permission in gcp_platform_permissions {
             let binding_spec = match binding_target {
-                BindingTarget::Stack => match platform_permission.binding.stack.as_ref() {
-                    Some(spec) => spec,
-                    None => continue,
-                },
-                BindingTarget::Resource => match platform_permission.binding.resource.as_ref() {
-                    Some(spec) => spec,
-                    None => continue,
-                },
+                BindingTarget::Stack => platform_permission.binding.stack.as_ref(),
+                BindingTarget::Resource => platform_permission.binding.resource.as_ref(),
             };
 
-            if let Some(gcp_condition) = &binding_spec.condition {
-                let interpolated_condition = self.interpolate_condition(gcp_condition, context)?;
-                let condition = GcpIamCondition {
-                    title: interpolated_condition.title.clone(),
-                    description: format!("Limit to {}", interpolated_condition.title),
-                    expression: interpolated_condition.expression,
-                };
+            let Some(binding_spec) = binding_spec else {
+                continue;
+            };
 
-                // Only add if we don't already have a binding with this condition
-                let already_exists = bindings.iter().any(|b| {
-                    b.condition
-                        .as_ref()
-                        .map(|c| c.expression == condition.expression)
-                        .unwrap_or(false)
-                });
-                if !already_exists {
+            let target = binding_target_scope(binding_spec);
+            let resource_kind = binding_resource_kind(binding_spec);
+            let condition = self.binding_condition(binding_spec, context)?;
+
+            if let Some(predefined_roles) = &platform_permission.grant.predefined_roles {
+                for predefined_role in predefined_roles {
                     bindings.push(GcpIamBinding {
-                        role: full_role_name.clone(),
+                        role: predefined_role.clone(),
                         members: vec![service_account.clone()],
-                        condition: Some(condition),
+                        target,
+                        resource_kind,
+                        condition: condition.clone(),
                     });
                 }
-            } else if !has_unconditional {
-                has_unconditional = true;
-                bindings.push(GcpIamBinding {
-                    role: full_role_name.clone(),
-                    members: vec![service_account.clone()],
-                    condition: None,
-                });
+            }
+
+            let Some(permissions) = gcp_residual_permissions(&platform_permission.grant) else {
+                continue;
+            };
+            if permissions.is_empty() {
+                continue;
+            }
+
+            let custom_role = self.custom_role_for_permissions(
+                permission_set,
+                permissions.clone(),
+                context,
+                role_suffix(
+                    &platform_permission.grant,
+                    platform_permission.label.as_deref(),
+                    has_multiple_entries,
+                ),
+                platform_permission.label.as_deref(),
+                platform_permission.description.as_deref(),
+            )?;
+            bindings.push(GcpIamBinding {
+                role: custom_role.name.clone(),
+                members: vec![service_account.clone()],
+                target,
+                resource_kind,
+                condition,
+            });
+            if !custom_roles
+                .iter()
+                .any(|existing: &GcpCustomRole| existing.role_id == custom_role.role_id)
+            {
+                custom_roles.push(custom_role);
             }
         }
 
-        Ok(GcpIamBindings { bindings })
+        Ok(GcpGrantPlan {
+            bindings: dedupe_bindings(bindings),
+            custom_roles,
+        })
     }
 
-    /// Generate a human-readable role name
-    fn generate_role_name(&self, permission_set_id: &str) -> String {
-        permission_set_id
-            .split('/')
-            .map(|part| {
-                part.split('-')
-                    .map(|word| {
-                        let mut chars = word.chars();
-                        match chars.next() {
-                            None => String::new(),
-                            Some(first) => {
-                                first.to_uppercase().collect::<String>() + chars.as_str()
-                            }
-                        }
-                    })
-                    .collect::<Vec<String>>()
-                    .join(" ")
-            })
-            .collect::<Vec<String>>()
-            .join(" ")
+    fn binding_condition(
+        &self,
+        binding_spec: &GcpBindingSpec,
+        context: &PermissionContext,
+    ) -> Result<Option<GcpIamCondition>> {
+        let Some(gcp_condition) = binding_spec.condition.as_ref() else {
+            return Ok(None);
+        };
+
+        let interpolated = self.interpolate_condition(gcp_condition, context)?;
+        Ok(Some(GcpIamCondition {
+            title: interpolated.title.clone(),
+            description: format!("Limit to {}", interpolated.title),
+            expression: interpolated.expression,
+        }))
     }
 
-    /// Generate a valid GCP role ID
-    fn generate_role_id(&self, permission_set_id: &str) -> String {
-        // Convert to camelCase and remove special characters for valid GCP role ID
-        let all_parts: Vec<&str> = permission_set_id
-            .split('/')
-            .flat_map(|part| part.split('-'))
-            .collect();
-
-        all_parts
-            .iter()
-            .enumerate()
-            .map(|(i, word)| {
-                if i == 0 {
-                    word.to_lowercase()
-                } else {
-                    let mut chars = word.chars();
-                    match chars.next() {
-                        None => String::new(),
-                        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-                    }
-                }
-            })
-            .collect::<String>()
-    }
-
-    /// Interpolate variables in a GCP condition
+    /// Interpolate variables in a GCP condition.
     fn interpolate_condition(
         &self,
         condition: &alien_core::GcpCondition,
@@ -262,8 +422,314 @@ impl GcpRuntimePermissionsGenerator {
     }
 }
 
-impl Default for GcpRuntimePermissionsGenerator {
-    fn default() -> Self {
-        Self::new()
+fn gcp_residual_permissions(grant: &PermissionGrant) -> Option<&Vec<String>> {
+    grant
+        .residual_permissions
+        .as_ref()
+        .or(grant.permissions.as_ref())
+}
+
+fn validate_gcp_grant(
+    permission_set: &PermissionSet,
+    index: usize,
+    grant: &PermissionGrant,
+) -> Result<()> {
+    if let Some(predefined_roles) = &grant.predefined_roles {
+        if predefined_roles.is_empty() {
+            return Err(alien_error::AlienError::new(ErrorData::GeneratorError {
+                platform: "gcp".to_string(),
+                message: format!(
+                    "GCP permission set '{}' entry {} has an empty predefinedRoles list",
+                    permission_set.id, index
+                ),
+            }));
+        }
+        for role in predefined_roles {
+            if !role.starts_with("roles/") {
+                return Err(alien_error::AlienError::new(ErrorData::GeneratorError {
+                    platform: "gcp".to_string(),
+                    message: format!(
+                        "GCP permission set '{}' entry {} has invalid predefined role '{}'",
+                        permission_set.id, index, role
+                    ),
+                }));
+            }
+        }
     }
+
+    if let Some(permissions) = gcp_residual_permissions(grant) {
+        if permissions.is_empty() {
+            return Err(alien_error::AlienError::new(ErrorData::GeneratorError {
+                platform: "gcp".to_string(),
+                message: format!(
+                    "GCP permission set '{}' entry {} has an empty permissions list",
+                    permission_set.id, index
+                ),
+            }));
+        }
+    }
+
+    if grant.predefined_roles.is_none() && gcp_residual_permissions(grant).is_none() {
+        return Err(alien_error::AlienError::new(ErrorData::GeneratorError {
+            platform: "gcp".to_string(),
+            message: format!(
+                "GCP permission set '{}' entry {} has no permissions",
+                permission_set.id, index
+            ),
+        }));
+    }
+
+    Ok(())
+}
+
+fn generate_role_id(
+    permission_set: &PermissionSet,
+    context: &PermissionContext,
+    suffix: Option<&str>,
+    explicit_label: Option<&str>,
+) -> String {
+    let namespace = custom_role_namespace(context);
+    if has_explicit_label(explicit_label) {
+        let suffix = suffix.unwrap_or("custom");
+        let prefix = format!("role_{namespace}_");
+        let suffix = fit_role_suffix(suffix, GCP_CUSTOM_ROLE_ID_MAX_LEN - prefix.len());
+        return format!("{prefix}{suffix}");
+    }
+
+    let permission_set_slug = sanitize_role_segment(&permission_set.id.replace('/', "_"), 28);
+    match suffix {
+        Some(suffix) => {
+            let prefix = format!("role_{namespace}_{permission_set_slug}_");
+            let suffix = fit_role_suffix(suffix, GCP_CUSTOM_ROLE_ID_MAX_LEN - prefix.len());
+            format!("{prefix}{suffix}")
+        }
+        None => format!("role_{namespace}_{permission_set_slug}"),
+    }
+}
+
+/// Return the project custom-role prefix for all roles owned by this stack.
+pub fn custom_role_prefix(context: &PermissionContext) -> String {
+    format!("role_{}_", custom_role_namespace(context))
+}
+
+/// Return the project custom-role prefix for one permission set in this stack.
+pub fn custom_role_permission_set_prefix(
+    permission_set_id: &str,
+    context: &PermissionContext,
+) -> String {
+    let permission_set_slug = sanitize_role_segment(&permission_set_id.replace('/', "_"), 28);
+    format!("{}{permission_set_slug}", custom_role_prefix(context))
+}
+
+fn custom_role_namespace(context: &PermissionContext) -> String {
+    sanitize_role_segment(context.stack_prefix.as_deref().unwrap_or("stack"), 18)
+}
+
+fn custom_role_title(
+    permission_set: &PermissionSet,
+    context: &PermissionContext,
+    suffix: Option<&str>,
+    explicit_label: Option<&str>,
+) -> String {
+    let deployment_name = context.deployment_name.as_deref();
+    if has_explicit_label(explicit_label) {
+        let title = entry_title_label(explicit_label, &PermissionGrant::default());
+        return role_title(deployment_name, &title);
+    }
+
+    let label = permission_set_display_label(&permission_set.id);
+    let title = match suffix {
+        Some(suffix) => format!(
+            "{label} - {}",
+            entry_title_label(Some(suffix), &PermissionGrant::default())
+        ),
+        None => label,
+    };
+    role_title(deployment_name, &title)
+}
+
+fn custom_role_description(
+    permission_set: &PermissionSet,
+    context: &PermissionContext,
+    entry_description_override: Option<&str>,
+) -> String {
+    let stack_prefix = context.stack_prefix.as_deref().unwrap_or("unknown");
+    let description = entry_description(entry_description_override, &permission_set.description);
+    let description = description.trim_end_matches('.');
+    match context.deployment_name.as_deref() {
+        Some(deployment_name) if !deployment_name.trim().is_empty() => {
+            format!("Used by {deployment_name}. {description}. Resource prefix: {stack_prefix}.")
+        }
+        _ => format!("{description}. Resource prefix: {stack_prefix}."),
+    }
+}
+
+fn role_title(deployment_name: Option<&str>, title: &str) -> String {
+    match deployment_name {
+        Some(deployment_name) if !deployment_name.trim().is_empty() => {
+            format!("{deployment_name}: {title}")
+        }
+        _ => title.to_string(),
+    }
+}
+
+fn permission_set_display_label(permission_set_id: &str) -> String {
+    let mut words = Vec::new();
+    let mut current = String::new();
+
+    for ch in permission_set_id.chars() {
+        if ch.is_ascii_alphanumeric() {
+            current.push(ch.to_ascii_lowercase());
+        } else if !current.is_empty() {
+            words.push(std::mem::take(&mut current));
+        }
+    }
+    if !current.is_empty() {
+        words.push(current);
+    }
+
+    let mut label = words.join(" ");
+    if let Some(first) = label.get_mut(0..1) {
+        first.make_ascii_uppercase();
+    }
+    label
+}
+
+fn role_suffix(
+    grant: &PermissionGrant,
+    explicit_label: Option<&str>,
+    has_multiple_entries: bool,
+) -> Option<String> {
+    let explicit = has_explicit_label(explicit_label);
+    if explicit || has_multiple_entries {
+        let max_len = if explicit { 40 } else { 28 };
+        let mut label = entry_snake_label(explicit_label, grant);
+        if !explicit {
+            label.push('_');
+            label.push_str(&grant_suffix_hash(grant));
+        }
+        Some(sanitize_role_segment(&label, max_len))
+    } else {
+        None
+    }
+}
+
+fn grant_suffix_hash(grant: &PermissionGrant) -> String {
+    let mut values = Vec::new();
+    if let Some(predefined_roles) = &grant.predefined_roles {
+        values.extend(predefined_roles.iter().map(|role| format!("role:{role}")));
+    }
+    if let Some(permissions) = gcp_residual_permissions(grant) {
+        values.extend(
+            permissions
+                .iter()
+                .map(|permission| format!("permission:{permission}")),
+        );
+    }
+    values.sort();
+    stable_role_hash(&values.join("|"))
+}
+
+fn sanitize_role_segment(value: &str, max_len: usize) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut previous_underscore = false;
+    for ch in value.chars() {
+        let next = if ch.is_ascii_alphanumeric() {
+            ch.to_ascii_lowercase()
+        } else {
+            '_'
+        };
+        if next == '_' {
+            if !previous_underscore {
+                out.push(next);
+            }
+            previous_underscore = true;
+        } else {
+            out.push(next);
+            previous_underscore = false;
+        }
+    }
+
+    let trimmed = out.trim_matches('_');
+    let mut segment = if trimmed.is_empty() {
+        "x".to_string()
+    } else {
+        trimmed.to_string()
+    };
+    if segment.len() > max_len {
+        segment.truncate(max_len);
+        while segment.ends_with('_') {
+            segment.pop();
+        }
+    }
+    if segment.is_empty() {
+        "x".to_string()
+    } else {
+        segment
+    }
+}
+
+fn fit_role_suffix(value: &str, max_len: usize) -> String {
+    if value.len() <= max_len {
+        return value.to_string();
+    }
+
+    let hash = stable_role_hash(value);
+    if max_len <= ROLE_ID_HASH_LEN {
+        return hash[..max_len].to_string();
+    }
+
+    let prefix_len = max_len - ROLE_ID_HASH_LEN - 1;
+    let mut prefix = value.to_string();
+    prefix.truncate(prefix_len);
+    while prefix.ends_with('_') {
+        prefix.pop();
+    }
+
+    if prefix.is_empty() {
+        hash[..max_len].to_string()
+    } else {
+        format!("{prefix}_{hash}")
+    }
+}
+
+fn stable_role_hash(value: &str) -> String {
+    let mut hash = 0x811c9dc5_u32;
+    for byte in value.bytes() {
+        hash ^= u32::from(byte);
+        hash = hash.wrapping_mul(0x01000193);
+    }
+    format!("{hash:08x}")
+}
+
+fn binding_target_scope(binding_spec: &GcpBindingSpec) -> GcpBindingTargetScope {
+    let scope = binding_spec.scope.trim();
+    match scope.strip_prefix("projects/") {
+        Some(project_scope) if !project_scope.contains('/') => GcpBindingTargetScope::Project,
+        _ => GcpBindingTargetScope::CurrentResource,
+    }
+}
+
+fn binding_resource_kind(binding_spec: &GcpBindingSpec) -> Option<GcpBindingResourceKind> {
+    let scope = binding_spec.scope.trim();
+    if scope.contains("/topics/") {
+        return Some(GcpBindingResourceKind::PubsubTopic);
+    }
+    if scope.contains("/subscriptions/") {
+        return Some(GcpBindingResourceKind::PubsubSubscription);
+    }
+    if scope.contains("/repositories/") {
+        return Some(GcpBindingResourceKind::ArtifactRegistryRepository);
+    }
+    None
+}
+
+fn dedupe_bindings(bindings: Vec<GcpIamBinding>) -> Vec<GcpIamBinding> {
+    let mut deduped = Vec::new();
+    for binding in bindings {
+        if !deduped.contains(&binding) {
+            deduped.push(binding);
+        }
+    }
+    deduped
 }

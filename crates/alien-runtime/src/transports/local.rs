@@ -34,7 +34,9 @@ use alien_error::AlienError;
 /// Simple HTTP proxy that forwards all requests to the application.
 /// No CloudEvents parsing, no platform-specific middleware.
 pub struct LocalTransport {
+    bind_addr: [u8; 4],
     port: u16,
+    transport_name: &'static str,
     #[allow(dead_code)]
     control_server: Arc<ControlGrpcServer>,
     app_http_port: Option<u16>,
@@ -48,7 +50,24 @@ impl LocalTransport {
         shutdown_rx: broadcast::Receiver<()>,
     ) -> Self {
         Self {
+            bind_addr: [127, 0, 0, 1],
             port,
+            transport_name: "local",
+            control_server,
+            app_http_port: None,
+            shutdown_rx,
+        }
+    }
+
+    pub fn exposed(
+        port: u16,
+        control_server: Arc<ControlGrpcServer>,
+        shutdown_rx: broadcast::Receiver<()>,
+    ) -> Self {
+        Self {
+            bind_addr: [0, 0, 0, 0],
+            port,
+            transport_name: "http",
             control_server,
             app_http_port: None,
             shutdown_rx,
@@ -61,10 +80,15 @@ impl LocalTransport {
     }
 
     /// Run the transport.
-    pub async fn run(mut self) -> Result<()> {
-        let addr = SocketAddr::from(([127, 0, 0, 1], self.port));
+    pub async fn run(self) -> Result<()> {
+        let addr = SocketAddr::from((self.bind_addr, self.port));
+        let transport_name = self.transport_name;
 
-        info!(port = self.port, "Starting Local transport");
+        info!(
+            port = self.port,
+            transport = transport_name,
+            "Starting HTTP proxy transport"
+        );
 
         let state = TransportState {
             app_http_port: self.app_http_port,
@@ -78,29 +102,40 @@ impl LocalTransport {
 
         let listener = TcpListener::bind(addr).await.map_err(|e| {
             AlienError::new(ErrorData::TransportStartupFailed {
-                transport_name: "local".to_string(),
+                transport_name: transport_name.to_string(),
                 message: format!("Failed to bind to {}: {}", addr, e),
                 address: Some(addr.to_string()),
             })
         })?;
 
-        info!(addr = %addr, "Local transport listening");
+        info!(
+            addr = %addr,
+            transport = transport_name,
+            "HTTP proxy transport listening"
+        );
 
+        let mut shutdown_rx = self.shutdown_rx;
         axum::serve(listener, app)
             .with_graceful_shutdown(async move {
-                self.shutdown_rx.recv().await.ok();
-                info!("Local transport received shutdown signal");
+                shutdown_rx.recv().await.ok();
+                info!(
+                    transport = transport_name,
+                    "HTTP proxy transport received shutdown signal"
+                );
             })
             .await
             .map_err(|e| {
                 AlienError::new(ErrorData::TransportStartupFailed {
-                    transport_name: "local".to_string(),
+                    transport_name: transport_name.to_string(),
                     message: format!("Server error: {}", e),
                     address: Some(addr.to_string()),
                 })
             })?;
 
-        info!("Local transport shutdown complete");
+        info!(
+            transport = transport_name,
+            "HTTP proxy transport shutdown complete"
+        );
         Ok(())
     }
 }

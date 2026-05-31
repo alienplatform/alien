@@ -5,7 +5,6 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 mod commands;
 mod db;
 mod error;
-mod http;
 mod monitor;
 mod pii;
 
@@ -52,19 +51,10 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!("Started monitoring tasks");
 
-    // TODO: Remove HTTP server once Worker resource is implemented
-    // Worker resources don't require HTTP - they signal ready through gRPC
-    // For now, Function requires HTTP registration to signal ready state
-    let http_port = http::start_health_server(&ctx).await?;
-    tracing::info!(
-        port = http_port,
-        "HTTP health server started (temporary - will be removed with Worker resource)"
-    );
-
-    // Register ARC command handlers
+    // Register command handlers
     commands::register(&ctx, db);
 
-    tracing::info!("Registered ARC command handlers");
+    tracing::info!("Registered command handlers");
 
     // Run event loop (blocks until shutdown)
     ctx.run().await?;

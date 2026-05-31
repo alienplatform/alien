@@ -11,24 +11,33 @@ terraform {
       source  = "hashicorp/aws"
       version = ">= 5.0"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = ">= 3.6"
+    }
   }
 }
 
 === variables.tf ===
-variable "stack_name" {
+variable "resource_prefix" {
   type        = string
-  description = "Stable physical-name prefix for resources created by this module."
-}
-
-variable "deployment_name" {
-  type        = string
-  description = "Deployment name used when registering the resolved stack import. Defaults to stack_name."
+  description = "Optional stable physical resource prefix. Leave empty to generate one."
   default     = ""
+
+  validation {
+    condition     = var.resource_prefix == "" || (can(regex("^[a-z][a-z0-9-]{1,38}[a-z0-9]$", var.resource_prefix)) && length(regexall("--", var.resource_prefix)) == 0)
+    error_message = "resource_prefix must be 3-40 characters: lowercase letters, numbers, and hyphens; start with a letter; end with a letter or number; and not contain consecutive hyphens."
+  }
 }
 
-variable "deployment_group_token" {
+variable "name" {
   type        = string
-  description = "Deployment group token used when registering the resolved stack import."
+  description = "Human-readable application name shown in setup and cloud IAM review metadata."
+}
+
+variable "token" {
+  type        = string
+  description = "Install token from the application setup page. This is the same token used by the deploy CLI --token flag."
   sensitive   = true
 }
 
@@ -59,7 +68,7 @@ variable "managing_role_arn" {
 
 variable "managing_account_id" {
   type        = string
-  description = "AWS account ID hosting the manager. Referenced by stack-side IAM policies that scope cross-account ECR pulls. Empty disables those grants."
+  description = "Account ID hosting the manager. Referenced by resource-side IAM policies that scope cross-account image pulls. Empty disables those grants."
   default     = ""
 }
 
@@ -72,16 +81,20 @@ data "aws_caller_identity" "current" {}
 
 data "aws_region" "current" {}
 
+=== resource_prefix.tf ===
+resource "random_id" "resource_prefix" {
+  byte_length = 4
+}
+
 === locals.tf ===
 locals {
-  deployment_platform = "aws"
-  deployment_target   = "aws"
-  deployment_region   = data.aws_region.current.region
-  deployment_management_config = {
-    platform        = "aws"
-    managingRoleArn = var.managing_role_arn
-  }
-  deployment_stack_settings = jsondecode(var.stack_settings_json)
+  resource_prefix              = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
+  deployment_name              = var.name
+  deployment_platform          = "aws"
+  deployment_target            = "aws"
+  deployment_region            = data.aws_region.current.region
+  deployment_management_config = null
+  deployment_settings          = jsondecode(var.stack_settings_json)
   deployment_resources = [
     {
       id   = "registry"
@@ -91,7 +104,7 @@ locals {
         region           = data.aws_region.current.region
         registryId       = "${data.aws_caller_identity.current.account_id}:${data.aws_region.current.region}"
         registryEndpoint = aws_ecr_repository.registry.registry_id
-        repositoryPrefix = "${var.stack_name}-registry"
+        repositoryPrefix = "${local.resource_prefix}-registry"
         pullRoleArn      = aws_iam_role.registry_pull.arn
         pushRoleArn      = aws_iam_role.registry_push.arn
       }
@@ -101,7 +114,7 @@ locals {
 
 === registry.tf ===
 resource "aws_ecr_repository" "registry" {
-  name                 = "${var.stack_name}-registry"
+  name                 = "${local.resource_prefix}-registry"
   image_tag_mutability = "IMMUTABLE"
 
   image_scanning_configuration {
@@ -114,10 +127,10 @@ resource "aws_ecr_repository" "registry" {
 
   force_delete = false
   tags = {
-    "alien.dev/managed-by" = "alien"
-    "alien.dev/stack"      = var.stack_name
-    "alien.dev/resource"   = "registry"
-    AlienResourceType      = "artifact-registry"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "registry"
+    "resource-type" = "artifact-registry"
   }
 
   lifecycle {
@@ -131,24 +144,24 @@ resource "aws_ecr_lifecycle_policy" "registry" {
 }
 
 resource "aws_iam_role" "registry_pull" {
-  name               = "${var.stack_name}-registry-pull"
+  name               = length(format("%s-%s", local.resource_prefix, "registry-pull")) <= 64 ? format("%s-%s", local.resource_prefix, "registry-pull") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "registry-pull"), 0, 55), substr(sha1(format("%s-%s", local.resource_prefix, "registry-pull")), 0, 8))
   assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { AWS = var.managing_role_arn }, Action = "sts:AssumeRole" }] })
   tags = {
-    "alien.dev/managed-by" = "alien"
-    "alien.dev/stack"      = var.stack_name
-    "alien.dev/resource"   = "registry"
-    AlienResourceType      = "artifact-registry"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "registry"
+    "resource-type" = "artifact-registry"
   }
 }
 
 resource "aws_iam_role" "registry_push" {
-  name               = "${var.stack_name}-registry-push"
+  name               = length(format("%s-%s", local.resource_prefix, "registry-push")) <= 64 ? format("%s-%s", local.resource_prefix, "registry-push") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "registry-push"), 0, 55), substr(sha1(format("%s-%s", local.resource_prefix, "registry-push")), 0, 8))
   assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { AWS = var.managing_role_arn }, Action = "sts:AssumeRole" }] })
   tags = {
-    "alien.dev/managed-by" = "alien"
-    "alien.dev/stack"      = var.stack_name
-    "alien.dev/resource"   = "registry"
-    AlienResourceType      = "artifact-registry"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "registry"
+    "resource-type" = "artifact-registry"
   }
 }
 
@@ -165,16 +178,20 @@ resource "aws_iam_role_policy" "registry_push_policy" {
 }
 
 === import.tf ===
-resource "terraform_data" "deployment_stack_import" {
+resource "terraform_data" "deployment_import" {
   input = {
-    platform               = local.deployment_platform
-    deployment_group_token = var.deployment_group_token
-    deployment_name        = var.deployment_name == "" ? var.stack_name : var.deployment_name
-    stack_prefix           = var.stack_name
-    manager_url            = var.manager_url
-    management_config      = local.deployment_management_config
-    stack_settings         = local.deployment_stack_settings
-    resources              = local.deployment_resources
+    platform                    = local.deployment_platform
+    token                       = var.token
+    name                        = var.name
+    resource_prefix             = local.resource_prefix
+    setup_target                = ""
+    setup_import_format_version = 1
+    setup_fingerprint           = ""
+    setup_fingerprint_version   = 0
+    manager_url                 = var.manager_url
+    management_config           = local.deployment_management_config
+    stack_settings              = local.deployment_settings
+    resources                   = local.deployment_resources
   }
   depends_on = [
     aws_ecr_repository.registry,
@@ -192,9 +209,9 @@ output "deployment_target" {
   description = "Terraform module target."
 }
 
-output "deployment_stack_prefix" {
-  value       = var.stack_name
-  description = "Physical stack prefix."
+output "deployment_resource_prefix" {
+  value       = local.resource_prefix
+  description = "Physical resource prefix."
 }
 
 output "deployment_platform" {
@@ -207,13 +224,33 @@ output "deployment_region" {
   description = "Target cloud region or location."
 }
 
+output "deployment_setup_target" {
+  value       = ""
+  description = "Setup target."
+}
+
+output "deployment_setup_import_format_version" {
+  value       = 1
+  description = "Setup import payload format version."
+}
+
+output "deployment_setup_fingerprint" {
+  value       = ""
+  description = "Setup compatibility fingerprint."
+}
+
+output "deployment_setup_fingerprint_version" {
+  value       = 0
+  description = "Setup fingerprint algorithm version."
+}
+
 output "deployment_management_config" {
   value       = jsonencode(local.deployment_management_config)
   description = "Manager import ManagementConfig JSON."
 }
 
 output "deployment_stack_settings" {
-  value       = jsonencode(local.deployment_stack_settings)
+  value       = jsonencode(local.deployment_settings)
   description = "Manager import StackSettings JSON."
   sensitive   = true
 }
@@ -233,7 +270,7 @@ Run:
 ```bash
 terraform init -backend=false
 terraform validate
-terraform apply -var='stack_name=acme-ecr' -var='deployment_group_token=...'
+terraform apply -var='name=acme-ecr' -var='token=...'
 ```
 
 This module exposes `deployment_management_config` / `deployment_stack_settings` / `deployment_resources` for external registration flows.

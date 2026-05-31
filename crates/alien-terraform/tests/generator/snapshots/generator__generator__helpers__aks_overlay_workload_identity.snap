@@ -11,24 +11,33 @@ terraform {
       source  = "hashicorp/azurerm"
       version = ">= 3.100"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = ">= 3.6"
+    }
   }
 }
 
 === variables.tf ===
-variable "stack_name" {
+variable "resource_prefix" {
   type        = string
-  description = "Stable physical-name prefix for resources created by this module."
-}
-
-variable "deployment_name" {
-  type        = string
-  description = "Deployment name used when registering the resolved stack import. Defaults to stack_name."
+  description = "Optional stable physical resource prefix. Leave empty to generate one."
   default     = ""
+
+  validation {
+    condition     = var.resource_prefix == "" || (can(regex("^[a-z][a-z0-9-]{1,38}[a-z0-9]$", var.resource_prefix)) && length(regexall("--", var.resource_prefix)) == 0)
+    error_message = "resource_prefix must be 3-40 characters: lowercase letters, numbers, and hyphens; start with a letter; end with a letter or number; and not contain consecutive hyphens."
+  }
 }
 
-variable "deployment_group_token" {
+variable "name" {
   type        = string
-  description = "Deployment group token used when registering the resolved stack import."
+  description = "Human-readable application name shown in setup and cloud IAM review metadata."
+}
+
+variable "token" {
+  type        = string
+  description = "Install token from the application setup page. This is the same token used by the deploy CLI --token flag."
   sensitive   = true
 }
 
@@ -56,6 +65,11 @@ variable "azure_subscription_id" {
   description = "Azure subscription ID hosting the stack."
 }
 
+variable "azure_tenant_id" {
+  type        = string
+  description = "Azure tenant ID hosting the target AKS Kubernetes API identities."
+}
+
 variable "azure_resource_group_name" {
   type        = string
   description = "Azure resource group name."
@@ -64,25 +78,22 @@ variable "azure_resource_group_name" {
 variable "azure_managing_tenant_id" {
   type        = string
   description = "Azure tenant ID the manager uses for cross-tenant access."
-  default     = ""
-}
-
-variable "azure_management_principal_id" {
-  type        = string
-  description = "Optional service-principal object ID for local development fallback role assignment."
-  default     = ""
 }
 
 variable "azure_oidc_issuer" {
   type        = string
-  description = "OIDC issuer URL for Azure Federated Identity Credential. Empty disables FIC creation."
-  default     = ""
+  description = "OIDC issuer URL for Azure Federated Identity Credential."
 }
 
 variable "azure_oidc_subject" {
   type        = string
-  description = "OIDC subject claim for Azure Federated Identity Credential. Empty disables FIC creation."
-  default     = ""
+  description = "OIDC subject claim for Azure Federated Identity Credential."
+}
+
+variable "kubernetes_cluster_mode" {
+  type        = string
+  description = "Kubernetes cluster mode. Values: create or existing."
+  default     = "create"
 }
 
 variable "kubernetes_namespace" {
@@ -91,9 +102,15 @@ variable "kubernetes_namespace" {
   default     = "default"
 }
 
-variable "aks_oidc_issuer_url" {
+variable "aks_cluster_name" {
   type        = string
-  description = "OIDC issuer URL of the AKS cluster (read from `az aks show` and supplied by the customer)."
+  description = "Existing AKS cluster name that Helm will install into."
+  default     = ""
+}
+
+variable "aks_cluster_resource_group_name" {
+  type        = string
+  description = "Resource group containing the existing AKS cluster."
   default     = ""
 }
 
@@ -104,19 +121,25 @@ provider "azurerm" {
   features {}
 }
 
+=== resource_prefix.tf ===
+resource "random_id" "resource_prefix" {
+  byte_length = 4
+}
+
 === locals.tf ===
 locals {
-  deployment_platform = "azure"
-  deployment_target   = "aks"
-  deployment_region   = var.azure_location
-  deployment_management_config = {
-    platform              = "azure"
-    managingTenantId      = var.azure_managing_tenant_id
-    managementPrincipalId = var.azure_management_principal_id == "" ? null : var.azure_management_principal_id
-    oidcIssuer            = var.azure_oidc_issuer == "" ? null : var.azure_oidc_issuer
-    oidcSubject           = var.azure_oidc_subject == "" ? null : var.azure_oidc_subject
+  resource_prefix              = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
+  deployment_name              = var.name
+  deployment_platform          = "kubernetes"
+  deployment_base_platform     = "azure"
+  deployment_target            = "aks"
+  deployment_region            = var.azure_location
+  deployment_management_config = null
+  kubernetes_exposure = {
+    mode = "disabled"
   }
-  deployment_stack_settings = jsondecode(var.stack_settings_json)
+  deployment_kubernetes_settings = merge(try(jsondecode(var.stack_settings_json).kubernetes, {}), { exposure = jsondecode(try(jsondecode(var.stack_settings_json).kubernetes.exposure, null) == null ? jsonencode(local.kubernetes_exposure) : jsonencode(jsondecode(var.stack_settings_json).kubernetes.exposure)) })
+  deployment_settings            = merge(jsondecode(var.stack_settings_json), { kubernetes = local.deployment_kubernetes_settings })
   deployment_resources = [
     {
       id   = "default-resource-group"
@@ -140,9 +163,11 @@ locals {
       }
     }
   ]
+  kubernetes_kubeconfig      = ""
+  kubernetes_kube_context    = ""
   alien_kubernetes_namespace = var.kubernetes_namespace
   helm_service_accounts = {
-    execution_sa = {
+    execution = {
       annotations = {
         "azure.workload.identity/client-id" = azurerm_user_assigned_identity.execution_sa.client_id
       }
@@ -151,9 +176,9 @@ locals {
       }
     }
   }
-  helm_values = {
-    serviceAccounts = local.helm_service_accounts
-    stackSettings   = local.deployment_stack_settings
+  helm_manager_service_account = {
+    annotations = {}
+    labels      = {}
   }
 }
 
@@ -162,61 +187,38 @@ resource "azurerm_resource_group" "default_resource_group" {
   name     = var.azure_resource_group_name
   location = var.azure_location
   tags = {
-    "managed-by"          = "alien-dev"
-    "alien-stack-id"      = var.stack_name
-    "alien-resource-id"   = "default-resource-group"
-    "alien-resource-type" = "resource-group"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "default-resource-group"
+    "resource-type" = "resource-group"
   }
 }
 
 === execution_sa.tf ===
+data "azurerm_kubernetes_cluster" "target" {
+  name                = var.aks_cluster_name
+  resource_group_name = var.aks_cluster_resource_group_name
+}
+
 resource "azurerm_user_assigned_identity" "execution_sa" {
-  name                = "${var.stack_name}-execution-sa"
+  name                = "${local.resource_prefix}-execution-sa"
   resource_group_name = var.azure_resource_group_name
   location            = var.azure_location
   tags = {
-    "managed-by"          = "alien-dev"
-    "alien-stack-id"      = var.stack_name
-    "alien-resource-id"   = "execution-sa"
-    "alien-resource-type" = "service-account"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "execution-sa"
+    "resource-type" = "service-account"
   }
   depends_on = [
     azurerm_resource_group.default_resource_group
   ]
 }
 
-resource "azurerm_role_definition" "execution_sa_storage_data_read" {
-  name               = "${var.stack_name}-execution-sa-0"
-  role_definition_id = uuidv5("oid", "alien:azure:stack-role-def:${var.stack_name}-execution-sa-0")
+resource "azurerm_role_assignment" "execution_sa_storage_blob_data_reader___var_azure_resource_group_name__assignment" {
+  name               = uuidv5("oid", "deployment:azure:role-assign:execution-sa:storage_blob_data_reader___var_azure_resource_group_name_:${azurerm_user_assigned_identity.execution_sa.principal_id}")
   scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
-  description        = "Allows reading data from storage buckets and containers"
-
-  permissions {
-    actions = [
-      "Microsoft.Storage/storageAccounts/blobServices/containers/read",
-      "Microsoft.Storage/storageAccounts/blobServices/generateUserDelegationKey/action",
-      "Microsoft.Storage/storageAccounts/blobServices/read",
-      "Microsoft.Storage/storageAccounts/listKeys/action"
-    ]
-    data_actions = [
-      "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
-    ]
-    not_actions      = []
-    not_data_actions = []
-  }
-
-  assignable_scopes = [
-    "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
-  ]
-  depends_on = [
-    azurerm_resource_group.default_resource_group
-  ]
-}
-
-resource "azurerm_role_assignment" "execution_sa_storage_data_read_assignment" {
-  name               = uuidv5("oid", "alien:azure:stack-role-assign:${azurerm_role_definition.execution_sa_storage_data_read.role_definition_resource_id}:${azurerm_user_assigned_identity.execution_sa.principal_id}")
-  scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
-  role_definition_id = azurerm_role_definition.execution_sa_storage_data_read.role_definition_resource_id
+  role_definition_id = "/subscriptions/${var.azure_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/2a2b9908-6ea1-4ae2-8e65-a410df84e7d1"
   principal_id       = azurerm_user_assigned_identity.execution_sa.principal_id
   depends_on = [
     azurerm_resource_group.default_resource_group
@@ -224,36 +226,40 @@ resource "azurerm_role_assignment" "execution_sa_storage_data_read_assignment" {
 }
 
 resource "azurerm_federated_identity_credential" "execution_sa_federated" {
-  name                = "${var.stack_name}-execution_sa"
+  name                = "${local.resource_prefix}-execution_sa"
   resource_group_name = var.azure_resource_group_name
   parent_id           = azurerm_user_assigned_identity.execution_sa.id
   audience = [
     "api://AzureADTokenExchange"
   ]
-  issuer  = var.aks_oidc_issuer_url
-  subject = "system:serviceaccount:${var.kubernetes_namespace}:execution_sa"
+  issuer  = data.azurerm_kubernetes_cluster.target.oidc_issuer_url
+  subject = "system:serviceaccount:${var.kubernetes_namespace}:${local.resource_prefix}-execution-sa"
   depends_on = [
     azurerm_resource_group.default_resource_group
   ]
 }
 
 === import.tf ===
-resource "terraform_data" "deployment_stack_import" {
+resource "terraform_data" "deployment_import" {
   input = {
-    platform               = local.deployment_platform
-    deployment_group_token = var.deployment_group_token
-    deployment_name        = var.deployment_name == "" ? var.stack_name : var.deployment_name
-    stack_prefix           = var.stack_name
-    manager_url            = var.manager_url
-    management_config      = local.deployment_management_config
-    stack_settings         = local.deployment_stack_settings
-    resources              = local.deployment_resources
+    platform                    = local.deployment_platform
+    token                       = var.token
+    name                        = var.name
+    resource_prefix             = local.resource_prefix
+    setup_target                = ""
+    setup_import_format_version = 1
+    setup_fingerprint           = ""
+    setup_fingerprint_version   = 0
+    manager_url                 = var.manager_url
+    management_config           = local.deployment_management_config
+    stack_settings              = local.deployment_settings
+    resources                   = local.deployment_resources
+    basePlatform                = local.deployment_base_platform
   }
   depends_on = [
     azurerm_resource_group.default_resource_group,
     azurerm_user_assigned_identity.execution_sa,
-    azurerm_role_definition.execution_sa_storage_data_read,
-    azurerm_role_assignment.execution_sa_storage_data_read_assignment,
+    azurerm_role_assignment.execution_sa_storage_blob_data_reader___var_azure_resource_group_name__assignment,
     azurerm_federated_identity_credential.execution_sa_federated
   ]
 }
@@ -264,9 +270,9 @@ output "deployment_target" {
   description = "Terraform module target."
 }
 
-output "deployment_stack_prefix" {
-  value       = var.stack_name
-  description = "Physical stack prefix."
+output "deployment_resource_prefix" {
+  value       = local.resource_prefix
+  description = "Physical resource prefix."
 }
 
 output "deployment_platform" {
@@ -279,13 +285,33 @@ output "deployment_region" {
   description = "Target cloud region or location."
 }
 
+output "deployment_setup_target" {
+  value       = ""
+  description = "Setup target."
+}
+
+output "deployment_setup_import_format_version" {
+  value       = 1
+  description = "Setup import payload format version."
+}
+
+output "deployment_setup_fingerprint" {
+  value       = ""
+  description = "Setup compatibility fingerprint."
+}
+
+output "deployment_setup_fingerprint_version" {
+  value       = 0
+  description = "Setup fingerprint algorithm version."
+}
+
 output "deployment_management_config" {
   value       = jsonencode(local.deployment_management_config)
   description = "Manager import ManagementConfig JSON."
 }
 
 output "deployment_stack_settings" {
-  value       = jsonencode(local.deployment_stack_settings)
+  value       = jsonencode(local.deployment_settings)
   description = "Manager import StackSettings JSON."
   sensitive   = true
 }
@@ -295,10 +321,20 @@ output "deployment_resources" {
   description = "Manager import resources JSON."
 }
 
-output "helm_values" {
-  value       = jsonencode(local.helm_values)
-  description = "Helm values JSON for the manager-fetch Kubernetes install."
+output "deployment_base_platform" {
+  value       = local.deployment_base_platform
+  description = "Base cloud platform for Kubernetes targets."
+}
+
+output "kubernetes_kubeconfig" {
+  value       = local.kubernetes_kubeconfig
+  description = "Kubeconfig for managed Kubernetes clusters created by this module."
   sensitive   = true
+}
+
+output "kubernetes_kube_context" {
+  value       = local.kubernetes_kube_context
+  description = "Kube context for managed Kubernetes clusters created by this module."
 }
 
 === README.md ===
@@ -311,7 +347,7 @@ Run:
 ```bash
 terraform init -backend=false
 terraform validate
-terraform apply -var='stack_name=aks-overlay' -var='deployment_group_token=...'
+terraform apply -var='name=aks-overlay' -var='token=...'
 ```
 
 This module exposes `deployment_management_config` / `deployment_stack_settings` / `deployment_resources` for external registration flows.

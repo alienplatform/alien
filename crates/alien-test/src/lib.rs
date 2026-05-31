@@ -7,12 +7,12 @@
 //! ## Quick start
 //!
 //! ```rust,ignore
-//! use alien_test::{DeploymentModel, Language, e2e};
+//! use alien_test::{DeploymentModel, TestApp, e2e};
 //! use alien_core::Platform;
 //!
 //! #[tokio::test]
 //! async fn my_e2e_test() {
-//!     let ctx = e2e::setup(Platform::Aws, DeploymentModel::Push, Language::Rust)
+//!     let ctx = e2e::setup(Platform::Aws, DeploymentModel::Push, TestApp::ComprehensiveRust)
 //!         .await
 //!         .unwrap();
 //!     // Run checks against ctx.deployment ...
@@ -26,6 +26,8 @@ pub mod config;
 pub mod deployment;
 pub mod distribution;
 pub mod e2e;
+pub mod helm_values;
+pub mod managed_secret;
 pub mod manager;
 pub mod ngrok;
 pub mod setup;
@@ -37,6 +39,6 @@ pub use cleanup::{
 };
 pub use config::TestConfig;
 pub use deployment::TestDeployment;
-pub use e2e::{Binding, DeploymentModel, DistributionFlow, Language, TestContext};
+pub use e2e::{Binding, DeploymentModel, DistributionFlow, TestApp, TestContext};
 pub use manager::TestManager;
 pub use setup::{setup_target, teardown_target};

@@ -131,6 +131,40 @@ pub fn client_with_header(auth_value: &str) -> Result<Client> {
         })?)
 }
 
+/// Build a Client that carries both the Authorization bearer and the
+/// caller's workspace name on every request. User OAuth tokens don't
+/// carry a workspace claim, so the manager needs this hint to know which
+/// membership to resolve when forwarding to `/v1/whoami`.
+pub fn client_with_auth_and_workspace(auth_value: &str, workspace: &str) -> Result<Client> {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_str(auth_value)
+            .into_alien_error()
+            .context(ErrorData::AuthenticationFailed {
+                reason: "Invalid authorization header value".to_string(),
+            })?,
+    );
+    headers.insert(
+        "x-alien-workspace",
+        HeaderValue::from_str(workspace)
+            .into_alien_error()
+            .context(ErrorData::AuthenticationFailed {
+                reason:
+                    "Invalid workspace name (contains characters not allowed in an HTTP header)"
+                        .to_string(),
+            })?,
+    );
+    headers.insert(USER_AGENT, HeaderValue::from_static("alien-cli"));
+    Ok(Client::builder()
+        .default_headers(headers)
+        .build()
+        .into_alien_error()
+        .context(ErrorData::NetworkError {
+            message: "Failed to create HTTP client".to_string(),
+        })?)
+}
+
 /// Build an AuthHttp instance with both reqwest client and SDK client
 pub fn build_auth_http(client: Client, base_url: String, bearer_token: Option<String>) -> AuthHttp {
     let sdk_client = SdkClient::new_with_client(&base_url, client.clone());

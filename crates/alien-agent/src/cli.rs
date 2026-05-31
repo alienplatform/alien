@@ -10,6 +10,7 @@ use alien_core::Platform;
 use alien_error::{AlienError, Context, IntoAlienError};
 use clap::Parser;
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -33,6 +34,9 @@ The Agent:
 pub struct Args {
     #[arg(long, env = "PLATFORM", value_parser = parse_platform)]
     pub platform: Platform,
+
+    #[arg(long, env = "BASE_PLATFORM", value_parser = parse_platform)]
+    pub base_platform: Option<Platform>,
 
     #[arg(long, env = "SYNC_URL")]
     pub sync_url: Option<String>,
@@ -78,6 +82,9 @@ pub struct Args {
 
     #[arg(long, env = "OTLP_PORT", default_value = "4318")]
     pub otlp_port: u16,
+
+    #[arg(long, env = "OTLP_HOST", default_value = "127.0.0.1")]
+    pub otlp_host: IpAddr,
 
     #[arg(short, long)]
     pub verbose: bool,
@@ -259,11 +266,13 @@ async fn run(args: Args, init_hook: InitHook) -> Result<()> {
 
     let agent_config = AgentConfig::builder()
         .platform(args.platform)
+        .maybe_base_platform(args.base_platform)
         .maybe_sync(sync_config)
         .data_dir(data_dir)
         .encryption_key(encryption_key)
         .sync_interval_seconds(args.sync_interval)
         .otlp_server_port(args.otlp_port)
+        .otlp_server_host(args.otlp_host)
         .maybe_namespace(args.namespace)
         .maybe_public_urls(public_urls)
         .stack_settings(stack_settings)
@@ -603,10 +612,10 @@ async fn read_secret_file(path: &std::path::Path, label: &str) -> Result<String>
             },
         )?;
         let mode = metadata.permissions().mode() & 0o777;
-        if mode != 0o600 {
+        if !is_secret_file_mode_allowed(mode) {
             return Err(AlienError::new(ErrorData::ConfigurationError {
                 message: format!(
-                    "{} file '{}' has permissions {:o}; required 0600",
+                    "{} file '{}' has permissions {:o}; required owner-readable with no group write or world access",
                     label,
                     path.display(),
                     mode
@@ -630,6 +639,17 @@ async fn read_secret_file(path: &std::path::Path, label: &str) -> Result<String>
     Ok(trimmed)
 }
 
+#[cfg(unix)]
+fn is_secret_file_mode_allowed(mode: u32) -> bool {
+    let mode = mode & 0o777;
+    let has_owner_read = mode & 0o400 != 0;
+    let has_group_write_or_execute = mode & 0o030 != 0;
+    let has_world_access = mode & 0o007 != 0;
+    let has_owner_execute = mode & 0o100 != 0;
+
+    has_owner_read && !has_owner_execute && !has_group_write_or_execute && !has_world_access
+}
+
 async fn load_encryption_key(file: Option<&std::path::Path>) -> Result<String> {
     if let Some(path) = file {
         return read_secret_file(path, "encryption key").await;
@@ -649,5 +669,26 @@ async fn load_sync_token(file: Option<&std::path::Path>) -> Result<Option<String
     match std::env::var("SYNC_TOKEN") {
         Ok(value) if !value.is_empty() => Ok(Some(value)),
         _ => Ok(None),
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::is_secret_file_mode_allowed;
+
+    #[test]
+    fn secret_file_mode_allows_kubernetes_fs_group_read() {
+        assert!(is_secret_file_mode_allowed(0o600));
+        assert!(is_secret_file_mode_allowed(0o400));
+        assert!(is_secret_file_mode_allowed(0o640));
+        assert!(is_secret_file_mode_allowed(0o440));
+    }
+
+    #[test]
+    fn secret_file_mode_rejects_wider_access() {
+        assert!(!is_secret_file_mode_allowed(0o660));
+        assert!(!is_secret_file_mode_allowed(0o644));
+        assert!(!is_secret_file_mode_allowed(0o700));
+        assert!(!is_secret_file_mode_allowed(0o040));
     }
 }

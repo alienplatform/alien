@@ -1,7 +1,7 @@
 use alien_aws_clients::AwsClientConfig;
 use alien_core::{
-    DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBindings, Function, FunctionCode,
-    LifecycleRule, ResourceLifecycle, Stack, StackSettings, StackState, Storage,
+    DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBindings, LifecycleRule,
+    ResourceLifecycle, Stack, StackSettings, StackState, Storage, Worker, WorkerCode,
 };
 use std::collections::HashMap;
 use std::time::Duration;
@@ -25,8 +25,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }])
         .build();
 
-    let image_processor = Function::new("my-step-processor".to_string())
-        .code(FunctionCode::Image {
+    let image_processor = Worker::new("my-step-processor".to_string())
+        .code(WorkerCode::Image {
             image: "your-repo/image-processor:latest".to_string(),
         })
         .permissions("execution".to_string())

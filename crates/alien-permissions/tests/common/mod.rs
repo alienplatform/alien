@@ -10,6 +10,8 @@ use indexmap::IndexMap;
 pub fn create_test_context() -> PermissionContext {
     PermissionContext::new()
         .with_stack_prefix("my-stack")
+        .with_stack_name("byoc-database")
+        .with_deployment_name("Payment Processor")
         .with_resource_name("my-stack-payments-data")
         .with_project_name("my-project")
         .with_project_number("123456789012")
@@ -31,6 +33,8 @@ pub fn create_aws_storage_data_read_permission_set() -> PermissionSet {
         description: "Allows reading data from storage resources".to_string(),
         platforms: PlatformPermissions {
             aws: Some(vec![AwsPlatformPermission {
+                label: None,
+                description: None,
                 effect: Default::default(),
                 grant: PermissionGrant {
                     actions: Some(vec![
@@ -39,6 +43,8 @@ pub fn create_aws_storage_data_read_permission_set() -> PermissionSet {
                         "s3:ListBucket".to_string(),
                     ]),
                     permissions: None,
+                    predefined_roles: None,
+                    residual_permissions: None,
                     data_actions: None,
                 },
                 binding: BindingConfiguration {
@@ -77,6 +83,8 @@ pub fn create_aws_storage_data_read_permission_set_with_condition() -> Permissio
         description: "Allows reading data from storage resources".to_string(),
         platforms: PlatformPermissions {
             aws: Some(vec![AwsPlatformPermission {
+                label: None,
+                description: None,
                 effect: Default::default(),
                 grant: PermissionGrant {
                     actions: Some(vec![
@@ -85,6 +93,8 @@ pub fn create_aws_storage_data_read_permission_set_with_condition() -> Permissio
                         "s3:ListBucket".to_string(),
                     ]),
                     permissions: None,
+                    predefined_roles: None,
+                    residual_permissions: None,
                     data_actions: None,
                 },
                 binding: BindingConfiguration {
@@ -119,13 +129,17 @@ pub fn create_gcp_storage_data_read_permission_set() -> PermissionSet {
         platforms: PlatformPermissions {
             aws: None,
             gcp: Some(vec![GcpPlatformPermission {
+                label: None,
+                description: None,
                 grant: PermissionGrant {
                     actions: None,
                     permissions: Some(vec![
+                        "storage.buckets.get".to_string(),
                         "storage.objects.get".to_string(),
                         "storage.objects.list".to_string(),
-                        "storage.buckets.get".to_string(),
                     ]),
+                    predefined_roles: None,
+                    residual_permissions: None,
                     data_actions: None,
                 },
                 binding: BindingConfiguration {
@@ -158,23 +172,95 @@ pub fn create_azure_storage_data_read_permission_set() -> PermissionSet {
         platforms: PlatformPermissions {
             aws: None,
             gcp: None,
-            azure: Some(vec![
-                AzurePlatformPermission {
-                    grant: PermissionGrant {
-                        actions: Some(vec!["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read".to_string()]),
-                        permissions: None,
-                        data_actions: Some(vec!["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read".to_string()]),
-                    },
-                    binding: BindingConfiguration {
-                        stack: Some(AzureBindingSpec {
-                            scope: "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}".to_string(),
-                        }),
-                        resource: Some(AzureBindingSpec {
-                            scope: "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${storageAccountName}".to_string(),
-                        }),
-                    },
-                }
-            ]),
+            azure: Some(vec![AzurePlatformPermission {
+                label: None,
+                description: None,
+                grant: PermissionGrant {
+                    actions: None,
+                    permissions: None,
+                    predefined_roles: Some(vec!["Storage Blob Data Reader".to_string()]),
+                    residual_permissions: None,
+                    data_actions: None,
+                },
+                binding: BindingConfiguration {
+                    stack: Some(AzureBindingSpec {
+                        scope: "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+                            .to_string(),
+                    }),
+                    resource: Some(AzureBindingSpec {
+                        scope: "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${storageAccountName}".to_string(),
+                    }),
+                },
+            }]),
+        },
+    }
+}
+
+/// Test helper to create Azure custom-only permission set
+#[allow(dead_code)]
+pub fn create_azure_custom_permission_set() -> PermissionSet {
+    PermissionSet {
+        id: "storage/metadata-read".to_string(),
+        description: "Allows reading storage account metadata".to_string(),
+        platforms: PlatformPermissions {
+            aws: None,
+            gcp: None,
+            azure: Some(vec![AzurePlatformPermission {
+                label: None,
+                description: None,
+                grant: PermissionGrant {
+                    actions: Some(vec!["Microsoft.Storage/storageAccounts/read".to_string()]),
+                    permissions: None,
+                    predefined_roles: None,
+                    residual_permissions: None,
+                    data_actions: None,
+                },
+                binding: BindingConfiguration {
+                    stack: Some(AzureBindingSpec {
+                        scope: "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+                            .to_string(),
+                    }),
+                    resource: Some(AzureBindingSpec {
+                        scope: "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${storageAccountName}".to_string(),
+                    }),
+                },
+            }]),
+        },
+    }
+}
+
+/// Test helper to create Azure hybrid predefined + residual custom permission set
+#[allow(dead_code)]
+pub fn create_azure_hybrid_permission_set() -> PermissionSet {
+    PermissionSet {
+        id: "artifact-registry/provision".to_string(),
+        description: "Allows provisioning artifact registries".to_string(),
+        platforms: PlatformPermissions {
+            aws: None,
+            gcp: None,
+            azure: Some(vec![AzurePlatformPermission {
+                label: None,
+                description: None,
+                grant: PermissionGrant {
+                    actions: Some(vec![
+                        "Microsoft.ContainerRegistry/registries/write".to_string(),
+                        "Microsoft.ContainerRegistry/registries/delete".to_string(),
+                    ]),
+                    permissions: None,
+                    predefined_roles: Some(vec!["AcrPush".to_string()]),
+                    residual_permissions: None,
+                    data_actions: None,
+                },
+                binding: BindingConfiguration {
+                    stack: Some(AzureBindingSpec {
+                        scope: "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+                            .to_string(),
+                    }),
+                    resource: Some(AzureBindingSpec {
+                        scope: "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ContainerRegistry/registries/${resourceName}".to_string(),
+                    }),
+                },
+            }]),
         },
     }
 }
@@ -187,10 +273,14 @@ pub fn create_permission_set_missing_actions() -> PermissionSet {
         description: "Test permission set with missing actions".to_string(),
         platforms: PlatformPermissions {
             aws: Some(vec![AwsPlatformPermission {
+                label: None,
+                description: None,
                 effect: Default::default(),
                 grant: PermissionGrant {
                     actions: None, // Missing actions for AWS
                     permissions: None,
+                    predefined_roles: None,
+                    residual_permissions: None,
                     data_actions: None,
                 },
                 binding: BindingConfiguration {
@@ -216,9 +306,13 @@ pub fn create_permission_set_missing_gcp_permissions() -> PermissionSet {
         platforms: PlatformPermissions {
             aws: None,
             gcp: Some(vec![GcpPlatformPermission {
+                label: None,
+                description: None,
                 grant: PermissionGrant {
                     actions: None,
                     permissions: None, // Missing permissions for GCP
+                    predefined_roles: None,
+                    residual_permissions: None,
                     data_actions: None,
                 },
                 binding: BindingConfiguration {
@@ -259,6 +353,8 @@ pub fn create_aws_cloudformation_permission_set() -> PermissionSet {
         description: "Allows reading data from storage resources".to_string(),
         platforms: PlatformPermissions {
             aws: Some(vec![AwsPlatformPermission {
+                label: None,
+                description: None,
                 effect: Default::default(),
                 grant: PermissionGrant {
                     actions: Some(vec![
@@ -267,6 +363,8 @@ pub fn create_aws_cloudformation_permission_set() -> PermissionSet {
                         "s3:ListBucket".to_string(),
                     ]),
                     permissions: None,
+                    predefined_roles: None,
+                    residual_permissions: None,
                     data_actions: None,
                 },
                 binding: BindingConfiguration {
@@ -301,18 +399,22 @@ pub fn create_aws_lambda_permission_set() -> PermissionSet {
     condition.insert("StringEquals".to_string(), string_equals);
 
     PermissionSet {
-        id: "function/execute".to_string(),
+        id: "worker/execute".to_string(),
         description: "Allows executing Lambda functions and pulling container images".to_string(),
         platforms: PlatformPermissions {
             aws: Some(vec![
                 AwsPlatformPermission {
+                label: None,
+                description: None,
                     effect: Default::default(),
                     grant: PermissionGrant {
                         actions: Some(vec![
-                            "lambda:InvokeFunction".to_string(),
+                            "lambda:InvokeWorker".to_string(),
                         ]),
                         permissions: None,
-                        data_actions: None,
+                        predefined_roles: None,
+                    residual_permissions: None,
+                    data_actions: None,
                     },
                     binding: BindingConfiguration {
                         stack: Some(AwsBindingSpec {
@@ -331,6 +433,8 @@ pub fn create_aws_lambda_permission_set() -> PermissionSet {
                 },
                 // Cross-service permission for ECR
                 AwsPlatformPermission {
+                label: None,
+                description: None,
                     effect: Default::default(),
                     grant: PermissionGrant {
                         actions: Some(vec![
@@ -338,7 +442,9 @@ pub fn create_aws_lambda_permission_set() -> PermissionSet {
                             "ecr:GetDownloadUrlForLayer".to_string(),
                         ]),
                         permissions: None,
-                        data_actions: None,
+                        predefined_roles: None,
+                    residual_permissions: None,
+                    data_actions: None,
                     },
                     binding: BindingConfiguration {
                         stack: Some(AwsBindingSpec {

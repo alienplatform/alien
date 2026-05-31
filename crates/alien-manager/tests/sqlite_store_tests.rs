@@ -66,10 +66,13 @@ async fn create_test_deployment(
         .create_deployment(
             &test_subject(),
             CreateDeploymentParams {
+                deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
                 name: name.to_string(),
                 deployment_group_id: group_id.to_string(),
                 platform,
+                base_platform: None,
                 stack_settings: StackSettings::default(),
+                stack_state: None,
                 environment_variables: None,
                 deployment_token: None,
             },
@@ -378,6 +381,110 @@ async fn acquire_and_release() {
 }
 
 #[tokio::test]
+async fn acquire_does_not_pick_failed_status_without_retry_request() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db.clone());
+    let group_id = create_test_group(&store).await;
+    let dep = create_test_deployment(&store, &group_id, "dep", Platform::Aws).await;
+
+    let sql = format!(
+        "UPDATE deployments SET status = 'delete-failed', retry_requested = 0 WHERE id = '{}'",
+        dep.id
+    );
+    db.conn().lock().await.execute(&sql, ()).await.unwrap();
+
+    let acquired = store
+        .acquire(
+            &test_subject(),
+            "session-1",
+            &DeploymentFilter {
+                statuses: Some(vec!["delete-failed".to_string()]),
+                deployment_ids: Some(vec![dep.id.clone()]),
+                ..Default::default()
+            },
+            10,
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        acquired.is_empty(),
+        "failed deployments without retry_requested must not be acquired"
+    );
+}
+
+#[tokio::test]
+async fn acquire_picks_failed_status_with_retry_request_once() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db.clone());
+    let group_id = create_test_group(&store).await;
+    let dep = create_test_deployment(&store, &group_id, "dep", Platform::Aws).await;
+
+    let sql = format!(
+        "UPDATE deployments SET status = 'delete-failed', retry_requested = 1 WHERE id = '{}'",
+        dep.id
+    );
+    db.conn().lock().await.execute(&sql, ()).await.unwrap();
+
+    let acquired = store
+        .acquire(
+            &test_subject(),
+            "session-1",
+            &DeploymentFilter {
+                statuses: Some(vec!["delete-failed".to_string()]),
+                deployment_ids: Some(vec![dep.id.clone()]),
+                ..Default::default()
+            },
+            10,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(acquired.len(), 1);
+    assert_eq!(acquired[0].deployment.id, dep.id);
+    assert!(
+        acquired[0].deployment.retry_requested,
+        "the acquired record must tell the state machine this tick is a retry"
+    );
+
+    let fetched = store
+        .get_deployment(&test_subject(), &dep.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        !fetched.retry_requested,
+        "acquisition must consume the persisted retry request"
+    );
+}
+
+#[tokio::test]
+async fn acquire_picks_active_status_without_retry_request() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db);
+    let group_id = create_test_group(&store).await;
+    let dep = create_test_deployment(&store, &group_id, "dep", Platform::Aws).await;
+
+    let acquired = store
+        .acquire(
+            &test_subject(),
+            "session-1",
+            &DeploymentFilter {
+                statuses: Some(vec!["pending".to_string()]),
+                deployment_ids: Some(vec![dep.id.clone()]),
+                ..Default::default()
+            },
+            10,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(acquired.len(), 1);
+    assert_eq!(acquired[0].deployment.id, dep.id);
+    assert!(!acquired[0].deployment.retry_requested);
+}
+
+#[tokio::test]
 async fn concurrent_acquire() {
     let db = fresh_db().await;
     let store = SqliteDeploymentStore::new(db);
@@ -488,6 +595,7 @@ async fn reconcile_succeeds_under_other_session_lock() {
                 session: "agent-sync".to_string(),
                 state,
                 update_heartbeat: false,
+                heartbeats: vec![],
                 error: None,
                 suggested_delay_ms: None,
             },
@@ -504,6 +612,71 @@ async fn reconcile_succeeds_under_other_session_lock() {
     assert_eq!(fetched.status, "running");
     // The lock is unaffected — still held by session-A.
     assert_eq!(fetched.locked_by.as_deref(), Some("session-A"));
+}
+
+#[tokio::test]
+async fn reconcile_refreshes_owned_lock_lease() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db.clone());
+    let group_id = create_test_group(&store).await;
+
+    let dep = create_test_deployment(&store, &group_id, "dep", Platform::Aws).await;
+
+    let acquired = store
+        .acquire(
+            &test_subject(),
+            "session-A",
+            &DeploymentFilter::default(),
+            10,
+        )
+        .await
+        .unwrap();
+    assert_eq!(acquired.len(), 1);
+
+    let stale_time = "2020-01-01T00:00:00+00:00";
+    let lock_sql = format!(
+        "UPDATE deployments SET locked_at = '{}' WHERE id = '{}'",
+        stale_time, dep.id
+    );
+    db.conn().lock().await.execute(&lock_sql, ()).await.unwrap();
+
+    let state = DeploymentState {
+        status: DeploymentStatus::InitialSetup,
+        platform: Platform::Aws,
+        current_release: None,
+        target_release: None,
+        stack_state: None,
+        environment_info: None,
+        runtime_metadata: None,
+        retry_requested: false,
+        protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+    };
+    store
+        .reconcile(
+            &test_subject(),
+            ReconcileData {
+                deployment_id: dep.id.clone(),
+                session: "session-A".to_string(),
+                state,
+                update_heartbeat: false,
+                heartbeats: vec![],
+                error: None,
+                suggested_delay_ms: None,
+            },
+        )
+        .await
+        .expect("lock owner reconcile should refresh the lock lease");
+
+    let fetched = store
+        .get_deployment(&test_subject(), &dep.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(fetched.locked_by.as_deref(), Some("session-A"));
+    assert!(
+        fetched.locked_at.unwrap().to_rfc3339().as_str() > stale_time,
+        "reconcile by the lock owner should move locked_at forward"
+    );
 }
 
 #[tokio::test]

@@ -47,7 +47,6 @@ pub struct InvokeOptions {
 pub struct CommandsClient {
     manager_url: String,
     deployment_id: String,
-    token: String,
     http_client: reqwest::Client,
     config: CommandsClientConfig,
 }
@@ -58,14 +57,11 @@ pub struct CommandsClient {
 #[serde(rename_all = "camelCase")]
 struct CreateCommandResponse {
     command_id: String,
-    state: String,
-    next: String,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CommandStatusResponse {
-    command_id: String,
     state: String,
     #[serde(default)]
     response: Option<CommandResponseBody>,
@@ -74,7 +70,6 @@ struct CommandStatusResponse {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CommandResponseBody {
-    status: String,
     #[serde(default)]
     response: Option<BodySpecResponse>,
     #[serde(default)]
@@ -147,7 +142,6 @@ impl CommandsClient {
         Self {
             manager_url: manager_url.trim_end_matches('/').to_string(),
             deployment_id: deployment_id.to_string(),
-            token: token.to_string(),
             http_client,
             config,
         }
@@ -274,10 +268,7 @@ impl CommandsClient {
     }
 
     /// Poll for a command's status.
-    pub async fn get_status(
-        &self,
-        command_id: &str,
-    ) -> Result<CommandStatusResponse, CommandError> {
+    async fn get_status(&self, command_id: &str) -> Result<CommandStatusResponse, CommandError> {
         let url = format!("{}/commands/{}", self.manager_url, command_id);
         let resp = self.http_client.get(&url).send().await?;
 

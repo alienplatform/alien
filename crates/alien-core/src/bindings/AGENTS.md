@@ -53,7 +53,7 @@ Each resource type has its own binding enum:
 - `KvBinding` - DynamoDB, Firestore, Table Storage, Redis, Local KV
 - `VaultBinding` - Parameter Store, Secret Manager, Key Vault, Local Vault
 - `QueueBinding` - SQS, Pub/Sub, Service Bus, Local Queue
-- `FunctionBinding` - Lambda, Cloud Run, Container Apps, Local Function
+- `WorkerBinding` - Lambda, Cloud Run, Container Apps, Local Worker
 - `ContainerBinding` - ECS, GKE, AKS, Local Container
 
 All variants are defined in `alien-core/src/bindings/`.

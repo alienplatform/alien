@@ -91,13 +91,13 @@ fn profile_scope_contains_permission(
 mod tests {
     use super::*;
     use alien_core::{
-        Function, FunctionCode, PermissionsConfig, Resource, ResourceEntry, ResourceLifecycle,
+        PermissionsConfig, Resource, ResourceEntry, ResourceLifecycle, Worker, WorkerCode,
     };
     use indexmap::IndexMap;
 
     fn stack_with_management(management: ManagementPermissions) -> Stack {
-        let function = Function::new("api".to_string())
-            .code(FunctionCode::Image {
+        let worker = Worker::new("api".to_string())
+            .code(WorkerCode::Image {
                 image: "api:latest".to_string(),
             })
             .permissions("execution".to_string())
@@ -107,7 +107,7 @@ mod tests {
         resources.insert(
             "api".to_string(),
             ResourceEntry {
-                config: Resource::new(function),
+                config: Resource::new(worker),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
@@ -128,7 +128,7 @@ mod tests {
     #[tokio::test]
     async fn override_without_live_provision_fails() {
         let stack = stack_with_management(ManagementPermissions::override_(
-            PermissionProfile::new().global(["function/management"]),
+            PermissionProfile::new().global(["worker/management"]),
         ));
 
         let result = LiveProvisionPermissionsCheck
@@ -138,14 +138,14 @@ mod tests {
 
         assert!(!result.success);
         assert_eq!(result.errors.len(), 1);
-        assert!(result.errors[0].contains("function/provision"));
+        assert!(result.errors[0].contains("worker/provision"));
         assert!(result.errors[0].contains("rerun setup"));
     }
 
     #[tokio::test]
     async fn override_with_resource_scoped_live_provision_succeeds() {
         let stack = stack_with_management(ManagementPermissions::override_(
-            PermissionProfile::new().resource("api", ["function/provision"]),
+            PermissionProfile::new().resource("api", ["worker/provision"]),
         ));
 
         let result = LiveProvisionPermissionsCheck

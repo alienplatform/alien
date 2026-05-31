@@ -12,11 +12,11 @@
 //! behind `#[cfg(feature = "platform")]`.
 
 use crate::error::{ErrorData, Result};
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError, IntoAlienErrorDirect};
 use alien_manager_api::Client as ServerSdkClient;
 use alien_platform_api::Client as SdkClient;
 use tokio::time::Duration;
-use tracing::info;
+use tracing::{info, warn};
 
 #[cfg(feature = "platform")]
 use crate::auth::{get_auth_http, load_workspace, save_workspace, AuthOpts};
@@ -27,6 +27,12 @@ use crate::commands::platform::workspace::prompt_workspace;
 pub struct ManagerContext {
     /// Base URL of the manager (e.g. "http://localhost:8090").
     pub manager_url: String,
+    /// Display name of the resolved manager, when provided by the platform.
+    pub manager_name: Option<String>,
+    /// Whether the resolved manager is Alien-hosted.
+    pub manager_is_system: Option<bool>,
+    /// Hosting cloud for private managers.
+    pub manager_cloud: Option<String>,
     /// Authenticated manager SDK client.
     pub client: ServerSdkClient,
     /// Underlying reqwest client (carries auth headers, useful for non-SDK endpoints).
@@ -38,6 +44,10 @@ pub struct ManagerContext {
     pub repository_name: Option<String>,
     /// Repository URI for image pushing (only available via platform discovery).
     pub repository_uri: Option<String>,
+    /// Workspace the caller is acting in. The manager needs it to resolve
+    /// the user's identity — user OAuth tokens don't carry that themselves.
+    /// `None` in single-tenant modes (dev, standalone).
+    pub workspace: Option<String>,
 }
 
 /// Execution mode determines which API the command targets and carries all global flags.
@@ -237,6 +247,15 @@ impl ExecutionMode {
         }
     }
 
+    /// Whether commands should avoid opening a browser.
+    pub fn no_browser(&self) -> bool {
+        match self {
+            #[cfg(feature = "platform")]
+            Self::Platform { no_browser, .. } => *no_browser,
+            Self::Standalone { .. } | Self::Dev { .. } => true,
+        }
+    }
+
     /// Get workspace and project for this mode (non-interactive, fails if not set).
     pub fn get_workspace_project(&self) -> Result<(String, Option<String>)> {
         match self {
@@ -318,11 +337,15 @@ impl ExecutionMode {
 
                 Ok(ManagerContext {
                     manager_url: server_url.clone(),
+                    manager_name: None,
+                    manager_is_system: None,
+                    manager_cloud: None,
                     client,
                     http_client,
                     auth_token: Some(api_key.clone()),
                     repository_name: None, // Resolved at push time via manager's /v1/build-config
                     repository_uri: Some(server_url.clone()),
+                    workspace: None,
                 })
             }
             Self::Dev { port } => {
@@ -332,11 +355,15 @@ impl ExecutionMode {
 
                 Ok(ManagerContext {
                     manager_url: manager_url.clone(),
+                    manager_name: Some("local manager".to_string()),
+                    manager_is_system: None,
+                    manager_cloud: None,
                     client,
                     http_client,
                     auth_token: None,
                     repository_name: Some("artifacts/default".to_string()),
                     repository_uri: Some(manager_url),
+                    workspace: None,
                 })
             }
             #[cfg(feature = "platform")]
@@ -426,10 +453,20 @@ impl ExecutionMode {
 
                 info!("Manager: {}", resolved.manager_url);
 
+                // Manager-bound client; workspace lives in default headers.
+                let auth_token = http.bearer_token.clone();
+                let manager_http_client = match &auth_token {
+                    Some(token) => crate::auth::client_with_auth_and_workspace(
+                        &format!("Bearer {}", token),
+                        &workspace,
+                    )?,
+                    None => http.client.clone(),
+                };
+
                 // Now call the manager directly to create/get the artifact registry repo.
                 // The repo logical name is the project ID.
                 let repo_name = create_or_get_artifact_repo(
-                    &http.client,
+                    &manager_http_client,
                     &resolved.manager_url,
                     &resolved.project_id,
                     platform,
@@ -438,21 +475,22 @@ impl ExecutionMode {
 
                 info!("Repository: {}", repo_name);
 
-                // Create manager SDK client reusing the authenticated reqwest client
-                let authenticated_client = http.client.clone();
-                let auth_token = http.bearer_token.clone();
                 let manager_client = ServerSdkClient::new_with_client(
                     &resolved.manager_url,
-                    authenticated_client.clone(),
+                    manager_http_client.clone(),
                 );
 
                 Ok(ManagerContext {
                     manager_url: resolved.manager_url,
+                    manager_name: resolved.manager_name,
+                    manager_is_system: resolved.manager_is_system,
+                    manager_cloud: resolved.manager_cloud,
                     client: manager_client,
-                    http_client: authenticated_client,
+                    http_client: manager_http_client,
                     auth_token,
                     repository_name: Some(repo_name),
                     repository_uri: None,
+                    workspace: Some(workspace),
                 })
             }
         }
@@ -555,12 +593,21 @@ async fn check_server_health(port: u16) -> bool {
 #[serde(rename_all = "camelCase")]
 struct ResolveResponse {
     manager_url: String,
+    #[serde(default)]
+    manager_name: Option<String>,
+    #[serde(default)]
+    manager_is_system: Option<bool>,
+    #[serde(default)]
+    manager_cloud: Option<String>,
     project_id: String,
 }
 
 /// Create or get an artifact registry repository on the manager.
 ///
-/// Tries GET first (repo may already exist), then POST to create if 404.
+/// GET first (repo may exist), POST to create on 404. The `client` is
+/// expected to carry the caller's workspace in its default headers (see
+/// [`crate::auth::client_with_auth_and_workspace`]); no per-call header
+/// plumbing happens here.
 #[cfg(feature = "platform")]
 async fn create_or_get_artifact_repo(
     client: &reqwest::Client,
@@ -576,18 +623,13 @@ async fn create_or_get_artifact_repo(
         manager_url, project_id, platform
     );
 
-    let get_resp = client
-        .get(&get_url)
-        .send()
-        .await
-        .into_alien_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: format!(
-                "Failed to reach artifact registry on manager at {}",
-                manager_url
-            ),
-            url: Some(get_url.clone()),
-        })?;
+    let get_resp = send_artifact_registry_request_with_retry(
+        || client.get(&get_url),
+        manager_url,
+        &get_url,
+        "Failed to reach artifact registry on manager",
+    )
+    .await?;
 
     if get_resp.status().is_success() {
         let body: serde_json::Value =
@@ -611,19 +653,17 @@ async fn create_or_get_artifact_repo(
         manager_url, platform
     );
 
-    let create_resp = client
-        .post(&create_url)
-        .json(&serde_json::json!({ "name": project_id }))
-        .send()
-        .await
-        .into_alien_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: format!(
-                "Failed to create artifact repository on manager at {}",
-                manager_url
-            ),
-            url: Some(create_url.clone()),
-        })?;
+    let create_resp = send_artifact_registry_request_with_retry(
+        || {
+            client
+                .post(&create_url)
+                .json(&serde_json::json!({ "name": project_id }))
+        },
+        manager_url,
+        &create_url,
+        "Failed to create artifact repository on manager",
+    )
+    .await?;
 
     let create_status = create_resp.status();
 
@@ -645,18 +685,13 @@ async fn create_or_get_artifact_repo(
 
     // Create returned non-success (409 = already exists, or other error).
     // Try GET again — the repo may have been created concurrently.
-    let get_resp2 = client
-        .get(&get_url)
-        .send()
-        .await
-        .into_alien_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: format!(
-                "Failed to get artifact repository from manager at {}",
-                manager_url
-            ),
-            url: Some(get_url.clone()),
-        })?;
+    let get_resp2 = send_artifact_registry_request_with_retry(
+        || client.get(&get_url),
+        manager_url,
+        &get_url,
+        "Failed to get artifact repository from manager",
+    )
+    .await?;
 
     if get_resp2.status().is_success() {
         let body: serde_json::Value =
@@ -682,4 +717,47 @@ async fn create_or_get_artifact_repo(
         ),
         url: Some(create_url),
     }))
+}
+
+#[cfg(feature = "platform")]
+async fn send_artifact_registry_request_with_retry<F>(
+    build_request: F,
+    manager_url: &str,
+    url: &str,
+    message: &str,
+) -> crate::error::Result<reqwest::Response>
+where
+    F: Fn() -> reqwest::RequestBuilder,
+{
+    for attempt in 1..=3 {
+        match build_request().send().await {
+            Ok(response) => return Ok(response),
+            Err(error) if attempt < 3 && is_retryable_artifact_registry_error(&error) => {
+                let delay = Duration::from_secs(attempt * 2);
+                warn!(
+                    attempt,
+                    delay_secs = delay.as_secs(),
+                    url,
+                    error = %error,
+                    "Retrying artifact registry manager request"
+                );
+                tokio::time::sleep(delay).await;
+            }
+            Err(error) => {
+                return Err(error
+                    .into_alien_error()
+                    .context(ErrorData::ApiRequestFailed {
+                        message: format!("{} at {}", message, manager_url),
+                        url: Some(url.to_string()),
+                    }));
+            }
+        }
+    }
+
+    unreachable!("artifact registry retry loop always returns")
+}
+
+#[cfg(feature = "platform")]
+fn is_retryable_artifact_registry_error(error: &reqwest::Error) -> bool {
+    error.is_timeout() || error.is_connect()
 }

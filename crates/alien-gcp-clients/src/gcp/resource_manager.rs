@@ -46,7 +46,6 @@ use bon::Builder;
 use reqwest::{Client, Method};
 use serde::{Deserialize, Serialize};
 
-use async_trait::async_trait;
 #[cfg(feature = "test-utils")]
 use mockall::automock;
 use std::fmt::Debug;

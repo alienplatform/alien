@@ -25,7 +25,7 @@
       },
       {
         "grant": {
-          "actions": ["acm:ImportCertificate"]
+          "actions": ["acm:ImportCertificate", "acm:AddTagsToCertificate"]
         },
         "binding": {
           "stack": {
@@ -33,7 +33,7 @@
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${managedByTag}": "alien"
+                "aws:RequestTag/${managedByTag}": "deployment"
               }
             }
           },
@@ -43,7 +43,7 @@
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${resourceTag}": "${resourceName}",
-                "aws:RequestTag/${managedByTag}": "alien"
+                "aws:RequestTag/${managedByTag}": "deployment"
               }
             }
           }
@@ -51,7 +51,11 @@
       },
       {
         "grant": {
-          "actions": ["acm:DeleteCertificate", "acm:DescribeCertificate"]
+          "actions": [
+            "acm:AddTagsToCertificate",
+            "acm:DeleteCertificate",
+            "acm:DescribeCertificate"
+          ]
         },
         "binding": {
           "stack": {
@@ -59,7 +63,7 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${managedByTag}": "alien"
+                "aws:ResourceTag/${managedByTag}": "deployment"
               }
             }
           },
@@ -69,7 +73,7 @@
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
                 "aws:ResourceTag/${resourceTag}": "${resourceName}",
-                "aws:ResourceTag/${managedByTag}": "alien"
+                "aws:ResourceTag/${managedByTag}": "deployment"
               }
             }
           }

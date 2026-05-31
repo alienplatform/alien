@@ -12,18 +12,21 @@ Metadata:
     - Label:
         default: Registration
       Parameters:
-      - DeploymentGroupToken
+      - Token
       - ManagingRoleArn
       - ManagingAccountId
     - Label:
         default: Network
       Parameters:
+      - NetworkMode
+      - VpcCidr
+      - AvailabilityZones
       - VpcId
       - PublicSubnetIds
       - PrivateSubnetIds
       - SecurityGroupIds
     - Label:
-        default: Domains
+        default: Custom domain
       Parameters:
       - DomainName
       - HostedZoneId
@@ -35,10 +38,10 @@ Metadata:
       - TelemetryMode
       - HeartbeatsMode
     ParameterLabels:
+      AvailabilityZones:
+        default: Availability zones
       CertificateArn:
         default: Certificate ARN
-      DeploymentGroupToken:
-        default: Deployment group token
       DomainName:
         default: Domain name
       HeartbeatsMode:
@@ -46,9 +49,11 @@ Metadata:
       HostedZoneId:
         default: Hosted zone ID
       ManagingAccountId:
-        default: Manager AWS account ID
+        default: Manager account ID
       ManagingRoleArn:
         default: Manager role ARN
+      NetworkMode:
+        default: Network
       PrivateSubnetIds:
         default: Private subnet IDs
       PublicSubnetIds:
@@ -57,47 +62,74 @@ Metadata:
         default: Security group IDs
       TelemetryMode:
         default: Telemetry
+      Token:
+        default: Install token
       UpdatesMode:
         default: Updates
+      VpcCidr:
+        default: VPC CIDR
       VpcId:
         default: VPC ID
 Parameters:
-  DeploymentGroupToken:
+  Token:
     Type: String
-    Description: Deployment-group token used when registering the resolved stack import.
+    Description: Install token from the application setup page.
     NoEcho: true
   ManagingRoleArn:
     Type: String
-    Description: AWS IAM role ARN for the manager identity allowed to assume generated management roles.
+    Description: Manager IAM role ARN allowed to assume generated management roles.
   ManagingAccountId:
     Type: String
-    Description: AWS account ID hosting the manager. Referenced by stack-side IAM policies that scope cross-account ECR pulls. Empty disables those grants.
+    Description: AWS account ID for the management account that hosts application container images.
     Default: ''
+  NetworkMode:
+    Type: String
+    Description: Choose create-new for a managed VPC, use-existing for your VPC, or use-default for the account default VPC.
+    Default: use-existing
+    AllowedValues:
+    - create-new
+    - use-existing
+    - use-default
+  VpcCidr:
+    Type: String
+    Description: Only used with create-new. CIDR for the new VPC; leave unset for the generated default.
+    Default: ''
+  AvailabilityZones:
+    Type: Number
+    Description: Only used with create-new. Number of availability zones for the new VPC.
+    Default: 2
+    AllowedValues:
+    - 1
+    - 2
+    - 3
   VpcId:
     Type: String
-    Description: Existing VPC ID.
+    Description: Only used with use-existing. Existing VPC ID.
     Default: vpc-0123456789abcdef0
   PublicSubnetIds:
     Type: CommaDelimitedList
-    Description: Existing public subnet IDs.
+    Description: Only used with use-existing. Existing public subnet IDs.
     Default: subnet-public-a,subnet-public-b
   PrivateSubnetIds:
     Type: CommaDelimitedList
-    Description: Existing private subnet IDs.
+    Description: Only used with use-existing. Existing private subnet IDs.
     Default: subnet-private-a,subnet-private-b
   SecurityGroupIds:
     Type: CommaDelimitedList
-    Description: Existing security group IDs.
+    Description: Only used with use-existing. Existing security group IDs.
     Default: sg-0123456789abcdef0
   DomainName:
     Type: String
-    Description: Optional domain name for public endpoints. Empty disables custom domains.
+    Description: Optional custom domain for public endpoints. Leave unset to expose through the generated load balancer DNS name over HTTP.
+    Default: ''
   HostedZoneId:
     Type: String
-    Description: Optional Route 53 hosted zone ID for the domain.
+    Description: Route 53 hosted zone ID for the custom domain. Not needed for the auto-generated domain.
+    Default: ''
   CertificateArn:
     Type: String
-    Description: Optional ACM certificate ARN for the domain.
+    Description: ACM certificate ARN for the custom domain. Required when DomainName is set.
+    Default: ''
   UpdatesMode:
     Type: String
     Description: How updates are applied after import.
@@ -121,6 +153,19 @@ Parameters:
     - "off"
     - "on"
 Conditions:
+  NetworkModeCreate:
+    Fn::Equals:
+    - Ref: NetworkMode
+    - create-new
+  NetworkModeUseExisting:
+    Fn::Equals:
+    - Ref: NetworkMode
+    - use-existing
+  HasVpcCidr:
+    Fn::Not:
+    - Fn::Equals:
+      - Ref: VpcCidr
+      - ''
   HasDomainName:
     Fn::Not:
     - Fn::Equals:
@@ -136,10 +181,10 @@ Outputs:
   DeploymentSourceKind:
     Value: cloudformation
     Description: Setup source kind.
-  DeploymentStackPrefix:
+  DeploymentResourcePrefix:
     Value:
       Ref: AWS::StackName
-    Description: Physical stack prefix.
+    Description: Stable physical resource prefix.
   DeploymentPlatform:
     Value: aws
     Description: Target platform.
@@ -153,8 +198,11 @@ Outputs:
   DeploymentSetupFingerprint:
     Value: test
     Description: Setup compatibility fingerprint.
+  DeploymentSetupImportFormatVersion:
+    Value: 1
+    Description: Setup import payload format version.
   DeploymentSetupFingerprintVersion:
-    Value: '1'
+    Value: 1
     Description: Setup fingerprint algorithm version.
   DeploymentManagementConfig:
     Value:
@@ -174,15 +222,28 @@ Outputs:
         heartbeats:
           Ref: HeartbeatsMode
         network:
-          type: byo-vpc-aws
-          vpcId:
-            Ref: VpcId
-          publicSubnetIds:
-            Ref: PublicSubnetIds
-          privateSubnetIds:
-            Ref: PrivateSubnetIds
-          securityGroupIds:
-            Ref: SecurityGroupIds
+          Fn::If:
+          - NetworkModeCreate
+          - type: create
+            cidr:
+              Fn::If:
+              - HasVpcCidr
+              - Ref: VpcCidr
+              - Ref: AWS::NoValue
+            availability_zones:
+              Ref: AvailabilityZones
+          - Fn::If:
+            - NetworkModeUseExisting
+            - type: byo-vpc-aws
+              vpc_id:
+                Ref: VpcId
+              public_subnet_ids:
+                Ref: PublicSubnetIds
+              private_subnet_ids:
+                Ref: PrivateSubnetIds
+              security_group_ids:
+                Ref: SecurityGroupIds
+            - type: use-default
         domains:
           Fn::If:
           - HasDomainName

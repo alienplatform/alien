@@ -6,8 +6,9 @@ use async_trait::async_trait;
 use futures::{stream::BoxStream, Stream, StreamExt};
 use object_store::{
     path::Path as ObjectStorePath, Error as OsError, GetOptions as OsGetOptions,
-    GetResult as OsGetResult, ObjectMeta as OsObjectMeta, PutMultipartOpts as OsPutMultipartOpts,
-    PutOptions as OsPutOptions, PutPayload, PutResult as OsPutResult,
+    GetResult as OsGetResult, ObjectMeta as OsObjectMeta,
+    PutMultipartOptions as OsPutMultipartOptions, PutOptions as OsPutOptions, PutPayload,
+    PutResult as OsPutResult,
 };
 use std::{pin::Pin, sync::Arc};
 use tokio_stream::once;
@@ -30,10 +31,11 @@ use alien_bindings::storage::{
     storage_service_server::{StorageService, StorageServiceServer},
     GetResponsePart, StorageCopyRequest, StorageDeleteRequest, StorageGetBaseDirRequest,
     StorageGetBaseDirResponse, StorageGetRequest, StorageGetUrlRequest, StorageGetUrlResponse,
-    StorageHeadRequest, StorageHttpMethod, StorageListRequest, StorageListResultProto,
-    StorageListWithDelimiterRequest, StorageObjectMeta, StorageOperationResponse,
-    StoragePutMultipartChunkRequest, StoragePutMultipartMetadata, StoragePutRequest,
-    StoragePutResponse, StorageRenameRequest, StorageSignedUrlRequest, StorageSignedUrlResponse,
+    StorageHeadRequest, StorageHttpHeader, StorageHttpMethod, StorageListRequest,
+    StorageListResultProto, StorageListWithDelimiterRequest, StorageObjectMeta,
+    StorageOperationResponse, StoragePutMultipartChunkRequest, StoragePutMultipartMetadata,
+    StoragePutRequest, StoragePutResponse, StorageRenameRequest, StorageSignedUrlRequest,
+    StorageSignedUrlResponse,
 };
 
 pub struct StorageGrpcServer {
@@ -138,7 +140,7 @@ impl StorageService for StorageGrpcServer {
             .await?;
         let path = ObjectStorePath::from(proto_metadata.path);
         let options = proto_metadata.options.map_or_else(
-            OsPutMultipartOpts::default,
+            OsPutMultipartOptions::default,
             super::storage_utils::map_proto_put_multipart_options_to_os,
         );
 
@@ -388,8 +390,8 @@ impl StorageService for StorageGrpcServer {
         let storage = self.get_storage_binding(&req_inner.binding_name).await?;
         let path = ObjectStorePath::from(req_inner.path);
         let method = super::storage_utils::map_proto_method_to_reqwest(
-            StorageHttpMethod::from_i32(req_inner.http_method)
-                .ok_or_else(|| Status::invalid_argument("Invalid HTTP method"))?,
+            StorageHttpMethod::try_from(req_inner.http_method)
+                .map_err(|_| Status::invalid_argument("Invalid HTTP method"))?,
         );
 
         // Calculate duration from current time to expiration time
@@ -424,9 +426,15 @@ impl StorageService for StorageGrpcServer {
         .map_err(alien_error_to_status)?;
 
         let signed_url = presigned_request.url();
+        let headers = presigned_request
+            .headers()
+            .into_iter()
+            .map(|(key, value)| StorageHttpHeader { key, value })
+            .collect();
 
         Ok(Response::new(StorageSignedUrlResponse {
             url: signed_url.to_string(),
+            headers,
         }))
     }
 }

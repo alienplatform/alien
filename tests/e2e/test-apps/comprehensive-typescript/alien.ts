@@ -7,7 +7,7 @@ const kv = new alien.Kv("alien-kv").build()
 const queue = new alien.Queue("alien-queue").build()
 const serviceAccount = new alien.ServiceAccount("test-alien-sa").build()
 
-const fn = new alien.Function("alien-ts-fn")
+const worker = new alien.Worker("alien-ts-worker")
   .code({
     type: "source",
     src: "./",
@@ -46,7 +46,7 @@ const stack = new alien.Stack("alien-ts-stack")
           "kv/data-write",
           "queue/data-read",
           "queue/data-write",
-          "function/execute",
+          "worker/execute",
         ],
         "test-alien-sa": ["service-account/impersonate"],
       },
@@ -58,7 +58,7 @@ const stack = new alien.Stack("alien-ts-stack")
   .add(kv, "frozen")
   .add(queue, "frozen")
   .add(serviceAccount, "frozen")
-  .add(fn, "live")
+  .add(worker, "live")
   .build()
 
 export default stack

@@ -1,14 +1,15 @@
 //! GCP compute & artifacts — function / build / artifact-registry.
 //!
-//! `container-cluster` is a platform-only resource (Phase 6d moved its
+//! `compute-cluster` is a platform-only resource (Phase 6d moved its
 //! emitter to `alien-terraformx`); the OSS suite asserts the dispatch
 //! registry produces a typed `ImportRegistrationMissing` error if the
 //! extension is absent.
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
-    ArtifactRegistry, Build, CapacityGroup, ContainerCluster, ErrorData, Function, FunctionCode,
-    FunctionTrigger, Ingress, Platform, Queue, ResourceLifecycle, Stack, StackSettings, Storage,
+    ArtifactRegistry, Build, CapacityGroup, ComputeCluster, ErrorData, Ingress, Platform, Queue,
+    ResourceLifecycle, ServiceAccount, Stack, StackSettings, Storage, Worker, WorkerCode,
+    WorkerTrigger,
 };
 use alien_terraform::{generate_terraform_module, TerraformOptions, TerraformTarget, TfRegistry};
 
@@ -29,6 +30,10 @@ fn gcp_artifact_registry_renders_docker_repository() {
 fn gcp_build_renders_cloud_build_trigger() {
     let stack = Stack::new("acme-build".to_string())
         .add(
+            ServiceAccount::new("execution-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
             Build::new("builder".to_string())
                 .permissions("execution".to_string())
                 .environment([("PROFILE".to_string(), "release".to_string())].into())
@@ -38,6 +43,13 @@ fn gcp_build_renders_cloud_build_trigger() {
         .build();
     let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
     snapshot_module("gcp_build", &module);
+    let build_tf = module
+        .get("builder.tf")
+        .expect("builder terraform file should render");
+    assert!(
+        build_tf.contains("service_account = google_service_account.execution_sa.name"),
+        "Cloud Build trigger must use the fully-qualified service-account name",
+    );
     assert_terraform_valid(&module, "gcp_build");
 }
 
@@ -45,8 +57,8 @@ fn gcp_build_renders_cloud_build_trigger() {
 fn gcp_function_basic_cloud_run() {
     let stack = Stack::new("acme-fn".to_string())
         .add(
-            Function::new("api".to_string())
-                .code(FunctionCode::Image {
+            Worker::new("api".to_string())
+                .code(WorkerCode::Image {
                     image: "us-central1-docker.pkg.dev/proj/app/api:1".to_string(),
                 })
                 .permissions("execution".to_string())
@@ -65,8 +77,8 @@ fn gcp_function_basic_cloud_run() {
 fn gcp_function_public_ingress_emits_invoker_binding() {
     let stack = Stack::new("acme-public".to_string())
         .add(
-            Function::new("public-api".to_string())
-                .code(FunctionCode::Image {
+            Worker::new("public-api".to_string())
+                .code(WorkerCode::Image {
                     image: "us-central1-docker.pkg.dev/proj/app/api:1".to_string(),
                 })
                 .permissions("execution".to_string())
@@ -90,17 +102,14 @@ fn gcp_function_with_queue_and_schedule_triggers() {
         .add(jobs.clone(), ResourceLifecycle::Frozen)
         .add(assets.clone(), ResourceLifecycle::Frozen)
         .add(
-            Function::new("worker".to_string())
-                .code(FunctionCode::Image {
+            Worker::new("worker".to_string())
+                .code(WorkerCode::Image {
                     image: "us-central1-docker.pkg.dev/proj/app/worker:1".to_string(),
                 })
                 .permissions("execution".to_string())
-                .trigger(FunctionTrigger::queue(&jobs))
-                .trigger(FunctionTrigger::schedule("*/5 * * * *"))
-                .trigger(FunctionTrigger::storage(
-                    &assets,
-                    vec!["created".to_string()],
-                ))
+                .trigger(WorkerTrigger::queue(&jobs))
+                .trigger(WorkerTrigger::schedule("*/5 * * * *"))
+                .trigger(WorkerTrigger::storage(&assets, vec!["created".to_string()]))
                 .timeout_seconds(60)
                 .memory_mb(512)
                 .build(),
@@ -116,7 +125,7 @@ fn gcp_function_with_queue_and_schedule_triggers() {
 fn gcp_container_cluster_without_platform_extension_errors_cleanly() {
     let stack = Stack::new("acme-cluster".to_string())
         .add(
-            ContainerCluster::new("compute".to_string())
+            ComputeCluster::new("compute".to_string())
                 .capacity_group(CapacityGroup {
                     group_id: "general".to_string(),
                     instance_type: Some("e2-standard-4".to_string()),
@@ -134,9 +143,12 @@ fn gcp_container_cluster_without_platform_extension_errors_cleanly() {
         &stack,
         TerraformTarget::Gcp,
         TerraformOptions {
+            display_name: None,
             registry: &registry,
             stack_settings: StackSettings::default(),
             registration: None,
+            helm_install: None,
+            supported_aws_regions: Vec::new(),
         },
     )
     .expect_err("OSS registry should not register container_cluster");
@@ -147,7 +159,7 @@ fn gcp_container_cluster_without_platform_extension_errors_cleanly() {
             platform,
             ..
         } => {
-            assert_eq!(resource_type.as_ref(), "container-cluster");
+            assert_eq!(resource_type.as_ref(), "compute-cluster");
             assert_eq!(*platform, Platform::Gcp);
         }
         other => panic!("expected ImportRegistrationMissing, got {other:?}"),

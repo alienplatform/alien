@@ -2,8 +2,9 @@ use crate::{bindings::binding_env_var_name, ErrorData, Platform, ResourceRef, Re
 use alien_error::AlienError;
 use std::collections::HashMap;
 
-pub const ENV_ALIEN_CURRENT_FUNCTION_BINDING_NAME: &str = "ALIEN_CURRENT_FUNCTION_BINDING_NAME";
+pub const ENV_ALIEN_CURRENT_WORKER_BINDING_NAME: &str = "ALIEN_CURRENT_WORKER_BINDING_NAME";
 pub const ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME: &str = "ALIEN_CURRENT_CONTAINER_BINDING_NAME";
+pub const ENV_ALIEN_BASE_PLATFORM: &str = "ALIEN_BASE_PLATFORM";
 pub const ENV_ALIEN_DEPLOYMENT_TYPE: &str = "ALIEN_DEPLOYMENT_TYPE";
 pub const ENV_ALIEN_LAMBDA_MODE: &str = "ALIEN_LAMBDA_MODE";
 pub const ENV_ALIEN_RUNTIME_SEND_OTLP: &str = "ALIEN_RUNTIME_SEND_OTLP";
@@ -18,6 +19,7 @@ pub const ENV_ALIEN_BINDINGS_ADDRESS: &str = "ALIEN_BINDINGS_ADDRESS";
 pub const ENV_ALIEN_BINDINGS_GRPC_ADDRESS: &str = "ALIEN_BINDINGS_GRPC_ADDRESS";
 pub const ENV_ALIEN_BINDINGS_MODE: &str = "ALIEN_BINDINGS_MODE";
 pub const ENV_AWS_ACCOUNT_ID: &str = "AWS_ACCOUNT_ID";
+pub const ENV_AWS_REGION: &str = "AWS_REGION";
 pub const ENV_AZURE_CLIENT_ID: &str = "AZURE_CLIENT_ID";
 pub const ENV_AZURE_REGION: &str = "AZURE_REGION";
 pub const ENV_AZURE_SUBSCRIPTION_ID: &str = "AZURE_SUBSCRIPTION_ID";
@@ -30,12 +32,14 @@ pub const ENV_GOOGLE_CLOUD_PROJECT: &str = "GOOGLE_CLOUD_PROJECT";
 pub enum RuntimeEnvironmentValue {
     Literal(&'static str),
     AwsAccountId,
+    AwsRegion,
     AzureClientId,
     AzureRegion,
     AzureSubscriptionId,
     AzureTenantId,
+    BasePlatform,
     CurrentContainerBindingName,
-    CurrentFunctionBindingName,
+    CurrentWorkerBindingName,
     GcpProjectId,
     GcpRegion,
 }
@@ -50,7 +54,7 @@ pub struct RuntimeEnvironmentEntry {
 pub enum RuntimeEnvironmentBindingSource {
     LinkedResource(ResourceRef),
     CurrentContainer,
-    CurrentFunction,
+    CurrentWorker,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,12 +101,12 @@ impl RuntimeEnvironmentPlan {
         self
     }
 
-    pub fn add_current_function_binding(mut self, function_id: &str) -> Self {
+    pub fn add_current_worker_binding(mut self, worker_id: &str) -> Self {
         self.entries.push(RuntimeEnvironmentPlanEntry::Binding(
             RuntimeEnvironmentBindingEntry {
-                env_name: binding_env_var_name(function_id),
-                binding_name: function_id.to_string(),
-                source: RuntimeEnvironmentBindingSource::CurrentFunction,
+                env_name: binding_env_var_name(worker_id),
+                binding_name: worker_id.to_string(),
+                source: RuntimeEnvironmentBindingSource::CurrentWorker,
             },
         ));
         self
@@ -177,13 +181,67 @@ pub fn standard_runtime_environment_plan(platform: Platform) -> Vec<RuntimeEnvir
                 value: RuntimeEnvironmentValue::AzureRegion,
             },
         ]),
-        Platform::Kubernetes | Platform::Local | Platform::Test => {}
+        Platform::Kubernetes => entries.push(RuntimeEnvironmentEntry {
+            name: ENV_ALIEN_BASE_PLATFORM,
+            value: RuntimeEnvironmentValue::BasePlatform,
+        }),
+        Platform::Local | Platform::Test => {}
     }
 
     entries
 }
 
-pub fn function_transport_runtime_environment_plan(
+pub fn kubernetes_base_platform_runtime_environment_plan(
+    base_platform: Option<Platform>,
+) -> Vec<RuntimeEnvironmentEntry> {
+    match base_platform {
+        Some(Platform::Aws) => vec![
+            RuntimeEnvironmentEntry {
+                name: ENV_AWS_ACCOUNT_ID,
+                value: RuntimeEnvironmentValue::AwsAccountId,
+            },
+            RuntimeEnvironmentEntry {
+                name: ENV_AWS_REGION,
+                value: RuntimeEnvironmentValue::AwsRegion,
+            },
+        ],
+        Some(Platform::Gcp) => vec![
+            RuntimeEnvironmentEntry {
+                name: ENV_GOOGLE_CLOUD_PROJECT,
+                value: RuntimeEnvironmentValue::GcpProjectId,
+            },
+            RuntimeEnvironmentEntry {
+                name: ENV_GCP_PROJECT_ID,
+                value: RuntimeEnvironmentValue::GcpProjectId,
+            },
+            RuntimeEnvironmentEntry {
+                name: ENV_GCP_REGION,
+                value: RuntimeEnvironmentValue::GcpRegion,
+            },
+        ],
+        Some(Platform::Azure) => vec![
+            RuntimeEnvironmentEntry {
+                name: ENV_AZURE_SUBSCRIPTION_ID,
+                value: RuntimeEnvironmentValue::AzureSubscriptionId,
+            },
+            RuntimeEnvironmentEntry {
+                name: ENV_AZURE_TENANT_ID,
+                value: RuntimeEnvironmentValue::AzureTenantId,
+            },
+            RuntimeEnvironmentEntry {
+                name: ENV_AZURE_REGION,
+                value: RuntimeEnvironmentValue::AzureRegion,
+            },
+            RuntimeEnvironmentEntry {
+                name: ENV_AZURE_CLIENT_ID,
+                value: RuntimeEnvironmentValue::AzureClientId,
+            },
+        ],
+        _ => Vec::new(),
+    }
+}
+
+pub fn worker_transport_runtime_environment_plan(
     platform: Platform,
 ) -> Vec<RuntimeEnvironmentEntry> {
     match platform {
@@ -205,23 +263,27 @@ pub fn function_transport_runtime_environment_plan(
             name: ENV_ALIEN_TRANSPORT,
             value: RuntimeEnvironmentValue::Literal("container-app"),
         }],
-        Platform::Kubernetes | Platform::Local | Platform::Test => vec![RuntimeEnvironmentEntry {
+        Platform::Kubernetes => vec![RuntimeEnvironmentEntry {
+            name: ENV_ALIEN_TRANSPORT,
+            value: RuntimeEnvironmentValue::Literal("http"),
+        }],
+        Platform::Local | Platform::Test => vec![RuntimeEnvironmentEntry {
             name: ENV_ALIEN_TRANSPORT,
             value: RuntimeEnvironmentValue::Literal("passthrough"),
         }],
     }
 }
 
-pub fn function_runtime_environment_plan(platform: Platform) -> Vec<RuntimeEnvironmentEntry> {
+pub fn worker_runtime_environment_plan(platform: Platform) -> Vec<RuntimeEnvironmentEntry> {
     let mut entries = standard_runtime_environment_plan(platform);
-    entries.extend(function_transport_runtime_environment_plan(platform));
+    entries.extend(worker_transport_runtime_environment_plan(platform));
     entries.push(RuntimeEnvironmentEntry {
         name: ENV_ALIEN_RUNTIME_SEND_OTLP,
         value: RuntimeEnvironmentValue::Literal("true"),
     });
     entries.push(RuntimeEnvironmentEntry {
-        name: ENV_ALIEN_CURRENT_FUNCTION_BINDING_NAME,
-        value: RuntimeEnvironmentValue::CurrentFunctionBindingName,
+        name: ENV_ALIEN_CURRENT_WORKER_BINDING_NAME,
+        value: RuntimeEnvironmentValue::CurrentWorkerBindingName,
     });
     if platform == Platform::Azure {
         entries.push(RuntimeEnvironmentEntry {
@@ -232,15 +294,15 @@ pub fn function_runtime_environment_plan(platform: Platform) -> Vec<RuntimeEnvir
     entries
 }
 
-pub fn function_runtime_environment_contract(
+pub fn worker_runtime_environment_contract(
     platform: Platform,
-    function_id: &str,
+    worker_id: &str,
     links: &[ResourceRef],
 ) -> RuntimeEnvironmentPlan {
     RuntimeEnvironmentPlan::new()
-        .add_scalar_entries(function_runtime_environment_plan(platform))
+        .add_scalar_entries(worker_runtime_environment_plan(platform))
         .add_linked_bindings(links)
-        .add_current_function_binding(function_id)
+        .add_current_worker_binding(worker_id)
 }
 
 pub fn passthrough_transport_runtime_environment_plan() -> [RuntimeEnvironmentEntry; 1] {
@@ -316,12 +378,14 @@ pub fn is_runtime_environment_contract_name(name: &str) -> bool {
     matches!(
         name,
         ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME
-            | ENV_ALIEN_CURRENT_FUNCTION_BINDING_NAME
+            | ENV_ALIEN_CURRENT_WORKER_BINDING_NAME
+            | ENV_ALIEN_BASE_PLATFORM
             | ENV_ALIEN_DEPLOYMENT_TYPE
             | ENV_ALIEN_LAMBDA_MODE
             | ENV_ALIEN_RUNTIME_SEND_OTLP
             | ENV_ALIEN_TRANSPORT
             | ENV_AWS_ACCOUNT_ID
+            | ENV_AWS_REGION
             | ENV_AZURE_CLIENT_ID
             | ENV_AZURE_REGION
             | ENV_AZURE_SUBSCRIPTION_ID
@@ -407,6 +471,9 @@ mod tests {
         assert!(is_reserved_runtime_environment_name(
             ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME
         ));
+        assert!(is_reserved_runtime_environment_name(
+            ENV_ALIEN_BASE_PLATFORM
+        ));
         assert!(is_reserved_runtime_environment_name(ENV_ALIEN_SECRETS));
         assert!(is_reserved_runtime_environment_name(
             "ALIEN_STORAGE_BINDING"
@@ -436,5 +503,41 @@ mod tests {
 
         assert!(error.to_string().contains(ENV_ALIEN_TRANSPORT));
         assert!(!error.to_string().contains(ENV_ALIEN_SECRETS));
+    }
+
+    #[test]
+    fn kubernetes_standard_environment_declares_base_platform() {
+        let entries = standard_runtime_environment_plan(Platform::Kubernetes);
+
+        assert!(entries.iter().any(|entry| {
+            entry.name == ENV_ALIEN_BASE_PLATFORM
+                && entry.value == RuntimeEnvironmentValue::BasePlatform
+        }));
+    }
+
+    #[test]
+    fn kubernetes_gcp_base_environment_declares_gcp_identity() {
+        let entries = kubernetes_base_platform_runtime_environment_plan(Some(Platform::Gcp));
+
+        assert!(entries.iter().any(|entry| {
+            entry.name == ENV_GOOGLE_CLOUD_PROJECT
+                && entry.value == RuntimeEnvironmentValue::GcpProjectId
+        }));
+        assert!(entries.iter().any(|entry| {
+            entry.name == ENV_GCP_PROJECT_ID && entry.value == RuntimeEnvironmentValue::GcpProjectId
+        }));
+        assert!(entries.iter().any(|entry| {
+            entry.name == ENV_GCP_REGION && entry.value == RuntimeEnvironmentValue::GcpRegion
+        }));
+    }
+
+    #[test]
+    fn kubernetes_worker_environment_uses_http_proxy_transport() {
+        let entries = worker_transport_runtime_environment_plan(Platform::Kubernetes);
+
+        assert!(entries.iter().any(|entry| {
+            entry.name == ENV_ALIEN_TRANSPORT
+                && entry.value == RuntimeEnvironmentValue::Literal("http")
+        }));
     }
 }

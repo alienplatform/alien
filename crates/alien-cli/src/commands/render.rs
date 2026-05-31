@@ -76,18 +76,26 @@ pub async fn render_task(args: RenderArgs) -> Result<()> {
 
     match args.format {
         RenderFormat::Cloudformation => {
-            let stack = prepare_stack_for_render(stack, Platform::Aws, &stack_settings).await?;
+            let stack =
+                prepare_stack_for_render(stack, Platform::Aws, None, &stack_settings).await?;
             render_cloudformation(&stack, &stack_settings, &args)
         }
         RenderFormat::Terraform => {
             let target = args.target.expect("validated by validate_args");
-            let platform = terraform_target(target).platform();
-            let stack = prepare_stack_for_render(stack, platform, &stack_settings).await?;
+            let terraform_target = terraform_target(target);
+            let stack = prepare_stack_for_render(
+                stack,
+                terraform_target.deployment_platform(),
+                terraform_target.base_platform(),
+                &stack_settings,
+            )
+            .await?;
             render_terraform(&stack, &stack_settings, &args)
         }
         RenderFormat::Helm => {
             let stack =
-                prepare_stack_for_render(stack, Platform::Kubernetes, &stack_settings).await?;
+                prepare_stack_for_render(stack, Platform::Kubernetes, None, &stack_settings)
+                    .await?;
             render_helm(&stack, &stack_settings, &args)
         }
     }
@@ -96,6 +104,7 @@ pub async fn render_task(args: RenderArgs) -> Result<()> {
 async fn prepare_stack_for_render(
     stack: alien_core::Stack,
     platform: Platform,
+    base_platform: Option<Platform>,
     stack_settings: &StackSettings,
 ) -> Result<alien_core::Stack> {
     let runner = alien_preflights::runner::PreflightRunner::new();
@@ -106,6 +115,7 @@ async fn prepare_stack_for_render(
 
     let stack_state = StackState::new(platform);
     let config = DeploymentConfig {
+        deployment_name: Some(stack.id().to_string()),
         stack_settings: stack_settings.clone(),
         management_config: None,
         environment_variables: EnvironmentVariablesSnapshot {
@@ -116,6 +126,7 @@ async fn prepare_stack_for_render(
         allow_frozen_changes: false,
         compute_backend: None,
         external_bindings: ExternalBindings::default(),
+        base_platform,
         public_urls: None,
         domain_metadata: None,
         monitoring: None,
@@ -185,6 +196,7 @@ fn render_cloudformation(
         stack,
         alien_cloudformation::CloudFormationOptions {
             registry: &registry,
+            target: alien_cloudformation::CloudFormationTarget::Aws,
             stack_settings: stack_settings.clone(),
             setup_target: "aws".to_string(),
             setup_fingerprint: "render-preview".to_string(),
@@ -223,6 +235,7 @@ fn registration_mode(args: &RenderArgs) -> Result<alien_cloudformation::Registra
         RenderRegistrationMode::Auto => match &args.notification_lambda_arn {
             Some(lambda_arn) => Ok(alien_cloudformation::RegistrationMode::CustomResource {
                 lambda_arn: lambda_arn.clone(),
+                callback_url: None,
             }),
             None => Ok(alien_cloudformation::RegistrationMode::OutputsFallback),
         },
@@ -234,7 +247,10 @@ fn registration_mode(args: &RenderArgs) -> Result<alien_cloudformation::Registra
                         .to_string(),
                 })
             })?;
-            Ok(alien_cloudformation::RegistrationMode::Both { lambda_arn })
+            Ok(alien_cloudformation::RegistrationMode::Both {
+                lambda_arn,
+                callback_url: None,
+            })
         }
     }
 }
@@ -250,9 +266,12 @@ fn render_terraform(
         stack,
         terraform_target(target),
         alien_terraform::TerraformOptions {
+            display_name: None,
             registry: &registry,
             stack_settings: stack_settings.clone(),
             registration: None,
+            helm_install: None,
+            supported_aws_regions: Vec::new(),
         },
     )
     .map_err(render_error)?;
@@ -379,9 +398,10 @@ mod tests {
             )
             .build();
 
-        let stack = prepare_stack_for_render(stack, Platform::Azure, &StackSettings::default())
-            .await
-            .expect("render preflights should mutate stack");
+        let stack =
+            prepare_stack_for_render(stack, Platform::Azure, None, &StackSettings::default())
+                .await
+                .expect("render preflights should mutate stack");
 
         let has_storage_account = stack.resources().any(|(id, entry)| {
             id == "default-storage-account"

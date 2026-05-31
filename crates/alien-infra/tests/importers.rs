@@ -8,6 +8,8 @@
 //!
 //! * `status == Running` for resources that are fully imported at their
 //!   controller terminal state.
+//! * `status == Provisioning` for imported setup resources that still need a
+//!   controller-owned propagation wait before live resources can start.
 //! * `internal_state.type` — the type tag injected by `serialize_controller`
 //!   must round-trip through `deserialize_controller` (the manager calls
 //!   this on every reconcile tick).
@@ -16,28 +18,35 @@
 //! cloud) ∈ {storage, kv, vault, queue, network, service-account,
 //! remote-stack-management, build, artifact-registry, function} × {Aws, Gcp,
 //! Azure}` (plus GCP `service_activation`, plus the four Azure aux
-//! resources) is registered. `container` and `container-cluster` are
-//! deliberately *not* asserted — they live in `alien-platform-controllers`.
+//! resources) is registered. `container` and `compute-cluster` are
+//! deliberately *not* asserted — embedders register those controllers
+//! separately.
 
 use alien_core::import::{
     data::{
         AwsKvImportData, AwsRemoteStackManagementImportData, AwsServiceAccountImportData,
         AwsStorageImportData, AzureContainerAppsEnvironmentImportData,
-        AzureRemoteStackManagementImportData, AzureResourceGroupImportData, AzureStorageImportData,
-        GcpKvImportData, GcpServiceActivationImportData, GcpStorageImportData,
+        AzureRemoteStackManagementImportData, AzureResourceGroupImportData,
+        AzureServiceAccountImportData, AzureStorageAccountImportData, AzureStorageImportData,
+        GcpBuildImportData, GcpKvImportData, GcpServiceActivationImportData, GcpStorageImportData,
+        KubernetesClusterImportData,
     },
     ImportContext,
 };
 use alien_core::{
     ArtifactRegistry, AwsManagementConfig, AzureContainerAppsEnvironment,
     AzureContainerAppsEnvironmentOutputs, AzureManagementConfig, AzureResourceGroup,
-    AzureResourceGroupOutputs, AzureServiceBusNamespace, AzureStorageAccount, Build, Function,
-    GcpManagementConfig, Kv, ManagementConfig, Network, Platform, Queue, RemoteStackManagement,
+    AzureResourceGroupOutputs, AzureServiceBusNamespace, AzureStorageAccount,
+    AzureStorageAccountOutputs, Build, GcpManagementConfig, KubernetesCluster,
+    KubernetesClusterOutputs, KubernetesClusterOwnership, KubernetesClusterProvider,
+    KubernetesHeartbeatMode, Kv, ManagementConfig, Network, Platform, Queue, RemoteStackManagement,
     RemoteStackManagementOutputs, Resource, ResourceDefinition, ResourceEntry, ResourceLifecycle,
     ResourceStatus, ResourceType, ServiceAccount, ServiceActivation, StackSettings, Storage, Vault,
+    Worker,
 };
 use alien_infra::ImporterRegistry;
 use serde_json::json;
+use std::collections::HashMap;
 
 /// Build a `ResourceEntry` whose `config` is `T`. The importer reads
 /// `ctx.resource.config` to derive the resource_type written into the
@@ -46,6 +55,15 @@ fn entry<T: ResourceDefinition>(resource: T) -> ResourceEntry {
     ResourceEntry {
         config: Resource::new(resource),
         lifecycle: ResourceLifecycle::Live,
+        dependencies: vec![],
+        remote_access: false,
+    }
+}
+
+fn frozen_entry<T: ResourceDefinition>(resource: T) -> ResourceEntry {
+    ResourceEntry {
+        config: Resource::new(resource),
+        lifecycle: ResourceLifecycle::Frozen,
         dependencies: vec![],
         remote_access: false,
     }
@@ -66,9 +84,8 @@ fn gcp_management_config() -> ManagementConfig {
 fn azure_management_config() -> ManagementConfig {
     ManagementConfig::Azure(AzureManagementConfig {
         managing_tenant_id: "00000000-0000-0000-0000-000000000000".to_string(),
-        oidc_issuer: None,
-        oidc_subject: None,
-        management_principal_id: None,
+        oidc_issuer: "https://issuer.example".to_string(),
+        oidc_subject: "system:serviceaccount:alien:manager".to_string(),
     })
 }
 
@@ -95,7 +112,7 @@ fn run_through_registry(
         platform,
         region,
         stack_settings: &settings,
-        management_config: management,
+        management_config: Some(management),
         resource: entry,
     };
     registry
@@ -125,6 +142,64 @@ fn assert_running_with_internal_state(state: &alien_core::StackResourceState) {
          got keys: {:?}",
         internal.keys().collect::<Vec<_>>()
     );
+}
+
+fn assert_provisioning_with_internal_state(state: &alien_core::StackResourceState) {
+    assert_eq!(
+        state.status,
+        ResourceStatus::Provisioning,
+        "imported setup resource must finish controller-owned propagation before live provisioning"
+    );
+    let internal = internal_state(state)
+        .as_object()
+        .expect("internal_state must serialize as object");
+    assert!(
+        internal.contains_key("type"),
+        "serialize_controller must inject a `type` discriminator (controller deserialization depends on it). \
+         got keys: {:?}",
+        internal.keys().collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn kubernetes_cluster_handoff_imports_as_running() {
+    let entry = frozen_entry(
+        KubernetesCluster::new("kubernetes".to_string())
+            .provider(KubernetesClusterProvider::Eks)
+            .ownership(KubernetesClusterOwnership::Managed)
+            .namespace("alien-test".to_string())
+            .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+            .build(),
+    );
+    let data = KubernetesClusterImportData {
+        provider: KubernetesClusterProvider::Eks,
+        ownership: KubernetesClusterOwnership::Managed,
+        namespace: "alien-test".to_string(),
+        cluster_name: Some("alien-e2e-a2591da2".to_string()),
+        cluster_id: Some("alien-e2e-a2591da2".to_string()),
+        cloud_metadata_ready: Some(true),
+        azure_application_gateway_for_containers: None,
+    };
+    let state = run_through_registry(
+        &KubernetesCluster::RESOURCE_TYPE,
+        Platform::Kubernetes,
+        serde_json::to_value(&data).unwrap(),
+        &entry,
+        "us-east-2",
+        &aws_management_config(),
+    );
+
+    assert_running_with_internal_state(&state);
+    let outputs = state
+        .outputs
+        .as_ref()
+        .and_then(|outputs| outputs.downcast_ref::<KubernetesClusterOutputs>())
+        .expect("KubernetesCluster import must expose typed outputs");
+    assert!(outputs.kubernetes_api_reachable);
+    assert!(outputs.namespace_ready);
+    assert!(outputs.rbac_ready);
+    assert!(!outputs.agent_ready);
+    assert_eq!(outputs.cloud_metadata_ready, Some(true));
 }
 
 #[test]
@@ -268,6 +343,51 @@ fn gcp_kv_round_trip() {
 }
 
 #[test]
+fn gcp_build_round_trip() {
+    let entry = entry(
+        Build::new("builder".to_string())
+            .permissions("build-execution".to_string())
+            .environment(HashMap::from([(
+                "TEST_VAR".to_string(),
+                "test-value".to_string(),
+            )]))
+            .build(),
+    );
+    let data = GcpBuildImportData {
+        project_id: "my-project".to_string(),
+        region: "us-central1".to_string(),
+        trigger_id: "12345678-1234-1234-1234-123456789abc".to_string(),
+        trigger_name: "alien-stack-builder".to_string(),
+        build_env_vars: HashMap::from([("TEST_VAR".to_string(), "test-value".to_string())]),
+        service_account_email: "builder@my-project.iam.gserviceaccount.com".to_string(),
+    };
+    let state = run_through_registry(
+        &Build::RESOURCE_TYPE,
+        Platform::Gcp,
+        serde_json::to_value(&data).unwrap(),
+        &entry,
+        "us-central1",
+        &gcp_management_config(),
+    );
+    assert_running_with_internal_state(&state);
+    assert_eq!(
+        internal_state(&state)["buildConfigId"],
+        "alien-stack-builder"
+    );
+    assert_eq!(
+        state.remote_binding_params,
+        Some(json!({
+            "service": "cloudbuild",
+            "buildEnvVars": {
+                "TEST_VAR": "test-value",
+            },
+            "serviceAccount": "builder@my-project.iam.gserviceaccount.com",
+            "monitoring": null,
+        }))
+    );
+}
+
+#[test]
 fn gcp_service_activation_round_trip() {
     let entry = entry(
         ServiceActivation::new("activate-run".to_string())
@@ -311,6 +431,42 @@ fn azure_storage_round_trip() {
 }
 
 #[test]
+fn azure_storage_account_round_trip_includes_dependency_outputs() {
+    let entry = entry(AzureStorageAccount::new("default-storage-account".to_string()).build());
+    let data = AzureStorageAccountImportData {
+        subscription_id: "00000000-0000-0000-0000-000000000000".to_string(),
+        resource_group: "rg-alien".to_string(),
+        storage_account_name: "alienstg".to_string(),
+        resource_id: "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-alien/providers/Microsoft.Storage/storageAccounts/alienstg".to_string(),
+        blob_endpoint: "https://alienstg.blob.core.windows.net/".to_string(),
+        file_endpoint: "https://alienstg.file.core.windows.net/".to_string(),
+        queue_endpoint: "https://alienstg.queue.core.windows.net/".to_string(),
+        table_endpoint: "https://alienstg.table.core.windows.net/".to_string(),
+    };
+    let state = run_through_registry(
+        &AzureStorageAccount::RESOURCE_TYPE,
+        Platform::Azure,
+        serde_json::to_value(&data).unwrap(),
+        &entry,
+        "eastus",
+        &azure_management_config(),
+    );
+    assert_running_with_internal_state(&state);
+
+    let outputs = state
+        .outputs
+        .as_ref()
+        .and_then(|outputs| outputs.downcast_ref::<AzureStorageAccountOutputs>())
+        .expect("imported Azure storage account must expose dependency outputs");
+    assert_eq!(outputs.account_name, data.storage_account_name);
+    assert_eq!(outputs.resource_id, data.resource_id);
+    assert_eq!(outputs.primary_blob_endpoint, data.blob_endpoint);
+    assert_eq!(outputs.primary_file_endpoint, data.file_endpoint);
+    assert_eq!(outputs.primary_queue_endpoint, data.queue_endpoint);
+    assert_eq!(outputs.primary_table_endpoint, data.table_endpoint);
+}
+
+#[test]
 fn azure_resource_group_round_trip() {
     let entry = entry(AzureResourceGroup::new("default-resource-group".to_string()).build());
     let data = AzureResourceGroupImportData {
@@ -351,6 +507,7 @@ fn azure_container_apps_environment_round_trip_includes_dependency_outputs() {
         environment_name: "alien-env".to_string(),
         resource_id: "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-alien/providers/Microsoft.App/managedEnvironments/alien-env".to_string(),
         default_domain: "alien-env.example.azurecontainerapps.io".to_string(),
+        custom_domain_verification_id: Some("verification-id".to_string()),
     };
     let state = run_through_registry(
         &AzureContainerAppsEnvironment::RESOURCE_TYPE,
@@ -371,6 +528,33 @@ fn azure_container_apps_environment_round_trip_includes_dependency_outputs() {
     assert_eq!(outputs.resource_id, data.resource_id);
     assert_eq!(outputs.resource_group_name, data.resource_group);
     assert_eq!(outputs.default_domain, data.default_domain);
+    assert_eq!(
+        outputs.custom_domain_verification_id,
+        data.custom_domain_verification_id
+    );
+}
+
+#[test]
+fn azure_service_account_import_waits_for_stack_permission_propagation() {
+    let entry = entry(ServiceAccount::new("execution".to_string()).build());
+    let data = AzureServiceAccountImportData {
+        subscription_id: "00000000-0000-0000-0000-000000000000".to_string(),
+        resource_group: "rg-alien".to_string(),
+        identity_id: "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-alien/providers/Microsoft.ManagedIdentity/userAssignedIdentities/execution".to_string(),
+        client_id: "11111111-1111-1111-1111-111111111111".to_string(),
+        principal_id: "22222222-2222-2222-2222-222222222222".to_string(),
+        stack_permissions_applied: true,
+    };
+    let state = run_through_registry(
+        &ServiceAccount::RESOURCE_TYPE,
+        Platform::Azure,
+        serde_json::to_value(&data).unwrap(),
+        &entry,
+        "eastus",
+        &azure_management_config(),
+    );
+    assert_provisioning_with_internal_state(&state);
+    assert_eq!(internal_state(&state)["state"], "waitingForRbacPropagation");
 }
 
 #[test]
@@ -393,7 +577,8 @@ fn azure_remote_stack_management_round_trip_includes_access_outputs() {
         "eastus",
         &azure_management_config(),
     );
-    assert_running_with_internal_state(&state);
+    assert_provisioning_with_internal_state(&state);
+    assert_eq!(internal_state(&state)["state"], "waitingForRbacPropagation");
 
     let outputs = state
         .outputs
@@ -427,7 +612,7 @@ fn registry_built_in_covers_all_oss_pairs() {
         RemoteStackManagement::RESOURCE_TYPE,
         Build::RESOURCE_TYPE,
         ArtifactRegistry::RESOURCE_TYPE,
-        Function::RESOURCE_TYPE,
+        Worker::RESOURCE_TYPE,
     ];
     for rt in aws_pairs {
         assert!(
@@ -447,7 +632,7 @@ fn registry_built_in_covers_all_oss_pairs() {
         RemoteStackManagement::RESOURCE_TYPE,
         Build::RESOURCE_TYPE,
         ArtifactRegistry::RESOURCE_TYPE,
-        Function::RESOURCE_TYPE,
+        Worker::RESOURCE_TYPE,
         ServiceActivation::RESOURCE_TYPE,
     ];
     for rt in gcp_pairs {
@@ -468,7 +653,7 @@ fn registry_built_in_covers_all_oss_pairs() {
         RemoteStackManagement::RESOURCE_TYPE,
         Build::RESOURCE_TYPE,
         ArtifactRegistry::RESOURCE_TYPE,
-        Function::RESOURCE_TYPE,
+        Worker::RESOURCE_TYPE,
         ServiceActivation::RESOURCE_TYPE,
         AzureResourceGroup::RESOURCE_TYPE,
         AzureStorageAccount::RESOURCE_TYPE,
@@ -483,11 +668,11 @@ fn registry_built_in_covers_all_oss_pairs() {
         );
     }
 
-    // Container / container-cluster live in the platform crate.
-    let container_cluster: ResourceType = "container-cluster".into();
+    // Container / compute-cluster live in the platform crate.
+    let compute_cluster: ResourceType = "compute-cluster".into();
     assert!(
-        registry.importer(&container_cluster, Platform::Aws).is_none(),
-        "container-cluster must not be registered in OSS built_in (it lives in alien-platform-controllers)"
+        registry.importer(&compute_cluster, Platform::Aws).is_none(),
+        "compute-cluster must not be registered in OSS built_in (it lives in alien-platform-controllers)"
     );
 }
 
@@ -502,7 +687,7 @@ fn missing_importer_returns_typed_error() {
         platform: Platform::Kubernetes,
         region: "n/a",
         stack_settings: &settings,
-        management_config: &mgmt,
+        management_config: Some(&mgmt),
         resource: &entry,
     };
     // Storage is registered for AWS/GCP/Azure but not for Kubernetes —

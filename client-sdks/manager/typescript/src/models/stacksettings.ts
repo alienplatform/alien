@@ -23,6 +23,12 @@ import {
   HeartbeatsMode$outboundSchema,
 } from "./heartbeatsmode.js";
 import {
+  KubernetesSettings,
+  KubernetesSettings$inboundSchema,
+  KubernetesSettings$Outbound,
+  KubernetesSettings$outboundSchema,
+} from "./kubernetessettings.js";
+import {
   NetworkSettings,
   NetworkSettings$inboundSchema,
   NetworkSettings$Outbound,
@@ -80,6 +86,7 @@ export type StackSettings = {
    * How heartbeat health checks are handled.
    */
   heartbeats?: HeartbeatsMode | undefined;
+  kubernetes?: KubernetesSettings | null | undefined;
   network?: NetworkSettings | null | undefined;
   /**
    * How telemetry (logs, metrics, traces) is handled.
@@ -130,6 +137,7 @@ export const StackSettings$inboundSchema: z.ZodType<StackSettings, unknown> = z
     externalBindings: z.nullable(z.lazy(() => ExternalBindings$inboundSchema))
       .optional(),
     heartbeats: HeartbeatsMode$inboundSchema.optional(),
+    kubernetes: z.nullable(KubernetesSettings$inboundSchema).optional(),
     network: z.nullable(NetworkSettings$inboundSchema).optional(),
     telemetry: TelemetryMode$inboundSchema.optional(),
     updates: UpdatesMode$inboundSchema.optional(),
@@ -140,6 +148,7 @@ export type StackSettings$Outbound = {
   domains?: DomainSettings$Outbound | null | undefined;
   externalBindings?: ExternalBindings$Outbound | null | undefined;
   heartbeats?: string | undefined;
+  kubernetes?: KubernetesSettings$Outbound | null | undefined;
   network?: NetworkSettings$Outbound | null | undefined;
   telemetry?: string | undefined;
   updates?: string | undefined;
@@ -155,6 +164,7 @@ export const StackSettings$outboundSchema: z.ZodType<
   externalBindings: z.nullable(z.lazy(() => ExternalBindings$outboundSchema))
     .optional(),
   heartbeats: HeartbeatsMode$outboundSchema.optional(),
+  kubernetes: z.nullable(KubernetesSettings$outboundSchema).optional(),
   network: z.nullable(NetworkSettings$outboundSchema).optional(),
   telemetry: TelemetryMode$outboundSchema.optional(),
   updates: UpdatesMode$outboundSchema.optional(),

@@ -18,7 +18,7 @@ let value: ListPackagesResponse = {
       version: "<value>",
       sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
       setupFingerprints: {},
-      packageGeneratorContractVersion: "<value>",
+      packageBuildInputHash: "<value>",
       config: {
         displayName: "Virginia51",
         name: "<value>",

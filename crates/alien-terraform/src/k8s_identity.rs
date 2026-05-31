@@ -3,28 +3,32 @@
 //! Applied on top of cloud emitters when [`crate::TerraformTarget`] is
 //! `Eks` / `Gke` / `Aks`. Wires service-account identity:
 //!
-//! * EKS → IRSA (IAM Role for Service Account, OIDC provider).
+//! * EKS → IRSA (IAM Role for Service Account).
 //! * GKE → Workload Identity (Google service account binding via the
 //!   `iam.workloadIdentityUser` role).
 //! * AKS → User-Assigned Managed Identity + Federated Identity Credentials.
 //!
 //! The overlay reads each `aws_iam_role` / `google_service_account` /
 //! `azurerm_user_assigned_identity` resource the cloud emitter produced
-//! and adds cloud-side trust plus the values Helm needs:
+//! and adds the cloud-side trust needed by imported service-account data:
 //!
 //! 1. The federated trust binding (IAM role-policy / IAM binding /
 //!    federated identity credential).
-//! 2. `helm_values` output data that carries service-account annotations
-//!    and labels for the generated chart. Terraform intentionally does not
-//!    create Kubernetes runtime objects; Helm owns those resources.
+//! 2. Shared locals that let the platform import service-account annotations
+//!    and labels, then render chart values from deployment state. Terraform
+//!    intentionally does not create Kubernetes runtime objects; Helm owns
+//!    those resources.
 
 use crate::{
-    block::{attr, resource_block},
+    block::{attr, block, data_block, nested, resource_block},
     emitter::TfFragment,
     expr,
     target::TerraformTarget,
 };
-use alien_core::{Result, ServiceAccount, Stack};
+use alien_core::{
+    permission_profile_from_service_account_id, RemoteStackManagement, Result, ServiceAccount,
+    Stack,
+};
 use hcl::expr::Expression;
 use indexmap::IndexMap;
 
@@ -39,41 +43,52 @@ pub(crate) fn overlay_per_resource(
         return Ok(());
     }
 
-    let mut sa_labels: Vec<(String, String)> = Vec::new();
+    let cluster_label = kubernetes_cluster_label(stack, resource_labels);
+    let mut service_accounts: Vec<(String, String, String)> = Vec::new();
     for (resource_id, entry) in stack.resources() {
-        if entry.config.downcast_ref::<ServiceAccount>().is_none() {
+        let Some(service_account) = entry.config.downcast_ref::<ServiceAccount>() else {
             continue;
-        }
+        };
         let Some(label) = resource_labels.get(resource_id) else {
             continue;
         };
-        sa_labels.push((resource_id.clone(), label.clone()));
+        service_accounts.push((
+            resource_id.clone(),
+            label.clone(),
+            permission_profile_from_service_account_id(service_account.id()),
+        ));
     }
 
     let mut helm_service_accounts: Vec<(String, Expression)> = Vec::new();
-    for (resource_id, label) in &sa_labels {
+    let mut target_cluster_data_added = false;
+    for (resource_id, label, permission_profile) in &service_accounts {
         let Some(fragment) = per_resource.get_mut(resource_id) else {
             continue;
         };
+        if !target_cluster_data_added {
+            add_target_cluster_data(fragment, target, cluster_label.as_deref());
+            target_cluster_data_added = true;
+        }
+        let service_account_name = terraform_service_account_name_expr(permission_profile);
         let helm_value = match target {
-            TerraformTarget::Eks => Some(apply_eks(fragment, label)),
+            TerraformTarget::Eks => Some(apply_eks(fragment, label, &service_account_name)),
             // GKE / AKS overlays land alongside the GCP / Azure
             // service-account emitters under T4 / T5 — wiring is below
             // but currently dormant until those cloud emitters exist.
             TerraformTarget::Gke if has_block(fragment, "google_service_account") => {
-                Some(apply_gke(fragment, label))
+                Some(apply_gke(fragment, label, &service_account_name))
             }
             TerraformTarget::Aks if has_block(fragment, "azurerm_user_assigned_identity") => {
-                Some(apply_aks(fragment, label))
+                Some(apply_aks(fragment, label, &service_account_name))
             }
             _ => None,
         };
         if let Some(value) = helm_value {
-            helm_service_accounts.push((label.clone(), value));
+            helm_service_accounts.push((permission_profile.clone(), value));
         }
     }
 
-    if !sa_labels.is_empty() {
+    if !service_accounts.is_empty() {
         shared_locals.insert(
             "alien_kubernetes_namespace".to_string(),
             expr::raw("var.kubernetes_namespace"),
@@ -83,17 +98,272 @@ pub(crate) fn overlay_per_resource(
         "helm_service_accounts".to_string(),
         expr::object(helm_service_accounts),
     );
+    let helm_manager_service_account = overlay_manager_service_account(
+        stack,
+        target,
+        resource_labels,
+        per_resource,
+        &mut target_cluster_data_added,
+        cluster_label.as_deref(),
+    );
+    shared_locals.insert(
+        "helm_manager_service_account".to_string(),
+        helm_manager_service_account.unwrap_or_else(|| service_account_values([], [])),
+    );
+    if target == TerraformTarget::Eks && target_cluster_data_added {
+        shared_locals.insert(
+            "eks_oidc_issuer_host_path".to_string(),
+            expr::raw(
+                "trimprefix(data.aws_eks_cluster.target.identity[0].oidc[0].issuer, \"https://\")",
+            ),
+        );
+        shared_locals.insert(
+            "eks_oidc_provider_arn".to_string(),
+            expr::raw(
+                "var.kubernetes_cluster_mode == \"create\" ? aws_iam_openid_connect_provider.eks[0].arn : data.aws_iam_openid_connect_provider.eks_existing[0].arn",
+            ),
+        );
+    }
 
     Ok(())
 }
 
-fn apply_eks(_fragment: &mut TfFragment, label: &str) -> Expression {
-    // The cloud IAM role's trust policy is updated by the customer
-    // out-of-band (one role-trust-policy per OIDC provider per cluster
-    // — see the EKS module README for the kubectl/eksctl trust-policy
-    // template). The chart-level Kubernetes ServiceAccount carries the
-    // `eks.amazonaws.com/role-arn` annotation; pods consuming the SA
-    // get IRSA credentials via the EKS pod identity webhook.
+fn overlay_manager_service_account(
+    stack: &Stack,
+    target: TerraformTarget,
+    resource_labels: &IndexMap<String, String>,
+    per_resource: &mut IndexMap<String, TfFragment>,
+    target_cluster_data_added: &mut bool,
+    cluster_label: Option<&str>,
+) -> Option<Expression> {
+    let manager_service_account_name = "${local.resource_prefix}-manager-sa".to_string();
+    for (resource_id, entry) in stack.resources() {
+        if entry
+            .config
+            .downcast_ref::<RemoteStackManagement>()
+            .is_none()
+        {
+            continue;
+        }
+        let label = resource_labels.get(resource_id)?;
+        let fragment = per_resource.get_mut(resource_id)?;
+        if !*target_cluster_data_added {
+            add_target_cluster_data(fragment, target, cluster_label);
+            *target_cluster_data_added = true;
+        }
+        return match target {
+            TerraformTarget::Eks if has_block(fragment, "aws_iam_role") => {
+                Some(apply_eks(fragment, label, &manager_service_account_name))
+            }
+            TerraformTarget::Gke if has_block(fragment, "google_service_account") => {
+                Some(apply_gke(fragment, label, &manager_service_account_name))
+            }
+            TerraformTarget::Aks if has_block(fragment, "azurerm_user_assigned_identity") => {
+                Some(apply_aks(fragment, label, &manager_service_account_name))
+            }
+            _ => Some(service_account_values([], [])),
+        };
+    }
+    None
+}
+
+fn terraform_service_account_name_expr(permission_profile: &str) -> String {
+    format!("${{local.resource_prefix}}-{permission_profile}-sa")
+}
+
+fn kubernetes_cluster_label(
+    stack: &Stack,
+    resource_labels: &IndexMap<String, String>,
+) -> Option<String> {
+    stack.resources().find_map(|(resource_id, entry)| {
+        entry
+            .config
+            .downcast_ref::<alien_core::KubernetesCluster>()
+            .and_then(|_| resource_labels.get(resource_id).cloned())
+    })
+}
+
+fn add_target_cluster_data(
+    fragment: &mut TfFragment,
+    target: TerraformTarget,
+    cluster_label: Option<&str>,
+) {
+    match target {
+        TerraformTarget::Eks => add_eks_cluster_data(fragment, cluster_label),
+        TerraformTarget::Gke => add_gke_cluster_data(fragment, cluster_label),
+        TerraformTarget::Aks => add_aks_cluster_data(fragment, cluster_label),
+        _ => {}
+    }
+}
+
+fn add_eks_cluster_data(fragment: &mut TfFragment, cluster_label: Option<&str>) {
+    if cluster_label.is_some() {
+        return;
+    }
+    fragment.data_blocks.push(data_block(
+        "aws_eks_cluster",
+        "target",
+        [attr("name", expr::raw("var.eks_cluster_name"))],
+    ));
+    fragment.data_blocks.push(data_block(
+        "tls_certificate",
+        "eks_oidc",
+        [attr(
+            "url",
+            expr::raw("data.aws_eks_cluster.target.identity[0].oidc[0].issuer"),
+        )],
+    ));
+    fragment.data_blocks.push(data_block(
+        "aws_iam_openid_connect_provider",
+        "eks_existing",
+        [
+            attr(
+                "count",
+                expr::raw("var.kubernetes_cluster_mode == \"existing\" ? 1 : 0"),
+            ),
+            attr(
+                "url",
+                expr::raw("data.aws_eks_cluster.target.identity[0].oidc[0].issuer"),
+            ),
+        ],
+    ));
+    fragment.resource_blocks.push(resource_block(
+        "aws_iam_openid_connect_provider",
+        "eks",
+        [
+            attr(
+                "count",
+                expr::raw("var.kubernetes_cluster_mode == \"create\" ? 1 : 0"),
+            ),
+            attr(
+                "url",
+                expr::raw("data.aws_eks_cluster.target.identity[0].oidc[0].issuer"),
+            ),
+            attr(
+                "client_id_list",
+                Expression::Array(vec![Expression::String("sts.amazonaws.com".to_string())]),
+            ),
+            attr(
+                "thumbprint_list",
+                Expression::Array(vec![expr::raw(
+                    "data.tls_certificate.eks_oidc.certificates[0].sha1_fingerprint",
+                )]),
+            ),
+            attr(
+                "tags",
+                expr::object([
+                    ("Name", expr::template("${local.resource_prefix}-eks-oidc")),
+                    ("alien-resource-prefix", expr::raw("local.resource_prefix")),
+                ]),
+            ),
+        ],
+    ));
+}
+
+fn add_gke_cluster_data(fragment: &mut TfFragment, cluster_label: Option<&str>) {
+    if cluster_label.is_some() {
+        return;
+    }
+    let cluster_name = cluster_label
+        .map(|label| format!("local.{label}_cluster_name"))
+        .unwrap_or_else(|| "var.gke_cluster_name".to_string());
+    fragment.data_blocks.push(data_block(
+        "google_container_cluster",
+        "target",
+        [
+            attr("name", expr::raw(cluster_name)),
+            attr("location", expr::raw("var.gke_cluster_location")),
+        ],
+    ));
+}
+
+fn add_aks_cluster_data(fragment: &mut TfFragment, cluster_label: Option<&str>) {
+    if cluster_label.is_some() {
+        return;
+    }
+    let cluster_name = cluster_label
+        .map(|label| format!("local.{label}_cluster_name"))
+        .unwrap_or_else(|| "var.aks_cluster_name".to_string());
+    fragment.data_blocks.push(data_block(
+        "azurerm_kubernetes_cluster",
+        "target",
+        [
+            attr("name", expr::raw(cluster_name)),
+            attr(
+                "resource_group_name",
+                expr::raw("var.aks_cluster_resource_group_name"),
+            ),
+        ],
+    ));
+}
+
+fn apply_eks(fragment: &mut TfFragment, label: &str, service_account_name: &str) -> Expression {
+    fragment.data_blocks.push(data_block(
+        "aws_iam_policy_document",
+        &format!("{label}_assume_role"),
+        [nested(block(
+            "statement",
+            [
+                attr("effect", Expression::String("Allow".to_string())),
+                attr(
+                    "actions",
+                    Expression::Array(vec![Expression::String(
+                        "sts:AssumeRoleWithWebIdentity".to_string(),
+                    )]),
+                ),
+                nested(block(
+                    "principals",
+                    [
+                        attr("type", Expression::String("Federated".to_string())),
+                        attr(
+                            "identifiers",
+                            Expression::Array(vec![expr::raw("local.eks_oidc_provider_arn")]),
+                        ),
+                    ],
+                )),
+                nested(block(
+                    "condition",
+                    [
+                        attr("test", Expression::String("StringEquals".to_string())),
+                        attr(
+                            "variable",
+                            expr::template("${local.eks_oidc_issuer_host_path}:sub"),
+                        ),
+                        attr(
+                            "values",
+                            Expression::Array(vec![expr::template(format!(
+                                "system:serviceaccount:${{var.kubernetes_namespace}}:{service_account_name}"
+                            ))]),
+                        ),
+                    ],
+                )),
+                nested(block(
+                    "condition",
+                    [
+                        attr("test", Expression::String("StringEquals".to_string())),
+                        attr(
+                            "variable",
+                            expr::template("${local.eks_oidc_issuer_host_path}:aud"),
+                        ),
+                        attr(
+                            "values",
+                            Expression::Array(vec![Expression::String(
+                                "sts.amazonaws.com".to_string(),
+                            )]),
+                        ),
+                    ],
+                )),
+            ],
+        ))],
+    ));
+    replace_assume_role_policy(
+        fragment,
+        label,
+        expr::raw(format!(
+            "data.aws_iam_policy_document.{label}_assume_role.json"
+        )),
+    );
+
     service_account_values(
         [(
             "eks.amazonaws.com/role-arn",
@@ -103,7 +373,7 @@ fn apply_eks(_fragment: &mut TfFragment, label: &str) -> Expression {
     )
 }
 
-fn apply_gke(fragment: &mut TfFragment, label: &str) -> Expression {
+fn apply_gke(fragment: &mut TfFragment, label: &str, service_account_name: &str) -> Expression {
     // Workload Identity binding: the IAM service account allows the
     // Kubernetes service account to impersonate it.
     fragment.resource_blocks.push(resource_block(
@@ -121,7 +391,7 @@ fn apply_gke(fragment: &mut TfFragment, label: &str) -> Expression {
             attr(
                 "members",
                 Expression::Array(vec![expr::template(format!(
-                    "serviceAccount:${{var.gcp_project}}.svc.id.goog[${{var.kubernetes_namespace}}/{label}]"
+                    "serviceAccount:${{data.google_container_cluster.target.workload_identity_config[0].workload_pool}}[${{var.kubernetes_namespace}}/{service_account_name}]"
                 ))]),
             ),
         ],
@@ -136,7 +406,7 @@ fn apply_gke(fragment: &mut TfFragment, label: &str) -> Expression {
     )
 }
 
-fn apply_aks(fragment: &mut TfFragment, label: &str) -> Expression {
+fn apply_aks(fragment: &mut TfFragment, label: &str, service_account_name: &str) -> Expression {
     // Federated Identity Credential: trusts the AKS cluster's OIDC
     // issuer for the Kubernetes service-account subject.
     fragment.resource_blocks.push(resource_block(
@@ -145,7 +415,7 @@ fn apply_aks(fragment: &mut TfFragment, label: &str) -> Expression {
         [
             attr(
                 "name",
-                expr::template(format!("${{var.stack_name}}-{label}")),
+                expr::template(format!("${{local.resource_prefix}}-{label}")),
             ),
             attr(
                 "resource_group_name",
@@ -161,11 +431,14 @@ fn apply_aks(fragment: &mut TfFragment, label: &str) -> Expression {
                     "api://AzureADTokenExchange".to_string(),
                 )]),
             ),
-            attr("issuer", expr::raw("var.aks_oidc_issuer_url")),
+            attr(
+                "issuer",
+                expr::raw("data.azurerm_kubernetes_cluster.target.oidc_issuer_url"),
+            ),
             attr(
                 "subject",
                 expr::template(format!(
-                    "system:serviceaccount:${{var.kubernetes_namespace}}:{label}"
+                    "system:serviceaccount:${{var.kubernetes_namespace}}:{service_account_name}"
                 )),
             ),
         ],
@@ -181,6 +454,36 @@ fn apply_aks(fragment: &mut TfFragment, label: &str) -> Expression {
             Expression::String("true".to_string()),
         )],
     )
+}
+
+fn replace_assume_role_policy(fragment: &mut TfFragment, label: &str, value: Expression) {
+    for resource in &mut fragment.resource_blocks {
+        if resource.identifier.as_str() != "resource" {
+            continue;
+        }
+        if resource.labels.first().map(|label| label.as_str()) != Some("aws_iam_role") {
+            continue;
+        }
+        if resource
+            .labels
+            .get(1)
+            .map(|resource_label| resource_label.as_str())
+            != Some(label)
+        {
+            continue;
+        }
+        for structure in &mut resource.body.0 {
+            let hcl::structure::Structure::Attribute(attribute) = structure else {
+                continue;
+            };
+            if attribute.key.as_str() == "assume_role_policy" {
+                attribute.expr = value;
+                return;
+            }
+        }
+        resource.body.0.push(attr("assume_role_policy", value));
+        return;
+    }
 }
 
 fn service_account_values<const A: usize, const L: usize>(

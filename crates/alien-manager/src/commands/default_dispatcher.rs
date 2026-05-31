@@ -7,7 +7,7 @@ use alien_commands::{
     server::CommandDispatcher,
     Envelope,
 };
-use alien_core::{Function, FunctionOutputs, Platform};
+use alien_core::{Platform, Worker, WorkerOutputs};
 use alien_error::{AlienError, Context};
 use async_trait::async_trait;
 use tracing::{debug, info};
@@ -16,7 +16,7 @@ use crate::traits::{CredentialResolver, DeploymentStore, ReleaseStore};
 
 /// Default command dispatcher for standalone alien-manager.
 ///
-/// Looks up the deployment's stack state, finds the function with `commands_enabled=true`,
+/// Looks up the deployment's stack state, finds the worker with `commands_enabled=true`,
 /// reads its `commands_push_target` from outputs, resolves credentials for the target
 /// environment, and dispatches via the platform-specific mechanism.
 pub struct DefaultCommandDispatcher {
@@ -47,8 +47,8 @@ impl DefaultCommandDispatcher {
         }
     }
 
-    /// Find the function with `commands_enabled=true` in the release stack for the given platform.
-    fn find_commands_function(
+    /// Find the worker with `commands_enabled=true` in the release stack for the given platform.
+    fn find_commands_worker(
         &self,
         release: &crate::traits::ReleaseRecord,
         platform: &Platform,
@@ -63,14 +63,14 @@ impl DefaultCommandDispatcher {
         })?;
 
         for (resource_id, entry) in stack.resources() {
-            if let Some(function) = entry.config.downcast_ref::<Function>() {
-                if function.commands_enabled {
+            if let Some(worker) = entry.config.downcast_ref::<Worker>() {
+                if worker.commands_enabled {
                     return Ok(resource_id.clone());
                 }
             }
         }
         Err(AlienError::new(CmdErrorData::Other {
-            message: "No function with commands_enabled=true found in release stack".to_string(),
+            message: "No worker with commands_enabled=true found in release stack".to_string(),
         }))
     }
 }
@@ -119,7 +119,7 @@ impl CommandDispatcher for DefaultCommandDispatcher {
             }));
         }
 
-        // 3. Get release to find the commands-enabled function
+        // 3. Get release to find the commands-enabled worker
         let release_id = deployment.current_release_id.as_ref().ok_or_else(|| {
             AlienError::new(CmdErrorData::Other {
                 message: format!("Deployment {} has no current_release_id", deployment_id),
@@ -139,8 +139,8 @@ impl CommandDispatcher for DefaultCommandDispatcher {
                 })
             })?;
 
-        // 4. Find function with commands_enabled and get its push target from stack state
-        let function_id = self.find_commands_function(&release, &deployment.platform)?;
+        // 4. Find worker with commands_enabled and get its push target from stack state
+        let worker_id = self.find_commands_worker(&release, &deployment.platform)?;
 
         let stack_state = deployment.stack_state.as_ref().ok_or_else(|| {
             AlienError::new(CmdErrorData::Other {
@@ -148,20 +148,21 @@ impl CommandDispatcher for DefaultCommandDispatcher {
             })
         })?;
 
-        let function_outputs: &FunctionOutputs = stack_state
-            .get_resource_outputs(&function_id)
-            .context(CmdErrorData::Other {
-                message: format!("Failed to get function outputs for '{}'", function_id),
-            })?;
+        let worker_outputs: &WorkerOutputs =
+            stack_state
+                .get_resource_outputs(&worker_id)
+                .context(CmdErrorData::Other {
+                    message: format!("Failed to get worker outputs for '{}'", worker_id),
+                })?;
 
-        let push_target = function_outputs
+        let push_target = worker_outputs
             .commands_push_target
             .as_ref()
             .ok_or_else(|| {
                 AlienError::new(CmdErrorData::Other {
                     message: format!(
-                        "Function '{}' has no commands_push_target in outputs",
-                        function_id
+                        "Worker '{}' has no commands_push_target in outputs",
+                        worker_id
                     ),
                 })
             })?;

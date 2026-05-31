@@ -3,9 +3,14 @@ use tracing::{debug, info};
 
 use crate::core::{EnvironmentVariableBuilder, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
-use alien_core::{Build, BuildOutputs, ResourceOutputs, ResourceRef, ResourceStatus};
+use alien_core::{
+    AzureContainerAppsBuildHeartbeatData, Build, BuildHeartbeatData, BuildHeartbeatStatus,
+    BuildOutputs, HeartbeatBackend, ObservedHealth, Platform, ProviderLifecycleState,
+    ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs, ResourceRef, ResourceStatus,
+};
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_macros::{controller, flow_entry, handler, terminal_state};
+use alien_macros::controller;
+use chrono::Utc;
 
 #[controller]
 pub struct AzureBuildController {
@@ -122,6 +127,8 @@ impl AzureBuildController {
             }));
         }
 
+        emit_azure_build_heartbeat(ctx, &config.id, self);
+
         debug!(name = %config.id, "Heartbeat check passed");
         Ok(HandlerAction::Continue {
             state: Ready,
@@ -234,7 +241,7 @@ impl AzureBuildController {
     }
 
     fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
-        use alien_core::bindings::{BindingValue, BuildBinding};
+        use alien_core::bindings::BuildBinding;
 
         if let (
             Some(managed_environment_id),
@@ -345,11 +352,15 @@ impl AzureBuildController {
         let azure_config = ctx.get_azure_config()?;
 
         // Build permission context for this specific build resource
-        let permission_context = PermissionContext::new()
+        let mut permission_context = PermissionContext::new()
             .with_subscription_id(azure_config.subscription_id.clone())
             .with_resource_group(self.resource_group_name.as_ref().unwrap().clone())
             .with_stack_prefix(ctx.resource_prefix.to_string())
             .with_resource_name(build_id.to_string());
+        if let Some(deployment_name) = ctx.deployment_name_for_metadata() {
+            permission_context =
+                permission_context.with_deployment_name(deployment_name.to_string());
+        }
 
         // Build Azure resource scope for the Container Apps environment (build execution environment)
         // Use the environment's own resource group, which may differ from the stack's RG
@@ -391,6 +402,52 @@ impl AzureBuildController {
             _internal_stay_count: None,
         }
     }
+}
+
+fn emit_azure_build_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    controller: &AzureBuildController,
+) {
+    let managed_environment_id = controller
+        .managed_environment_id
+        .clone()
+        .unwrap_or_default();
+    let resource_group_name = controller.resource_group_name.clone().unwrap_or_default();
+
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: Build::RESOURCE_TYPE,
+        controller_platform: Platform::Azure,
+        backend: HeartbeatBackend::Azure,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::Build(BuildHeartbeatData::AzureContainerApps(
+            AzureContainerAppsBuildHeartbeatData {
+                status: BuildHeartbeatStatus {
+                    health: ObservedHealth::Healthy,
+                    lifecycle: ProviderLifecycleState::Running,
+                    message: Some(format!(
+                        "Azure Container Apps build configuration '{}' is ready",
+                        resource_id
+                    )),
+                    stale: false,
+                    partial: false,
+                    collection_issues: vec![],
+                },
+                managed_environment_id,
+                resource_group_name,
+                managed_identity_id: controller.managed_identity_id.clone(),
+                resource_prefix: controller.resource_prefix.clone(),
+                environment_variable_count: controller
+                    .build_env_vars
+                    .as_ref()
+                    .map(|env_vars| env_vars.len() as u32)
+                    .unwrap_or(0),
+            },
+        )),
+        raw: vec![],
+    });
 }
 
 #[cfg(test)]

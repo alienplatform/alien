@@ -37,7 +37,7 @@ use crate::error::{ErrorData, Result};
 use crate::events::gcp::{
     pubsub_cloudevent_to_queue_messages, storage_cloudevent_to_storage_events,
 };
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::{Context, IntoAlienError};
 
 /// Cloud Run transport
 pub struct CloudRunTransport {

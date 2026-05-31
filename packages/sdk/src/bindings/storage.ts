@@ -514,6 +514,7 @@ export class Storage {
         })
         return {
           url: response.url,
+          headers: Object.fromEntries(response.headers.map(header => [header.key, header.value])),
           expiresAt: expirationTime,
         }
       },

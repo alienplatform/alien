@@ -6,6 +6,10 @@ import * as z from "zod/v4";
 import { safeParse } from "../lib/schemas.js";
 import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
+import {
+  APIKeyDeploymentSetupConfig,
+  APIKeyDeploymentSetupConfig$inboundSchema,
+} from "./apikeydeploymentsetupconfig.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 export const APIKeyType = {
@@ -48,6 +52,7 @@ export type APIKey = {
   expiresAt: Date | null;
   lastUsedAt: Date | null;
   revokedAt: Date | null;
+  deploymentSetupConfig: APIKeyDeploymentSetupConfig | null;
   /**
    * User information associated with the API key
    */
@@ -100,6 +105,7 @@ export const APIKey$inboundSchema: z.ZodType<APIKey, unknown> = z.object({
   revokedAt: z.nullable(
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   ),
+  deploymentSetupConfig: z.nullable(APIKeyDeploymentSetupConfig$inboundSchema),
   createdByUser: z.nullable(z.lazy(() => CreatedByUser$inboundSchema)),
 });
 

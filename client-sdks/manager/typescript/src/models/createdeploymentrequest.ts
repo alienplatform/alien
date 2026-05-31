@@ -23,6 +23,7 @@ export type CreateDeploymentRequest = {
    * Represents the target cloud platform.
    */
   platform: PlatformEnum;
+  resourcePrefix?: string | null | undefined;
   stackSettings?: StackSettings | null | undefined;
 };
 
@@ -32,6 +33,7 @@ export type CreateDeploymentRequest$Outbound = {
   environmentVariables?: Array<EnvironmentVariable$Outbound> | null | undefined;
   name: string;
   platform: string;
+  resourcePrefix?: string | null | undefined;
   stackSettings?: StackSettings$Outbound | null | undefined;
 };
 
@@ -45,6 +47,7 @@ export const CreateDeploymentRequest$outboundSchema: z.ZodType<
     .optional(),
   name: z.string(),
   platform: PlatformEnum$outboundSchema,
+  resourcePrefix: z.nullable(z.string()).optional(),
   stackSettings: z.nullable(StackSettings$outboundSchema).optional(),
 });
 

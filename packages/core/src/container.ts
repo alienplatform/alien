@@ -5,6 +5,7 @@ import {
   type ContainerGpuSpec,
   ContainerSchema,
   type HealthCheck,
+  type PersistentStorage,
   type ResourceSpec,
   type ResourceType,
 } from "./generated/index.js"
@@ -32,6 +33,15 @@ export {
   ContainerAutoscalingSchema,
 } from "./generated/index.js"
 
+export interface PersistentStorageOptions {
+  /**
+   * Mount path inside the container.
+   *
+   * Defaults to `/data`.
+   */
+  mountPath?: string
+}
+
 /**
  * Represents a long-running container workload.
  *
@@ -45,7 +55,7 @@ export class Container {
     ports: [],
     environment: {},
     stateful: false,
-    // cluster is optional - if not set, ContainerClusterMutation will auto-assign
+    // cluster is optional - if not set, ComputeClusterMutation will auto-assign
   }
 
   /**
@@ -67,7 +77,7 @@ export class Container {
 
   /**
    * Sets the container cluster this container runs on.
-   * @param clusterId The ContainerCluster resource ID.
+   * @param clusterId The ComputeCluster resource ID.
    * @returns The Container builder instance.
    */
   public cluster(clusterId: string): this {
@@ -280,16 +290,19 @@ export class Container {
   }
 
   /**
-   * Configures persistent storage (requires stateful=true).
+   * Configures persistent storage and marks the container stateful.
    * Data survives container restarts.
    * @param size Storage size (e.g., "100Gi", "500Gi", "1Ti").
+   * @param options Optional mount path.
    * @returns The Container builder instance.
    */
-  public persistentStorage(size: string): this {
-    this._config.persistentStorage = {
+  public persistentStorage(size: string, options: PersistentStorageOptions = {}): this {
+    const persistentStorage: PersistentStorage = {
       size,
-      mountPath: "/data",
+      mountPath: options.mountPath ?? "/data",
     }
+
+    this._config.persistentStorage = persistentStorage
     this._config.stateful = true
     return this
   }

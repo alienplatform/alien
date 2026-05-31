@@ -14,6 +14,7 @@ export const GcpBuildImportDataSchema = z.object({
     }).catchall(z.string()).describe("Environment variables stamped into the trigger's substitutions."),
 "projectId": z.string().describe("Project ID hosting the trigger."),
 "region": z.string().describe("Region where the trigger runs."),
+"serviceAccountEmail": z.string().describe("Service account email Cloud Build uses when running builds."),
 "triggerId": z.string().describe("Cloud Build trigger ID."),
 "triggerName": z.string().describe("Cloud Build trigger name.")
     }).describe("GCP Build ImportData — Cloud Build trigger + worker pool reference.")

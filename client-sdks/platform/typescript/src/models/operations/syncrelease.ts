@@ -14,7 +14,7 @@ export type SyncReleaseRequest = {
    * Workspace name. Defaults to your last workspace (user auth) or your API key's workspace (token auth). When using an API key, if provided, must match the key's workspace.
    */
   workspace?: string | undefined;
-  syncReleaseRequest?: models.SyncReleaseRequest | undefined;
+  syncReleaseRequest: models.SyncReleaseRequest;
 };
 
 /**
@@ -27,7 +27,7 @@ export type SyncReleaseResponse = {
 /** @internal */
 export type SyncReleaseRequest$Outbound = {
   workspace?: string | undefined;
-  SyncReleaseRequest?: models.SyncReleaseRequest$Outbound | undefined;
+  SyncReleaseRequest: models.SyncReleaseRequest$Outbound;
 };
 
 /** @internal */
@@ -36,7 +36,7 @@ export const SyncReleaseRequest$outboundSchema: z.ZodType<
   SyncReleaseRequest
 > = z.object({
   workspace: z.string().optional(),
-  syncReleaseRequest: models.SyncReleaseRequest$outboundSchema.optional(),
+  syncReleaseRequest: models.SyncReleaseRequest$outboundSchema,
 }).transform((v) => {
   return remap$(v, {
     syncReleaseRequest: "SyncReleaseRequest",

@@ -9,9 +9,7 @@ use async_trait::async_trait;
 /// Kubernetes Container implementation that provides URLs for container-to-container communication
 #[derive(Debug)]
 pub struct KubernetesContainer {
-    namespace: String,
     service_name: String,
-    service_port: u16,
     public_url: Option<String>,
     internal_url: String,
 }
@@ -61,9 +59,7 @@ impl KubernetesContainer {
         );
 
         Ok(Self {
-            namespace,
             service_name: service_name.clone(),
-            service_port,
             public_url,
             internal_url,
         })

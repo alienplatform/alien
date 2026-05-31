@@ -6,6 +6,7 @@ use alien_core::{Platform, StackSettings, TelemetryMode, UpdatesMode};
 use bon::Builder;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::net::{IpAddr, Ipv4Addr};
 use url::Url;
 
 /// Sync configuration for connecting to remote management server
@@ -29,6 +30,9 @@ pub struct SyncConfig {
 pub struct AgentConfig {
     /// Target cloud platform
     pub platform: Platform,
+
+    /// Optional base cloud platform for cloud-backed Kubernetes.
+    pub base_platform: Option<Platform>,
 
     /// Sync configuration (None = airgapped mode)
     pub sync: Option<SyncConfig>,
@@ -61,6 +65,10 @@ pub struct AgentConfig {
     /// OTLP server port (for local functions to send telemetry)
     #[builder(default = 4318)]
     pub otlp_server_port: u16,
+
+    /// OTLP server bind host.
+    #[builder(default = IpAddr::V4(Ipv4Addr::LOCALHOST))]
+    pub otlp_server_host: IpAddr,
 
     /// HTTP server port for airgapped CLI APIs (None = disabled)
     pub api_server_port: Option<u16>,
@@ -125,6 +133,7 @@ mod tests {
         assert_eq!(config.data_dir, ".alien-agent");
         assert_eq!(config.sync_interval_seconds, 30);
         assert_eq!(config.deployment_interval_seconds, 1);
+        assert_eq!(config.otlp_server_host, IpAddr::V4(Ipv4Addr::LOCALHOST));
         assert_eq!(config.otlp_server_port, 4318);
         assert!(!config.is_airgapped());
         assert!(!config.requires_deployment_approval());
@@ -141,6 +150,7 @@ mod tests {
             .encryption_key("key")
             .data_dir("/var/agent")
             .sync_interval_seconds(60)
+            .otlp_server_host(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
             .maybe_stack_settings(Some(alien_core::StackSettings {
                 updates: alien_core::UpdatesMode::ApprovalRequired,
                 telemetry: alien_core::TelemetryMode::Auto,
@@ -148,6 +158,7 @@ mod tests {
                 deployment_model: alien_core::DeploymentModel::Pull,
                 network: None,
                 domains: None,
+                kubernetes: None,
                 external_bindings: None,
             }))
             .api_server_port(8080)
@@ -155,6 +166,7 @@ mod tests {
 
         assert_eq!(config.data_dir, "/var/agent");
         assert_eq!(config.sync_interval_seconds, 60);
+        assert_eq!(config.otlp_server_host, IpAddr::V4(Ipv4Addr::UNSPECIFIED));
         assert!(config.requires_deployment_approval());
         assert!(!config.requires_telemetry_approval());
         assert!(config.is_telemetry_enabled());
@@ -184,6 +196,7 @@ mod tests {
                 deployment_model: alien_core::DeploymentModel::Pull,
                 network: None,
                 domains: None,
+                kubernetes: None,
                 external_bindings: None,
             }))
             .build();
@@ -205,6 +218,7 @@ mod tests {
                 deployment_model: alien_core::DeploymentModel::Pull,
                 network: None,
                 domains: None,
+                kubernetes: None,
                 external_bindings: None,
             }))
             .build();
@@ -226,6 +240,7 @@ mod tests {
                 deployment_model: alien_core::DeploymentModel::Pull,
                 network: None,
                 domains: None,
+                kubernetes: None,
                 external_bindings: None,
             }))
             .build();

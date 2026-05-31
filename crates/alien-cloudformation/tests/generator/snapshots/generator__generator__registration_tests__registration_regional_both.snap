@@ -1,0 +1,268 @@
+---
+source: crates/alien-cloudformation/tests/generator/registration_tests.rs
+expression: yaml
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: registration regional both
+Transform:
+- AWS::LanguageExtensions
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+    - Label:
+        default: Registration
+      Parameters:
+      - Token
+      - ManagingRoleArn
+      - ManagingAccountId
+    - Label:
+        default: Custom domain
+      Parameters:
+      - DomainName
+      - HostedZoneId
+      - CertificateArn
+    - Label:
+        default: Operations
+      Parameters:
+      - UpdatesMode
+      - TelemetryMode
+      - HeartbeatsMode
+    ParameterLabels:
+      CertificateArn:
+        default: Certificate ARN
+      DomainName:
+        default: Domain name
+      HeartbeatsMode:
+        default: Heartbeats
+      HostedZoneId:
+        default: Hosted zone ID
+      ManagingAccountId:
+        default: Manager account ID
+      ManagingRoleArn:
+        default: Manager role ARN
+      TelemetryMode:
+        default: Telemetry
+      Token:
+        default: Install token
+      UpdatesMode:
+        default: Updates
+Parameters:
+  Token:
+    Type: String
+    Description: Install token from the application setup page.
+    NoEcho: true
+  ManagingRoleArn:
+    Type: String
+    Description: Manager IAM role ARN allowed to assume generated management roles.
+  ManagingAccountId:
+    Type: String
+    Description: AWS account ID for the management account that hosts application container images.
+    Default: ''
+  NetworkMode:
+    Type: String
+    Description: Choose create-new for a managed VPC, use-existing for your VPC, or use-default for the account default VPC.
+    Default: create-new
+    AllowedValues:
+    - create-new
+    - use-existing
+    - use-default
+  DomainName:
+    Type: String
+    Description: Optional custom domain for public endpoints. Leave unset to expose through the generated load balancer DNS name over HTTP.
+    Default: ''
+  HostedZoneId:
+    Type: String
+    Description: Route 53 hosted zone ID for the custom domain. Not needed for the auto-generated domain.
+    Default: ''
+  CertificateArn:
+    Type: String
+    Description: ACM certificate ARN for the custom domain. Required when DomainName is set.
+    Default: ''
+  UpdatesMode:
+    Type: String
+    Description: How updates are applied after import.
+    Default: auto
+    AllowedValues:
+    - auto
+    - approval-required
+  TelemetryMode:
+    Type: String
+    Description: Telemetry collection behavior.
+    Default: auto
+    AllowedValues:
+    - "off"
+    - auto
+    - approval-required
+  HeartbeatsMode:
+    Type: String
+    Description: Heartbeat health-check behavior.
+    Default: "on"
+    AllowedValues:
+    - "off"
+    - "on"
+Mappings:
+  RegionalCustomResourceServiceTokens:
+    us-east-1:
+      ServiceToken: arn:aws:lambda:us-east-1:123456789012:function:alien-import
+    eu-west-1:
+      ServiceToken: arn:aws:lambda:eu-west-1:123456789012:function:alien-import
+Conditions:
+  HasDomainName:
+    Fn::Not:
+    - Fn::Equals:
+      - Ref: DomainName
+      - ''
+Rules:
+  SupportedAwsRegion:
+    Assertions:
+    - Assert:
+        Fn::Contains:
+        - - us-east-1
+          - eu-west-1
+        - Ref: AWS::Region
+      AssertDescription: 'This template can only be launched in AWS regions supported by this Alien environment: us-east-1, eu-west-1.'
+Resources:
+  LogsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName:
+        Fn::Sub: ${AWS::StackName}-logs-bucket
+  DeploymentStackImport:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken:
+        Fn::FindInMap:
+        - RegionalCustomResourceServiceTokens
+        - Ref: AWS::Region
+        - ServiceToken
+      Token:
+        Ref: Token
+      DeploymentName:
+        Ref: AWS::StackName
+      ResourcePrefix:
+        Ref: AWS::StackName
+      SourceKind: cloudformation
+      Platform: aws
+      Region:
+        Ref: AWS::Region
+      SetupTarget: aws
+      SetupImportFormatVersion: 1
+      SetupFingerprint: test
+      SetupFingerprintVersion: 1
+      ManagementConfig:
+        platform: aws
+        managingRoleArn:
+          Ref: ManagingRoleArn
+      StackSettings:
+        deploymentModel: push
+        updates:
+          Ref: UpdatesMode
+        telemetry:
+          Ref: TelemetryMode
+        heartbeats:
+          Ref: HeartbeatsMode
+        network:
+          Ref: AWS::NoValue
+        domains:
+          Fn::If:
+          - HasDomainName
+          - customDomains:
+              default:
+                domain:
+                  Ref: DomainName
+                certificate:
+                  aws:
+                    certificateArn:
+                      Ref: CertificateArn
+          - Ref: AWS::NoValue
+      Resources:
+      - id: logs-bucket
+        type: sample-resource
+        importData:
+          bucketName:
+            Ref: LogsBucket
+          bucketArn:
+            Fn::GetAtt:
+            - LogsBucket
+            - Arn
+      CallbackUrl: https://api.dev.example.com
+    DependsOn:
+    - LogsBucket
+Outputs:
+  DeploymentSourceKind:
+    Value: cloudformation
+    Description: Setup source kind.
+  DeploymentId:
+    Value:
+      Fn::GetAtt:
+      - DeploymentStackImport
+      - DeploymentId
+    Description: Imported deployment ID.
+  DeploymentResourcePrefix:
+    Value:
+      Ref: AWS::StackName
+    Description: Stable physical resource prefix.
+  DeploymentPlatform:
+    Value: aws
+    Description: Target platform.
+  DeploymentRegion:
+    Value:
+      Ref: AWS::Region
+    Description: AWS region.
+  DeploymentSetupTarget:
+    Value: aws
+    Description: Setup target.
+  DeploymentSetupFingerprint:
+    Value: test
+    Description: Setup compatibility fingerprint.
+  DeploymentSetupImportFormatVersion:
+    Value: 1
+    Description: Setup import payload format version.
+  DeploymentSetupFingerprintVersion:
+    Value: 1
+    Description: Setup fingerprint algorithm version.
+  DeploymentManagementConfig:
+    Value:
+      Fn::ToJsonString:
+        platform: aws
+        managingRoleArn:
+          Ref: ManagingRoleArn
+    Description: Manager import ManagementConfig JSON.
+  DeploymentStackSettings:
+    Value:
+      Fn::ToJsonString:
+        deploymentModel: push
+        updates:
+          Ref: UpdatesMode
+        telemetry:
+          Ref: TelemetryMode
+        heartbeats:
+          Ref: HeartbeatsMode
+        network:
+          Ref: AWS::NoValue
+        domains:
+          Fn::If:
+          - HasDomainName
+          - customDomains:
+              default:
+                domain:
+                  Ref: DomainName
+                certificate:
+                  aws:
+                    certificateArn:
+                      Ref: CertificateArn
+          - Ref: AWS::NoValue
+    Description: Manager import StackSettings JSON.
+  DeploymentResources:
+    Value:
+      Fn::ToJsonString:
+      - id: logs-bucket
+        type: sample-resource
+        importData:
+          bucketName:
+            Ref: LogsBucket
+          bucketArn:
+            Fn::GetAtt:
+            - LogsBucket
+            - Arn
+    Description: Manager import resources JSON.

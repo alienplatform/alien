@@ -26,7 +26,7 @@
     "gcp": [
       {
         "grant": {
-          "permissions": ["datastore.entities.get", "datastore.entities.list"]
+          "predefinedRoles": ["roles/datastore.viewer"]
         },
         // Firestore uses the (default) database shared across stacks.
         // Isolation is enforced at the collection level by the application (collection names
@@ -41,8 +41,7 @@
     "azure": [
       {
         "grant": {
-          "actions": ["Microsoft.Storage/storageAccounts/tableServices/read"],
-          "dataActions": ["Microsoft.Storage/storageAccounts/tableServices/tables/entities/read"]
+          "predefinedRoles": ["Storage Table Data Reader"]
         },
         "binding": {
           "stack": {

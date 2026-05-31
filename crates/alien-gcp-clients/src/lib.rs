@@ -17,6 +17,7 @@ pub use gcp::cloudbuild::{CloudBuildApi, CloudBuildClient};
 pub use gcp::cloudrun::{CloudRunApi, CloudRunClient};
 pub use gcp::cloudscheduler::{CloudSchedulerApi, CloudSchedulerClient};
 pub use gcp::compute::{ComputeApi, ComputeClient};
+pub use gcp::container::{ContainerApi, ContainerClient};
 pub use gcp::firestore::{FirestoreApi, FirestoreClient};
 pub use gcp::gcs::{GcsApi, GcsClient};
 pub use gcp::iam::{IamApi, IamClient};

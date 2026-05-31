@@ -10,6 +10,7 @@
 
 use crate::compile_time::stack_requires_network;
 use crate::error::Result;
+use crate::mutations::runs_on_platform_or_base;
 use crate::StackMutation;
 use alien_core::{
     DeploymentConfig, Network, NetworkSettings, Platform, ResourceEntry, ResourceLifecycle, Stack,
@@ -47,13 +48,15 @@ impl StackMutation for NetworkMutation {
         stack_state: &StackState,
         config: &DeploymentConfig,
     ) -> bool {
-        // Only cloud platforms need VPC networking
-        if !matches!(
-            stack_state.platform,
-            Platform::Aws | Platform::Gcp | Platform::Azure
-        ) {
+        let target_platform = if stack_state.platform == Platform::Aws {
+            Platform::Aws
+        } else if runs_on_platform_or_base(stack_state, config, Platform::Gcp) {
+            Platform::Gcp
+        } else if runs_on_platform_or_base(stack_state, config, Platform::Azure) {
+            Platform::Azure
+        } else {
             return false;
-        }
+        };
 
         // Don't create a duplicate if network already exists
         if stack
@@ -68,7 +71,7 @@ impl StackMutation for NetworkMutation {
             Some(network_settings) => {
                 // Explicit settings: verify BYO-VPC matches target platform
                 matches!(
-                    (network_settings, stack_state.platform),
+                    (network_settings, target_platform),
                     (NetworkSettings::UseDefault, _)
                         | (NetworkSettings::Create { .. }, _)
                         | (NetworkSettings::ByoVpcAws { .. }, Platform::Aws)

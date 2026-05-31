@@ -45,10 +45,6 @@ pub struct AzureStorageAccountOutputs {
     pub primary_queue_endpoint: String,
     /// The primary endpoint for table storage.
     pub primary_table_endpoint: String,
-    /// The primary access key for the storage account.
-    pub primary_access_key: String,
-    /// The connection string for the storage account.
-    pub connection_string: String,
 }
 
 impl ResourceOutputsDefinition for AzureStorageAccountOutputs {

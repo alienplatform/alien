@@ -92,6 +92,7 @@ async function $do(
     "cursor": payload?.cursor,
     "limit": payload?.limit,
     "project": payload?.project,
+    "search": payload?.search,
     "status": payload?.status,
     "type": payload?.type,
     "workspace": payload?.workspace,

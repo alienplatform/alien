@@ -19,8 +19,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use alien_core::{
-    DeploymentModel, DeploymentState, DeploymentStatus, Function, FunctionCode, Ingress, Platform,
-    ReadinessProbe, ReleaseInfo, Stack, StackSettings,
+    DeploymentModel, DeploymentState, DeploymentStatus, Ingress, Platform, ReadinessProbe,
+    ReleaseInfo, Stack, StackSettings, Worker, WorkerCode,
 };
 use alien_manager::auth::{Role, Scope, Subject, SubjectKind};
 use alien_manager::config::ManagerConfig;
@@ -88,8 +88,8 @@ fn hash_token(raw: &str) -> (String, String) {
 }
 
 fn test_stack(function_id: &str, image_uri: &str) -> Stack {
-    let function = Function::new(function_id.to_string())
-        .code(FunctionCode::Image {
+    let function = Worker::new(function_id.to_string())
+        .code(WorkerCode::Image {
             image: image_uri.to_string(),
         })
         .permissions("execution".to_string())
@@ -267,6 +267,7 @@ impl CloudProxyTest {
             ),
             releases_url: None,
             targets: vec![platform],
+            supported_aws_regions: Vec::new(),
             disable_deployment_loop: true,
             disable_heartbeat_loop: true,
             enable_local_log_ingest: false,
@@ -321,13 +322,16 @@ impl CloudProxyTest {
             .create_deployment(
                 &test_subject(),
                 CreateDeploymentParams {
+                    deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
                     name: "cloud-proxy-deploy".to_string(),
                     deployment_group_id: dg.id.clone(),
                     platform,
+                    base_platform: None,
                     stack_settings: StackSettings {
                         deployment_model: DeploymentModel::Pull,
                         ..Default::default()
                     },
+                    stack_state: None,
                     environment_variables: None,
                     deployment_token: Some(deploy_raw.clone()),
                 },
@@ -441,6 +445,7 @@ impl CloudProxyTest {
                     session: "cloud-proxy-test".to_string(),
                     state,
                     update_heartbeat: false,
+                    heartbeats: vec![],
                     error: None,
                     suggested_delay_ms: None,
                 },

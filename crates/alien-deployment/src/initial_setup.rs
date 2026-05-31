@@ -94,6 +94,7 @@ pub async fn handle_initial_setup(
         .deployment_config(&config)
         .service_provider(service_provider)
         .lifecycle_filter(vec![ResourceLifecycle::Frozen])
+        .step_running_resources(false)
         .build()
         .context(ErrorData::StackExecutionFailed {
             message: "Failed to create stack executor for initial setup".to_string(),
@@ -152,6 +153,7 @@ pub async fn handle_initial_setup(
             error: None,
             suggested_delay_ms: Some(10_000),
             update_heartbeat: false,
+            heartbeats: vec![],
         }
     } else if stack_status == StackStatus::Failure {
         info!("Initial setup failed");
@@ -194,6 +196,7 @@ pub async fn handle_initial_setup(
             error,
             suggested_delay_ms: None,
             update_heartbeat: false,
+            heartbeats: vec![],
         }
     } else {
         // Still in progress — log which Frozen resources are not yet running.
@@ -213,6 +216,7 @@ pub async fn handle_initial_setup(
             error: None,
             suggested_delay_ms: step_result.suggested_delay_ms,
             update_heartbeat: false,
+            heartbeats: step_result.heartbeats,
         }
     };
 
@@ -286,6 +290,7 @@ pub async fn handle_initial_setup_failed(
             error: None,
             suggested_delay_ms: None,
             update_heartbeat: false,
+            heartbeats: vec![],
         });
     }
 
@@ -317,5 +322,6 @@ pub async fn handle_initial_setup_failed(
         error: None,
         suggested_delay_ms: None,
         update_heartbeat: false,
+        heartbeats: vec![],
     })
 }

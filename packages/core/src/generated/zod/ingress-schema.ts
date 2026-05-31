@@ -6,8 +6,8 @@
 import * as z from "zod";
 
 /**
- * @description Controls network accessibility of the function.
+ * @description Controls network accessibility of the worker.
  */
-export const IngressSchema = z.enum(["public", "private"]).describe("Controls network accessibility of the function.")
+export const IngressSchema = z.enum(["public", "private"]).describe("Controls network accessibility of the worker.")
 
 export type Ingress = z.infer<typeof IngressSchema>

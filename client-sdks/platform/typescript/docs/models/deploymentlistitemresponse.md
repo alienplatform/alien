@@ -11,13 +11,14 @@ let value: DeploymentListItemResponse = {
   status: "refresh-failed",
   projectId: "prj_mcytp6z3j91f7tn5ryqsfwtr",
   platform: "test",
+  deploymentProtocolVersion: 850514,
   deploymentGroupId: "dg_r27ict8c7vcgsumpj90ackf7b",
   currentReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
   desiredReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
   pinnedReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
-  retryRequested: false,
-  createdAt: new Date("2025-02-20T18:21:31.698Z"),
-  updatedAt: new Date("2026-01-02T04:46:33.633Z"),
+  retryRequested: true,
+  createdAt: new Date("2026-01-02T04:46:33.633Z"),
+  updatedAt: new Date("2026-09-13T22:49:00.377Z"),
   managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
   workspaceId: "ws_It13CUaGEhLLAB87simX0",
   release: {
@@ -35,7 +36,7 @@ let value: DeploymentListItemResponse = {
       commitAuthorLogin: "johndoe",
       commitAuthorAvatarUrl: "https://github.com/johndoe.png",
     },
-    createdAt: new Date("2024-12-03T20:05:51.098Z"),
+    createdAt: new Date("2024-04-17T05:47:54.417Z"),
   },
   deploymentGroup: {
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
@@ -57,6 +58,7 @@ let value: DeploymentListItemResponse = {
 | `status`                                                                                             | [models.DeploymentListItemResponseStatus](../models/deploymentlistitemresponsestatus.md)             | :heavy_check_mark:                                                                                   | Deployment status in the deployment lifecycle                                                        |                                                                                                      |
 | `projectId`                                                                                          | *string*                                                                                             | :heavy_check_mark:                                                                                   | Unique identifier for the project.                                                                   | prj_mcytp6z3j91f7tn5ryqsfwtr                                                                         |
 | `platform`                                                                                           | [models.DeploymentListItemResponsePlatform](../models/deploymentlistitemresponseplatform.md)         | :heavy_check_mark:                                                                                   | Target platform for the deployment                                                                   |                                                                                                      |
+| `deploymentProtocolVersion`                                                                          | *number*                                                                                             | :heavy_check_mark:                                                                                   | DeploymentState protocol version owned by the runtime/manager                                        |                                                                                                      |
 | `deploymentGroupId`                                                                                  | *string*                                                                                             | :heavy_check_mark:                                                                                   | ID of deployment group this deployment belongs to                                                    | dg_r27ict8c7vcgsumpj90ackf7b                                                                         |
 | `environmentInfo`                                                                                    | *models.DeploymentListItemResponseEnvironmentInfoUnion*                                              | :heavy_minus_sign:                                                                                   | Cloud environment information                                                                        |                                                                                                      |
 | `currentReleaseId`                                                                                   | *string*                                                                                             | :heavy_minus_sign:                                                                                   | ID of the currently deployed release                                                                 | rel_WbhQgksrawSKIpEN0NAssHX9                                                                         |

@@ -23,16 +23,12 @@ impl ResourceImporter for GcpServiceAccountImporter {
     ) -> Result<StackResourceState> {
         use crate::service_account::gcp::GcpServiceAccountState;
 
-        // `stack_permissions_applied` lights up `role_created` since the
-        // GCP controller binds its custom role unconditionally during
-        // create — the two flags carry the same signal.
         let _ = data.project_id;
+        let _ = data.stack_permissions_applied;
         let controller = GcpServiceAccountController {
             state: GcpServiceAccountState::Ready,
             service_account_email: Some(data.service_account_email),
             service_account_unique_id: Some(data.service_account_unique_id),
-            custom_role_name: None,
-            role_created: data.stack_permissions_applied,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)

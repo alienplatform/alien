@@ -52,8 +52,6 @@
             "cloudbuild.builds.create",
             "cloudbuild.builds.update",
             "cloudbuild.workerpools.use",
-            "cloudbuild.builds.get",
-            "cloudbuild.builds.list",
             "cloudbuild.operations.get",
             "cloudbuild.operations.list"
           ]
@@ -75,8 +73,7 @@
             "Microsoft.App/managedEnvironments/read",
             "Microsoft.App/managedEnvironments/write",
             "Microsoft.App/jobs/read",
-            "Microsoft.App/jobs/executions/read",
-            "Microsoft.App/jobs/listSecrets/action"
+            "Microsoft.App/jobs/executions/read"
           ],
           "dataActions": []
         },

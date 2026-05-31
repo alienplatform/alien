@@ -17,47 +17,52 @@ impl CompileTimeCheck for ValidResourceDependenciesCheck {
     }
 
     async fn check(&self, stack: &Stack, _platform: Platform) -> Result<CheckResult> {
-        let mut errors = Vec::new();
-
-        // Build dependency graph
-        let mut graph: HashMap<String, Vec<String>> = HashMap::new();
-
-        for (resource_id, resource_entry) in stack.resources() {
-            let mut dependencies = Vec::new();
-
-            // Add explicit dependencies from resource entry
-            for dep in &resource_entry.dependencies {
-                dependencies.push(dep.id().to_string());
-            }
-
-            // Add implicit dependencies from resource configuration
-            for dep_ref in resource_entry.config.get_dependencies() {
-                dependencies.push(dep_ref.id().to_string());
-            }
-
-            graph.insert(resource_id.clone(), dependencies);
-        }
-
-        // Check for circular dependencies using DFS
-        for resource_id in graph.keys() {
-            if let Some(cycle) = find_cycle(&graph, resource_id) {
-                errors.push(format!(
-                    "Circular dependency detected: {}",
-                    cycle.join(" -> ")
-                ));
-                break; // Only report one cycle to avoid noise
-            }
-        }
-
-        if errors.is_empty() {
-            Ok(CheckResult::success())
-        } else {
-            Ok(CheckResult::failed(errors))
-        }
+        Ok(validate_stack_dependencies(stack))
     }
 }
 
-/// Helper function to detect cycles in dependency graph using DFS
+/// Validate explicit and implicit resource dependencies for a stack.
+pub fn validate_stack_dependencies(stack: &Stack) -> CheckResult {
+    let mut errors = Vec::new();
+
+    // Build dependency graph
+    let mut graph: HashMap<String, Vec<String>> = HashMap::new();
+
+    for (resource_id, resource_entry) in stack.resources() {
+        let mut dependencies = Vec::new();
+
+        // Add explicit dependencies from resource entry
+        for dep in &resource_entry.dependencies {
+            dependencies.push(dep.id().to_string());
+        }
+
+        // Add implicit dependencies from resource configuration
+        for dep_ref in resource_entry.config.get_dependencies() {
+            dependencies.push(dep_ref.id().to_string());
+        }
+
+        graph.insert(resource_id.clone(), dependencies);
+    }
+
+    // Check for circular dependencies using DFS
+    for resource_id in graph.keys() {
+        if let Some(cycle) = find_cycle(&graph, resource_id) {
+            errors.push(format!(
+                "Circular dependency detected: {}",
+                cycle.join(" -> ")
+            ));
+            break; // Only report one cycle to avoid noise
+        }
+    }
+
+    if errors.is_empty() {
+        CheckResult::success()
+    } else {
+        CheckResult::failed(errors)
+    }
+}
+
+/// Helper worker to detect cycles in dependency graph using DFS
 fn find_cycle(graph: &HashMap<String, Vec<String>>, start: &str) -> Option<Vec<String>> {
     let mut visited = HashSet::new();
     let mut path = Vec::new();
@@ -105,20 +110,18 @@ fn find_cycle(graph: &HashMap<String, Vec<String>>, start: &str) -> Option<Vec<S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::{
-        Function, FunctionCode, ResourceEntry, ResourceLifecycle, ResourceRef, Storage,
-    };
+    use alien_core::{ResourceEntry, ResourceLifecycle, ResourceRef, Storage, Worker, WorkerCode};
     use indexmap::IndexMap;
 
     #[tokio::test]
     async fn test_valid_dependencies_success() {
         let storage = Storage::new("storage".to_string()).build();
-        let function = Function::new("function".to_string())
-            .code(FunctionCode::Image {
+        let worker = Worker::new("worker".to_string())
+            .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
             })
             .permissions("test".to_string())
-            .link(&storage) // function depends on storage - this is valid
+            .link(&storage) // worker depends on storage - this is valid
             .build();
 
         let mut resources = IndexMap::new();
@@ -132,9 +135,9 @@ mod tests {
             },
         );
         resources.insert(
-            "function".to_string(),
+            "worker".to_string(),
             ResourceEntry {
-                config: alien_core::Resource::new(function),
+                config: alien_core::Resource::new(worker),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
@@ -156,12 +159,12 @@ mod tests {
     #[tokio::test]
     async fn test_circular_dependency_failure() {
         let storage = Storage::new("storage".to_string()).build();
-        let function = Function::new("function".to_string())
-            .code(FunctionCode::Image {
+        let worker = Worker::new("worker".to_string())
+            .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
             })
             .permissions("test".to_string())
-            .link(&storage) // function depends on storage
+            .link(&storage) // worker depends on storage
             .build();
 
         let mut resources = IndexMap::new();
@@ -171,16 +174,16 @@ mod tests {
                 config: alien_core::Resource::new(storage),
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: vec![ResourceRef::new(
-                    alien_core::ResourceType::from("function"),
-                    "function".to_string(),
-                )], // storage depends on function - creates cycle
+                    alien_core::ResourceType::from("worker"),
+                    "worker".to_string(),
+                )], // storage depends on worker - creates cycle
                 remote_access: false,
             },
         );
         resources.insert(
-            "function".to_string(),
+            "worker".to_string(),
             ResourceEntry {
-                config: alien_core::Resource::new(function),
+                config: alien_core::Resource::new(worker),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,

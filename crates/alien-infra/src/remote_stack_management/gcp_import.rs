@@ -28,11 +28,6 @@ impl ResourceImporter for GcpRemoteStackManagementImporter {
             state: GcpRemoteStackManagementState::Ready,
             service_account_email: Some(data.service_account_email),
             service_account_unique_id: Some(data.service_account_unique_id),
-            // The custom role + token-creator binding are created together
-            // when management permissions are applied; otherwise both
-            // booleans stay false (manager will refresh on first reconcile).
-            custom_role_name: None,
-            role_created: data.management_permissions_applied,
             role_bound: data.management_permissions_applied,
             impersonation_granted: data.management_permissions_applied,
             _internal_stay_count: None,

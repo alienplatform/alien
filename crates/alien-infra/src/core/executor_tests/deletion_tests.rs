@@ -168,6 +168,41 @@ async fn test_partial_deletion_with_lifecycle_filter() -> Result<()> {
     Ok(())
 }
 
+/// Tests delete requests interrupt in-flight updates instead of waiting for
+/// update stabilization.
+#[tokio::test]
+async fn test_deletion_interrupts_updating_resource() -> Result<()> {
+    let func = test_function_with_image("func1", "image:v1");
+
+    let stack = Stack::new("delete-updating-test".to_owned())
+        .add(func.clone(), ResourceLifecycle::Live)
+        .build();
+
+    let executor = new_executor(&stack)?;
+    let state = new_test_state();
+    let state = run_to_synced(&executor, state).await?;
+
+    let updated_func = test_function_with_image("func1", "image:v2");
+    let updated_stack = Stack::new("delete-updating-test".to_owned())
+        .add(updated_func.clone(), ResourceLifecycle::Live)
+        .build();
+    let update_executor = new_executor(&updated_stack)?;
+    let step_result = update_executor.step(state).await?;
+    let state = step_result.next_state;
+
+    assert_eq!(get_status(&state, "func1"), Some(ResourceStatus::Updating));
+
+    let deletion_executor = new_deletion_executor()?;
+    let step_result = deletion_executor.step(state).await?;
+
+    assert_eq!(
+        get_status(&step_result.next_state, "func1"),
+        Some(ResourceStatus::Deleting)
+    );
+
+    Ok(())
+}
+
 /// Tests lifecycle-filtered deletion does not continue deleting resources
 /// outside its scope.
 ///
@@ -319,7 +354,7 @@ async fn test_delete_dependent_running() -> Result<()> {
             leaf_func.clone(),
             ResourceLifecycle::Live,
             vec![ResourceRef::new(
-                alien_core::Function::RESOURCE_TYPE,
+                alien_core::Worker::RESOURCE_TYPE,
                 "middle-func",
             )],
         )

@@ -1,14 +1,13 @@
 use crate::{
     error::{Error, ErrorData},
     providers::{
-        artifact_registry::grpc::GrpcArtifactRegistry, build::grpc::GrpcBuild,
-        function::grpc::GrpcFunction, kv::grpc::GrpcKv, queue::grpc::GrpcQueue,
-        service_account::grpc::GrpcServiceAccount, storage::grpc::GrpcStorage,
-        vault::grpc::GrpcVault,
+        artifact_registry::grpc::GrpcArtifactRegistry, build::grpc::GrpcBuild, kv::grpc::GrpcKv,
+        queue::grpc::GrpcQueue, service_account::grpc::GrpcServiceAccount,
+        storage::grpc::GrpcStorage, vault::grpc::GrpcVault, worker::grpc::GrpcWorker,
     },
     traits::{
-        ArtifactRegistry, BindingsProviderApi, Build, Container, Function, Kv, Queue,
-        ServiceAccount, Storage, Vault,
+        ArtifactRegistry, BindingsProviderApi, Build, Container, Kv, Queue, ServiceAccount,
+        Storage, Vault, Worker,
     },
 };
 use alien_error::{AlienError, Context, IntoAlienError};
@@ -279,7 +278,7 @@ impl BindingsProviderApi for GrpcBindingsProvider {
         Ok(queue)
     }
 
-    async fn load_function(&self, binding_name: &str) -> Result<Arc<dyn Function>, Error> {
+    async fn load_worker(&self, binding_name: &str) -> Result<Arc<dyn Worker>, Error> {
         let channel = self
             .get_channel()
             .await
@@ -289,7 +288,7 @@ impl BindingsProviderApi for GrpcBindingsProvider {
             })?;
 
         let function = Arc::new(
-            GrpcFunction::new_from_channel(channel, binding_name.to_string())
+            GrpcWorker::new_from_channel(channel, binding_name.to_string())
                 .await
                 .context(ErrorData::BindingConfigInvalid {
                     binding_name: binding_name.to_string(),

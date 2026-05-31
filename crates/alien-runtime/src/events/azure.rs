@@ -2,7 +2,6 @@ use crate::error::{Error, ErrorData};
 use alien_core::{MessagePayload, QueueMessage, StorageEvent, StorageEventType, StorageEvents};
 use alien_error::{AlienError, Context, IntoAlienError};
 use base64::{engine::general_purpose, Engine};
-use chrono::{DateTime, Utc};
 use cloudevents::AttributesReader;
 use cloudevents::{event::ExtensionValue, Data, Event};
 use serde::{Deserialize, Serialize};
@@ -324,6 +323,7 @@ pub fn azure_storage_cloudevent_to_storage_events(event: Event) -> Result<Storag
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{DateTime, Utc};
     use cloudevents::{EventBuilder as _, EventBuilderV10};
     use serde_json::json;
 

@@ -54,7 +54,7 @@
     "azure": [
       {
         "grant": {
-          "actions": ["Microsoft.KeyVault/vaults/write", "Microsoft.KeyVault/vaults/delete"]
+          "predefinedRoles": ["Key Vault Contributor"]
         },
         "binding": {
           "stack": {

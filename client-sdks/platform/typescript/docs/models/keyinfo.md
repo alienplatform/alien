@@ -21,6 +21,18 @@ let value: KeyInfo = {
   expiresAt: new Date("2025-12-06T17:54:43.268Z"),
   lastUsedAt: new Date("2025-08-16T08:23:11.867Z"),
   revokedAt: new Date("2026-05-29T18:50:17.810Z"),
+  deploymentSetupConfig: {
+    metadata: {
+      "key": "<value>",
+    },
+    policy: {
+      allowedPlatforms: [],
+      allowedSetupMethods: [
+        "google-oauth",
+      ],
+    },
+    environmentVariables: [],
+  },
 };
 ```
 
@@ -43,3 +55,4 @@ let value: KeyInfo = {
 | `expiresAt`                                                                                   | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
 | `lastUsedAt`                                                                                  | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
 | `revokedAt`                                                                                   | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
+| `deploymentSetupConfig`                                                                       | [models.APIKeyDeploymentSetupConfig](../models/apikeydeploymentsetupconfig.md)                | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |

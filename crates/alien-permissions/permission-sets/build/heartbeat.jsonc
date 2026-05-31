@@ -28,8 +28,6 @@
           "permissions": [
             "cloudbuild.workerpools.get",
             "cloudbuild.workerpools.list",
-            "cloudbuild.builds.get",
-            "cloudbuild.builds.list",
             "cloudbuild.operations.get",
             "cloudbuild.operations.list"
           ]
@@ -44,11 +42,7 @@
     "azure": [
       {
         "grant": {
-          "actions": [
-            "Microsoft.App/jobs/read",
-            "Microsoft.App/jobs/executions/read",
-            "Microsoft.App/managedEnvironments/read"
-          ]
+          "predefinedRoles": ["Reader"]
         },
         "binding": {
           "stack": {

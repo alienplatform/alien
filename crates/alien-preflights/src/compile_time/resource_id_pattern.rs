@@ -123,7 +123,7 @@ mod tests {
 
     #[tokio::test]
     async fn uppercase_rejected() {
-        let stack = stack_with(&["MyFunction"]);
+        let stack = stack_with(&["MyWorker"]);
         let result = ResourceIdPatternCheck
             .check(&stack, Platform::Aws)
             .await

@@ -14,9 +14,11 @@ export const GcpPlatformPermissionSchema = z.object({
     get "binding"(){
                 return BindingConfigurationGcpBindingSpecSchema.describe("Generic binding configuration for permissions")
               },
+"description": z.string().describe("Short admin-facing description of why this entry exists.").nullish(),
 get "grant"(){
                 return PermissionGrantSchema.describe("Grant permissions for a specific cloud platform")
-              }
+              },
+"label": z.string().describe("Stable admin-facing label for this permission entry.").nullish()
     }).describe("GCP-specific platform permission configuration")
 
 export type GcpPlatformPermission = z.infer<typeof GcpPlatformPermissionSchema>

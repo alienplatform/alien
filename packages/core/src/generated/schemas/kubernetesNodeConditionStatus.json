@@ -1,0 +1,1 @@
+{"type":"object","required":["type","status"],"properties":{"message":{"type":["string","null"]},"reason":{"type":["string","null"]},"status":{"type":"string"},"type":{"type":"string"}},"x-readme-ref-name":"KubernetesNodeConditionStatus"}

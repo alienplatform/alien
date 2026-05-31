@@ -30,7 +30,7 @@ import { Result } from "../types/fp.js";
  */
 export function syncRelease(
   client: AlienCore,
-  request?: operations.SyncReleaseRequest | undefined,
+  request: operations.SyncReleaseRequest,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -55,7 +55,7 @@ export function syncRelease(
 
 async function $do(
   client: AlienCore,
-  request?: operations.SyncReleaseRequest | undefined,
+  request: operations.SyncReleaseRequest,
   options?: RequestOptions,
 ): Promise<
   [
@@ -76,22 +76,21 @@ async function $do(
 > {
   const parsed = safeParse(
     request,
-    (value) =>
-      operations.SyncReleaseRequest$outboundSchema.optional().parse(value),
+    (value) => operations.SyncReleaseRequest$outboundSchema.parse(value),
     "Input validation failed",
   );
   if (!parsed.ok) {
     return [parsed, { status: "invalid" }];
   }
   const payload = parsed.value;
-  const body = encodeJSON("body", payload?.SyncReleaseRequest, {
+  const body = encodeJSON("body", payload.SyncReleaseRequest, {
     explode: true,
   });
 
   const path = pathToFunc("/v1/sync/release")();
 
   const query = encodeFormQuery({
-    "workspace": payload?.workspace,
+    "workspace": payload.workspace,
   });
 
   const headers = new Headers(compactMap({

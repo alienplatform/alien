@@ -47,21 +47,17 @@ export type ManagerManagementConfigsPlatformAzure = ClosedEnum<
 
 export type ManagerManagementConfigsAzure = {
   /**
-   * Management service principal object ID for local development fallback
-   */
-  managementPrincipalId?: string | null | undefined;
-  /**
    * The managing Azure Tenant ID for cross-tenant access
    */
   managingTenantId: string;
   /**
-   * OIDC issuer URL for federated identity credential creation
+   * OIDC issuer URL trusted by the target-side managed identity.
    */
-  oidcIssuer?: string | null | undefined;
+  oidcIssuer: string;
   /**
-   * OIDC subject claim for federated identity credential creation
+   * OIDC subject claim trusted by the target-side managed identity.
    */
-  oidcSubject?: string | null | undefined;
+  oidcSubject: string;
   platform: ManagerManagementConfigsPlatformAzure;
 };
 
@@ -72,7 +68,7 @@ export type ManagerManagementConfigsPlatformKubernetes = ClosedEnum<
   typeof ManagerManagementConfigsPlatformKubernetes
 >;
 
-export type Kubernetes = {
+export type ManagerManagementConfigsKubernetes = {
   platform: ManagerManagementConfigsPlatformKubernetes;
 };
 
@@ -83,7 +79,7 @@ export type ManagerManagementConfigs = {
   aws?: ManagerManagementConfigsAws | undefined;
   gcp?: ManagerManagementConfigsGcp | undefined;
   azure?: ManagerManagementConfigsAzure | undefined;
-  kubernetes?: Kubernetes | undefined;
+  kubernetes?: ManagerManagementConfigsKubernetes | undefined;
 };
 
 /** @internal */
@@ -202,18 +198,16 @@ export const ManagerManagementConfigsAzure$inboundSchema: z.ZodType<
   ManagerManagementConfigsAzure,
   unknown
 > = z.object({
-  managementPrincipalId: z.nullable(z.string()).optional(),
   managingTenantId: z.string(),
-  oidcIssuer: z.nullable(z.string()).optional(),
-  oidcSubject: z.nullable(z.string()).optional(),
+  oidcIssuer: z.string(),
+  oidcSubject: z.string(),
   platform: ManagerManagementConfigsPlatformAzure$inboundSchema,
 });
 /** @internal */
 export type ManagerManagementConfigsAzure$Outbound = {
-  managementPrincipalId?: string | null | undefined;
   managingTenantId: string;
-  oidcIssuer?: string | null | undefined;
-  oidcSubject?: string | null | undefined;
+  oidcIssuer: string;
+  oidcSubject: string;
   platform: string;
 };
 
@@ -222,10 +216,9 @@ export const ManagerManagementConfigsAzure$outboundSchema: z.ZodType<
   ManagerManagementConfigsAzure$Outbound,
   ManagerManagementConfigsAzure
 > = z.object({
-  managementPrincipalId: z.nullable(z.string()).optional(),
   managingTenantId: z.string(),
-  oidcIssuer: z.nullable(z.string()).optional(),
-  oidcSubject: z.nullable(z.string()).optional(),
+  oidcIssuer: z.string(),
+  oidcSubject: z.string(),
   platform: ManagerManagementConfigsPlatformAzure$outboundSchema,
 });
 
@@ -259,33 +252,42 @@ export const ManagerManagementConfigsPlatformKubernetes$outboundSchema:
     ManagerManagementConfigsPlatformKubernetes$inboundSchema;
 
 /** @internal */
-export const Kubernetes$inboundSchema: z.ZodType<Kubernetes, unknown> = z
-  .object({
-    platform: ManagerManagementConfigsPlatformKubernetes$inboundSchema,
-  });
+export const ManagerManagementConfigsKubernetes$inboundSchema: z.ZodType<
+  ManagerManagementConfigsKubernetes,
+  unknown
+> = z.object({
+  platform: ManagerManagementConfigsPlatformKubernetes$inboundSchema,
+});
 /** @internal */
-export type Kubernetes$Outbound = {
+export type ManagerManagementConfigsKubernetes$Outbound = {
   platform: string;
 };
 
 /** @internal */
-export const Kubernetes$outboundSchema: z.ZodType<
-  Kubernetes$Outbound,
-  Kubernetes
+export const ManagerManagementConfigsKubernetes$outboundSchema: z.ZodType<
+  ManagerManagementConfigsKubernetes$Outbound,
+  ManagerManagementConfigsKubernetes
 > = z.object({
   platform: ManagerManagementConfigsPlatformKubernetes$outboundSchema,
 });
 
-export function kubernetesToJSON(kubernetes: Kubernetes): string {
-  return JSON.stringify(Kubernetes$outboundSchema.parse(kubernetes));
+export function managerManagementConfigsKubernetesToJSON(
+  managerManagementConfigsKubernetes: ManagerManagementConfigsKubernetes,
+): string {
+  return JSON.stringify(
+    ManagerManagementConfigsKubernetes$outboundSchema.parse(
+      managerManagementConfigsKubernetes,
+    ),
+  );
 }
-export function kubernetesFromJSON(
+export function managerManagementConfigsKubernetesFromJSON(
   jsonString: string,
-): SafeParseResult<Kubernetes, SDKValidationError> {
+): SafeParseResult<ManagerManagementConfigsKubernetes, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Kubernetes$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Kubernetes' from JSON`,
+    (x) =>
+      ManagerManagementConfigsKubernetes$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ManagerManagementConfigsKubernetes' from JSON`,
   );
 }
 
@@ -297,14 +299,15 @@ export const ManagerManagementConfigs$inboundSchema: z.ZodType<
   aws: z.lazy(() => ManagerManagementConfigsAws$inboundSchema).optional(),
   gcp: z.lazy(() => ManagerManagementConfigsGcp$inboundSchema).optional(),
   azure: z.lazy(() => ManagerManagementConfigsAzure$inboundSchema).optional(),
-  kubernetes: z.lazy(() => Kubernetes$inboundSchema).optional(),
+  kubernetes: z.lazy(() => ManagerManagementConfigsKubernetes$inboundSchema)
+    .optional(),
 });
 /** @internal */
 export type ManagerManagementConfigs$Outbound = {
   aws?: ManagerManagementConfigsAws$Outbound | undefined;
   gcp?: ManagerManagementConfigsGcp$Outbound | undefined;
   azure?: ManagerManagementConfigsAzure$Outbound | undefined;
-  kubernetes?: Kubernetes$Outbound | undefined;
+  kubernetes?: ManagerManagementConfigsKubernetes$Outbound | undefined;
 };
 
 /** @internal */
@@ -315,7 +318,8 @@ export const ManagerManagementConfigs$outboundSchema: z.ZodType<
   aws: z.lazy(() => ManagerManagementConfigsAws$outboundSchema).optional(),
   gcp: z.lazy(() => ManagerManagementConfigsGcp$outboundSchema).optional(),
   azure: z.lazy(() => ManagerManagementConfigsAzure$outboundSchema).optional(),
-  kubernetes: z.lazy(() => Kubernetes$outboundSchema).optional(),
+  kubernetes: z.lazy(() => ManagerManagementConfigsKubernetes$outboundSchema)
+    .optional(),
 });
 
 export function managerManagementConfigsToJSON(

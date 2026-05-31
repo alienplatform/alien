@@ -3,9 +3,10 @@
 //! These tests exercise the full alien_deployment::step() lifecycle with no cloud I/O.
 
 use alien_core::{
-    ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus, EnvironmentVariable,
-    EnvironmentVariableType, EnvironmentVariablesSnapshot, Function, FunctionCode, Platform,
-    ReleaseInfo, ResourceEntry, ResourceLifecycle, Stack, StackSettings, Storage,
+    ClientConfig, DeleteScope, DeploymentConfig, DeploymentState, DeploymentStatus,
+    EnvironmentVariable, EnvironmentVariableType, EnvironmentVariablesSnapshot, Platform,
+    ReleaseInfo, ResourceEntry, ResourceLifecycle, RuntimeMetadata, Stack, StackSettings,
+    StackState, Storage, Worker, WorkerCode,
 };
 use chrono::Utc;
 use indexmap::IndexMap;
@@ -107,6 +108,9 @@ fn start_update(state: &mut DeploymentState, new_release: ReleaseInfo) {
 /// Helper to start a delete
 fn start_delete(state: &mut DeploymentState) {
     state.status = DeploymentStatus::DeletePending;
+    let mut runtime_metadata = state.runtime_metadata.clone().unwrap_or_default();
+    runtime_metadata.delete_scope = Some(DeleteScope::Full);
+    state.runtime_metadata = Some(runtime_metadata);
     // Keep target_release when starting delete - it's needed for preflight/mutation steps
     if state.target_release.is_none() && state.current_release.is_some() {
         state.target_release = state.current_release.clone();
@@ -115,8 +119,8 @@ fn start_delete(state: &mut DeploymentState) {
 
 /// Create a minimal stack fixture for Platform::Test
 fn create_test_stack(stack_id: &str, function_id: &str) -> Stack {
-    let function = Function::new(function_id.to_string())
-        .code(FunctionCode::Image {
+    let function = Worker::new(function_id.to_string())
+        .code(WorkerCode::Image {
             image: "test:latest".to_string(),
         })
         .permissions("default".to_string())
@@ -150,8 +154,8 @@ fn create_test_stack(stack_id: &str, function_id: &str) -> Stack {
 /// Create a stack with one setup-owned Frozen resource and one Alien-owned Live resource.
 fn create_test_stack_with_storage(stack_id: &str, storage_id: &str, function_id: &str) -> Stack {
     let storage = Storage::new(storage_id.to_string()).build();
-    let function = Function::new(function_id.to_string())
-        .code(FunctionCode::Image {
+    let function = Worker::new(function_id.to_string())
+        .code(WorkerCode::Image {
             image: "test:latest".to_string(),
         })
         .permissions("default".to_string())
@@ -219,10 +223,12 @@ fn create_env_vars_snapshot(hash: &str, include_secret: bool) -> EnvironmentVari
 /// Create a deployment config fixture
 fn create_test_config(env_vars_hash: &str, include_secret: bool) -> DeploymentConfig {
     DeploymentConfig {
+        deployment_name: Some("test deployment".to_string()),
         stack_settings: StackSettings::default(),
         management_config: None,
         environment_variables: create_env_vars_snapshot(env_vars_hash, include_secret),
         external_bindings: alien_core::ExternalBindings::default(),
+        base_platform: None,
         compute_backend: None,
         allow_frozen_changes: false,
         domain_metadata: None,
@@ -566,8 +572,8 @@ async fn test_running_transitions_to_refresh_failed_on_health_check_failure() {
     let _temp_dir = TempDir::new().expect("Failed to create temp dir");
 
     // Create a function configured to fail persistently
-    let function = Function::new("test-function".to_string())
-        .code(FunctionCode::Image {
+    let function = Worker::new("test-function".to_string())
+        .code(WorkerCode::Image {
             image: "test:latest".to_string(),
         })
         .permissions("default".to_string())
@@ -682,8 +688,8 @@ async fn test_update_failed_retry_gate_returns_to_update_pending() {
     state = run_to_completion(state, config.clone()).await;
 
     // Start update with a function that will fail
-    let function_v2 = Function::new("test-function-v2".to_string())
-        .code(FunctionCode::Image {
+    let function_v2 = Worker::new("test-function-v2".to_string())
+        .code(WorkerCode::Image {
             image: "test:latest".to_string(),
         })
         .permissions("default".to_string())
@@ -754,6 +760,67 @@ async fn test_update_failed_retry_gate_returns_to_update_pending() {
     );
 }
 
+async fn assert_failed_retry_transition(
+    failed_status: DeploymentStatus,
+    retried_status: DeploymentStatus,
+) {
+    let stack = create_test_stack("test-stack", "test-function");
+    let config = create_test_config("hash_v1", false);
+    let mut state = create_initial_state(stack);
+    state.status = failed_status;
+    state.stack_state = Some(StackState::new(Platform::Test));
+
+    if failed_status == DeploymentStatus::DeleteFailed {
+        state.runtime_metadata = Some(RuntimeMetadata {
+            delete_scope: Some(DeleteScope::Full),
+            ..Default::default()
+        });
+    }
+
+    let result = alien_deployment::step(state.clone(), config.clone(), ClientConfig::Test, None)
+        .await
+        .expect("failed status without retry should remain terminal");
+    assert_eq!(result.state.status, failed_status);
+    assert!(
+        !result.state.retry_requested,
+        "retry flag should remain false when no retry was requested"
+    );
+
+    request_retry(&mut state);
+    let result = alien_deployment::step(state, config, ClientConfig::Test, None)
+        .await
+        .expect("failed status with retry should transition");
+    assert_eq!(result.state.status, retried_status);
+    assert!(
+        !result.state.retry_requested,
+        "retry flag should be cleared after retry transition"
+    );
+}
+
+#[tokio::test]
+async fn test_initial_setup_failed_retry_gate_returns_to_initial_setup() {
+    assert_failed_retry_transition(
+        DeploymentStatus::InitialSetupFailed,
+        DeploymentStatus::InitialSetup,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn test_provisioning_failed_retry_gate_returns_to_provisioning() {
+    assert_failed_retry_transition(
+        DeploymentStatus::ProvisioningFailed,
+        DeploymentStatus::Provisioning,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn test_delete_failed_retry_gate_returns_to_deleting() {
+    assert_failed_retry_transition(DeploymentStatus::DeleteFailed, DeploymentStatus::Deleting)
+        .await;
+}
+
 /// E) Delete flow tests
 
 #[tokio::test]
@@ -781,7 +848,7 @@ async fn test_delete_flow_happy_path_reaches_deleted() {
 #[tokio::test]
 async fn test_delete_failed_retry_gate() {
     // Create a minimal test for delete retry pattern
-    // In practice, TestFunctionController doesn't easily simulate delete failures,
+    // In practice, TestWorkerController doesn't easily simulate delete failures,
     // but we can test the pattern conceptually by checking the handler exists
 
     let _temp_dir = TempDir::new().expect("Failed to create temp dir");
@@ -808,8 +875,8 @@ async fn test_delete_failed_retry_gate() {
 /// the executor processes resources in parallel; its provisioning will still be in progress when
 /// `failing-fn` transitions to ProvisionFailed.
 fn create_two_function_stack_one_fails(stack_id: &str) -> Stack {
-    let failing_fn = Function::new("failing-fn".to_string())
-        .code(FunctionCode::Image {
+    let failing_fn = Worker::new("failing-fn".to_string())
+        .code(WorkerCode::Image {
             image: "test:latest".to_string(),
         })
         .permissions("default".to_string())
@@ -823,8 +890,8 @@ fn create_two_function_stack_one_fails(stack_id: &str) -> Stack {
         })
         .build();
 
-    let sibling_fn = Function::new("sibling-fn".to_string())
-        .code(FunctionCode::Image {
+    let sibling_fn = Worker::new("sibling-fn".to_string())
+        .code(WorkerCode::Image {
             image: "test:latest".to_string(),
         })
         .permissions("default".to_string())
@@ -867,8 +934,8 @@ fn create_two_function_stack_one_fails(stack_id: &str) -> Stack {
 /// Build a two-resource stack where `sibling-fn` depends on `failing-fn`.
 /// `sibling-fn` will be in Pending when `failing-fn` fails.
 fn create_two_function_stack_dependent_one_fails(stack_id: &str) -> Stack {
-    let failing_fn = Function::new("failing-fn".to_string())
-        .code(FunctionCode::Image {
+    let failing_fn = Worker::new("failing-fn".to_string())
+        .code(WorkerCode::Image {
             image: "test:latest".to_string(),
         })
         .permissions("default".to_string())
@@ -882,8 +949,8 @@ fn create_two_function_stack_dependent_one_fails(stack_id: &str) -> Stack {
         })
         .build();
 
-    let sibling_fn = Function::new("sibling-fn".to_string())
-        .code(FunctionCode::Image {
+    let sibling_fn = Worker::new("sibling-fn".to_string())
+        .code(WorkerCode::Image {
             image: "test:latest".to_string(),
         })
         .permissions("default".to_string())
@@ -905,7 +972,7 @@ fn create_two_function_stack_dependent_one_fails(stack_id: &str) -> Stack {
             config: alien_core::Resource::new(sibling_fn),
             lifecycle: ResourceLifecycle::Live,
             dependencies: vec![alien_core::ResourceRef::new(
-                alien_core::Function::RESOURCE_TYPE,
+                alien_core::Worker::RESOURCE_TYPE,
                 "failing-fn".to_string(),
             )],
             remote_access: false,

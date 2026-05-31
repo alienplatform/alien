@@ -295,6 +295,7 @@ impl ManagerTomlConfig {
             base_url: self.server.base_url.clone(),
             releases_url: self.server.releases_url.clone(),
             targets: Vec::new(),
+            supported_aws_regions: Vec::new(),
             disable_deployment_loop: false,
             disable_heartbeat_loop: false,
             enable_local_log_ingest: false,

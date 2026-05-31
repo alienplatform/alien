@@ -5,7 +5,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=proto/vault.proto");
     println!("cargo:rerun-if-changed=proto/kv.proto");
     println!("cargo:rerun-if-changed=proto/queue.proto");
-    println!("cargo:rerun-if-changed=proto/function.proto");
+    println!("cargo:rerun-if-changed=proto/worker.proto");
     println!("cargo:rerun-if-changed=proto/container.proto");
     println!("cargo:rerun-if-changed=proto/service_account.proto");
     println!("cargo:rerun-if-changed=proto/wait_until.proto");
@@ -98,12 +98,12 @@ fn compile_protos(out_dir: &std::path::PathBuf) -> Result<(), Box<dyn std::error
     tonic_build::configure()
         .build_server(cfg!(feature = "grpc"))
         .build_client(cfg!(feature = "grpc"))
-        .file_descriptor_set_path(out_dir.join("alien_bindings.function_descriptor.bin"))
+        .file_descriptor_set_path(out_dir.join("alien_bindings.worker_descriptor.bin"))
         .type_attribute(
             ".",
             "#[allow(clippy::doc_lazy_continuation, clippy::enum_variant_names)]",
         )
-        .compile_protos(&["proto/function.proto"], &["proto/"])?;
+        .compile_protos(&["proto/worker.proto"], &["proto/"])?;
 
     // Compile container proto
     tonic_build::configure()

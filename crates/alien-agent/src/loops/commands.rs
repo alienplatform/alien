@@ -14,7 +14,7 @@ use alien_commands::dispatchers::{
     ServiceBusCommandDispatcher,
 };
 use alien_commands::{LeaseRequest, LeaseResponse};
-use alien_core::{ClientConfig, FunctionOutputs, Platform};
+use alien_core::{ClientConfig, Platform, WorkerOutputs};
 use alien_infra::ClientConfigExt;
 use reqwest::Client;
 use std::sync::Arc;
@@ -209,12 +209,12 @@ async fn poll_and_dispatch(
 
 /// Find the commands push target from stack state.
 ///
-/// Iterates all resources looking for a Function with `commands_push_target` set.
-/// Only functions with `commands_enabled: true` get a push target during provisioning.
+/// Iterates all resources looking for a Worker with `commands_push_target` set.
+/// Only workers with `commands_enabled: true` get a push target during provisioning.
 fn find_push_target(stack_state: &alien_core::StackState) -> Option<String> {
     for (_resource_id, resource_state) in &stack_state.resources {
         if let Some(ref outputs) = resource_state.outputs {
-            if let Some(function_outputs) = outputs.downcast_ref::<FunctionOutputs>() {
+            if let Some(function_outputs) = outputs.downcast_ref::<WorkerOutputs>() {
                 if let Some(ref push_target) = function_outputs.commands_push_target {
                     return Some(push_target.clone());
                 }

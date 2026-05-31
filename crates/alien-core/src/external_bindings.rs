@@ -218,6 +218,7 @@ impl ExternalBinding {
                     resource_group_name,
                     default_domain,
                     static_ip,
+                    custom_domain_verification_id: None,
                 }))
             }
             // Application-level bindings are consumed via remote_binding_params, not outputs

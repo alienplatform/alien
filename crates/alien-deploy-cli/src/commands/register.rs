@@ -54,7 +54,7 @@ pub struct RegisterArgs {
     #[arg(long, env = "ALIEN_MANAGER_URL")]
     pub manager_url: String,
 
-    /// Deployment-group token authorizing the import.
+    /// Deployment token authorizing the import.
     #[arg(long, env = "ALIEN_TOKEN")]
     pub token: String,
 
@@ -145,9 +145,11 @@ async fn register_cloudformation(args: RegisterArgs) -> Result<()> {
 struct CfnOutputs {
     source_kind: Option<String>,
     platform: Option<String>,
+    base_platform: Option<String>,
     region: Option<String>,
-    stack_prefix: Option<String>,
+    resource_prefix: Option<String>,
     setup_target: Option<String>,
+    setup_import_format_version: Option<u32>,
     setup_fingerprint: Option<String>,
     setup_fingerprint_version: Option<u32>,
     management_config: Option<JsonValue>,
@@ -202,12 +204,23 @@ async fn fetch_cloudformation_outputs(region: &str, stack_name: &str) -> Result<
             };
             match key {
                 "DeploymentSourceKind" => outputs.source_kind = Some(value.to_string()),
-                "DeploymentStackPrefix" => {
-                    outputs.stack_prefix = Some(value.to_string());
+                "DeploymentResourcePrefix" => {
+                    outputs.resource_prefix = Some(value.to_string());
                 }
                 "DeploymentPlatform" => outputs.platform = Some(value.to_string()),
+                "DeploymentBasePlatform" => outputs.base_platform = Some(value.to_string()),
                 "DeploymentRegion" => outputs.region = Some(value.to_string()),
                 "DeploymentSetupTarget" => outputs.setup_target = Some(value.to_string()),
+                "DeploymentSetupImportFormatVersion" => {
+                    let version = value.parse().map_err(|reason| {
+                        AlienError::new(ErrorData::ConfigurationError {
+                            message: format!(
+                                "DeploymentSetupImportFormatVersion output '{value}' is invalid: {reason}"
+                            ),
+                        })
+                    })?;
+                    outputs.setup_import_format_version = Some(version);
+                }
                 "DeploymentSetupFingerprint" => outputs.setup_fingerprint = Some(value.to_string()),
                 "DeploymentSetupFingerprintVersion" => {
                     let version = value.parse().map_err(|reason| {
@@ -280,15 +293,26 @@ fn build_import_request(
             }));
         }
     };
+    let base_platform = outputs
+        .base_platform
+        .as_deref()
+        .map(|p| {
+            p.parse().map_err(|reason| {
+                AlienError::new(ErrorData::ConfigurationError {
+                    message: format!("DeploymentBasePlatform output '{p}' is invalid: {reason}"),
+                })
+            })
+        })
+        .transpose()?;
 
     let region = outputs.region.clone().ok_or_else(|| {
         AlienError::new(ErrorData::ConfigurationError {
             message: "DeploymentRegion output not found in stack".to_string(),
         })
     })?;
-    let stack_prefix = outputs.stack_prefix.clone().ok_or_else(|| {
+    let resource_prefix = outputs.resource_prefix.clone().ok_or_else(|| {
         AlienError::new(ErrorData::ConfigurationError {
-            message: format!("DeploymentStackPrefix output not found in stack '{stack_name}'"),
+            message: format!("DeploymentResourcePrefix output not found in stack '{stack_name}'"),
         })
     })?;
     let setup_target = outputs.setup_target.clone().ok_or_else(|| {
@@ -353,19 +377,28 @@ fn build_import_request(
         }
     }
 
+    let setup_import_format_version = outputs.setup_import_format_version.ok_or_else(|| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: "CloudFormation output DeploymentSetupImportFormatVersion is required"
+                .to_string(),
+        })
+    })?;
+
     Ok(StackImportRequest {
+        setup_import_format_version,
         deployment_group_token: token.to_string(),
         deployment_name: deployment_name.to_string(),
-        stack_prefix,
+        resource_prefix,
         source_kind: Some(source_kind),
         release_id: None,
         platform,
+        base_platform,
         region,
         setup_target,
         setup_fingerprint,
         setup_fingerprint_version,
         stack_settings,
-        management_config,
+        management_config: Some(management_config),
         resources,
     })
 }
@@ -377,4 +410,44 @@ struct ImportedResourceWire {
     #[serde(rename = "type")]
     resource_type: String,
     import_data: JsonValue,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::AwsManagementConfig;
+
+    fn base_outputs() -> CfnOutputs {
+        CfnOutputs {
+            source_kind: Some("cloudformation".to_string()),
+            platform: Some("kubernetes".to_string()),
+            base_platform: Some("aws".to_string()),
+            region: Some("us-east-1".to_string()),
+            resource_prefix: Some("e2e-cfn-eks".to_string()),
+            setup_target: Some("eks".to_string()),
+            setup_import_format_version: Some(1),
+            setup_fingerprint: Some("test".to_string()),
+            setup_fingerprint_version: Some(1),
+            management_config: Some(
+                serde_json::to_value(ManagementConfig::Aws(AwsManagementConfig {
+                    managing_role_arn: "arn:aws:iam::123456789012:role/manager".to_string(),
+                }))
+                .expect("management config"),
+            ),
+            stack_settings: Some(
+                serde_json::to_value(StackSettings::default()).expect("stack settings"),
+            ),
+            resources_chunks: vec![JsonValue::Array(Vec::new())],
+        }
+    }
+
+    #[test]
+    fn cloudformation_import_request_preserves_base_platform() {
+        let request =
+            build_import_request(&base_outputs(), "dg_token", "app", "stack").expect("request");
+
+        assert_eq!(request.platform, Platform::Kubernetes);
+        assert_eq!(request.base_platform, Some(Platform::Aws));
+        assert_eq!(request.setup_target, "eks");
+    }
 }

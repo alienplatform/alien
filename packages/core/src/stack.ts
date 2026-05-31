@@ -58,7 +58,7 @@ export class Stack {
 
   /**
    * Adds a resource to the stack with a specified lifecycle.
-   * @param resource The resource to add (e.g., Function, Storage).
+   * @param resource The resource to add (e.g., Worker, Storage).
    * @param lifecycle The lifecycle state of the resource (e.g., Frozen, Live).
    * @param options Optional configuration for the resource entry.
    * @returns The Stack builder instance.

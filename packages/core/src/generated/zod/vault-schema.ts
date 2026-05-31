@@ -6,10 +6,10 @@
 import * as z from "zod";
 
 /**
- * @description Represents a secure vault for storing secrets.\nThis resource provides a platform-agnostic interface over cloud-native secret management services:\n- AWS: AWS Secrets Manager with prefixed secret names\n- GCP: Secret Manager with prefixed secret names\n- Azure: Key Vault resource\n\nThe vault acts as a namespace for secrets and controls access permissions for functions and services.
+ * @description Represents a secure vault for storing secrets.\nThis resource provides a platform-agnostic interface over cloud-native secret management services:\n- AWS: AWS Secrets Manager with prefixed secret names\n- GCP: Secret Manager with prefixed secret names\n- Azure: Key Vault resource\n\nThe vault acts as a namespace for secrets and controls access permissions for workers and services.
  */
 export const VaultSchema = z.object({
     "id": z.string().describe("Unique identifier for the vault. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]).\nMaximum 64 characters.")
-    }).describe("Represents a secure vault for storing secrets.\nThis resource provides a platform-agnostic interface over cloud-native secret management services:\n- AWS: AWS Secrets Manager with prefixed secret names\n- GCP: Secret Manager with prefixed secret names\n- Azure: Key Vault resource\n\nThe vault acts as a namespace for secrets and controls access permissions for functions and services.")
+    }).describe("Represents a secure vault for storing secrets.\nThis resource provides a platform-agnostic interface over cloud-native secret management services:\n- AWS: AWS Secrets Manager with prefixed secret names\n- GCP: Secret Manager with prefixed secret names\n- Azure: Key Vault resource\n\nThe vault acts as a namespace for secrets and controls access permissions for workers and services.")
 
 export type Vault = z.infer<typeof VaultSchema>

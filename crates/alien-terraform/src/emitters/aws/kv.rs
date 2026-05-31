@@ -3,7 +3,9 @@
 use crate::{
     block::{attr, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
-    emitters::aws::helpers::{downcast, nested_block, required_label, stack_name_template, tags},
+    emitters::aws::helpers::{
+        downcast, nested_block, required_label, resource_prefix_template, tags,
+    },
     expr,
 };
 use alien_core::{import::EmitContext, Kv, Result};
@@ -21,7 +23,7 @@ impl TfEmitter for AwsKvEmitter {
             "aws_dynamodb_table",
             label,
             [
-                attr("name", stack_name_template(kv.id())),
+                attr("name", resource_prefix_template(kv.id())),
                 attr(
                     "billing_mode",
                     Expression::String("PAY_PER_REQUEST".to_string()),

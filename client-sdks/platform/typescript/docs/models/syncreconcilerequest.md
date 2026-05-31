@@ -11,7 +11,8 @@ let value: SyncReconcileRequest = {
   deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
   state: {
     platform: "azure",
-    status: "updating",
+    protocolVersion: 583290,
+    status: "deleting",
   },
 };
 ```
@@ -26,3 +27,4 @@ let value: SyncReconcileRequest = {
 | `error`                                                                        | [models.SyncReconcileRequestError](../models/syncreconcilerequesterror.md)     | :heavy_minus_sign:                                                             | Deployment error from step() result. Set when deployment fails, null to clear. |                                                                                |
 | `updateHeartbeat`                                                              | *boolean*                                                                      | :heavy_minus_sign:                                                             | Update heartbeat timestamp (for successful health checks)                      |                                                                                |
 | `suggestedDelayMs`                                                             | *number*                                                                       | :heavy_minus_sign:                                                             | Delay before this deployment should be acquired again.                         |                                                                                |
+| `heartbeats`                                                                   | [models.Heartbeat](../models/heartbeat.md)[]                                   | :heavy_minus_sign:                                                             | Latest typed resource heartbeats collected during this step.                   |                                                                                |

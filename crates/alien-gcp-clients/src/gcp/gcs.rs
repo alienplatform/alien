@@ -3,7 +3,6 @@ use crate::gcp::iam::IamPolicy;
 use crate::gcp::GcpClientConfig;
 use crate::gcp::GcpClientConfigExt;
 use alien_client_core::ErrorData;
-use alien_client_core::RequestBuilderExt;
 use alien_client_core::Result;
 use alien_error::AlienError;
 use bon::Builder;
@@ -12,7 +11,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap; // For Object metadata
 use url::Url;
 
-use async_trait::async_trait;
 #[cfg(feature = "test-utils")]
 use mockall::automock;
 use std::fmt::Debug;
@@ -86,6 +84,9 @@ pub trait GcsApi: Send + Sync + Debug {
         bucket_name: String,
         notification: GcsNotification,
     ) -> Result<GcsNotification>;
+
+    /// List Pub/Sub notification configurations on a bucket.
+    async fn list_notifications(&self, bucket_name: String) -> Result<ListNotificationsResponse>;
 
     /// Delete a notification configuration from a bucket.
     async fn delete_notification(&self, bucket_name: String, notification_id: String)
@@ -449,6 +450,23 @@ impl GcsApi for GcsClient {
         .await
     }
 
+    async fn list_notifications(&self, bucket_name: String) -> Result<ListNotificationsResponse> {
+        let url = format!(
+            "{}/b/{}/notificationConfigs",
+            self.get_api_base_url(),
+            bucket_name
+        );
+        let builder = self.http.get(url);
+        auth_send_json(
+            builder,
+            &self.auth().await?,
+            "ListNotifications",
+            &bucket_name,
+            "GCS",
+        )
+        .await
+    }
+
     async fn delete_notification(
         &self,
         bucket_name: String,
@@ -522,6 +540,10 @@ pub struct Bucket {
     pub lifecycle: Option<Lifecycle>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub labels: Option<HashMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encryption: Option<BucketEncryption>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub soft_delete_policy: Option<SoftDeletePolicy>,
     // ... other fields can be added as needed based on the API docs ...
 }
 
@@ -534,6 +556,22 @@ pub struct RetentionPolicy {
     pub is_locked: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub retention_period: Option<String>, // u64 as string in API
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct BucketEncryption {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_kms_key_name: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct SoftDeletePolicy {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retention_duration_seconds: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effective_time: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
@@ -685,6 +723,17 @@ pub struct ListObjectsResponse {
     #[builder(default)]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub items: Vec<Object>,
+}
+
+/// Response for listing GCS Pub/Sub notification configurations.
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct ListNotificationsResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[builder(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<GcsNotification>,
 }
 
 /// GCS Pub/Sub notification configuration.

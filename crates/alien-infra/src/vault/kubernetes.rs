@@ -3,14 +3,19 @@ use tracing::{debug, info};
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use alien_core::{ResourceOutputs, ResourceStatus, Vault, VaultOutputs};
+use alien_core::{
+    HeartbeatBackend, KubernetesSecretVaultHeartbeatData, ObservedHealth, Platform,
+    ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
+    ResourceStatus, Vault, VaultHeartbeatData, VaultHeartbeatStatus, VaultOutputs,
+};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_macros::controller;
+use chrono::Utc;
 
 /// Kubernetes Vault controller that uses Kubernetes Secrets as the backing store.
 ///
 /// This controller creates a logical vault using the Kubernetes Secrets API.
-/// Each secret value is stored as a separate Kubernetes Secret resource with
+/// Each vault entry is stored as a separate Kubernetes Secret resource with
 /// a naming convention: {release-name}-{vault-id}-{secret-key}
 ///
 /// For external vaults (HashiCorp Vault, Azure KeyVault, AWS Secrets Manager),
@@ -74,9 +79,18 @@ impl KubernetesVaultController {
         on_failure = RefreshFailed,
         status = ResourceStatus::Running,
     )]
-    async fn ready(&mut self, _ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
-        // No heartbeat check needed - secrets are created/verified on-demand
-        // during secret sync operations
+    async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<Vault>()?;
+
+        if let (Some(namespace), Some(vault_prefix)) = (&self.namespace, &self.vault_prefix) {
+            emit_kubernetes_secret_vault_heartbeat(
+                ctx,
+                &config.id,
+                namespace.as_str(),
+                vault_prefix.as_str(),
+            );
+        }
+
         debug!("Kubernetes Vault is ready");
 
         Ok(HandlerAction::Continue {
@@ -180,6 +194,41 @@ impl KubernetesVaultController {
             Ok(None)
         }
     }
+}
+
+fn emit_kubernetes_secret_vault_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    namespace: &str,
+    prefix: &str,
+) {
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: Vault::RESOURCE_TYPE,
+        controller_platform: Platform::Kubernetes,
+        backend: HeartbeatBackend::Kubernetes,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::Vault(VaultHeartbeatData::KubernetesSecret(
+            KubernetesSecretVaultHeartbeatData {
+                status: VaultHeartbeatStatus {
+                    health: ObservedHealth::Healthy,
+                    lifecycle: ProviderLifecycleState::Running,
+                    message: Some(
+                        "Kubernetes Secret namespace prefix is configured; secret metadata was not listed"
+                            .to_string(),
+                    ),
+                    stale: false,
+                    partial: false,
+                    collection_issues: vec![],
+                },
+                namespace: namespace.to_string(),
+                prefix: prefix.to_string(),
+                secret_metadata_listed: false,
+            },
+        )),
+        raw: vec![],
+    });
 }
 
 impl KubernetesVaultController {

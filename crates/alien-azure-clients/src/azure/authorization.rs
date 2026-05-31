@@ -6,7 +6,6 @@ use crate::azure::AzureClientConfig;
 use alien_client_core::{ErrorData, Result};
 
 use alien_error::{Context, IntoAlienError};
-use async_trait::async_trait;
 use reqwest::{Client, Method, StatusCode};
 use serde::Deserialize;
 
@@ -135,6 +134,18 @@ impl Scope {
                 }
             }
         }
+    }
+
+    /// Convert the scope to a canonical Azure Resource Manager resource ID.
+    ///
+    /// ARM URLs in this client are built from a relative scope string, but role
+    /// assignment payloads require the `scope` property to be the canonical ARM
+    /// resource ID with a leading slash.
+    pub fn to_resource_id_string(&self, client_config: &AzureClientConfig) -> String {
+        format!(
+            "/{}",
+            self.to_scope_string(client_config).trim_start_matches('/')
+        )
     }
 }
 
@@ -669,5 +680,56 @@ impl AuthorizationApi for AzureAuthorizationClient {
             resource_name: resource_name.to_string(),
         };
         self.build_role_assignment_id(&scope, role_assignment_name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::azure::AzureCredentials;
+
+    fn test_config() -> AzureClientConfig {
+        AzureClientConfig {
+            subscription_id: "sub-123".to_string(),
+            tenant_id: "tenant-123".to_string(),
+            region: Some("eastus".to_string()),
+            credentials: AzureCredentials::AccessToken {
+                token: "token".to_string(),
+            },
+            service_overrides: None,
+        }
+    }
+
+    #[test]
+    fn scope_strings_distinguish_relative_paths_from_arm_resource_ids() {
+        let config = test_config();
+
+        let rg_scope = Scope::ResourceGroup {
+            resource_group_name: "rg-1".to_string(),
+        };
+        assert_eq!(
+            rg_scope.to_scope_string(&config),
+            "subscriptions/sub-123/resourceGroups/rg-1"
+        );
+        assert_eq!(
+            rg_scope.to_resource_id_string(&config),
+            "/subscriptions/sub-123/resourceGroups/rg-1"
+        );
+
+        let resource_scope = Scope::Resource {
+            resource_group_name: "rg-1".to_string(),
+            resource_provider: "Microsoft.ServiceBus".to_string(),
+            parent_resource_path: None,
+            resource_type: "namespaces".to_string(),
+            resource_name: "bus-1".to_string(),
+        };
+        assert_eq!(
+            resource_scope.to_scope_string(&config),
+            "subscriptions/sub-123/resourceGroups/rg-1/providers/Microsoft.ServiceBus/namespaces/bus-1"
+        );
+        assert_eq!(
+            resource_scope.to_resource_id_string(&config),
+            "/subscriptions/sub-123/resourceGroups/rg-1/providers/Microsoft.ServiceBus/namespaces/bus-1"
+        );
     }
 }

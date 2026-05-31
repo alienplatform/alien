@@ -26,6 +26,8 @@ const value: models.SyncReconcileResponseManagementConfigGcp = {
 ```typescript
 const value: models.SyncReconcileResponseManagementConfigAzure = {
   managingTenantId: "<id>",
+  oidcIssuer: "<value>",
+  oidcSubject: "<value>",
   platform: "azure",
 };
 ```

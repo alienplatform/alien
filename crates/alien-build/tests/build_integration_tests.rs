@@ -2,9 +2,7 @@ use alien_build::{
     build_stack,
     settings::{BuildSettings, PlatformBuildSettings},
 };
-use alien_core::{
-    permissions::PermissionProfile, Function, FunctionCode, Ingress, ResourceLifecycle,
-};
+use alien_core::{permissions::PermissionProfile, Ingress, ResourceLifecycle, Worker, WorkerCode};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use tempfile::tempdir;
@@ -68,8 +66,8 @@ fn stack_with_permissions(name: &str) -> alien_core::StackBuilder {
 }
 
 // Helper to create a basic function for testing
-fn create_test_function(name: &str, code: FunctionCode) -> Function {
-    Function::new(name.to_string())
+fn create_test_function(name: &str, code: WorkerCode) -> Worker {
+    Worker::new(name.to_string())
         .code(code)
         .memory_mb(512)
         .timeout_seconds(60)
@@ -124,7 +122,7 @@ async fn test_build_stack_with_missing_file_should_error() {
 
     let func_with_missing_file = create_test_function(
         "my-func-missing-file",
-        FunctionCode::Source {
+        WorkerCode::Source {
             src: "nonexistent/directory".to_string(), // This directory doesn't exist
             toolchain: alien_core::ToolchainConfig::TypeScript {
                 binary_name: Some("app".to_string()),
@@ -185,7 +183,7 @@ async fn test_build_stack_with_glob_matching_no_files_should_succeed() {
 
     let func_with_empty_glob = create_test_function(
         "my-func-empty-glob",
-        FunctionCode::Source {
+        WorkerCode::Source {
             src: project_dir.to_str().unwrap().to_string(),
             toolchain: alien_core::ToolchainConfig::TypeScript {
                 binary_name: Some("app".to_string()),
@@ -238,7 +236,7 @@ async fn test_build_stack_with_direct_file_path() {
 
     let func_with_direct_file = create_test_function(
         "my-func-direct-file",
-        FunctionCode::Source {
+        WorkerCode::Source {
             src: project_dir.to_str().unwrap().to_string(),
             toolchain: alien_core::ToolchainConfig::TypeScript {
                 binary_name: Some("app".to_string()),
@@ -291,7 +289,7 @@ async fn test_build_stack_with_direct_directory_path() {
 
     let func_with_direct_dir = create_test_function(
         "my-func-direct-dir",
-        FunctionCode::Source {
+        WorkerCode::Source {
             src: project_dir.to_str().unwrap().to_string(),
             toolchain: alien_core::ToolchainConfig::TypeScript {
                 binary_name: Some("app".to_string()),
@@ -352,7 +350,7 @@ async fn test_build_stack_with_glob_patterns_matching_files() {
 
     let func_with_glob_files = create_test_function(
         "my-func-glob-files",
-        FunctionCode::Source {
+        WorkerCode::Source {
             src: project_dir.to_str().unwrap().to_string(),
             toolchain: alien_core::ToolchainConfig::TypeScript {
                 binary_name: Some("app".to_string()),
@@ -420,7 +418,7 @@ async fn test_build_stack_with_glob_patterns_matching_directories() {
 
     let func_with_glob_dirs = create_test_function(
         "my-func-glob-dirs",
-        FunctionCode::Source {
+        WorkerCode::Source {
             src: project_dir.to_str().unwrap().to_string(),
             toolchain: alien_core::ToolchainConfig::TypeScript {
                 binary_name: Some("app".to_string()),
@@ -461,7 +459,7 @@ async fn test_build_stack_with_missing_directory_should_error() {
 
     let func_with_missing_dir = create_test_function(
         "my-func-missing-dir",
-        FunctionCode::Source {
+        WorkerCode::Source {
             src: "nonexistent/directory".to_string(), // This directory doesn't exist
             toolchain: alien_core::ToolchainConfig::TypeScript {
                 binary_name: Some("app".to_string()),

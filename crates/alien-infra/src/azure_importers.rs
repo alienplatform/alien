@@ -1,6 +1,6 @@
 //! Bulk registration of Azure [`crate::ResourceImporter`] implementations.
 //!
-//! See [`crate::aws_importers`] for the parent doc. `container-cluster`
+//! See [`crate::aws_importers`] for the parent doc. `compute-cluster`
 //! intentionally lives in `alien-platform-controllers`.
 //!
 //! Azure has additional **auxiliary** resources that the preflight stamps
@@ -9,15 +9,18 @@
 //! get their own importers as well. They never appear in the user-authored
 //! stack but the typed payloads must round-trip the same as the rest.
 
+#[cfg(feature = "kubernetes")]
+use alien_core::KubernetesCluster;
 use alien_core::{
     ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup, AzureServiceBusNamespace,
-    AzureStorageAccount, Build, Function, Kv, Network, Platform, Queue, RemoteStackManagement,
-    ServiceAccount, ServiceActivation, Storage, Vault,
+    AzureStorageAccount, Build, Kv, Network, Platform, Queue, RemoteStackManagement,
+    ServiceAccount, ServiceActivation, Storage, Vault, Worker,
 };
 
 use crate::artifact_registry::AzureArtifactRegistryImporter;
 use crate::build::AzureBuildImporter;
-use crate::function::AzureFunctionImporter;
+#[cfg(feature = "kubernetes")]
+use crate::kubernetes_cluster::KubernetesClusterImporter;
 use crate::kv::AzureKvImporter;
 use crate::network::AzureNetworkImporter;
 use crate::queue::AzureQueueImporter;
@@ -29,6 +32,7 @@ use crate::storage::{
     AzureServiceBusNamespaceImporter, AzureStorageAccountImporter, AzureStorageImporter,
 };
 use crate::vault::AzureVaultImporter;
+use crate::worker::AzureWorkerImporter;
 use crate::ImporterRegistry;
 
 /// Register every OSS Azure importer with `registry`.
@@ -64,11 +68,7 @@ pub fn register(registry: &mut ImporterRegistry) {
             Platform::Azure,
             AzureArtifactRegistryImporter,
         )
-        .register(
-            Function::RESOURCE_TYPE,
-            Platform::Azure,
-            AzureFunctionImporter,
-        )
+        .register(Worker::RESOURCE_TYPE, Platform::Azure, AzureWorkerImporter)
         .register(
             ServiceActivation::RESOURCE_TYPE,
             Platform::Azure,
@@ -95,4 +95,10 @@ pub fn register(registry: &mut ImporterRegistry) {
             Platform::Azure,
             AzureServiceBusNamespaceImporter,
         );
+    #[cfg(feature = "kubernetes")]
+    registry.register(
+        KubernetesCluster::RESOURCE_TYPE,
+        Platform::Azure,
+        KubernetesClusterImporter,
+    );
 }

@@ -270,6 +270,32 @@ const alienManager = new AlienManager({
 async function run() {
   const result = await alienManager.sync.reconcile({
     deploymentId: "<id>",
+    heartbeats: [
+      {
+        backend: "external",
+        controllerPlatform: "gcp",
+        data: {
+          data: {
+            enabled: false,
+            projectId: "<id>",
+            serviceName: "<value>",
+            status: {
+              collectionIssues: [],
+              health: "unhealthy",
+              lifecycle: "failed",
+              partial: true,
+              stale: false,
+            },
+            backend: "gcpServiceUsage",
+          },
+          resourceType: "service_activation",
+        },
+        observedAt: new Date("2024-11-07T15:56:57.583Z"),
+        raw: [],
+        resourceId: "<id>",
+        resourceType: "worker",
+      },
+    ],
     session: "<value>",
     state: {
       "currentRelease": {
@@ -372,6 +398,32 @@ const alienManager = new AlienManagerCore({
 async function run() {
   const res = await syncReconcile(alienManager, {
     deploymentId: "<id>",
+    heartbeats: [
+      {
+        backend: "external",
+        controllerPlatform: "gcp",
+        data: {
+          data: {
+            enabled: false,
+            projectId: "<id>",
+            serviceName: "<value>",
+            status: {
+              collectionIssues: [],
+              health: "unhealthy",
+              lifecycle: "failed",
+              partial: true,
+              stale: false,
+            },
+            backend: "gcpServiceUsage",
+          },
+          resourceType: "service_activation",
+        },
+        observedAt: new Date("2024-11-07T15:56:57.583Z"),
+        raw: [],
+        resourceId: "<id>",
+        resourceType: "worker",
+      },
+    ],
     session: "<value>",
     state: {
       "currentRelease": {

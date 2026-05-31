@@ -191,12 +191,38 @@ export type NewDeploymentRequestGcp = {
 export type NewDeploymentRequestGcpUnion = NewDeploymentRequestGcp | any;
 
 /**
+ * Namespace-scoped Kubernetes TLS Secret reference.
+ */
+export type NewDeploymentRequestTlsSecretRef = {
+  /**
+   * Secret namespace. Defaults to the release namespace when omitted.
+   */
+  namespace?: string | null | undefined;
+  /**
+   * Secret name.
+   */
+  secretName: string;
+};
+
+export type NewDeploymentRequestDomainsKubernetes = {
+  /**
+   * Namespace-scoped Kubernetes TLS Secret reference.
+   */
+  tlsSecretRef: NewDeploymentRequestTlsSecretRef;
+};
+
+export type NewDeploymentRequestDomainsKubernetesUnion =
+  | NewDeploymentRequestDomainsKubernetes
+  | any;
+
+/**
  * Platform-specific certificate references for custom domains.
  */
-export type NewDeploymentRequestCertificate = {
+export type NewDeploymentRequestDomainsCertificate = {
   aws?: NewDeploymentRequestAws | any | null | undefined;
   azure?: NewDeploymentRequestAzure | any | null | undefined;
   gcp?: NewDeploymentRequestGcp | any | null | undefined;
+  kubernetes?: NewDeploymentRequestDomainsKubernetes | any | null | undefined;
 };
 
 /**
@@ -206,7 +232,7 @@ export type NewDeploymentRequestCustomDomains = {
   /**
    * Platform-specific certificate references for custom domains.
    */
-  certificate: NewDeploymentRequestCertificate;
+  certificate: NewDeploymentRequestDomainsCertificate;
   /**
    * Fully qualified domain name to use.
    */
@@ -258,6 +284,709 @@ export const NewDeploymentRequestHeartbeats = {
 export type NewDeploymentRequestHeartbeats = ClosedEnum<
   typeof NewDeploymentRequestHeartbeats
 >;
+
+/**
+ * Optional provider-specific identity for a cloud-backed Kubernetes cluster.
+ */
+export type NewDeploymentRequestCloud = {
+  accountId?: string | null | undefined;
+  clusterId?: string | null | undefined;
+  clusterName?: string | null | undefined;
+  projectId?: string | null | undefined;
+  region?: string | null | undefined;
+  resourceGroup?: string | null | undefined;
+  subscriptionId?: string | null | undefined;
+};
+
+export type NewDeploymentRequestCloudUnion = NewDeploymentRequestCloud | any;
+
+/**
+ * Ownership model for the Kubernetes cluster.
+ */
+export const NewDeploymentRequestOwnership = {
+  Managed: "managed",
+  Existing: "existing",
+  External: "external",
+} as const;
+/**
+ * Ownership model for the Kubernetes cluster.
+ */
+export type NewDeploymentRequestOwnership = ClosedEnum<
+  typeof NewDeploymentRequestOwnership
+>;
+
+/**
+ * Kubernetes cluster setup settings.
+ */
+export type NewDeploymentRequestCluster = {
+  cloud?: NewDeploymentRequestCloud | any | null | undefined;
+  /**
+   * Namespace where the Alien chart and application resources run.
+   */
+  namespace?: string | null | undefined;
+  /**
+   * Ownership model for the Kubernetes cluster.
+   */
+  ownership: NewDeploymentRequestOwnership;
+};
+
+export type NewDeploymentRequestClusterUnion =
+  | NewDeploymentRequestCluster
+  | any;
+
+export type NewDeploymentRequestCertificateNone2 = {
+  mode: "none";
+};
+
+export type NewDeploymentRequestCertificateManagedTLSSecret2 = {
+  mode: "managedTlsSecret";
+  /**
+   * Secret name template. Runtime may substitute resource/deployment tokens.
+   */
+  secretNameTemplate: string;
+};
+
+export type NewDeploymentRequestCertificateAwsAcmArn2 = {
+  /**
+   * Existing ACM certificate ARN.
+   */
+  certificateArn: string;
+  mode: "awsAcmArn";
+};
+
+export type NewDeploymentRequestCertificateManagedAcmImport2 = {
+  mode: "managedAcmImport";
+  /**
+   * ACM region. Defaults to the deployment region when omitted.
+   */
+  region?: string | null | undefined;
+  /**
+   * Tags applied to runtime-imported ACM certificates.
+   */
+  tags?: { [k: string]: string } | undefined;
+};
+
+/**
+ * Namespace-scoped Kubernetes TLS Secret reference.
+ */
+export type NewDeploymentRequestCertificateTLSSecretRef2 = {
+  /**
+   * Secret namespace. Defaults to the release namespace when omitted.
+   */
+  namespace?: string | null | undefined;
+  /**
+   * Secret name.
+   */
+  secretName: string;
+  mode: "tlsSecretRef";
+};
+
+/**
+ * Certificate publication or reference mode for Kubernetes public endpoints.
+ */
+export type NewDeploymentRequestCertificateUnion2 =
+  | NewDeploymentRequestCertificateTLSSecretRef2
+  | NewDeploymentRequestCertificateManagedAcmImport2
+  | NewDeploymentRequestCertificateAwsAcmArn2
+  | NewDeploymentRequestCertificateManagedTLSSecret2
+  | NewDeploymentRequestCertificateNone2;
+
+export const NewDeploymentRequestModeCustom = {
+  Custom: "custom",
+} as const;
+export type NewDeploymentRequestModeCustom = ClosedEnum<
+  typeof NewDeploymentRequestModeCustom
+>;
+
+export const NewDeploymentRequestProviderAzureApplicationGatewayForContainersEnum4 =
+  {
+    AzureApplicationGatewayForContainers:
+      "azureApplicationGatewayForContainers",
+  } as const;
+export type NewDeploymentRequestProviderAzureApplicationGatewayForContainersEnum4 =
+  ClosedEnum<
+    typeof NewDeploymentRequestProviderAzureApplicationGatewayForContainersEnum4
+  >;
+
+export type NewDeploymentRequestProviderAzureApplicationGatewayForContainers4 =
+  {
+    /**
+     * Optional ALB name when using BYO Application Gateway resources.
+     */
+    albName?: string | null | undefined;
+    /**
+     * Optional ALB namespace when using BYO Application Gateway resources.
+     */
+    albNamespace?: string | null | undefined;
+    /**
+     * Public or internal frontend exposure.
+     */
+    frontend: string;
+    provider:
+      NewDeploymentRequestProviderAzureApplicationGatewayForContainersEnum4;
+  };
+
+export const NewDeploymentRequestProviderGkeGatewayEnum4 = {
+  GkeGateway: "gkeGateway",
+} as const;
+export type NewDeploymentRequestProviderGkeGatewayEnum4 = ClosedEnum<
+  typeof NewDeploymentRequestProviderGkeGatewayEnum4
+>;
+
+export type NewDeploymentRequestProviderGkeGateway4 = {
+  provider: NewDeploymentRequestProviderGkeGatewayEnum4;
+  /**
+   * Optional static address name for the Gateway frontend.
+   */
+  staticAddressName?: string | null | undefined;
+};
+
+export const NewDeploymentRequestProviderAwsAlbEnum4 = {
+  AwsAlb: "awsAlb",
+} as const;
+export type NewDeploymentRequestProviderAwsAlbEnum4 = ClosedEnum<
+  typeof NewDeploymentRequestProviderAwsAlbEnum4
+>;
+
+export type NewDeploymentRequestProviderAwsAlb4 = {
+  /**
+   * Optional ALB IP address type, such as `dualstack`.
+   */
+  ipAddressType?: string | null | undefined;
+  provider: NewDeploymentRequestProviderAwsAlbEnum4;
+  /**
+   * Internet-facing or internal ALB scheme.
+   */
+  scheme: string;
+  /**
+   * Explicit subnet IDs when the profile cannot rely on controller discovery.
+   */
+  subnetIds?: Array<string> | undefined;
+  /**
+   * ALB target type, usually `ip`.
+   */
+  targetType: string;
+};
+
+export type NewDeploymentRequestProviderUnion4 =
+  | NewDeploymentRequestProviderAwsAlb4
+  | NewDeploymentRequestProviderAzureApplicationGatewayForContainers4
+  | NewDeploymentRequestProviderGkeGateway4
+  | any;
+
+/**
+ * Shared Gateway API route profile values.
+ */
+export type NewDeploymentRequestRouteGateway2 = {
+  /**
+   * Annotations applied to route objects.
+   */
+  annotations?: { [k: string]: string } | undefined;
+  /**
+   * Route controller identifier, for example a cloud Gateway controller.
+   */
+  controller?: string | null | undefined;
+  /**
+   * GatewayClass selected for generated Gateways.
+   */
+  gatewayClassName: string;
+  /**
+   * Labels applied to route objects.
+   */
+  labels?: { [k: string]: string } | undefined;
+  /**
+   * Listener port, usually 443.
+   */
+  listenerPort: number;
+  provider?:
+    | NewDeploymentRequestProviderAwsAlb4
+    | NewDeploymentRequestProviderAzureApplicationGatewayForContainers4
+    | NewDeploymentRequestProviderGkeGateway4
+    | any
+    | null
+    | undefined;
+  routeApi: "gateway";
+};
+
+export const NewDeploymentRequestProviderAzureApplicationGatewayForContainersEnum3 =
+  {
+    AzureApplicationGatewayForContainers:
+      "azureApplicationGatewayForContainers",
+  } as const;
+export type NewDeploymentRequestProviderAzureApplicationGatewayForContainersEnum3 =
+  ClosedEnum<
+    typeof NewDeploymentRequestProviderAzureApplicationGatewayForContainersEnum3
+  >;
+
+export type NewDeploymentRequestProviderAzureApplicationGatewayForContainers3 =
+  {
+    /**
+     * Optional ALB name when using BYO Application Gateway resources.
+     */
+    albName?: string | null | undefined;
+    /**
+     * Optional ALB namespace when using BYO Application Gateway resources.
+     */
+    albNamespace?: string | null | undefined;
+    /**
+     * Public or internal frontend exposure.
+     */
+    frontend: string;
+    provider:
+      NewDeploymentRequestProviderAzureApplicationGatewayForContainersEnum3;
+  };
+
+export const NewDeploymentRequestProviderGkeGatewayEnum3 = {
+  GkeGateway: "gkeGateway",
+} as const;
+export type NewDeploymentRequestProviderGkeGatewayEnum3 = ClosedEnum<
+  typeof NewDeploymentRequestProviderGkeGatewayEnum3
+>;
+
+export type NewDeploymentRequestProviderGkeGateway3 = {
+  provider: NewDeploymentRequestProviderGkeGatewayEnum3;
+  /**
+   * Optional static address name for the Gateway frontend.
+   */
+  staticAddressName?: string | null | undefined;
+};
+
+export const NewDeploymentRequestProviderAwsAlbEnum3 = {
+  AwsAlb: "awsAlb",
+} as const;
+export type NewDeploymentRequestProviderAwsAlbEnum3 = ClosedEnum<
+  typeof NewDeploymentRequestProviderAwsAlbEnum3
+>;
+
+export type NewDeploymentRequestProviderAwsAlb3 = {
+  /**
+   * Optional ALB IP address type, such as `dualstack`.
+   */
+  ipAddressType?: string | null | undefined;
+  provider: NewDeploymentRequestProviderAwsAlbEnum3;
+  /**
+   * Internet-facing or internal ALB scheme.
+   */
+  scheme: string;
+  /**
+   * Explicit subnet IDs when the profile cannot rely on controller discovery.
+   */
+  subnetIds?: Array<string> | undefined;
+  /**
+   * ALB target type, usually `ip`.
+   */
+  targetType: string;
+};
+
+export type NewDeploymentRequestProviderUnion3 =
+  | NewDeploymentRequestProviderAwsAlb3
+  | NewDeploymentRequestProviderAzureApplicationGatewayForContainers3
+  | NewDeploymentRequestProviderGkeGateway3
+  | any;
+
+/**
+ * Shared Ingress route profile values.
+ */
+export type NewDeploymentRequestRouteIngress2 = {
+  /**
+   * Annotations applied to route objects.
+   */
+  annotations?: { [k: string]: string } | undefined;
+  /**
+   * Route controller identifier, for example `eks.amazonaws.com/alb`.
+   */
+  controller?: string | null | undefined;
+  /**
+   * `spec.ingressClassName` for generated Ingresses.
+   */
+  ingressClassName: string;
+  /**
+   * Labels applied to route objects.
+   */
+  labels?: { [k: string]: string } | undefined;
+  provider?:
+    | NewDeploymentRequestProviderAwsAlb3
+    | NewDeploymentRequestProviderAzureApplicationGatewayForContainers3
+    | NewDeploymentRequestProviderGkeGateway3
+    | any
+    | null
+    | undefined;
+  routeApi: "ingress";
+};
+
+/**
+ * Kubernetes route API selected for public endpoints.
+ */
+export type NewDeploymentRequestRouteUnion2 =
+  | NewDeploymentRequestRouteIngress2
+  | NewDeploymentRequestRouteGateway2;
+
+export type NewDeploymentRequestExposureCustom = {
+  /**
+   * Certificate publication or reference mode for Kubernetes public endpoints.
+   */
+  certificate:
+    | NewDeploymentRequestCertificateTLSSecretRef2
+    | NewDeploymentRequestCertificateManagedAcmImport2
+    | NewDeploymentRequestCertificateAwsAcmArn2
+    | NewDeploymentRequestCertificateManagedTLSSecret2
+    | NewDeploymentRequestCertificateNone2;
+  /**
+   * Hostname routed by the Kubernetes public endpoint.
+   */
+  domain: string;
+  mode: NewDeploymentRequestModeCustom;
+  /**
+   * Kubernetes route API selected for public endpoints.
+   */
+  route: NewDeploymentRequestRouteIngress2 | NewDeploymentRequestRouteGateway2;
+};
+
+export type NewDeploymentRequestCertificateNone1 = {
+  mode: "none";
+};
+
+export type NewDeploymentRequestCertificateManagedTLSSecret1 = {
+  mode: "managedTlsSecret";
+  /**
+   * Secret name template. Runtime may substitute resource/deployment tokens.
+   */
+  secretNameTemplate: string;
+};
+
+export type NewDeploymentRequestCertificateAwsAcmArn1 = {
+  /**
+   * Existing ACM certificate ARN.
+   */
+  certificateArn: string;
+  mode: "awsAcmArn";
+};
+
+export type NewDeploymentRequestCertificateManagedAcmImport1 = {
+  mode: "managedAcmImport";
+  /**
+   * ACM region. Defaults to the deployment region when omitted.
+   */
+  region?: string | null | undefined;
+  /**
+   * Tags applied to runtime-imported ACM certificates.
+   */
+  tags?: { [k: string]: string } | undefined;
+};
+
+/**
+ * Namespace-scoped Kubernetes TLS Secret reference.
+ */
+export type NewDeploymentRequestCertificateTLSSecretRef1 = {
+  /**
+   * Secret namespace. Defaults to the release namespace when omitted.
+   */
+  namespace?: string | null | undefined;
+  /**
+   * Secret name.
+   */
+  secretName: string;
+  mode: "tlsSecretRef";
+};
+
+/**
+ * Certificate publication or reference mode for Kubernetes public endpoints.
+ */
+export type NewDeploymentRequestCertificateUnion1 =
+  | NewDeploymentRequestCertificateTLSSecretRef1
+  | NewDeploymentRequestCertificateManagedAcmImport1
+  | NewDeploymentRequestCertificateAwsAcmArn1
+  | NewDeploymentRequestCertificateManagedTLSSecret1
+  | NewDeploymentRequestCertificateNone1;
+
+export const NewDeploymentRequestModeGenerated = {
+  Generated: "generated",
+} as const;
+export type NewDeploymentRequestModeGenerated = ClosedEnum<
+  typeof NewDeploymentRequestModeGenerated
+>;
+
+export const NewDeploymentRequestProviderAzureApplicationGatewayForContainersEnum2 =
+  {
+    AzureApplicationGatewayForContainers:
+      "azureApplicationGatewayForContainers",
+  } as const;
+export type NewDeploymentRequestProviderAzureApplicationGatewayForContainersEnum2 =
+  ClosedEnum<
+    typeof NewDeploymentRequestProviderAzureApplicationGatewayForContainersEnum2
+  >;
+
+export type NewDeploymentRequestProviderAzureApplicationGatewayForContainers2 =
+  {
+    /**
+     * Optional ALB name when using BYO Application Gateway resources.
+     */
+    albName?: string | null | undefined;
+    /**
+     * Optional ALB namespace when using BYO Application Gateway resources.
+     */
+    albNamespace?: string | null | undefined;
+    /**
+     * Public or internal frontend exposure.
+     */
+    frontend: string;
+    provider:
+      NewDeploymentRequestProviderAzureApplicationGatewayForContainersEnum2;
+  };
+
+export const NewDeploymentRequestProviderGkeGatewayEnum2 = {
+  GkeGateway: "gkeGateway",
+} as const;
+export type NewDeploymentRequestProviderGkeGatewayEnum2 = ClosedEnum<
+  typeof NewDeploymentRequestProviderGkeGatewayEnum2
+>;
+
+export type NewDeploymentRequestProviderGkeGateway2 = {
+  provider: NewDeploymentRequestProviderGkeGatewayEnum2;
+  /**
+   * Optional static address name for the Gateway frontend.
+   */
+  staticAddressName?: string | null | undefined;
+};
+
+export const NewDeploymentRequestProviderAwsAlbEnum2 = {
+  AwsAlb: "awsAlb",
+} as const;
+export type NewDeploymentRequestProviderAwsAlbEnum2 = ClosedEnum<
+  typeof NewDeploymentRequestProviderAwsAlbEnum2
+>;
+
+export type NewDeploymentRequestProviderAwsAlb2 = {
+  /**
+   * Optional ALB IP address type, such as `dualstack`.
+   */
+  ipAddressType?: string | null | undefined;
+  provider: NewDeploymentRequestProviderAwsAlbEnum2;
+  /**
+   * Internet-facing or internal ALB scheme.
+   */
+  scheme: string;
+  /**
+   * Explicit subnet IDs when the profile cannot rely on controller discovery.
+   */
+  subnetIds?: Array<string> | undefined;
+  /**
+   * ALB target type, usually `ip`.
+   */
+  targetType: string;
+};
+
+export type NewDeploymentRequestProviderUnion2 =
+  | NewDeploymentRequestProviderAwsAlb2
+  | NewDeploymentRequestProviderAzureApplicationGatewayForContainers2
+  | NewDeploymentRequestProviderGkeGateway2
+  | any;
+
+/**
+ * Shared Gateway API route profile values.
+ */
+export type NewDeploymentRequestRouteGateway1 = {
+  /**
+   * Annotations applied to route objects.
+   */
+  annotations?: { [k: string]: string } | undefined;
+  /**
+   * Route controller identifier, for example a cloud Gateway controller.
+   */
+  controller?: string | null | undefined;
+  /**
+   * GatewayClass selected for generated Gateways.
+   */
+  gatewayClassName: string;
+  /**
+   * Labels applied to route objects.
+   */
+  labels?: { [k: string]: string } | undefined;
+  /**
+   * Listener port, usually 443.
+   */
+  listenerPort: number;
+  provider?:
+    | NewDeploymentRequestProviderAwsAlb2
+    | NewDeploymentRequestProviderAzureApplicationGatewayForContainers2
+    | NewDeploymentRequestProviderGkeGateway2
+    | any
+    | null
+    | undefined;
+  routeApi: "gateway";
+};
+
+export const NewDeploymentRequestProviderAzureApplicationGatewayForContainersEnum1 =
+  {
+    AzureApplicationGatewayForContainers:
+      "azureApplicationGatewayForContainers",
+  } as const;
+export type NewDeploymentRequestProviderAzureApplicationGatewayForContainersEnum1 =
+  ClosedEnum<
+    typeof NewDeploymentRequestProviderAzureApplicationGatewayForContainersEnum1
+  >;
+
+export type NewDeploymentRequestProviderAzureApplicationGatewayForContainers1 =
+  {
+    /**
+     * Optional ALB name when using BYO Application Gateway resources.
+     */
+    albName?: string | null | undefined;
+    /**
+     * Optional ALB namespace when using BYO Application Gateway resources.
+     */
+    albNamespace?: string | null | undefined;
+    /**
+     * Public or internal frontend exposure.
+     */
+    frontend: string;
+    provider:
+      NewDeploymentRequestProviderAzureApplicationGatewayForContainersEnum1;
+  };
+
+export const NewDeploymentRequestProviderGkeGatewayEnum1 = {
+  GkeGateway: "gkeGateway",
+} as const;
+export type NewDeploymentRequestProviderGkeGatewayEnum1 = ClosedEnum<
+  typeof NewDeploymentRequestProviderGkeGatewayEnum1
+>;
+
+export type NewDeploymentRequestProviderGkeGateway1 = {
+  provider: NewDeploymentRequestProviderGkeGatewayEnum1;
+  /**
+   * Optional static address name for the Gateway frontend.
+   */
+  staticAddressName?: string | null | undefined;
+};
+
+export const NewDeploymentRequestProviderAwsAlbEnum1 = {
+  AwsAlb: "awsAlb",
+} as const;
+export type NewDeploymentRequestProviderAwsAlbEnum1 = ClosedEnum<
+  typeof NewDeploymentRequestProviderAwsAlbEnum1
+>;
+
+export type NewDeploymentRequestProviderAwsAlb1 = {
+  /**
+   * Optional ALB IP address type, such as `dualstack`.
+   */
+  ipAddressType?: string | null | undefined;
+  provider: NewDeploymentRequestProviderAwsAlbEnum1;
+  /**
+   * Internet-facing or internal ALB scheme.
+   */
+  scheme: string;
+  /**
+   * Explicit subnet IDs when the profile cannot rely on controller discovery.
+   */
+  subnetIds?: Array<string> | undefined;
+  /**
+   * ALB target type, usually `ip`.
+   */
+  targetType: string;
+};
+
+export type NewDeploymentRequestProviderUnion1 =
+  | NewDeploymentRequestProviderAwsAlb1
+  | NewDeploymentRequestProviderAzureApplicationGatewayForContainers1
+  | NewDeploymentRequestProviderGkeGateway1
+  | any;
+
+/**
+ * Shared Ingress route profile values.
+ */
+export type NewDeploymentRequestRouteIngress1 = {
+  /**
+   * Annotations applied to route objects.
+   */
+  annotations?: { [k: string]: string } | undefined;
+  /**
+   * Route controller identifier, for example `eks.amazonaws.com/alb`.
+   */
+  controller?: string | null | undefined;
+  /**
+   * `spec.ingressClassName` for generated Ingresses.
+   */
+  ingressClassName: string;
+  /**
+   * Labels applied to route objects.
+   */
+  labels?: { [k: string]: string } | undefined;
+  provider?:
+    | NewDeploymentRequestProviderAwsAlb1
+    | NewDeploymentRequestProviderAzureApplicationGatewayForContainers1
+    | NewDeploymentRequestProviderGkeGateway1
+    | any
+    | null
+    | undefined;
+  routeApi: "ingress";
+};
+
+/**
+ * Kubernetes route API selected for public endpoints.
+ */
+export type NewDeploymentRequestRouteUnion1 =
+  | NewDeploymentRequestRouteIngress1
+  | NewDeploymentRequestRouteGateway1;
+
+export type NewDeploymentRequestExposureGenerated = {
+  /**
+   * Certificate publication or reference mode for Kubernetes public endpoints.
+   */
+  certificate:
+    | NewDeploymentRequestCertificateTLSSecretRef1
+    | NewDeploymentRequestCertificateManagedAcmImport1
+    | NewDeploymentRequestCertificateAwsAcmArn1
+    | NewDeploymentRequestCertificateManagedTLSSecret1
+    | NewDeploymentRequestCertificateNone1;
+  mode: NewDeploymentRequestModeGenerated;
+  /**
+   * Kubernetes route API selected for public endpoints.
+   */
+  route: NewDeploymentRequestRouteIngress1 | NewDeploymentRequestRouteGateway1;
+};
+
+export const NewDeploymentRequestModeDisabled = {
+  Disabled: "disabled",
+} as const;
+export type NewDeploymentRequestModeDisabled = ClosedEnum<
+  typeof NewDeploymentRequestModeDisabled
+>;
+
+export type NewDeploymentRequestExposureDisabled = {
+  mode: NewDeploymentRequestModeDisabled;
+};
+
+export type NewDeploymentRequestExposureUnion =
+  | NewDeploymentRequestExposureCustom
+  | NewDeploymentRequestExposureGenerated
+  | NewDeploymentRequestExposureDisabled
+  | any;
+
+/**
+ * Kubernetes runtime substrate configuration.
+ *
+ * @remarks
+ *
+ * This controls how setup chooses the cluster backing `Platform::Kubernetes`
+ * deployments. When omitted, cloud-backed Kubernetes deployments default to a
+ * managed cluster and generic/on-prem Kubernetes defaults to an external
+ * cluster.
+ */
+export type NewDeploymentRequestKubernetes = {
+  cluster?: NewDeploymentRequestCluster | any | null | undefined;
+  exposure?:
+    | NewDeploymentRequestExposureCustom
+    | NewDeploymentRequestExposureGenerated
+    | NewDeploymentRequestExposureDisabled
+    | any
+    | null
+    | undefined;
+};
+
+export type NewDeploymentRequestKubernetesUnion =
+  | NewDeploymentRequestKubernetes
+  | any;
 
 export const NewDeploymentRequestTypeByoVnetAzure = {
   ByoVnetAzure: "byo-vnet-azure",
@@ -424,6 +1153,7 @@ export type NewDeploymentRequestStackSettings = {
    * How heartbeat health checks are handled.
    */
   heartbeats?: NewDeploymentRequestHeartbeats | undefined;
+  kubernetes?: NewDeploymentRequestKubernetes | any | null | undefined;
   network?:
     | NewDeploymentRequestNetworkByoVpcAws
     | NewDeploymentRequestNetworkByoVpcGcp
@@ -491,6 +1221,10 @@ export type NewDeploymentRequest = {
    * Stack settings for deployment customization
    */
   stackSettings?: NewDeploymentRequestStackSettings | undefined;
+  /**
+   * Optional physical-name prefix for generated cloud resources. Omit to let the manager generate one.
+   */
+  resourcePrefix?: string | undefined;
 };
 
 /** @internal */
@@ -832,16 +1566,95 @@ export function newDeploymentRequestGcpUnionToJSON(
 }
 
 /** @internal */
-export type NewDeploymentRequestCertificate$Outbound = {
-  aws?: NewDeploymentRequestAws$Outbound | any | null | undefined;
-  azure?: NewDeploymentRequestAzure$Outbound | any | null | undefined;
-  gcp?: NewDeploymentRequestGcp$Outbound | any | null | undefined;
+export type NewDeploymentRequestTlsSecretRef$Outbound = {
+  namespace?: string | null | undefined;
+  secretName: string;
 };
 
 /** @internal */
-export const NewDeploymentRequestCertificate$outboundSchema: z.ZodType<
-  NewDeploymentRequestCertificate$Outbound,
-  NewDeploymentRequestCertificate
+export const NewDeploymentRequestTlsSecretRef$outboundSchema: z.ZodType<
+  NewDeploymentRequestTlsSecretRef$Outbound,
+  NewDeploymentRequestTlsSecretRef
+> = z.object({
+  namespace: z.nullable(z.string()).optional(),
+  secretName: z.string(),
+});
+
+export function newDeploymentRequestTlsSecretRefToJSON(
+  newDeploymentRequestTlsSecretRef: NewDeploymentRequestTlsSecretRef,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestTlsSecretRef$outboundSchema.parse(
+      newDeploymentRequestTlsSecretRef,
+    ),
+  );
+}
+
+/** @internal */
+export type NewDeploymentRequestDomainsKubernetes$Outbound = {
+  tlsSecretRef: NewDeploymentRequestTlsSecretRef$Outbound;
+};
+
+/** @internal */
+export const NewDeploymentRequestDomainsKubernetes$outboundSchema: z.ZodType<
+  NewDeploymentRequestDomainsKubernetes$Outbound,
+  NewDeploymentRequestDomainsKubernetes
+> = z.object({
+  tlsSecretRef: z.lazy(() => NewDeploymentRequestTlsSecretRef$outboundSchema),
+});
+
+export function newDeploymentRequestDomainsKubernetesToJSON(
+  newDeploymentRequestDomainsKubernetes: NewDeploymentRequestDomainsKubernetes,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestDomainsKubernetes$outboundSchema.parse(
+      newDeploymentRequestDomainsKubernetes,
+    ),
+  );
+}
+
+/** @internal */
+export type NewDeploymentRequestDomainsKubernetesUnion$Outbound =
+  | NewDeploymentRequestDomainsKubernetes$Outbound
+  | any;
+
+/** @internal */
+export const NewDeploymentRequestDomainsKubernetesUnion$outboundSchema:
+  z.ZodType<
+    NewDeploymentRequestDomainsKubernetesUnion$Outbound,
+    NewDeploymentRequestDomainsKubernetesUnion
+  > = z.union([
+    z.lazy(() => NewDeploymentRequestDomainsKubernetes$outboundSchema),
+    z.any(),
+  ]);
+
+export function newDeploymentRequestDomainsKubernetesUnionToJSON(
+  newDeploymentRequestDomainsKubernetesUnion:
+    NewDeploymentRequestDomainsKubernetesUnion,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestDomainsKubernetesUnion$outboundSchema.parse(
+      newDeploymentRequestDomainsKubernetesUnion,
+    ),
+  );
+}
+
+/** @internal */
+export type NewDeploymentRequestDomainsCertificate$Outbound = {
+  aws?: NewDeploymentRequestAws$Outbound | any | null | undefined;
+  azure?: NewDeploymentRequestAzure$Outbound | any | null | undefined;
+  gcp?: NewDeploymentRequestGcp$Outbound | any | null | undefined;
+  kubernetes?:
+    | NewDeploymentRequestDomainsKubernetes$Outbound
+    | any
+    | null
+    | undefined;
+};
+
+/** @internal */
+export const NewDeploymentRequestDomainsCertificate$outboundSchema: z.ZodType<
+  NewDeploymentRequestDomainsCertificate$Outbound,
+  NewDeploymentRequestDomainsCertificate
 > = z.object({
   aws: z.nullable(
     z.union([z.lazy(() => NewDeploymentRequestAws$outboundSchema), z.any()]),
@@ -852,21 +1665,28 @@ export const NewDeploymentRequestCertificate$outboundSchema: z.ZodType<
   gcp: z.nullable(
     z.union([z.lazy(() => NewDeploymentRequestGcp$outboundSchema), z.any()]),
   ).optional(),
+  kubernetes: z.nullable(
+    z.union([
+      z.lazy(() => NewDeploymentRequestDomainsKubernetes$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
 });
 
-export function newDeploymentRequestCertificateToJSON(
-  newDeploymentRequestCertificate: NewDeploymentRequestCertificate,
+export function newDeploymentRequestDomainsCertificateToJSON(
+  newDeploymentRequestDomainsCertificate:
+    NewDeploymentRequestDomainsCertificate,
 ): string {
   return JSON.stringify(
-    NewDeploymentRequestCertificate$outboundSchema.parse(
-      newDeploymentRequestCertificate,
+    NewDeploymentRequestDomainsCertificate$outboundSchema.parse(
+      newDeploymentRequestDomainsCertificate,
     ),
   );
 }
 
 /** @internal */
 export type NewDeploymentRequestCustomDomains$Outbound = {
-  certificate: NewDeploymentRequestCertificate$Outbound;
+  certificate: NewDeploymentRequestDomainsCertificate$Outbound;
   domain: string;
 };
 
@@ -875,7 +1695,9 @@ export const NewDeploymentRequestCustomDomains$outboundSchema: z.ZodType<
   NewDeploymentRequestCustomDomains$Outbound,
   NewDeploymentRequestCustomDomains
 > = z.object({
-  certificate: z.lazy(() => NewDeploymentRequestCertificate$outboundSchema),
+  certificate: z.lazy(() =>
+    NewDeploymentRequestDomainsCertificate$outboundSchema
+  ),
   domain: z.string(),
 });
 
@@ -967,6 +1789,1473 @@ export function newDeploymentRequestExternalBindingsToJSON(
 export const NewDeploymentRequestHeartbeats$outboundSchema: z.ZodEnum<
   typeof NewDeploymentRequestHeartbeats
 > = z.enum(NewDeploymentRequestHeartbeats);
+
+/** @internal */
+export type NewDeploymentRequestCloud$Outbound = {
+  accountId?: string | null | undefined;
+  clusterId?: string | null | undefined;
+  clusterName?: string | null | undefined;
+  projectId?: string | null | undefined;
+  region?: string | null | undefined;
+  resourceGroup?: string | null | undefined;
+  subscriptionId?: string | null | undefined;
+};
+
+/** @internal */
+export const NewDeploymentRequestCloud$outboundSchema: z.ZodType<
+  NewDeploymentRequestCloud$Outbound,
+  NewDeploymentRequestCloud
+> = z.object({
+  accountId: z.nullable(z.string()).optional(),
+  clusterId: z.nullable(z.string()).optional(),
+  clusterName: z.nullable(z.string()).optional(),
+  projectId: z.nullable(z.string()).optional(),
+  region: z.nullable(z.string()).optional(),
+  resourceGroup: z.nullable(z.string()).optional(),
+  subscriptionId: z.nullable(z.string()).optional(),
+});
+
+export function newDeploymentRequestCloudToJSON(
+  newDeploymentRequestCloud: NewDeploymentRequestCloud,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestCloud$outboundSchema.parse(newDeploymentRequestCloud),
+  );
+}
+
+/** @internal */
+export type NewDeploymentRequestCloudUnion$Outbound =
+  | NewDeploymentRequestCloud$Outbound
+  | any;
+
+/** @internal */
+export const NewDeploymentRequestCloudUnion$outboundSchema: z.ZodType<
+  NewDeploymentRequestCloudUnion$Outbound,
+  NewDeploymentRequestCloudUnion
+> = z.union([z.lazy(() => NewDeploymentRequestCloud$outboundSchema), z.any()]);
+
+export function newDeploymentRequestCloudUnionToJSON(
+  newDeploymentRequestCloudUnion: NewDeploymentRequestCloudUnion,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestCloudUnion$outboundSchema.parse(
+      newDeploymentRequestCloudUnion,
+    ),
+  );
+}
+
+/** @internal */
+export const NewDeploymentRequestOwnership$outboundSchema: z.ZodEnum<
+  typeof NewDeploymentRequestOwnership
+> = z.enum(NewDeploymentRequestOwnership);
+
+/** @internal */
+export type NewDeploymentRequestCluster$Outbound = {
+  cloud?: NewDeploymentRequestCloud$Outbound | any | null | undefined;
+  namespace?: string | null | undefined;
+  ownership: string;
+};
+
+/** @internal */
+export const NewDeploymentRequestCluster$outboundSchema: z.ZodType<
+  NewDeploymentRequestCluster$Outbound,
+  NewDeploymentRequestCluster
+> = z.object({
+  cloud: z.nullable(
+    z.union([z.lazy(() => NewDeploymentRequestCloud$outboundSchema), z.any()]),
+  ).optional(),
+  namespace: z.nullable(z.string()).optional(),
+  ownership: NewDeploymentRequestOwnership$outboundSchema,
+});
+
+export function newDeploymentRequestClusterToJSON(
+  newDeploymentRequestCluster: NewDeploymentRequestCluster,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestCluster$outboundSchema.parse(
+      newDeploymentRequestCluster,
+    ),
+  );
+}
+
+/** @internal */
+export type NewDeploymentRequestClusterUnion$Outbound =
+  | NewDeploymentRequestCluster$Outbound
+  | any;
+
+/** @internal */
+export const NewDeploymentRequestClusterUnion$outboundSchema: z.ZodType<
+  NewDeploymentRequestClusterUnion$Outbound,
+  NewDeploymentRequestClusterUnion
+> = z.union([
+  z.lazy(() => NewDeploymentRequestCluster$outboundSchema),
+  z.any(),
+]);
+
+export function newDeploymentRequestClusterUnionToJSON(
+  newDeploymentRequestClusterUnion: NewDeploymentRequestClusterUnion,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestClusterUnion$outboundSchema.parse(
+      newDeploymentRequestClusterUnion,
+    ),
+  );
+}
+
+/** @internal */
+export type NewDeploymentRequestCertificateNone2$Outbound = {
+  mode: "none";
+};
+
+/** @internal */
+export const NewDeploymentRequestCertificateNone2$outboundSchema: z.ZodType<
+  NewDeploymentRequestCertificateNone2$Outbound,
+  NewDeploymentRequestCertificateNone2
+> = z.object({
+  mode: z.literal("none"),
+});
+
+export function newDeploymentRequestCertificateNone2ToJSON(
+  newDeploymentRequestCertificateNone2: NewDeploymentRequestCertificateNone2,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestCertificateNone2$outboundSchema.parse(
+      newDeploymentRequestCertificateNone2,
+    ),
+  );
+}
+
+/** @internal */
+export type NewDeploymentRequestCertificateManagedTLSSecret2$Outbound = {
+  mode: "managedTlsSecret";
+  secretNameTemplate: string;
+};
+
+/** @internal */
+export const NewDeploymentRequestCertificateManagedTLSSecret2$outboundSchema:
+  z.ZodType<
+    NewDeploymentRequestCertificateManagedTLSSecret2$Outbound,
+    NewDeploymentRequestCertificateManagedTLSSecret2
+  > = z.object({
+    mode: z.literal("managedTlsSecret"),
+    secretNameTemplate: z.string(),
+  });
+
+export function newDeploymentRequestCertificateManagedTLSSecret2ToJSON(
+  newDeploymentRequestCertificateManagedTLSSecret2:
+    NewDeploymentRequestCertificateManagedTLSSecret2,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestCertificateManagedTLSSecret2$outboundSchema.parse(
+      newDeploymentRequestCertificateManagedTLSSecret2,
+    ),
+  );
+}
+
+/** @internal */
+export type NewDeploymentRequestCertificateAwsAcmArn2$Outbound = {
+  certificateArn: string;
+  mode: "awsAcmArn";
+};
+
+/** @internal */
+export const NewDeploymentRequestCertificateAwsAcmArn2$outboundSchema:
+  z.ZodType<
+    NewDeploymentRequestCertificateAwsAcmArn2$Outbound,
+    NewDeploymentRequestCertificateAwsAcmArn2
+  > = z.object({
+    certificateArn: z.string(),
+    mode: z.literal("awsAcmArn"),
+  });
+
+export function newDeploymentRequestCertificateAwsAcmArn2ToJSON(
+  newDeploymentRequestCertificateAwsAcmArn2:
+    NewDeploymentRequestCertificateAwsAcmArn2,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestCertificateAwsAcmArn2$outboundSchema.parse(
+      newDeploymentRequestCertificateAwsAcmArn2,
+    ),
+  );
+}
+
+/** @internal */
+export type NewDeploymentRequestCertificateManagedAcmImport2$Outbound = {
+  mode: "managedAcmImport";
+  region?: string | null | undefined;
+  tags?: { [k: string]: string } | undefined;
+};
+
+/** @internal */
+export const NewDeploymentRequestCertificateManagedAcmImport2$outboundSchema:
+  z.ZodType<
+    NewDeploymentRequestCertificateManagedAcmImport2$Outbound,
+    NewDeploymentRequestCertificateManagedAcmImport2
+  > = z.object({
+    mode: z.literal("managedAcmImport"),
+    region: z.nullable(z.string()).optional(),
+    tags: z.record(z.string(), z.string()).optional(),
+  });
+
+export function newDeploymentRequestCertificateManagedAcmImport2ToJSON(
+  newDeploymentRequestCertificateManagedAcmImport2:
+    NewDeploymentRequestCertificateManagedAcmImport2,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestCertificateManagedAcmImport2$outboundSchema.parse(
+      newDeploymentRequestCertificateManagedAcmImport2,
+    ),
+  );
+}
+
+/** @internal */
+export type NewDeploymentRequestCertificateTLSSecretRef2$Outbound = {
+  namespace?: string | null | undefined;
+  secretName: string;
+  mode: "tlsSecretRef";
+};
+
+/** @internal */
+export const NewDeploymentRequestCertificateTLSSecretRef2$outboundSchema:
+  z.ZodType<
+    NewDeploymentRequestCertificateTLSSecretRef2$Outbound,
+    NewDeploymentRequestCertificateTLSSecretRef2
+  > = z.object({
+    namespace: z.nullable(z.string()).optional(),
+    secretName: z.string(),
+    mode: z.literal("tlsSecretRef"),
+  });
+
+export function newDeploymentRequestCertificateTLSSecretRef2ToJSON(
+  newDeploymentRequestCertificateTLSSecretRef2:
+    NewDeploymentRequestCertificateTLSSecretRef2,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestCertificateTLSSecretRef2$outboundSchema.parse(
+      newDeploymentRequestCertificateTLSSecretRef2,
+    ),
+  );
+}
+
+/** @internal */
+export type NewDeploymentRequestCertificateUnion2$Outbound =
+  | NewDeploymentRequestCertificateTLSSecretRef2$Outbound
+  | NewDeploymentRequestCertificateManagedAcmImport2$Outbound
+  | NewDeploymentRequestCertificateAwsAcmArn2$Outbound
+  | NewDeploymentRequestCertificateManagedTLSSecret2$Outbound
+  | NewDeploymentRequestCertificateNone2$Outbound;
+
+/** @internal */
+export const NewDeploymentRequestCertificateUnion2$outboundSchema: z.ZodType<
+  NewDeploymentRequestCertificateUnion2$Outbound,
+  NewDeploymentRequestCertificateUnion2
+> = z.union([
+  z.lazy(() => NewDeploymentRequestCertificateTLSSecretRef2$outboundSchema),
+  z.lazy(() => NewDeploymentRequestCertificateManagedAcmImport2$outboundSchema),
+  z.lazy(() => NewDeploymentRequestCertificateAwsAcmArn2$outboundSchema),
+  z.lazy(() => NewDeploymentRequestCertificateManagedTLSSecret2$outboundSchema),
+  z.lazy(() => NewDeploymentRequestCertificateNone2$outboundSchema),
+]);
+
+export function newDeploymentRequestCertificateUnion2ToJSON(
+  newDeploymentRequestCertificateUnion2: NewDeploymentRequestCertificateUnion2,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestCertificateUnion2$outboundSchema.parse(
+      newDeploymentRequestCertificateUnion2,
+    ),
+  );
+}
+
+/** @internal */
+export const NewDeploymentRequestModeCustom$outboundSchema: z.ZodEnum<
+  typeof NewDeploymentRequestModeCustom
+> = z.enum(NewDeploymentRequestModeCustom);
+
+/** @internal */
+export const NewDeploymentRequestProviderAzureApplicationGatewayForContainersEnum4$outboundSchema:
+  z.ZodEnum<
+    typeof NewDeploymentRequestProviderAzureApplicationGatewayForContainersEnum4
+  > = z.enum(
+    NewDeploymentRequestProviderAzureApplicationGatewayForContainersEnum4,
+  );
+
+/** @internal */
+export type NewDeploymentRequestProviderAzureApplicationGatewayForContainers4$Outbound =
+  {
+    albName?: string | null | undefined;
+    albNamespace?: string | null | undefined;
+    frontend: string;
+    provider: string;
+  };
+
+/** @internal */
+export const NewDeploymentRequestProviderAzureApplicationGatewayForContainers4$outboundSchema:
+  z.ZodType<
+    NewDeploymentRequestProviderAzureApplicationGatewayForContainers4$Outbound,
+    NewDeploymentRequestProviderAzureApplicationGatewayForContainers4
+  > = z.object({
+    albName: z.nullable(z.string()).optional(),
+    albNamespace: z.nullable(z.string()).optional(),
+    frontend: z.string(),
+    provider:
+      NewDeploymentRequestProviderAzureApplicationGatewayForContainersEnum4$outboundSchema,
+  });
+
+export function newDeploymentRequestProviderAzureApplicationGatewayForContainers4ToJSON(
+  newDeploymentRequestProviderAzureApplicationGatewayForContainers4:
+    NewDeploymentRequestProviderAzureApplicationGatewayForContainers4,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestProviderAzureApplicationGatewayForContainers4$outboundSchema
+      .parse(newDeploymentRequestProviderAzureApplicationGatewayForContainers4),
+  );
+}
+
+/** @internal */
+export const NewDeploymentRequestProviderGkeGatewayEnum4$outboundSchema:
+  z.ZodEnum<typeof NewDeploymentRequestProviderGkeGatewayEnum4> = z.enum(
+    NewDeploymentRequestProviderGkeGatewayEnum4,
+  );
+
+/** @internal */
+export type NewDeploymentRequestProviderGkeGateway4$Outbound = {
+  provider: string;
+  staticAddressName?: string | null | undefined;
+};
+
+/** @internal */
+export const NewDeploymentRequestProviderGkeGateway4$outboundSchema: z.ZodType<
+  NewDeploymentRequestProviderGkeGateway4$Outbound,
+  NewDeploymentRequestProviderGkeGateway4
+> = z.object({
+  provider: NewDeploymentRequestProviderGkeGatewayEnum4$outboundSchema,
+  staticAddressName: z.nullable(z.string()).optional(),
+});
+
+export function newDeploymentRequestProviderGkeGateway4ToJSON(
+  newDeploymentRequestProviderGkeGateway4:
+    NewDeploymentRequestProviderGkeGateway4,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestProviderGkeGateway4$outboundSchema.parse(
+      newDeploymentRequestProviderGkeGateway4,
+    ),
+  );
+}
+
+/** @internal */
+export const NewDeploymentRequestProviderAwsAlbEnum4$outboundSchema: z.ZodEnum<
+  typeof NewDeploymentRequestProviderAwsAlbEnum4
+> = z.enum(NewDeploymentRequestProviderAwsAlbEnum4);
+
+/** @internal */
+export type NewDeploymentRequestProviderAwsAlb4$Outbound = {
+  ipAddressType?: string | null | undefined;
+  provider: string;
+  scheme: string;
+  subnetIds?: Array<string> | undefined;
+  targetType: string;
+};
+
+/** @internal */
+export const NewDeploymentRequestProviderAwsAlb4$outboundSchema: z.ZodType<
+  NewDeploymentRequestProviderAwsAlb4$Outbound,
+  NewDeploymentRequestProviderAwsAlb4
+> = z.object({
+  ipAddressType: z.nullable(z.string()).optional(),
+  provider: NewDeploymentRequestProviderAwsAlbEnum4$outboundSchema,
+  scheme: z.string(),
+  subnetIds: z.array(z.string()).optional(),
+  targetType: z.string(),
+});
+
+export function newDeploymentRequestProviderAwsAlb4ToJSON(
+  newDeploymentRequestProviderAwsAlb4: NewDeploymentRequestProviderAwsAlb4,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestProviderAwsAlb4$outboundSchema.parse(
+      newDeploymentRequestProviderAwsAlb4,
+    ),
+  );
+}
+
+/** @internal */
+export type NewDeploymentRequestProviderUnion4$Outbound =
+  | NewDeploymentRequestProviderAwsAlb4$Outbound
+  | NewDeploymentRequestProviderAzureApplicationGatewayForContainers4$Outbound
+  | NewDeploymentRequestProviderGkeGateway4$Outbound
+  | any;
+
+/** @internal */
+export const NewDeploymentRequestProviderUnion4$outboundSchema: z.ZodType<
+  NewDeploymentRequestProviderUnion4$Outbound,
+  NewDeploymentRequestProviderUnion4
+> = z.union([
+  z.lazy(() => NewDeploymentRequestProviderAwsAlb4$outboundSchema),
+  z.lazy(() =>
+    NewDeploymentRequestProviderAzureApplicationGatewayForContainers4$outboundSchema
+  ),
+  z.lazy(() => NewDeploymentRequestProviderGkeGateway4$outboundSchema),
+  z.any(),
+]);
+
+export function newDeploymentRequestProviderUnion4ToJSON(
+  newDeploymentRequestProviderUnion4: NewDeploymentRequestProviderUnion4,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestProviderUnion4$outboundSchema.parse(
+      newDeploymentRequestProviderUnion4,
+    ),
+  );
+}
+
+/** @internal */
+export type NewDeploymentRequestRouteGateway2$Outbound = {
+  annotations?: { [k: string]: string } | undefined;
+  controller?: string | null | undefined;
+  gatewayClassName: string;
+  labels?: { [k: string]: string } | undefined;
+  listenerPort: number;
+  provider?:
+    | NewDeploymentRequestProviderAwsAlb4$Outbound
+    | NewDeploymentRequestProviderAzureApplicationGatewayForContainers4$Outbound
+    | NewDeploymentRequestProviderGkeGateway4$Outbound
+    | any
+    | null
+    | undefined;
+  routeApi: "gateway";
+};
+
+/** @internal */
+export const NewDeploymentRequestRouteGateway2$outboundSchema: z.ZodType<
+  NewDeploymentRequestRouteGateway2$Outbound,
+  NewDeploymentRequestRouteGateway2
+> = z.object({
+  annotations: z.record(z.string(), z.string()).optional(),
+  controller: z.nullable(z.string()).optional(),
+  gatewayClassName: z.string(),
+  labels: z.record(z.string(), z.string()).optional(),
+  listenerPort: z.int(),
+  provider: z.nullable(
+    z.union([
+      z.lazy(() => NewDeploymentRequestProviderAwsAlb4$outboundSchema),
+      z.lazy(() =>
+        NewDeploymentRequestProviderAzureApplicationGatewayForContainers4$outboundSchema
+      ),
+      z.lazy(() => NewDeploymentRequestProviderGkeGateway4$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  routeApi: z.literal("gateway"),
+});
+
+export function newDeploymentRequestRouteGateway2ToJSON(
+  newDeploymentRequestRouteGateway2: NewDeploymentRequestRouteGateway2,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestRouteGateway2$outboundSchema.parse(
+      newDeploymentRequestRouteGateway2,
+    ),
+  );
+}
+
+/** @internal */
+export const NewDeploymentRequestProviderAzureApplicationGatewayForContainersEnum3$outboundSchema:
+  z.ZodEnum<
+    typeof NewDeploymentRequestProviderAzureApplicationGatewayForContainersEnum3
+  > = z.enum(
+    NewDeploymentRequestProviderAzureApplicationGatewayForContainersEnum3,
+  );
+
+/** @internal */
+export type NewDeploymentRequestProviderAzureApplicationGatewayForContainers3$Outbound =
+  {
+    albName?: string | null | undefined;
+    albNamespace?: string | null | undefined;
+    frontend: string;
+    provider: string;
+  };
+
+/** @internal */
+export const NewDeploymentRequestProviderAzureApplicationGatewayForContainers3$outboundSchema:
+  z.ZodType<
+    NewDeploymentRequestProviderAzureApplicationGatewayForContainers3$Outbound,
+    NewDeploymentRequestProviderAzureApplicationGatewayForContainers3
+  > = z.object({
+    albName: z.nullable(z.string()).optional(),
+    albNamespace: z.nullable(z.string()).optional(),
+    frontend: z.string(),
+    provider:
+      NewDeploymentRequestProviderAzureApplicationGatewayForContainersEnum3$outboundSchema,
+  });
+
+export function newDeploymentRequestProviderAzureApplicationGatewayForContainers3ToJSON(
+  newDeploymentRequestProviderAzureApplicationGatewayForContainers3:
+    NewDeploymentRequestProviderAzureApplicationGatewayForContainers3,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestProviderAzureApplicationGatewayForContainers3$outboundSchema
+      .parse(newDeploymentRequestProviderAzureApplicationGatewayForContainers3),
+  );
+}
+
+/** @internal */
+export const NewDeploymentRequestProviderGkeGatewayEnum3$outboundSchema:
+  z.ZodEnum<typeof NewDeploymentRequestProviderGkeGatewayEnum3> = z.enum(
+    NewDeploymentRequestProviderGkeGatewayEnum3,
+  );
+
+/** @internal */
+export type NewDeploymentRequestProviderGkeGateway3$Outbound = {
+  provider: string;
+  staticAddressName?: string | null | undefined;
+};
+
+/** @internal */
+export const NewDeploymentRequestProviderGkeGateway3$outboundSchema: z.ZodType<
+  NewDeploymentRequestProviderGkeGateway3$Outbound,
+  NewDeploymentRequestProviderGkeGateway3
+> = z.object({
+  provider: NewDeploymentRequestProviderGkeGatewayEnum3$outboundSchema,
+  staticAddressName: z.nullable(z.string()).optional(),
+});
+
+export function newDeploymentRequestProviderGkeGateway3ToJSON(
+  newDeploymentRequestProviderGkeGateway3:
+    NewDeploymentRequestProviderGkeGateway3,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestProviderGkeGateway3$outboundSchema.parse(
+      newDeploymentRequestProviderGkeGateway3,
+    ),
+  );
+}
+
+/** @internal */
+export const NewDeploymentRequestProviderAwsAlbEnum3$outboundSchema: z.ZodEnum<
+  typeof NewDeploymentRequestProviderAwsAlbEnum3
+> = z.enum(NewDeploymentRequestProviderAwsAlbEnum3);
+
+/** @internal */
+export type NewDeploymentRequestProviderAwsAlb3$Outbound = {
+  ipAddressType?: string | null | undefined;
+  provider: string;
+  scheme: string;
+  subnetIds?: Array<string> | undefined;
+  targetType: string;
+};
+
+/** @internal */
+export const NewDeploymentRequestProviderAwsAlb3$outboundSchema: z.ZodType<
+  NewDeploymentRequestProviderAwsAlb3$Outbound,
+  NewDeploymentRequestProviderAwsAlb3
+> = z.object({
+  ipAddressType: z.nullable(z.string()).optional(),
+  provider: NewDeploymentRequestProviderAwsAlbEnum3$outboundSchema,
+  scheme: z.string(),
+  subnetIds: z.array(z.string()).optional(),
+  targetType: z.string(),
+});
+
+export function newDeploymentRequestProviderAwsAlb3ToJSON(
+  newDeploymentRequestProviderAwsAlb3: NewDeploymentRequestProviderAwsAlb3,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestProviderAwsAlb3$outboundSchema.parse(
+      newDeploymentRequestProviderAwsAlb3,
+    ),
+  );
+}
+
+/** @internal */
+export type NewDeploymentRequestProviderUnion3$Outbound =
+  | NewDeploymentRequestProviderAwsAlb3$Outbound
+  | NewDeploymentRequestProviderAzureApplicationGatewayForContainers3$Outbound
+  | NewDeploymentRequestProviderGkeGateway3$Outbound
+  | any;
+
+/** @internal */
+export const NewDeploymentRequestProviderUnion3$outboundSchema: z.ZodType<
+  NewDeploymentRequestProviderUnion3$Outbound,
+  NewDeploymentRequestProviderUnion3
+> = z.union([
+  z.lazy(() => NewDeploymentRequestProviderAwsAlb3$outboundSchema),
+  z.lazy(() =>
+    NewDeploymentRequestProviderAzureApplicationGatewayForContainers3$outboundSchema
+  ),
+  z.lazy(() => NewDeploymentRequestProviderGkeGateway3$outboundSchema),
+  z.any(),
+]);
+
+export function newDeploymentRequestProviderUnion3ToJSON(
+  newDeploymentRequestProviderUnion3: NewDeploymentRequestProviderUnion3,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestProviderUnion3$outboundSchema.parse(
+      newDeploymentRequestProviderUnion3,
+    ),
+  );
+}
+
+/** @internal */
+export type NewDeploymentRequestRouteIngress2$Outbound = {
+  annotations?: { [k: string]: string } | undefined;
+  controller?: string | null | undefined;
+  ingressClassName: string;
+  labels?: { [k: string]: string } | undefined;
+  provider?:
+    | NewDeploymentRequestProviderAwsAlb3$Outbound
+    | NewDeploymentRequestProviderAzureApplicationGatewayForContainers3$Outbound
+    | NewDeploymentRequestProviderGkeGateway3$Outbound
+    | any
+    | null
+    | undefined;
+  routeApi: "ingress";
+};
+
+/** @internal */
+export const NewDeploymentRequestRouteIngress2$outboundSchema: z.ZodType<
+  NewDeploymentRequestRouteIngress2$Outbound,
+  NewDeploymentRequestRouteIngress2
+> = z.object({
+  annotations: z.record(z.string(), z.string()).optional(),
+  controller: z.nullable(z.string()).optional(),
+  ingressClassName: z.string(),
+  labels: z.record(z.string(), z.string()).optional(),
+  provider: z.nullable(
+    z.union([
+      z.lazy(() => NewDeploymentRequestProviderAwsAlb3$outboundSchema),
+      z.lazy(() =>
+        NewDeploymentRequestProviderAzureApplicationGatewayForContainers3$outboundSchema
+      ),
+      z.lazy(() => NewDeploymentRequestProviderGkeGateway3$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  routeApi: z.literal("ingress"),
+});
+
+export function newDeploymentRequestRouteIngress2ToJSON(
+  newDeploymentRequestRouteIngress2: NewDeploymentRequestRouteIngress2,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestRouteIngress2$outboundSchema.parse(
+      newDeploymentRequestRouteIngress2,
+    ),
+  );
+}
+
+/** @internal */
+export type NewDeploymentRequestRouteUnion2$Outbound =
+  | NewDeploymentRequestRouteIngress2$Outbound
+  | NewDeploymentRequestRouteGateway2$Outbound;
+
+/** @internal */
+export const NewDeploymentRequestRouteUnion2$outboundSchema: z.ZodType<
+  NewDeploymentRequestRouteUnion2$Outbound,
+  NewDeploymentRequestRouteUnion2
+> = z.union([
+  z.lazy(() => NewDeploymentRequestRouteIngress2$outboundSchema),
+  z.lazy(() => NewDeploymentRequestRouteGateway2$outboundSchema),
+]);
+
+export function newDeploymentRequestRouteUnion2ToJSON(
+  newDeploymentRequestRouteUnion2: NewDeploymentRequestRouteUnion2,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestRouteUnion2$outboundSchema.parse(
+      newDeploymentRequestRouteUnion2,
+    ),
+  );
+}
+
+/** @internal */
+export type NewDeploymentRequestExposureCustom$Outbound = {
+  certificate:
+    | NewDeploymentRequestCertificateTLSSecretRef2$Outbound
+    | NewDeploymentRequestCertificateManagedAcmImport2$Outbound
+    | NewDeploymentRequestCertificateAwsAcmArn2$Outbound
+    | NewDeploymentRequestCertificateManagedTLSSecret2$Outbound
+    | NewDeploymentRequestCertificateNone2$Outbound;
+  domain: string;
+  mode: string;
+  route:
+    | NewDeploymentRequestRouteIngress2$Outbound
+    | NewDeploymentRequestRouteGateway2$Outbound;
+};
+
+/** @internal */
+export const NewDeploymentRequestExposureCustom$outboundSchema: z.ZodType<
+  NewDeploymentRequestExposureCustom$Outbound,
+  NewDeploymentRequestExposureCustom
+> = z.object({
+  certificate: z.union([
+    z.lazy(() => NewDeploymentRequestCertificateTLSSecretRef2$outboundSchema),
+    z.lazy(() =>
+      NewDeploymentRequestCertificateManagedAcmImport2$outboundSchema
+    ),
+    z.lazy(() => NewDeploymentRequestCertificateAwsAcmArn2$outboundSchema),
+    z.lazy(() =>
+      NewDeploymentRequestCertificateManagedTLSSecret2$outboundSchema
+    ),
+    z.lazy(() => NewDeploymentRequestCertificateNone2$outboundSchema),
+  ]),
+  domain: z.string(),
+  mode: NewDeploymentRequestModeCustom$outboundSchema,
+  route: z.union([
+    z.lazy(() => NewDeploymentRequestRouteIngress2$outboundSchema),
+    z.lazy(() => NewDeploymentRequestRouteGateway2$outboundSchema),
+  ]),
+});
+
+export function newDeploymentRequestExposureCustomToJSON(
+  newDeploymentRequestExposureCustom: NewDeploymentRequestExposureCustom,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestExposureCustom$outboundSchema.parse(
+      newDeploymentRequestExposureCustom,
+    ),
+  );
+}
+
+/** @internal */
+export type NewDeploymentRequestCertificateNone1$Outbound = {
+  mode: "none";
+};
+
+/** @internal */
+export const NewDeploymentRequestCertificateNone1$outboundSchema: z.ZodType<
+  NewDeploymentRequestCertificateNone1$Outbound,
+  NewDeploymentRequestCertificateNone1
+> = z.object({
+  mode: z.literal("none"),
+});
+
+export function newDeploymentRequestCertificateNone1ToJSON(
+  newDeploymentRequestCertificateNone1: NewDeploymentRequestCertificateNone1,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestCertificateNone1$outboundSchema.parse(
+      newDeploymentRequestCertificateNone1,
+    ),
+  );
+}
+
+/** @internal */
+export type NewDeploymentRequestCertificateManagedTLSSecret1$Outbound = {
+  mode: "managedTlsSecret";
+  secretNameTemplate: string;
+};
+
+/** @internal */
+export const NewDeploymentRequestCertificateManagedTLSSecret1$outboundSchema:
+  z.ZodType<
+    NewDeploymentRequestCertificateManagedTLSSecret1$Outbound,
+    NewDeploymentRequestCertificateManagedTLSSecret1
+  > = z.object({
+    mode: z.literal("managedTlsSecret"),
+    secretNameTemplate: z.string(),
+  });
+
+export function newDeploymentRequestCertificateManagedTLSSecret1ToJSON(
+  newDeploymentRequestCertificateManagedTLSSecret1:
+    NewDeploymentRequestCertificateManagedTLSSecret1,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestCertificateManagedTLSSecret1$outboundSchema.parse(
+      newDeploymentRequestCertificateManagedTLSSecret1,
+    ),
+  );
+}
+
+/** @internal */
+export type NewDeploymentRequestCertificateAwsAcmArn1$Outbound = {
+  certificateArn: string;
+  mode: "awsAcmArn";
+};
+
+/** @internal */
+export const NewDeploymentRequestCertificateAwsAcmArn1$outboundSchema:
+  z.ZodType<
+    NewDeploymentRequestCertificateAwsAcmArn1$Outbound,
+    NewDeploymentRequestCertificateAwsAcmArn1
+  > = z.object({
+    certificateArn: z.string(),
+    mode: z.literal("awsAcmArn"),
+  });
+
+export function newDeploymentRequestCertificateAwsAcmArn1ToJSON(
+  newDeploymentRequestCertificateAwsAcmArn1:
+    NewDeploymentRequestCertificateAwsAcmArn1,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestCertificateAwsAcmArn1$outboundSchema.parse(
+      newDeploymentRequestCertificateAwsAcmArn1,
+    ),
+  );
+}
+
+/** @internal */
+export type NewDeploymentRequestCertificateManagedAcmImport1$Outbound = {
+  mode: "managedAcmImport";
+  region?: string | null | undefined;
+  tags?: { [k: string]: string } | undefined;
+};
+
+/** @internal */
+export const NewDeploymentRequestCertificateManagedAcmImport1$outboundSchema:
+  z.ZodType<
+    NewDeploymentRequestCertificateManagedAcmImport1$Outbound,
+    NewDeploymentRequestCertificateManagedAcmImport1
+  > = z.object({
+    mode: z.literal("managedAcmImport"),
+    region: z.nullable(z.string()).optional(),
+    tags: z.record(z.string(), z.string()).optional(),
+  });
+
+export function newDeploymentRequestCertificateManagedAcmImport1ToJSON(
+  newDeploymentRequestCertificateManagedAcmImport1:
+    NewDeploymentRequestCertificateManagedAcmImport1,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestCertificateManagedAcmImport1$outboundSchema.parse(
+      newDeploymentRequestCertificateManagedAcmImport1,
+    ),
+  );
+}
+
+/** @internal */
+export type NewDeploymentRequestCertificateTLSSecretRef1$Outbound = {
+  namespace?: string | null | undefined;
+  secretName: string;
+  mode: "tlsSecretRef";
+};
+
+/** @internal */
+export const NewDeploymentRequestCertificateTLSSecretRef1$outboundSchema:
+  z.ZodType<
+    NewDeploymentRequestCertificateTLSSecretRef1$Outbound,
+    NewDeploymentRequestCertificateTLSSecretRef1
+  > = z.object({
+    namespace: z.nullable(z.string()).optional(),
+    secretName: z.string(),
+    mode: z.literal("tlsSecretRef"),
+  });
+
+export function newDeploymentRequestCertificateTLSSecretRef1ToJSON(
+  newDeploymentRequestCertificateTLSSecretRef1:
+    NewDeploymentRequestCertificateTLSSecretRef1,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestCertificateTLSSecretRef1$outboundSchema.parse(
+      newDeploymentRequestCertificateTLSSecretRef1,
+    ),
+  );
+}
+
+/** @internal */
+export type NewDeploymentRequestCertificateUnion1$Outbound =
+  | NewDeploymentRequestCertificateTLSSecretRef1$Outbound
+  | NewDeploymentRequestCertificateManagedAcmImport1$Outbound
+  | NewDeploymentRequestCertificateAwsAcmArn1$Outbound
+  | NewDeploymentRequestCertificateManagedTLSSecret1$Outbound
+  | NewDeploymentRequestCertificateNone1$Outbound;
+
+/** @internal */
+export const NewDeploymentRequestCertificateUnion1$outboundSchema: z.ZodType<
+  NewDeploymentRequestCertificateUnion1$Outbound,
+  NewDeploymentRequestCertificateUnion1
+> = z.union([
+  z.lazy(() => NewDeploymentRequestCertificateTLSSecretRef1$outboundSchema),
+  z.lazy(() => NewDeploymentRequestCertificateManagedAcmImport1$outboundSchema),
+  z.lazy(() => NewDeploymentRequestCertificateAwsAcmArn1$outboundSchema),
+  z.lazy(() => NewDeploymentRequestCertificateManagedTLSSecret1$outboundSchema),
+  z.lazy(() => NewDeploymentRequestCertificateNone1$outboundSchema),
+]);
+
+export function newDeploymentRequestCertificateUnion1ToJSON(
+  newDeploymentRequestCertificateUnion1: NewDeploymentRequestCertificateUnion1,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestCertificateUnion1$outboundSchema.parse(
+      newDeploymentRequestCertificateUnion1,
+    ),
+  );
+}
+
+/** @internal */
+export const NewDeploymentRequestModeGenerated$outboundSchema: z.ZodEnum<
+  typeof NewDeploymentRequestModeGenerated
+> = z.enum(NewDeploymentRequestModeGenerated);
+
+/** @internal */
+export const NewDeploymentRequestProviderAzureApplicationGatewayForContainersEnum2$outboundSchema:
+  z.ZodEnum<
+    typeof NewDeploymentRequestProviderAzureApplicationGatewayForContainersEnum2
+  > = z.enum(
+    NewDeploymentRequestProviderAzureApplicationGatewayForContainersEnum2,
+  );
+
+/** @internal */
+export type NewDeploymentRequestProviderAzureApplicationGatewayForContainers2$Outbound =
+  {
+    albName?: string | null | undefined;
+    albNamespace?: string | null | undefined;
+    frontend: string;
+    provider: string;
+  };
+
+/** @internal */
+export const NewDeploymentRequestProviderAzureApplicationGatewayForContainers2$outboundSchema:
+  z.ZodType<
+    NewDeploymentRequestProviderAzureApplicationGatewayForContainers2$Outbound,
+    NewDeploymentRequestProviderAzureApplicationGatewayForContainers2
+  > = z.object({
+    albName: z.nullable(z.string()).optional(),
+    albNamespace: z.nullable(z.string()).optional(),
+    frontend: z.string(),
+    provider:
+      NewDeploymentRequestProviderAzureApplicationGatewayForContainersEnum2$outboundSchema,
+  });
+
+export function newDeploymentRequestProviderAzureApplicationGatewayForContainers2ToJSON(
+  newDeploymentRequestProviderAzureApplicationGatewayForContainers2:
+    NewDeploymentRequestProviderAzureApplicationGatewayForContainers2,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestProviderAzureApplicationGatewayForContainers2$outboundSchema
+      .parse(newDeploymentRequestProviderAzureApplicationGatewayForContainers2),
+  );
+}
+
+/** @internal */
+export const NewDeploymentRequestProviderGkeGatewayEnum2$outboundSchema:
+  z.ZodEnum<typeof NewDeploymentRequestProviderGkeGatewayEnum2> = z.enum(
+    NewDeploymentRequestProviderGkeGatewayEnum2,
+  );
+
+/** @internal */
+export type NewDeploymentRequestProviderGkeGateway2$Outbound = {
+  provider: string;
+  staticAddressName?: string | null | undefined;
+};
+
+/** @internal */
+export const NewDeploymentRequestProviderGkeGateway2$outboundSchema: z.ZodType<
+  NewDeploymentRequestProviderGkeGateway2$Outbound,
+  NewDeploymentRequestProviderGkeGateway2
+> = z.object({
+  provider: NewDeploymentRequestProviderGkeGatewayEnum2$outboundSchema,
+  staticAddressName: z.nullable(z.string()).optional(),
+});
+
+export function newDeploymentRequestProviderGkeGateway2ToJSON(
+  newDeploymentRequestProviderGkeGateway2:
+    NewDeploymentRequestProviderGkeGateway2,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestProviderGkeGateway2$outboundSchema.parse(
+      newDeploymentRequestProviderGkeGateway2,
+    ),
+  );
+}
+
+/** @internal */
+export const NewDeploymentRequestProviderAwsAlbEnum2$outboundSchema: z.ZodEnum<
+  typeof NewDeploymentRequestProviderAwsAlbEnum2
+> = z.enum(NewDeploymentRequestProviderAwsAlbEnum2);
+
+/** @internal */
+export type NewDeploymentRequestProviderAwsAlb2$Outbound = {
+  ipAddressType?: string | null | undefined;
+  provider: string;
+  scheme: string;
+  subnetIds?: Array<string> | undefined;
+  targetType: string;
+};
+
+/** @internal */
+export const NewDeploymentRequestProviderAwsAlb2$outboundSchema: z.ZodType<
+  NewDeploymentRequestProviderAwsAlb2$Outbound,
+  NewDeploymentRequestProviderAwsAlb2
+> = z.object({
+  ipAddressType: z.nullable(z.string()).optional(),
+  provider: NewDeploymentRequestProviderAwsAlbEnum2$outboundSchema,
+  scheme: z.string(),
+  subnetIds: z.array(z.string()).optional(),
+  targetType: z.string(),
+});
+
+export function newDeploymentRequestProviderAwsAlb2ToJSON(
+  newDeploymentRequestProviderAwsAlb2: NewDeploymentRequestProviderAwsAlb2,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestProviderAwsAlb2$outboundSchema.parse(
+      newDeploymentRequestProviderAwsAlb2,
+    ),
+  );
+}
+
+/** @internal */
+export type NewDeploymentRequestProviderUnion2$Outbound =
+  | NewDeploymentRequestProviderAwsAlb2$Outbound
+  | NewDeploymentRequestProviderAzureApplicationGatewayForContainers2$Outbound
+  | NewDeploymentRequestProviderGkeGateway2$Outbound
+  | any;
+
+/** @internal */
+export const NewDeploymentRequestProviderUnion2$outboundSchema: z.ZodType<
+  NewDeploymentRequestProviderUnion2$Outbound,
+  NewDeploymentRequestProviderUnion2
+> = z.union([
+  z.lazy(() => NewDeploymentRequestProviderAwsAlb2$outboundSchema),
+  z.lazy(() =>
+    NewDeploymentRequestProviderAzureApplicationGatewayForContainers2$outboundSchema
+  ),
+  z.lazy(() => NewDeploymentRequestProviderGkeGateway2$outboundSchema),
+  z.any(),
+]);
+
+export function newDeploymentRequestProviderUnion2ToJSON(
+  newDeploymentRequestProviderUnion2: NewDeploymentRequestProviderUnion2,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestProviderUnion2$outboundSchema.parse(
+      newDeploymentRequestProviderUnion2,
+    ),
+  );
+}
+
+/** @internal */
+export type NewDeploymentRequestRouteGateway1$Outbound = {
+  annotations?: { [k: string]: string } | undefined;
+  controller?: string | null | undefined;
+  gatewayClassName: string;
+  labels?: { [k: string]: string } | undefined;
+  listenerPort: number;
+  provider?:
+    | NewDeploymentRequestProviderAwsAlb2$Outbound
+    | NewDeploymentRequestProviderAzureApplicationGatewayForContainers2$Outbound
+    | NewDeploymentRequestProviderGkeGateway2$Outbound
+    | any
+    | null
+    | undefined;
+  routeApi: "gateway";
+};
+
+/** @internal */
+export const NewDeploymentRequestRouteGateway1$outboundSchema: z.ZodType<
+  NewDeploymentRequestRouteGateway1$Outbound,
+  NewDeploymentRequestRouteGateway1
+> = z.object({
+  annotations: z.record(z.string(), z.string()).optional(),
+  controller: z.nullable(z.string()).optional(),
+  gatewayClassName: z.string(),
+  labels: z.record(z.string(), z.string()).optional(),
+  listenerPort: z.int(),
+  provider: z.nullable(
+    z.union([
+      z.lazy(() => NewDeploymentRequestProviderAwsAlb2$outboundSchema),
+      z.lazy(() =>
+        NewDeploymentRequestProviderAzureApplicationGatewayForContainers2$outboundSchema
+      ),
+      z.lazy(() => NewDeploymentRequestProviderGkeGateway2$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  routeApi: z.literal("gateway"),
+});
+
+export function newDeploymentRequestRouteGateway1ToJSON(
+  newDeploymentRequestRouteGateway1: NewDeploymentRequestRouteGateway1,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestRouteGateway1$outboundSchema.parse(
+      newDeploymentRequestRouteGateway1,
+    ),
+  );
+}
+
+/** @internal */
+export const NewDeploymentRequestProviderAzureApplicationGatewayForContainersEnum1$outboundSchema:
+  z.ZodEnum<
+    typeof NewDeploymentRequestProviderAzureApplicationGatewayForContainersEnum1
+  > = z.enum(
+    NewDeploymentRequestProviderAzureApplicationGatewayForContainersEnum1,
+  );
+
+/** @internal */
+export type NewDeploymentRequestProviderAzureApplicationGatewayForContainers1$Outbound =
+  {
+    albName?: string | null | undefined;
+    albNamespace?: string | null | undefined;
+    frontend: string;
+    provider: string;
+  };
+
+/** @internal */
+export const NewDeploymentRequestProviderAzureApplicationGatewayForContainers1$outboundSchema:
+  z.ZodType<
+    NewDeploymentRequestProviderAzureApplicationGatewayForContainers1$Outbound,
+    NewDeploymentRequestProviderAzureApplicationGatewayForContainers1
+  > = z.object({
+    albName: z.nullable(z.string()).optional(),
+    albNamespace: z.nullable(z.string()).optional(),
+    frontend: z.string(),
+    provider:
+      NewDeploymentRequestProviderAzureApplicationGatewayForContainersEnum1$outboundSchema,
+  });
+
+export function newDeploymentRequestProviderAzureApplicationGatewayForContainers1ToJSON(
+  newDeploymentRequestProviderAzureApplicationGatewayForContainers1:
+    NewDeploymentRequestProviderAzureApplicationGatewayForContainers1,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestProviderAzureApplicationGatewayForContainers1$outboundSchema
+      .parse(newDeploymentRequestProviderAzureApplicationGatewayForContainers1),
+  );
+}
+
+/** @internal */
+export const NewDeploymentRequestProviderGkeGatewayEnum1$outboundSchema:
+  z.ZodEnum<typeof NewDeploymentRequestProviderGkeGatewayEnum1> = z.enum(
+    NewDeploymentRequestProviderGkeGatewayEnum1,
+  );
+
+/** @internal */
+export type NewDeploymentRequestProviderGkeGateway1$Outbound = {
+  provider: string;
+  staticAddressName?: string | null | undefined;
+};
+
+/** @internal */
+export const NewDeploymentRequestProviderGkeGateway1$outboundSchema: z.ZodType<
+  NewDeploymentRequestProviderGkeGateway1$Outbound,
+  NewDeploymentRequestProviderGkeGateway1
+> = z.object({
+  provider: NewDeploymentRequestProviderGkeGatewayEnum1$outboundSchema,
+  staticAddressName: z.nullable(z.string()).optional(),
+});
+
+export function newDeploymentRequestProviderGkeGateway1ToJSON(
+  newDeploymentRequestProviderGkeGateway1:
+    NewDeploymentRequestProviderGkeGateway1,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestProviderGkeGateway1$outboundSchema.parse(
+      newDeploymentRequestProviderGkeGateway1,
+    ),
+  );
+}
+
+/** @internal */
+export const NewDeploymentRequestProviderAwsAlbEnum1$outboundSchema: z.ZodEnum<
+  typeof NewDeploymentRequestProviderAwsAlbEnum1
+> = z.enum(NewDeploymentRequestProviderAwsAlbEnum1);
+
+/** @internal */
+export type NewDeploymentRequestProviderAwsAlb1$Outbound = {
+  ipAddressType?: string | null | undefined;
+  provider: string;
+  scheme: string;
+  subnetIds?: Array<string> | undefined;
+  targetType: string;
+};
+
+/** @internal */
+export const NewDeploymentRequestProviderAwsAlb1$outboundSchema: z.ZodType<
+  NewDeploymentRequestProviderAwsAlb1$Outbound,
+  NewDeploymentRequestProviderAwsAlb1
+> = z.object({
+  ipAddressType: z.nullable(z.string()).optional(),
+  provider: NewDeploymentRequestProviderAwsAlbEnum1$outboundSchema,
+  scheme: z.string(),
+  subnetIds: z.array(z.string()).optional(),
+  targetType: z.string(),
+});
+
+export function newDeploymentRequestProviderAwsAlb1ToJSON(
+  newDeploymentRequestProviderAwsAlb1: NewDeploymentRequestProviderAwsAlb1,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestProviderAwsAlb1$outboundSchema.parse(
+      newDeploymentRequestProviderAwsAlb1,
+    ),
+  );
+}
+
+/** @internal */
+export type NewDeploymentRequestProviderUnion1$Outbound =
+  | NewDeploymentRequestProviderAwsAlb1$Outbound
+  | NewDeploymentRequestProviderAzureApplicationGatewayForContainers1$Outbound
+  | NewDeploymentRequestProviderGkeGateway1$Outbound
+  | any;
+
+/** @internal */
+export const NewDeploymentRequestProviderUnion1$outboundSchema: z.ZodType<
+  NewDeploymentRequestProviderUnion1$Outbound,
+  NewDeploymentRequestProviderUnion1
+> = z.union([
+  z.lazy(() => NewDeploymentRequestProviderAwsAlb1$outboundSchema),
+  z.lazy(() =>
+    NewDeploymentRequestProviderAzureApplicationGatewayForContainers1$outboundSchema
+  ),
+  z.lazy(() => NewDeploymentRequestProviderGkeGateway1$outboundSchema),
+  z.any(),
+]);
+
+export function newDeploymentRequestProviderUnion1ToJSON(
+  newDeploymentRequestProviderUnion1: NewDeploymentRequestProviderUnion1,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestProviderUnion1$outboundSchema.parse(
+      newDeploymentRequestProviderUnion1,
+    ),
+  );
+}
+
+/** @internal */
+export type NewDeploymentRequestRouteIngress1$Outbound = {
+  annotations?: { [k: string]: string } | undefined;
+  controller?: string | null | undefined;
+  ingressClassName: string;
+  labels?: { [k: string]: string } | undefined;
+  provider?:
+    | NewDeploymentRequestProviderAwsAlb1$Outbound
+    | NewDeploymentRequestProviderAzureApplicationGatewayForContainers1$Outbound
+    | NewDeploymentRequestProviderGkeGateway1$Outbound
+    | any
+    | null
+    | undefined;
+  routeApi: "ingress";
+};
+
+/** @internal */
+export const NewDeploymentRequestRouteIngress1$outboundSchema: z.ZodType<
+  NewDeploymentRequestRouteIngress1$Outbound,
+  NewDeploymentRequestRouteIngress1
+> = z.object({
+  annotations: z.record(z.string(), z.string()).optional(),
+  controller: z.nullable(z.string()).optional(),
+  ingressClassName: z.string(),
+  labels: z.record(z.string(), z.string()).optional(),
+  provider: z.nullable(
+    z.union([
+      z.lazy(() => NewDeploymentRequestProviderAwsAlb1$outboundSchema),
+      z.lazy(() =>
+        NewDeploymentRequestProviderAzureApplicationGatewayForContainers1$outboundSchema
+      ),
+      z.lazy(() => NewDeploymentRequestProviderGkeGateway1$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  routeApi: z.literal("ingress"),
+});
+
+export function newDeploymentRequestRouteIngress1ToJSON(
+  newDeploymentRequestRouteIngress1: NewDeploymentRequestRouteIngress1,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestRouteIngress1$outboundSchema.parse(
+      newDeploymentRequestRouteIngress1,
+    ),
+  );
+}
+
+/** @internal */
+export type NewDeploymentRequestRouteUnion1$Outbound =
+  | NewDeploymentRequestRouteIngress1$Outbound
+  | NewDeploymentRequestRouteGateway1$Outbound;
+
+/** @internal */
+export const NewDeploymentRequestRouteUnion1$outboundSchema: z.ZodType<
+  NewDeploymentRequestRouteUnion1$Outbound,
+  NewDeploymentRequestRouteUnion1
+> = z.union([
+  z.lazy(() => NewDeploymentRequestRouteIngress1$outboundSchema),
+  z.lazy(() => NewDeploymentRequestRouteGateway1$outboundSchema),
+]);
+
+export function newDeploymentRequestRouteUnion1ToJSON(
+  newDeploymentRequestRouteUnion1: NewDeploymentRequestRouteUnion1,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestRouteUnion1$outboundSchema.parse(
+      newDeploymentRequestRouteUnion1,
+    ),
+  );
+}
+
+/** @internal */
+export type NewDeploymentRequestExposureGenerated$Outbound = {
+  certificate:
+    | NewDeploymentRequestCertificateTLSSecretRef1$Outbound
+    | NewDeploymentRequestCertificateManagedAcmImport1$Outbound
+    | NewDeploymentRequestCertificateAwsAcmArn1$Outbound
+    | NewDeploymentRequestCertificateManagedTLSSecret1$Outbound
+    | NewDeploymentRequestCertificateNone1$Outbound;
+  mode: string;
+  route:
+    | NewDeploymentRequestRouteIngress1$Outbound
+    | NewDeploymentRequestRouteGateway1$Outbound;
+};
+
+/** @internal */
+export const NewDeploymentRequestExposureGenerated$outboundSchema: z.ZodType<
+  NewDeploymentRequestExposureGenerated$Outbound,
+  NewDeploymentRequestExposureGenerated
+> = z.object({
+  certificate: z.union([
+    z.lazy(() => NewDeploymentRequestCertificateTLSSecretRef1$outboundSchema),
+    z.lazy(() =>
+      NewDeploymentRequestCertificateManagedAcmImport1$outboundSchema
+    ),
+    z.lazy(() => NewDeploymentRequestCertificateAwsAcmArn1$outboundSchema),
+    z.lazy(() =>
+      NewDeploymentRequestCertificateManagedTLSSecret1$outboundSchema
+    ),
+    z.lazy(() => NewDeploymentRequestCertificateNone1$outboundSchema),
+  ]),
+  mode: NewDeploymentRequestModeGenerated$outboundSchema,
+  route: z.union([
+    z.lazy(() => NewDeploymentRequestRouteIngress1$outboundSchema),
+    z.lazy(() => NewDeploymentRequestRouteGateway1$outboundSchema),
+  ]),
+});
+
+export function newDeploymentRequestExposureGeneratedToJSON(
+  newDeploymentRequestExposureGenerated: NewDeploymentRequestExposureGenerated,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestExposureGenerated$outboundSchema.parse(
+      newDeploymentRequestExposureGenerated,
+    ),
+  );
+}
+
+/** @internal */
+export const NewDeploymentRequestModeDisabled$outboundSchema: z.ZodEnum<
+  typeof NewDeploymentRequestModeDisabled
+> = z.enum(NewDeploymentRequestModeDisabled);
+
+/** @internal */
+export type NewDeploymentRequestExposureDisabled$Outbound = {
+  mode: string;
+};
+
+/** @internal */
+export const NewDeploymentRequestExposureDisabled$outboundSchema: z.ZodType<
+  NewDeploymentRequestExposureDisabled$Outbound,
+  NewDeploymentRequestExposureDisabled
+> = z.object({
+  mode: NewDeploymentRequestModeDisabled$outboundSchema,
+});
+
+export function newDeploymentRequestExposureDisabledToJSON(
+  newDeploymentRequestExposureDisabled: NewDeploymentRequestExposureDisabled,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestExposureDisabled$outboundSchema.parse(
+      newDeploymentRequestExposureDisabled,
+    ),
+  );
+}
+
+/** @internal */
+export type NewDeploymentRequestExposureUnion$Outbound =
+  | NewDeploymentRequestExposureCustom$Outbound
+  | NewDeploymentRequestExposureGenerated$Outbound
+  | NewDeploymentRequestExposureDisabled$Outbound
+  | any;
+
+/** @internal */
+export const NewDeploymentRequestExposureUnion$outboundSchema: z.ZodType<
+  NewDeploymentRequestExposureUnion$Outbound,
+  NewDeploymentRequestExposureUnion
+> = z.union([
+  z.lazy(() => NewDeploymentRequestExposureCustom$outboundSchema),
+  z.lazy(() => NewDeploymentRequestExposureGenerated$outboundSchema),
+  z.lazy(() => NewDeploymentRequestExposureDisabled$outboundSchema),
+  z.any(),
+]);
+
+export function newDeploymentRequestExposureUnionToJSON(
+  newDeploymentRequestExposureUnion: NewDeploymentRequestExposureUnion,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestExposureUnion$outboundSchema.parse(
+      newDeploymentRequestExposureUnion,
+    ),
+  );
+}
+
+/** @internal */
+export type NewDeploymentRequestKubernetes$Outbound = {
+  cluster?: NewDeploymentRequestCluster$Outbound | any | null | undefined;
+  exposure?:
+    | NewDeploymentRequestExposureCustom$Outbound
+    | NewDeploymentRequestExposureGenerated$Outbound
+    | NewDeploymentRequestExposureDisabled$Outbound
+    | any
+    | null
+    | undefined;
+};
+
+/** @internal */
+export const NewDeploymentRequestKubernetes$outboundSchema: z.ZodType<
+  NewDeploymentRequestKubernetes$Outbound,
+  NewDeploymentRequestKubernetes
+> = z.object({
+  cluster: z.nullable(
+    z.union([
+      z.lazy(() => NewDeploymentRequestCluster$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  exposure: z.nullable(
+    z.union([
+      z.lazy(() => NewDeploymentRequestExposureCustom$outboundSchema),
+      z.lazy(() => NewDeploymentRequestExposureGenerated$outboundSchema),
+      z.lazy(() => NewDeploymentRequestExposureDisabled$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+});
+
+export function newDeploymentRequestKubernetesToJSON(
+  newDeploymentRequestKubernetes: NewDeploymentRequestKubernetes,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestKubernetes$outboundSchema.parse(
+      newDeploymentRequestKubernetes,
+    ),
+  );
+}
+
+/** @internal */
+export type NewDeploymentRequestKubernetesUnion$Outbound =
+  | NewDeploymentRequestKubernetes$Outbound
+  | any;
+
+/** @internal */
+export const NewDeploymentRequestKubernetesUnion$outboundSchema: z.ZodType<
+  NewDeploymentRequestKubernetesUnion$Outbound,
+  NewDeploymentRequestKubernetesUnion
+> = z.union([
+  z.lazy(() => NewDeploymentRequestKubernetes$outboundSchema),
+  z.any(),
+]);
+
+export function newDeploymentRequestKubernetesUnionToJSON(
+  newDeploymentRequestKubernetesUnion: NewDeploymentRequestKubernetesUnion,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestKubernetesUnion$outboundSchema.parse(
+      newDeploymentRequestKubernetesUnion,
+    ),
+  );
+}
 
 /** @internal */
 export const NewDeploymentRequestTypeByoVnetAzure$outboundSchema: z.ZodEnum<
@@ -1206,6 +3495,7 @@ export type NewDeploymentRequestStackSettings$Outbound = {
     | null
     | undefined;
   heartbeats?: string | undefined;
+  kubernetes?: NewDeploymentRequestKubernetes$Outbound | any | null | undefined;
   network?:
     | NewDeploymentRequestNetworkByoVpcAws$Outbound
     | NewDeploymentRequestNetworkByoVpcGcp$Outbound
@@ -1236,6 +3526,12 @@ export const NewDeploymentRequestStackSettings$outboundSchema: z.ZodType<
     z.lazy(() => NewDeploymentRequestExternalBindings$outboundSchema),
   ).optional(),
   heartbeats: NewDeploymentRequestHeartbeats$outboundSchema.optional(),
+  kubernetes: z.nullable(
+    z.union([
+      z.lazy(() => NewDeploymentRequestKubernetes$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   network: z.nullable(
     z.union([
       z.lazy(() => NewDeploymentRequestNetworkByoVpcAws$outboundSchema),
@@ -1282,6 +3578,7 @@ export type NewDeploymentRequest$Outbound = {
     | undefined;
   project: string;
   stackSettings?: NewDeploymentRequestStackSettings$Outbound | undefined;
+  resourcePrefix?: string | undefined;
 };
 
 /** @internal */
@@ -1310,6 +3607,7 @@ export const NewDeploymentRequest$outboundSchema: z.ZodType<
   project: z.string(),
   stackSettings: z.lazy(() => NewDeploymentRequestStackSettings$outboundSchema)
     .optional(),
+  resourcePrefix: z.string().optional(),
 });
 
 export function newDeploymentRequestToJSON(

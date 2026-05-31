@@ -6,7 +6,15 @@ use tracing::{debug, info};
 use crate::core::ResourceControllerContext;
 use crate::core::ResourcePermissionsHelper;
 use crate::error::{ErrorData, Result};
-use alien_core::{ResourceOutputs, ResourceStatus, Vault, VaultOutputs};
+use alien_aws_clients::ssm::{
+    DescribeParametersRequest, DescribeParametersResponse, ParameterMetadata, ParameterStringFilter,
+};
+use alien_core::{
+    AwsParameterStoreVaultHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
+    ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
+    ResourceStatus, Vault, VaultHeartbeatData, VaultHeartbeatStatus, VaultOutputs,
+};
+use chrono::{DateTime, Utc};
 
 /// AWS Vault controller.
 ///
@@ -158,6 +166,37 @@ impl AwsVaultController {
             debug!(account_id=%stored_account_id, region=%stored_region, "AWS SSM Parameter Store vault heartbeat check passed");
         }
 
+        if let Some(vault_prefix) = &self.vault_prefix {
+            let client = ctx.service_provider.get_aws_ssm_client(aws_cfg).await?;
+            let response = client
+                .describe_parameters(DescribeParametersRequest {
+                    parameter_filters: Some(vec![ParameterStringFilter {
+                        key: "Name".to_string(),
+                        option: Some("BeginsWith".to_string()),
+                        values: Some(vec![vault_prefix.clone()]),
+                    }]),
+                    max_results: Some(50),
+                    next_token: None,
+                })
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to describe SSM Parameter Store metadata for prefix '{}'",
+                        vault_prefix
+                    ),
+                    resource_id: Some(config.id.clone()),
+                })?;
+
+            emit_aws_parameter_store_vault_heartbeat(
+                ctx,
+                &config.id,
+                &aws_cfg.account_id.to_string(),
+                &aws_cfg.region,
+                vault_prefix,
+                response,
+            );
+        }
+
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: Some(Duration::from_secs(30)),
@@ -204,4 +243,98 @@ impl AwsVaultController {
             Ok(None)
         }
     }
+}
+
+fn emit_aws_parameter_store_vault_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    account_id: &str,
+    region: &str,
+    prefix: &str,
+    response: DescribeParametersResponse,
+) {
+    let parameters = response.parameters.unwrap_or_default();
+    let has_more_parameters = response.next_token.is_some();
+    let sampled_parameter_count = parameters.len() as u32;
+    let latest_modified_at = latest_modified_at(&parameters);
+
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: Vault::RESOURCE_TYPE,
+        controller_platform: Platform::Aws,
+        backend: HeartbeatBackend::Aws,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::Vault(VaultHeartbeatData::AwsParameterStore(
+            AwsParameterStoreVaultHeartbeatData {
+                status: VaultHeartbeatStatus {
+                    health: ObservedHealth::Healthy,
+                    lifecycle: ProviderLifecycleState::Running,
+                    message: Some(format!(
+                        "SSM Parameter Store metadata sample for prefix '{}' is reachable",
+                        prefix
+                    )),
+                    stale: false,
+                    partial: has_more_parameters,
+                    collection_issues: vec![],
+                },
+                account_id: account_id.to_string(),
+                region: region.to_string(),
+                prefix: prefix.to_string(),
+                parameter_metadata_sampled: true,
+                sampled_parameter_count: Some(sampled_parameter_count),
+                sampled_secure_string_count: Some(count_parameter_type(
+                    &parameters,
+                    "SecureString",
+                )),
+                sampled_string_count: Some(count_parameter_type(&parameters, "String")),
+                sampled_string_list_count: Some(count_parameter_type(&parameters, "StringList")),
+                sampled_advanced_tier_count: Some(count_parameter_tier(&parameters, "Advanced")),
+                sampled_kms_key_metadata_present_count: Some(
+                    parameters
+                        .iter()
+                        .filter(|parameter| parameter.key_id.is_some())
+                        .count() as u32,
+                ),
+                latest_modified_at,
+                has_more_parameters: Some(has_more_parameters),
+            },
+        )),
+        raw: vec![],
+    });
+}
+
+fn count_parameter_type(parameters: &[ParameterMetadata], parameter_type: &str) -> u32 {
+    parameters
+        .iter()
+        .filter(|parameter| parameter.parameter_type.as_deref() == Some(parameter_type))
+        .count() as u32
+}
+
+fn count_parameter_tier(parameters: &[ParameterMetadata], tier: &str) -> u32 {
+    parameters
+        .iter()
+        .filter(|parameter| parameter.tier.as_deref() == Some(tier))
+        .count() as u32
+}
+
+fn latest_modified_at(parameters: &[ParameterMetadata]) -> Option<DateTime<Utc>> {
+    parameters
+        .iter()
+        .filter_map(|parameter| {
+            parameter
+                .last_modified_date
+                .and_then(aws_epoch_seconds_to_utc)
+        })
+        .max()
+}
+
+fn aws_epoch_seconds_to_utc(seconds: f64) -> Option<DateTime<Utc>> {
+    if !seconds.is_finite() || seconds < 0.0 {
+        return None;
+    }
+
+    let secs = seconds.trunc() as i64;
+    let nanos = (seconds.fract() * 1_000_000_000.0).round() as u32;
+    DateTime::<Utc>::from_timestamp(secs, nanos.min(999_999_999))
 }

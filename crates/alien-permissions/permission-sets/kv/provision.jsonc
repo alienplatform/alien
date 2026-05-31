@@ -14,7 +14,6 @@
             "dynamodb:UpdateTimeToLive",
             "dynamodb:DescribeTimeToLive",
             "dynamodb:TagResource",
-            "dynamodb:UntagResource",
             "dynamodb:ListTagsOfResource"
           ]
         },
@@ -33,16 +32,11 @@
         "grant": {
           "permissions": [
             "datastore.databases.get",
+            "datastore.databases.getMetadata",
             "datastore.databases.create",
             "datastore.databases.update",
             "datastore.databases.delete",
             "datastore.databases.list",
-            "datastore.entities.allocateIds",
-            "datastore.entities.create",
-            "datastore.entities.delete",
-            "datastore.entities.get",
-            "datastore.entities.list",
-            "datastore.entities.update",
             "datastore.indexes.create",
             "datastore.indexes.delete",
             "datastore.indexes.get",

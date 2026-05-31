@@ -15,24 +15,33 @@ terraform {
       source  = "hashicorp/time"
       version = ">= 0.9"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = ">= 3.6"
+    }
   }
 }
 
 === variables.tf ===
-variable "stack_name" {
+variable "resource_prefix" {
   type        = string
-  description = "Stable physical-name prefix for resources created by this module."
-}
-
-variable "deployment_name" {
-  type        = string
-  description = "Deployment name used when registering the resolved stack import. Defaults to stack_name."
+  description = "Optional stable physical resource prefix. Leave empty to generate one."
   default     = ""
+
+  validation {
+    condition     = var.resource_prefix == "" || (can(regex("^[a-z][a-z0-9-]{1,38}[a-z0-9]$", var.resource_prefix)) && length(regexall("--", var.resource_prefix)) == 0)
+    error_message = "resource_prefix must be 3-40 characters: lowercase letters, numbers, and hyphens; start with a letter; end with a letter or number; and not contain consecutive hyphens."
+  }
 }
 
-variable "deployment_group_token" {
+variable "name" {
   type        = string
-  description = "Deployment group token used when registering the resolved stack import."
+  description = "Human-readable application name shown in setup and cloud IAM review metadata."
+}
+
+variable "token" {
+  type        = string
+  description = "Install token from the application setup page. This is the same token used by the deploy CLI --token flag."
   sensitive   = true
 }
 
@@ -45,7 +54,7 @@ variable "manager_url" {
 variable "stack_settings_json" {
   type        = string
   description = "Optional JSON-encoded StackSettings override supplied by deployment installers."
-  default     = "{}"
+  default     = "{\"network\":{\"type\":\"create\",\"availability_zones\":2}}"
   sensitive   = true
 }
 
@@ -66,10 +75,58 @@ variable "managing_service_account_email" {
   default     = ""
 }
 
-variable "gcp_use_existing_custom_roles" {
+variable "gcp_manage_custom_roles" {
   type        = bool
-  description = "Use pre-created project custom roles named after Alien permission sets instead of creating per-stack custom roles."
-  default     = false
+  description = "Whether this module creates the GCP project custom roles it binds. Set to false when those roles are managed outside this stack."
+  default     = true
+}
+
+variable "gcp_custom_role_prefix" {
+  type        = string
+  description = "Prefix used for GCP project custom role IDs when gcp_manage_custom_roles is false. Empty uses resource_prefix."
+  default     = ""
+}
+
+variable "network_mode" {
+  type        = string
+  description = "Choose whether this setup creates a new network, uses an existing network, or uses the default network. Values: create-new, use-existing, use-default."
+  default     = "create-new"
+}
+
+variable "network_cidr" {
+  type        = string
+  description = "CIDR for a newly-created network. Empty uses 10.44.0.0/16."
+  default     = ""
+}
+
+variable "availability_zones" {
+  type        = number
+  description = "Reserved for cross-cloud network-mode parity. GCP creates one regional subnet."
+  default     = 2
+}
+
+variable "network_name" {
+  type        = string
+  description = "Existing VPC network name. Required when network is use-existing."
+  default     = ""
+}
+
+variable "subnet_name" {
+  type        = string
+  description = "Existing subnet name. Required when network is use-existing."
+  default     = ""
+}
+
+variable "network_region" {
+  type        = string
+  description = "Existing subnet region. Empty uses gcp_region."
+  default     = ""
+}
+
+variable "kubernetes_cluster_mode" {
+  type        = string
+  description = "Kubernetes cluster mode. Values: create or existing."
+  default     = "create"
 }
 
 variable "kubernetes_namespace" {
@@ -78,23 +135,44 @@ variable "kubernetes_namespace" {
   default     = "default"
 }
 
+variable "gke_cluster_name" {
+  type        = string
+  description = "Existing GKE cluster name that Helm will install into."
+  default     = ""
+}
+
+variable "gke_cluster_location" {
+  type        = string
+  description = "Existing GKE cluster location (region or zone)."
+  default     = ""
+}
+
 === providers.tf ===
 provider "google" {
   project = var.gcp_project
   region  = var.gcp_region
 }
 
+=== resource_prefix.tf ===
+resource "random_id" "resource_prefix" {
+  byte_length = 4
+}
+
 === locals.tf ===
 locals {
-  deployment_platform = "gcp"
-  deployment_target   = "gke"
-  deployment_region   = var.gcp_region
-  deployment_management_config = {
-    platform            = "gcp"
-    projectId           = var.gcp_project
-    serviceAccountEmail = var.managing_service_account_email
+  resource_prefix              = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
+  deployment_name              = var.name
+  gcp_custom_role_prefix       = substr(replace(lower(var.gcp_custom_role_prefix == "" ? local.resource_prefix : var.gcp_custom_role_prefix), "-", "_"), 0, 18)
+  deployment_platform          = "kubernetes"
+  deployment_base_platform     = "gcp"
+  deployment_target            = "gke"
+  deployment_region            = var.gcp_region
+  deployment_management_config = null
+  kubernetes_exposure = {
+    mode = "disabled"
   }
-  deployment_stack_settings = jsondecode(var.stack_settings_json)
+  deployment_kubernetes_settings = merge(try(jsondecode(var.stack_settings_json).kubernetes, {}), { exposure = jsondecode(try(jsondecode(var.stack_settings_json).kubernetes.exposure, null) == null ? jsonencode(local.kubernetes_exposure) : jsonencode(jsondecode(var.stack_settings_json).kubernetes.exposure)) })
+  deployment_settings            = merge(jsondecode(var.stack_settings_json), { network = jsondecode(var.network_mode == "create-new" ? jsonencode({ type = "create", cidr = var.network_cidr == "" ? null : var.network_cidr, availabilityZones = var.availability_zones }) : var.network_mode == "use-existing" ? jsonencode({ type = "byo-vpc-gcp", networkName = var.network_name, subnetName = var.subnet_name, region = var.network_region == "" ? var.gcp_region : var.network_region }) : jsonencode({ type = "use-default" })), kubernetes = local.deployment_kubernetes_settings })
   deployment_resources = [
     {
       id   = "data"
@@ -117,24 +195,26 @@ locals {
       }
     }
   ]
+  kubernetes_kubeconfig      = ""
+  kubernetes_kube_context    = ""
   alien_kubernetes_namespace = var.kubernetes_namespace
   helm_service_accounts = {
-    execution_sa = {
+    execution = {
       annotations = {
         "iam.gke.io/gcp-service-account" = google_service_account.execution_sa.email
       }
       labels = {}
     }
   }
-  helm_values = {
-    serviceAccounts = local.helm_service_accounts
-    stackSettings   = local.deployment_stack_settings
+  helm_manager_service_account = {
+    annotations = {}
+    labels      = {}
   }
 }
 
 === data.tf ===
 resource "google_storage_bucket" "data" {
-  name                        = "${var.stack_name}-data"
+  name                        = "${local.resource_prefix}-data"
   project                     = var.gcp_project
   location                    = upper(var.gcp_region)
   storage_class               = "STANDARD"
@@ -142,43 +222,65 @@ resource "google_storage_bucket" "data" {
   force_destroy               = true
   public_access_prevention    = "enforced"
   labels = {
-    "managed-by"          = "alien-dev"
-    "alien-stack-id"      = var.stack_name
-    "alien-resource-id"   = "data"
-    "alien-resource-type" = "storage"
+    "managed-by"    = "deployment"
+    deployment      = local.resource_prefix
+    resource        = "data"
+    "resource-type" = "storage"
   }
 }
 
 === execution_sa.tf ===
-resource "google_service_account" "execution_sa" {
-  project      = var.gcp_project
-  account_id   = format("%s-%s", trim(substr(replace(lower(format("a-%s-execution_sa", var.stack_name)), "_", "-"), 0, 21), "-"), substr(sha1(replace(lower(format("%s-execution_sa", var.stack_name)), "_", "-")), 0, 8))
-  display_name = "Alien execution-sa service account"
-  description  = "${var.stack_name} stack service account for permission profile 'execution_sa'"
+data "google_container_cluster" "target" {
+  name     = var.gke_cluster_name
+  location = var.gke_cluster_location
 }
 
-resource "google_project_iam_custom_role" "execution_sa_storagedataread" {
-  count       = var.gcp_use_existing_custom_roles ? 0 : 1
+resource "google_service_account" "execution_sa" {
+  project      = var.gcp_project
+  account_id   = format("%s-%s", trim(substr(replace(lower(format("a-%s-execution_sa", local.resource_prefix)), "_", "-"), 0, 21), "-"), substr(sha1(replace(lower(format("%s-execution_sa", local.resource_prefix)), "_", "-")), 0, 8))
+  display_name = "${local.deployment_name}: Runtime service account (execution-sa)"
+  description  = "Runtime cloud identity for ${local.deployment_name}. Resource prefix: ${local.resource_prefix}. Resource: execution_sa."
+}
+
+resource "google_project_iam_custom_role" "gcp_role_read_cloud_storage_objects" {
+  count       = var.gcp_manage_custom_roles ? 1 : 0
   project     = var.gcp_project
-  role_id     = format("%s_execution_sa_storageDataRead_%s", substr(replace(var.stack_name, "-", "_"), 0, 12), substr(sha1(format("%s-execution_sa-storageDataRead", var.stack_name)), 0, 8))
-  title       = "Storage Data Read"
-  description = "Allows reading data from storage buckets and containers"
+  role_id     = format("role_%s_read_cloud_storage_objects", local.gcp_custom_role_prefix)
+  title       = "${local.deployment_name}: Read Cloud Storage Objects"
+  description = "Used by ${local.deployment_name}. Read objects and object metadata from application-owned Cloud Storage buckets. Resource prefix: ${local.resource_prefix}."
   stage       = "GA"
   permissions = [
     "storage.buckets.get",
     "storage.buckets.list",
-    "storage.objects.get",
-    "storage.objects.list",
-    "storage.objects.getIamPolicy",
     "storage.multipartUploads.list",
     "storage.multipartUploads.listParts",
+    "storage.objects.get",
+    "storage.objects.getIamPolicy",
+    "storage.objects.list"
+  ]
+}
+
+resource "google_project_iam_custom_role" "gcp_role_sign_cloud_storage_download_urls" {
+  count       = var.gcp_manage_custom_roles ? 1 : 0
+  project     = var.gcp_project
+  role_id     = format("role_%s_sign_cloud_storage_download_urls", local.gcp_custom_role_prefix)
+  title       = "${local.deployment_name}: Sign Cloud Storage Download URLs"
+  description = "Used by ${local.deployment_name}. Sign Cloud Storage download URLs on behalf of this application's service account. Resource prefix: ${local.resource_prefix}."
+  stage       = "GA"
+  permissions = [
     "iam.serviceAccounts.signBlob"
   ]
 }
 
-resource "google_project_iam_member" "execution_sa_storagedataread_binding_0" {
+resource "google_project_iam_member" "gcp_role_read_cloud_storage_objects_execution_sa_binding_0" {
   project = var.gcp_project
-  role    = var.gcp_use_existing_custom_roles ? format("projects/%s/roles/storageDataRead", var.gcp_project) : google_project_iam_custom_role.execution_sa_storagedataread[0].name
+  role    = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_read_cloud_storage_objects[0].name : format("projects/%s/roles/role_%s_read_cloud_storage_objects", var.gcp_project, local.gcp_custom_role_prefix)
+  member  = "serviceAccount:${google_service_account.execution_sa.email}"
+}
+
+resource "google_project_iam_member" "gcp_role_sign_cloud_storage_download_urls_execution_sa_binding_1" {
+  project = var.gcp_project
+  role    = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_sign_cloud_storage_download_urls[0].name : format("projects/%s/roles/role_%s_sign_cloud_storage_download_urls", var.gcp_project, local.gcp_custom_role_prefix)
   member  = "serviceAccount:${google_service_account.execution_sa.email}"
 }
 
@@ -186,7 +288,7 @@ resource "google_service_account_iam_binding" "execution_sa_workload_identity" {
   service_account_id = google_service_account.execution_sa.name
   role               = "roles/iam.workloadIdentityUser"
   members = [
-    "serviceAccount:${var.gcp_project}.svc.id.goog[${var.kubernetes_namespace}/execution_sa]"
+    "serviceAccount:${data.google_container_cluster.target.workload_identity_config[0].workload_pool}[${var.kubernetes_namespace}/${local.resource_prefix}-execution-sa]"
   ]
 }
 
@@ -194,28 +296,35 @@ resource "google_service_account_iam_binding" "execution_sa_workload_identity" {
 resource "time_sleep" "gcp_iam_propagation" {
   create_duration = "120s"
   depends_on = [
-    google_project_iam_custom_role.execution_sa_storagedataread,
-    google_project_iam_member.execution_sa_storagedataread_binding_0
+    google_project_iam_member.gcp_role_read_cloud_storage_objects_execution_sa_binding_0,
+    google_project_iam_member.gcp_role_sign_cloud_storage_download_urls_execution_sa_binding_1
   ]
 }
 
 === import.tf ===
-resource "terraform_data" "deployment_stack_import" {
+resource "terraform_data" "deployment_import" {
   input = {
-    platform               = local.deployment_platform
-    deployment_group_token = var.deployment_group_token
-    deployment_name        = var.deployment_name == "" ? var.stack_name : var.deployment_name
-    stack_prefix           = var.stack_name
-    manager_url            = var.manager_url
-    management_config      = local.deployment_management_config
-    stack_settings         = local.deployment_stack_settings
-    resources              = local.deployment_resources
+    platform                    = local.deployment_platform
+    token                       = var.token
+    name                        = var.name
+    resource_prefix             = local.resource_prefix
+    setup_target                = ""
+    setup_import_format_version = 1
+    setup_fingerprint           = ""
+    setup_fingerprint_version   = 0
+    manager_url                 = var.manager_url
+    management_config           = local.deployment_management_config
+    stack_settings              = local.deployment_settings
+    resources                   = local.deployment_resources
+    basePlatform                = local.deployment_base_platform
   }
   depends_on = [
     google_storage_bucket.data,
     google_service_account.execution_sa,
-    google_project_iam_custom_role.execution_sa_storagedataread,
-    google_project_iam_member.execution_sa_storagedataread_binding_0,
+    google_project_iam_custom_role.gcp_role_read_cloud_storage_objects,
+    google_project_iam_custom_role.gcp_role_sign_cloud_storage_download_urls,
+    google_project_iam_member.gcp_role_read_cloud_storage_objects_execution_sa_binding_0,
+    google_project_iam_member.gcp_role_sign_cloud_storage_download_urls_execution_sa_binding_1,
     google_service_account_iam_binding.execution_sa_workload_identity,
     time_sleep.gcp_iam_propagation
   ]
@@ -227,9 +336,9 @@ output "deployment_target" {
   description = "Terraform module target."
 }
 
-output "deployment_stack_prefix" {
-  value       = var.stack_name
-  description = "Physical stack prefix."
+output "deployment_resource_prefix" {
+  value       = local.resource_prefix
+  description = "Physical resource prefix."
 }
 
 output "deployment_platform" {
@@ -242,13 +351,33 @@ output "deployment_region" {
   description = "Target cloud region or location."
 }
 
+output "deployment_setup_target" {
+  value       = ""
+  description = "Setup target."
+}
+
+output "deployment_setup_import_format_version" {
+  value       = 1
+  description = "Setup import payload format version."
+}
+
+output "deployment_setup_fingerprint" {
+  value       = ""
+  description = "Setup compatibility fingerprint."
+}
+
+output "deployment_setup_fingerprint_version" {
+  value       = 0
+  description = "Setup fingerprint algorithm version."
+}
+
 output "deployment_management_config" {
   value       = jsonencode(local.deployment_management_config)
   description = "Manager import ManagementConfig JSON."
 }
 
 output "deployment_stack_settings" {
-  value       = jsonencode(local.deployment_stack_settings)
+  value       = jsonencode(local.deployment_settings)
   description = "Manager import StackSettings JSON."
   sensitive   = true
 }
@@ -258,10 +387,20 @@ output "deployment_resources" {
   description = "Manager import resources JSON."
 }
 
-output "helm_values" {
-  value       = jsonencode(local.helm_values)
-  description = "Helm values JSON for the manager-fetch Kubernetes install."
+output "deployment_base_platform" {
+  value       = local.deployment_base_platform
+  description = "Base cloud platform for Kubernetes targets."
+}
+
+output "kubernetes_kubeconfig" {
+  value       = local.kubernetes_kubeconfig
+  description = "Kubeconfig for managed Kubernetes clusters created by this module."
   sensitive   = true
+}
+
+output "kubernetes_kube_context" {
+  value       = local.kubernetes_kube_context
+  description = "Kube context for managed Kubernetes clusters created by this module."
 }
 
 === README.md ===
@@ -274,7 +413,7 @@ Run:
 ```bash
 terraform init -backend=false
 terraform validate
-terraform apply -var='stack_name=gke-overlay' -var='deployment_group_token=...'
+terraform apply -var='name=gke-overlay' -var='token=...'
 ```
 
 This module exposes `deployment_management_config` / `deployment_stack_settings` / `deployment_resources` for external registration flows.

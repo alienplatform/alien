@@ -8,14 +8,29 @@ use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_aws_clients::iam::{CreateRoleRequest, CreateRoleTag, IamApi};
 use alien_core::{
-    standard_resource_tags, ArtifactRegistry, ArtifactRegistryOutputs, ResourceOutputs,
+    standard_resource_tags, ArtifactRegistry, ArtifactRegistryHeartbeatData,
+    ArtifactRegistryHeartbeatStatus, ArtifactRegistryOutputs, AwsEcrArtifactRegistryHeartbeatData,
+    AwsEcrRepositoryHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
+    ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
     ResourceStatus,
 };
 
 use alien_aws_clients::aws::ecr::{
-    PutReplicationConfigurationRequest, ReplicationConfiguration, ReplicationDestination,
-    ReplicationRule,
+    DescribeRepositoriesRequest, PutReplicationConfigurationRequest, ReplicationConfiguration,
+    ReplicationDestination, ReplicationRule, Repository,
 };
+use chrono::Utc;
+
+fn role_name_from_arn(arn: &str) -> Option<&str> {
+    arn.rsplit_once(':')?
+        .1
+        .strip_prefix("role/")
+        .filter(|role_name| !role_name.is_empty())
+}
+
+fn fallback_role_name(resource_prefix: &str, resource_id: &str, suffix: &str) -> String {
+    format!("{}-{}-{}", resource_prefix, resource_id, suffix)
+}
 
 /// AWS Artifact Registry controller.
 ///
@@ -89,7 +104,7 @@ impl AwsArtifactRegistryController {
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
         let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
 
-        let pull_role_name = format!("{}-{}-pull", ctx.resource_prefix, config.id);
+        let pull_role_name = fallback_role_name(ctx.resource_prefix, &config.id, "pull");
 
         info!(
             role_name = %pull_role_name,
@@ -147,7 +162,7 @@ impl AwsArtifactRegistryController {
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
         let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
 
-        let pull_role_name = format!("{}-{}-pull", ctx.resource_prefix, config.id);
+        let pull_role_name = fallback_role_name(ctx.resource_prefix, &config.id, "pull");
         let policy_name = "ECRPullPolicy";
 
         // Create policy document for ECR pull permissions
@@ -185,7 +200,7 @@ impl AwsArtifactRegistryController {
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
         let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
 
-        let push_role_name = format!("{}-{}-push", ctx.resource_prefix, config.id);
+        let push_role_name = fallback_role_name(ctx.resource_prefix, &config.id, "push");
 
         info!(
             role_name = %push_role_name,
@@ -243,7 +258,7 @@ impl AwsArtifactRegistryController {
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
         let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
 
-        let push_role_name = format!("{}-{}-push", ctx.resource_prefix, config.id);
+        let push_role_name = fallback_role_name(ctx.resource_prefix, &config.id, "push");
         let policy_name = "ECRPushPolicy";
 
         // Create policy document for ECR push+pull permissions
@@ -380,7 +395,7 @@ impl AwsArtifactRegistryController {
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
         let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
 
-        let pull_role_name = format!("{}-{}-pull", ctx.resource_prefix, config.id);
+        let pull_role_name = fallback_role_name(ctx.resource_prefix, &config.id, "pull");
 
         // Generate updated trust policy (allow service account roles)
         let assume_role_policy = self.generate_service_account_assume_role_policy(ctx)?;
@@ -420,7 +435,7 @@ impl AwsArtifactRegistryController {
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
         let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
 
-        let pull_role_name = format!("{}-{}-pull", ctx.resource_prefix, config.id);
+        let pull_role_name = fallback_role_name(ctx.resource_prefix, &config.id, "pull");
         let policy_name = "ECRPullPolicy";
 
         // Always update the policy to ensure it's correct
@@ -458,7 +473,7 @@ impl AwsArtifactRegistryController {
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
         let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
 
-        let push_role_name = format!("{}-{}-push", ctx.resource_prefix, config.id);
+        let push_role_name = fallback_role_name(ctx.resource_prefix, &config.id, "push");
 
         // Generate updated trust policy (allow service account roles)
         let assume_role_policy = self.generate_service_account_assume_role_policy(ctx)?;
@@ -498,7 +513,7 @@ impl AwsArtifactRegistryController {
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
         let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
 
-        let push_role_name = format!("{}-{}-push", ctx.resource_prefix, config.id);
+        let push_role_name = fallback_role_name(ctx.resource_prefix, &config.id, "push");
         let policy_name = "ECRPushPolicy";
 
         // Always update the policy to ensure it's correct
@@ -599,7 +614,12 @@ impl AwsArtifactRegistryController {
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
         let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
 
-        let pull_role_name = format!("{}-{}-pull", ctx.resource_prefix, config.id);
+        let pull_role_name = self
+            .pull_role_arn
+            .as_deref()
+            .and_then(role_name_from_arn)
+            .map(str::to_string)
+            .unwrap_or_else(|| fallback_role_name(ctx.resource_prefix, &config.id, "pull"));
 
         self.cleanup_role_policies(&*iam_client, &pull_role_name, "pull", &config.id)
             .await?;
@@ -623,7 +643,12 @@ impl AwsArtifactRegistryController {
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
         let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
 
-        let pull_role_name = format!("{}-{}-pull", ctx.resource_prefix, config.id);
+        let pull_role_name = self
+            .pull_role_arn
+            .as_deref()
+            .and_then(role_name_from_arn)
+            .map(str::to_string)
+            .unwrap_or_else(|| fallback_role_name(ctx.resource_prefix, &config.id, "pull"));
 
         // Delete pull role - treat NotFound as success for idempotent deletion
         match iam_client.delete_role(&pull_role_name).await {
@@ -682,7 +707,12 @@ impl AwsArtifactRegistryController {
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
         let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
 
-        let push_role_name = format!("{}-{}-push", ctx.resource_prefix, config.id);
+        let push_role_name = self
+            .push_role_arn
+            .as_deref()
+            .and_then(role_name_from_arn)
+            .map(str::to_string)
+            .unwrap_or_else(|| fallback_role_name(ctx.resource_prefix, &config.id, "push"));
 
         self.cleanup_role_policies(&*iam_client, &push_role_name, "push", &config.id)
             .await?;
@@ -706,7 +736,12 @@ impl AwsArtifactRegistryController {
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
         let iam_client = ctx.service_provider.get_aws_iam_client(aws_cfg).await?;
 
-        let push_role_name = format!("{}-{}-push", ctx.resource_prefix, config.id);
+        let push_role_name = self
+            .push_role_arn
+            .as_deref()
+            .and_then(role_name_from_arn)
+            .map(str::to_string)
+            .unwrap_or_else(|| fallback_role_name(ctx.resource_prefix, &config.id, "push"));
 
         // Delete push role - treat NotFound as success for idempotent deletion
         match iam_client.delete_role(&push_role_name).await {
@@ -786,6 +821,42 @@ impl AwsArtifactRegistryController {
             }
 
             debug!(account_id=%stored_account_id, region=%stored_region, "AWS ECR registry heartbeat check passed");
+
+            let ecr_client = ctx.service_provider.get_aws_ecr_client(aws_cfg).await?;
+            let repository_prefix = self
+                .repository_prefix
+                .clone()
+                .unwrap_or_else(|| format!("{}-{}", ctx.resource_prefix, config.id));
+            let repositories_response = ecr_client
+                .describe_repositories(DescribeRepositoriesRequest {
+                    registry_id: Some(stored_account_id.clone()),
+                    repository_names: None,
+                    next_token: None,
+                    max_results: Some(100),
+                })
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to describe ECR repositories during heartbeat check"
+                        .to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?;
+            let repositories = repositories_response
+                .repositories
+                .into_iter()
+                .filter(|repository| repository.repository_name.starts_with(&repository_prefix))
+                .collect::<Vec<_>>();
+
+            emit_aws_artifact_registry_heartbeat(
+                ctx,
+                &config.id,
+                stored_account_id,
+                stored_region,
+                &repository_prefix,
+                self.pull_role_arn.clone(),
+                self.push_role_arn.clone(),
+                repositories_response.next_token.is_some(),
+                repositories,
+            );
         }
 
         Ok(HandlerAction::Continue {
@@ -1215,13 +1286,85 @@ impl AwsArtifactRegistryController {
     }
 }
 
+fn emit_aws_artifact_registry_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    registry_id: &str,
+    region: &str,
+    repository_prefix: &str,
+    pull_role_arn: Option<String>,
+    push_role_arn: Option<String>,
+    repositories_truncated: bool,
+    repositories: Vec<Repository>,
+) {
+    let repository_data = repositories
+        .into_iter()
+        .map(|repository| AwsEcrRepositoryHeartbeatData {
+            repository_arn: repository.repository_arn,
+            registry_id: repository.registry_id,
+            repository_name: repository.repository_name,
+            repository_uri: repository.repository_uri,
+            created_at: repository.created_at,
+            image_tag_mutability: repository.image_tag_mutability,
+            scan_on_push: repository
+                .image_scanning_configuration
+                .and_then(|config| config.scan_on_push),
+            encryption_type: repository
+                .encryption_configuration
+                .as_ref()
+                .map(|config| config.encryption_type.clone()),
+            kms_key_present: repository
+                .encryption_configuration
+                .as_ref()
+                .and_then(|config| config.kms_key.as_ref())
+                .is_some(),
+        })
+        .collect::<Vec<_>>();
+    let repository_count = repository_data.len() as u32;
+
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: ArtifactRegistry::RESOURCE_TYPE,
+        controller_platform: Platform::Aws,
+        backend: HeartbeatBackend::Aws,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::ArtifactRegistry(ArtifactRegistryHeartbeatData::AwsEcr(
+            AwsEcrArtifactRegistryHeartbeatData {
+                status: ArtifactRegistryHeartbeatStatus {
+                    health: ObservedHealth::Healthy,
+                    lifecycle: ProviderLifecycleState::Running,
+                    message: Some(format!(
+                        "AWS ECR registry '{}' in '{}' is reachable",
+                        registry_id, region
+                    )),
+                    stale: false,
+                    partial: repositories_truncated,
+                    collection_issues: vec![],
+                },
+                registry_id: registry_id.to_string(),
+                region: region.to_string(),
+                registry_uri: format!("{registry_id}.dkr.ecr.{region}.amazonaws.com"),
+                repository_prefix: repository_prefix.to_string(),
+                pull_role_arn,
+                push_role_arn,
+                repository_count,
+                repositories_truncated,
+                repositories: repository_data,
+            },
+        )),
+        raw: vec![],
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::controller_test::SingleControllerExecutor;
     use crate::MockPlatformServiceProvider;
     use alien_aws_clients::iam::{
-        CreateRoleResponse, CreateRoleResult, ListRolePoliciesResponse, ListRolePoliciesResult,
+        AttachedPolicies, CreateRoleResponse, CreateRoleResult, ListAttachedRolePoliciesResponse,
+        ListAttachedRolePoliciesResult, ListRolePoliciesResponse, ListRolePoliciesResult,
         MockIamApi, PolicyNames, Role,
     };
     use alien_core::Platform;
@@ -1322,6 +1465,26 @@ mod tests {
         Arc::new(mock_provider)
     }
 
+    fn empty_attached_role_policies_response() -> ListAttachedRolePoliciesResponse {
+        ListAttachedRolePoliciesResponse {
+            list_attached_role_policies_result: ListAttachedRolePoliciesResult {
+                attached_policies: Some(AttachedPolicies { member: vec![] }),
+                is_truncated: Some(false),
+                marker: None,
+            },
+        }
+    }
+
+    fn empty_inline_role_policies_response() -> ListRolePoliciesResponse {
+        ListRolePoliciesResponse {
+            list_role_policies_result: ListRolePoliciesResult {
+                policy_names: Some(PolicyNames { member: vec![] }),
+                is_truncated: Some(false),
+                marker: None,
+            },
+        }
+    }
+
     #[tokio::test]
     async fn test_create_and_delete_flow_succeeds() {
         let registry = basic_artifact_registry();
@@ -1362,6 +1525,65 @@ mod tests {
         assert!(registry_outputs.push_role.is_some());
 
         // Test delete flow
+        executor.delete().unwrap();
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+    }
+
+    #[tokio::test]
+    async fn test_imported_delete_uses_persisted_role_arn_names() {
+        let registry = ArtifactRegistry::new(
+            "test-alien-artifact-registry-with-long-enough-name-to-overflow-iam-role-limit"
+                .to_string(),
+        )
+        .build();
+
+        let mut mock_iam = MockIamApi::new();
+        mock_iam
+            .expect_list_attached_role_policies()
+            .returning(|role_name| {
+                assert!(
+                    matches!(role_name, "short-registry-pull" | "short-registry-push"),
+                    "expected ARN-derived role name, got {role_name}"
+                );
+                Ok(empty_attached_role_policies_response())
+            });
+        mock_iam.expect_list_role_policies().returning(|role_name| {
+            assert!(
+                matches!(role_name, "short-registry-pull" | "short-registry-push"),
+                "expected ARN-derived role name, got {role_name}"
+            );
+            Ok(empty_inline_role_policies_response())
+        });
+        mock_iam.expect_delete_role().returning(|role_name| {
+            assert!(
+                matches!(role_name, "short-registry-pull" | "short-registry-push"),
+                "expected ARN-derived role name, got {role_name}"
+            );
+            Ok(())
+        });
+
+        let mock_provider = setup_mock_service_provider(Arc::new(mock_iam));
+        let controller = AwsArtifactRegistryController {
+            state: AwsArtifactRegistryState::Ready,
+            account_id: Some("123456789012".to_string()),
+            region: Some("us-east-1".to_string()),
+            pull_role_arn: Some("arn:aws:iam::123456789012:role/short-registry-pull".to_string()),
+            push_role_arn: Some("arn:aws:iam::123456789012:role/short-registry-push".to_string()),
+            repository_prefix: Some("test-registry".to_string()),
+            _internal_stay_count: None,
+        };
+
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(registry)
+            .controller(controller)
+            .platform(Platform::Aws)
+            .service_provider(mock_provider)
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+
         executor.delete().unwrap();
         executor.run_until_terminal().await.unwrap();
         assert_eq!(executor.status(), ResourceStatus::Deleted);

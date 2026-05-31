@@ -6,9 +6,10 @@ use async_trait::async_trait;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use tokio::fs;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 /// Rust toolchain implementation using Cargo with Zig cross-compilation
 #[derive(Debug, Clone)]
@@ -104,7 +105,7 @@ impl RustToolchain {
             .await
             .into_alien_error()
             .context(ErrorData::ImageBuildFailed {
-                function_name: self.binary_name.clone(),
+                resource_name: self.binary_name.clone(),
                 reason: "Failed to execute cargo metadata".to_string(),
                 build_output: None,
             })?;
@@ -112,7 +113,7 @@ impl RustToolchain {
         if !metadata_output.status.success() {
             let stderr = String::from_utf8_lossy(&metadata_output.stderr);
             return Err(AlienError::new(ErrorData::ImageBuildFailed {
-                function_name: self.binary_name.clone(),
+                resource_name: self.binary_name.clone(),
                 reason: "cargo metadata failed".to_string(),
                 build_output: Some(stderr.to_string()),
             }));
@@ -121,7 +122,7 @@ impl RustToolchain {
         let stdout = String::from_utf8_lossy(&metadata_output.stdout);
         let metadata: Value = serde_json::from_str(&stdout).into_alien_error().context(
             ErrorData::ImageBuildFailed {
-                function_name: self.binary_name.clone(),
+                resource_name: self.binary_name.clone(),
                 reason: "Failed to parse cargo metadata JSON".to_string(),
                 build_output: None,
             },
@@ -132,7 +133,7 @@ impl RustToolchain {
             .and_then(|v| v.as_str())
             .ok_or_else(|| {
                 AlienError::new(ErrorData::ImageBuildFailed {
-                    function_name: self.binary_name.clone(),
+                    resource_name: self.binary_name.clone(),
                     reason: "cargo metadata missing target_directory field".to_string(),
                     build_output: None,
                 })
@@ -188,7 +189,7 @@ impl Toolchain for RustToolchain {
                     .await
                     .into_alien_error()
                     .context(ErrorData::ImageBuildFailed {
-                        function_name: self.binary_name.clone(),
+                        resource_name: self.binary_name.clone(),
                         reason: format!("Failed to execute cargo install {}", package),
                         build_output: None,
                     })?;
@@ -196,7 +197,7 @@ impl Toolchain for RustToolchain {
                 if !install_output.status.success() {
                     let stderr = String::from_utf8_lossy(&install_output.stderr);
                     return Err(AlienError::new(ErrorData::ImageBuildFailed {
-                        function_name: self.binary_name.clone(),
+                        resource_name: self.binary_name.clone(),
                         reason: format!("Failed to install {}", package),
                         build_output: Some(stderr.to_string()),
                     }));
@@ -216,7 +217,7 @@ impl Toolchain for RustToolchain {
             .await
             .into_alien_error()
             .context(ErrorData::ImageBuildFailed {
-                function_name: self.binary_name.clone(),
+                resource_name: self.binary_name.clone(),
                 reason: "Failed to execute rustup target list".to_string(),
                 build_output: None,
             })?;
@@ -239,7 +240,7 @@ impl Toolchain for RustToolchain {
                 .await
                 .into_alien_error()
                 .context(ErrorData::ImageBuildFailed {
-                    function_name: self.binary_name.clone(),
+                    resource_name: self.binary_name.clone(),
                     reason: "Failed to execute rustup target add".to_string(),
                     build_output: None,
                 })?;
@@ -247,7 +248,7 @@ impl Toolchain for RustToolchain {
             if !install_target_output.status.success() {
                 let stderr = String::from_utf8_lossy(&install_target_output.stderr);
                 return Err(AlienError::new(ErrorData::ImageBuildFailed {
-                    function_name: self.binary_name.clone(),
+                    resource_name: self.binary_name.clone(),
                     reason: format!(
                         "Failed to install target {}",
                         context.build_target.rust_target_triple()
@@ -264,6 +265,52 @@ impl Toolchain for RustToolchain {
                 "Target {} already installed",
                 context.build_target.rust_target_triple()
             );
+        }
+
+        // Determine the expected binary path before building so stale corrupt
+        // artifacts from interrupted builds cannot be reused by Cargo.
+        let target_dir_base = self.get_target_directory(&context.src_dir).await?;
+        let target_subdir = if context.debug_mode {
+            "debug"
+        } else {
+            "release"
+        };
+        let target_platform_dir = target_dir_base
+            .join(context.build_target.rust_target_triple())
+            .join(target_subdir);
+        let binary_filename = format!(
+            "{}{}",
+            self.binary_name,
+            context.build_target.binary_extension()
+        );
+        let binary_path = target_platform_dir.join(&binary_filename);
+
+        if binary_path.exists() {
+            if let Some(reason) = super::executable_format_error(&binary_path, context.build_target)
+                .into_alien_error()
+                .context(ErrorData::ImageBuildFailed {
+                    resource_name: self.binary_name.clone(),
+                    reason: format!(
+                        "Failed to inspect existing binary at {}",
+                        binary_path.display()
+                    ),
+                    build_output: None,
+                })?
+            {
+                warn!(
+                    binary = %binary_path.display(),
+                    reason = %reason,
+                    "Removing stale invalid Rust build artifact before rebuilding"
+                );
+                fs::remove_file(&binary_path)
+                    .await
+                    .into_alien_error()
+                    .context(ErrorData::FileOperationFailed {
+                        operation: "remove file".to_string(),
+                        file_path: binary_path.display().to_string(),
+                        reason: "Failed to remove stale invalid Rust build artifact".to_string(),
+                    })?;
+            }
         }
 
         // Build the project for the target platform.
@@ -304,7 +351,7 @@ impl Toolchain for RustToolchain {
                 .spawn()
                 .into_alien_error()
                 .context(ErrorData::ImageBuildFailed {
-                    function_name: self.binary_name.clone(),
+                    resource_name: self.binary_name.clone(),
                     reason: format!("Failed to execute {}", build_command),
                     build_output: None,
                 })?;
@@ -317,7 +364,7 @@ impl Toolchain for RustToolchain {
             // Process stderr output line by line
             while let Some(line) = stderr_reader.next_line().await.into_alien_error().context(
                 ErrorData::ImageBuildFailed {
-                    function_name: self.binary_name.clone(),
+                    resource_name: self.binary_name.clone(),
                     reason: "Failed to read cargo build output".to_string(),
                     build_output: None,
                 },
@@ -343,7 +390,7 @@ impl Toolchain for RustToolchain {
                     .await
                     .into_alien_error()
                     .context(ErrorData::ImageBuildFailed {
-                        function_name: self.binary_name.clone(),
+                        resource_name: self.binary_name.clone(),
                         reason: format!("Failed to wait for {} completion", build_command),
                         build_output: None,
                     })?;
@@ -356,7 +403,7 @@ impl Toolchain for RustToolchain {
                     build_command, stderr_output
                 );
                 return Err(AlienError::new(ErrorData::ImageBuildFailed {
-                    function_name: self.binary_name.clone(),
+                    resource_name: self.binary_name.clone(),
                     reason: format!("{} failed", build_command),
                     build_output: Some(stderr_output),
                 }));
@@ -367,30 +414,10 @@ impl Toolchain for RustToolchain {
         })
         .await?;
 
-        // Save updated cache if available
-        cache_utils::save_cache(context.cache_store.as_deref(), &cache_key, &cache_paths).await?;
-
-        // Determine the actual target directory (workspace-aware) and binary path
-        let target_dir_base = self.get_target_directory(&context.src_dir).await?;
-        let target_subdir = if context.debug_mode {
-            "debug"
-        } else {
-            "release"
-        };
-        let target_platform_dir = target_dir_base
-            .join(context.build_target.rust_target_triple())
-            .join(target_subdir);
-        let binary_filename = format!(
-            "{}{}",
-            self.binary_name,
-            context.build_target.binary_extension()
-        );
-        let binary_path = target_platform_dir.join(&binary_filename);
-
         // Verify the binary was built
         if !binary_path.exists() {
             return Err(AlienError::new(ErrorData::ImageBuildFailed {
-                function_name: self.binary_name.clone(),
+                resource_name: self.binary_name.clone(),
                 reason: format!(
                     "Expected binary not found at: {}. Target directory: {}",
                     binary_path.display(),
@@ -399,16 +426,21 @@ impl Toolchain for RustToolchain {
                 build_output: None,
             }));
         }
+        super::validate_executable_format(&binary_path, context.build_target, &self.binary_name)?;
 
         info!("Successfully built Rust binary: {}", binary_path.display());
 
+        // Save updated cache only after validating the build output.
+        cache_utils::save_cache(context.cache_store.as_deref(), &cache_key, &cache_paths).await?;
+
         // Determine if we need alien-runtime in the image
-        // Functions on local platform use embedded runtime in agent (no runtime in image)
+        // Workers on local platform use embedded runtime in agent (no runtime in image)
         // Everything else (containers on any platform, functions on cloud) needs alien-runtime
-        let needs_runtime_in_image = context.is_container || context.platform_name != "local";
+        let needs_runtime_in_image =
+            context.is_container || context.runtime_platform_name != "local";
 
         if !needs_runtime_in_image {
-            // Function on local platform - runtime is embedded in operator
+            // Worker on local platform - runtime is embedded in operator
             // Just package the application binary
             let runtime_command = vec![format!("./{}", binary_filename)];
 
@@ -438,7 +470,11 @@ impl Toolchain for RustToolchain {
         Ok(ToolchainOutput {
             build_strategy: super::ImageBuildStrategy::FromBaseImage {
                 base_images,
-                files_to_package: vec![(binary_path, format!("./{}", binary_filename))],
+                files_to_package: vec![super::FileSpec {
+                    host_path: binary_path,
+                    container_path: format!("./{}", binary_filename),
+                    mode: Some(0o755),
+                }],
             },
             runtime_command,
         })
@@ -568,7 +604,7 @@ version = "0.1.0"
             cache_store: None,
             cache_prefix: "test".to_string(),
             build_target: alien_core::BinaryTarget::LinuxX64,
-            platform_name: "aws".to_string(),
+            runtime_platform_name: "aws".to_string(),
             debug_mode: false,
             is_container: false,
         };

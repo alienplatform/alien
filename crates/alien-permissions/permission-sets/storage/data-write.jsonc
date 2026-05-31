@@ -32,23 +32,7 @@
     "gcp": [
       {
         "grant": {
-          "permissions": [
-            "storage.buckets.get",
-            "storage.objects.get",
-            "storage.objects.list",
-            "storage.objects.getIamPolicy",
-            "storage.multipartUploads.list",
-            "storage.multipartUploads.listParts",
-            "storage.objects.create",
-            "storage.objects.update",
-            "storage.objects.delete",
-            "storage.objects.setIamPolicy",
-            "storage.objects.restore",
-            "storage.objects.setRetention",
-            "storage.objects.overrideUnlockedRetention",
-            "storage.multipartUploads.create",
-            "storage.multipartUploads.abort"
-          ]
+          "predefinedRoles": ["roles/storage.objectAdmin", "roles/storage.bucketViewer"]
         },
         "binding": {
           "stack": {
@@ -76,18 +60,7 @@
     "azure": [
       {
         "grant": {
-          "actions": [
-            "Microsoft.Storage/storageAccounts/blobServices/containers/read",
-            "Microsoft.Storage/storageAccounts/blobServices/containers/write",
-            "Microsoft.Storage/storageAccounts/blobServices/generateUserDelegationKey/action",
-            "Microsoft.Storage/storageAccounts/listKeys/action"
-          ],
-          "dataActions": [
-            "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
-            "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write",
-            "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/delete",
-            "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/add/action"
-          ]
+          "predefinedRoles": ["Storage Blob Data Contributor"]
         },
         "binding": {
           "stack": {

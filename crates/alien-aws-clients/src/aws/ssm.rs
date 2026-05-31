@@ -131,32 +131,6 @@ impl SsmClient {
         Self::map_result(result, operation, resource, Some(&body))
     }
 
-    async fn send_no_response(
-        &self,
-        target: &str,
-        body: String,
-        operation: &str,
-        resource: &str,
-    ) -> Result<()> {
-        self.credentials.ensure_fresh().await?;
-        let url = self.get_base_url();
-
-        let builder = self
-            .client
-            .request(Method::POST, &url)
-            .host(&self.get_host())
-            .header("X-Amz-Target", format!("AmazonSSM.{}", target))
-            .header("Content-Type", "application/x-amz-json-1.1")
-            .content_sha256(&body)
-            .body(body.clone());
-
-        let result =
-            crate::aws::aws_request_utils::sign_send_no_response(builder, &self.sign_config())
-                .await;
-
-        Self::map_result(result, operation, resource, Some(&body))
-    }
-
     fn map_result<T>(
         result: Result<T>,
         operation: &str,

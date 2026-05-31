@@ -2,9 +2,9 @@ use crate::error::{ErrorData, Result};
 use crate::traits::{
     AzureServiceAccountInfo, Binding, ImpersonationRequest, ServiceAccount, ServiceAccountInfo,
 };
-use alien_azure_clients::{AzureClientConfig, AzureClientConfigExt};
+use alien_azure_clients::AzureClientConfig;
 use alien_core::bindings::AzureServiceAccountBinding;
-use alien_core::{AzureClientConfig as CoreAzureClientConfig, ClientConfig};
+use alien_core::{AzureClientConfig as CoreAzureClientConfig, AzureCredentials, ClientConfig};
 use alien_error::Context;
 use async_trait::async_trait;
 use std::collections::HashMap;
@@ -82,40 +82,46 @@ impl ServiceAccount for AzureManagedIdentityServiceAccount {
     async fn impersonate(&self, _request: ImpersonationRequest) -> Result<ClientConfig> {
         let client_id = self.get_client_id()?;
 
-        // For Azure, "impersonation" means using a different managed identity that's already
-        // attached to the workload. We do this by creating a new config with the target
-        // identity's client_id, reusing the existing workload identity setup.
-        //
-        // When multiple UAMIs are attached to a Container App, Azure exposes the same
-        // AZURE_TENANT_ID and AZURE_FEDERATED_TOKEN_FILE for all of them. The
-        // AZURE_CLIENT_ID environment variable determines which identity to use when
-        // requesting tokens. By overriding AZURE_CLIENT_ID and calling from_env(),
-        // we effectively "switch" to the target identity.
+        let env_vars = std::env::vars().collect::<HashMap<_, _>>();
+        let tenant_id = env_vars
+            .get("AZURE_TENANT_ID")
+            .cloned()
+            .unwrap_or_else(|| self.config.tenant_id.clone());
 
-        // Get current environment variables and override AZURE_CLIENT_ID
-        let mut env_vars: HashMap<String, String> = std::env::vars().collect();
+        let credentials = if let Some(federated_token_file) =
+            env_vars.get("AZURE_FEDERATED_TOKEN_FILE")
+        {
+            AzureCredentials::WorkloadIdentity {
+                client_id: client_id.clone(),
+                tenant_id: tenant_id.clone(),
+                federated_token_file: federated_token_file.clone(),
+                authority_host: env_vars
+                    .get("AZURE_AUTHORITY_HOST")
+                    .cloned()
+                    .unwrap_or_else(|| "https://login.microsoftonline.com/".to_string()),
+            }
+        } else if let (Some(identity_endpoint), Some(identity_header)) = (
+            env_vars.get("IDENTITY_ENDPOINT"),
+            env_vars.get("IDENTITY_HEADER"),
+        ) {
+            AzureCredentials::ManagedIdentity {
+                client_id: client_id.clone(),
+                identity_endpoint: identity_endpoint.clone(),
+                identity_header: identity_header.clone(),
+            }
+        } else {
+            return Err(alien_error::AlienError::new(ErrorData::Other {
+                    message: "Azure managed identity impersonation requires workload identity (AZURE_FEDERATED_TOKEN_FILE) or managed identity (IDENTITY_ENDPOINT and IDENTITY_HEADER) credentials".to_string(),
+                }));
+        };
 
-        // Override the client_id to select the target managed identity
-        env_vars.insert("AZURE_CLIENT_ID".to_string(), client_id.clone());
-
-        // For SP→SP impersonation: also swap client_secret so the Azure Identity SDK
-        // authenticates as the management SP rather than the execution SP.
-        // On-Azure (UAMI→UAMI): env var absent → current behavior unchanged.
-        // Off-Azure (SP→SP): env var present → swaps both client_id and client_secret.
-        if let Some(mgmt_secret) = env_vars.remove("ALIEN_AZURE_MANAGEMENT_CLIENT_SECRET") {
-            env_vars.insert("AZURE_CLIENT_SECRET".to_string(), mgmt_secret);
-        }
-
-        // Use from_env to create the config - it will handle all the credential setup
-        let impersonated_config =
-            CoreAzureClientConfig::from_env(&env_vars)
-                .await
-                .context(ErrorData::Other {
-                    message: format!(
-                        "Failed to create Azure config for impersonation with client_id: {}",
-                        client_id
-                    ),
-                })?;
+        let impersonated_config = CoreAzureClientConfig {
+            subscription_id: self.config.subscription_id.clone(),
+            tenant_id,
+            region: self.config.region.clone(),
+            credentials,
+            service_overrides: self.config.service_overrides.clone(),
+        };
 
         Ok(ClientConfig::Azure(Box::new(impersonated_config)))
     }

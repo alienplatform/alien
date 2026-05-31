@@ -14,9 +14,10 @@ alien-core = { workspace = true }
 alien-error = { workspace = true }
 alien-preflights = { workspace = true }
 dockdash = { workspace = true }
+oci-client = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 toml = { workspace = true }
-tokio = { workspace = true, features = ["fs", "io-util", "macros", "rt-multi-thread", "process"] }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "rt-multi-thread", "process", "time"] }
 tokio-util = { workspace = true }
 reqwest = { workspace = true, features = ["json", "stream", "rustls-tls-webpki-roots"] }
 url = { workspace = true }

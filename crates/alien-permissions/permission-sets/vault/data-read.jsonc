@@ -13,9 +13,7 @@
             "resources": ["arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-*"]
           },
           "resource": {
-            "resources": [
-              "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${resourceName}-*"
-            ]
+            "resources": ["arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${resourceName}-*"]
           }
         }
       }
@@ -23,21 +21,21 @@
     "gcp": [
       {
         "grant": {
-          "permissions": ["secretmanager.versions.access", "secretmanager.secrets.get"]
+          "predefinedRoles": ["roles/secretmanager.viewer", "roles/secretmanager.secretAccessor"]
         },
         "binding": {
           "stack": {
             "scope": "projects/${projectName}",
             "condition": {
               "title": "StackVaultSecretsRead",
-              "expression": "resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-\")"
+              "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-\")"
             }
           },
           "resource": {
             "scope": "projects/${projectName}",
             "condition": {
               "title": "ResourceVaultSecretsRead",
-              "expression": "resource.name.startsWith(\"projects/${projectNumber}/secrets/${resourceName}-\")"
+              "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${projectNumber}/secrets/${resourceName}-\")"
             }
           }
         }
@@ -46,10 +44,7 @@
     "azure": [
       {
         "grant": {
-          "dataActions": [
-            "Microsoft.KeyVault/vaults/secrets/getSecret/action",
-            "Microsoft.KeyVault/vaults/secrets/readMetadata/action"
-          ]
+          "predefinedRoles": ["Key Vault Secrets User"]
         },
         "binding": {
           "stack": {

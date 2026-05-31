@@ -14,7 +14,7 @@ See [External URLs](https://alien.dev/docs/external-urls).
 
 | Resource | Type | Description |
 |----------|------|-------------|
-| `api` | Function (live) | HTTP API with webhook receivers and commands |
+| `api` | Worker (live) | HTTP API with webhook receivers and commands |
 | `events` | KV (frozen) | Stores received webhook events |
 
 ### HTTP endpoints

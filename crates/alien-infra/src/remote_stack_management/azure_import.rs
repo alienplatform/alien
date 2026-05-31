@@ -2,11 +2,11 @@
 
 use alien_core::{
     import::{data::AzureRemoteStackManagementImportData, ImportContext},
-    Result, StackResourceState,
+    ResourceStatus, Result, StackResourceState,
 };
 
 use crate::import::ResourceImporter;
-use crate::import_helpers::make_imported_state;
+use crate::import_helpers::make_imported_state_with_status;
 use crate::remote_stack_management::{
     AzureRemoteStackManagementController, AzureRemoteStackManagementState,
 };
@@ -25,9 +25,19 @@ impl ResourceImporter for AzureRemoteStackManagementImporter {
     ) -> Result<StackResourceState> {
         let _ = data.subscription_id;
         let _ = data.resource_group;
-        let _ = data.management_permissions_applied;
+        let (state, status) = if data.management_permissions_applied {
+            (
+                AzureRemoteStackManagementState::WaitingForRbacPropagation,
+                ResourceStatus::Provisioning,
+            )
+        } else {
+            (
+                AzureRemoteStackManagementState::Ready,
+                ResourceStatus::Running,
+            )
+        };
         let controller = AzureRemoteStackManagementController {
-            state: AzureRemoteStackManagementState::Ready,
+            state,
             uami_resource_id: Some(data.identity_id),
             uami_client_id: Some(data.client_id),
             uami_principal_id: Some(data.principal_id),
@@ -38,8 +48,9 @@ impl ResourceImporter for AzureRemoteStackManagementImporter {
             fic_name: None,
             role_definition_id: None,
             role_assignment_ids: Vec::new(),
+            role_assignment_wait_until_epoch_secs: None,
             _internal_stay_count: None,
         };
-        make_imported_state(controller, ctx)
+        make_imported_state_with_status(controller, ctx, status)
     }
 }

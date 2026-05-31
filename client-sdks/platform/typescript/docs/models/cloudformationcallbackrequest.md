@@ -13,42 +13,32 @@ let value: CloudFormationCallbackRequest = {
   responseUrl: "https://only-nun.info",
   source: {
     deploymentName: "<value>",
-    stackPrefix: "<value>",
+    resourcePrefix: "<value>",
     releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
     platform: "test",
     region: "<value>",
     setupTarget: "<value>",
+    setupImportFormatVersion: 651282,
     setupFingerprint: "<value>",
-    setupFingerprintVersion: 651282,
+    setupFingerprintVersion: 14476,
     stackSettings: {},
     managementConfig: {
-      managingRoleArn: "<value>",
-      platform: "aws",
+      platform: "kubernetes",
     },
-    resources: [
-      {
-        id: "<id>",
-        type: "<value>",
-        importData: {
-          "key": "<value>",
-          "key1": "<value>",
-          "key2": "<value>",
-        },
-      },
-    ],
+    resources: [],
   },
 };
 ```
 
 ## Fields
 
-| Field                                          | Type                                           | Required                                       | Description                                    |
-| ---------------------------------------------- | ---------------------------------------------- | ---------------------------------------------- | ---------------------------------------------- |
-| `stackId`                                      | *string*                                       | :heavy_check_mark:                             | N/A                                            |
-| `requestId`                                    | *string*                                       | :heavy_check_mark:                             | N/A                                            |
-| `logicalResourceId`                            | *string*                                       | :heavy_check_mark:                             | N/A                                            |
-| `requestType`                                  | [models.RequestType](../models/requesttype.md) | :heavy_check_mark:                             | N/A                                            |
-| `responseUrl`                                  | *string*                                       | :heavy_check_mark:                             | N/A                                            |
-| `physicalResourceId`                           | *string*                                       | :heavy_minus_sign:                             | N/A                                            |
-| `source`                                       | [models.Source](../models/source.md)           | :heavy_minus_sign:                             | N/A                                            |
-| `serviceTimeoutSeconds`                        | *number*                                       | :heavy_minus_sign:                             | N/A                                            |
+| Field                                                                                          | Type                                                                                           | Required                                                                                       | Description                                                                                    |
+| ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `stackId`                                                                                      | *string*                                                                                       | :heavy_check_mark:                                                                             | N/A                                                                                            |
+| `requestId`                                                                                    | *string*                                                                                       | :heavy_check_mark:                                                                             | N/A                                                                                            |
+| `logicalResourceId`                                                                            | *string*                                                                                       | :heavy_check_mark:                                                                             | N/A                                                                                            |
+| `requestType`                                                                                  | [models.RequestType](../models/requesttype.md)                                                 | :heavy_check_mark:                                                                             | N/A                                                                                            |
+| `responseUrl`                                                                                  | *string*                                                                                       | :heavy_check_mark:                                                                             | N/A                                                                                            |
+| `physicalResourceId`                                                                           | *string*                                                                                       | :heavy_minus_sign:                                                                             | N/A                                                                                            |
+| `source`                                                                                       | [models.CloudFormationCallbackRequestSource](../models/cloudformationcallbackrequestsource.md) | :heavy_minus_sign:                                                                             | N/A                                                                                            |
+| `serviceTimeoutSeconds`                                                                        | *number*                                                                                       | :heavy_minus_sign:                                                                             | N/A                                                                                            |

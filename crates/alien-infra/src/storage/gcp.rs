@@ -6,13 +6,18 @@ use tracing::{debug, info, warn};
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_client_core::ErrorData as CloudClientErrorData;
-use alien_core::{ResourceOutputs, ResourceStatus, Storage, StorageOutputs};
+use alien_core::{
+    GcpCloudStorageHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
+    ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
+    ResourceStatus, Storage, StorageHeartbeatData, StorageHeartbeatStatus, StorageOutputs,
+};
 use alien_gcp_clients::gcs::{
     Bucket, IamConfiguration, Lifecycle, LifecycleAction, LifecycleCondition, LifecycleRule,
     UniformBucketLevelAccess, Versioning,
 };
 use alien_gcp_clients::iam::{Binding, IamPolicy};
 use alien_macros::controller;
+use chrono::Utc;
 
 /// Generates the full, prefixed GCP bucket name.
 fn get_gcp_bucket_name(prefix: &str, name: &str) -> String {
@@ -267,13 +272,15 @@ impl GcpStorageController {
             let gcp_config = ctx.get_gcp_config()?;
             let client = ctx.service_provider.get_gcp_gcs_client(gcp_config)?;
 
-            // Check if bucket still exists
-            client.get_bucket(bucket_name.clone()).await.context(
+            // Fetch bucket metadata without listing objects or reading object ACLs.
+            let bucket = client.get_bucket(bucket_name.clone()).await.context(
                 ErrorData::CloudPlatformError {
                     message: "Failed to check GCS bucket during heartbeat".to_string(),
                     resource_id: Some(config.id.clone()),
                 },
             )?;
+
+            emit_gcp_storage_heartbeat(ctx, &config.id, bucket_name, bucket);
 
             debug!(name = %config.id, bucket = %bucket_name, "GCS bucket exists and is accessible");
         }
@@ -729,7 +736,7 @@ impl GcpStorageController {
     }
 
     fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
-        use alien_core::bindings::{BindingValue, StorageBinding};
+        use alien_core::bindings::StorageBinding;
 
         if let Some(bucket_name) = &self.bucket_name {
             let binding = StorageBinding::gcs(bucket_name.clone());
@@ -747,12 +754,93 @@ impl GcpStorageController {
     }
 }
 
+fn emit_gcp_storage_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    bucket_name: &str,
+    bucket: Bucket,
+) {
+    let observed_bucket_name = bucket
+        .name
+        .clone()
+        .unwrap_or_else(|| bucket_name.to_string());
+    let lifecycle_rule_count = bucket
+        .lifecycle
+        .as_ref()
+        .and_then(|lifecycle| lifecycle.rule.as_ref())
+        .map(|rules| rules.len() as u64);
+    let lifecycle_present = lifecycle_rule_count.map(|count| count > 0).unwrap_or(false);
+    let versioning_enabled = bucket
+        .versioning
+        .as_ref()
+        .map(|versioning| versioning.enabled);
+    let iam_configuration = bucket.iam_configuration.as_ref();
+    let uniform_bucket_level_access = iam_configuration
+        .and_then(|configuration| configuration.uniform_bucket_level_access.as_ref());
+    let public_access_prevention =
+        iam_configuration.and_then(|configuration| configuration.public_access_prevention.clone());
+    let default_kms_key_name = bucket
+        .encryption
+        .as_ref()
+        .and_then(|encryption| encryption.default_kms_key_name.clone());
+    let encryption_config_present = default_kms_key_name.is_some();
+    let retention_policy = bucket.retention_policy.as_ref();
+    let soft_delete_policy = bucket.soft_delete_policy.as_ref();
+
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: Storage::RESOURCE_TYPE,
+        controller_platform: Platform::Gcp,
+        backend: HeartbeatBackend::Gcp,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::Storage(StorageHeartbeatData::GcpCloudStorage(
+            GcpCloudStorageHeartbeatData {
+                status: StorageHeartbeatStatus {
+                    health: ObservedHealth::Healthy,
+                    lifecycle: ProviderLifecycleState::Running,
+                    message: Some(format!(
+                        "GCS bucket '{}' metadata is reachable",
+                        observed_bucket_name
+                    )),
+                    stale: false,
+                    partial: false,
+                    collection_issues: vec![],
+                },
+                name: observed_bucket_name,
+                bucket_id: bucket.id,
+                location: bucket.location,
+                location_type: bucket.location_type,
+                storage_class: bucket.storage_class,
+                versioning_enabled,
+                lifecycle_present,
+                lifecycle_rule_count,
+                retention_policy_effective_time: retention_policy
+                    .and_then(|policy| policy.effective_time.clone()),
+                retention_policy_is_locked: retention_policy.and_then(|policy| policy.is_locked),
+                retention_period: retention_policy
+                    .and_then(|policy| policy.retention_period.clone()),
+                soft_delete_retention_duration_seconds: soft_delete_policy
+                    .and_then(|policy| policy.retention_duration_seconds.clone()),
+                soft_delete_effective_time: soft_delete_policy
+                    .and_then(|policy| policy.effective_time.clone()),
+                uniform_bucket_level_access_enabled: uniform_bucket_level_access
+                    .map(|access| access.enabled),
+                uniform_bucket_level_access_locked_time: uniform_bucket_level_access
+                    .and_then(|access| access.locked_time.clone()),
+                public_access_prevention,
+                encryption_config_present,
+                default_kms_key_name,
+            },
+        )),
+        raw: vec![],
+    });
+}
+
 impl GcpStorageController {
     /// Applies resource-scoped permissions to the bucket from stack permission profiles.
     ///
-    /// This first ensures the required GCP custom roles exist (they are referenced
-    /// by the IAM bindings but not created by any other controller), then collects
-    /// and applies the bindings to the bucket.
+    /// Collects custom-role bindings and applies them to the bucket.
     async fn apply_resource_scoped_permissions(
         &self,
         ctx: &ResourceControllerContext<'_>,
@@ -763,7 +851,7 @@ impl GcpStorageController {
 
         let config = ctx.desired_resource_config::<Storage>()?;
 
-        // Collect resource-scoped bindings (this also ensures any required custom roles exist)
+        // Collect resource-scoped custom-role bindings.
         let mut all_bindings = Vec::new();
         ResourcePermissionsHelper::collect_gcp_resource_scoped_bindings(
             ctx,
@@ -845,7 +933,7 @@ mod tests {
         Bucket, IamConfiguration, Lifecycle, LifecycleAction, LifecycleCondition, LifecycleRule,
         ListObjectsResponse, MockGcsApi, Object, UniformBucketLevelAccess, Versioning,
     };
-    use alien_gcp_clients::iam::{Binding, IamPolicy, MockIamApi, Role};
+    use alien_gcp_clients::iam::{Binding, IamPolicy, MockIamApi};
     use rstest::{fixture, rstest};
 
     use crate::core::{
@@ -1024,14 +1112,7 @@ mod tests {
     }
 
     fn create_gcp_iam_mock_for_resource_permissions() -> Arc<MockIamApi> {
-        let mut mock_iam = MockIamApi::new();
-        mock_iam
-            .expect_get_role()
-            .returning(|_| Ok(Role::default()));
-        mock_iam
-            .expect_patch_role()
-            .returning(|_, _, _| Ok(Role::default()));
-        Arc::new(mock_iam)
+        Arc::new(MockIamApi::new())
     }
 
     fn setup_mock_service_provider(mock_gcs: Arc<MockGcsApi>) -> Arc<MockPlatformServiceProvider> {
@@ -1041,7 +1122,7 @@ mod tests {
             .expect_get_gcp_gcs_client()
             .returning(move |_| Ok(mock_gcs.clone()));
 
-        // Mock IAM client for resource-scoped permissions (custom role management)
+        // Mock IAM client for resource-scoped permissions.
         let mock_iam = create_gcp_iam_mock_for_resource_permissions();
         mock_provider
             .expect_get_gcp_iam_client()

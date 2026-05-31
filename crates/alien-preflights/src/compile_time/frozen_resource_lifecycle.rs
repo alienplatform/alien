@@ -49,8 +49,8 @@ impl CompileTimeCheck for FrozenResourceLifecycleCheck {
 mod tests {
     use super::*;
     use alien_core::{
-        ArtifactRegistry, Build, CapacityGroup, Container, ContainerCluster, ContainerCode,
-        Function, FunctionCode, ResourceEntry, ResourceLifecycle, ResourceSpec, Storage,
+        ArtifactRegistry, Build, CapacityGroup, ComputeCluster, Container, ContainerCode,
+        ResourceEntry, ResourceLifecycle, ResourceSpec, Storage, Worker, WorkerCode,
     };
     use indexmap::IndexMap;
 
@@ -125,8 +125,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_function_must_be_live() {
-        let function = Function::new("my-function".to_string())
-            .code(FunctionCode::Image {
+        let worker = Worker::new("my-worker".to_string())
+            .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
             })
             .permissions("test".to_string())
@@ -134,9 +134,9 @@ mod tests {
 
         let mut resources = IndexMap::new();
         resources.insert(
-            "my-function".to_string(),
+            "my-worker".to_string(),
             ResourceEntry {
-                config: alien_core::Resource::new(function),
+                config: alien_core::Resource::new(worker),
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(),
                 remote_access: false,
@@ -199,8 +199,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_container_cluster_must_be_frozen() {
-        let cluster = ContainerCluster::new("compute".to_string())
+    async fn test_compute_cluster_must_be_frozen() {
+        let cluster = ComputeCluster::new("compute".to_string())
             .capacity_group(CapacityGroup {
                 group_id: "general".to_string(),
                 instance_type: Some("m7g.large".to_string()),

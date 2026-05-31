@@ -1,6 +1,6 @@
 //! Deployment state, step results, and runtime metadata.
 
-use crate::{Platform, StackState};
+use crate::{Platform, ResourceHeartbeat, StackState};
 use alien_error::AlienError;
 use bon::Builder;
 use serde::{Deserialize, Serialize};
@@ -49,6 +49,13 @@ pub struct RuntimeMetadata {
     /// Scope selected by the caller that requested deletion.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delete_scope: Option<DeleteScope>,
+
+    /// Delete scope requested while another actor owns the deployment lock.
+    ///
+    /// The lock owner consumes this on its next reconcile and yields to
+    /// deletion without overwriting the queued delete request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending_delete_scope: Option<DeleteScope>,
 }
 
 /// Deployment state
@@ -89,7 +96,6 @@ pub struct DeploymentState {
     /// All actors (manager, push client, agent) check this before stepping.
     /// Mismatched versions produce a clear error instead of silent corruption.
     /// See docs/02-manager/10-deployment-protocol.md.
-    #[serde(default = "default_protocol_version")]
     pub protocol_version: u32,
 }
 
@@ -121,16 +127,22 @@ pub struct DeploymentStepResult {
     /// - `true`: Update lastHeartbeatAt (for successful health checks in Running state)
     #[serde(default, skip_serializing_if = "is_false")]
     pub update_heartbeat: bool,
+
+    /// Typed resource heartbeats emitted by controllers during this step.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub heartbeats: Vec<ResourceHeartbeat>,
 }
 
 pub(crate) fn is_false(b: &bool) -> bool {
     !*b
 }
 
-/// Current deployment protocol version.
-/// Bump when making incompatible changes to DeploymentState semantics.
-pub const DEPLOYMENT_PROTOCOL_VERSION: u32 = 1;
+/// Oldest deployment protocol version this binary can read.
+pub const MIN_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION: u32 = 1;
 
-fn default_protocol_version() -> u32 {
-    DEPLOYMENT_PROTOCOL_VERSION
-}
+/// Deployment protocol version this binary writes.
+/// Bump when making incompatible changes to DeploymentState semantics.
+pub const CURRENT_DEPLOYMENT_PROTOCOL_VERSION: u32 = 1;
+
+/// Backwards-compatible alias for older call sites.
+pub const DEPLOYMENT_PROTOCOL_VERSION: u32 = CURRENT_DEPLOYMENT_PROTOCOL_VERSION;

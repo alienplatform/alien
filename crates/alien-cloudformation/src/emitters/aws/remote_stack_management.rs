@@ -8,7 +8,8 @@ use crate::{
     emitter::CfEmitter,
     emitters::aws::{
         helpers::{
-            cf_from_json, required_logical_id, resource_config, tags, PARAM_MANAGING_ROLE_ARN,
+            cf_from_json, required_logical_id, resource_config, tags, uniquify_iam_statement_sids,
+            PARAM_MANAGING_ROLE_ARN,
         },
         service_account::permission_context,
     },
@@ -39,16 +40,13 @@ impl CfEmitter for AwsRemoteStackManagementEmitter {
             "AssumeRolePolicyDocument".to_string(),
             remote_management_trust_policy(),
         );
-        role.properties.insert(
-            "Policies".to_string(),
-            CfExpression::list([CfExpression::object([
-                ("PolicyName", CfExpression::from("alien-management-policy")),
-                ("PolicyDocument", remote_management_policy_document(ctx)?),
-            ])]),
-        );
         role.properties.insert("Tags".to_string(), tags(ctx));
 
-        Ok(vec![role])
+        let policy_documents = remote_management_policy_documents(ctx)?;
+        let mut resources = vec![role];
+        resources.extend(management_policy_resources(&role_id, policy_documents));
+
+        Ok(resources)
     }
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<CfExpression> {
@@ -99,7 +97,7 @@ fn remote_management_trust_policy() -> CfExpression {
     ])
 }
 
-fn remote_management_policy_document(ctx: &EmitContext<'_>) -> Result<CfExpression> {
+fn remote_management_policy_documents(ctx: &EmitContext<'_>) -> Result<Vec<CfExpression>> {
     let mut statements = Vec::new();
     let generator = AwsCloudFormationPermissionsGenerator::new();
     let context = permission_context();
@@ -136,6 +134,47 @@ fn remote_management_policy_document(ctx: &EmitContext<'_>) -> Result<CfExpressi
                 }
             }
         }
+
+        for (resource_id, permission_set_ref) in resource_scoped_permission_refs(profile) {
+            let Some(resource_entry) = ctx.stack.resources.get(resource_id) else {
+                continue;
+            };
+            let Some(permission_set) = permission_set_ref
+                .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+            else {
+                continue;
+            };
+            if permission_set.platforms.aws.is_none()
+                || !resource_scoped_aws_permission_applies(&permission_set.id, resource_entry)
+            {
+                continue;
+            }
+
+            let resource_context = context.clone().with_resource_name(resource_id.to_string());
+            let policy = generator
+                .generate_policy(&permission_set, BindingTarget::Resource, &resource_context)
+                .context(ErrorData::GenericError {
+                    message: "failed to generate AWS resource-scoped management IAM policy"
+                        .to_string(),
+                })?;
+            let policy_value = serde_json::to_value(policy).into_alien_error().context(
+                ErrorData::TemplateSerializationFailed {
+                    format: "CloudFormation IAM policy".to_string(),
+                    reason: "Failed to serialize IAM policy".to_string(),
+                },
+            )?;
+            let CfExpression::Object(mut policy_object) = cf_from_json(policy_value)? else {
+                return Err(AlienError::new(ErrorData::TemplateSerializationFailed {
+                    format: "CloudFormation IAM policy".to_string(),
+                    reason: "policy did not serialize to a JSON object".to_string(),
+                }));
+            };
+            if let Some(CfExpression::List(policy_statements)) =
+                policy_object.shift_remove("Statement")
+            {
+                statements.extend(policy_statements);
+            }
+        }
     }
 
     statements.push(CfExpression::object([
@@ -150,10 +189,85 @@ fn remote_management_policy_document(ctx: &EmitContext<'_>) -> Result<CfExpressi
         ),
     ]));
 
-    Ok(CfExpression::object([
+    chunk_policy_statements(uniquify_iam_statement_sids(statements))
+}
+
+fn policy_document(statements: Vec<CfExpression>) -> CfExpression {
+    CfExpression::object([
         ("Version", CfExpression::from("2012-10-17")),
         ("Statement", CfExpression::list(statements)),
-    ]))
+    ])
+}
+
+fn management_policy_resources(
+    role_id: &str,
+    policy_documents: Vec<CfExpression>,
+) -> Vec<CfResource> {
+    policy_documents
+        .into_iter()
+        .enumerate()
+        .map(|(index, policy_document)| {
+            let mut policy = CfResource::new(
+                format!("{role_id}ManagementPolicy{}", index + 1),
+                "AWS::IAM::ManagedPolicy".to_string(),
+            );
+            policy.properties.insert(
+                "Description".to_string(),
+                CfExpression::from("Application management permissions"),
+            );
+            policy
+                .properties
+                .insert("PolicyDocument".to_string(), policy_document);
+            policy.properties.insert(
+                "Roles".to_string(),
+                CfExpression::list([CfExpression::ref_(role_id)]),
+            );
+            policy.depends_on.push(role_id.to_string());
+            policy
+        })
+        .collect()
+}
+
+fn chunk_policy_statements(statements: Vec<CfExpression>) -> Result<Vec<CfExpression>> {
+    const MAX_MANAGED_POLICY_BYTES: usize = 5_500;
+
+    let mut chunks = Vec::new();
+    let mut current = Vec::new();
+
+    for statement in statements {
+        let mut candidate = current.clone();
+        candidate.push(statement.clone());
+        if policy_document_size(&candidate)? <= MAX_MANAGED_POLICY_BYTES {
+            current = candidate;
+            continue;
+        }
+
+        if current.is_empty() {
+            return Err(AlienError::new(ErrorData::GenericError {
+                message: "AWS management IAM statement is too large for a managed policy"
+                    .to_string(),
+            }));
+        }
+
+        chunks.push(policy_document(current));
+        current = vec![statement];
+    }
+
+    if !current.is_empty() {
+        chunks.push(policy_document(current));
+    }
+
+    Ok(chunks)
+}
+
+fn policy_document_size(statements: &[CfExpression]) -> Result<usize> {
+    serde_json::to_string(&policy_document(statements.to_vec()))
+        .into_alien_error()
+        .context(ErrorData::TemplateSerializationFailed {
+            format: "CloudFormation IAM policy".to_string(),
+            reason: "Failed to serialize IAM policy for size validation".to_string(),
+        })
+        .map(|policy| policy.len())
 }
 
 fn global_permission_refs(profile: &PermissionProfile) -> Vec<&PermissionSetReference> {
@@ -162,4 +276,25 @@ fn global_permission_refs(profile: &PermissionProfile) -> Vec<&PermissionSetRefe
         .get("*")
         .map(|refs| refs.iter().collect())
         .unwrap_or_default()
+}
+
+fn resource_scoped_permission_refs(
+    profile: &PermissionProfile,
+) -> Vec<(&str, &PermissionSetReference)> {
+    profile
+        .0
+        .iter()
+        .filter(|(scope, _)| scope.as_str() != "*")
+        .flat_map(|(resource_id, refs)| {
+            refs.iter()
+                .map(move |permission_set_ref| (resource_id.as_str(), permission_set_ref))
+        })
+        .collect()
+}
+
+fn resource_scoped_aws_permission_applies(
+    permission_set_id: &str,
+    _resource_entry: &alien_core::ResourceEntry,
+) -> bool {
+    permission_set_id == "kubernetes-public-endpoint/management"
 }

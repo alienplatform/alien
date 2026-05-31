@@ -11,7 +11,7 @@ import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 /**
  * Represents the target cloud platform.
  */
-export const GetManagerManagementConfigPlatformEnum = {
+export const GetManagerManagementConfigQueryParamPlatform = {
   Aws: "aws",
   Gcp: "gcp",
   Azure: "azure",
@@ -22,8 +22,8 @@ export const GetManagerManagementConfigPlatformEnum = {
 /**
  * Represents the target cloud platform.
  */
-export type GetManagerManagementConfigPlatformEnum = ClosedEnum<
-  typeof GetManagerManagementConfigPlatformEnum
+export type GetManagerManagementConfigQueryParamPlatform = ClosedEnum<
+  typeof GetManagerManagementConfigQueryParamPlatform
 >;
 
 export type GetManagerManagementConfigRequest = {
@@ -38,40 +38,36 @@ export type GetManagerManagementConfigRequest = {
   /**
    * Represents the target cloud platform.
    */
-  platform: GetManagerManagementConfigPlatformEnum;
+  platform: GetManagerManagementConfigQueryParamPlatform;
 };
 
-export type Kubernetes = {
+export type GetManagerManagementConfigKubernetes = {
   platform: "kubernetes";
 };
 
 /**
  * Azure management configuration extracted from stack settings
  */
-export type Azure = {
-  /**
-   * Management service principal object ID for local development fallback
-   */
-  managementPrincipalId?: string | null | undefined;
+export type GetManagerManagementConfigAzure = {
   /**
    * The managing Azure Tenant ID for cross-tenant access
    */
   managingTenantId: string;
   /**
-   * OIDC issuer URL for federated identity credential creation
+   * OIDC issuer URL trusted by the target-side managed identity.
    */
-  oidcIssuer?: string | null | undefined;
+  oidcIssuer: string;
   /**
-   * OIDC subject claim for federated identity credential creation
+   * OIDC subject claim trusted by the target-side managed identity.
    */
-  oidcSubject?: string | null | undefined;
+  oidcSubject: string;
   platform: "azure";
 };
 
 /**
  * GCP management configuration extracted from stack settings
  */
-export type Gcp = {
+export type GetManagerManagementConfigGcp = {
   /**
    * Service account email for management roles
    */
@@ -100,14 +96,15 @@ export type GetManagerManagementConfigAws = {
  */
 export type GetManagerManagementConfigResponse =
   | GetManagerManagementConfigAws
-  | Gcp
-  | Azure
-  | Kubernetes;
+  | GetManagerManagementConfigGcp
+  | GetManagerManagementConfigAzure
+  | GetManagerManagementConfigKubernetes;
 
 /** @internal */
-export const GetManagerManagementConfigPlatformEnum$outboundSchema: z.ZodEnum<
-  typeof GetManagerManagementConfigPlatformEnum
-> = z.enum(GetManagerManagementConfigPlatformEnum);
+export const GetManagerManagementConfigQueryParamPlatform$outboundSchema:
+  z.ZodEnum<typeof GetManagerManagementConfigQueryParamPlatform> = z.enum(
+    GetManagerManagementConfigQueryParamPlatform,
+  );
 
 /** @internal */
 export type GetManagerManagementConfigRequest$Outbound = {
@@ -123,7 +120,7 @@ export const GetManagerManagementConfigRequest$outboundSchema: z.ZodType<
 > = z.object({
   id: z.string(),
   workspace: z.string().optional(),
-  platform: GetManagerManagementConfigPlatformEnum$outboundSchema,
+  platform: GetManagerManagementConfigQueryParamPlatform$outboundSchema,
 });
 
 export function getManagerManagementConfigRequestToJSON(
@@ -137,53 +134,61 @@ export function getManagerManagementConfigRequestToJSON(
 }
 
 /** @internal */
-export const Kubernetes$inboundSchema: z.ZodType<Kubernetes, unknown> = z
-  .object({
-    platform: z.literal("kubernetes"),
-  });
+export const GetManagerManagementConfigKubernetes$inboundSchema: z.ZodType<
+  GetManagerManagementConfigKubernetes,
+  unknown
+> = z.object({
+  platform: z.literal("kubernetes"),
+});
 
-export function kubernetesFromJSON(
+export function getManagerManagementConfigKubernetesFromJSON(
   jsonString: string,
-): SafeParseResult<Kubernetes, SDKValidationError> {
+): SafeParseResult<GetManagerManagementConfigKubernetes, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Kubernetes$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Kubernetes' from JSON`,
+    (x) =>
+      GetManagerManagementConfigKubernetes$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetManagerManagementConfigKubernetes' from JSON`,
   );
 }
 
 /** @internal */
-export const Azure$inboundSchema: z.ZodType<Azure, unknown> = z.object({
-  managementPrincipalId: z.nullable(z.string()).optional(),
+export const GetManagerManagementConfigAzure$inboundSchema: z.ZodType<
+  GetManagerManagementConfigAzure,
+  unknown
+> = z.object({
   managingTenantId: z.string(),
-  oidcIssuer: z.nullable(z.string()).optional(),
-  oidcSubject: z.nullable(z.string()).optional(),
+  oidcIssuer: z.string(),
+  oidcSubject: z.string(),
   platform: z.literal("azure"),
 });
 
-export function azureFromJSON(
+export function getManagerManagementConfigAzureFromJSON(
   jsonString: string,
-): SafeParseResult<Azure, SDKValidationError> {
+): SafeParseResult<GetManagerManagementConfigAzure, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Azure$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Azure' from JSON`,
+    (x) => GetManagerManagementConfigAzure$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetManagerManagementConfigAzure' from JSON`,
   );
 }
 
 /** @internal */
-export const Gcp$inboundSchema: z.ZodType<Gcp, unknown> = z.object({
+export const GetManagerManagementConfigGcp$inboundSchema: z.ZodType<
+  GetManagerManagementConfigGcp,
+  unknown
+> = z.object({
   serviceAccountEmail: z.string(),
   platform: z.literal("gcp"),
 });
 
-export function gcpFromJSON(
+export function getManagerManagementConfigGcpFromJSON(
   jsonString: string,
-): SafeParseResult<Gcp, SDKValidationError> {
+): SafeParseResult<GetManagerManagementConfigGcp, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Gcp$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Gcp' from JSON`,
+    (x) => GetManagerManagementConfigGcp$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetManagerManagementConfigGcp' from JSON`,
   );
 }
 
@@ -212,9 +217,9 @@ export const GetManagerManagementConfigResponse$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => GetManagerManagementConfigAws$inboundSchema),
-  z.lazy(() => Gcp$inboundSchema),
-  z.lazy(() => Azure$inboundSchema),
-  z.lazy(() => Kubernetes$inboundSchema),
+  z.lazy(() => GetManagerManagementConfigGcp$inboundSchema),
+  z.lazy(() => GetManagerManagementConfigAzure$inboundSchema),
+  z.lazy(() => GetManagerManagementConfigKubernetes$inboundSchema),
 ]);
 
 export function getManagerManagementConfigResponseFromJSON(

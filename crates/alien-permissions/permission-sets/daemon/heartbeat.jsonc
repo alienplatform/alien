@@ -1,0 +1,5 @@
+{
+  "id": "daemon/heartbeat",
+  "description": "Allows readonly health checks for Daemon resources on Local and Kubernetes platforms",
+  "platforms": {}
+}

@@ -3,7 +3,7 @@
 //! Three modes:
 //!
 //! * `UseDefault` — emit nothing, controller falls back to default VPC.
-//! * `ByoVpcAws` — emit nothing, BYO IDs are passed via parameters.
+//! * `ByoVpcAws` — emit nothing; existing network IDs are passed via parameters.
 //! * `Create` — full topology: VPC, public + private subnets across 1–3
 //!   AZs, internet gateway, NAT gateway, route tables, default routes,
 //!   subnet associations, security group.
@@ -20,6 +20,8 @@ use crate::{
 };
 use alien_core::{import::EmitContext, ErrorData, Network, NetworkSettings, Result};
 use alien_error::AlienError;
+
+const CONDITION_NETWORK_MODE_CREATE: &str = "NetworkModeCreate";
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AwsNetworkEmitter;
@@ -44,25 +46,13 @@ impl CfEmitter for AwsNetworkEmitter {
         let network = resource_config::<Network>(ctx, Network::RESOURCE_TYPE)?;
         let import_data = match &network.settings {
             NetworkSettings::UseDefault => CfExpression::object([
-                ("vpcId", CfExpression::Null),
-                ("cidrBlock", CfExpression::Null),
-                ("internetGatewayId", CfExpression::Null),
-                ("natGatewayId", CfExpression::Null),
-                ("eipAllocationId", CfExpression::Null),
                 ("publicSubnetIds", CfExpression::list([])),
                 ("privateSubnetIds", CfExpression::list([])),
-                ("publicRouteTableId", CfExpression::Null),
-                ("privateRouteTableId", CfExpression::Null),
-                ("securityGroupId", CfExpression::Null),
                 ("availabilityZones", CfExpression::list([])),
                 ("isByoVpc", CfExpression::from(true)),
             ]),
             NetworkSettings::ByoVpcAws { .. } => CfExpression::object([
                 ("vpcId", CfExpression::ref_("VpcId")),
-                ("cidrBlock", CfExpression::Null),
-                ("internetGatewayId", CfExpression::Null),
-                ("natGatewayId", CfExpression::Null),
-                ("eipAllocationId", CfExpression::Null),
                 (
                     "publicSubnetIds",
                     CfExpression::ref_(PARAM_PUBLIC_SUBNET_IDS),
@@ -71,52 +61,79 @@ impl CfEmitter for AwsNetworkEmitter {
                     "privateSubnetIds",
                     CfExpression::ref_(PARAM_PRIVATE_SUBNET_IDS),
                 ),
-                ("publicRouteTableId", CfExpression::Null),
-                ("privateRouteTableId", CfExpression::Null),
                 (
                     "securityGroupId",
                     first_or_null(CfExpression::ref_(PARAM_SECURITY_GROUP_IDS)),
                 ),
-                ("availabilityZones", availability_zone_names()),
+                ("availabilityZones", CfExpression::list([])),
                 ("isByoVpc", CfExpression::from(true)),
             ]),
             NetworkSettings::Create { .. } => {
                 let prefix = required_logical_id(ctx)?;
-                CfExpression::object([
-                    ("vpcId", CfExpression::ref_(network_id(prefix, "Vpc"))),
-                    (
-                        "cidrBlock",
-                        CfExpression::get_att(network_id(prefix, "Vpc"), "CidrBlock"),
+                CfExpression::if_(
+                    CONDITION_NETWORK_MODE_CREATE,
+                    CfExpression::object([
+                        ("vpcId", CfExpression::ref_(network_id(prefix, "Vpc"))),
+                        (
+                            "cidrBlock",
+                            CfExpression::get_att(network_id(prefix, "Vpc"), "CidrBlock"),
+                        ),
+                        (
+                            "internetGatewayId",
+                            CfExpression::ref_(network_id(prefix, "InternetGateway")),
+                        ),
+                        (
+                            "natGatewayId",
+                            CfExpression::ref_(network_id(prefix, "NatGateway")),
+                        ),
+                        (
+                            "eipAllocationId",
+                            CfExpression::get_att(network_id(prefix, "NatEip"), "AllocationId"),
+                        ),
+                        ("publicSubnetIds", subnet_refs(prefix, "PublicSubnet")),
+                        ("privateSubnetIds", subnet_refs(prefix, "PrivateSubnet")),
+                        (
+                            "publicRouteTableId",
+                            CfExpression::ref_(network_id(prefix, "PublicRouteTable")),
+                        ),
+                        (
+                            "privateRouteTableId",
+                            CfExpression::ref_(network_id(prefix, "PrivateRouteTable")),
+                        ),
+                        (
+                            "securityGroupId",
+                            CfExpression::get_att(network_id(prefix, "SecurityGroup"), "GroupId"),
+                        ),
+                        ("availabilityZones", availability_zone_names()),
+                        ("isByoVpc", CfExpression::from(false)),
+                    ]),
+                    CfExpression::if_(
+                        "NetworkModeUseExisting",
+                        CfExpression::object([
+                            ("vpcId", CfExpression::ref_("VpcId")),
+                            (
+                                "publicSubnetIds",
+                                CfExpression::ref_(PARAM_PUBLIC_SUBNET_IDS),
+                            ),
+                            (
+                                "privateSubnetIds",
+                                CfExpression::ref_(PARAM_PRIVATE_SUBNET_IDS),
+                            ),
+                            (
+                                "securityGroupId",
+                                first_or_null(CfExpression::ref_(PARAM_SECURITY_GROUP_IDS)),
+                            ),
+                            ("availabilityZones", CfExpression::list([])),
+                            ("isByoVpc", CfExpression::from(true)),
+                        ]),
+                        CfExpression::object([
+                            ("publicSubnetIds", CfExpression::list([])),
+                            ("privateSubnetIds", CfExpression::list([])),
+                            ("availabilityZones", CfExpression::list([])),
+                            ("isByoVpc", CfExpression::from(true)),
+                        ]),
                     ),
-                    (
-                        "internetGatewayId",
-                        CfExpression::ref_(network_id(prefix, "InternetGateway")),
-                    ),
-                    (
-                        "natGatewayId",
-                        CfExpression::ref_(network_id(prefix, "NatGateway")),
-                    ),
-                    (
-                        "eipAllocationId",
-                        CfExpression::get_att(network_id(prefix, "NatEip"), "AllocationId"),
-                    ),
-                    ("publicSubnetIds", subnet_refs(prefix, "PublicSubnet")),
-                    ("privateSubnetIds", subnet_refs(prefix, "PrivateSubnet")),
-                    (
-                        "publicRouteTableId",
-                        CfExpression::ref_(network_id(prefix, "PublicRouteTable")),
-                    ),
-                    (
-                        "privateRouteTableId",
-                        CfExpression::ref_(network_id(prefix, "PrivateRouteTable")),
-                    ),
-                    (
-                        "securityGroupId",
-                        CfExpression::ref_(network_id(prefix, "SecurityGroup")),
-                    ),
-                    ("availabilityZones", availability_zone_names()),
-                    ("isByoVpc", CfExpression::from(false)),
-                ])
+                )
             }
             NetworkSettings::ByoVpcGcp { .. } | NetworkSettings::ByoVnetAzure { .. } => {
                 unreachable!("validated in emit_resources")
@@ -332,6 +349,12 @@ fn created_network_resources(ctx: &EmitContext<'_>) -> Result<Vec<CfResource>> {
         .properties
         .insert("Tags".to_string(), tags(ctx));
     resources.push(security_group);
+
+    for resource in &mut resources {
+        if resource.condition.is_none() {
+            resource.condition = Some(CONDITION_NETWORK_MODE_CREATE.to_string());
+        }
+    }
 
     Ok(resources)
 }

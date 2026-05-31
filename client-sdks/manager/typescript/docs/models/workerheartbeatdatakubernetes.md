@@ -1,0 +1,48 @@
+# WorkerHeartbeatDataKubernetes
+
+## Example Usage
+
+```typescript
+import { WorkerHeartbeatDataKubernetes } from "@alienplatform/manager-api/models";
+
+let value: WorkerHeartbeatDataKubernetes = {
+  events: [
+    {
+      message: "<value>",
+      reason: "<value>",
+    },
+  ],
+  name: "<value>",
+  namespace: "<value>",
+  pods: [],
+  replicas: {},
+  status: {
+    collectionIssues: [],
+    health: "unknown",
+    lifecycle: "running",
+    partial: false,
+    stale: true,
+  },
+  triggerCount: 374516,
+  workloadKind: "daemonSet",
+  backend: "kubernetes",
+};
+```
+
+## Fields
+
+| Field                                                                                  | Type                                                                                   | Required                                                                               | Description                                                                            |
+| -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `cpu`                                                                                  | [models.MetricSample](../models/metricsample.md)                                       | :heavy_minus_sign:                                                                     | N/A                                                                                    |
+| `events`                                                                               | [models.KubernetesEventSnapshot](../models/kuberneteseventsnapshot.md)[]               | :heavy_check_mark:                                                                     | N/A                                                                                    |
+| `memory`                                                                               | [models.MetricSample](../models/metricsample.md)                                       | :heavy_minus_sign:                                                                     | N/A                                                                                    |
+| `name`                                                                                 | *string*                                                                               | :heavy_check_mark:                                                                     | N/A                                                                                    |
+| `namespace`                                                                            | *string*                                                                               | :heavy_check_mark:                                                                     | N/A                                                                                    |
+| `pods`                                                                                 | [models.KubernetesPodRuntimeUnitStatus](../models/kubernetespodruntimeunitstatus.md)[] | :heavy_check_mark:                                                                     | N/A                                                                                    |
+| `replicas`                                                                             | [models.WorkloadReplicaStatus](../models/workloadreplicastatus.md)                     | :heavy_check_mark:                                                                     | N/A                                                                                    |
+| `restarts`                                                                             | *number*                                                                               | :heavy_minus_sign:                                                                     | N/A                                                                                    |
+| `status`                                                                               | [models.WorkloadHeartbeatStatus](../models/workloadheartbeatstatus.md)                 | :heavy_check_mark:                                                                     | N/A                                                                                    |
+| `triggerCount`                                                                         | *number*                                                                               | :heavy_check_mark:                                                                     | N/A                                                                                    |
+| `workload`                                                                             | [models.KubernetesWorkloadStatus](../models/kubernetesworkloadstatus.md)               | :heavy_minus_sign:                                                                     | N/A                                                                                    |
+| `workloadKind`                                                                         | [models.KubernetesWorkloadKind](../models/kubernetesworkloadkind.md)                   | :heavy_check_mark:                                                                     | N/A                                                                                    |
+| `backend`                                                                              | *"kubernetes"*                                                                         | :heavy_check_mark:                                                                     | N/A                                                                                    |

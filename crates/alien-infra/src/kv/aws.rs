@@ -1,25 +1,26 @@
-use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
-use std::any::Any;
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
-use crate::core::{ResourceController, ResourceControllerContext, ResourceControllerStepResult};
+use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_aws_clients::dynamodb::{
     attribute_types, billing_modes, key_types, table_status, AttributeDefinition,
-    CreateTableRequest, DeleteTableRequest, DescribeTableRequest, DynamoDbApi, DynamoDbClient,
-    KeySchemaElement, Tag, TimeToLiveSpecification, UpdateTimeToLiveRequest,
+    CreateTableRequest, DeleteTableRequest, DescribeTableRequest, DescribeTimeToLiveRequest,
+    KeySchemaElement, TableDescription, Tag, TimeToLiveDescription, TimeToLiveSpecification,
+    UpdateTimeToLiveRequest,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    standard_resource_tags, Kv, KvOutputs, Resource, ResourceDefinition, ResourceOutputs,
+    standard_resource_tags, AwsDynamoDbKeySchemaElement, AwsDynamoDbKvHeartbeatData,
+    HeartbeatBackend, HeartbeatCollectionIssue, HeartbeatCollectionIssueReason,
+    HeartbeatIssueSeverity, Kv, KvHeartbeatData, KvHeartbeatStatus, KvOutputs, ObservedHealth,
+    Platform, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
     ResourceStatus,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
-use alien_macros::{controller, flow_entry, handler, terminal_state};
+use alien_macros::controller;
+use chrono::Utc;
 
 /// Generates the full, prefixed AWS DynamoDB table name.
 fn get_aws_table_name(prefix: &str, name: &str) -> String {
@@ -312,6 +313,31 @@ impl AwsKvController {
                         ),
                     }));
                 }
+
+                let (ttl_description, ttl_issue) = match client
+                    .describe_time_to_live(
+                        DescribeTimeToLiveRequest::builder()
+                            .table_name(table_name.clone())
+                            .build(),
+                    )
+                    .await
+                {
+                    Ok(output) => (output.time_to_live_description, None),
+                    Err(e) => (
+                        None,
+                        Some(HeartbeatCollectionIssue {
+                            source: "ttl".to_string(),
+                            reason: HeartbeatCollectionIssueReason::CollectionFailed,
+                            severity: HeartbeatIssueSeverity::Warning,
+                            message: format!(
+                                "Failed to describe DynamoDB TTL metadata for table '{}': {}",
+                                table_name, e
+                            ),
+                        }),
+                    ),
+                };
+
+                emit_aws_dynamodb_kv_heartbeat(ctx, &config.id, table, ttl_description, ttl_issue);
             }
             Err(e)
                 if matches!(
@@ -569,4 +595,105 @@ impl AwsKvController {
             _internal_stay_count: None,
         }
     }
+}
+
+fn emit_aws_dynamodb_kv_heartbeat(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+    table: TableDescription,
+    ttl_description: Option<TimeToLiveDescription>,
+    ttl_issue: Option<HeartbeatCollectionIssue>,
+) {
+    let table_name = table
+        .table_name
+        .clone()
+        .unwrap_or_else(|| resource_id.to_string());
+    let table_status = table.table_status.clone();
+    let item_count = nonnegative_i64_to_u64(table.item_count);
+    let table_size_bytes = nonnegative_i64_to_u64(table.table_size_bytes);
+    let collection_issues = ttl_issue.into_iter().collect::<Vec<_>>();
+    let partial = !collection_issues.is_empty();
+
+    ctx.emit_heartbeat(ResourceHeartbeat {
+        deployment_id: None,
+        resource_id: resource_id.to_string(),
+        resource_type: Kv::RESOURCE_TYPE,
+        controller_platform: Platform::Aws,
+        backend: HeartbeatBackend::Aws,
+        observed_at: Utc::now(),
+        data: ResourceHeartbeatData::Kv(KvHeartbeatData::AwsDynamoDb(AwsDynamoDbKvHeartbeatData {
+            status: KvHeartbeatStatus {
+                health: ObservedHealth::Healthy,
+                lifecycle: ProviderLifecycleState::Running,
+                message: table_status
+                    .as_ref()
+                    .map(|status| format!("DynamoDB table status is {}", status)),
+                stale: false,
+                partial,
+                collection_issues,
+            },
+            name: table_name,
+            region: region_from_table_arn(table.table_arn.as_deref()),
+            table_arn: table.table_arn,
+            table_status,
+            billing_mode: table
+                .billing_mode_summary
+                .and_then(|summary| summary.billing_mode),
+            key_schema: table
+                .key_schema
+                .unwrap_or_default()
+                .into_iter()
+                .map(|key| AwsDynamoDbKeySchemaElement {
+                    attribute_name: key.attribute_name,
+                    key_type: key.key_type,
+                })
+                .collect(),
+            global_secondary_index_count: len_to_u32(&table.global_secondary_indexes),
+            local_secondary_index_count: len_to_u32(&table.local_secondary_indexes),
+            item_count,
+            table_size_bytes,
+            stream_enabled: table
+                .stream_specification
+                .as_ref()
+                .and_then(|stream| stream.stream_enabled),
+            stream_view_type: table
+                .stream_specification
+                .and_then(|stream| stream.stream_view_type),
+            ttl_status: ttl_description
+                .as_ref()
+                .and_then(|ttl| ttl.time_to_live_status.clone()),
+            ttl_attribute_name: ttl_description.and_then(|ttl| ttl.attribute_name),
+            deletion_protection_enabled: table.deletion_protection_enabled,
+            sse_status: table
+                .sse_description
+                .as_ref()
+                .and_then(|sse| sse.status.clone()),
+            sse_type: table.sse_description.and_then(|sse| sse.sse_type),
+            table_class: table
+                .table_class_summary
+                .and_then(|summary| summary.table_class),
+            replica_count: len_to_u32(&table.replicas),
+            restore_in_progress: table
+                .restore_summary
+                .and_then(|summary| summary.restore_in_progress),
+        })),
+        raw: vec![],
+    });
+}
+
+fn nonnegative_i64_to_u64(value: Option<i64>) -> Option<u64> {
+    value.and_then(|value| u64::try_from(value).ok())
+}
+
+fn len_to_u32<T>(items: &Option<Vec<T>>) -> Option<u32> {
+    items
+        .as_ref()
+        .and_then(|items| u32::try_from(items.len()).ok())
+}
+
+fn region_from_table_arn(table_arn: Option<&str>) -> Option<String> {
+    table_arn
+        .and_then(|arn| arn.split(':').nth(3))
+        .filter(|region| !region.is_empty())
+        .map(ToString::to_string)
 }

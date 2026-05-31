@@ -3,7 +3,7 @@ import * as alien from "@alienplatform/core"
 const credentials = new alien.Vault("credentials").build()
 const cache = new alien.Kv("cache").build()
 
-const connector = new alien.Function("connector")
+const connector = new alien.Worker("connector")
   .code({ type: "source", src: "./", toolchain: { type: "typescript" } })
   .commandsEnabled(true)
   .ingress("private")

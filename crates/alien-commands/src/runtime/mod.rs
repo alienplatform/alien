@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use alien_core::{MessagePayload, QueueMessage};
 use alien_error::{AlienError, Context, IntoAlienError};
-use tracing::{debug, info};
+use tracing::debug;
 
 use crate::{
     error::{ErrorData, Result},

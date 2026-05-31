@@ -27,6 +27,68 @@ pub use azure_permissions_helper::*;
 mod resource_permissions_helper;
 pub use resource_permissions_helper::*;
 
+use std::collections::BTreeMap;
+
+use alien_core::Platform;
+
+pub fn kubernetes_runtime_pod_labels(
+    ctx: &ResourceControllerContext<'_>,
+    labels: BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    kubernetes_runtime_pod_labels_for_platform(
+        ctx.platform,
+        ctx.deployment_config.base_platform,
+        labels,
+    )
+}
+
+fn kubernetes_runtime_pod_labels_for_platform(
+    platform: Platform,
+    base_platform: Option<Platform>,
+    mut labels: BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    if platform == Platform::Kubernetes && base_platform == Some(Platform::Azure) {
+        labels.insert(
+            "azure.workload.identity/use".to_string(),
+            "true".to_string(),
+        );
+    }
+    labels
+}
+
+#[cfg(test)]
+mod kubernetes_runtime_pod_label_tests {
+    use super::*;
+
+    #[test]
+    fn azure_backed_kubernetes_pods_get_workload_identity_label() {
+        let labels = kubernetes_runtime_pod_labels_for_platform(
+            Platform::Kubernetes,
+            Some(Platform::Azure),
+            BTreeMap::from([("app".to_string(), "worker".to_string())]),
+        );
+
+        assert_eq!(
+            labels
+                .get("azure.workload.identity/use")
+                .map(String::as_str),
+            Some("true")
+        );
+        assert_eq!(labels.get("app").map(String::as_str), Some("worker"));
+    }
+
+    #[test]
+    fn non_azure_kubernetes_pods_do_not_get_azure_workload_identity_label() {
+        let labels = kubernetes_runtime_pod_labels_for_platform(
+            Platform::Kubernetes,
+            Some(Platform::Gcp),
+            BTreeMap::new(),
+        );
+
+        assert!(!labels.contains_key("azure.workload.identity/use"));
+    }
+}
+
 // Test utilities
 #[cfg(any(feature = "test-utils", doc, test))]
 pub mod controller_test;

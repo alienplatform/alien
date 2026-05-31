@@ -5,7 +5,7 @@
     "gcp": [
       {
         "grant": {
-          "permissions": ["serviceusage.services.get"]
+          "predefinedRoles": ["roles/serviceusage.serviceUsageViewer"]
         },
         "binding": {
           "stack": {

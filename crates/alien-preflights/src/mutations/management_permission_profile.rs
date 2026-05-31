@@ -2,8 +2,10 @@ use crate::error::Result;
 use crate::StackMutation;
 use alien_core::permissions::{ManagementPermissions, PermissionProfile, PermissionSetReference};
 use alien_core::{
-    ownership_policy_for_resource_type, DeploymentConfig, Function, Platform, ResourceLifecycle,
-    Stack, StackState,
+    ownership_policy_for_resource_type, Container, DeploymentConfig, ExposeProtocol, Ingress,
+    KubernetesCertificateMode, KubernetesCluster, KubernetesExposureSettings,
+    KubernetesHeartbeatMode, KubernetesIngressRouteProfile, KubernetesRouteProfile,
+    KubernetesRouteProviderOptions, Platform, ResourceLifecycle, Stack, StackState, Worker,
 };
 use alien_permissions::get_permission_set;
 use indexmap::IndexMap;
@@ -100,14 +102,11 @@ fn generate_auto_management_profile(
 ) -> Result<Option<PermissionProfile>> {
     // Generate management permission set IDs based on stack resources
     let mut permission_set_ids = BTreeSet::new();
+    let mut resource_permission_set_ids: IndexMap<String, BTreeSet<String>> = IndexMap::new();
     let platform = stack_state.platform;
 
-    if platform == Platform::Aws {
-        permission_set_ids.insert("aws/tag-tamper-protection".to_string());
-    }
-
     // Iterate through all resources in the stack to determine required management permissions
-    for (_, resource_entry) in stack.resources() {
+    for (resource_id, resource_entry) in stack.resources() {
         let resource_type_value = resource_entry.config.resource_type();
         let resource_type = resource_type_value.0.as_ref();
         let policy = ownership_policy_for_resource_type(resource_type);
@@ -131,7 +130,13 @@ fn generate_auto_management_profile(
         // Add heartbeat permissions if heartbeat is enabled (Auto or RequiresApproval)
         // Disabled means no infrastructure/IAM permissions at all
         if config.stack_settings.heartbeats.is_enabled() {
-            permission_set_ids.insert(format!("{}/heartbeat", resource_type));
+            add_cloud_heartbeat_permission(
+                resource_id,
+                resource_type,
+                resource_entry,
+                &mut permission_set_ids,
+                &mut resource_permission_set_ids,
+            );
         }
 
         // Add telemetry permissions if telemetry is enabled (Auto or RequiresApproval)
@@ -140,56 +145,162 @@ fn generate_auto_management_profile(
             permission_set_ids.insert(format!("{}/telemetry", resource_type));
         }
 
-        // Add commands-specific permissions for functions with commands_enabled = true
-        if resource_type == "function" {
-            if let Some(function) = resource_entry.config.downcast_ref::<Function>() {
-                if function.commands_enabled {
+        // Add command dispatch permissions for workers with commands_enabled = true.
+        if resource_type == "worker" {
+            if let Some(worker) = resource_entry.config.downcast_ref::<Worker>() {
+                if worker.commands_enabled {
                     match platform {
-                        Platform::Aws => {
-                            // On AWS: function/invoke for Lambda InvokeFunction API
-                            permission_set_ids.insert("function/invoke".to_string());
-                        }
-                        Platform::Gcp | Platform::Azure => {
-                            // On GCP/Azure: queue/data-write for Pub/Sub and Service Bus
-                            permission_set_ids.insert("queue/data-write".to_string());
+                        Platform::Aws | Platform::Gcp | Platform::Azure => {
+                            // Preflights author the explicit command dispatch grant for
+                            // this concrete worker. Each cloud maps it to that worker's
+                            // platform command transport.
+                            resource_permission_set_ids
+                                .entry(resource_id.clone())
+                                .or_default()
+                                .insert("worker/dispatch-command".to_string());
                         }
                         _ => {
-                            // Other platforms like Kubernetes and Local use HTTP polling, no additional permissions needed
+                            // Other platforms like Kubernetes and Local use HTTP polling.
                         }
                     }
                 }
             }
         }
-    }
 
-    // Only create management permissions if there are resources that need management
-    if permission_set_ids.is_empty() {
-        return Ok(None);
-    }
-
-    // Validate permission sets exist in registry and filter out missing ones
-    let mut valid_permission_refs = Vec::new();
-    for permission_set_id in permission_set_ids {
-        if get_permission_set(&permission_set_id).is_some() {
-            valid_permission_refs.push(PermissionSetReference::from_name(permission_set_id));
-        } else {
-            // Log warning but continue - allows system to work even if some permission sets are missing
-            tracing::debug!(
-                permission_set_id = %permission_set_id,
-                "Management permission set not found in registry, skipping"
-            );
+        if platform == Platform::Kubernetes
+            && kubernetes_exposure_needs_acm_import(config)
+            && resource_needs_kubernetes_public_endpoint(resource_entry)
+        {
+            resource_permission_set_ids
+                .entry(resource_id.clone())
+                .or_default()
+                .insert("kubernetes-public-endpoint/management".to_string());
         }
     }
 
-    if valid_permission_refs.is_empty() {
+    // Only create management permissions if there are resources that need management
+    if permission_set_ids.is_empty() && resource_permission_set_ids.is_empty() {
         return Ok(None);
     }
 
-    // Create the management permission profile with global scope
+    fn resolve_permission_refs(
+        permission_set_ids: BTreeSet<String>,
+    ) -> Vec<PermissionSetReference> {
+        let mut valid_permission_refs = Vec::new();
+        for permission_set_id in permission_set_ids {
+            if get_permission_set(&permission_set_id).is_some() {
+                valid_permission_refs.push(PermissionSetReference::from_name(permission_set_id));
+            } else {
+                // Log warning but continue - allows system to work even if some permission sets are missing
+                tracing::debug!(
+                    permission_set_id = %permission_set_id,
+                    "Management permission set not found in registry, skipping"
+                );
+            }
+        }
+        valid_permission_refs
+    }
+
+    // Validate permission sets exist in registry and filter out missing ones
+    let valid_permission_refs = resolve_permission_refs(permission_set_ids);
+
+    // Create the management permission profile. Auto lifecycle permissions are
+    // wildcard-scoped. Permissions that address imported/existing physical
+    // resources, such as KubernetesCluster cloud metadata heartbeats, are scoped
+    // to the concrete resource so setup can use its actual provider identity.
     let mut management_permissions = IndexMap::new();
-    management_permissions.insert("*".to_string(), valid_permission_refs);
+    if !valid_permission_refs.is_empty() {
+        management_permissions.insert("*".to_string(), valid_permission_refs);
+    }
+
+    for (resource_id, permission_set_ids) in resource_permission_set_ids {
+        let valid_resource_refs = resolve_permission_refs(permission_set_ids);
+        if !valid_resource_refs.is_empty() {
+            management_permissions.insert(resource_id, valid_resource_refs);
+        }
+    }
+
+    if management_permissions.is_empty() {
+        return Ok(None);
+    }
 
     Ok(Some(PermissionProfile(management_permissions)))
+}
+
+fn kubernetes_exposure_needs_acm_import(config: &DeploymentConfig) -> bool {
+    let Some(KubernetesExposureSettings::Generated { route, certificate }) = config
+        .stack_settings
+        .kubernetes
+        .as_ref()
+        .and_then(|settings| settings.exposure.as_ref())
+    else {
+        return false;
+    };
+
+    matches!(
+        certificate,
+        KubernetesCertificateMode::ManagedAcmImport { .. }
+    ) && matches!(
+        route,
+        KubernetesRouteProfile::Ingress(KubernetesIngressRouteProfile {
+            provider: Some(KubernetesRouteProviderOptions::AwsAlb { .. }),
+            ..
+        })
+    )
+}
+
+fn resource_needs_kubernetes_public_endpoint(resource_entry: &alien_core::ResourceEntry) -> bool {
+    resource_entry
+        .config
+        .downcast_ref::<Worker>()
+        .is_some_and(|worker| worker.ingress == Ingress::Public)
+        || resource_entry
+            .config
+            .downcast_ref::<Container>()
+            .is_some_and(|container| {
+                container
+                    .ports
+                    .iter()
+                    .any(|port| port.expose == Some(ExposeProtocol::Http))
+            })
+}
+
+fn resource_needs_cloud_heartbeat_permission(
+    resource_type: &str,
+    resource_entry: &alien_core::ResourceEntry,
+) -> bool {
+    if resource_type != KubernetesCluster::RESOURCE_TYPE.as_ref() {
+        return true;
+    }
+
+    resource_entry
+        .config
+        .downcast_ref::<KubernetesCluster>()
+        .is_some_and(|cluster| {
+            cluster.heartbeat_mode == KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata
+        })
+}
+
+fn add_cloud_heartbeat_permission(
+    resource_id: &str,
+    resource_type: &str,
+    resource_entry: &alien_core::ResourceEntry,
+    permission_set_ids: &mut BTreeSet<String>,
+    resource_permission_set_ids: &mut IndexMap<String, BTreeSet<String>>,
+) {
+    if !resource_needs_cloud_heartbeat_permission(resource_type, resource_entry) {
+        return;
+    }
+
+    let permission_set_id = format!("{}/heartbeat", resource_type);
+    if resource_type == KubernetesCluster::RESOURCE_TYPE.as_ref() {
+        resource_permission_set_ids
+            .entry(resource_id.to_string())
+            .or_default()
+            .insert(permission_set_id);
+    } else {
+        permission_set_ids.insert(permission_set_id);
+    }
 }
 
 #[cfg(test)]
@@ -197,10 +308,13 @@ mod tests {
     use super::*;
     use alien_core::permissions::{ManagementPermissions, PermissionsConfig};
     use alien_core::{
-        CapacityGroup, Container, ContainerCluster, ContainerCode, DeploymentModel,
-        EnvironmentVariablesSnapshot, ExternalBindings, Function, FunctionCode, HeartbeatsMode,
-        ResourceEntry, ResourceLifecycle, ResourceSpec, StackSettings, StackState, Storage,
-        TelemetryMode,
+        ArtifactRegistry, CapacityGroup, ComputeCluster, Container, ContainerCode, DeploymentModel,
+        EnvironmentVariablesSnapshot, ExternalBindings, HeartbeatsMode, Ingress,
+        KubernetesCertificateMode, KubernetesCluster, KubernetesClusterOwnership,
+        KubernetesClusterProvider, KubernetesExposureSettings, KubernetesHeartbeatMode,
+        KubernetesIngressRouteProfile, KubernetesRouteProfile, KubernetesRouteProviderOptions,
+        KubernetesSettings, ResourceEntry, ResourceLifecycle, ResourceSpec, StackSettings,
+        StackState, Storage, TelemetryMode, Worker, WorkerCode,
     };
 
     fn empty_env_snapshot() -> EnvironmentVariablesSnapshot {
@@ -211,10 +325,56 @@ mod tests {
         }
     }
 
+    fn kubernetes_generated_aws_alb_acm_settings() -> StackSettings {
+        StackSettings {
+            kubernetes: Some(KubernetesSettings {
+                cluster: None,
+                exposure: Some(KubernetesExposureSettings::Generated {
+                    route: aws_alb_route_profile(),
+                    certificate: KubernetesCertificateMode::ManagedAcmImport {
+                        region: None,
+                        tags: Default::default(),
+                    },
+                }),
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn kubernetes_custom_aws_alb_byo_acm_settings() -> StackSettings {
+        StackSettings {
+            kubernetes: Some(KubernetesSettings {
+                cluster: None,
+                exposure: Some(KubernetesExposureSettings::Custom {
+                    domain: "api.example.com".to_string(),
+                    route: aws_alb_route_profile(),
+                    certificate: KubernetesCertificateMode::AwsAcmArn {
+                        certificate_arn: "arn:aws:acm:us-east-1:123456789012:certificate/customer"
+                            .to_string(),
+                    },
+                }),
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn aws_alb_route_profile() -> KubernetesRouteProfile {
+        KubernetesRouteProfile::Ingress(KubernetesIngressRouteProfile {
+            ingress_class_name: "alb".to_string(),
+            provider: Some(KubernetesRouteProviderOptions::AwsAlb {
+                scheme: "internet-facing".to_string(),
+                target_type: "ip".to_string(),
+                ip_address_type: None,
+                subnet_ids: Vec::new(),
+            }),
+            ..Default::default()
+        })
+    }
+
     #[tokio::test]
     async fn test_auto_management_profile_generation() {
-        let function = Function::new("test-function".to_string())
-            .code(FunctionCode::Image {
+        let worker = Worker::new("test-worker".to_string())
+            .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
             })
             .permissions("test".to_string())
@@ -223,9 +383,9 @@ mod tests {
 
         let mut resources = IndexMap::new();
         resources.insert(
-            "test-function".to_string(),
+            "test-worker".to_string(),
             ResourceEntry {
-                config: alien_core::Resource::new(function),
+                config: alien_core::Resource::new(worker),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
@@ -267,24 +427,178 @@ mod tests {
                 assert!(profile.0.contains_key("*"));
                 let global_permissions = profile.0.get("*").unwrap();
 
-                // Live function gets provision; storage is frozen so no management.
+                // Live worker gets provision; storage is frozen so no management.
                 let permission_names: Vec<String> = global_permissions
                     .iter()
                     .map(|perm_ref| perm_ref.id().to_string())
                     .collect();
 
-                assert!(permission_names.contains(&"function/provision".to_string()));
-                assert!(!permission_names.contains(&"function/management".to_string()));
+                assert!(permission_names.contains(&"worker/provision".to_string()));
+                assert!(!permission_names.contains(&"worker/management".to_string()));
                 assert!(!permission_names.contains(&"storage/management".to_string()));
+                assert!(!permission_names.contains(&"aws/tag-tamper-protection".to_string()));
             }
             _ => panic!("Expected Extend management permissions"),
         }
     }
 
     #[tokio::test]
+    async fn kubernetes_cluster_cloud_metadata_heartbeat_is_explicit() {
+        let cluster = KubernetesCluster::new("kubernetes".to_string())
+            .provider(KubernetesClusterProvider::Eks)
+            .ownership(KubernetesClusterOwnership::Managed)
+            .namespace("default".to_string())
+            .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+            .build();
+
+        let stack = Stack::new("test-stack".to_string())
+            .add(cluster, ResourceLifecycle::Frozen)
+            .management(ManagementPermissions::Auto)
+            .build();
+        let stack_state = StackState::new(Platform::Kubernetes);
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+
+        let result_stack = ManagementPermissionProfileMutation
+            .mutate(stack, &stack_state, &config)
+            .await
+            .unwrap();
+
+        let ManagementPermissions::Extend(profile) = result_stack.management() else {
+            panic!("Expected Extend management permissions");
+        };
+        assert!(
+            !profile.0.contains_key("*"),
+            "KubernetesCluster heartbeat should be resource-scoped because existing clusters do not necessarily use the deployment prefix"
+        );
+        let permission_names: Vec<String> = profile
+            .0
+            .get("kubernetes")
+            .unwrap()
+            .iter()
+            .map(|perm_ref| perm_ref.id().to_string())
+            .collect();
+        assert!(permission_names.contains(&"kubernetes-cluster/heartbeat".to_string()));
+        assert!(!permission_names.contains(&"compute-cluster/heartbeat".to_string()));
+    }
+
+    #[tokio::test]
+    async fn kubernetes_api_only_heartbeat_gets_no_cloud_metadata_permission() {
+        let cluster = KubernetesCluster::new("kubernetes".to_string())
+            .provider(KubernetesClusterProvider::Generic)
+            .ownership(KubernetesClusterOwnership::External)
+            .namespace("default".to_string())
+            .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApi)
+            .build();
+
+        let stack = Stack::new("test-stack".to_string())
+            .add(cluster, ResourceLifecycle::Frozen)
+            .management(ManagementPermissions::Auto)
+            .build();
+        let stack_state = StackState::new(Platform::Kubernetes);
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+
+        let result_stack = ManagementPermissionProfileMutation
+            .mutate(stack, &stack_state, &config)
+            .await
+            .unwrap();
+
+        assert!(
+            result_stack.management().profile().is_none(),
+            "API-only Kubernetes heartbeat should not author cloud IAM permissions"
+        );
+    }
+
+    #[tokio::test]
+    async fn kubernetes_generated_aws_alb_public_worker_gets_acm_permission() {
+        let worker = Worker::new("api".to_string())
+            .code(WorkerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .permissions("test".to_string())
+            .ingress(Ingress::Public)
+            .build();
+
+        let stack = Stack::new("test-stack".to_string())
+            .add(worker, ResourceLifecycle::Live)
+            .management(ManagementPermissions::Auto)
+            .build();
+        let stack_state = StackState::new(Platform::Kubernetes);
+        let config = DeploymentConfig::builder()
+            .stack_settings(kubernetes_generated_aws_alb_acm_settings())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+
+        let result_stack = ManagementPermissionProfileMutation
+            .mutate(stack, &stack_state, &config)
+            .await
+            .unwrap();
+
+        let ManagementPermissions::Extend(profile) = result_stack.management() else {
+            panic!("Expected Extend management permissions");
+        };
+        let permission_names: Vec<String> = profile
+            .0
+            .get("api")
+            .unwrap()
+            .iter()
+            .map(|perm_ref| perm_ref.id().to_string())
+            .collect();
+
+        assert!(permission_names.contains(&"kubernetes-public-endpoint/management".to_string()));
+    }
+
+    #[tokio::test]
+    async fn kubernetes_byo_acm_public_worker_gets_no_managed_acm_permission() {
+        let worker = Worker::new("api".to_string())
+            .code(WorkerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .permissions("test".to_string())
+            .ingress(Ingress::Public)
+            .build();
+
+        let stack = Stack::new("test-stack".to_string())
+            .add(worker, ResourceLifecycle::Live)
+            .management(ManagementPermissions::Auto)
+            .build();
+        let stack_state = StackState::new(Platform::Kubernetes);
+        let config = DeploymentConfig::builder()
+            .stack_settings(kubernetes_custom_aws_alb_byo_acm_settings())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+
+        let result_stack = ManagementPermissionProfileMutation
+            .mutate(stack, &stack_state, &config)
+            .await
+            .unwrap();
+
+        let ManagementPermissions::Extend(profile) = result_stack.management() else {
+            panic!("Expected Extend management permissions");
+        };
+        assert!(
+            !profile.0.contains_key("api"),
+            "BYO ACM should not add Kubernetes managed ACM permissions"
+        );
+    }
+
+    #[tokio::test]
     async fn test_extend_management_profile_merge() {
-        let function = Function::new("test-function".to_string())
-            .code(FunctionCode::Image {
+        let worker = Worker::new("test-worker".to_string())
+            .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
             })
             .permissions("test".to_string())
@@ -292,9 +606,9 @@ mod tests {
 
         let mut resources = IndexMap::new();
         resources.insert(
-            "test-function".to_string(),
+            "test-worker".to_string(),
             ResourceEntry {
-                config: alien_core::Resource::new(function),
+                config: alien_core::Resource::new(worker),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
@@ -334,8 +648,8 @@ mod tests {
                     .collect();
 
                 // Should have auto-generated live provision and extended storage/data-write.
-                assert!(permission_names.contains(&"function/provision".to_string()));
-                assert!(!permission_names.contains(&"function/management".to_string()));
+                assert!(permission_names.contains(&"worker/provision".to_string()));
+                assert!(!permission_names.contains(&"worker/management".to_string()));
                 assert!(permission_names.contains(&"storage/data-write".to_string()));
             }
             _ => panic!("Expected Extend management permissions"),
@@ -344,8 +658,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_override_management_profile_unchanged() {
-        let function = Function::new("test-function".to_string())
-            .code(FunctionCode::Image {
+        let worker = Worker::new("test-worker".to_string())
+            .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
             })
             .permissions("test".to_string())
@@ -353,9 +667,9 @@ mod tests {
 
         let mut resources = IndexMap::new();
         resources.insert(
-            "test-function".to_string(),
+            "test-worker".to_string(),
             ResourceEntry {
-                config: alien_core::Resource::new(function),
+                config: alien_core::Resource::new(worker),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
@@ -364,7 +678,7 @@ mod tests {
 
         // Create an override profile
         let override_profile =
-            PermissionProfile::new().global(["storage/management", "function/management"]);
+            PermissionProfile::new().global(["storage/management", "worker/management"]);
 
         let stack = Stack {
             id: "test-stack".to_string(),
@@ -398,9 +712,9 @@ mod tests {
                     .collect();
 
                 assert!(permission_names.contains(&"storage/management".to_string()));
-                assert!(permission_names.contains(&"function/management".to_string()));
-                // Should NOT have auto-generated function/provision
-                assert!(!permission_names.contains(&"function/provision".to_string()));
+                assert!(permission_names.contains(&"worker/management".to_string()));
+                // Should NOT have auto-generated worker/provision
+                assert!(!permission_names.contains(&"worker/provision".to_string()));
             }
             _ => panic!("Expected Override management permissions"),
         }
@@ -408,8 +722,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_pull_model_permissions() {
-        let function = Function::new("test-function".to_string())
-            .code(FunctionCode::Image {
+        let worker = Worker::new("test-worker".to_string())
+            .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
             })
             .permissions("test".to_string())
@@ -418,9 +732,9 @@ mod tests {
 
         let mut resources = IndexMap::new();
         resources.insert(
-            "test-function".to_string(),
+            "test-worker".to_string(),
             ResourceEntry {
-                config: alien_core::Resource::new(function),
+                config: alien_core::Resource::new(worker),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
@@ -475,13 +789,13 @@ mod tests {
                     .collect();
 
                 // Should contain heartbeat permissions for both resources
-                assert!(permission_names.contains(&"function/heartbeat".to_string()));
+                assert!(permission_names.contains(&"worker/heartbeat".to_string()));
                 assert!(permission_names.contains(&"storage/heartbeat".to_string()));
 
                 // Should contain live resource mutation permissions in both
                 // Pull and Push models.
-                assert!(permission_names.contains(&"function/provision".to_string()));
-                assert!(!permission_names.contains(&"function/management".to_string()));
+                assert!(permission_names.contains(&"worker/provision".to_string()));
+                assert!(!permission_names.contains(&"worker/management".to_string()));
                 assert!(!permission_names.contains(&"storage/management".to_string()));
             }
             _ => panic!("Expected Extend management permissions"),
@@ -505,7 +819,7 @@ mod tests {
             .port(8080)
             .permissions("test".to_string())
             .build();
-        let cluster = ContainerCluster::new("compute".to_string())
+        let cluster = ComputeCluster::new("compute".to_string())
             .capacity_group(CapacityGroup {
                 group_id: "general".to_string(),
                 instance_type: Some("m7g.large".to_string()),
@@ -568,8 +882,61 @@ mod tests {
 
                 assert!(permission_names.contains(&"container/provision".to_string()));
                 assert!(!permission_names.contains(&"container/management".to_string()));
-                assert!(permission_names.contains(&"container-cluster/management".to_string()));
-                assert!(!permission_names.contains(&"container-cluster/provision".to_string()));
+                assert!(permission_names.contains(&"compute-cluster/management".to_string()));
+                assert!(!permission_names.contains(&"compute-cluster/provision".to_string()));
+            }
+            _ => panic!("Expected Extend management permissions"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_frozen_artifact_registry_gets_management_permissions() {
+        let registry = ArtifactRegistry::new("registry".to_string()).build();
+
+        let mut resources = IndexMap::new();
+        resources.insert(
+            "registry".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(registry),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                remote_access: false,
+            },
+        );
+
+        let stack = Stack {
+            id: "test-stack".to_string(),
+            resources,
+            permissions: PermissionsConfig {
+                profiles: IndexMap::new(),
+                management: ManagementPermissions::Auto,
+            },
+            supported_platforms: None,
+        };
+
+        let stack_state = StackState::new(Platform::Aws);
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+
+        let mutation = ManagementPermissionProfileMutation;
+        let result_stack = mutation.mutate(stack, &stack_state, &config).await.unwrap();
+
+        match result_stack.management() {
+            ManagementPermissions::Extend(profile) => {
+                let permission_names: Vec<String> = profile
+                    .0
+                    .get("*")
+                    .unwrap()
+                    .iter()
+                    .map(|perm_ref| perm_ref.id().to_string())
+                    .collect();
+
+                assert!(permission_names.contains(&"artifact-registry/management".to_string()));
+                assert!(!permission_names.contains(&"artifact-registry/provision".to_string()));
             }
             _ => panic!("Expected Extend management permissions"),
         }
@@ -577,8 +944,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_push_model_permissions() {
-        let function = Function::new("test-function".to_string())
-            .code(FunctionCode::Image {
+        let worker = Worker::new("test-worker".to_string())
+            .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
             })
             .permissions("test".to_string())
@@ -586,9 +953,9 @@ mod tests {
 
         let mut resources = IndexMap::new();
         resources.insert(
-            "test-function".to_string(),
+            "test-worker".to_string(),
             ResourceEntry {
-                config: alien_core::Resource::new(function),
+                config: alien_core::Resource::new(worker),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
@@ -631,9 +998,9 @@ mod tests {
                     .collect();
 
                 // Should contain heartbeat plus live mutation permissions.
-                assert!(permission_names.contains(&"function/heartbeat".to_string()));
-                assert!(permission_names.contains(&"function/provision".to_string()));
-                assert!(!permission_names.contains(&"function/management".to_string()));
+                assert!(permission_names.contains(&"worker/heartbeat".to_string()));
+                assert!(permission_names.contains(&"worker/provision".to_string()));
+                assert!(!permission_names.contains(&"worker/management".to_string()));
             }
             _ => panic!("Expected Extend management permissions"),
         }
@@ -641,9 +1008,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_commands_enabled_function_permissions() {
-        // Test AWS platform - should add function/invoke
-        let arc_function = Function::new("arc-function".to_string())
-            .code(FunctionCode::Image {
+        // Test AWS platform - should add resource-scoped worker/dispatch-command.
+        let arc_function = Worker::new("arc-worker".to_string())
+            .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
             })
             .permissions("test".to_string())
@@ -652,7 +1019,7 @@ mod tests {
 
         let mut resources = IndexMap::new();
         resources.insert(
-            "arc-function".to_string(),
+            "arc-worker".to_string(),
             ResourceEntry {
                 config: alien_core::Resource::new(arc_function),
                 lifecycle: ResourceLifecycle::Live,
@@ -690,15 +1057,22 @@ mod tests {
                     .map(|perm_ref| perm_ref.id().to_string())
                     .collect();
 
-                // Should have live resource permissions and function/invoke for Commands.
-                assert!(permission_names.contains(&"function/provision".to_string()));
-                assert!(!permission_names.contains(&"function/management".to_string()));
-                assert!(permission_names.contains(&"function/invoke".to_string()));
+                // Should have live resource permissions globally; command dispatch is resource-scoped.
+                assert!(permission_names.contains(&"worker/provision".to_string()));
+                assert!(!permission_names.contains(&"worker/management".to_string()));
+                assert!(!permission_names.contains(&"worker/dispatch-command".to_string()));
+
+                let worker_permissions = profile.0.get("arc-worker").unwrap();
+                let worker_permission_names: Vec<String> = worker_permissions
+                    .iter()
+                    .map(|perm_ref| perm_ref.id().to_string())
+                    .collect();
+                assert!(worker_permission_names.contains(&"worker/dispatch-command".to_string()));
             }
             _ => panic!("Expected Extend management permissions"),
         }
 
-        // Test GCP platform - should add queue/data-write
+        // Test GCP platform - should author an explicit command dispatch grant.
         let stack_state_gcp = StackState::new(Platform::Gcp);
         let config_gcp = DeploymentConfig::builder()
             .stack_settings(StackSettings::default())
@@ -710,15 +1084,15 @@ mod tests {
             id: "test-stack-gcp".to_string(),
             resources: {
                 let mut resources = IndexMap::new();
-                let arc_function = Function::new("arc-function".to_string())
-                    .code(FunctionCode::Image {
+                let arc_function = Worker::new("arc-worker".to_string())
+                    .code(WorkerCode::Image {
                         image: "test:latest".to_string(),
                     })
                     .permissions("test".to_string())
                     .commands_enabled(true)
                     .build();
                 resources.insert(
-                    "arc-function".to_string(),
+                    "arc-worker".to_string(),
                     ResourceEntry {
                         config: alien_core::Resource::new(arc_function),
                         lifecycle: ResourceLifecycle::Live,
@@ -748,10 +1122,17 @@ mod tests {
                     .map(|perm_ref| perm_ref.id().to_string())
                     .collect();
 
-                // Should have live resource permissions and queue/data-write for Commands.
-                assert!(permission_names.contains(&"function/provision".to_string()));
-                assert!(!permission_names.contains(&"function/management".to_string()));
-                assert!(permission_names.contains(&"queue/data-write".to_string()));
+                // Should have live resource permissions globally; command dispatch is resource-scoped.
+                assert!(permission_names.contains(&"worker/provision".to_string()));
+                assert!(!permission_names.contains(&"worker/management".to_string()));
+                assert!(!permission_names.contains(&"worker/dispatch-command".to_string()));
+
+                let worker_permissions = profile.0.get("arc-worker").unwrap();
+                let worker_permission_names: Vec<String> = worker_permissions
+                    .iter()
+                    .map(|perm_ref| perm_ref.id().to_string())
+                    .collect();
+                assert!(worker_permission_names.contains(&"worker/dispatch-command".to_string()));
             }
             _ => panic!("Expected Extend management permissions"),
         }
@@ -759,8 +1140,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_disabled_heartbeat_no_permissions() {
-        let function = Function::new("test-function".to_string())
-            .code(FunctionCode::Image {
+        let worker = Worker::new("test-worker".to_string())
+            .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
             })
             .permissions("test".to_string())
@@ -768,9 +1149,9 @@ mod tests {
 
         let mut resources = IndexMap::new();
         resources.insert(
-            "test-function".to_string(),
+            "test-worker".to_string(),
             ResourceEntry {
-                config: alien_core::Resource::new(function),
+                config: alien_core::Resource::new(worker),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
@@ -812,10 +1193,10 @@ mod tests {
                     .collect();
 
                 // Should NOT contain heartbeat permissions since heartbeat is disabled
-                assert!(!permission_names.contains(&"function/heartbeat".to_string()));
+                assert!(!permission_names.contains(&"worker/heartbeat".to_string()));
                 // Should still have live mutation permissions.
-                assert!(permission_names.contains(&"function/provision".to_string()));
-                assert!(!permission_names.contains(&"function/management".to_string()));
+                assert!(permission_names.contains(&"worker/provision".to_string()));
+                assert!(!permission_names.contains(&"worker/management".to_string()));
             }
             _ => panic!("Expected Extend management permissions"),
         }
@@ -823,8 +1204,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_disabled_telemetry_no_permissions() {
-        let function = Function::new("test-function".to_string())
-            .code(FunctionCode::Image {
+        let worker = Worker::new("test-worker".to_string())
+            .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
             })
             .permissions("test".to_string())
@@ -832,9 +1213,9 @@ mod tests {
 
         let mut resources = IndexMap::new();
         resources.insert(
-            "test-function".to_string(),
+            "test-worker".to_string(),
             ResourceEntry {
-                config: alien_core::Resource::new(function),
+                config: alien_core::Resource::new(worker),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
@@ -876,11 +1257,11 @@ mod tests {
                     .collect();
 
                 // Should NOT contain telemetry permissions since telemetry is disabled
-                assert!(!permission_names.contains(&"function/telemetry".to_string()));
+                assert!(!permission_names.contains(&"worker/telemetry".to_string()));
                 // Should still have heartbeat and live mutation permissions.
-                assert!(permission_names.contains(&"function/heartbeat".to_string()));
-                assert!(permission_names.contains(&"function/provision".to_string()));
-                assert!(!permission_names.contains(&"function/management".to_string()));
+                assert!(permission_names.contains(&"worker/heartbeat".to_string()));
+                assert!(permission_names.contains(&"worker/provision".to_string()));
+                assert!(!permission_names.contains(&"worker/management".to_string()));
             }
             _ => panic!("Expected Extend management permissions"),
         }
@@ -888,8 +1269,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_requires_approval_still_creates_permissions() {
-        let function = Function::new("test-function".to_string())
-            .code(FunctionCode::Image {
+        let worker = Worker::new("test-worker".to_string())
+            .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
             })
             .permissions("test".to_string())
@@ -897,9 +1278,9 @@ mod tests {
 
         let mut resources = IndexMap::new();
         resources.insert(
-            "test-function".to_string(),
+            "test-worker".to_string(),
             ResourceEntry {
-                config: alien_core::Resource::new(function),
+                config: alien_core::Resource::new(worker),
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
@@ -944,11 +1325,11 @@ mod tests {
                     .collect();
 
                 // Should contain heartbeat permissions (heartbeat is On by default)
-                assert!(permission_names.contains(&"function/heartbeat".to_string()));
+                assert!(permission_names.contains(&"worker/heartbeat".to_string()));
                 // Should contain live mutation permissions.
-                assert!(permission_names.contains(&"function/provision".to_string()));
-                assert!(!permission_names.contains(&"function/management".to_string()));
-                // Note: function/telemetry permission set may not exist in registry,
+                assert!(permission_names.contains(&"worker/provision".to_string()));
+                assert!(!permission_names.contains(&"worker/management".to_string()));
+                // Note: worker/telemetry permission set may not exist in registry,
                 // but the code attempts to add it. If it exists, it would be added.
             }
             _ => panic!("Expected Extend management permissions"),

@@ -4,7 +4,8 @@ use crate::{
     block::{attr, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::aws::helpers::{
-        downcast, jsonencode, nested_block, required_label, stack_name_template, tags,
+        downcast, iam_role_name_template, jsonencode, nested_block, required_label,
+        resource_prefix_template, tags,
     },
     expr,
 };
@@ -27,7 +28,7 @@ impl TfEmitter for AwsArtifactRegistryEmitter {
             "aws_ecr_repository",
             label,
             [
-                attr("name", stack_name_template(registry.id())),
+                attr("name", resource_prefix_template(registry.id())),
                 attr(
                     "image_tag_mutability",
                     Expression::String("IMMUTABLE".to_string()),
@@ -101,7 +102,7 @@ impl TfEmitter for AwsArtifactRegistryEmitter {
             ),
             (
                 "repositoryPrefix",
-                expr::template(format!("${{var.stack_name}}-{}", registry.id())),
+                expr::template(format!("${{local.resource_prefix}}-{}", registry.id())),
             ),
             (
                 "pullRoleArn",
@@ -121,7 +122,7 @@ impl TfEmitter for AwsArtifactRegistryEmitter {
             ("service", Expression::String("ecr".to_string())),
             (
                 "repositoryPrefix",
-                expr::template(format!("${{var.stack_name}}-{}", registry.id())),
+                expr::template(format!("${{local.resource_prefix}}-{}", registry.id())),
             ),
             (
                 "pullRoleArn",
@@ -149,7 +150,7 @@ fn ecr_role(
         [
             attr(
                 "name",
-                stack_name_template(&format!("{}-{suffix}", registry.id())),
+                iam_role_name_template(&format!("{}-{suffix}", registry.id())),
             ),
             attr("assume_role_policy", ecr_role_trust_policy(&principals)),
             attr("tags", tags(ctx, "artifact-registry")),

@@ -26,13 +26,7 @@
     "gcp": [
       {
         "grant": {
-          "permissions": [
-            "iam.serviceAccounts.get",
-            "iam.serviceAccounts.list",
-            "iam.serviceAccounts.getIamPolicy",
-            "iam.roles.get",
-            "iam.roles.list"
-          ]
+          "predefinedRoles": ["roles/iam.serviceAccountViewer"]
         },
         "binding": {
           "stack": {
@@ -42,16 +36,25 @@
             "scope": "projects/${projectName}/serviceAccounts/${stackPrefix}-${resourceName}@${projectName}.iam.gserviceaccount.com"
           }
         }
+      },
+      {
+        "grant": {
+          "predefinedRoles": ["roles/iam.roleViewer"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
       }
     ],
     "azure": [
       {
         "grant": {
-          "actions": [
-            "Microsoft.ManagedIdentity/userAssignedIdentities/read",
-            "Microsoft.Authorization/roleDefinitions/read",
-            "Microsoft.Authorization/roleAssignments/read"
-          ]
+          "predefinedRoles": ["Reader"]
         },
         "binding": {
           "stack": {

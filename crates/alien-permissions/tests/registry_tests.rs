@@ -4,8 +4,9 @@ use alien_permissions::{get_permission_set, has_permission_set, list_permission_
 fn test_registry_basic_functionality() {
     // Test that the registry contains expected permission sets
     assert!(has_permission_set("storage/data-read"));
-    assert!(has_permission_set("function/execute"));
+    assert!(has_permission_set("worker/execute"));
     assert!(has_permission_set("build/provision"));
+    assert!(has_permission_set("kubernetes-public-endpoint/management"));
 
     // Test non-existent permission set
     assert!(!has_permission_set("nonexistent/permission"));
@@ -34,11 +35,11 @@ fn test_get_permission_set_storage_data_read() {
 
 #[test]
 fn test_get_permission_set_function_execute() {
-    let perm_set = get_permission_set("function/execute");
+    let perm_set = get_permission_set("worker/execute");
     assert!(perm_set.is_some());
 
     let perm_set = perm_set.unwrap();
-    assert_eq!(perm_set.id, "function/execute");
+    assert_eq!(perm_set.id, "worker/execute");
     assert!(perm_set.description.contains("executing"));
 
     // Verify AWS permissions
@@ -60,9 +61,10 @@ fn test_list_permission_set_ids() {
     assert!(ids.contains(&"storage/data-write"));
     assert!(ids.contains(&"storage/management"));
     assert!(ids.contains(&"storage/provision"));
-    assert!(ids.contains(&"function/execute"));
-    assert!(ids.contains(&"function/management"));
-    assert!(ids.contains(&"function/provision"));
+    assert!(ids.contains(&"worker/execute"));
+    assert!(ids.contains(&"worker/management"));
+    assert!(ids.contains(&"worker/provision"));
+    assert!(ids.contains(&"kubernetes-public-endpoint/management"));
     assert!(ids.contains(&"build/execute"));
     assert!(ids.contains(&"build/management"));
     assert!(ids.contains(&"build/provision"));

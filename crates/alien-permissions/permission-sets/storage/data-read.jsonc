@@ -5,6 +5,8 @@
   "platforms": {
     "aws": [
       {
+        "label": "read-s3-objects",
+        "description": "Read objects and object metadata from application-owned S3 buckets.",
         "grant": {
           "actions": ["s3:ListBucket", "s3:GetObject", "s3:GetObjectVersion", "s3:GetObjectAcl"]
         },
@@ -20,6 +22,8 @@
     ],
     "gcp": [
       {
+        "label": "read-cloud-storage-objects",
+        "description": "Read objects and object metadata from application-owned Cloud Storage buckets.",
         "grant": {
           "permissions": [
             "storage.buckets.get",
@@ -41,6 +45,8 @@
         }
       },
       {
+        "label": "sign-cloud-storage-download-urls",
+        "description": "Sign Cloud Storage download URLs on behalf of this application's service account.",
         "grant": {
           "permissions": ["iam.serviceAccounts.signBlob"]
         },
@@ -56,14 +62,10 @@
     ],
     "azure": [
       {
+        "label": "read-blob-storage-objects",
+        "description": "Read objects from application-owned Azure Blob Storage containers.",
         "grant": {
-          "actions": [
-            "Microsoft.Storage/storageAccounts/blobServices/read",
-            "Microsoft.Storage/storageAccounts/blobServices/containers/read",
-            "Microsoft.Storage/storageAccounts/blobServices/generateUserDelegationKey/action",
-            "Microsoft.Storage/storageAccounts/listKeys/action"
-          ],
-          "dataActions": ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"]
+          "predefinedRoles": ["Storage Blob Data Reader"]
         },
         "binding": {
           "stack": {

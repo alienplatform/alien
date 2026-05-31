@@ -411,6 +411,7 @@ pub struct Api {
 pub struct CreateIntegrationRequest {
     pub integration_type: String,
     pub integration_uri: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub payload_format_version: Option<String>,
 }
 
@@ -440,6 +441,7 @@ pub struct Route {
 #[serde(rename_all = "camelCase")]
 pub struct CreateStageRequest {
     pub stage_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_deploy: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tags: Option<std::collections::HashMap<String, String>>,
@@ -474,7 +476,9 @@ pub struct DomainNameConfiguration {
     pub certificate_arn: String,
     pub endpoint_type: String,
     pub security_policy: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub api_gateway_domain_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub hosted_zone_id: Option<String>,
 }
 
@@ -483,6 +487,7 @@ pub struct DomainNameConfiguration {
 pub struct CreateApiMappingRequest {
     pub api_id: String,
     pub stage: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub api_mapping_key: Option<String>,
 }
 
@@ -499,4 +504,39 @@ pub struct ApiMapping {
 pub struct GetApiMappingsResponse {
     pub items: Option<Vec<ApiMapping>>,
     pub next_token: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn create_domain_name_request_omits_response_only_null_fields() {
+        let request = CreateDomainNameRequest {
+            domain_name: "worker.example.com".to_string(),
+            domain_name_configurations: vec![DomainNameConfiguration {
+                certificate_arn: "arn:aws:acm:us-east-2:123456789012:certificate/test".to_string(),
+                endpoint_type: "REGIONAL".to_string(),
+                security_policy: "TLS_1_2".to_string(),
+                api_gateway_domain_name: None,
+                hosted_zone_id: None,
+            }],
+            tags: None,
+        };
+
+        let serialized = serde_json::to_value(request).unwrap();
+
+        assert_eq!(
+            serialized,
+            json!({
+                "domainName": "worker.example.com",
+                "domainNameConfigurations": [{
+                    "certificateArn": "arn:aws:acm:us-east-2:123456789012:certificate/test",
+                    "endpointType": "REGIONAL",
+                    "securityPolicy": "TLS_1_2"
+                }]
+            })
+        );
+    }
 }

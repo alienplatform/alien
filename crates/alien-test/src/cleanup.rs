@@ -126,6 +126,8 @@ pub async fn cleanup_helm_release(
     release_name: &str,
     namespace: &str,
     kubeconfig: Option<&str>,
+    kube_context: Option<&str>,
+    command_env: &[(String, String)],
 ) -> Result<(), Box<dyn std::error::Error>> {
     info!(%release_name, %namespace, "cleaning up helm release");
 
@@ -135,6 +137,10 @@ pub async fn cleanup_helm_release(
     if let Some(kc) = kubeconfig {
         cmd.env("KUBECONFIG", kc);
     }
+    if let Some(context) = kube_context {
+        cmd.arg("--kube-context").arg(context);
+    }
+    apply_command_env(&mut cmd, command_env);
 
     match cmd.output().await {
         Ok(out) if out.status.success() => {
@@ -150,6 +156,50 @@ pub async fn cleanup_helm_release(
     }
 
     Ok(())
+}
+
+/// Delete the per-test Kubernetes namespace after Helm uninstall. Namespaces
+/// are random for distribution E2Es, so deleting the namespace is the owner
+/// cleanup for ServiceAccounts, app Services, Ingresses, and workload pods.
+pub async fn cleanup_kubernetes_namespace(
+    namespace: &str,
+    kubeconfig: Option<&str>,
+    kube_context: Option<&str>,
+    command_env: &[(String, String)],
+) -> Result<(), Box<dyn std::error::Error>> {
+    info!(%namespace, "deleting kubernetes test namespace");
+
+    let mut cmd = tokio::process::Command::new("kubectl");
+    cmd.args(["delete", "namespace", namespace, "--ignore-not-found=true"]);
+
+    if let Some(kc) = kubeconfig {
+        cmd.env("KUBECONFIG", kc);
+    }
+    if let Some(context) = kube_context {
+        cmd.arg("--context").arg(context);
+    }
+    apply_command_env(&mut cmd, command_env);
+
+    match cmd.output().await {
+        Ok(out) if out.status.success() => {
+            info!(%namespace, "kubernetes test namespace deleted");
+        }
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            warn!(%namespace, %stderr, "failed to delete kubernetes namespace (continuing)");
+        }
+        Err(e) => {
+            warn!(%namespace, error = %e, "failed to delete kubernetes namespace (continuing)");
+        }
+    }
+
+    Ok(())
+}
+
+fn apply_command_env(cmd: &mut tokio::process::Command, env: &[(String, String)]) {
+    for (key, value) in env {
+        cmd.env(key, value);
+    }
 }
 
 /// Clean up all test-related resources. Combines deployment cleanup with

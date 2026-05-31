@@ -5,14 +5,25 @@
     "aws": [
       {
         "grant": {
+          "actions": ["ecr:DescribeRepositories"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/*"]
+          }
+        }
+      },
+      {
+        "grant": {
           "actions": [
-            "ecr:DescribeRepositories",
             "ecr:DescribeImages",
             "ecr:ListImages",
             "ecr:DescribeImageScanFindings",
             "ecr:GetRepositoryPolicy",
-            "ecr:ListTagsForResource",
-            "ecr:DescribeRegistry"
+            "ecr:ListTagsForResource"
           ]
         },
         "binding": {
@@ -21,6 +32,29 @@
           },
           "resource": {
             "resources": ["arn:aws:ecr:${awsRegion}:${awsAccountId}:repository/${resourceName}-*"]
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": [
+            "iam:GetRole",
+            "iam:UpdateAssumeRolePolicy",
+            "iam:PutRolePolicy",
+            "iam:GetRolePolicy",
+            "iam:ListRolePolicies",
+            "iam:DeleteRolePolicy",
+            "iam:ListAttachedRolePolicies",
+            "iam:DetachRolePolicy",
+            "iam:DeleteRole"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${resourceName}-*"]
           }
         }
       }
@@ -42,7 +76,7 @@
         },
         "binding": {
           "stack": {
-            "scope": "projects/${projectName}/locations/${region}"
+            "scope": "projects/${projectName}"
           },
           "resource": {
             "scope": "projects/${projectName}/locations/${region}/repositories/${resourceName}"

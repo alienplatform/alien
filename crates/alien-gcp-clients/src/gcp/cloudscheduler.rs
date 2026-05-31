@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use alien_client_core::Result;
-use async_trait::async_trait;
 #[cfg(feature = "test-utils")]
 use mockall::automock;
 use std::fmt::Debug;

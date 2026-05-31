@@ -19,7 +19,7 @@ const PREFIX_LEN: usize = 8;
 
 /// A naming rule for a specific (resource_type, platform) combination.
 struct NamingRule {
-    /// The resource type string (e.g., "service-account", "function").
+    /// The resource type string (e.g., "service-account", "worker").
     resource_type: &'static str,
     /// Which platform this rule applies to.
     platform: Platform,
@@ -66,11 +66,11 @@ fn naming_rules() -> Vec<NamingRule> {
             cloud_limit: 30,
             pattern: "{prefix}-{id}",
         },
-        // A single container-cluster resource generates multiple GCP resources,
+        // A single compute-cluster resource generates multiple GCP resources,
         // each with its own naming limit. The SA is the tightest.
         // Container Cluster creates a GCP SA: {prefix}-{id}-sa (max 30)
         NamingRule {
-            resource_type: "container-cluster",
+            resource_type: "compute-cluster",
             platform: Platform::Gcp,
             max_id_len: max_id(30, 3), // 18  (-sa = 3 chars with dash)
             cloud_resource: "GCP service account for container cluster",
@@ -88,7 +88,7 @@ fn naming_rules() -> Vec<NamingRule> {
         },
         // Compute Instance Template: max 63, pattern {prefix}-{id}-template
         NamingRule {
-            resource_type: "container-cluster",
+            resource_type: "compute-cluster",
             platform: Platform::Gcp,
             max_id_len: max_id(63, 9), // 45  (-template = 9 chars with dash)
             cloud_resource: "GCP instance template name",
@@ -105,12 +105,12 @@ fn naming_rules() -> Vec<NamingRule> {
             cloud_limit: 64,
             pattern: "{prefix}-{id}",
         },
-        // Lambda Function: max 64, pattern {prefix}-{id}
+        // Lambda Worker: max 64, pattern {prefix}-{id}
         NamingRule {
-            resource_type: "function",
+            resource_type: "worker",
             platform: Platform::Aws,
             max_id_len: max_id(64, 0), // 55
-            cloud_resource: "AWS Lambda function name",
+            cloud_resource: "AWS Lambda worker name",
             cloud_limit: 64,
             pattern: "{prefix}-{id}",
         },
@@ -133,9 +133,9 @@ fn naming_rules() -> Vec<NamingRule> {
             cloud_limit: 24,
             pattern: "{prefix}-{id}",
         },
-        // Container App (function): max 32, pattern {prefix}-{id}
+        // Container App (worker): max 32, pattern {prefix}-{id}
         NamingRule {
-            resource_type: "function",
+            resource_type: "worker",
             platform: Platform::Azure,
             max_id_len: max_id(32, 0), // 23
             cloud_resource: "Azure Container App name",

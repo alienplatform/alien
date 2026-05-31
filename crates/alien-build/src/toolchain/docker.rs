@@ -36,7 +36,7 @@ impl DockerToolchain {
     }
 
     /// Generate a temporary tag for the build
-    fn generate_temp_tag(function_name: &str) -> String {
+    fn generate_temp_tag(resource_name: &str) -> String {
         use rand::distr::Alphanumeric;
         use rand::Rng;
 
@@ -47,20 +47,37 @@ impl DockerToolchain {
             .collect::<String>()
             .to_lowercase();
 
-        format!("alien-build-{}:{}", function_name, random_suffix)
+        format!("alien-build-{}:{}", resource_name, random_suffix)
     }
 
     fn humanize_buildx_failure(stderr_output: &str) -> String {
         let lower = stderr_output.to_ascii_lowercase();
 
-        if lower.contains("cannot connect to the docker daemon")
+        let summary = if lower.contains("cannot connect to the docker daemon")
             || lower.contains("is the docker daemon running")
             || lower.contains("docker.sock")
         {
-            return "Docker is installed but the daemon is unavailable. Start Docker or OrbStack and retry.".to_string();
-        }
+            "Docker is installed but the daemon is unavailable. Start Docker or OrbStack and retry."
+        } else {
+            "docker buildx build failed"
+        };
 
-        "docker buildx build failed".to_string()
+        let tail = stderr_output
+            .lines()
+            .rev()
+            .filter(|line| !line.trim().is_empty())
+            .take(20)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        if tail.is_empty() {
+            summary.to_string()
+        } else {
+            format!("{summary}; docker output:\n{tail}")
+        }
     }
 }
 
@@ -145,7 +162,7 @@ impl Toolchain for DockerToolchain {
                 .spawn()
                 .into_alien_error()
                 .context(ErrorData::ImageBuildFailed {
-                    function_name: "docker-build".to_string(),
+                    resource_name: "docker-build".to_string(),
                     reason: "Failed to execute docker buildx build. Is Docker installed?"
                         .to_string(),
                     build_output: None,
@@ -158,7 +175,7 @@ impl Toolchain for DockerToolchain {
 
             while let Some(line) = stderr_reader.next_line().await.into_alien_error().context(
                 ErrorData::ImageBuildFailed {
-                    function_name: "docker-build".to_string(),
+                    resource_name: "docker-build".to_string(),
                     reason: "Failed to read docker build output".to_string(),
                     build_output: None,
                 },
@@ -182,7 +199,7 @@ impl Toolchain for DockerToolchain {
                     .await
                     .into_alien_error()
                     .context(ErrorData::ImageBuildFailed {
-                        function_name: "docker-build".to_string(),
+                        resource_name: "docker-build".to_string(),
                         reason: "Failed to wait for docker build completion".to_string(),
                         build_output: None,
                     })?;
@@ -190,7 +207,7 @@ impl Toolchain for DockerToolchain {
             if !output.success() {
                 let stderr_output = stderr_lines.join("\n");
                 return Err(AlienError::new(ErrorData::ImageBuildFailed {
-                    function_name: "docker-build".to_string(),
+                    resource_name: "docker-build".to_string(),
                     reason: Self::humanize_buildx_failure(&stderr_output),
                     build_output: Some(stderr_output),
                 }));
@@ -224,7 +241,7 @@ impl Toolchain for DockerToolchain {
             .await
             .into_alien_error()
             .context(ErrorData::ImageBuildFailed {
-                function_name: "docker-build".to_string(),
+                resource_name: "docker-build".to_string(),
                 reason: "Failed to execute docker save".to_string(),
                 build_output: None,
             })?;
@@ -232,7 +249,7 @@ impl Toolchain for DockerToolchain {
         if !save_output.status.success() {
             let stderr = String::from_utf8_lossy(&save_output.stderr);
             return Err(AlienError::new(ErrorData::ImageBuildFailed {
-                function_name: "docker-build".to_string(),
+                resource_name: "docker-build".to_string(),
                 reason: "docker save failed".to_string(),
                 build_output: Some(stderr.to_string()),
             }));
@@ -274,7 +291,7 @@ impl DockerToolchain {
         let image = Image::from_tarball(tarball_path)
             .into_alien_error()
             .context(ErrorData::ImageBuildFailed {
-                function_name: "docker-build".to_string(),
+                resource_name: "docker-build".to_string(),
                 reason: "Failed to read OCI tarball".to_string(),
                 build_output: None,
             })?;
@@ -284,7 +301,7 @@ impl DockerToolchain {
                 .get_metadata()
                 .into_alien_error()
                 .context(ErrorData::ImageBuildFailed {
-                    function_name: "docker-build".to_string(),
+                    resource_name: "docker-build".to_string(),
                     reason: "Failed to read image metadata from tarball".to_string(),
                     build_output: None,
                 })?;
@@ -375,7 +392,7 @@ CMD ["cat", "hello.txt"]
             cache_store: None,
             cache_prefix: "test".to_string(),
             build_target: BinaryTarget::linux_container_target(),
-            platform_name: "aws".to_string(),
+            runtime_platform_name: "aws".to_string(),
             debug_mode: false,
             is_container: true,
         };
@@ -454,7 +471,7 @@ RUN echo "Version: $VERSION" > version.txt
             cache_store: None,
             cache_prefix: "test".to_string(),
             build_target: BinaryTarget::linux_container_target(),
-            platform_name: "aws".to_string(),
+            runtime_platform_name: "aws".to_string(),
             debug_mode: false,
             is_container: true,
         };
@@ -493,7 +510,7 @@ RUN echo "Version: $VERSION" > version.txt
             cache_store: None,
             cache_prefix: "test".to_string(),
             build_target: BinaryTarget::linux_container_target(),
-            platform_name: "aws".to_string(),
+            runtime_platform_name: "aws".to_string(),
             debug_mode: false,
             is_container: true,
         };
@@ -542,7 +559,7 @@ WORKDIR /app
             cache_store: None,
             cache_prefix: "test".to_string(),
             build_target: BinaryTarget::linux_container_target(),
-            platform_name: "aws".to_string(),
+            runtime_platform_name: "aws".to_string(),
             debug_mode: false,
             is_container: true,
         };
