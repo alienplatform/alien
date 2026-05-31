@@ -7,6 +7,10 @@
 //! (examples/onprem.yaml).
 
 mod generator {
+    #[allow(dead_code)]
+    #[path = "../../src/test_utils.rs"]
+    pub mod test_utils;
+
     pub mod helpers;
 
     pub mod boot_paths_tests;

@@ -2,14 +2,16 @@
 //! resources. Charts still render `examples/<target>.yaml` files for
 //! IRSA / Workload Identity / Federated Identity.
 
-use super::helpers::{assert_helm_valid, render, snapshot_chart};
+use super::{
+    helpers::{assert_helm_valid, render, snapshot_chart},
+    test_utils::{self, LinterStatus},
+};
 use alien_core::{
     Container, ContainerCode, Daemon, DaemonCode, Ingress, KubernetesCertificateMode,
     KubernetesExposureSettings, KubernetesGatewayRouteProfile, KubernetesIngressRouteProfile,
     KubernetesRouteProfile, KubernetesSettings, PermissionProfile, ResourceLifecycle, ResourceSpec,
     Stack, StackSettings, ToolchainConfig, Worker, WorkerCode,
 };
-use alien_helm::test_utils::LinterStatus;
 use alien_helm::{generate_helm_chart, HelmOptions, HelmRegistry};
 
 #[test]
@@ -144,7 +146,7 @@ fn chart_role_rbac_is_selected_by_kubernetes_route_api() {
     assert!(role.contains("eq $routeApi \"ingress\""));
     assert!(role.contains("eq $routeApi \"gateway\""));
 
-    let rendered = alien_helm::test_utils::helm_template(&chart.files, None);
+    let rendered = test_utils::helm_template(&chart.files, None);
     match &rendered.status {
         LinterStatus::Passed => {
             assert!(rendered
@@ -218,7 +220,7 @@ fn gcp_base_platform_config_renders_agent_environment() {
         .replace("projectId: \"\"", "projectId: alien-test-target")
         .replace("region: \"\"", "region: us-east4");
 
-    let rendered = alien_helm::test_utils::helm_template(&files, Some(&gcp_values));
+    let rendered = test_utils::helm_template(&files, Some(&gcp_values));
     match &rendered.status {
         LinterStatus::Passed => {
             assert!(rendered.stdout.contains("name: BASE_PLATFORM"));
@@ -249,7 +251,7 @@ fn cluster_bootstrap_renders_only_when_enabled() {
     assert!(values.contains("eksAutoMode:"));
     assert!(values.contains("arm64NodePool:"));
 
-    let default_rendered = alien_helm::test_utils::helm_template(&files, None);
+    let default_rendered = test_utils::helm_template(&files, None);
     match &default_rendered.status {
         LinterStatus::Passed => {
             assert!(!default_rendered.stdout.contains("kind: StorageClass"));
@@ -270,7 +272,7 @@ fn cluster_bootstrap_renders_only_when_enabled() {
         "clusterBootstrap:\n  metricsServer:\n    enabled: true\n    image: registry.k8s.io/metrics-server/metrics-server:v0.8.1\n  storageClass:\n    default:\n      enabled: true\n      name: gp3\n      provisioner: ebs.csi.eks.amazonaws.com\n      parameters:\n        type: gp3\n        fsType: ext4\n        encrypted: \"true\"\n  ingress:\n    eksAutoMode:\n      enabled: true",
         )
         .replace("arm64NodePool:\n        enabled: false", "arm64NodePool:\n        enabled: true");
-    let enabled_rendered = alien_helm::test_utils::helm_template(&files, Some(&enabled_values));
+    let enabled_rendered = test_utils::helm_template(&files, Some(&enabled_values));
     match &enabled_rendered.status {
         LinterStatus::Passed => {
             assert!(enabled_rendered.stdout.contains("kind: StorageClass"));
@@ -325,7 +327,7 @@ fn heartbeat_collection_rbac_is_namespace_scoped_with_optional_node_reads() {
     assert!(cluster_role.contains(r#"resources: ["nodes"]"#));
     assert!(cluster_role.contains(r#"apiGroups: ["metrics.k8s.io"]"#));
 
-    alien_helm::test_utils::helm_template_and_validate(&files, None)
+    test_utils::helm_template_and_validate(&files, None)
         .assert_ok("heartbeat RBAC default values");
 
     let values = files.get("values.yaml").expect("values.yaml");
@@ -333,10 +335,10 @@ fn heartbeat_collection_rbac_is_namespace_scoped_with_optional_node_reads() {
         "heartbeat:\n  collection:\n    nodes:\n      enabled: true",
         "heartbeat:\n  collection:\n    nodes:\n      enabled: false",
     );
-    alien_helm::test_utils::helm_template_and_validate(&files, Some(&disabled_values))
+    test_utils::helm_template_and_validate(&files, Some(&disabled_values))
         .assert_ok("heartbeat RBAC node collection disabled");
 
-    let rendered = alien_helm::test_utils::helm_template(&files, Some(&disabled_values));
+    let rendered = test_utils::helm_template(&files, Some(&disabled_values));
     match &rendered.status {
         LinterStatus::Passed => {
             assert!(!rendered.stdout.contains("kind: ClusterRole"));
