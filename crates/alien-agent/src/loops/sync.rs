@@ -293,6 +293,13 @@ async fn sync_with_manager(
         }
     }
 
+    // Agent self-update: act on `agent_target` when the manager emits one.
+    // Best-effort — the actuator logs failures and the manager keeps
+    // sending the target until the agent reports the new version.
+    if let Some(target) = sync_response.agent_target.as_ref() {
+        crate::loops::agent_upgrade::apply_agent_target(target).await;
+    }
+
     Ok(has_update || state_hydrated)
 }
 

@@ -1009,6 +1009,12 @@ fn build_agent_target(
         return None;
     }
     let helm = (regime == Some("kubernetes")).then(|| alien_core::sync::AgentHelmTarget {
+        // Agent reads chart_repo/chart_version directly; when empty it falls
+        // back to its `ALIEN_AGENT_CHART_REF` / `ALIEN_AGENT_CHART_VERSION`
+        // env vars (injected by the chart at install time). Leaving blank
+        // here keeps the manager out of the per-project chart catalog —
+        // upgrade follow-on can plumb explicit refs when chart shape changes
+        // between agent versions, which it doesn't today.
         chart_repo: String::new(),
         chart_version: String::new(),
         values: serde_json::json!({

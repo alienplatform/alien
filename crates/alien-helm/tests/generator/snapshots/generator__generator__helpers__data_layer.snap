@@ -42,6 +42,15 @@ runtime:
     existingSecret:
       name: ""
       key: encryption-key
+  # Agent self-update inputs the agent passes to the Helm-runner Job it
+  # spawns on `agent_target.helm`. Set chartRef + chartVersion to the OCI
+  # ref + version used at install time — the agent re-uses them in
+  # `helm upgrade --reuse-values`. Leave blank if you don't want to enable
+  # in-cluster agent upgrades for this install.
+  upgrade:
+    chartRef: ""
+    chartVersion: ""
+    helmRunnerImage: "alpine/helm:3.18.4"
   replicas: 1
   # Helm's --atomic --wait gives up after this many seconds if /readyz
   # hasn't returned 200 — the revision is then rolled back automatically.
@@ -265,6 +274,15 @@ ephemeralStorage:
                 "key": { "type": "string", "minLength": 1 }
               }
             }
+          }
+        },
+        "upgrade": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "chartRef": { "type": "string" },
+            "chartVersion": { "type": "string" },
+            "helmRunnerImage": { "type": "string" }
           }
         },
         "replicas": { "type": "integer", "minimum": 1 },
@@ -979,6 +997,26 @@ spec:
             {{- end }}
             - name: KUBERNETES_NAMESPACE
               value: {{ .Release.Namespace | quote }}
+            - name: KUBERNETES_HELM_RELEASE
+              value: {{ .Release.Name | quote }}
+            - name: ALIEN_AGENT_UPGRADER_SA
+              value: {{ include "alien.upgraderServiceAccountName" . | quote }}
+            {{- if .Values.runtime.upgrade.chartRef }}
+            # Used by the agent when it receives `agent_target.helm` and
+            # spawns a Helm-runner Job to apply the new version. The Job
+            # runs `helm upgrade --reuse-values` against this chart so only
+            # the manager-supplied `values` override (e.g. image.tag) flips.
+            - name: ALIEN_AGENT_CHART_REF
+              value: {{ .Values.runtime.upgrade.chartRef | quote }}
+            {{- end }}
+            {{- if .Values.runtime.upgrade.chartVersion }}
+            - name: ALIEN_AGENT_CHART_VERSION
+              value: {{ .Values.runtime.upgrade.chartVersion | quote }}
+            {{- end }}
+            {{- if .Values.runtime.upgrade.helmRunnerImage }}
+            - name: ALIEN_AGENT_HELM_RUNNER_IMAGE
+              value: {{ .Values.runtime.upgrade.helmRunnerImage | quote }}
+            {{- end }}
             {{- if .Values.serviceAccountPrefix }}
             # Pin the deployment's resource_prefix to the same value used for
             # ServiceAccount naming, so Helm-created SAs and vault secret names
