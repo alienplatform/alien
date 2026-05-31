@@ -1,6 +1,6 @@
 use crate::error::{ErrorData, Result};
 use alien_error::{AlienError, Context, IntoAlienError};
-use std::sync::OnceLock;
+use std::{collections::HashMap, sync::OnceLock};
 use tracing::{error, info};
 
 use opentelemetry::KeyValue;
@@ -14,11 +14,13 @@ use opentelemetry_sdk::{
 /// Global OTLP logger provider for flushing logs on shutdown
 static OTLP_PROVIDER: OnceLock<Option<SdkLoggerProvider>> = OnceLock::new();
 
+const ENV_ALIEN_RUNTIME_SEND_OTLP: &str = "ALIEN_RUNTIME_SEND_OTLP";
+
 /// Configuration for OTLP logging based on environment variables
 #[derive(Debug, Clone)]
 pub struct OtlpConfig {
     pub endpoint: String,
-    pub headers: std::collections::HashMap<String, String>,
+    pub headers: HashMap<String, String>,
     pub service_name: String,
     pub service_version: String,
 }
@@ -26,6 +28,10 @@ pub struct OtlpConfig {
 impl OtlpConfig {
     /// Load OTLP configuration from environment variables
     pub fn from_env() -> Option<Self> {
+        if runtime_otlp_disabled() {
+            return None;
+        }
+
         // Logs-specific endpoint takes precedence over generic endpoint
         let endpoint = std::env::var("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT")
             .or_else(|_| std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT"))
@@ -38,7 +44,7 @@ impl OtlpConfig {
             .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_string());
 
         // Parse headers from environment
-        let mut headers = std::collections::HashMap::new();
+        let mut headers = HashMap::new();
 
         // Standard OTLP headers
         if let Ok(auth_header) = std::env::var("OTEL_EXPORTER_OTLP_HEADERS_AUTHORIZATION") {
@@ -61,6 +67,17 @@ impl OtlpConfig {
             service_version,
         })
     }
+}
+
+fn runtime_otlp_disabled() -> bool {
+    std::env::var(ENV_ALIEN_RUNTIME_SEND_OTLP)
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "false" | "0" | "off"
+            )
+        })
+        .unwrap_or(false)
 }
 
 /// Initialize OTLP logging and return the tracing bridge layer
@@ -117,21 +134,7 @@ pub fn init_otlp_logging(
             ),
         })?;
 
-    // Create resource with service information
-    let mut attributes = vec![
-        KeyValue::new("service.name", config.service_name),
-        KeyValue::new("service.version", config.service_version),
-        KeyValue::new("service.instance.id", uuid::Uuid::new_v4().to_string()),
-    ];
-
-    // Add alien.deployment_id if ALIEN_DEPLOYMENT_ID environment variable is set
-    if let Ok(deployment_id) = std::env::var("ALIEN_DEPLOYMENT_ID") {
-        attributes.push(KeyValue::new("alien.deployment_id", deployment_id));
-    }
-
-    let resource = Resource::builder_empty()
-        .with_attributes(attributes)
-        .build();
+    let resource = build_otlp_resource(&config);
 
     // Create batch log processor
     let batch_processor = BatchLogProcessor::builder(exporter).build();
@@ -163,6 +166,24 @@ pub fn init_otlp_logging(
 
     info!("OTLP logging initialized successfully");
     Ok(Some(bridge))
+}
+
+#[cfg(feature = "otlp")]
+fn build_otlp_resource(config: &OtlpConfig) -> Resource {
+    // Resource::builder() includes OTEL_RESOURCE_ATTRIBUTES and SDK-provided
+    // telemetry attributes. Explicit runtime service attributes override env
+    // values for the keys owned by alien-runtime.
+    let mut attributes = vec![
+        KeyValue::new("service.name", config.service_name.clone()),
+        KeyValue::new("service.version", config.service_version.clone()),
+        KeyValue::new("service.instance.id", uuid::Uuid::new_v4().to_string()),
+    ];
+
+    if let Ok(deployment_id) = std::env::var("ALIEN_DEPLOYMENT_ID") {
+        attributes.push(KeyValue::new("alien.deployment_id", deployment_id));
+    }
+
+    Resource::builder().with_attributes(attributes).build()
 }
 
 /// Initialize OTLP logging when feature is disabled
@@ -328,9 +349,11 @@ mod tests {
         std::env::remove_var("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT");
         std::env::remove_var("OTEL_SERVICE_NAME");
         std::env::remove_var("OTEL_SERVICE_VERSION");
+        std::env::remove_var("OTEL_RESOURCE_ATTRIBUTES");
         std::env::remove_var("OTEL_EXPORTER_OTLP_HEADERS");
         std::env::remove_var("OTEL_EXPORTER_OTLP_HEADERS_AUTHORIZATION");
         std::env::remove_var("ALIEN_DEPLOYMENT_ID");
+        std::env::remove_var(ENV_ALIEN_RUNTIME_SEND_OTLP);
     }
 
     #[test]
@@ -353,6 +376,18 @@ mod tests {
         assert_eq!(config.endpoint, "http://localhost:4318");
         assert_eq!(config.service_name, "alien-runtime");
         assert!(config.headers.is_empty());
+    }
+
+    #[test]
+    fn test_otlp_config_from_env_respects_disable_flag() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        clear_otlp_env_vars();
+
+        std::env::set_var("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318");
+        std::env::set_var(ENV_ALIEN_RUNTIME_SEND_OTLP, "false");
+
+        let config = OtlpConfig::from_env();
+        assert!(config.is_none());
     }
 
     #[test]
@@ -383,14 +418,45 @@ mod tests {
         let _guard = ENV_MUTEX.lock().unwrap();
         clear_otlp_env_vars();
 
-        // Test that alien.deployment_id attribute is added when ALIEN_DEPLOYMENT_ID is set
         std::env::set_var("ALIEN_DEPLOYMENT_ID", "test-agent-123");
         std::env::set_var("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318");
 
-        // We can't easily test the full init_otlp_logging function in a unit test
-        // since it creates real OTLP infrastructure, but we can verify the environment
-        // variable is read correctly by testing the logic inline
-        let deployment_id = std::env::var("ALIEN_DEPLOYMENT_ID").ok();
-        assert_eq!(deployment_id, Some("test-agent-123".to_string()));
+        let config = OtlpConfig::from_env().expect("Should have config");
+        let resource = build_otlp_resource(&config);
+
+        assert_eq!(
+            resource.get(&opentelemetry::Key::new("alien.deployment_id")),
+            Some(opentelemetry::Value::String("test-agent-123".into()))
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "otlp")]
+    fn test_resource_includes_otel_resource_attributes() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        clear_otlp_env_vars();
+
+        std::env::set_var("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318");
+        std::env::set_var(
+            "OTEL_RESOURCE_ATTRIBUTES",
+            "alien.workspace_id=ws_test,alien.deployment_id=dep_from_resource,service.name=ignored",
+        );
+        std::env::set_var("OTEL_SERVICE_NAME", "runtime-service");
+
+        let config = OtlpConfig::from_env().expect("Should have config");
+        let resource = build_otlp_resource(&config);
+
+        assert_eq!(
+            resource.get(&opentelemetry::Key::new("alien.workspace_id")),
+            Some(opentelemetry::Value::String("ws_test".into()))
+        );
+        assert_eq!(
+            resource.get(&opentelemetry::Key::new("alien.deployment_id")),
+            Some(opentelemetry::Value::String("dep_from_resource".into()))
+        );
+        assert_eq!(
+            resource.get(&opentelemetry::Key::new("service.name")),
+            Some(opentelemetry::Value::String("runtime-service".into()))
+        );
     }
 }

@@ -170,7 +170,10 @@ impl TfEmitter for AwsNetworkEmitter {
                         cmp_az_count_expr(&network.settings)
                     )),
                 ),
-                ("isByoVpc", Expression::Bool(false)),
+                (
+                    "isByoVpc",
+                    expr::raw("var.network_mode != \"create-new\""),
+                ),
             ]),
             NetworkSettings::ByoVpcGcp { .. } | NetworkSettings::ByoVnetAzure { .. } => {
                 unreachable!("validated in emit")

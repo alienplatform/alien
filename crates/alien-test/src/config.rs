@@ -499,6 +499,10 @@ impl TestConfig {
                 vnet_resource_id: required_env("ALIEN_E2E_AZURE_VNET_RESOURCE_ID")?,
                 public_subnet_name: required_env("ALIEN_E2E_AZURE_PUBLIC_SUBNET_NAME")?,
                 private_subnet_name: required_env("ALIEN_E2E_AZURE_PRIVATE_SUBNET_NAME")?,
+                application_gateway_subnet_name: env::var(
+                    "ALIEN_E2E_AZURE_APPLICATION_GATEWAY_SUBNET_NAME",
+                )
+                .ok(),
             }),
             Platform::Kubernetes | Platform::Local | Platform::Test => {
                 bail!("ALIEN_E2E_NETWORK_MODE=existing is not supported for {platform:?}")

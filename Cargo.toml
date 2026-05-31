@@ -226,11 +226,11 @@ opt-level = 0
 panic = "abort"
 
 [profile.release]
-strip = true
-opt-level = "z"
-lto = true
-panic = "abort"
-codegen-units = 1
+# strip = true
+# opt-level = "z"
+# lto = true
+# panic = "abort"
+# codegen-units = 1
 
 [profile.dev.build-override]
 opt-level = 0

@@ -153,7 +153,7 @@ locals {
         privateRouteTableId = var.network_mode == "create-new" ? aws_route_table.default_network_private[0].id : null
         securityGroupId     = var.network_mode == "create-new" ? aws_security_group.default_network_workload[0].id : var.network_mode == "use-existing" ? try(var.security_group_ids[0], null) : null
         availabilityZones   = var.network_mode == "use-default" ? [] : slice(data.aws_availability_zones.available.names, 0, 2)
-        isByoVpc            = false
+        isByoVpc            = var.network_mode != "create-new"
       }
     }
   ]

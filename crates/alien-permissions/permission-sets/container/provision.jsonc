@@ -376,10 +376,20 @@
       }
     ],
     "azure": [
-      // Load Balancer + Public IP for exposed containers
+      // Application Gateway / Load Balancer + Public IP for exposed containers
       {
         "grant": {
           "actions": [
+            "Microsoft.Network/applicationGateways/write",
+            "Microsoft.Network/applicationGateways/read",
+            "Microsoft.Network/applicationGateways/delete",
+            "Microsoft.ManagedIdentity/userAssignedIdentities/read",
+            "Microsoft.ManagedIdentity/userAssignedIdentities/write",
+            "Microsoft.ManagedIdentity/userAssignedIdentities/delete",
+            "Microsoft.ManagedIdentity/userAssignedIdentities/assign/action",
+            "Microsoft.Authorization/roleAssignments/read",
+            "Microsoft.Authorization/roleAssignments/write",
+            "Microsoft.Authorization/roleAssignments/delete",
             "Microsoft.Network/loadBalancers/write",
             "Microsoft.Network/loadBalancers/read",
             "Microsoft.Network/loadBalancers/delete",
@@ -420,7 +430,8 @@
         "grant": {
           "dataActions": [
             "Microsoft.KeyVault/vaults/certificates/import/action",
-            "Microsoft.KeyVault/vaults/certificates/read"
+            "Microsoft.KeyVault/vaults/certificates/read",
+            "Microsoft.KeyVault/vaults/certificates/delete"
           ]
         },
         "binding": {

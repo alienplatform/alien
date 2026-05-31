@@ -10,7 +10,10 @@ use alien_core::{
 use alien_error::{AlienError, Context, IntoAlienError as _};
 use alien_gcp_clients::{ResourceManagerApi, ResourceManagerClient};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use tracing::{debug, info};
+
+const OTEL_RESOURCE_ATTRIBUTES: &str = "OTEL_RESOURCE_ATTRIBUTES";
 
 /// Collect environment information from cloud platforms
 pub async fn collect_environment_info(
@@ -173,6 +176,8 @@ pub fn inject_environment_variables(stack: &mut Stack, config: &DeploymentConfig
 ///   each resource within the stack appears as a distinct `service.name` in
 ///   logs (drives the dashboard's "Resource" column). Skipped if the user
 ///   has already set `OTEL_SERVICE_NAME` via plain or secret env vars.
+/// - `OTEL_RESOURCE_ATTRIBUTES`       — deployment-level resource attributes
+///   such as `alien.deployment_id`, merged with any user-provided value.
 pub fn inject_monitoring_environment_variables(
     stack: &mut Stack,
     monitoring: &OtlpConfig,
@@ -225,6 +230,11 @@ pub fn inject_monitoring_environment_variables(
                 "OTEL_EXPORTER_OTLP_HEADERS".to_string(),
                 monitoring.logs_auth_header.clone(),
             );
+            if !monitoring.resource_attributes.is_empty() {
+                let merged =
+                    merge_otel_resource_attributes(env.get(OTEL_RESOURCE_ATTRIBUTES), monitoring);
+                env.insert(OTEL_RESOURCE_ATTRIBUTES.to_string(), merged);
+            }
             // The resource name (e.g. "agent" / "events") is the most useful
             // value for `service.name`: it identifies *which slot in the
             // stack* a log came from, which is the dimension users see in
@@ -257,6 +267,36 @@ pub fn inject_monitoring_environment_variables(
     }
 
     Ok(())
+}
+
+fn merge_otel_resource_attributes(existing: Option<&String>, monitoring: &OtlpConfig) -> String {
+    let mut attributes = parse_otel_resource_attributes(existing.map(String::as_str));
+    for (key, value) in &monitoring.resource_attributes {
+        attributes.insert(key.clone(), value.clone());
+    }
+
+    attributes
+        .into_iter()
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn parse_otel_resource_attributes(existing: Option<&str>) -> BTreeMap<String, String> {
+    let mut attributes = BTreeMap::new();
+
+    if let Some(existing) = existing {
+        for entry in existing.split(',') {
+            if let Some((key, value)) = entry.split_once('=') {
+                let key = key.trim();
+                if !key.is_empty() {
+                    attributes.insert(key.to_string(), value.trim().to_string());
+                }
+            }
+        }
+    }
+
+    attributes
 }
 
 /// Inject environment variables into a Worker or Container compute resource.
@@ -761,5 +801,76 @@ mod tests {
 
         // Secret targeted at "other-fn" should NOT produce ALIEN_SECRETS on "worker"
         assert!(func.environment.get(ENV_ALIEN_SECRETS).is_none());
+    }
+
+    #[test]
+    fn test_monitoring_injects_resource_attributes() {
+        let mut stack = make_single_function_stack("worker");
+        let monitoring = OtlpConfig {
+            logs_endpoint: "https://manager.test/v1/logs".to_string(),
+            logs_auth_header: "authorization=Bearer token".to_string(),
+            metrics_endpoint: None,
+            metrics_auth_header: None,
+            resource_attributes: std::collections::HashMap::from([
+                ("alien.workspace_id".to_string(), "ws_test".to_string()),
+                ("alien.deployment_id".to_string(), "dep_test".to_string()),
+            ]),
+        };
+
+        inject_monitoring_environment_variables(&mut stack, &monitoring).unwrap();
+
+        let func = stack
+            .resources
+            .get("worker")
+            .unwrap()
+            .config
+            .downcast_ref::<Worker>()
+            .unwrap();
+
+        let attributes = func.environment.get(OTEL_RESOURCE_ATTRIBUTES).unwrap();
+        assert!(attributes.contains("alien.deployment_id=dep_test"));
+        assert!(attributes.contains("alien.workspace_id=ws_test"));
+    }
+
+    #[test]
+    fn test_monitoring_resource_attributes_override_existing_alien_keys() {
+        let mut stack = make_single_function_stack("worker");
+        stack
+            .resources
+            .get_mut("worker")
+            .unwrap()
+            .config
+            .downcast_mut::<Worker>()
+            .unwrap()
+            .environment
+            .insert(
+                OTEL_RESOURCE_ATTRIBUTES.to_string(),
+                "custom=value,alien.deployment_id=wrong".to_string(),
+            );
+        let monitoring = OtlpConfig {
+            logs_endpoint: "https://manager.test/v1/logs".to_string(),
+            logs_auth_header: "authorization=Bearer token".to_string(),
+            metrics_endpoint: None,
+            metrics_auth_header: None,
+            resource_attributes: std::collections::HashMap::from([(
+                "alien.deployment_id".to_string(),
+                "dep_test".to_string(),
+            )]),
+        };
+
+        inject_monitoring_environment_variables(&mut stack, &monitoring).unwrap();
+
+        let func = stack
+            .resources
+            .get("worker")
+            .unwrap()
+            .config
+            .downcast_ref::<Worker>()
+            .unwrap();
+
+        assert_eq!(
+            func.environment.get(OTEL_RESOURCE_ATTRIBUTES).unwrap(),
+            "alien.deployment_id=dep_test,custom=value"
+        );
     }
 }

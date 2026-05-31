@@ -20,6 +20,7 @@ use alien_aws_clients::{
     AwsClientConfig, AwsCredentialProvider,
 };
 use alien_azure_clients::{
+    application_gateways::{ApplicationGatewayApi, AzureApplicationGatewayClient},
     authorization::{AuthorizationApi, AzureAuthorizationClient},
     blob_containers::{AzureBlobContainerClient, BlobContainerApi},
     compute::{AzureVmssClient, VirtualMachineScaleSetsApi},
@@ -156,6 +157,10 @@ pub trait PlatformServiceProvider: Send + Sync {
     ) -> Result<Arc<dyn GkeContainerApi>>;
 
     // Azure clients
+    fn get_azure_application_gateway_client(
+        &self,
+        config: &AzureClientConfig,
+    ) -> Result<Arc<dyn ApplicationGatewayApi>>;
     fn get_azure_authorization_client(
         &self,
         config: &AzureClientConfig,
@@ -747,6 +752,16 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn AuthorizationApi>> {
         Ok(Arc::new(AzureAuthorizationClient::new(
+            reqwest::Client::new(),
+            AzureTokenCache::new(config.clone()),
+        )))
+    }
+
+    fn get_azure_application_gateway_client(
+        &self,
+        config: &AzureClientConfig,
+    ) -> Result<Arc<dyn ApplicationGatewayApi>> {
+        Ok(Arc::new(AzureApplicationGatewayClient::new(
             reqwest::Client::new(),
             AzureTokenCache::new(config.clone()),
         )))

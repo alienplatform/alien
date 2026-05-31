@@ -17,6 +17,12 @@ pub struct AzureNetworkImportData {
     pub vnet_name: Option<String>,
     /// Subnet resource ids in this VNet used by workloads.
     pub subnet_ids: Vec<String>,
+    /// Dedicated subnet for classic Azure Application Gateway ingress.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub application_gateway_subnet_id: Option<String>,
+    /// Dedicated subnet name for classic Azure Application Gateway ingress.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub application_gateway_subnet_name: Option<String>,
     /// NAT gateway resource id when one was created.
     pub nat_gateway_id: Option<String>,
     /// Network Security Group resource id attached to workload subnets.

@@ -96,7 +96,9 @@ impl CompileTimeCheck for PublicSubnetsRequiredCheck {
                     // BYO-VNet Azure: check public_subnet_name
                     (
                         NetworkSettings::ByoVnetAzure {
-                            public_subnet_name, ..
+                            public_subnet_name,
+                            application_gateway_subnet_name,
+                            ..
                         },
                         Platform::Azure,
                     ) => {
@@ -105,6 +107,19 @@ impl CompileTimeCheck for PublicSubnetsRequiredCheck {
                                 "Stack has resources with public ingress, but BYO-VNet \
                                  configuration has no public subnet. Add public_subnet_name \
                                  to your network configuration."
+                                    .to_string(),
+                            );
+                        }
+                        if application_gateway_subnet_name
+                            .as_deref()
+                            .unwrap_or_default()
+                            .is_empty()
+                        {
+                            errors.push(
+                                "Stack has resources with public ingress, but BYO-VNet \
+                                 configuration has no dedicated Application Gateway subnet. \
+                                 Add application_gateway_subnet_name to your Azure network \
+                                 configuration."
                                     .to_string(),
                             );
                         }

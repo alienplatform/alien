@@ -16,6 +16,8 @@ use crate::error::ErrorData;
 use crate::Result;
 use alien_error::AlienError;
 
+const ENV_ALIEN_RUNTIME_SEND_OTLP: &str = "ALIEN_RUNTIME_SEND_OTLP";
+
 /// A log line from the application subprocess.
 #[derive(Debug, Clone)]
 pub struct AppLogLine {
@@ -125,7 +127,9 @@ impl RuntimeConfig {
 
         // When running from CLI (standalone binary), build LogExporter from environment
         // Worker controllers (AWS/GCP/Azure/Kubernetes) set OTEL_* env vars
-        let log_exporter = if let Some(endpoint) = std::env::var("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT")
+        let log_exporter = if runtime_otlp_disabled() {
+            LogExporter::None
+        } else if let Some(endpoint) = std::env::var("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT")
             .or_else(|_| std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT"))
             .ok()
         {
@@ -196,12 +200,33 @@ impl RuntimeConfig {
     }
 }
 
+fn runtime_otlp_disabled() -> bool {
+    std::env::var(ENV_ALIEN_RUNTIME_SEND_OTLP)
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "false" | "0" | "off"
+            )
+        })
+        .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn clear_otlp_env_vars() {
+        std::env::remove_var("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT");
+        std::env::remove_var("OTEL_EXPORTER_OTLP_ENDPOINT");
+        std::env::remove_var("OTEL_EXPORTER_OTLP_HEADERS");
+        std::env::remove_var("OTEL_SERVICE_NAME");
+        std::env::remove_var(ENV_ALIEN_RUNTIME_SEND_OTLP);
+    }
+
     #[test]
     fn test_config_from_cli() {
+        clear_otlp_env_vars();
+
         let cli = Cli::try_parse_from(["alien-runtime", "--", "bun", "index.ts"]).unwrap();
         let config = RuntimeConfig::from_cli_struct(cli).unwrap();
 
@@ -224,5 +249,22 @@ mod tests {
         assert_eq!(config.command, vec!["./app"]);
         assert_eq!(config.working_dir, Some(PathBuf::from("/app")));
         assert_eq!(config.env_vars.get("MY_VAR"), Some(&"value".to_string()));
+    }
+
+    #[test]
+    fn test_log_exporter_respects_runtime_otlp_disable_flag() {
+        clear_otlp_env_vars();
+        std::env::set_var(
+            "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+            "https://example.com/v1/logs",
+        );
+        std::env::set_var(ENV_ALIEN_RUNTIME_SEND_OTLP, "false");
+
+        let cli = Cli::try_parse_from(["alien-runtime", "--", "bun", "index.ts"]).unwrap();
+        let config = RuntimeConfig::from_cli_struct(cli).unwrap();
+
+        assert!(matches!(config.log_exporter, LogExporter::None));
+
+        clear_otlp_env_vars();
     }
 }

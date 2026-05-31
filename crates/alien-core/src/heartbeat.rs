@@ -1582,6 +1582,7 @@ pub struct AzureVnetNetworkHeartbeatData {
     pub cidr_block: Option<String>,
     pub public_subnet_name: Option<String>,
     pub private_subnet_name: Option<String>,
+    pub application_gateway_subnet_name: Option<String>,
     pub nat_gateway_id: Option<String>,
     pub public_ip_id: Option<String>,
     pub nsg_id: Option<String>,

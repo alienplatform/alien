@@ -244,6 +244,23 @@
             "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
           }
         }
+      },
+      // Application Gateway backend pool registration (container runtime)
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.Network/applicationGateways/read",
+            "Microsoft.Network/applicationGateways/write"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          }
+        }
       }
       // Note: Azure per-container identity impersonation works by attaching the
       // container's user-assigned managed identity to the VMSS at provisioning time.

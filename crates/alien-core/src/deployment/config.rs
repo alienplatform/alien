@@ -153,4 +153,12 @@ pub struct OtlpConfig {
     /// Example: "authorization=Bearer <token>,x-axiom-dataset=<metrics-dataset>"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metrics_auth_header: Option<String>,
+    /// Resource attributes attached to every OTLP signal emitted for this deployment.
+    ///
+    /// Platform managers use this for stable identity such as `alien.workspace_id`,
+    /// `alien.project_id`, `alien.deployment_group_id`, and `alien.deployment_id`.
+    /// Runtime-specific resource attributes such as `service.name` remain owned by
+    /// the runtime/exporter.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub resource_attributes: HashMap<String, String>,
 }

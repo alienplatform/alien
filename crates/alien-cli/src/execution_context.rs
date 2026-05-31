@@ -80,8 +80,8 @@ impl ExecutionMode {
     pub fn manager_url(&self) -> String {
         match self {
             #[cfg(feature = "platform")]
-            Self::Platform { base_url, .. } => base_url.clone(),
-            Self::Standalone { server_url, .. } => server_url.clone(),
+            Self::Platform { base_url, .. } => normalize_base_url(base_url),
+            Self::Standalone { server_url, .. } => normalize_base_url(server_url),
             Self::Dev { port } => format!("http://localhost:{}", port),
         }
     }
@@ -156,7 +156,8 @@ impl ExecutionMode {
                         message: "Failed to build HTTP client".to_string(),
                     })?;
 
-                Ok(ServerSdkClient::new_with_client(server_url, http_client))
+                let manager_url = normalize_base_url(server_url);
+                Ok(ServerSdkClient::new_with_client(&manager_url, http_client))
             }
             Self::Dev { port } => Ok(ServerSdkClient::new(&format!("http://localhost:{}", port))),
             #[cfg(feature = "platform")]
@@ -194,7 +195,8 @@ impl ExecutionMode {
                         message: "Failed to build HTTP client".to_string(),
                     })?;
 
-                Ok(SdkClient::new_with_client(server_url, http_client))
+                let manager_url = normalize_base_url(server_url);
+                Ok(SdkClient::new_with_client(&manager_url, http_client))
             }
             Self::Dev { port } => Ok(SdkClient::new(&format!("http://localhost:{}", port))),
             #[cfg(feature = "platform")]
@@ -333,10 +335,11 @@ impl ExecutionMode {
                         message: "Failed to build HTTP client".to_string(),
                     })?;
 
-                let client = ServerSdkClient::new_with_client(server_url, http_client.clone());
+                let manager_url = normalize_base_url(server_url);
+                let client = ServerSdkClient::new_with_client(&manager_url, http_client.clone());
 
                 Ok(ManagerContext {
-                    manager_url: server_url.clone(),
+                    manager_url: manager_url.clone(),
                     manager_name: None,
                     manager_is_system: None,
                     manager_cloud: None,
@@ -344,7 +347,7 @@ impl ExecutionMode {
                     http_client,
                     auth_token: Some(api_key.clone()),
                     repository_name: None, // Resolved at push time via manager's /v1/build-config
-                    repository_uri: Some(server_url.clone()),
+                    repository_uri: Some(manager_url),
                     workspace: None,
                 })
             }
@@ -451,7 +454,9 @@ impl ExecutionMode {
                     info!("Manager ready after {} attempt(s)", attempt);
                 }
 
-                info!("Manager: {}", resolved.manager_url);
+                let manager_url = normalize_base_url(&resolved.manager_url);
+
+                info!("Manager: {}", manager_url);
 
                 // Manager-bound client; workspace lives in default headers.
                 let auth_token = http.bearer_token.clone();
@@ -464,10 +469,12 @@ impl ExecutionMode {
                 };
 
                 // Now call the manager directly to create/get the artifact registry repo.
-                // The repo logical name is the project ID.
+                // The manager owns backend selection: cloud targets use target providers,
+                // while pull platforms like Kubernetes/local fall back to the manager's
+                // primary registry provider.
                 let repo_name = create_or_get_artifact_repo(
                     &manager_http_client,
-                    &resolved.manager_url,
+                    &manager_url,
                     &resolved.project_id,
                     platform,
                 )
@@ -475,13 +482,11 @@ impl ExecutionMode {
 
                 info!("Repository: {}", repo_name);
 
-                let manager_client = ServerSdkClient::new_with_client(
-                    &resolved.manager_url,
-                    manager_http_client.clone(),
-                );
+                let manager_client =
+                    ServerSdkClient::new_with_client(&manager_url, manager_http_client.clone());
 
                 Ok(ManagerContext {
-                    manager_url: resolved.manager_url,
+                    manager_url,
                     manager_name: resolved.manager_name,
                     manager_is_system: resolved.manager_is_system,
                     manager_cloud: resolved.manager_cloud,
@@ -602,6 +607,15 @@ struct ResolveResponse {
     project_id: String,
 }
 
+fn normalize_base_url(url: &str) -> String {
+    let trimmed = url.trim_end_matches('/');
+    if trimmed.is_empty() {
+        url.to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 /// Create or get an artifact registry repository on the manager.
 ///
 /// GET first (repo may exist), POST to create on 404. The `client` is
@@ -617,6 +631,8 @@ async fn create_or_get_artifact_repo(
 ) -> crate::error::Result<String> {
     use alien_error::{Context, IntoAlienError};
 
+    let manager_url = normalize_base_url(manager_url);
+
     // Step 1: Try GET for existing repo
     let get_url = format!(
         "{}/v1/artifact-registry/repositories/{}?platform={}",
@@ -625,7 +641,7 @@ async fn create_or_get_artifact_repo(
 
     let get_resp = send_artifact_registry_request_with_retry(
         || client.get(&get_url),
-        manager_url,
+        &manager_url,
         &get_url,
         "Failed to reach artifact registry on manager",
     )
@@ -659,7 +675,7 @@ async fn create_or_get_artifact_repo(
                 .post(&create_url)
                 .json(&serde_json::json!({ "name": project_id }))
         },
-        manager_url,
+        &manager_url,
         &create_url,
         "Failed to create artifact repository on manager",
     )
@@ -687,7 +703,7 @@ async fn create_or_get_artifact_repo(
     // Try GET again — the repo may have been created concurrently.
     let get_resp2 = send_artifact_registry_request_with_retry(
         || client.get(&get_url),
-        manager_url,
+        &manager_url,
         &get_url,
         "Failed to get artifact repository from manager",
     )
@@ -760,4 +776,29 @@ where
 #[cfg(feature = "platform")]
 fn is_retryable_artifact_registry_error(error: &reqwest::Error) -> bool {
     error.is_timeout() || error.is_connect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_base_url;
+
+    #[test]
+    fn normalize_base_url_removes_trailing_slashes() {
+        assert_eq!(
+            normalize_base_url("https://alien-manager.example.com/"),
+            "https://alien-manager.example.com"
+        );
+        assert_eq!(
+            normalize_base_url("https://alien-manager.example.com///"),
+            "https://alien-manager.example.com"
+        );
+    }
+
+    #[test]
+    fn normalize_base_url_keeps_urls_without_trailing_slash() {
+        assert_eq!(
+            normalize_base_url("http://localhost:8080"),
+            "http://localhost:8080"
+        );
+    }
 }

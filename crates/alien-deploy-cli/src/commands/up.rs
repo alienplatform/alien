@@ -217,6 +217,7 @@ impl From<DeployConfigNetwork> for NetworkSettings {
                 vnet_resource_id,
                 public_subnet_name,
                 private_subnet_name,
+                application_gateway_subnet_name: None,
             },
         }
     }
