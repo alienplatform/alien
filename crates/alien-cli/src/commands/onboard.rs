@@ -207,6 +207,7 @@ fn platform_onboard_deployment_setup_config(
     types::DeploymentSetupConfig {
         metadata: types::DeploymentSetupMetadata(serde_json::Map::new()),
         policy: types::DeploymentSetupPolicy {
+            allow_release_pinning: None,
             allowed_platforms: vec![
                 types::DeploymentSetupPolicyAllowedPlatformsItem::Aws,
                 types::DeploymentSetupPolicyAllowedPlatformsItem::Gcp,
