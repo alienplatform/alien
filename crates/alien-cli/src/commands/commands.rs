@@ -64,9 +64,6 @@ pub enum CommandsAction {
 
 /// Execute commands task — works in all execution modes.
 pub async fn commands_task(args: CommandsArgs, ctx: ExecutionMode) -> Result<()> {
-    let manager = ctx.server_sdk_client()?;
-    let manager_url = ctx.manager_url();
-
     match args.action {
         CommandsAction::Invoke {
             deployment,
@@ -75,11 +72,17 @@ pub async fn commands_task(args: CommandsArgs, ctx: ExecutionMode) -> Result<()>
             timeout,
         } => {
             let is_dev = ctx.is_dev();
-            let auth_token = ctx.auth_token().unwrap_or_default().to_string();
+
+            // Resolve the manager the same way `deployments` does. In platform
+            // mode this discovers the manager URL and builds a workspace-aware
+            // client; server_sdk_client() isn't available there.
+            let (_, project_link) = ctx.resolve_project(None, true).await?;
+            let manager = ctx.resolve_manager(&project_link.project_id, "aws").await?;
+
             invoke_command(
-                &manager,
-                &manager_url,
-                &auth_token,
+                &manager.client,
+                &manager.manager_url,
+                manager.http_client.clone(),
                 &deployment,
                 &command,
                 &params,
@@ -100,7 +103,7 @@ pub async fn commands_task_dev(args: CommandsArgs, port: u16) -> Result<()> {
 async fn invoke_command(
     manager: &alien_manager_api::Client,
     manager_url: &str,
-    auth_token: &str,
+    http_client: reqwest::Client,
     deployment_name: &str,
     command: &str,
     params_json: &str,
@@ -125,7 +128,7 @@ async fn invoke_command(
         ..Default::default()
     };
     let commands_url = format!("{}/v1", manager_url.trim_end_matches('/'));
-    let client = CommandsClient::with_config(&commands_url, &deployment_id, auth_token, config);
+    let client = CommandsClient::with_http_client(&commands_url, &deployment_id, http_client, config);
 
     let result: serde_json::Value = client
         .invoke(command, params)
