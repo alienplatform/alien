@@ -66,6 +66,5 @@ pub fn snapshot_module(name: &str, module: &ModuleFiles) {
 pub fn assert_terraform_valid(module: &ModuleFiles, context: &str) {
     let files = linter_files(module);
     test_utils::terraform_fmt_check(&files).assert_ok(format!("{context} terraform fmt -check"));
-    test_utils::terraform_validate(&files)
-        .assert_ok(format!("{context} terraform validate"));
+    test_utils::terraform_validate(&files).assert_ok(format!("{context} terraform validate"));
 }

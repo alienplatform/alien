@@ -327,8 +327,7 @@ fn heartbeat_collection_rbac_is_namespace_scoped_with_optional_node_reads() {
     assert!(cluster_role.contains(r#"resources: ["nodes"]"#));
     assert!(cluster_role.contains(r#"apiGroups: ["metrics.k8s.io"]"#));
 
-    test_utils::helm_template_and_validate(&files, None)
-        .assert_ok("heartbeat RBAC default values");
+    test_utils::helm_template_and_validate(&files, None).assert_ok("heartbeat RBAC default values");
 
     let values = files.get("values.yaml").expect("values.yaml");
     let disabled_values = values.replace(
