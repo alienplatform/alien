@@ -17,7 +17,7 @@ expression: stack
       "dependencies": [],
       "remoteAccess": false
     },
-    "my-function": {
+    "my-worker": {
       "config": {
         "code": {
           "image": "rust:latest",
@@ -26,7 +26,7 @@ expression: stack
         "commandsEnabled": false,
         "concurrencyLimit": null,
         "environment": {},
-        "id": "my-function",
+        "id": "my-worker",
         "ingress": "private",
         "links": [
           {
