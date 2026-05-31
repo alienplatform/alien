@@ -127,7 +127,8 @@
             "ec2:DescribeInstances",
             "ec2:DescribeInstanceStatus",
             "ec2:DescribeTags",
-            "autoscaling:DescribeAutoScalingGroups"
+            "autoscaling:DescribeAutoScalingGroups",
+            "autoscaling:DescribeScalingActivities"
           ]
         },
         "binding": {
@@ -198,6 +199,7 @@
             "compute.instanceGroupManagers.get",
             "compute.instanceGroupManagers.list",
             "compute.instanceGroupManagers.update",
+            "compute.zoneOperations.get",
             "compute.instances.getSerialPortOutput"
           ]
         },
@@ -261,7 +263,10 @@
             "Microsoft.Compute/virtualMachineScaleSets/write",
             "Microsoft.Compute/virtualMachineScaleSets/read",
             "Microsoft.Compute/virtualMachineScaleSets/delete",
+            "Microsoft.Compute/virtualMachineScaleSets/instanceView/read",
             "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/read",
+            "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/instanceView/read",
+            "Microsoft.Compute/locations/operations/read",
             "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/retrieveBootDiagnosticsData/action"
           ]
         },

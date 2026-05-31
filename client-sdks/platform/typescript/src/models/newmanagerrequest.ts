@@ -3,6 +3,7 @@
  */
 
 import * as z from "zod/v4";
+import { ClosedEnum } from "../types/enums.js";
 import {
   PrivateManagerCloud,
   PrivateManagerCloud$outboundSchema,
@@ -11,6 +12,18 @@ import {
   PrivateManagerSetupMethod,
   PrivateManagerSetupMethod$outboundSchema,
 } from "./privatemanagersetupmethod.js";
+
+/**
+ * Optional network mode for the private-manager setup. Defaults to create for production isolation; default uses the provider default network for faster dev/test setup.
+ */
+export const NetworkEnum = {
+  Create: "create",
+  Default: "default",
+} as const;
+/**
+ * Optional network mode for the private-manager setup. Defaults to create for production isolation; default uses the provider default network for faster dev/test setup.
+ */
+export type NetworkEnum = ClosedEnum<typeof NetworkEnum>;
 
 /**
  * Optional external OTLP config for forwarding logs to Axiom, Datadog, etc. Falls back to built-in DeepStore when not set.
@@ -41,10 +54,19 @@ export type NewManagerRequest = {
    */
   setupMethod?: PrivateManagerSetupMethod | undefined;
   /**
+   * Optional network mode for the private-manager setup. Defaults to create for production isolation; default uses the provider default network for faster dev/test setup.
+   */
+  network?: NetworkEnum | undefined;
+  /**
    * Optional external OTLP config for forwarding logs to Axiom, Datadog, etc. Falls back to built-in DeepStore when not set.
    */
   otlpConfig?: OtlpConfig | undefined;
 };
+
+/** @internal */
+export const NetworkEnum$outboundSchema: z.ZodEnum<typeof NetworkEnum> = z.enum(
+  NetworkEnum,
+);
 
 /** @internal */
 export type OtlpConfig$Outbound = {
@@ -71,6 +93,7 @@ export type NewManagerRequest$Outbound = {
   cloud: string;
   region: string;
   setupMethod?: string | undefined;
+  network?: string | undefined;
   otlpConfig?: OtlpConfig$Outbound | undefined;
 };
 
@@ -83,6 +106,7 @@ export const NewManagerRequest$outboundSchema: z.ZodType<
   cloud: PrivateManagerCloud$outboundSchema,
   region: z.string(),
   setupMethod: PrivateManagerSetupMethod$outboundSchema.optional(),
+  network: NetworkEnum$outboundSchema.optional(),
   otlpConfig: z.lazy(() => OtlpConfig$outboundSchema).optional(),
 });
 

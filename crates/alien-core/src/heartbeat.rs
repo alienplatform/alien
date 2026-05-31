@@ -918,6 +918,28 @@ pub struct ComputeCapacityGroupStatus {
     pub max_machines: Option<u32>,
     pub instance_type: Option<String>,
     pub recommendation: Option<ComputeCapacityRecommendation>,
+    pub capacity_blocker: Option<ComputeCapacityBlocker>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum ComputeCapacityBlockerCategory {
+    Quota,
+    Capacity,
+    Allocation,
+    Other,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ComputeCapacityBlocker {
+    pub category: ComputeCapacityBlockerCategory,
+    pub provider_code: Option<String>,
+    pub message: String,
+    pub provider_reference: Option<String>,
+    pub observed_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -94,6 +94,19 @@ pub enum ManagersCmd {
         #[arg(long)]
         open: bool,
     },
+    /// Retry private-manager setup or failed manager deployment
+    Retry {
+        /// Manager ID
+        id: String,
+
+        /// Write Terraform setup files to this directory when setup is retried
+        #[arg(long)]
+        output_dir: Option<PathBuf>,
+
+        /// Open the returned browser setup URL when setup is retried
+        #[arg(long)]
+        open: bool,
+    },
     /// Cancel an incomplete private-manager setup
     Cancel {
         /// Manager ID
@@ -251,6 +264,25 @@ struct ManagerSetupResponse {
     setup: serde_json::Value,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(tag = "mode", rename_all = "camelCase")]
+enum ManagerRetryResponse {
+    Setup {
+        manager_id: String,
+        setup_status: String,
+        setup_token: String,
+        setup_token_id: String,
+        deployment_link: String,
+        setup: serde_json::Value,
+    },
+    Deployment {
+        manager_id: String,
+        setup_status: String,
+        deployment_id: String,
+        message: String,
+    },
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ManagerSetupOutput {
@@ -280,6 +312,15 @@ struct ManagerMutationOutput {
     id: String,
     action: String,
     completed: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ManagerRetryDeploymentOutput {
+    manager_id: String,
+    setup_status: String,
+    deployment_id: String,
+    message: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -391,6 +432,22 @@ pub async fn managers_task(args: ManagersArgs, ctx: ExecutionMode) -> Result<()>
             )
             .await?;
         }
+        ManagersCmd::Retry {
+            id,
+            output_dir,
+            open,
+        } => {
+            retry_manager_task(
+                &auth,
+                &workspace,
+                &id,
+                output_dir.as_deref(),
+                open,
+                ctx.no_browser(),
+                args.json,
+            )
+            .await?;
+        }
         ManagersCmd::Cancel { id, yes } => {
             cancel_manager_task(&auth, &workspace, &id, yes, args.json).await?;
         }
@@ -488,6 +545,65 @@ async fn setup_manager_task(
     };
 
     render_setup_output(&output, json)
+}
+
+async fn retry_manager_task(
+    auth: &AuthHttp,
+    workspace: &str,
+    manager_id: &str,
+    output_dir: Option<&Path>,
+    open_browser: bool,
+    no_browser: bool,
+    json: bool,
+) -> Result<()> {
+    validate_setup_side_effect_flags(open_browser, no_browser, json)?;
+    validate_manager_id(manager_id)?;
+    let path = format!("/v1/managers/{manager_id}/retry");
+    let url = api_url(&auth.base_url, &path, workspace, None)?;
+    let response: ManagerRetryResponse =
+        send_json::<(), _>(auth, Method::POST, url, None::<&()>).await?;
+
+    match response {
+        ManagerRetryResponse::Setup {
+            manager_id,
+            setup_status,
+            setup_token_id,
+            deployment_link,
+            setup,
+            ..
+        } => {
+            let files_written = write_setup_files(output_dir, &setup)?;
+            maybe_open_setup(&setup, open_browser)?;
+
+            let output = ManagerSetupOutput {
+                manager_id,
+                name: None,
+                cloud: None,
+                region: None,
+                setup_status,
+                setup_token_id,
+                deployment_link,
+                setup,
+                files_written,
+            };
+
+            render_setup_output(&output, json)
+        }
+        ManagerRetryResponse::Deployment {
+            manager_id,
+            setup_status,
+            deployment_id,
+            message,
+        } => {
+            let output = ManagerRetryDeploymentOutput {
+                manager_id,
+                setup_status,
+                deployment_id,
+                message,
+            };
+            render_retry_deployment_output(&output, json)
+        }
+    }
 }
 
 async fn list_managers_task(
@@ -965,6 +1081,21 @@ fn render_setup_output(output: &ManagerSetupOutput, json: bool) -> Result<()> {
             println!("    {}", file);
         }
     }
+    println!();
+    println!("Next: alien managers status {} --watch", output.manager_id);
+    Ok(())
+}
+
+fn render_retry_deployment_output(output: &ManagerRetryDeploymentOutput, json: bool) -> Result<()> {
+    if json {
+        return print_json(output);
+    }
+
+    println!("Manager retry requested:");
+    println!("  ID: {}", output.manager_id);
+    println!("  Deployment: {}", output.deployment_id);
+    println!("  Setup: {}", output.setup_status);
+    println!("  Message: {}", output.message);
     println!();
     println!("Next: alien managers status {} --watch", output.manager_id);
     Ok(())

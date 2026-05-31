@@ -10,6 +10,7 @@
         "grant": {
           "actions": [
             "autoscaling:DescribeAutoScalingGroups",
+            "autoscaling:DescribeScalingActivities",
             "ec2:DescribeInstances",
             "ec2:DescribeInstanceStatus",
             "ec2:DescribeTags"
@@ -31,6 +32,7 @@
           "permissions": [
             "compute.instanceGroupManagers.list",
             "compute.instanceGroupManagers.get",
+            "compute.zoneOperations.get",
             "compute.instances.list",
             "compute.instances.get"
           ]
@@ -51,7 +53,9 @@
           "actions": [
             "Microsoft.Compute/virtualMachineScaleSets/read",
             "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/read",
-            "Microsoft.Compute/virtualMachineScaleSets/instanceView/read"
+            "Microsoft.Compute/virtualMachineScaleSets/instanceView/read",
+            "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/instanceView/read",
+            "Microsoft.Compute/locations/operations/read"
           ]
         },
         "binding": {

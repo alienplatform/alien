@@ -225,6 +225,7 @@ run();
 * [list](docs/sdks/managers/README.md#list) - Retrieve all managers.
 * [create](docs/sdks/managers/README.md#create) - Create a new manager.
 * [retrySetup](docs/sdks/managers/README.md#retrysetup) - Revoke previous private-manager setup tokens and issue a fresh setup token/config.
+* [retry](docs/sdks/managers/README.md#retry) - Retry private-manager setup. Returns a fresh setup action before the internal deployment exists, or requests retry for the internal deployment after it exists.
 * [cancelSetup](docs/sdks/managers/README.md#cancelsetup) - Cancel pending private-manager setup, revoke setup/runtime tokens, and remove the undeployed manager record.
 * [get](docs/sdks/managers/README.md#get) - Retrieve a manager by ID.
 * [delete](docs/sdks/managers/README.md#delete) - Delete a manager by ID.
@@ -382,6 +383,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`managersProvision`](docs/sdks/managers/README.md#provision) - Enqueue provisioning for a manager by ID.
 - [`managersReportHeartbeat`](docs/sdks/managers/README.md#reportheartbeat) - Report Manager health status and metrics.
 - [`managersResolveGcpOAuthProvider`](docs/sdks/managers/README.md#resolvegcpoauthprovider) - Resolve decrypted project-level Google Cloud OAuth provider settings for a manager-side deployment bootstrap.
+- [`managersRetry`](docs/sdks/managers/README.md#retry) - Retry private-manager setup. Returns a fresh setup action before the internal deployment exists, or requests retry for the internal deployment after it exists.
 - [`managersRetrySetup`](docs/sdks/managers/README.md#retrysetup) - Revoke previous private-manager setup tokens and issue a fresh setup token/config.
 - [`managersUpdate`](docs/sdks/managers/README.md#update) - Update a manager to a specific release ID or active release.
 - [`packagesCancel`](docs/sdks/packages/README.md#cancel) - Cancel a pending or building package.

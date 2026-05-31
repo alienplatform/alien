@@ -87,6 +87,7 @@ export * from "./reportmanagerheartbeat.js";
 export * from "./resolve.js";
 export * from "./resolvemanagergcpoauthprovider.js";
 export * from "./retrydeployment.js";
+export * from "./retrymanager.js";
 export * from "./retrymanagersetup.js";
 export * from "./revokeapikey.js";
 export * from "./syncacquire.js";

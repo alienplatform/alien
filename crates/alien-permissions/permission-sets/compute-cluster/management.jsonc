@@ -372,6 +372,7 @@
           "actions": [
             "autoscaling:DescribeAutoScalingGroups",
             "autoscaling:DescribeInstanceRefreshes",
+            "autoscaling:DescribeScalingActivities",
             "ec2:DescribeInstances",
             "ec2:DescribeInstanceStatus",
             "ec2:DescribeTags"
@@ -438,6 +439,7 @@
             "compute.instanceGroupManagers.update",
             "compute.instanceGroupManagers.get",
             "compute.instanceGroupManagers.list",
+            "compute.zoneOperations.get",
             "compute.instanceTemplates.create",
             "compute.instanceTemplates.delete",
             "compute.instanceTemplates.get",
@@ -494,6 +496,8 @@
             "Microsoft.Compute/virtualMachineScaleSets/read",
             "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/read",
             "Microsoft.Compute/virtualMachineScaleSets/instanceView/read",
+            "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/instanceView/read",
+            "Microsoft.Compute/locations/operations/read",
             "Microsoft.Compute/virtualMachineScaleSets/rollingUpgrades/read",
             "Microsoft.Compute/virtualMachineScaleSets/osRollingUpgrade/action",
             "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/retrieveBootDiagnosticsData/action"

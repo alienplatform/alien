@@ -34,7 +34,7 @@ export type CreateManagerResponseEnvironmentVariable = {
   targetResources: Array<string> | null;
 };
 
-export type SetupConfig = {
+export type CreateManagerResponseSetupConfig = {
   metadata: { [k: string]: any | null };
   policy: DeploymentSetupPolicy;
   environmentVariables: Array<CreateManagerResponseEnvironmentVariable>;
@@ -878,10 +878,12 @@ export type CreateManagerResponseKubernetesUnion3 =
   | CreateManagerResponseKubernetes3
   | any;
 
-export const SetupTypeByoVnetAzure3 = {
+export const CreateManagerResponseTypeByoVnetAzure3 = {
   ByoVnetAzure: "byo-vnet-azure",
 } as const;
-export type SetupTypeByoVnetAzure3 = ClosedEnum<typeof SetupTypeByoVnetAzure3>;
+export type CreateManagerResponseTypeByoVnetAzure3 = ClosedEnum<
+  typeof CreateManagerResponseTypeByoVnetAzure3
+>;
 
 export type CreateManagerResponseNetworkByoVnetAzure3 = {
   /**
@@ -892,17 +894,19 @@ export type CreateManagerResponseNetworkByoVnetAzure3 = {
    * Name of the public subnet within the VNet
    */
   publicSubnetName: string;
-  type: SetupTypeByoVnetAzure3;
+  type: CreateManagerResponseTypeByoVnetAzure3;
   /**
    * The full resource ID of the existing VNet
    */
   vnetResourceId: string;
 };
 
-export const SetupTypeByoVpcGcp3 = {
+export const CreateManagerResponseTypeByoVpcGcp3 = {
   ByoVpcGcp: "byo-vpc-gcp",
 } as const;
-export type SetupTypeByoVpcGcp3 = ClosedEnum<typeof SetupTypeByoVpcGcp3>;
+export type CreateManagerResponseTypeByoVpcGcp3 = ClosedEnum<
+  typeof CreateManagerResponseTypeByoVpcGcp3
+>;
 
 export type CreateManagerResponseNetworkByoVpcGcp3 = {
   /**
@@ -917,13 +921,15 @@ export type CreateManagerResponseNetworkByoVpcGcp3 = {
    * The name of the subnet to use
    */
   subnetName: string;
-  type: SetupTypeByoVpcGcp3;
+  type: CreateManagerResponseTypeByoVpcGcp3;
 };
 
-export const SetupTypeByoVpcAws3 = {
+export const CreateManagerResponseTypeByoVpcAws3 = {
   ByoVpcAws: "byo-vpc-aws",
 } as const;
-export type SetupTypeByoVpcAws3 = ClosedEnum<typeof SetupTypeByoVpcAws3>;
+export type CreateManagerResponseTypeByoVpcAws3 = ClosedEnum<
+  typeof CreateManagerResponseTypeByoVpcAws3
+>;
 
 export type CreateManagerResponseNetworkByoVpcAws3 = {
   /**
@@ -938,17 +944,19 @@ export type CreateManagerResponseNetworkByoVpcAws3 = {
    * Optional security group IDs to use
    */
   securityGroupIds?: Array<string> | undefined;
-  type: SetupTypeByoVpcAws3;
+  type: CreateManagerResponseTypeByoVpcAws3;
   /**
    * The ID of the existing VPC
    */
   vpcId: string;
 };
 
-export const SetupTypeCreate3 = {
+export const CreateManagerResponseTypeCreate3 = {
   Create: "create",
 } as const;
-export type SetupTypeCreate3 = ClosedEnum<typeof SetupTypeCreate3>;
+export type CreateManagerResponseTypeCreate3 = ClosedEnum<
+  typeof CreateManagerResponseTypeCreate3
+>;
 
 export type CreateManagerResponseNetworkCreate3 = {
   /**
@@ -962,16 +970,18 @@ export type CreateManagerResponseNetworkCreate3 = {
    * to reduce conflicts (e.g., "10.{hash}.0.0/16").
    */
   cidr?: string | null | undefined;
-  type: SetupTypeCreate3;
+  type: CreateManagerResponseTypeCreate3;
 };
 
-export const SetupTypeUseDefault3 = {
+export const CreateManagerResponseTypeUseDefault3 = {
   UseDefault: "use-default",
 } as const;
-export type SetupTypeUseDefault3 = ClosedEnum<typeof SetupTypeUseDefault3>;
+export type CreateManagerResponseTypeUseDefault3 = ClosedEnum<
+  typeof CreateManagerResponseTypeUseDefault3
+>;
 
 export type CreateManagerResponseNetworkUseDefault3 = {
-  type: SetupTypeUseDefault3;
+  type: CreateManagerResponseTypeUseDefault3;
 };
 
 export type CreateManagerResponseNetworkUnion3 =
@@ -1062,7 +1072,7 @@ export type CreateManagerResponseStackSettings3 = {
   updates?: CreateManagerResponseUpdates3 | undefined;
 };
 
-export type SetupTerraform = {
+export type CreateManagerResponseSetupTerraform = {
   method: "terraform";
   deploymentPortalUrl: string;
   managerUrl: string;
@@ -1926,10 +1936,12 @@ export type CreateManagerResponseKubernetesUnion2 =
   | CreateManagerResponseKubernetes2
   | any;
 
-export const SetupTypeByoVnetAzure2 = {
+export const CreateManagerResponseTypeByoVnetAzure2 = {
   ByoVnetAzure: "byo-vnet-azure",
 } as const;
-export type SetupTypeByoVnetAzure2 = ClosedEnum<typeof SetupTypeByoVnetAzure2>;
+export type CreateManagerResponseTypeByoVnetAzure2 = ClosedEnum<
+  typeof CreateManagerResponseTypeByoVnetAzure2
+>;
 
 export type CreateManagerResponseNetworkByoVnetAzure2 = {
   /**
@@ -1940,17 +1952,19 @@ export type CreateManagerResponseNetworkByoVnetAzure2 = {
    * Name of the public subnet within the VNet
    */
   publicSubnetName: string;
-  type: SetupTypeByoVnetAzure2;
+  type: CreateManagerResponseTypeByoVnetAzure2;
   /**
    * The full resource ID of the existing VNet
    */
   vnetResourceId: string;
 };
 
-export const SetupTypeByoVpcGcp2 = {
+export const CreateManagerResponseTypeByoVpcGcp2 = {
   ByoVpcGcp: "byo-vpc-gcp",
 } as const;
-export type SetupTypeByoVpcGcp2 = ClosedEnum<typeof SetupTypeByoVpcGcp2>;
+export type CreateManagerResponseTypeByoVpcGcp2 = ClosedEnum<
+  typeof CreateManagerResponseTypeByoVpcGcp2
+>;
 
 export type CreateManagerResponseNetworkByoVpcGcp2 = {
   /**
@@ -1965,13 +1979,15 @@ export type CreateManagerResponseNetworkByoVpcGcp2 = {
    * The name of the subnet to use
    */
   subnetName: string;
-  type: SetupTypeByoVpcGcp2;
+  type: CreateManagerResponseTypeByoVpcGcp2;
 };
 
-export const SetupTypeByoVpcAws2 = {
+export const CreateManagerResponseTypeByoVpcAws2 = {
   ByoVpcAws: "byo-vpc-aws",
 } as const;
-export type SetupTypeByoVpcAws2 = ClosedEnum<typeof SetupTypeByoVpcAws2>;
+export type CreateManagerResponseTypeByoVpcAws2 = ClosedEnum<
+  typeof CreateManagerResponseTypeByoVpcAws2
+>;
 
 export type CreateManagerResponseNetworkByoVpcAws2 = {
   /**
@@ -1986,17 +2002,19 @@ export type CreateManagerResponseNetworkByoVpcAws2 = {
    * Optional security group IDs to use
    */
   securityGroupIds?: Array<string> | undefined;
-  type: SetupTypeByoVpcAws2;
+  type: CreateManagerResponseTypeByoVpcAws2;
   /**
    * The ID of the existing VPC
    */
   vpcId: string;
 };
 
-export const SetupTypeCreate2 = {
+export const CreateManagerResponseTypeCreate2 = {
   Create: "create",
 } as const;
-export type SetupTypeCreate2 = ClosedEnum<typeof SetupTypeCreate2>;
+export type CreateManagerResponseTypeCreate2 = ClosedEnum<
+  typeof CreateManagerResponseTypeCreate2
+>;
 
 export type CreateManagerResponseNetworkCreate2 = {
   /**
@@ -2010,16 +2028,18 @@ export type CreateManagerResponseNetworkCreate2 = {
    * to reduce conflicts (e.g., "10.{hash}.0.0/16").
    */
   cidr?: string | null | undefined;
-  type: SetupTypeCreate2;
+  type: CreateManagerResponseTypeCreate2;
 };
 
-export const SetupTypeUseDefault2 = {
+export const CreateManagerResponseTypeUseDefault2 = {
   UseDefault: "use-default",
 } as const;
-export type SetupTypeUseDefault2 = ClosedEnum<typeof SetupTypeUseDefault2>;
+export type CreateManagerResponseTypeUseDefault2 = ClosedEnum<
+  typeof CreateManagerResponseTypeUseDefault2
+>;
 
 export type CreateManagerResponseNetworkUseDefault2 = {
-  type: SetupTypeUseDefault2;
+  type: CreateManagerResponseTypeUseDefault2;
 };
 
 export type CreateManagerResponseNetworkUnion2 =
@@ -2110,7 +2130,7 @@ export type CreateManagerResponseStackSettings2 = {
   updates?: CreateManagerResponseUpdates2 | undefined;
 };
 
-export type SetupGoogleOauth = {
+export type CreateManagerResponseSetupGoogleOauth = {
   method: "google-oauth";
   deploymentPortalUrl: string;
   managerUrl: string;
@@ -2969,10 +2989,12 @@ export type CreateManagerResponseKubernetesUnion1 =
   | CreateManagerResponseKubernetes1
   | any;
 
-export const SetupTypeByoVnetAzure1 = {
+export const CreateManagerResponseTypeByoVnetAzure1 = {
   ByoVnetAzure: "byo-vnet-azure",
 } as const;
-export type SetupTypeByoVnetAzure1 = ClosedEnum<typeof SetupTypeByoVnetAzure1>;
+export type CreateManagerResponseTypeByoVnetAzure1 = ClosedEnum<
+  typeof CreateManagerResponseTypeByoVnetAzure1
+>;
 
 export type CreateManagerResponseNetworkByoVnetAzure1 = {
   /**
@@ -2983,17 +3005,19 @@ export type CreateManagerResponseNetworkByoVnetAzure1 = {
    * Name of the public subnet within the VNet
    */
   publicSubnetName: string;
-  type: SetupTypeByoVnetAzure1;
+  type: CreateManagerResponseTypeByoVnetAzure1;
   /**
    * The full resource ID of the existing VNet
    */
   vnetResourceId: string;
 };
 
-export const SetupTypeByoVpcGcp1 = {
+export const CreateManagerResponseTypeByoVpcGcp1 = {
   ByoVpcGcp: "byo-vpc-gcp",
 } as const;
-export type SetupTypeByoVpcGcp1 = ClosedEnum<typeof SetupTypeByoVpcGcp1>;
+export type CreateManagerResponseTypeByoVpcGcp1 = ClosedEnum<
+  typeof CreateManagerResponseTypeByoVpcGcp1
+>;
 
 export type CreateManagerResponseNetworkByoVpcGcp1 = {
   /**
@@ -3008,13 +3032,15 @@ export type CreateManagerResponseNetworkByoVpcGcp1 = {
    * The name of the subnet to use
    */
   subnetName: string;
-  type: SetupTypeByoVpcGcp1;
+  type: CreateManagerResponseTypeByoVpcGcp1;
 };
 
-export const SetupTypeByoVpcAws1 = {
+export const CreateManagerResponseTypeByoVpcAws1 = {
   ByoVpcAws: "byo-vpc-aws",
 } as const;
-export type SetupTypeByoVpcAws1 = ClosedEnum<typeof SetupTypeByoVpcAws1>;
+export type CreateManagerResponseTypeByoVpcAws1 = ClosedEnum<
+  typeof CreateManagerResponseTypeByoVpcAws1
+>;
 
 export type CreateManagerResponseNetworkByoVpcAws1 = {
   /**
@@ -3029,17 +3055,19 @@ export type CreateManagerResponseNetworkByoVpcAws1 = {
    * Optional security group IDs to use
    */
   securityGroupIds?: Array<string> | undefined;
-  type: SetupTypeByoVpcAws1;
+  type: CreateManagerResponseTypeByoVpcAws1;
   /**
    * The ID of the existing VPC
    */
   vpcId: string;
 };
 
-export const SetupTypeCreate1 = {
+export const CreateManagerResponseTypeCreate1 = {
   Create: "create",
 } as const;
-export type SetupTypeCreate1 = ClosedEnum<typeof SetupTypeCreate1>;
+export type CreateManagerResponseTypeCreate1 = ClosedEnum<
+  typeof CreateManagerResponseTypeCreate1
+>;
 
 export type CreateManagerResponseNetworkCreate1 = {
   /**
@@ -3053,16 +3081,18 @@ export type CreateManagerResponseNetworkCreate1 = {
    * to reduce conflicts (e.g., "10.{hash}.0.0/16").
    */
   cidr?: string | null | undefined;
-  type: SetupTypeCreate1;
+  type: CreateManagerResponseTypeCreate1;
 };
 
-export const SetupTypeUseDefault1 = {
+export const CreateManagerResponseTypeUseDefault1 = {
   UseDefault: "use-default",
 } as const;
-export type SetupTypeUseDefault1 = ClosedEnum<typeof SetupTypeUseDefault1>;
+export type CreateManagerResponseTypeUseDefault1 = ClosedEnum<
+  typeof CreateManagerResponseTypeUseDefault1
+>;
 
 export type CreateManagerResponseNetworkUseDefault1 = {
-  type: SetupTypeUseDefault1;
+  type: CreateManagerResponseTypeUseDefault1;
 };
 
 export type CreateManagerResponseNetworkUnion1 =
@@ -3153,7 +3183,7 @@ export type CreateManagerResponseStackSettings1 = {
   updates?: CreateManagerResponseUpdates1 | undefined;
 };
 
-export type SetupCloudformation = {
+export type CreateManagerResponseSetupCloudformation = {
   method: "cloudformation";
   deploymentPortalUrl: string;
   launchUrl: string;
@@ -3175,7 +3205,10 @@ export type SetupCloudformation = {
   stackSettings: CreateManagerResponseStackSettings1;
 };
 
-export type Setup = SetupCloudformation | SetupGoogleOauth | SetupTerraform;
+export type CreateManagerResponseSetupUnion =
+  | CreateManagerResponseSetupCloudformation
+  | CreateManagerResponseSetupGoogleOauth
+  | CreateManagerResponseSetupTerraform;
 
 export type CreateManagerResponse = {
   managerId: string;
@@ -3183,8 +3216,11 @@ export type CreateManagerResponse = {
   setupToken: string;
   setupTokenId: string;
   deploymentLink: string;
-  setupConfig: SetupConfig;
-  setup: SetupCloudformation | SetupGoogleOauth | SetupTerraform;
+  setupConfig: CreateManagerResponseSetupConfig;
+  setup:
+    | CreateManagerResponseSetupCloudformation
+    | CreateManagerResponseSetupGoogleOauth
+    | CreateManagerResponseSetupTerraform;
 };
 
 /** @internal */
@@ -3225,22 +3261,24 @@ export function createManagerResponseEnvironmentVariableFromJSON(
 }
 
 /** @internal */
-export const SetupConfig$inboundSchema: z.ZodType<SetupConfig, unknown> = z
-  .object({
-    metadata: z.record(z.string(), z.nullable(z.any())),
-    policy: DeploymentSetupPolicy$inboundSchema,
-    environmentVariables: z.array(
-      z.lazy(() => CreateManagerResponseEnvironmentVariable$inboundSchema),
-    ),
-  });
+export const CreateManagerResponseSetupConfig$inboundSchema: z.ZodType<
+  CreateManagerResponseSetupConfig,
+  unknown
+> = z.object({
+  metadata: z.record(z.string(), z.nullable(z.any())),
+  policy: DeploymentSetupPolicy$inboundSchema,
+  environmentVariables: z.array(
+    z.lazy(() => CreateManagerResponseEnvironmentVariable$inboundSchema),
+  ),
+});
 
-export function setupConfigFromJSON(
+export function createManagerResponseSetupConfigFromJSON(
   jsonString: string,
-): SafeParseResult<SetupConfig, SDKValidationError> {
+): SafeParseResult<CreateManagerResponseSetupConfig, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => SetupConfig$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SetupConfig' from JSON`,
+    (x) => CreateManagerResponseSetupConfig$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseSetupConfig' from JSON`,
   );
 }
 
@@ -4736,9 +4774,9 @@ export function createManagerResponseKubernetesUnion3FromJSON(
 }
 
 /** @internal */
-export const SetupTypeByoVnetAzure3$inboundSchema: z.ZodEnum<
-  typeof SetupTypeByoVnetAzure3
-> = z.enum(SetupTypeByoVnetAzure3);
+export const CreateManagerResponseTypeByoVnetAzure3$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseTypeByoVnetAzure3
+> = z.enum(CreateManagerResponseTypeByoVnetAzure3);
 
 /** @internal */
 export const CreateManagerResponseNetworkByoVnetAzure3$inboundSchema: z.ZodType<
@@ -4747,7 +4785,7 @@ export const CreateManagerResponseNetworkByoVnetAzure3$inboundSchema: z.ZodType<
 > = z.object({
   private_subnet_name: z.string(),
   public_subnet_name: z.string(),
-  type: SetupTypeByoVnetAzure3$inboundSchema,
+  type: CreateManagerResponseTypeByoVnetAzure3$inboundSchema,
   vnet_resource_id: z.string(),
 }).transform((v) => {
   return remap$(v, {
@@ -4774,9 +4812,9 @@ export function createManagerResponseNetworkByoVnetAzure3FromJSON(
 }
 
 /** @internal */
-export const SetupTypeByoVpcGcp3$inboundSchema: z.ZodEnum<
-  typeof SetupTypeByoVpcGcp3
-> = z.enum(SetupTypeByoVpcGcp3);
+export const CreateManagerResponseTypeByoVpcGcp3$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseTypeByoVpcGcp3
+> = z.enum(CreateManagerResponseTypeByoVpcGcp3);
 
 /** @internal */
 export const CreateManagerResponseNetworkByoVpcGcp3$inboundSchema: z.ZodType<
@@ -4786,7 +4824,7 @@ export const CreateManagerResponseNetworkByoVpcGcp3$inboundSchema: z.ZodType<
   network_name: z.string(),
   region: z.string(),
   subnet_name: z.string(),
-  type: SetupTypeByoVpcGcp3$inboundSchema,
+  type: CreateManagerResponseTypeByoVpcGcp3$inboundSchema,
 }).transform((v) => {
   return remap$(v, {
     "network_name": "networkName",
@@ -4806,9 +4844,9 @@ export function createManagerResponseNetworkByoVpcGcp3FromJSON(
 }
 
 /** @internal */
-export const SetupTypeByoVpcAws3$inboundSchema: z.ZodEnum<
-  typeof SetupTypeByoVpcAws3
-> = z.enum(SetupTypeByoVpcAws3);
+export const CreateManagerResponseTypeByoVpcAws3$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseTypeByoVpcAws3
+> = z.enum(CreateManagerResponseTypeByoVpcAws3);
 
 /** @internal */
 export const CreateManagerResponseNetworkByoVpcAws3$inboundSchema: z.ZodType<
@@ -4818,7 +4856,7 @@ export const CreateManagerResponseNetworkByoVpcAws3$inboundSchema: z.ZodType<
   private_subnet_ids: z.array(z.string()),
   public_subnet_ids: z.array(z.string()),
   security_group_ids: z.array(z.string()).optional(),
-  type: SetupTypeByoVpcAws3$inboundSchema,
+  type: CreateManagerResponseTypeByoVpcAws3$inboundSchema,
   vpc_id: z.string(),
 }).transform((v) => {
   return remap$(v, {
@@ -4841,9 +4879,9 @@ export function createManagerResponseNetworkByoVpcAws3FromJSON(
 }
 
 /** @internal */
-export const SetupTypeCreate3$inboundSchema: z.ZodEnum<
-  typeof SetupTypeCreate3
-> = z.enum(SetupTypeCreate3);
+export const CreateManagerResponseTypeCreate3$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseTypeCreate3
+> = z.enum(CreateManagerResponseTypeCreate3);
 
 /** @internal */
 export const CreateManagerResponseNetworkCreate3$inboundSchema: z.ZodType<
@@ -4852,7 +4890,7 @@ export const CreateManagerResponseNetworkCreate3$inboundSchema: z.ZodType<
 > = z.object({
   availability_zones: z.int().optional(),
   cidr: z.nullable(z.string()).optional(),
-  type: SetupTypeCreate3$inboundSchema,
+  type: CreateManagerResponseTypeCreate3$inboundSchema,
 }).transform((v) => {
   return remap$(v, {
     "availability_zones": "availabilityZones",
@@ -4871,16 +4909,16 @@ export function createManagerResponseNetworkCreate3FromJSON(
 }
 
 /** @internal */
-export const SetupTypeUseDefault3$inboundSchema: z.ZodEnum<
-  typeof SetupTypeUseDefault3
-> = z.enum(SetupTypeUseDefault3);
+export const CreateManagerResponseTypeUseDefault3$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseTypeUseDefault3
+> = z.enum(CreateManagerResponseTypeUseDefault3);
 
 /** @internal */
 export const CreateManagerResponseNetworkUseDefault3$inboundSchema: z.ZodType<
   CreateManagerResponseNetworkUseDefault3,
   unknown
 > = z.object({
-  type: SetupTypeUseDefault3$inboundSchema,
+  type: CreateManagerResponseTypeUseDefault3$inboundSchema,
 });
 
 export function createManagerResponseNetworkUseDefault3FromJSON(
@@ -4982,30 +5020,33 @@ export function createManagerResponseStackSettings3FromJSON(
 }
 
 /** @internal */
-export const SetupTerraform$inboundSchema: z.ZodType<SetupTerraform, unknown> =
-  z.object({
-    method: z.literal("terraform"),
-    deploymentPortalUrl: z.string(),
-    managerUrl: z.string(),
-    providerSource: z.string(),
-    moduleSource: z.string(),
-    moduleVersion: z.string().optional(),
-    moduleInputs: z.record(z.string(), z.string()),
-    mainTf: z.string(),
-    tfvars: z.string(),
-    commands: z.string(),
-    stackSettings: z.lazy(() =>
-      CreateManagerResponseStackSettings3$inboundSchema
-    ),
-  });
+export const CreateManagerResponseSetupTerraform$inboundSchema: z.ZodType<
+  CreateManagerResponseSetupTerraform,
+  unknown
+> = z.object({
+  method: z.literal("terraform"),
+  deploymentPortalUrl: z.string(),
+  managerUrl: z.string(),
+  providerSource: z.string(),
+  moduleSource: z.string(),
+  moduleVersion: z.string().optional(),
+  moduleInputs: z.record(z.string(), z.string()),
+  mainTf: z.string(),
+  tfvars: z.string(),
+  commands: z.string(),
+  stackSettings: z.lazy(() =>
+    CreateManagerResponseStackSettings3$inboundSchema
+  ),
+});
 
-export function setupTerraformFromJSON(
+export function createManagerResponseSetupTerraformFromJSON(
   jsonString: string,
-): SafeParseResult<SetupTerraform, SDKValidationError> {
+): SafeParseResult<CreateManagerResponseSetupTerraform, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => SetupTerraform$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SetupTerraform' from JSON`,
+    (x) =>
+      CreateManagerResponseSetupTerraform$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseSetupTerraform' from JSON`,
   );
 }
 
@@ -6501,9 +6542,9 @@ export function createManagerResponseKubernetesUnion2FromJSON(
 }
 
 /** @internal */
-export const SetupTypeByoVnetAzure2$inboundSchema: z.ZodEnum<
-  typeof SetupTypeByoVnetAzure2
-> = z.enum(SetupTypeByoVnetAzure2);
+export const CreateManagerResponseTypeByoVnetAzure2$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseTypeByoVnetAzure2
+> = z.enum(CreateManagerResponseTypeByoVnetAzure2);
 
 /** @internal */
 export const CreateManagerResponseNetworkByoVnetAzure2$inboundSchema: z.ZodType<
@@ -6512,7 +6553,7 @@ export const CreateManagerResponseNetworkByoVnetAzure2$inboundSchema: z.ZodType<
 > = z.object({
   private_subnet_name: z.string(),
   public_subnet_name: z.string(),
-  type: SetupTypeByoVnetAzure2$inboundSchema,
+  type: CreateManagerResponseTypeByoVnetAzure2$inboundSchema,
   vnet_resource_id: z.string(),
 }).transform((v) => {
   return remap$(v, {
@@ -6539,9 +6580,9 @@ export function createManagerResponseNetworkByoVnetAzure2FromJSON(
 }
 
 /** @internal */
-export const SetupTypeByoVpcGcp2$inboundSchema: z.ZodEnum<
-  typeof SetupTypeByoVpcGcp2
-> = z.enum(SetupTypeByoVpcGcp2);
+export const CreateManagerResponseTypeByoVpcGcp2$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseTypeByoVpcGcp2
+> = z.enum(CreateManagerResponseTypeByoVpcGcp2);
 
 /** @internal */
 export const CreateManagerResponseNetworkByoVpcGcp2$inboundSchema: z.ZodType<
@@ -6551,7 +6592,7 @@ export const CreateManagerResponseNetworkByoVpcGcp2$inboundSchema: z.ZodType<
   network_name: z.string(),
   region: z.string(),
   subnet_name: z.string(),
-  type: SetupTypeByoVpcGcp2$inboundSchema,
+  type: CreateManagerResponseTypeByoVpcGcp2$inboundSchema,
 }).transform((v) => {
   return remap$(v, {
     "network_name": "networkName",
@@ -6571,9 +6612,9 @@ export function createManagerResponseNetworkByoVpcGcp2FromJSON(
 }
 
 /** @internal */
-export const SetupTypeByoVpcAws2$inboundSchema: z.ZodEnum<
-  typeof SetupTypeByoVpcAws2
-> = z.enum(SetupTypeByoVpcAws2);
+export const CreateManagerResponseTypeByoVpcAws2$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseTypeByoVpcAws2
+> = z.enum(CreateManagerResponseTypeByoVpcAws2);
 
 /** @internal */
 export const CreateManagerResponseNetworkByoVpcAws2$inboundSchema: z.ZodType<
@@ -6583,7 +6624,7 @@ export const CreateManagerResponseNetworkByoVpcAws2$inboundSchema: z.ZodType<
   private_subnet_ids: z.array(z.string()),
   public_subnet_ids: z.array(z.string()),
   security_group_ids: z.array(z.string()).optional(),
-  type: SetupTypeByoVpcAws2$inboundSchema,
+  type: CreateManagerResponseTypeByoVpcAws2$inboundSchema,
   vpc_id: z.string(),
 }).transform((v) => {
   return remap$(v, {
@@ -6606,9 +6647,9 @@ export function createManagerResponseNetworkByoVpcAws2FromJSON(
 }
 
 /** @internal */
-export const SetupTypeCreate2$inboundSchema: z.ZodEnum<
-  typeof SetupTypeCreate2
-> = z.enum(SetupTypeCreate2);
+export const CreateManagerResponseTypeCreate2$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseTypeCreate2
+> = z.enum(CreateManagerResponseTypeCreate2);
 
 /** @internal */
 export const CreateManagerResponseNetworkCreate2$inboundSchema: z.ZodType<
@@ -6617,7 +6658,7 @@ export const CreateManagerResponseNetworkCreate2$inboundSchema: z.ZodType<
 > = z.object({
   availability_zones: z.int().optional(),
   cidr: z.nullable(z.string()).optional(),
-  type: SetupTypeCreate2$inboundSchema,
+  type: CreateManagerResponseTypeCreate2$inboundSchema,
 }).transform((v) => {
   return remap$(v, {
     "availability_zones": "availabilityZones",
@@ -6636,16 +6677,16 @@ export function createManagerResponseNetworkCreate2FromJSON(
 }
 
 /** @internal */
-export const SetupTypeUseDefault2$inboundSchema: z.ZodEnum<
-  typeof SetupTypeUseDefault2
-> = z.enum(SetupTypeUseDefault2);
+export const CreateManagerResponseTypeUseDefault2$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseTypeUseDefault2
+> = z.enum(CreateManagerResponseTypeUseDefault2);
 
 /** @internal */
 export const CreateManagerResponseNetworkUseDefault2$inboundSchema: z.ZodType<
   CreateManagerResponseNetworkUseDefault2,
   unknown
 > = z.object({
-  type: SetupTypeUseDefault2$inboundSchema,
+  type: CreateManagerResponseTypeUseDefault2$inboundSchema,
 });
 
 export function createManagerResponseNetworkUseDefault2FromJSON(
@@ -6747,8 +6788,8 @@ export function createManagerResponseStackSettings2FromJSON(
 }
 
 /** @internal */
-export const SetupGoogleOauth$inboundSchema: z.ZodType<
-  SetupGoogleOauth,
+export const CreateManagerResponseSetupGoogleOauth$inboundSchema: z.ZodType<
+  CreateManagerResponseSetupGoogleOauth,
   unknown
 > = z.object({
   method: z.literal("google-oauth"),
@@ -6761,13 +6802,14 @@ export const SetupGoogleOauth$inboundSchema: z.ZodType<
   ),
 });
 
-export function setupGoogleOauthFromJSON(
+export function createManagerResponseSetupGoogleOauthFromJSON(
   jsonString: string,
-): SafeParseResult<SetupGoogleOauth, SDKValidationError> {
+): SafeParseResult<CreateManagerResponseSetupGoogleOauth, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => SetupGoogleOauth$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SetupGoogleOauth' from JSON`,
+    (x) =>
+      CreateManagerResponseSetupGoogleOauth$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseSetupGoogleOauth' from JSON`,
   );
 }
 
@@ -8263,9 +8305,9 @@ export function createManagerResponseKubernetesUnion1FromJSON(
 }
 
 /** @internal */
-export const SetupTypeByoVnetAzure1$inboundSchema: z.ZodEnum<
-  typeof SetupTypeByoVnetAzure1
-> = z.enum(SetupTypeByoVnetAzure1);
+export const CreateManagerResponseTypeByoVnetAzure1$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseTypeByoVnetAzure1
+> = z.enum(CreateManagerResponseTypeByoVnetAzure1);
 
 /** @internal */
 export const CreateManagerResponseNetworkByoVnetAzure1$inboundSchema: z.ZodType<
@@ -8274,7 +8316,7 @@ export const CreateManagerResponseNetworkByoVnetAzure1$inboundSchema: z.ZodType<
 > = z.object({
   private_subnet_name: z.string(),
   public_subnet_name: z.string(),
-  type: SetupTypeByoVnetAzure1$inboundSchema,
+  type: CreateManagerResponseTypeByoVnetAzure1$inboundSchema,
   vnet_resource_id: z.string(),
 }).transform((v) => {
   return remap$(v, {
@@ -8301,9 +8343,9 @@ export function createManagerResponseNetworkByoVnetAzure1FromJSON(
 }
 
 /** @internal */
-export const SetupTypeByoVpcGcp1$inboundSchema: z.ZodEnum<
-  typeof SetupTypeByoVpcGcp1
-> = z.enum(SetupTypeByoVpcGcp1);
+export const CreateManagerResponseTypeByoVpcGcp1$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseTypeByoVpcGcp1
+> = z.enum(CreateManagerResponseTypeByoVpcGcp1);
 
 /** @internal */
 export const CreateManagerResponseNetworkByoVpcGcp1$inboundSchema: z.ZodType<
@@ -8313,7 +8355,7 @@ export const CreateManagerResponseNetworkByoVpcGcp1$inboundSchema: z.ZodType<
   network_name: z.string(),
   region: z.string(),
   subnet_name: z.string(),
-  type: SetupTypeByoVpcGcp1$inboundSchema,
+  type: CreateManagerResponseTypeByoVpcGcp1$inboundSchema,
 }).transform((v) => {
   return remap$(v, {
     "network_name": "networkName",
@@ -8333,9 +8375,9 @@ export function createManagerResponseNetworkByoVpcGcp1FromJSON(
 }
 
 /** @internal */
-export const SetupTypeByoVpcAws1$inboundSchema: z.ZodEnum<
-  typeof SetupTypeByoVpcAws1
-> = z.enum(SetupTypeByoVpcAws1);
+export const CreateManagerResponseTypeByoVpcAws1$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseTypeByoVpcAws1
+> = z.enum(CreateManagerResponseTypeByoVpcAws1);
 
 /** @internal */
 export const CreateManagerResponseNetworkByoVpcAws1$inboundSchema: z.ZodType<
@@ -8345,7 +8387,7 @@ export const CreateManagerResponseNetworkByoVpcAws1$inboundSchema: z.ZodType<
   private_subnet_ids: z.array(z.string()),
   public_subnet_ids: z.array(z.string()),
   security_group_ids: z.array(z.string()).optional(),
-  type: SetupTypeByoVpcAws1$inboundSchema,
+  type: CreateManagerResponseTypeByoVpcAws1$inboundSchema,
   vpc_id: z.string(),
 }).transform((v) => {
   return remap$(v, {
@@ -8368,9 +8410,9 @@ export function createManagerResponseNetworkByoVpcAws1FromJSON(
 }
 
 /** @internal */
-export const SetupTypeCreate1$inboundSchema: z.ZodEnum<
-  typeof SetupTypeCreate1
-> = z.enum(SetupTypeCreate1);
+export const CreateManagerResponseTypeCreate1$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseTypeCreate1
+> = z.enum(CreateManagerResponseTypeCreate1);
 
 /** @internal */
 export const CreateManagerResponseNetworkCreate1$inboundSchema: z.ZodType<
@@ -8379,7 +8421,7 @@ export const CreateManagerResponseNetworkCreate1$inboundSchema: z.ZodType<
 > = z.object({
   availability_zones: z.int().optional(),
   cidr: z.nullable(z.string()).optional(),
-  type: SetupTypeCreate1$inboundSchema,
+  type: CreateManagerResponseTypeCreate1$inboundSchema,
 }).transform((v) => {
   return remap$(v, {
     "availability_zones": "availabilityZones",
@@ -8398,16 +8440,16 @@ export function createManagerResponseNetworkCreate1FromJSON(
 }
 
 /** @internal */
-export const SetupTypeUseDefault1$inboundSchema: z.ZodEnum<
-  typeof SetupTypeUseDefault1
-> = z.enum(SetupTypeUseDefault1);
+export const CreateManagerResponseTypeUseDefault1$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseTypeUseDefault1
+> = z.enum(CreateManagerResponseTypeUseDefault1);
 
 /** @internal */
 export const CreateManagerResponseNetworkUseDefault1$inboundSchema: z.ZodType<
   CreateManagerResponseNetworkUseDefault1,
   unknown
 > = z.object({
-  type: SetupTypeUseDefault1$inboundSchema,
+  type: CreateManagerResponseTypeUseDefault1$inboundSchema,
 });
 
 export function createManagerResponseNetworkUseDefault1FromJSON(
@@ -8509,8 +8551,8 @@ export function createManagerResponseStackSettings1FromJSON(
 }
 
 /** @internal */
-export const SetupCloudformation$inboundSchema: z.ZodType<
-  SetupCloudformation,
+export const CreateManagerResponseSetupCloudformation$inboundSchema: z.ZodType<
+  CreateManagerResponseSetupCloudformation,
   unknown
 > = z.object({
   method: z.literal("cloudformation"),
@@ -8524,30 +8566,39 @@ export const SetupCloudformation$inboundSchema: z.ZodType<
   ),
 });
 
-export function setupCloudformationFromJSON(
+export function createManagerResponseSetupCloudformationFromJSON(
   jsonString: string,
-): SafeParseResult<SetupCloudformation, SDKValidationError> {
+): SafeParseResult<
+  CreateManagerResponseSetupCloudformation,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => SetupCloudformation$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SetupCloudformation' from JSON`,
+    (x) =>
+      CreateManagerResponseSetupCloudformation$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'CreateManagerResponseSetupCloudformation' from JSON`,
   );
 }
 
 /** @internal */
-export const Setup$inboundSchema: z.ZodType<Setup, unknown> = z.union([
-  z.lazy(() => SetupCloudformation$inboundSchema),
-  z.lazy(() => SetupGoogleOauth$inboundSchema),
-  z.lazy(() => SetupTerraform$inboundSchema),
+export const CreateManagerResponseSetupUnion$inboundSchema: z.ZodType<
+  CreateManagerResponseSetupUnion,
+  unknown
+> = z.union([
+  z.lazy(() => CreateManagerResponseSetupCloudformation$inboundSchema),
+  z.lazy(() => CreateManagerResponseSetupGoogleOauth$inboundSchema),
+  z.lazy(() => CreateManagerResponseSetupTerraform$inboundSchema),
 ]);
 
-export function setupFromJSON(
+export function createManagerResponseSetupUnionFromJSON(
   jsonString: string,
-): SafeParseResult<Setup, SDKValidationError> {
+): SafeParseResult<CreateManagerResponseSetupUnion, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Setup$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Setup' from JSON`,
+    (x) => CreateManagerResponseSetupUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseSetupUnion' from JSON`,
   );
 }
 
@@ -8561,11 +8612,11 @@ export const CreateManagerResponse$inboundSchema: z.ZodType<
   setupToken: z.string(),
   setupTokenId: z.string(),
   deploymentLink: z.string(),
-  setupConfig: z.lazy(() => SetupConfig$inboundSchema),
+  setupConfig: z.lazy(() => CreateManagerResponseSetupConfig$inboundSchema),
   setup: z.union([
-    z.lazy(() => SetupCloudformation$inboundSchema),
-    z.lazy(() => SetupGoogleOauth$inboundSchema),
-    z.lazy(() => SetupTerraform$inboundSchema),
+    z.lazy(() => CreateManagerResponseSetupCloudformation$inboundSchema),
+    z.lazy(() => CreateManagerResponseSetupGoogleOauth$inboundSchema),
+    z.lazy(() => CreateManagerResponseSetupTerraform$inboundSchema),
   ]),
 });
 

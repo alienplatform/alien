@@ -143,6 +143,7 @@ pub enum Commands {
 
     /// Manage private managers deployed to your cloud
     #[cfg(feature = "platform")]
+    #[command(alias = "manager")]
     Managers(ManagersArgs),
 }
 

@@ -75,6 +75,10 @@ pub trait AutoScalingApi: Send + Sync + std::fmt::Debug {
         &self,
         request: DescribeAutoScalingGroupsRequest,
     ) -> Result<DescribeAutoScalingGroupsResponse>;
+    async fn describe_scaling_activities(
+        &self,
+        request: DescribeScalingActivitiesRequest,
+    ) -> Result<DescribeScalingActivitiesResponse>;
     async fn set_desired_capacity(&self, request: SetDesiredCapacityRequest) -> Result<()>;
 
     // Instance Operations
@@ -673,6 +677,50 @@ impl AutoScalingApi for AutoScalingClient {
         .await
     }
 
+    async fn describe_scaling_activities(
+        &self,
+        request: DescribeScalingActivitiesRequest,
+    ) -> Result<DescribeScalingActivitiesResponse> {
+        let mut form_data = HashMap::new();
+        form_data.insert(
+            "Action".to_string(),
+            "DescribeScalingActivities".to_string(),
+        );
+        form_data.insert("Version".to_string(), "2011-01-01".to_string());
+
+        if let Some(ref name) = request.auto_scaling_group_name {
+            form_data.insert("AutoScalingGroupName".to_string(), name.clone());
+        }
+
+        if let Some(max_records) = request.max_records {
+            form_data.insert("MaxRecords".to_string(), max_records.to_string());
+        }
+
+        if let Some(ref filters) = request.filters {
+            for (i, filter) in filters.iter().enumerate() {
+                let prefix = format!("Filters.member.{}", i + 1);
+                form_data.insert(format!("{prefix}.Name"), filter.name.clone());
+                for (j, value) in filter.values.iter().enumerate() {
+                    form_data.insert(format!("{prefix}.Values.member.{}", j + 1), value.clone());
+                }
+            }
+        }
+
+        if let Some(ref next_token) = request.next_token {
+            form_data.insert("NextToken".to_string(), next_token.clone());
+        }
+
+        self.send_form(
+            form_data,
+            "DescribeScalingActivities",
+            request
+                .auto_scaling_group_name
+                .as_deref()
+                .unwrap_or("AutoScalingGroup"),
+        )
+        .await
+    }
+
     // ---------------------------------------------------------------------------
     // Instance Operations
     // ---------------------------------------------------------------------------
@@ -945,6 +993,53 @@ pub struct DescribeAutoScalingGroupsRequest {
     /// The token for the next set of items.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_token: Option<String>,
+}
+
+/// Request to describe Auto Scaling scaling activities.
+#[derive(Debug, Clone, Serialize, Builder, Default)]
+pub struct DescribeScalingActivitiesRequest {
+    /// The name of the Auto Scaling group.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_scaling_group_name: Option<String>,
+    /// The maximum number of items to return.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_records: Option<i32>,
+    /// Filters to limit the returned scaling activities.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filters: Option<Vec<ScalingActivityFilter>>,
+    /// The token for the next set of items.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_token: Option<String>,
+}
+
+/// Filter for DescribeScalingActivities.
+#[derive(Debug, Clone, Serialize, Builder)]
+pub struct ScalingActivityFilter {
+    /// Filter name, such as `Status`.
+    pub name: String,
+    /// Filter values.
+    pub values: Vec<String>,
+}
+
+/// Response from describing Auto Scaling scaling activities.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct DescribeScalingActivitiesResponse {
+    pub describe_scaling_activities_result: DescribeScalingActivitiesResult,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct DescribeScalingActivitiesResult {
+    pub activities: Option<ActivitiesWrapper>,
+    pub next_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ActivitiesWrapper {
+    #[serde(rename = "member", default)]
+    pub members: Vec<Activity>,
 }
 
 /// Response from describing Auto Scaling groups.

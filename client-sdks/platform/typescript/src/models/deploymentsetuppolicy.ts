@@ -38,6 +38,7 @@ export type AllowedPlatform = ClosedEnum<typeof AllowedPlatform>;
 export type DeploymentSetupPolicy = {
   allowedPlatforms: Array<AllowedPlatform>;
   allowedSetupMethods: Array<DeploymentSetupMethod>;
+  allowReleasePinning?: boolean | undefined;
   stackSettings?: DeploymentSetupStackSettingsPolicy | undefined;
 };
 
@@ -55,12 +56,14 @@ export const DeploymentSetupPolicy$inboundSchema: z.ZodType<
 > = z.object({
   allowedPlatforms: z.array(AllowedPlatform$inboundSchema),
   allowedSetupMethods: z.array(DeploymentSetupMethod$inboundSchema),
+  allowReleasePinning: z.boolean().optional(),
   stackSettings: DeploymentSetupStackSettingsPolicy$inboundSchema.optional(),
 });
 /** @internal */
 export type DeploymentSetupPolicy$Outbound = {
   allowedPlatforms: Array<string>;
   allowedSetupMethods: Array<string>;
+  allowReleasePinning?: boolean | undefined;
   stackSettings?: DeploymentSetupStackSettingsPolicy$Outbound | undefined;
 };
 
@@ -71,6 +74,7 @@ export const DeploymentSetupPolicy$outboundSchema: z.ZodType<
 > = z.object({
   allowedPlatforms: z.array(AllowedPlatform$outboundSchema),
   allowedSetupMethods: z.array(DeploymentSetupMethod$outboundSchema),
+  allowReleasePinning: z.boolean().optional(),
   stackSettings: DeploymentSetupStackSettingsPolicy$outboundSchema.optional(),
 });
 

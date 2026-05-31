@@ -14,6 +14,7 @@ import { managersListEvents } from "../funcs/managersListEvents.js";
 import { managersProvision } from "../funcs/managersProvision.js";
 import { managersReportHeartbeat } from "../funcs/managersReportHeartbeat.js";
 import { managersResolveGcpOAuthProvider } from "../funcs/managersResolveGcpOAuthProvider.js";
+import { managersRetry } from "../funcs/managersRetry.js";
 import { managersRetrySetup } from "../funcs/managersRetrySetup.js";
 import { managersUpdate } from "../funcs/managersUpdate.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
@@ -58,6 +59,20 @@ export class Managers extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.CreateManagerResponse> {
     return unwrapAsync(managersRetrySetup(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Retry private-manager setup. Returns a fresh setup action before the internal deployment exists, or requests retry for the internal deployment after it exists.
+   */
+  async retry(
+    request: operations.RetryManagerRequest,
+    options?: RequestOptions,
+  ): Promise<models.ManagerRetryResponse> {
+    return unwrapAsync(managersRetry(
       this,
       request,
       options,
