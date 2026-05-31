@@ -158,6 +158,7 @@ mod tests {
                 deployment_model: alien_core::DeploymentModel::Pull,
                 network: None,
                 domains: None,
+                kubernetes: None,
                 external_bindings: None,
             }))
             .api_server_port(8080)
@@ -195,6 +196,7 @@ mod tests {
                 deployment_model: alien_core::DeploymentModel::Pull,
                 network: None,
                 domains: None,
+                kubernetes: None,
                 external_bindings: None,
             }))
             .build();
@@ -216,6 +218,7 @@ mod tests {
                 deployment_model: alien_core::DeploymentModel::Pull,
                 network: None,
                 domains: None,
+                kubernetes: None,
                 external_bindings: None,
             }))
             .build();
@@ -237,6 +240,7 @@ mod tests {
                 deployment_model: alien_core::DeploymentModel::Pull,
                 network: None,
                 domains: None,
+                kubernetes: None,
                 external_bindings: None,
             }))
             .build();
