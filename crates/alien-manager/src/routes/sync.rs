@@ -819,9 +819,7 @@ async fn agent_sync(
                     if config.management_config.is_none() {
                         config.management_config = management_config;
                     }
-                    if config.deployment_token.is_none() {
-                        config.deployment_token = agent_token.clone();
-                    }
+                    config.deployment_token = agent_token.clone();
                     if config.base_platform.is_none() {
                         config.base_platform = deployment.base_platform;
                     }

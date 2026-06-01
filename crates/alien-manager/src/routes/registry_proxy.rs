@@ -797,12 +797,12 @@ async fn validate_pull_access(
     } else {
         // Cache miss — query DB.
         // The caller has already been authenticated and scoped to this
-        // deployment. Use the manager's system subject for the metadata lookup
-        // so registry pull auth does not depend on the caller's bearer format.
+        // deployment. Use that subject for the deployment lookup so platform
+        // managers can hydrate pull deployments through their pull sync path.
         let system = crate::auth::Subject::system();
         let deployment = state
             .deployment_store
-            .get_deployment(&system, deployment_id)
+            .get_deployment(subject, deployment_id)
             .await
             .map_err(|e| {
                 warn!(error = %e, "Failed to get deployment for registry proxy");

@@ -168,18 +168,11 @@ impl KubernetesContainerController {
         // Generate ServiceAccount name following Helm naming convention
         let service_account_name =
             kubernetes_service_account_name(&ctx.resource_prefix, config.get_permissions());
-        let image_pull_secret_name = if matches!(config.code, ContainerCode::Image { .. }) {
+        let image_pull_secret_name = if let ContainerCode::Image { image } = &config.code {
             let token = ctx.deployment_config.deployment_token.as_ref().ok_or_else(|| {
                 AlienError::new(ErrorData::ResourceControllerConfigError {
                     resource_id: config.id.clone(),
                     message: "deployment_token is required for Kubernetes to pull images from the registry proxy".to_string(),
-                })
-            })?;
-            let manager_url = ctx.deployment_config.manager_url.as_ref().ok_or_else(|| {
-                AlienError::new(ErrorData::ResourceControllerConfigError {
-                    resource_id: config.id.clone(),
-                    message: "manager_url is required for Kubernetes registry pull credentials"
-                        .to_string(),
                 })
             })?;
             let secret_name = format!("{}-registry", container_name);
@@ -187,14 +180,8 @@ impl KubernetesContainerController {
                 .service_provider
                 .get_kubernetes_secrets_client(kubernetes_config)
                 .await?;
-            create_registry_pull_secret(
-                &secrets_client,
-                &namespace,
-                &secret_name,
-                manager_url,
-                token,
-            )
-            .await?;
+            create_registry_pull_secret(&secrets_client, &namespace, &secret_name, image, token)
+                .await?;
             Some(secret_name)
         } else {
             None
@@ -599,18 +586,11 @@ impl KubernetesContainerController {
 
         let service_account_name =
             kubernetes_service_account_name(&ctx.resource_prefix, config.get_permissions());
-        let image_pull_secret_name = if matches!(config.code, ContainerCode::Image { .. }) {
+        let image_pull_secret_name = if let ContainerCode::Image { image } = &config.code {
             let token = ctx.deployment_config.deployment_token.as_ref().ok_or_else(|| {
                 AlienError::new(ErrorData::ResourceControllerConfigError {
                     resource_id: config.id.clone(),
                     message: "deployment_token is required for Kubernetes to pull images from the registry proxy".to_string(),
-                })
-            })?;
-            let manager_url = ctx.deployment_config.manager_url.as_ref().ok_or_else(|| {
-                AlienError::new(ErrorData::ResourceControllerConfigError {
-                    resource_id: config.id.clone(),
-                    message: "manager_url is required for Kubernetes registry pull credentials"
-                        .to_string(),
                 })
             })?;
             let secret_name = format!("{}-registry", workload_name);
@@ -618,14 +598,8 @@ impl KubernetesContainerController {
                 .service_provider
                 .get_kubernetes_secrets_client(kubernetes_config)
                 .await?;
-            create_registry_pull_secret(
-                &secrets_client,
-                namespace,
-                &secret_name,
-                manager_url,
-                token,
-            )
-            .await?;
+            create_registry_pull_secret(&secrets_client, namespace, &secret_name, image, token)
+                .await?;
             Some(secret_name)
         } else {
             None
