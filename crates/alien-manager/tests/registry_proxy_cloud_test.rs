@@ -451,6 +451,7 @@ impl CloudProxyTest {
                     agent_os: None,
                     agent_arch: None,
                     regime: None,
+                    agent_image_repository: None,
                 },
             )
             .await

@@ -602,6 +602,7 @@ async fn reconcile_succeeds_under_other_session_lock() {
                 agent_os: None,
                 agent_arch: None,
                 regime: None,
+                agent_image_repository: None,
             },
         )
         .await
@@ -666,6 +667,11 @@ async fn reconcile_refreshes_owned_lock_lease() {
                 heartbeats: vec![],
                 error: None,
                 suggested_delay_ms: None,
+                agent_version: None,
+                agent_os: None,
+                agent_arch: None,
+                regime: None,
+                agent_image_repository: None,
             },
         )
         .await
@@ -1173,6 +1179,7 @@ async fn update_agent_metadata_persists_full_inventory() {
             Some("linux"),
             Some("aarch64"),
             Some("kubernetes"),
+            Some("ghcr.io/alien-dev/alien-agent"),
         )
         .await
         .unwrap();
@@ -1186,6 +1193,10 @@ async fn update_agent_metadata_persists_full_inventory() {
     assert_eq!(fetched.agent_os.as_deref(), Some("linux"));
     assert_eq!(fetched.agent_arch.as_deref(), Some("aarch64"));
     assert_eq!(fetched.regime.as_deref(), Some("kubernetes"));
+    assert_eq!(
+        fetched.agent_image_repository.as_deref(),
+        Some("ghcr.io/alien-dev/alien-agent")
+    );
 }
 
 /// An old agent that doesn't send any of the new fields is a no-op:
@@ -1208,13 +1219,14 @@ async fn update_agent_metadata_with_all_none_is_a_noop() {
             Some("linux"),
             Some("aarch64"),
             Some("kubernetes"),
+            Some("ghcr.io/alien-dev/alien-agent"),
         )
         .await
         .unwrap();
 
-    // Then a "back-compat" old-agent sync: all four are None.
+    // Then a "back-compat" old-agent sync: every field is None.
     store
-        .update_agent_metadata(&test_subject(), &dep.id, None, None, None, None)
+        .update_agent_metadata(&test_subject(), &dep.id, None, None, None, None, None)
         .await
         .unwrap();
 
@@ -1245,16 +1257,25 @@ async fn update_agent_metadata_partial_update_preserves_others() {
             Some("linux"),
             Some("aarch64"),
             Some("kubernetes"),
+            Some("ghcr.io/alien-dev/alien-agent"),
         )
         .await
         .unwrap();
 
-    // Agent upgraded to 1.4.0; OS/arch/regime didn't change, so the
-    // handler only forwards agent_version this time (hypothetically —
-    // the real agent always sends all four, but the contract supports
+    // Agent upgraded to 1.4.0; OS/arch/regime/repo didn't change, so the
+    // handler only forwards agent_version this time (hypothetically — the
+    // real agent always sends all fields, but the contract supports
     // partial updates).
     store
-        .update_agent_metadata(&test_subject(), &dep.id, Some("1.4.0"), None, None, None)
+        .update_agent_metadata(
+            &test_subject(),
+            &dep.id,
+            Some("1.4.0"),
+            None,
+            None,
+            None,
+            None,
+        )
         .await
         .unwrap();
 
