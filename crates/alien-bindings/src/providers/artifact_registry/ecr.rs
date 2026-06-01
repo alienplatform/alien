@@ -382,47 +382,8 @@ impl ArtifactRegistry for EcrArtifactRegistry {
             .repository_name(full_repo_name.clone())
             .build();
 
-        let response = match ecr_client.create_repository(request.clone()).await {
+        let response = match ecr_client.create_repository(request).await {
             Ok(response) => response,
-            Err(e) if self.push_role_arn.is_some() => {
-                warn!(
-                    repo_name = %repo_name,
-                    full_repo_name = %full_repo_name,
-                    error = %e,
-                    "Failed to create ECR repository with push role, retrying with base credentials"
-                );
-
-                let direct_ecr_client = alien_aws_clients::ecr::EcrClient::new(
-                    crate::http_client::create_http_client(),
-                    self.credentials.clone(),
-                );
-                match direct_ecr_client.create_repository(request).await {
-                    Ok(response) => response,
-                    Err(e) => {
-                        let error = map_cloud_client_error(
-                            e,
-                            format!("Failed to create ECR repository '{}'", full_repo_name),
-                            Some(repo_name.to_string()),
-                        );
-
-                        if matches!(error.http_status_code, Some(409)) {
-                            info!(
-                                repo_name = %repo_name,
-                                full_repo_name = %full_repo_name,
-                                "ECR repository already exists"
-                            );
-
-                            return Ok(RepositoryResponse {
-                                name: full_repo_name.clone(),
-                                uri: Some(self.repository_uri(&full_repo_name)),
-                                created_at: None,
-                            });
-                        }
-
-                        return Err(error);
-                    }
-                }
-            }
             Err(e) => {
                 let error = map_cloud_client_error(
                     e,
