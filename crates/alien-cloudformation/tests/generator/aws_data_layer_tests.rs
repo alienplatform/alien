@@ -92,8 +92,42 @@ fn aws_vault_resource_permissions_attach_to_service_account_role() {
         "aws vault service account permissions",
     );
 
-    assert!(yaml.contains("ExecutionSaRoleVaultPermission00"));
+    assert!(yaml.contains("SecretsExecutionSaRoleVaultPermission00"));
     assert!(yaml.contains("ssm:GetParameter"));
     assert!(yaml.contains("parameter/${AWS::StackName}-secrets-*"));
     assert!(yaml.contains("Ref: ExecutionSaRole"));
+}
+
+#[test]
+fn aws_vault_permissions_include_vault_logical_id() {
+    let stack = Stack::new("vault-permissions".to_string())
+        .permission(
+            "execution",
+            PermissionProfile::new()
+                .resource("secrets", ["vault/data-read"])
+                .resource("provider-keys", ["vault/data-read"]),
+        )
+        .add(
+            ServiceAccount::new("execution-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Vault::new("secrets".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Vault::new("provider-keys".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    let yaml = render_built_ins(
+        &stack,
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        "aws multiple vault service account permissions",
+    );
+
+    assert!(yaml.contains("SecretsExecutionSaRoleVaultPermission00"));
+    assert!(yaml.contains("ProviderKeysExecutionSaRoleVaultPermission00"));
 }

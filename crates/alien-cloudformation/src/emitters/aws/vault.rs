@@ -91,6 +91,7 @@ impl CfEmitter for AwsVaultEmitter {
 fn vault_iam_policies(ctx: &EmitContext<'_>, vault: &Vault) -> Result<Vec<CfResource>> {
     let mut resources = Vec::new();
     let generator = AwsCloudFormationPermissionsGenerator::new();
+    let logical_id = required_logical_id(ctx)?;
     let context =
         permission_context().with_resource_name(format!("${{AWS::StackName}}-{}", vault.id()));
 
@@ -131,7 +132,8 @@ fn vault_iam_policies(ctx: &EmitContext<'_>, vault: &Vault) -> Result<Vec<CfReso
                 continue;
             };
 
-            let policy_id = format!("{role_id}VaultPermission{owner_index}{permission_index}");
+            let policy_id =
+                format!("{logical_id}{role_id}VaultPermission{owner_index}{permission_index}");
             let mut policy_resource = CfResource::new(policy_id, "AWS::IAM::Policy".to_string());
             policy_resource.properties.insert(
                 "PolicyName".to_string(),
