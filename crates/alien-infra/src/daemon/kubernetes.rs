@@ -48,38 +48,20 @@ impl KubernetesDaemonController {
         let service_account_name =
             kubernetes_service_account_name(&ctx.resource_prefix, config.get_permissions());
 
-        let image_pull_secret_name = if matches!(config.code, DaemonCode::Image { .. }) {
+        let image_pull_secret_name = if let DaemonCode::Image { image } = &config.code {
             let token = ctx.deployment_config.deployment_token.as_ref().ok_or_else(|| {
                 AlienError::new(ErrorData::ResourceConfigInvalid {
                     message: "deployment_token is required for Kubernetes to pull images from the registry proxy".to_string(),
                     resource_id: Some(config.id.clone()),
                 })
             })?;
-            let proxy_host = ctx
-                .deployment_config
-                .manager_url
-                .as_deref()
-                .map(alien_core::image_rewrite::strip_url_scheme)
-                .ok_or_else(|| {
-                    AlienError::new(ErrorData::ResourceConfigInvalid {
-                        message: "manager_url is required for Kubernetes registry pull credentials"
-                            .to_string(),
-                        resource_id: Some(config.id.clone()),
-                    })
-                })?;
             let secret_name = format!("{}-registry", daemon_set_name);
             let secrets_client = ctx
                 .service_provider
                 .get_kubernetes_secrets_client(kubernetes_config)
                 .await?;
-            create_registry_pull_secret(
-                &secrets_client,
-                &namespace,
-                &secret_name,
-                proxy_host,
-                token,
-            )
-            .await?;
+            create_registry_pull_secret(&secrets_client, &namespace, &secret_name, image, token)
+                .await?;
             Some(secret_name)
         } else {
             None
@@ -234,14 +216,21 @@ impl KubernetesDaemonController {
 
         let service_account_name =
             kubernetes_service_account_name(&ctx.resource_prefix, config.get_permissions());
-        let image_pull_secret_name = if matches!(config.code, DaemonCode::Image { .. }) {
-            if ctx.deployment_config.deployment_token.is_none() {
-                return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+        let image_pull_secret_name = if let DaemonCode::Image { image } = &config.code {
+            let token = ctx.deployment_config.deployment_token.as_ref().ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceConfigInvalid {
                     message: "deployment_token is required for Kubernetes to pull images from the registry proxy".to_string(),
                     resource_id: Some(config.id.clone()),
-                }));
-            }
-            Some(format!("{}-registry", daemon_set_name))
+                })
+            })?;
+            let secret_name = format!("{}-registry", daemon_set_name);
+            let secrets_client = ctx
+                .service_provider
+                .get_kubernetes_secrets_client(kubernetes_config)
+                .await?;
+            create_registry_pull_secret(&secrets_client, namespace, &secret_name, image, token)
+                .await?;
+            Some(secret_name)
         } else {
             None
         };

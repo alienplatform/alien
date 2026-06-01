@@ -109,6 +109,7 @@ impl TerraformRegistration {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TerraformHelmInstall {
     pub chart_ref: String,
+    pub release_name: String,
 }
 
 /// Per-network-resource extra variables (e.g. existing VPC ids for AWS).
@@ -1029,13 +1030,15 @@ fn variables_body(
     if target.is_kubernetes() && registration.is_some() && helm_install.is_some() {
         blocks.push(nested(bool_variable_block(
             "helm_install_enabled",
-            "Whether this module installs the Alien Helm chart after registering the deployment.",
+            "Whether this module installs the runtime Helm chart after registering the deployment.",
             Some(true),
         )));
         blocks.push(nested(variable_block(
             "helm_release_name",
-            "Helm release name used for the Alien runtime chart.",
-            Some(Expression::String("alien".to_string())),
+            "Helm release name used for the runtime chart.",
+            Some(Expression::String(
+                helm_install.expect("checked above").release_name.clone(),
+            )),
             false,
         )));
         blocks.push(nested(variable_block(
@@ -1774,7 +1777,7 @@ fn helm_install_body(
 ) -> Body {
     Body::from(vec![Structure::Block(resource_block(
         "helm_release",
-        "alien",
+        "runtime",
         [
             attr("count", expr::raw("var.helm_install_enabled ? 1 : 0")),
             attr("name", expr::raw("var.helm_release_name")),

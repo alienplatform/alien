@@ -561,6 +561,7 @@ fn registered_kubernetes_module_installs_provider_rendered_helm_values() {
             }),
             helm_install: Some(TerraformHelmInstall {
                 chart_ref: "oci://pkg.example.com/acme/app/helm".to_string(),
+                release_name: "acme-agent".to_string(),
             }),
             supported_aws_regions: Vec::new(),
         },
@@ -637,6 +638,7 @@ fn registered_gke_kubernetes_module_declares_dynamic_network_inputs() {
             }),
             helm_install: Some(TerraformHelmInstall {
                 chart_ref: "oci://pkg.example.com/acme/app/helm".to_string(),
+                release_name: "acme-agent".to_string(),
             }),
             supported_aws_regions: Vec::new(),
         },
