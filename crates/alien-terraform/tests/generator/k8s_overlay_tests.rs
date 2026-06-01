@@ -574,6 +574,12 @@ fn registered_kubernetes_module_installs_provider_rendered_helm_values() {
         .expect("registered module with helm install should include helm.tf");
     assert!(helm.contains("alien_deployment.this.helm_values"));
     assert!(!helm.contains("local.helm_values"));
+
+    let providers = module
+        .get("providers.tf")
+        .expect("registered Kubernetes module should include providers.tf");
+    assert!(providers.contains("kubernetes = {"));
+    assert!(!providers.contains("kubernetes {"));
 }
 
 #[test]
