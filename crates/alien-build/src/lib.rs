@@ -28,6 +28,12 @@ use tokio::time::sleep;
 use tracing::{info, warn};
 
 const BASE_IMAGE_BUILD_MAX_ATTEMPTS: usize = 3;
+const ARTIFACT_CACHE_METADATA_FILE: &str = ".alien-build-cache.json";
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct ArtifactCacheMetadata {
+    cache_key: String,
+}
 
 /// Dedupe key for identifying containers that can share the same binary build.
 /// Containers with the same (src, toolchain_type, binary_name) produce identical binaries.
@@ -1310,6 +1316,26 @@ async fn build_resource(
         targets
     );
 
+    let artifact_cache_key =
+        compute_source_artifact_cache_key(src, toolchain_config, settings, &targets, is_container)
+            .await?;
+
+    if let Some(cached_dir) = find_cached_artifact_dir(
+        build_output_dir,
+        resource_name,
+        &targets,
+        &artifact_cache_key,
+    )
+    .await?
+    {
+        info!(
+            "Reusing cached build artifacts for resource '{}' at {}",
+            resource_name,
+            cached_dir.display()
+        );
+        return Ok(cached_dir.to_string_lossy().into_owned());
+    }
+
     // Build into a unique staging directory so concurrent builds do not race on
     // the same path before the hashed output is finalized.
     let resource_dir = temp_artifact_dir(build_output_dir, resource_name);
@@ -1391,6 +1417,7 @@ async fn build_resource(
     let final_output_dir = build_output_dir.join(&hashed_dir_name);
 
     let finalized_dir = finalize_artifact_dir(&resource_dir, &final_output_dir, "build").await?;
+    write_artifact_cache_metadata(&PathBuf::from(&finalized_dir), &artifact_cache_key).await?;
 
     // Return the directory path containing all OCI tarballs (with content hash)
     info!(
@@ -1400,6 +1427,217 @@ async fn build_resource(
         short_hash
     );
     Ok(finalized_dir)
+}
+
+async fn compute_source_artifact_cache_key(
+    src: &str,
+    toolchain_config: &alien_core::ToolchainConfig,
+    settings: &BuildSettings,
+    targets: &[BinaryTarget],
+    is_container: bool,
+) -> Result<String> {
+    let mut hasher = Sha256::new();
+    hasher.update(b"alien-build-artifact-cache-v1");
+    hasher.update(src.as_bytes());
+    hasher.update(
+        serde_json::to_vec(toolchain_config)
+            .into_alien_error()
+            .context(ErrorData::JsonSerializationError {
+                message: "Failed to serialize toolchain config for build cache key".to_string(),
+            })?,
+    );
+    hasher.update(settings.platform.runtime_platform().as_str().as_bytes());
+    if let Some(base_platform) = settings.platform.base_platform() {
+        hasher.update(base_platform.as_str().as_bytes());
+    }
+    hasher.update(settings.debug_mode.to_string().as_bytes());
+    hasher.update(is_container.to_string().as_bytes());
+    if let Some(override_base_image) = &settings.override_base_image {
+        hasher.update(override_base_image.as_bytes());
+    }
+    for target in targets {
+        hasher.update(target.runtime_platform_id().as_bytes());
+    }
+
+    hash_source_directory(Path::new(src), &mut hasher).await?;
+
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+async fn hash_source_directory(src_dir: &Path, hasher: &mut Sha256) -> Result<()> {
+    let mut files = Vec::new();
+    collect_source_files(src_dir, src_dir, &mut files)?;
+    files.sort();
+
+    for relative_path in files {
+        let full_path = src_dir.join(&relative_path);
+        let contents = fs::read(&full_path).await.into_alien_error().context(
+            ErrorData::FileOperationFailed {
+                operation: "read file".to_string(),
+                file_path: full_path.display().to_string(),
+                reason: "Failed to read source file for build cache key".to_string(),
+            },
+        )?;
+        hasher.update(relative_path.to_string_lossy().as_bytes());
+        hasher.update(&contents);
+    }
+
+    Ok(())
+}
+
+fn collect_source_files(base_dir: &Path, dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
+    let entries =
+        std::fs::read_dir(dir)
+            .into_alien_error()
+            .context(ErrorData::FileOperationFailed {
+                operation: "read directory".to_string(),
+                file_path: dir.display().to_string(),
+                reason: "Failed to read source directory for build cache key".to_string(),
+            })?;
+
+    for entry in entries {
+        let entry = entry
+            .into_alien_error()
+            .context(ErrorData::FileOperationFailed {
+                operation: "read directory entry".to_string(),
+                file_path: dir.display().to_string(),
+                reason: "Failed to iterate source directory for build cache key".to_string(),
+            })?;
+        let path = entry.path();
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+
+        if file_name == ".git" || file_name == ".alien" {
+            continue;
+        }
+
+        let file_type =
+            entry
+                .file_type()
+                .into_alien_error()
+                .context(ErrorData::FileOperationFailed {
+                    operation: "read metadata".to_string(),
+                    file_path: path.display().to_string(),
+                    reason: "Failed to read source file type for build cache key".to_string(),
+                })?;
+
+        if file_type.is_dir() {
+            collect_source_files(base_dir, &path, files)?;
+        } else if file_type.is_file() {
+            let relative_path = path.strip_prefix(base_dir).into_alien_error().context(
+                ErrorData::FileOperationFailed {
+                    operation: "strip prefix".to_string(),
+                    file_path: path.display().to_string(),
+                    reason: "Failed to compute relative source path for build cache key"
+                        .to_string(),
+                },
+            )?;
+            files.push(relative_path.to_path_buf());
+        }
+    }
+
+    Ok(())
+}
+
+async fn find_cached_artifact_dir(
+    build_output_dir: &Path,
+    resource_name: &str,
+    targets: &[BinaryTarget],
+    artifact_cache_key: &str,
+) -> Result<Option<PathBuf>> {
+    let mut entries = fs::read_dir(build_output_dir)
+        .await
+        .into_alien_error()
+        .context(ErrorData::FileOperationFailed {
+            operation: "read directory".to_string(),
+            file_path: build_output_dir.display().to_string(),
+            reason: "Failed to read build output directory for artifact cache".to_string(),
+        })?;
+
+    let prefix = format!("{resource_name}-");
+    while let Some(entry) =
+        entries
+            .next_entry()
+            .await
+            .into_alien_error()
+            .context(ErrorData::FileOperationFailed {
+                operation: "read directory entry".to_string(),
+                file_path: build_output_dir.display().to_string(),
+                reason: "Failed to iterate build output directory for artifact cache".to_string(),
+            })?
+    {
+        let path = entry.path();
+        let file_type =
+            entry
+                .file_type()
+                .await
+                .into_alien_error()
+                .context(ErrorData::FileOperationFailed {
+                    operation: "read metadata".to_string(),
+                    file_path: path.display().to_string(),
+                    reason: "Failed to read artifact cache entry metadata".to_string(),
+                })?;
+        if !file_type.is_dir() {
+            continue;
+        }
+
+        let Some(dir_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if !dir_name.starts_with(&prefix) {
+            continue;
+        }
+
+        let has_all_targets = targets.iter().all(|target| {
+            path.join(format!("{}.oci.tar", target.runtime_platform_id()))
+                .is_file()
+        });
+        if !has_all_targets {
+            continue;
+        }
+
+        let Ok(metadata_content) =
+            fs::read_to_string(path.join(ARTIFACT_CACHE_METADATA_FILE)).await
+        else {
+            continue;
+        };
+        let Ok(metadata) = serde_json::from_str::<ArtifactCacheMetadata>(&metadata_content) else {
+            continue;
+        };
+        if metadata.cache_key == artifact_cache_key {
+            return Ok(Some(path));
+        }
+    }
+
+    Ok(None)
+}
+
+async fn write_artifact_cache_metadata(
+    artifact_dir: &Path,
+    artifact_cache_key: &str,
+) -> Result<()> {
+    let metadata = ArtifactCacheMetadata {
+        cache_key: artifact_cache_key.to_string(),
+    };
+    let content = serde_json::to_string_pretty(&metadata)
+        .into_alien_error()
+        .context(ErrorData::JsonSerializationError {
+            message: "Failed to serialize build artifact cache metadata".to_string(),
+        })?;
+
+    fs::write(artifact_dir.join(ARTIFACT_CACHE_METADATA_FILE), content)
+        .await
+        .into_alien_error()
+        .context(ErrorData::FileOperationFailed {
+            operation: "write".to_string(),
+            file_path: artifact_dir
+                .join(ARTIFACT_CACHE_METADATA_FILE)
+                .display()
+                .to_string(),
+            reason: "Failed to write build artifact cache metadata".to_string(),
+        })?;
+
+    Ok(())
 }
 
 /// Build a specific OS/architecture target to an OCI tarball file
