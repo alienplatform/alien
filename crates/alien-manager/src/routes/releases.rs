@@ -78,6 +78,7 @@ pub struct ReleaseResponse {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ListReleasesResponse {
+    /// Releases the caller may read, newest first.
     pub items: Vec<ReleaseResponse>,
 }
 
@@ -313,6 +314,9 @@ async fn get_release(
     }
 }
 
+/// `GET /v1/releases` — Inbound: workspace / project bearer (or authenticated
+/// user). Outbound: caller bearer (passthrough). Returns only releases the
+/// caller may read.
 #[cfg_attr(feature = "openapi", utoipa::path(
     get,
     path = "/v1/releases",

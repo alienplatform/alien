@@ -59,13 +59,12 @@ async fn list_releases_task(client: &alien_manager_api::Client) -> Result<()> {
 
     let mut table = make_table(&["ID", "Created", "Commit", "Platforms"]);
     for release in &response.items {
-        let row: Vec<comfy_table::Cell> = vec![
+        table.add_row(vec![
             release.id.clone().into(),
             release.created_at.clone().into(),
-            commit_cell(release).into(),
-            platforms_cell(&release.stack).into(),
-        ];
-        table.add_row(row);
+            commit_cell(release),
+            platforms_cell(&release.stack),
+        ]);
     }
     print_table(table);
 
@@ -73,15 +72,16 @@ async fn list_releases_task(client: &alien_manager_api::Client) -> Result<()> {
 }
 
 /// A branch/tag ref reads better than a bare SHA, so prefer it.
-fn commit_cell(release: &ReleaseResponse) -> String {
-    release
+fn commit_cell(release: &ReleaseResponse) -> comfy_table::Cell {
+    let label = release
         .git_metadata
         .as_ref()
         .and_then(|g| g.commit_ref.clone().or_else(|| g.commit_sha.clone()))
-        .unwrap_or_else(|| "—".to_string())
+        .unwrap_or_else(|| "—".to_string());
+    comfy_table::Cell::new(label)
 }
 
-fn platforms_cell(stack: &StackByPlatform) -> String {
+fn platforms_cell(stack: &StackByPlatform) -> comfy_table::Cell {
     let names: Vec<&str> = [
         ("aws", stack.aws.is_some()),
         ("gcp", stack.gcp.is_some()),
@@ -94,9 +94,10 @@ fn platforms_cell(stack: &StackByPlatform) -> String {
     .filter_map(|(name, present)| present.then_some(name))
     .collect();
 
-    if names.is_empty() {
+    let label = if names.is_empty() {
         "—".to_string()
     } else {
         names.join(", ")
-    }
+    };
+    comfy_table::Cell::new(label)
 }
