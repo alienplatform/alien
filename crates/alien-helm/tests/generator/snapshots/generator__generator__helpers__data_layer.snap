@@ -1,5 +1,6 @@
 ---
 source: crates/alien-helm/tests/generator/helpers.rs
+assertion_line: 37
 expression: buf
 ---
 === Chart.yaml ===
@@ -131,6 +132,12 @@ clusterBootstrap:
       controller: eks.amazonaws.com/alb
       scheme: internet-facing
       subnetIds: []
+    azureApplicationGatewayForContainers:
+      enabled: false
+      applicationLoadBalancer:
+        name: ""
+        namespace: ""
+        associationSubnetId: ""
   compute:
     eksAutoMode:
       arm64NodePool:
@@ -155,6 +162,16 @@ stackSettings: null
 infrastructure: null
 
 basePlatform: null
+basePlatformConfig:
+  gcp:
+    projectId: ""
+    region: ""
+  aws:
+    region: ""
+  azure:
+    location: ""
+    subscriptionId: ""
+    tenantId: ""
 serviceAccountPrefix: ""
 managerServiceAccount:
   annotations: {}
@@ -370,6 +387,36 @@ ephemeralStorage:
     },
     "infrastructure": { "type": ["object", "null"] },
     "basePlatform": { "type": ["string", "null"], "enum": ["aws", "gcp", "azure", null] },
+    "basePlatformConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "gcp": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "projectId": { "type": "string" },
+            "region": { "type": "string" }
+          }
+        },
+        "aws": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "region": { "type": "string" }
+          }
+        },
+        "azure": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "location": { "type": "string" },
+            "subscriptionId": { "type": "string" },
+            "tenantId": { "type": "string" }
+          }
+        }
+      }
+    },
     "heartbeat": {
       "type": "object",
       "additionalProperties": false,
@@ -432,6 +479,22 @@ ephemeralStorage:
                 "subnetIds": {
                   "type": "array",
                   "items": { "type": "string" }
+                }
+              }
+            },
+            "azureApplicationGatewayForContainers": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "applicationLoadBalancer": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": { "type": "string" },
+                    "namespace": { "type": "string" },
+                    "associationSubnetId": { "type": "string" }
+                  }
                 }
               }
             }
@@ -665,6 +728,12 @@ rules:
   - apiGroups: ["gateway.networking.k8s.io"]
     resources: ["gateways", "httproutes"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["networking.gke.io"]
+    resources: ["healthcheckpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["alb.networking.azure.io"]
+    resources: ["healthcheckpolicy"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   {{- end }}
 
 === templates/rolebinding.yaml ===
@@ -824,6 +893,28 @@ spec:
             {{- if .Values.basePlatform }}
             - name: BASE_PLATFORM
               value: {{ .Values.basePlatform | quote }}
+            {{- end }}
+            {{- if and (eq .Values.basePlatform "gcp") .Values.basePlatformConfig.gcp.projectId }}
+            - name: GCP_PROJECT_ID
+              value: {{ .Values.basePlatformConfig.gcp.projectId | quote }}
+            - name: GOOGLE_CLOUD_PROJECT
+              value: {{ .Values.basePlatformConfig.gcp.projectId | quote }}
+            {{- end }}
+            {{- if and (eq .Values.basePlatform "gcp") .Values.basePlatformConfig.gcp.region }}
+            - name: GCP_REGION
+              value: {{ .Values.basePlatformConfig.gcp.region | quote }}
+            {{- end }}
+            {{- if and (eq .Values.basePlatform "azure") .Values.basePlatformConfig.azure.subscriptionId }}
+            - name: AZURE_SUBSCRIPTION_ID
+              value: {{ .Values.basePlatformConfig.azure.subscriptionId | quote }}
+            {{- end }}
+            {{- if and (eq .Values.basePlatform "azure") .Values.basePlatformConfig.azure.tenantId }}
+            - name: AZURE_TENANT_ID
+              value: {{ .Values.basePlatformConfig.azure.tenantId | quote }}
+            {{- end }}
+            {{- if and (eq .Values.basePlatform "azure") .Values.basePlatformConfig.azure.location }}
+            - name: AZURE_REGION
+              value: {{ .Values.basePlatformConfig.azure.location | quote }}
             {{- end }}
             - name: SYNC_URL
               value: {{ .Values.management.url | quote }}
@@ -1057,6 +1148,24 @@ spec:
     apiGroup: eks.amazonaws.com
     kind: IngressClassParams
     name: {{ $ingressClassName | quote }}
+{{ end }}
+{{- $azureAgc := dig "ingress" "azureApplicationGatewayForContainers" dict $bootstrap -}}
+{{- if dig "enabled" false $azureAgc }}
+{{- $azureAlb := required "clusterBootstrap.ingress.azureApplicationGatewayForContainers.applicationLoadBalancer is required when enabled" $azureAgc.applicationLoadBalancer -}}
+{{- $azureAlbName := required "clusterBootstrap.ingress.azureApplicationGatewayForContainers.applicationLoadBalancer.name is required when enabled" $azureAlb.name -}}
+{{- $azureAlbNamespace := required "clusterBootstrap.ingress.azureApplicationGatewayForContainers.applicationLoadBalancer.namespace is required when enabled" $azureAlb.namespace -}}
+{{- $azureAssociationSubnetId := required "clusterBootstrap.ingress.azureApplicationGatewayForContainers.applicationLoadBalancer.associationSubnetId is required when enabled" $azureAlb.associationSubnetId -}}
+---
+apiVersion: alb.networking.azure.io/v1
+kind: ApplicationLoadBalancer
+metadata:
+  name: {{ $azureAlbName | quote }}
+  namespace: {{ $azureAlbNamespace | quote }}
+  labels:
+    {{- include "alien.labels" . | nindent 4 }}
+spec:
+  associations:
+    - {{ $azureAssociationSubnetId | quote }}
 {{ end }}
 {{- $eksArm64NodePool := dig "compute" "eksAutoMode" "arm64NodePool" dict $bootstrap -}}
 {{- if dig "enabled" false $eksArm64NodePool }}
