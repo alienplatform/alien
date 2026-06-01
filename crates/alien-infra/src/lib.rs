@@ -46,6 +46,8 @@ mod kubernetes_cluster_heartbeat;
 #[cfg(feature = "kubernetes")]
 mod kubernetes_public_endpoint;
 #[cfg(feature = "kubernetes")]
+mod kubernetes_registry;
+#[cfg(feature = "kubernetes")]
 mod kubernetes_workload_heartbeat;
 
 mod container;

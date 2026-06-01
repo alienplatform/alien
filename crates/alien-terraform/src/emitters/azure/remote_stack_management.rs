@@ -82,6 +82,12 @@ impl TfEmitter for AzureRemoteStackManagementEmitter {
             &format!("{label}_fic"),
             [
                 attr(
+                    "count",
+                    expr::raw(
+                        "var.azure_oidc_issuer != \"\" && var.azure_oidc_subject != \"\" ? 1 : 0",
+                    ),
+                ),
+                attr(
                     "name",
                     expr::template("${local.resource_prefix}-federated-credential".to_string()),
                 ),

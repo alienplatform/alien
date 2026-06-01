@@ -621,7 +621,7 @@ fn add_standard_parameters(template: &mut CfTemplate, settings: &StackSettings) 
         PARAM_MANAGING_ROLE_ARN.to_string(),
         string_parameter(
             "Manager IAM role ARN allowed to assume generated management roles.",
-            None,
+            Some(String::new()),
             None,
             false,
         ),
@@ -1116,7 +1116,7 @@ fn add_outputs(
         OUTPUT_MANAGEMENT_CONFIG.to_string(),
         output(
             "Manager import ManagementConfig JSON.",
-            CfExpression::to_json_string(management_config),
+            json_output_value(management_config),
         ),
     );
     template.outputs.insert(
@@ -1128,6 +1128,13 @@ fn add_outputs(
     );
     add_resource_outputs(template, resources)?;
     Ok(())
+}
+
+fn json_output_value(value: CfExpression) -> CfExpression {
+    match value {
+        CfExpression::Null => CfExpression::from("null"),
+        value => CfExpression::to_json_string(value),
+    }
 }
 
 fn add_resource_outputs(template: &mut CfTemplate, resources: CfExpression) -> Result<()> {
@@ -1483,7 +1490,11 @@ fn domains_expression() -> CfExpression {
     )
 }
 
-fn management_config_expression(_target: CloudFormationTarget) -> CfExpression {
+fn management_config_expression(target: CloudFormationTarget) -> CfExpression {
+    if target.is_kubernetes() {
+        return CfExpression::Null;
+    }
+
     CfExpression::object([
         ("platform", CfExpression::from("aws")),
         (

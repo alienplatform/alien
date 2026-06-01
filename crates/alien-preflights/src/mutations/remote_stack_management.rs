@@ -3,8 +3,8 @@
 use crate::error::Result;
 use crate::StackMutation;
 use alien_core::{
-    DeploymentConfig, Platform, RemoteStackManagement, ResourceEntry, ResourceLifecycle, Stack,
-    StackState,
+    DeploymentConfig, DeploymentModel, Platform, RemoteStackManagement, ResourceEntry,
+    ResourceLifecycle, Stack, StackState,
 };
 use async_trait::async_trait;
 use tracing::{debug, info};
@@ -47,8 +47,17 @@ impl StackMutation for RemoteStackManagementMutation {
             return false;
         }
 
-        // Only add if management is configured in deployment config
-        if config.management_config.is_none() {
+        let cloud_backed_kubernetes_pull = platform == Platform::Kubernetes
+            && matches!(
+                base_platform,
+                Platform::Aws | Platform::Gcp | Platform::Azure
+            )
+            && config.stack_settings.deployment_model == DeploymentModel::Pull;
+
+        // Push-mode cloud stacks need an external manager management config.
+        // Cloud-backed Kubernetes pull stacks still need this setup-owned
+        // identity, but the agent uses it from inside the cluster.
+        if config.management_config.is_none() && !cloud_backed_kubernetes_pull {
             return false;
         }
 
@@ -90,5 +99,62 @@ impl StackMutation for RemoteStackManagementMutation {
         debug!("Added RemoteStackManagement resource '{}'", remote_mgmt_id);
 
         Ok(stack)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::{EnvironmentVariablesSnapshot, ExternalBindings, StackSettings};
+
+    fn empty_stack() -> Stack {
+        Stack::new("test".to_string()).build()
+    }
+
+    fn config(
+        base_platform: Option<Platform>,
+        deployment_model: DeploymentModel,
+    ) -> DeploymentConfig {
+        DeploymentConfig {
+            deployment_name: None,
+            stack_settings: StackSettings {
+                deployment_model,
+                ..StackSettings::default()
+            },
+            management_config: None,
+            environment_variables: EnvironmentVariablesSnapshot {
+                variables: Vec::new(),
+                hash: "empty".to_string(),
+                created_at: "1970-01-01T00:00:00Z".to_string(),
+            },
+            allow_frozen_changes: false,
+            compute_backend: None,
+            external_bindings: ExternalBindings::default(),
+            base_platform,
+            public_urls: None,
+            domain_metadata: None,
+            monitoring: None,
+            manager_url: None,
+            deployment_token: None,
+            native_image_host: None,
+        }
+    }
+
+    #[test]
+    fn cloud_backed_kubernetes_pull_runs_without_external_management_config() {
+        let mutation = RemoteStackManagementMutation;
+        let stack = empty_stack();
+        let config = config(Some(Platform::Aws), DeploymentModel::Pull);
+
+        assert!(mutation.should_run(&stack, &StackState::new(Platform::Kubernetes), &config));
+    }
+
+    #[test]
+    fn cloud_backed_kubernetes_push_still_requires_external_management_config() {
+        let mutation = RemoteStackManagementMutation;
+        let stack = empty_stack();
+        let config = config(Some(Platform::Aws), DeploymentModel::Push);
+
+        assert!(!mutation.should_run(&stack, &StackState::new(Platform::Kubernetes), &config));
     }
 }

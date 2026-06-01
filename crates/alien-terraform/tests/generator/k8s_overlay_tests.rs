@@ -424,6 +424,12 @@ fn eks_managed_cluster_with_remote_management_irsa_is_valid() {
     };
 
     let module = render(&stack, TerraformTarget::Eks, settings);
+    let locals = module.get("locals.tf").expect("locals should render");
+    let management_config_line = locals
+        .lines()
+        .find(|line| line.contains("deployment_management_config"))
+        .expect("locals should include deployment_management_config");
+    assert!(management_config_line.ends_with("= null"));
     snapshot_module("eks_managed_cluster_remote_management_irsa", &module);
     assert_terraform_valid(&module, "eks_managed_cluster_remote_management_irsa");
 }

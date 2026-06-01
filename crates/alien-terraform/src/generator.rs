@@ -24,8 +24,8 @@ use crate::{
 };
 use alien_core::{
     import::{EmitContext, CURRENT_SETUP_IMPORT_FORMAT_VERSION},
-    ownership_policy_for_resource_type, ErrorData, Network, NetworkSettings, RemoteStackManagement,
-    Result, Stack, StackSettings,
+    ownership_policy_for_resource_type, DeploymentModel, ErrorData, Network, NetworkSettings,
+    RemoteStackManagement, Result, Stack, StackSettings,
 };
 use alien_error::{AlienError, IntoAlienError};
 use hcl::{
@@ -268,7 +268,8 @@ pub fn generate_terraform_module(
         || has_resource_type(&per_resource, "azapi_resource_action");
     let has_remote_management =
         stack_has_resource_type(stack, RemoteStackManagement::RESOURCE_TYPE);
-    let needs_azure_management_inputs = has_remote_management || target == TerraformTarget::Aks;
+    let needs_azure_management_inputs =
+        matches!(target.cloud_platform(), alien_core::Platform::Azure) && has_remote_management;
     let deployment_name_default = options
         .display_name
         .as_deref()
@@ -994,19 +995,19 @@ fn variables_body(
             blocks.push(nested(variable_block(
                 "azure_managing_tenant_id",
                 "Azure tenant ID the manager uses for cross-tenant access.",
-                None,
+                Some(Expression::String(String::new())),
                 false,
             )));
             blocks.push(nested(variable_block(
                 "azure_oidc_issuer",
                 "OIDC issuer URL for Azure Federated Identity Credential.",
-                None,
+                Some(Expression::String(String::new())),
                 false,
             )));
             blocks.push(nested(variable_block(
                 "azure_oidc_subject",
                 "OIDC subject claim for Azure Federated Identity Credential.",
-                None,
+                Some(Expression::String(String::new())),
                 false,
             )));
         }
@@ -1458,7 +1459,7 @@ fn locals_body(
     body.push(attr("deployment_region", region_expression(target)));
     body.push(attr(
         "deployment_management_config",
-        if has_remote_management {
+        if has_remote_management && stack_settings.deployment_model == DeploymentModel::Push {
             management_config_expression(target)
         } else {
             expr::raw("null")

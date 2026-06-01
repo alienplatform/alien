@@ -1822,6 +1822,7 @@ async fn write_manager_fetch_values(
             deployment_name: &deployment.name,
             manager_url: &prepared.manager.public_url,
             deployment_token: &deployment.token,
+            runtime_encryption_key: &crate::agent::generate_encryption_key(),
             stack: &stack,
             stack_state,
             stack_settings,

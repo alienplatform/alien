@@ -77,6 +77,15 @@ pub trait GcpClientConfigExt {
         refresh_token: &str,
     ) -> Result<String>;
 
+    /// Exchange an external account subject token for a Google access token.
+    async fn exchange_external_account_token(
+        audience: &str,
+        subject_token_type: &str,
+        token_url: &str,
+        credential_source_file: &str,
+        service_account_impersonation_url: Option<&str>,
+    ) -> Result<String>;
+
     /// Parse a credentials JSON value and return (credentials, project_id, region)
     async fn parse_credentials_json(
         credential_data: &serde_json::Value,
@@ -304,6 +313,22 @@ impl GcpClientConfigExt for GcpClientConfig {
             GcpCredentials::ServiceMetadata => self.fetch_metadata_token().await,
             GcpCredentials::ProjectedServiceAccount { token_file, .. } => {
                 self.get_projected_token(token_file).await
+            }
+            GcpCredentials::ExternalAccount {
+                audience,
+                subject_token_type,
+                token_url,
+                credential_source_file,
+                service_account_impersonation_url,
+            } => {
+                Self::exchange_external_account_token(
+                    audience,
+                    subject_token_type,
+                    token_url,
+                    credential_source_file,
+                    service_account_impersonation_url.as_deref(),
+                )
+                .await
             }
             GcpCredentials::AuthorizedUser {
                 client_id,
@@ -730,8 +755,139 @@ impl GcpClientConfigExt for GcpClientConfig {
         Ok(token_response.access_token)
     }
 
+    /// Exchanges an external account subject token through Google's Security Token Service.
+    async fn exchange_external_account_token(
+        audience: &str,
+        subject_token_type: &str,
+        token_url: &str,
+        credential_source_file: &str,
+        service_account_impersonation_url: Option<&str>,
+    ) -> Result<String> {
+        #[derive(Deserialize)]
+        struct StsTokenResponse {
+            access_token: String,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct ImpersonationTokenResponse {
+            access_token: String,
+        }
+
+        let subject_token = std::fs::read_to_string(credential_source_file)
+            .into_alien_error()
+            .context(ErrorData::InvalidClientConfig {
+                message: format!(
+                    "Failed to read external account subject token from: {}",
+                    credential_source_file
+                ),
+                errors: None,
+            })?
+            .trim()
+            .to_string();
+
+        let scope = "https://www.googleapis.com/auth/cloud-platform";
+        let client = Client::new();
+        let response = client
+            .post(token_url)
+            .form(&[
+                (
+                    "grant_type",
+                    "urn:ietf:params:oauth:grant-type:token-exchange",
+                ),
+                ("audience", audience),
+                (
+                    "requested_token_type",
+                    "urn:ietf:params:oauth:token-type:access_token",
+                ),
+                ("subject_token_type", subject_token_type),
+                ("subject_token", &subject_token),
+                ("scope", scope),
+            ])
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::HttpRequestFailed {
+                message: "Failed to exchange external account token".to_string(),
+            })?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(AlienError::new(ErrorData::HttpResponseError {
+                message: format!(
+                    "External account token exchange failed with status {}: {}",
+                    status, error_text
+                ),
+                url: token_url.to_string(),
+                http_status: status.as_u16(),
+                http_request_text: None,
+                http_response_text: Some(error_text),
+            }));
+        }
+
+        let sts_token: StsTokenResponse =
+            response
+                .json()
+                .await
+                .into_alien_error()
+                .context(ErrorData::SerializationError {
+                    message: "Failed to parse external account token exchange response".to_string(),
+                })?;
+
+        let Some(impersonation_url) = service_account_impersonation_url else {
+            return Ok(sts_token.access_token);
+        };
+
+        let response = client
+            .post(impersonation_url)
+            .bearer_auth(&sts_token.access_token)
+            .json(&serde_json::json!({
+                "scope": [scope],
+                "lifetime": "3600s",
+            }))
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::HttpRequestFailed {
+                message: "Failed to impersonate external account service account".to_string(),
+            })?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(AlienError::new(ErrorData::HttpResponseError {
+                message: format!(
+                    "External account service account impersonation failed with status {}: {}",
+                    status, error_text
+                ),
+                url: impersonation_url.to_string(),
+                http_status: status.as_u16(),
+                http_request_text: None,
+                http_response_text: Some(error_text),
+            }));
+        }
+
+        let token_response: ImpersonationTokenResponse =
+            response
+                .json()
+                .await
+                .into_alien_error()
+                .context(ErrorData::SerializationError {
+                    message: "Failed to parse service account impersonation response".to_string(),
+                })?;
+
+        Ok(token_response.access_token)
+    }
+
     /// Parse a credentials JSON value and return (credentials, project_id, region).
-    /// Supports both `service_account` and `authorized_user` credential types.
+    /// Supports `service_account`, `authorized_user`, and `external_account` credential types.
     async fn parse_credentials_json(
         credential_data: &serde_json::Value,
         raw_json: &str,
@@ -741,7 +897,83 @@ impl GcpClientConfigExt for GcpClientConfig {
             .as_str()
             .unwrap_or("service_account");
 
-        if cred_type == "authorized_user" {
+        if cred_type == "external_account" {
+            let audience = credential_data["audience"]
+                .as_str()
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::InvalidClientConfig {
+                        message: "audience not found in external_account credentials".to_string(),
+                        errors: None,
+                    })
+                })?
+                .to_string();
+
+            let subject_token_type = credential_data["subject_token_type"]
+                .as_str()
+                .unwrap_or("urn:ietf:params:oauth:token-type:jwt")
+                .to_string();
+
+            let token_url = credential_data["token_url"]
+                .as_str()
+                .unwrap_or("https://sts.googleapis.com/v1/token")
+                .to_string();
+
+            let credential_source_file = credential_data["credential_source"]["file"]
+                .as_str()
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::InvalidClientConfig {
+                        message: "credential_source.file not found in external_account credentials"
+                            .to_string(),
+                        errors: None,
+                    })
+                })?
+                .to_string();
+
+            let service_account_impersonation_url = credential_data
+                ["service_account_impersonation_url"]
+                .as_str()
+                .map(|value| value.to_string());
+
+            let project_id = environment_variables
+                .get("GCP_PROJECT_ID")
+                .or_else(|| environment_variables.get("GOOGLE_CLOUD_PROJECT"))
+                .cloned()
+                .or_else(|| {
+                    credential_data["quota_project_id"]
+                        .as_str()
+                        .map(|value| value.to_string())
+                })
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::InvalidClientConfig {
+                        message: "Missing GCP_PROJECT_ID or GOOGLE_CLOUD_PROJECT environment variable for external_account credentials".to_string(),
+                        errors: None,
+                    })
+                })?;
+
+            let region = environment_variables
+                .get("GCP_REGION")
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::InvalidClientConfig {
+                        message:
+                            "Missing GCP_REGION environment variable for external_account credentials"
+                                .to_string(),
+                        errors: None,
+                    })
+                })?
+                .clone();
+
+            Ok((
+                GcpCredentials::ExternalAccount {
+                    audience,
+                    subject_token_type,
+                    token_url,
+                    credential_source_file,
+                    service_account_impersonation_url,
+                },
+                project_id,
+                region,
+            ))
+        } else if cred_type == "authorized_user" {
             let client_id = credential_data["client_id"]
                 .as_str()
                 .ok_or_else(|| {
