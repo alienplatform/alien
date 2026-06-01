@@ -11,15 +11,40 @@ use crate::core::{environment_variables::EnvironmentVariableBuilder, ResourceCon
 use crate::error::{ErrorData, Result};
 use alien_core::{
     Container, ContainerCode, ContainerHeartbeatData, ContainerOutputs, ContainerStatus,
-    HeartbeatBackend, Kv, LocalContainerHeartbeatData, LocalRuntimeUnitKind,
-    LocalRuntimeUnitStatus, ObservedHealth, Platform, ProviderLifecycleState, ResourceHeartbeat,
-    ResourceHeartbeatData, ResourceOutputs as CoreResourceOutputs, ResourceStatus, Storage, Vault,
-    WorkloadHeartbeatStatus,
+    EnvironmentVariable, EnvironmentVariableType, HeartbeatBackend, Kv, LocalContainerHeartbeatData,
+    LocalRuntimeUnitKind, LocalRuntimeUnitStatus, ObservedHealth, Platform, ProviderLifecycleState,
+    ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs as CoreResourceOutputs,
+    ResourceStatus, Storage, Vault, WorkloadHeartbeatStatus,
 };
 use alien_error::{AlienError, Context, IntoAlienError as _};
 use alien_local::{ContainerConfig, ContainerInfo};
 use alien_macros::controller;
 use chrono::Utc;
+
+fn matches_environment_target(resource_id: &str, target_resources: &Option<Vec<String>>) -> bool {
+    match target_resources {
+        None => true,
+        Some(patterns) if patterns.is_empty() => false,
+        Some(patterns) => patterns.iter().any(|pattern| {
+            if let Some(prefix) = pattern.strip_suffix('*') {
+                resource_id.starts_with(prefix)
+            } else {
+                resource_id == pattern
+            }
+        }),
+    }
+}
+
+fn applicable_secret_environment_variables<'a>(
+    resource_id: &str,
+    variables: &'a [EnvironmentVariable],
+) -> Vec<&'a EnvironmentVariable> {
+    variables
+        .iter()
+        .filter(|var| var.var_type == EnvironmentVariableType::Secret)
+        .filter(|var| matches_environment_target(resource_id, &var.target_resources))
+        .collect()
+}
 
 /// Local Container controller.
 ///
@@ -154,6 +179,13 @@ impl LocalContainerController {
             .await?
             .build();
 
+        for var in applicable_secret_environment_variables(
+            &config.id,
+            &ctx.deployment_config.environment_variables.variables,
+        ) {
+            env_vars.insert(var.name.clone(), var.value.clone());
+        }
+
         // Rewrite binding env vars to use container paths instead of host paths
         // This uses typed deserialization for type safety
         for bind_mount in &bind_mounts {
@@ -173,6 +205,7 @@ impl LocalContainerController {
 
         let container_config = ContainerConfig {
             image,
+            command: config.command.clone(),
             ports,
             expose_public,
             env_vars,
