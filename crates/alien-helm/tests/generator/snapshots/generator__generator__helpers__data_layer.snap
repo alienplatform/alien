@@ -51,6 +51,10 @@ runtime:
     chartRef: ""
     chartVersion: ""
     helmRunnerImage: "alpine/helm:3.18.4"
+    # Extra flags appended to the `helm upgrade` command the agent's
+    # helm-runner Job runs (e.g. `--plain-http` for local-dev OCI
+    # registries served over HTTP). Production should leave empty.
+    extraArgs: ""
   replicas: 1
   # Helm's --atomic --wait gives up after this many seconds if /readyz
   # hasn't returned 200 — the revision is then rolled back automatically.
@@ -282,7 +286,8 @@ ephemeralStorage:
           "properties": {
             "chartRef": { "type": "string" },
             "chartVersion": { "type": "string" },
-            "helmRunnerImage": { "type": "string" }
+            "helmRunnerImage": { "type": "string" },
+            "extraArgs": { "type": "string" }
           }
         },
         "replicas": { "type": "integer", "minimum": 1 },
@@ -685,6 +690,14 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- printf "%s-heartbeat-nodes" (include "alien.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{- /* Name of the ClusterRole that grants the agent self-update Job permission
+       to manage the chart-owned cluster-scoped resources (currently just the
+       heartbeat ClusterRole+Binding). Only created when both `upgrader.enabled`
+       and the heartbeat node-collection feature are on. */ -}}
+{{- define "alien.upgraderClusterRoleName" -}}
+{{- printf "%s-upgrader" (include "alien.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
 === templates/serviceaccount.yaml ===
 apiVersion: v1
 kind: ServiceAccount
@@ -748,6 +761,17 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["configmaps", "secrets", "services", "pods", "pods/log", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # ServiceAccounts + RBAC objects need to live here for `helm upgrade
+  # --reuse-values` to inspect (and patch) the release's existing
+  # resources during agent self-update. Without this, the upgrader SA
+  # — which is bound to this Role — can't `get` the SAs the chart
+  # already created and helm 4xx's out.
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
     resources: ["events"]
@@ -821,6 +845,40 @@ rules:
   - apiGroups: ["metrics.k8s.io"]
     resources: ["nodes"]
     verbs: ["get", "list", "watch"]
+{{- if .Values.upgrader.enabled }}
+---
+# Narrow cluster-scoped RBAC for the agent self-update helm-runner Job.
+# The chart creates exactly one cluster-scoped resource type pair —
+# the heartbeat ClusterRole + ClusterRoleBinding above — and the
+# upgrader SA needs to be able to `get/update/patch/delete` them
+# during `helm upgrade --reuse-values`. `resourceNames` scopes this
+# to ONLY the chart's own cluster objects; no enumeration of other
+# tenants' cluster resources. Verbs are deliberately minimal (no
+# `list`/`watch`, no `create` — chart install is what creates them
+# the first time, run by the customer's helm operator). If a future
+# chart version introduces new cluster-scoped resources, add their
+# names to `resourceNames` (and a `create` verb on a separate rule
+# without `resourceNames` if the upgrader needs to add new ones).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "alien.upgraderClusterRoleName" . }}
+  labels:
+    {{- include "alien.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles", "clusterrolebindings"]
+    resourceNames:
+      # The heartbeat-nodes cluster pair — the existing reason the
+      # upgrader needs cluster-scope access at all.
+      - {{ include "alien.heartbeatNodeClusterRoleName" . | quote }}
+      # And the upgrader cluster pair itself — helm now tracks these as
+      # chart-owned, so every `helm upgrade --reuse-values` does a `get`
+      # on them to compute the diff. Without self-reference, the first
+      # upgrade trips on `clusterroles "<name>-upgrader" is forbidden`.
+      - {{ include "alien.upgraderClusterRoleName" . | quote }}
+    verbs: ["get", "update", "patch", "delete"]
+{{- end }}
 {{- end }}
 
 === templates/clusterrolebinding.yaml ===
@@ -840,6 +898,23 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: {{ include "alien.heartbeatNodeClusterRoleName" . }}
+{{- if .Values.upgrader.enabled }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "alien.upgraderClusterRoleName" . }}
+  labels:
+    {{- include "alien.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "alien.upgraderServiceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "alien.upgraderClusterRoleName" . }}
+{{- end }}
 {{- end }}
 
 === templates/secret.yaml ===
@@ -1021,6 +1096,14 @@ spec:
             {{- if .Values.runtime.upgrade.helmRunnerImage }}
             - name: ALIEN_AGENT_HELM_RUNNER_IMAGE
               value: {{ .Values.runtime.upgrade.helmRunnerImage | quote }}
+            {{- end }}
+            {{- if .Values.runtime.upgrade.extraArgs }}
+            # Extra flags spliced into the `helm upgrade` command the
+            # agent's helm-runner Job runs. Use sparingly — exists for
+            # local-dev/insecure OCI registries (`--plain-http`) and
+            # similar one-off escape hatches; production should leave empty.
+            - name: ALIEN_AGENT_HELM_EXTRA_ARGS
+              value: {{ .Values.runtime.upgrade.extraArgs | quote }}
             {{- end }}
             {{- if .Values.serviceAccountPrefix }}
             # Pin the deployment's resource_prefix to the same value used for

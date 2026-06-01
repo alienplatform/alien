@@ -67,6 +67,10 @@ struct JobInputs {
     /// `None` means "let helm pick latest" — omits the `--version` flag.
     chart_version: Option<String>,
     runner_image: String,
+    /// Extra flags spliced into the `helm upgrade` command verbatim.
+    /// Empty in production; populated for local-dev escape hatches like
+    /// `--plain-http` against HTTP-only OCI registries.
+    extra_args: String,
     /// Pre-serialized JSON for `agent_target.helm.values`. Injected into
     /// the upgrader pod via the `VALUES_JSON` env var and re-materialised
     /// to a file inside the container.
@@ -113,6 +117,7 @@ fn resolve_job_inputs(target: &AgentTarget, helm: &AgentHelmTarget) -> Result<Jo
         .or_else(|| std::env::var("ALIEN_AGENT_CHART_VERSION").ok().filter(|s| !s.is_empty()));
     let runner_image = std::env::var("ALIEN_AGENT_HELM_RUNNER_IMAGE")
         .unwrap_or_else(|_| "alpine/helm:3.18.4".to_string());
+    let extra_args = std::env::var("ALIEN_AGENT_HELM_EXTRA_ARGS").unwrap_or_default();
 
     let values_json = serde_json::to_string(&helm.values).map_err(|e| {
         AlienError::new(ErrorData::ConfigurationError {
@@ -128,6 +133,7 @@ fn resolve_job_inputs(target: &AgentTarget, helm: &AgentHelmTarget) -> Result<Jo
         chart_ref,
         chart_version,
         runner_image,
+        extra_args,
         values_json,
     })
 }
@@ -149,10 +155,20 @@ fn build_job_body(inputs: &JobInputs) -> (String, serde_json::Value) {
         .as_deref()
         .map(|v| format!(" --version {v}"))
         .unwrap_or_default();
+    // Extra args spliced verbatim before `--namespace`. Empty in
+    // production; set via the chart's `runtime.upgrade.extraArgs` for
+    // local-dev escape hatches (e.g. `--plain-http` for HTTP-only OCI
+    // registries). Leading space is intentional — joins cleanly with
+    // version_flag whether it's empty or set.
+    let extra_args_flag = if inputs.extra_args.trim().is_empty() {
+        String::new()
+    } else {
+        format!(" {}", inputs.extra_args.trim())
+    };
     let helm_cmd = format!(
         "set -e\n\
          printf '%s' \"$VALUES_JSON\" > /tmp/values.json\n\
-         exec helm upgrade \"$RELEASE\" \"$CHART_REF\"{version_flag} \
+         exec helm upgrade \"$RELEASE\" \"$CHART_REF\"{version_flag}{extra_args_flag} \
             --namespace \"$NAMESPACE\" \
             --reuse-values \
             --atomic --wait \
@@ -295,6 +311,7 @@ mod tests {
             chart_ref: "oci://ghcr.io/alien-dev/alien".to_string(),
             chart_version: Some("1.4.0".to_string()),
             runner_image: "alpine/helm:3.18.4".to_string(),
+            extra_args: String::new(),
             values_json: r#"{"runtime":{"image":{"tag":"1.4.0"}}}"#.to_string(),
         }
     }
@@ -392,5 +409,45 @@ mod tests {
     fn non_empty_treats_empty_string_as_none() {
         assert_eq!(non_empty(""), None);
         assert_eq!(non_empty("oci://x"), Some("oci://x"));
+    }
+
+    #[test]
+    fn helm_command_omits_extra_args_when_unset() {
+        let (_, body) = build_job_body(&inputs());
+        let cmd = body["spec"]["template"]["spec"]["containers"][0]["command"][2]
+            .as_str()
+            .unwrap();
+        // Default fixture's extra_args is empty — should not contain
+        // double-spaces or stray flags.
+        assert!(!cmd.contains("  --namespace"), "stray double-space: {cmd}");
+        assert!(!cmd.contains("--plain-http"), "got: {cmd}");
+    }
+
+    #[test]
+    fn helm_command_splices_extra_args_before_namespace() {
+        let mut i = inputs();
+        i.extra_args = "--plain-http".to_string();
+        let (_, body) = build_job_body(&i);
+        let cmd = body["spec"]["template"]["spec"]["containers"][0]["command"][2]
+            .as_str()
+            .unwrap();
+        // Order matters: extra_args should appear after the chart ref
+        // (and any version flag) but before --namespace, so flags that
+        // affect chart pull (e.g. --plain-http) are in scope.
+        let plain_pos = cmd.find("--plain-http").expect("--plain-http should be present");
+        let ns_pos = cmd.find("--namespace").expect("--namespace should be present");
+        assert!(plain_pos < ns_pos, "--plain-http must come before --namespace: {cmd}");
+    }
+
+    #[test]
+    fn helm_command_trims_whitespace_in_extra_args() {
+        let mut i = inputs();
+        i.extra_args = "   --plain-http   ".to_string();
+        let (_, body) = build_job_body(&i);
+        let cmd = body["spec"]["template"]["spec"]["containers"][0]["command"][2]
+            .as_str()
+            .unwrap();
+        // The trim should keep exactly one space delimiter on each side.
+        assert!(cmd.contains(" --plain-http "), "got: {cmd}");
     }
 }
