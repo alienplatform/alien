@@ -197,6 +197,16 @@ async fn run(args: Args, init_hook: InitHook) -> Result<()> {
 
             if let Some(stored_deployment_id) = db.get_deployment_id().await? {
                 info!("   Using stored deployment ID: {}", stored_deployment_id);
+                // Prefer the deployment-scoped token previously returned by
+                // `/v1/initialize` over the chart-mounted deployment-group
+                // token. The platform API rejects `/v1/sync/acquire` calls
+                // made with a deployment-group token (403 Forbidden), so
+                // without this restoration step pod restarts silently lose
+                // sync until the agent re-initializes.
+                if let Some(stored_token) = db.get_sync_token().await? {
+                    info!("   Using stored deployment-scoped sync token");
+                    sync_token = stored_token;
+                }
             } else if let Some(deployment_id) = configured_deployment_id {
                 info!("   Using configured deployment ID: {}", deployment_id);
                 db.set_deployment_id(&deployment_id).await?;
@@ -217,6 +227,9 @@ async fn run(args: Args, init_hook: InitHook) -> Result<()> {
                 if let Some(ref dt) = deployment_token {
                     info!("   Received deployment-scoped token from manager");
                     sync_token = dt.clone();
+                    // Persist so pod restarts don't fall back to the
+                    // chart-mounted deployment-group token.
+                    db.set_sync_token(&sync_token).await?;
                 }
 
                 info!(
