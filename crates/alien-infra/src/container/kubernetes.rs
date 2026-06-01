@@ -213,15 +213,40 @@ impl KubernetesContainerController {
                 )
                 .await?;
 
-            let _created_statefulset = deployment_client
-                .create_statefulset(&namespace, &statefulset)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to create statefulset '{}'.", container_name),
-                    resource_id: Some(config.id.clone()),
-                })?;
-
-            info!(statefulset_name=%container_name, namespace=%namespace, "StatefulSet creation initiated");
+            match deployment_client.create_statefulset(&namespace, &statefulset).await {
+                Ok(_) => {
+                    info!(statefulset_name=%container_name, namespace=%namespace, "StatefulSet creation initiated");
+                }
+                Err(err) if is_already_exists(&err) => {
+                    let existing = deployment_client
+                        .get_statefulset(&namespace, &container_name)
+                        .await
+                        .context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Failed to read existing statefulset '{}' before adoption.",
+                                container_name
+                            ),
+                            resource_id: Some(config.id.clone()),
+                        })?;
+                    if !self.is_managed_workload(existing.metadata.labels.as_ref(), &container_name)
+                    {
+                        return Err(err.context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Refusing to adopt unmanaged statefulset '{}'.",
+                                container_name
+                            ),
+                            resource_id: Some(config.id.clone()),
+                        }));
+                    }
+                    info!(statefulset_name=%container_name, namespace=%namespace, "Adopting existing Kubernetes StatefulSet");
+                }
+                Err(err) => {
+                    return Err(err.context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to create statefulset '{}'.", container_name),
+                        resource_id: Some(config.id.clone()),
+                    }));
+                }
+            }
         } else {
             // Create Deployment for stateless containers
             let deployment_client = ctx
@@ -240,15 +265,40 @@ impl KubernetesContainerController {
                 )
                 .await?;
 
-            let _created_deployment = deployment_client
-                .create_deployment(&namespace, &deployment)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to create deployment '{}'.", container_name),
-                    resource_id: Some(config.id.clone()),
-                })?;
-
-            info!(deployment_name=%container_name, namespace=%namespace, "Deployment creation initiated");
+            match deployment_client.create_deployment(&namespace, &deployment).await {
+                Ok(_) => {
+                    info!(deployment_name=%container_name, namespace=%namespace, "Deployment creation initiated");
+                }
+                Err(err) if is_already_exists(&err) => {
+                    let existing = deployment_client
+                        .get_deployment(&namespace, &container_name)
+                        .await
+                        .context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Failed to read existing deployment '{}' before adoption.",
+                                container_name
+                            ),
+                            resource_id: Some(config.id.clone()),
+                        })?;
+                    if !self.is_managed_workload(existing.metadata.labels.as_ref(), &container_name)
+                    {
+                        return Err(err.context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Refusing to adopt unmanaged deployment '{}'.",
+                                container_name
+                            ),
+                            resource_id: Some(config.id.clone()),
+                        }));
+                    }
+                    info!(deployment_name=%container_name, namespace=%namespace, "Adopting existing Kubernetes Deployment");
+                }
+                Err(err) => {
+                    return Err(err.context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to create deployment '{}'.", container_name),
+                        resource_id: Some(config.id.clone()),
+                    }));
+                }
+            }
         }
 
         Ok(HandlerAction::Continue {
@@ -1731,6 +1781,18 @@ impl KubernetesContainerController {
         labels.insert("managed-by".to_string(), "alien".to_string());
         labels.insert("component".to_string(), "container".to_string());
         labels
+    }
+
+    fn is_managed_workload(
+        &self,
+        labels: Option<&BTreeMap<String, String>>,
+        container_name: &str,
+    ) -> bool {
+        labels.is_some_and(|labels| {
+            labels.get("managed-by").map(String::as_str) == Some("alien")
+                && labels.get("component").map(String::as_str) == Some("container")
+                && labels.get("app").map(String::as_str) == Some(container_name)
+        })
     }
 
     /// Gets the Kubernetes namespace from ClientConfig

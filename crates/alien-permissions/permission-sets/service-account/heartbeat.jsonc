@@ -5,7 +5,7 @@
     "aws": [
       {
         "grant": {
-          "actions": ["iam:GetRole"]
+          "actions": ["iam:GetRole", "iam:ListAttachedRolePolicies", "iam:ListRolePolicies"]
         },
         "binding": {
           "stack": {

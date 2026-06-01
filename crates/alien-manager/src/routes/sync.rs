@@ -421,7 +421,7 @@ mod tests {
     use crate::traits::DeploymentRecord;
 
     use super::{
-        deployment_state_from_record, management_platform, release_stack_platform,
+        deployment_needs_target, deployment_state_from_record, management_platform, release_stack_platform,
         should_ignore_agent_state_report, validate_initialize_base_platform, ReconcileRequest,
     };
 
@@ -499,6 +499,7 @@ mod tests {
                         "cpu": null,
                         "memory": null,
                         "workload": null,
+                        "pods": [],
                         "instances": [],
                         "events": []
                     }
@@ -576,6 +577,33 @@ mod tests {
             state.stack_state.unwrap().resource_prefix,
             stack_state.resource_prefix
         );
+    }
+
+    #[test]
+    fn provisioning_deployment_needs_target_even_when_current_matches_desired() {
+        let mut deployment = deployment_record_with_state("provisioning", None);
+        deployment.current_release_id = Some("rel_test".to_string());
+        deployment.desired_release_id = Some("rel_test".to_string());
+
+        assert!(deployment_needs_target(&deployment));
+    }
+
+    #[test]
+    fn running_deployment_does_not_need_target_when_current_matches_desired() {
+        let mut deployment = deployment_record_with_state("running", None);
+        deployment.current_release_id = Some("rel_test".to_string());
+        deployment.desired_release_id = Some("rel_test".to_string());
+
+        assert!(!deployment_needs_target(&deployment));
+    }
+
+    #[test]
+    fn deployment_needs_target_when_desired_differs_from_current() {
+        let mut deployment = deployment_record_with_state("running", None);
+        deployment.current_release_id = Some("rel_old".to_string());
+        deployment.desired_release_id = Some("rel_new".to_string());
+
+        assert!(deployment_needs_target(&deployment));
     }
 
     fn uninitialized_state() -> DeploymentState {
@@ -740,9 +768,7 @@ async fn agent_sync(
     };
 
     // Return target state if deployment needs updating
-    let target = if deployment.desired_release_id.is_some()
-        && deployment.desired_release_id != deployment.current_release_id
-    {
+    let target = if deployment_needs_target(&deployment) {
         let release = if let Some(ref release_id) = deployment.desired_release_id {
             let system = crate::auth::Subject::system();
             match state.release_store.get_release(&system, release_id).await {
@@ -970,6 +996,21 @@ fn deployment_has_authoritative_state(deployment: &DeploymentRecord) -> bool {
         || deployment.runtime_metadata.is_some()
         || deployment.current_release_id.is_some()
         || deployment.status != "pending"
+}
+
+fn deployment_needs_target(deployment: &DeploymentRecord) -> bool {
+    let Some(desired_release_id) = deployment.desired_release_id.as_ref() else {
+        return false;
+    };
+
+    if deployment.current_release_id.as_ref() != Some(desired_release_id) {
+        return true;
+    }
+
+    !matches!(
+        deployment_status_from_record(&deployment.status),
+        Some(DeploymentStatus::Running)
+    )
 }
 
 fn deployment_state_from_record(
