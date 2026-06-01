@@ -4,7 +4,7 @@ use axum::{
     extract::{Path, Query, State},
     http::{request::Parts, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{get, post, put},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -90,6 +90,10 @@ pub struct DeploymentResponse {
     pub agent_arch: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub regime: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_image_repository: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_agent_version: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -193,6 +197,10 @@ pub fn router() -> Router<AppState> {
         .route("/v1/deployments/{id}/info", get(get_deployment_info))
         .route("/v1/deployments/{id}/retry", post(retry_deployment))
         .route("/v1/deployments/{id}/redeploy", post(redeploy))
+        .route(
+            "/v1/deployments/{id}/target-agent-version",
+            put(set_target_agent_version),
+        )
 }
 
 // --- Helpers ---
@@ -233,6 +241,8 @@ fn record_to_response(
         agent_os: r.agent_os.clone(),
         agent_arch: r.agent_arch.clone(),
         regime: r.regime.clone(),
+        agent_image_repository: r.agent_image_repository.clone(),
+        target_agent_version: r.target_agent_version.clone(),
     }
 }
 
@@ -780,4 +790,100 @@ async fn redeploy(
     }
 
     Json(serde_json::json!({ "success": true })).into_response()
+}
+
+#[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct SetTargetAgentVersionRequest {
+    /// Target agent version (semver). `None`/omitted clears the target.
+    #[serde(default)]
+    pub target_agent_version: Option<String>,
+}
+
+/// Admin-only knob behind the dashboard's "Set target version" control
+/// (and the equivalent flow on the SaaS API). Writes
+/// `target_agent_version` on the deployment row; the sync handler reads
+/// it on each /v1/sync and emits `agent_target` whenever it differs from
+/// the agent's reported version, until they match.
+#[cfg_attr(feature = "openapi", utoipa::path(
+    put,
+    path = "/v1/deployments/{id}/target-agent-version",
+    tag = "deployments",
+    params(
+        ("id" = String, Path, description = "Deployment ID"),
+    ),
+    request_body = SetTargetAgentVersionRequest,
+    responses(
+        (status = 202, description = "Target agent version updated"),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden"),
+        (status = 404, description = "Not found"),
+    )
+))]
+async fn set_target_agent_version(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(req): Json<SetTargetAgentVersionRequest>,
+) -> Response {
+    let subject = match auth::require_auth(&state, &headers).await {
+        Ok(s) => s,
+        Err(e) => return e.into_response(),
+    };
+
+    let deployment = match state.deployment_store.get_deployment(&subject, &id).await {
+        Ok(Some(d)) => d,
+        Ok(None) => return ErrorData::not_found_deployment(&id).into_response(),
+        Err(e) => return e.into_response(),
+    };
+    if !state.authz.can_update_deployment(&subject, &deployment) {
+        return ErrorData::forbidden("Cannot set target agent version").into_response();
+    }
+
+    // Reject clearly-malformed semver early so admins get a 4xx rather
+    // than the agent silently ignoring an unparseable tag later.
+    if let Some(v) = req.target_agent_version.as_deref() {
+        if !is_plausible_semver(v) {
+            return ErrorData::bad_request(
+                "targetAgentVersion must be a semver string (e.g. 1.4.0)",
+            )
+            .into_response();
+        }
+    }
+
+    if let Err(e) = state
+        .deployment_store
+        .set_target_agent_version(&subject, &id, req.target_agent_version.as_deref())
+        .await
+    {
+        return e.into_response();
+    }
+
+    (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({ "success": true })),
+    )
+        .into_response()
+}
+
+/// Permissive semver check — `MAJOR.MINOR.PATCH` with optional `-prerelease`
+/// or `+build` suffix. Mirrors the platform API's regex; not full SemVer
+/// 2.0.0 grammar but catches typos and accidental whitespace.
+fn is_plausible_semver(v: &str) -> bool {
+    let mut parts = v.splitn(2, |c| c == '-' || c == '+');
+    let core = parts.next().unwrap_or("");
+    let core_ok = {
+        let segs: Vec<&str> = core.split('.').collect();
+        segs.len() == 3
+            && segs
+                .iter()
+                .all(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()))
+    };
+    let rest_ok = parts.next().map_or(true, |r| {
+        !r.is_empty()
+            && r.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+    });
+    core_ok && rest_ok
 }

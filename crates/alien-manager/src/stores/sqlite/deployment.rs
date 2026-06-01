@@ -793,6 +793,26 @@ impl DeploymentStore for SqliteDeploymentStore {
         self.db.execute(&sql).await
     }
 
+    async fn set_target_agent_version(
+        &self,
+        _caller: &crate::auth::Subject,
+        id: &str,
+        target_agent_version: Option<&str>,
+    ) -> Result<(), AlienError> {
+        let sql = {
+            let mut q = Query::update();
+            q.table(Deployments::Table);
+            match target_agent_version {
+                Some(v) => q.value(Deployments::TargetAgentVersion, v),
+                // sea_query treats `Option::<&str>::None` as SQL NULL.
+                None => q.value(Deployments::TargetAgentVersion, Option::<&str>::None),
+            };
+            q.and_where(Expr::col(Deployments::Id).eq(id))
+                .to_string(SqliteQueryBuilder)
+        };
+        self.db.execute(&sql).await
+    }
+
     async fn set_deployment_desired_release(
         &self,
         _caller: &crate::auth::Subject,

@@ -356,6 +356,19 @@ pub trait DeploymentStore: Send + Sync {
         agent_image_repository: Option<&str>,
     ) -> Result<(), AlienError>;
 
+    /// Set (or clear with `None`) the deployment's target agent version.
+    /// When set AND different from the agent's reported `agent_version` the
+    /// sync handler emits `agent_target` on every /v1/sync until the agent
+    /// catches up. This is the admin-side knob behind the dashboard's
+    /// "Set target version" control and the standalone manager's
+    /// `PUT /v1/deployments/:id/target-agent-version` endpoint.
+    async fn set_target_agent_version(
+        &self,
+        caller: &crate::auth::Subject,
+        id: &str,
+        target_agent_version: Option<&str>,
+    ) -> Result<(), AlienError>;
+
     async fn set_redeploy(&self, caller: &crate::auth::Subject, id: &str)
         -> Result<(), AlienError>;
 
