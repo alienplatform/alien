@@ -532,7 +532,7 @@ mod tests {
                         "cpu": null,
                         "memory": null,
                         "workload": null,
-                        "instances": [],
+                        "pods": [],
                         "events": []
                     }
                 },
