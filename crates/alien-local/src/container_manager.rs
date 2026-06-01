@@ -124,6 +124,8 @@ pub struct ContainerMetadata {
 pub struct ContainerConfig {
     /// Container image reference
     pub image: String,
+    /// Command override for the container image.
+    pub command: Option<Vec<String>>,
     /// Container ports to expose internally
     pub ports: Vec<u16>,
     /// Whether to expose ports publicly (map to host ports)
@@ -672,6 +674,7 @@ impl LocalContainerManager {
         // Build container config
         let container_config = Config {
             image: Some(image.clone()),
+            cmd: config.command.clone(),
             hostname: Some(container_id.to_string()),
             env: Some(env),
             exposed_ports,
