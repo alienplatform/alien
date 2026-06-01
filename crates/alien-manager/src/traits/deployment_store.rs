@@ -27,7 +27,10 @@ pub struct DeploymentRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_platform: Option<Platform>,
     pub status: String,
-    pub stack_settings: StackSettings,
+    /// `None` when a record is built from a source that doesn't carry stack
+    /// settings; records produced by this crate's stores always set it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stack_settings: Option<StackSettings>,
     pub stack_state: Option<StackState>,
     pub environment_info: Option<EnvironmentInfo>,
     pub runtime_metadata: Option<RuntimeMetadata>,

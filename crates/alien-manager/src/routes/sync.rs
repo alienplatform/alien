@@ -635,7 +635,7 @@ mod tests {
             deployment_protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
             base_platform: Some(Platform::Aws),
             status: status.to_string(),
-            stack_settings: StackSettings::default(),
+            stack_settings: Some(StackSettings::default()),
             stack_state,
             environment_info: None,
             runtime_metadata: None,
@@ -853,9 +853,21 @@ async fn agent_sync(
                     config.native_image_host = native_image_host;
                     config
                 } else {
+                    // Records loaded for sync always carry stack settings; in a
+                    // handler, answer with a 500 rather than panic-dropping the
+                    // connection if that invariant is ever broken.
+                    let stack_settings = match deployment.stack_settings.clone() {
+                        Some(settings) => settings,
+                        None => {
+                            return ErrorData::internal(
+                                "synced deployment is missing stack_settings",
+                            )
+                            .into_response();
+                        }
+                    };
                     DeploymentConfig::builder()
                         .deployment_name(deployment.name.clone())
-                        .stack_settings(deployment.stack_settings.clone())
+                        .stack_settings(stack_settings.clone())
                         .maybe_management_config(management_config)
                         .environment_variables(EnvironmentVariablesSnapshot {
                             variables: env_vars,
@@ -864,11 +876,7 @@ async fn agent_sync(
                         })
                         .allow_frozen_changes(false)
                         .external_bindings(
-                            deployment
-                                .stack_settings
-                                .external_bindings
-                                .clone()
-                                .unwrap_or_default(),
+                            stack_settings.external_bindings.clone().unwrap_or_default(),
                         )
                         .maybe_base_platform(deployment.base_platform)
                         .maybe_manager_url(Some(manager_url))

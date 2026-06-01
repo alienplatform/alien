@@ -147,6 +147,24 @@ impl CommandsClient {
         }
     }
 
+    /// Build a client over a caller-supplied HTTP client, reusing the headers
+    /// it already carries (the auth header, and the workspace header used in
+    /// platform mode). `with_config` builds a token-only client and can't add
+    /// those.
+    pub fn with_http_client(
+        manager_url: &str,
+        deployment_id: &str,
+        http_client: reqwest::Client,
+        config: CommandsClientConfig,
+    ) -> Self {
+        Self {
+            manager_url: manager_url.trim_end_matches('/').to_string(),
+            deployment_id: deployment_id.to_string(),
+            http_client,
+            config,
+        }
+    }
+
     /// Invoke a command and wait for the result.
     ///
     /// Sends params inline, polls for completion, and decodes the response.

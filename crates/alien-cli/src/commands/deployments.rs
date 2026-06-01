@@ -270,7 +270,7 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
 ///
 /// Uses the linked project (or `--project` override) to discover the manager URL
 /// in platform mode. In dev/standalone modes, the manager URL is known directly.
-async fn resolve_manager_client(
+pub(crate) async fn resolve_manager_client(
     ctx: &ExecutionMode,
     project_override: Option<&str>,
 ) -> Result<alien_manager_api::Client> {

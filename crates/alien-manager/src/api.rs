@@ -27,6 +27,7 @@ use utoipa::OpenApi;
         crate::routes::deployments::redeploy,
         // Releases
         crate::routes::releases::create_release,
+        crate::routes::releases::list_releases,
         crate::routes::releases::get_release,
         crate::routes::releases::get_latest_release,
         // Stack import
@@ -58,6 +59,7 @@ use utoipa::OpenApi;
         crate::routes::releases::CreateReleaseRequest,
         crate::routes::releases::GitMetadata,
         crate::routes::releases::ReleaseResponse,
+        crate::routes::releases::ListReleasesResponse,
         // Stack import types (mirror the alien-core request schemas).
         alien_core::import::request::StackImportRequest,
         alien_core::import::request::StackImportResponse,
