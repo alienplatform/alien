@@ -115,7 +115,7 @@ pub enum DeploymentToken {
         deployment_group_id: String,
         deployment_group_name: String,
         project_id: String,
-        workspace_id: String,
+        workspace_name: String,
         max_deployments: u32,
     },
 }
@@ -187,10 +187,16 @@ pub async fn validate_token(api_key: &str, base_url: &str) -> Result<DeploymentT
                     deployment_group_id,
                     project_id: _,
                 } => {
-                    // Fetch deployment group details
+                    // The group lookup keys on workspace name, not id (whoami provides the name).
+                    let workspace_name = sa.workspace_name.clone().ok_or_else(|| {
+                        AlienError::new(ErrorData::ValidationError {
+                            field: "workspace".to_string(),
+                            message: "token response is missing the workspace name".to_string(),
+                        })
+                    })?;
                     let deployment_group = fetch_deployment_group(
                         &deployment_group_id,
-                        &sa.workspace_id,
+                        &workspace_name,
                         api_key,
                         base_url,
                     )
@@ -200,7 +206,7 @@ pub async fn validate_token(api_key: &str, base_url: &str) -> Result<DeploymentT
                         deployment_group_id: deployment_group.id.to_string(),
                         deployment_group_name: deployment_group.name.to_string(),
                         project_id: deployment_group.project_id.to_string(),
-                        workspace_id: sa.workspace_id,
+                        workspace_name,
                         max_deployments: deployment_group.max_deployments.get() as u32,
                     })
                 }
@@ -221,7 +227,7 @@ pub async fn validate_token(api_key: &str, base_url: &str) -> Result<DeploymentT
 /// Fetch deployment group details from the API
 async fn fetch_deployment_group(
     deployment_group_id: &str,
-    workspace_id: &str,
+    workspace_name: &str,
     api_key: &str,
     base_url: &str,
 ) -> Result<alien_platform_api::types::GetDeploymentGroupResponse> {
@@ -254,7 +260,7 @@ async fn fetch_deployment_group(
     let response = sdk_client
         .get_deployment_group()
         .id(deployment_group_id)
-        .workspace(workspace_id)
+        .workspace(workspace_name)
         .send()
         .await
         .into_alien_error()

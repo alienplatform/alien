@@ -203,7 +203,7 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                 }
                 DeploymentToken::DeploymentGroup {
                     deployment_group_name,
-                    workspace_id,
+                    workspace_name,
                     project_id,
                     ..
                 } => {
@@ -261,7 +261,7 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
 
                     let create_response = sdk_client
                         .create_deployment()
-                        .workspace(&workspace_id)
+                        .workspace(&workspace_name)
                         .body(alien_platform_api::types::NewDeploymentRequest {
                             name: args.name.clone().try_into().into_alien_error().context(
                                 ErrorData::ValidationError {
@@ -366,7 +366,19 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
     let manager_ctx = ctx
         .resolve_manager(&tracked_deployment.project_id, &args.platform)
         .await?;
-    let manager_client = manager_ctx.client;
+    // Provisioning calls the manager's sync endpoints, which require
+    // `managers.sync` — held by the deployment's own token, not the install
+    // token that resolved the manager. In platform mode (workspace is set),
+    // re-authenticate as the deployment for these calls.
+    let manager_client = if let Some(workspace) = manager_ctx.workspace.clone() {
+        let http_client = crate::auth::client_with_auth_and_workspace(
+            &format!("Bearer {}", tracked_deployment.api_key),
+            &workspace,
+        )?;
+        alien_manager_api::Client::new_with_client(&manager_ctx.manager_url, http_client)
+    } else {
+        manager_ctx.client
+    };
 
     steps.complete(1, Some(format!("Manager: {}", manager_ctx.manager_url)));
 
