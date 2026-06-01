@@ -827,14 +827,21 @@ async fn agent_sync(
                     config.native_image_host = native_image_host;
                     config
                 } else {
+                    // Records loaded for sync always carry stack settings; in a
+                    // handler, answer with a 500 rather than panic-dropping the
+                    // connection if that invariant is ever broken.
+                    let stack_settings = match deployment.stack_settings.clone() {
+                        Some(settings) => settings,
+                        None => {
+                            return ErrorData::internal(
+                                "synced deployment is missing stack_settings",
+                            )
+                            .into_response();
+                        }
+                    };
                     DeploymentConfig::builder()
                         .deployment_name(deployment.name.clone())
-                        .stack_settings(
-                            deployment
-                                .stack_settings
-                                .clone()
-                                .expect("synced deployment carries stack_settings"),
-                        )
+                        .stack_settings(stack_settings.clone())
                         .maybe_management_config(management_config)
                         .environment_variables(EnvironmentVariablesSnapshot {
                             variables: env_vars,
@@ -843,13 +850,7 @@ async fn agent_sync(
                         })
                         .allow_frozen_changes(false)
                         .external_bindings(
-                            deployment
-                                .stack_settings
-                                .as_ref()
-                                .expect("synced deployment carries stack_settings")
-                                .external_bindings
-                                .clone()
-                                .unwrap_or_default(),
+                            stack_settings.external_bindings.clone().unwrap_or_default(),
                         )
                         .maybe_base_platform(deployment.base_platform)
                         .maybe_manager_url(Some(manager_url))

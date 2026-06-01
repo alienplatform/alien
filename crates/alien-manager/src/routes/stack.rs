@@ -268,14 +268,21 @@ pub async fn stack_import(
                 updated
             };
 
+            let stack_settings = match updated.stack_settings {
+                Some(settings) => settings,
+                None => {
+                    return ErrorData::internal(
+                        "imported deployment is missing stack_settings",
+                    )
+                    .into_response();
+                }
+            };
             return (
                 StatusCode::OK,
                 Json(StackImportResponse {
                     deployment_id: updated.id,
                     deployment_token: updated.deployment_token,
-                    stack_settings: updated
-                        .stack_settings
-                        .expect("imported deployment carries stack_settings"),
+                    stack_settings,
                     stack_state,
                 }),
             )
@@ -348,14 +355,19 @@ pub async fn stack_import(
         return e.into_response();
     }
 
+    let stack_settings = match created.stack_settings {
+        Some(settings) => settings,
+        None => {
+            return ErrorData::internal("created deployment is missing stack_settings")
+                .into_response();
+        }
+    };
     (
         StatusCode::CREATED,
         Json(StackImportResponse {
             deployment_id: created.id,
             deployment_token: Some(raw_token),
-            stack_settings: created
-                .stack_settings
-                .expect("created deployment carries stack_settings"),
+            stack_settings,
             stack_state,
         }),
     )
