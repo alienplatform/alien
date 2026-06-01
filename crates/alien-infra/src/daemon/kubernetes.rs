@@ -15,11 +15,11 @@ use alien_core::{
     kubernetes_resource_name, kubernetes_service_account_name, Daemon, DaemonCode, DaemonOutputs,
     ResourceOutputs, ResourceStatus,
 };
-use alien_error::{AlienError, Context, ContextError, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError};
 use alien_macros::controller;
 use k8s_openapi::api::apps::v1::{DaemonSet, DaemonSetSpec};
 use k8s_openapi::api::core::v1::{
-    Container, EnvVar, LocalObjectReference, PodSpec, PodTemplateSpec, Secret,
+    Container, EnvVar, LocalObjectReference, PodSpec, PodTemplateSpec,
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
 
@@ -629,57 +629,12 @@ async fn create_registry_pull_secret(
     proxy_host: &str,
     deployment_token: &str,
 ) -> Result<()> {
-    use base64::engine::{general_purpose::STANDARD as BASE64, Engine as _};
-
-    let auth = BASE64.encode(format!("deployment:{}", deployment_token));
-    let mut auths = serde_json::Map::new();
-    auths.insert(
-        proxy_host.to_string(),
-        serde_json::json!({
-            "username": "deployment",
-            "password": deployment_token,
-            "auth": auth,
-        }),
-    );
-    let docker_config = serde_json::json!({ "auths": auths });
-
-    let docker_config_bytes = serde_json::to_vec(&docker_config)
-        .into_alien_error()
-        .context(ErrorData::CloudPlatformError {
-            message: "Failed to serialize Docker config".to_string(),
-            resource_id: None,
-        })?;
-
-    let secret = Secret {
-        metadata: ObjectMeta {
-            name: Some(secret_name.to_string()),
-            namespace: Some(namespace.to_string()),
-            ..Default::default()
-        },
-        type_: Some("kubernetes.io/dockerconfigjson".to_string()),
-        data: Some({
-            let mut data = BTreeMap::new();
-            data.insert(
-                ".dockerconfigjson".to_string(),
-                k8s_openapi::ByteString(docker_config_bytes),
-            );
-            data
-        }),
-        ..Default::default()
-    };
-
-    match secrets_client.create_secret(namespace, &secret).await {
-        Ok(_) => Ok(()),
-        Err(e) => {
-            let err_str = format!("{}", e);
-            if err_str.contains("AlreadyExists") || err_str.contains("409") {
-                Ok(())
-            } else {
-                Err(e.context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to create registry pull secret '{}'", secret_name),
-                    resource_id: None,
-                }))
-            }
-        }
-    }
+    crate::kubernetes_registry::ensure_registry_pull_secret(
+        secrets_client,
+        namespace,
+        secret_name,
+        proxy_host,
+        deployment_token,
+    )
+    .await
 }

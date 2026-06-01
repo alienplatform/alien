@@ -148,6 +148,20 @@ pub enum GcpCredentials {
         service_account_email: String,
     },
 
+    /// Use an external account credential configuration.
+    ExternalAccount {
+        /// Workload identity audience.
+        audience: String,
+        /// Subject token type for STS token exchange.
+        subject_token_type: String,
+        /// STS token exchange URL.
+        token_url: String,
+        /// Path to the subject token file.
+        credential_source_file: String,
+        /// Optional service account impersonation URL.
+        service_account_impersonation_url: Option<String>,
+    },
+
     /// Use gcloud Application Default Credentials (authorized_user).
     /// Exchanges refresh_token for an access_token via Google's OAuth2 endpoint.
     AuthorizedUser {
@@ -179,6 +193,23 @@ impl std::fmt::Debug for GcpCredentials {
                 .debug_struct("GcpCredentials::ProjectedServiceAccount")
                 .field("token_file", token_file)
                 .field("service_account_email", service_account_email)
+                .finish(),
+            GcpCredentials::ExternalAccount {
+                audience,
+                subject_token_type,
+                token_url,
+                credential_source_file,
+                service_account_impersonation_url,
+            } => f
+                .debug_struct("GcpCredentials::ExternalAccount")
+                .field("audience", audience)
+                .field("subject_token_type", subject_token_type)
+                .field("token_url", token_url)
+                .field("credential_source_file", credential_source_file)
+                .field(
+                    "service_account_impersonation_url",
+                    service_account_impersonation_url,
+                )
                 .finish(),
             GcpCredentials::AuthorizedUser { client_id, .. } => f
                 .debug_struct("GcpCredentials::AuthorizedUser")

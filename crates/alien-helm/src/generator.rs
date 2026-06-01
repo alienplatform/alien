@@ -11,8 +11,10 @@ use crate::{
 };
 use alien_core::{
     import::EmitContext, AzureResourceGroupOutputs, Container, ContainerCode, Daemon, DaemonCode,
-    ErrorData, ExposeProtocol, Ingress, Platform, RemoteStackManagementOutputs, ResourceLifecycle,
-    Result, ServiceAccount, ServiceAccountOutputs, Stack, StackSettings, Worker, WorkerCode,
+    ErrorData, ExposeProtocol, Ingress, KubernetesCluster, KubernetesClusterOutputs,
+    KubernetesClusterOwnership, KubernetesClusterProvider, Platform, RemoteStackManagementOutputs,
+    ResourceLifecycle, Result, ServiceAccount, ServiceAccountOutputs, Stack, StackSettings, Worker,
+    WorkerCode,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use indexmap::IndexMap;
@@ -41,6 +43,7 @@ pub struct ManagerFetchHelmValuesOptions<'a> {
     pub deployment_name: &'a str,
     pub manager_url: &'a str,
     pub deployment_token: &'a str,
+    pub runtime_encryption_key: &'a str,
     pub stack: &'a Stack,
     pub stack_state: &'a alien_core::StackState,
     pub stack_settings: &'a StackSettings,
@@ -144,6 +147,8 @@ pub fn generate_helm_chart(stack: &Stack, options: HelmOptions<'_>) -> Result<He
 
 /// Render one complete manager-fetch values file from imported deployment state.
 pub fn render_manager_fetch_values(options: ManagerFetchHelmValuesOptions<'_>) -> Result<String> {
+    validate_runtime_encryption_key(options.runtime_encryption_key)?;
+
     let registry = HelmRegistry::built_in();
     let analysis = ChartAnalysis::from_stack(options.stack, &registry)?;
     let mut yaml = String::new();
@@ -173,6 +178,13 @@ pub fn render_manager_fetch_values(options: ManagerFetchHelmValuesOptions<'_>) -
     yaml.push_str(&format!(
         "  healthChecks: {}\n\n",
         yaml_string(heartbeats_mode_value(options.stack_settings.heartbeats))
+    ));
+
+    yaml.push_str("runtime:\n");
+    yaml.push_str("  encryption:\n");
+    yaml.push_str(&format!(
+        "    key: {}\n\n",
+        yaml_string(options.runtime_encryption_key)
     ));
 
     append_stack_settings(&mut yaml, options.stack_settings)?;
@@ -229,11 +241,26 @@ pub fn render_manager_fetch_values(options: ManagerFetchHelmValuesOptions<'_>) -
         options.base_platform,
     );
     append_runtime_cloud_identity(&mut yaml, options.base_platform);
-    append_cluster_bootstrap(&mut yaml, options.stack_state, options.base_platform);
+    append_cluster_bootstrap(
+        &mut yaml,
+        options.stack,
+        options.stack_state,
+        options.base_platform,
+    );
     append_services(&mut yaml, &analysis);
     yaml.push_str("\npublicUrls: {}\n");
 
     Ok(yaml)
+}
+
+fn validate_runtime_encryption_key(key: &str) -> Result<()> {
+    if key.len() == 64 && key.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Ok(());
+    }
+
+    Err(AlienError::new(ErrorData::GenericError {
+        message: "runtime encryption key must be exactly 64 hex characters".to_string(),
+    }))
 }
 
 /// Result of dispatching every stack resource through the
@@ -633,7 +660,12 @@ fn append_manager_service_account(
         }
         None => yaml.push_str("  annotations: {}\n"),
     }
-    yaml.push_str("  labels: {}\n");
+    if base_platform == Some(Platform::Azure) {
+        yaml.push_str("  labels:\n");
+        yaml.push_str("    azure.workload.identity/use: 'true'\n");
+    } else {
+        yaml.push_str("  labels: {}\n");
+    }
     Ok(())
 }
 
@@ -708,20 +740,12 @@ fn azure_subscription_id_from_resource_id(resource_id: &str) -> Option<String> {
 
 fn append_cluster_bootstrap(
     yaml: &mut String,
+    stack: &Stack,
     stack_state: &alien_core::StackState,
     base_platform: Option<Platform>,
 ) {
-    let eks_managed = base_platform == Some(Platform::Aws)
-        && stack_state.resources.values().any(|resource| {
-            resource
-                .outputs
-                .as_ref()
-                .and_then(|outputs| outputs.downcast_ref::<alien_core::KubernetesClusterOutputs>())
-                .is_some_and(|outputs| {
-                    outputs.provider == alien_core::KubernetesClusterProvider::Eks
-                        && outputs.ownership == alien_core::KubernetesClusterOwnership::Managed
-                })
-        });
+    let eks_managed =
+        base_platform == Some(Platform::Aws) && managed_eks_cluster_present(stack, stack_state);
 
     yaml.push_str("clusterBootstrap:\n");
     yaml.push_str("  metricsServer:\n");
@@ -784,6 +808,35 @@ fn append_cluster_bootstrap(
     yaml.push_str("        limits:\n");
     yaml.push_str("          cpu: \"1000\"\n");
     yaml.push_str("          memory: 1000Gi\n");
+}
+
+fn managed_eks_cluster_present(stack: &Stack, stack_state: &alien_core::StackState) -> bool {
+    stack_state.resources.values().any(|resource| {
+        resource
+            .outputs
+            .as_ref()
+            .and_then(|outputs| outputs.downcast_ref::<KubernetesClusterOutputs>())
+            .is_some_and(is_managed_eks_cluster_outputs)
+            || resource
+                .config
+                .downcast_ref::<KubernetesCluster>()
+                .is_some_and(is_managed_eks_cluster_config)
+    }) || stack.resources().any(|(_, entry)| {
+        entry
+            .config
+            .downcast_ref::<KubernetesCluster>()
+            .is_some_and(is_managed_eks_cluster_config)
+    })
+}
+
+fn is_managed_eks_cluster_outputs(outputs: &KubernetesClusterOutputs) -> bool {
+    outputs.provider == KubernetesClusterProvider::Eks
+        && outputs.ownership == KubernetesClusterOwnership::Managed
+}
+
+fn is_managed_eks_cluster_config(cluster: &KubernetesCluster) -> bool {
+    cluster.provider == KubernetesClusterProvider::Eks
+        && cluster.ownership == KubernetesClusterOwnership::Managed
 }
 
 fn azure_application_gateway_for_containers_bootstrap(
@@ -2421,6 +2474,9 @@ mod tests {
         ResourceOutputs, ResourceStatus, StackResourceState, Storage, WorkerCode, WorkerTrigger,
     };
 
+    const TEST_RUNTIME_ENCRYPTION_KEY: &str =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
     fn sample_stack() -> Stack {
         let storage = Storage::new("assets".to_string()).versioning(true).build();
         let queue = Queue::new("jobs".to_string()).build();
@@ -2467,6 +2523,104 @@ mod tests {
     }
 
     #[test]
+    fn manager_fetch_values_include_runtime_encryption_key() {
+        let stack_state =
+            alien_core::StackState::with_resource_prefix(Platform::Kubernetes, "e2e123".into());
+
+        let values = render_manager_fetch_values(ManagerFetchHelmValuesOptions {
+            deployment_id: "dep_123",
+            deployment_name: "deployment",
+            manager_url: "https://manager.example.com",
+            deployment_token: "token",
+            runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
+            stack: &sample_stack(),
+            stack_state: &stack_state,
+            stack_settings: &StackSettings::default(),
+            base_platform: Some(Platform::Aws),
+            region: Some("us-east-1"),
+            gcp_project_id: None,
+            azure_location: None,
+        })
+        .expect("manager-fetch values should render");
+
+        assert!(values.contains("runtime:\n  encryption:\n"));
+        assert!(values.contains(&format!("    key: '{}'", TEST_RUNTIME_ENCRYPTION_KEY)));
+    }
+
+    #[test]
+    fn manager_fetch_values_reject_invalid_runtime_encryption_key() {
+        let stack_state =
+            alien_core::StackState::with_resource_prefix(Platform::Kubernetes, "e2e123".into());
+
+        let error = render_manager_fetch_values(ManagerFetchHelmValuesOptions {
+            deployment_id: "dep_123",
+            deployment_name: "deployment",
+            manager_url: "https://manager.example.com",
+            deployment_token: "token",
+            runtime_encryption_key: "replace-me-with-a-stable-64-character-encryption-secret",
+            stack: &sample_stack(),
+            stack_state: &stack_state,
+            stack_settings: &StackSettings::default(),
+            base_platform: Some(Platform::Aws),
+            region: Some("us-east-1"),
+            gcp_project_id: None,
+            azure_location: None,
+        })
+        .expect_err("invalid runtime encryption key should fail");
+
+        assert!(error
+            .to_string()
+            .contains("runtime encryption key must be exactly 64 hex characters"));
+    }
+
+    #[test]
+    fn manager_fetch_values_enable_eks_cluster_bootstrap_from_imported_config() {
+        let cluster = KubernetesCluster::new("kubernetes".to_string())
+            .provider(KubernetesClusterProvider::Eks)
+            .ownership(KubernetesClusterOwnership::Managed)
+            .namespace("alien-test".to_string())
+            .heartbeat_mode(alien_core::KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+            .build();
+        let stack = Stack::new("sample-stack".to_string())
+            .add(cluster.clone(), ResourceLifecycle::Frozen)
+            .build();
+        let mut stack_state =
+            alien_core::StackState::with_resource_prefix(Platform::Kubernetes, "e2e123".into());
+        stack_state.resources.insert(
+            "kubernetes".to_string(),
+            StackResourceState::new_pending(
+                KubernetesCluster::RESOURCE_TYPE.to_string(),
+                Resource::new(cluster),
+                Some(ResourceLifecycle::Frozen),
+                Vec::new(),
+            ),
+        );
+
+        let values = render_manager_fetch_values(ManagerFetchHelmValuesOptions {
+            deployment_id: "dep_123",
+            deployment_name: "deployment",
+            manager_url: "https://manager.example.com",
+            deployment_token: "token",
+            runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
+            stack: &stack,
+            stack_state: &stack_state,
+            stack_settings: &StackSettings::default(),
+            base_platform: Some(Platform::Aws),
+            region: Some("us-east-1"),
+            gcp_project_id: None,
+            azure_location: None,
+        })
+        .expect("manager-fetch values should render");
+
+        assert!(values.contains("clusterBootstrap:"));
+        assert!(values
+            .contains("storageClass:\n    default:\n      enabled: true\n      name: \"gp3\""));
+        assert!(values.contains("ingress:\n    eksAutoMode:\n      enabled: true\n      name: alb"));
+        assert!(values
+            .contains("compute:\n    eksAutoMode:\n      arm64NodePool:\n        enabled: true"));
+    }
+
+    #[test]
     fn manager_fetch_values_use_azure_workload_identity_client_id() {
         let mut stack_state =
             alien_core::StackState::with_resource_prefix(Platform::Kubernetes, "e2e123".into());
@@ -2497,6 +2651,7 @@ mod tests {
             deployment_name: "deployment",
             manager_url: "https://manager.example.com",
             deployment_token: "token",
+            runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
             stack: &sample_stack(),
             stack_state: &stack_state,
             stack_settings: &StackSettings::default(),
@@ -2565,6 +2720,7 @@ mod tests {
             deployment_name: "deployment",
             manager_url: "https://manager.example.com",
             deployment_token: "token",
+            runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
             stack: &sample_stack(),
             stack_state: &stack_state,
             stack_settings: &StackSettings::default(),
