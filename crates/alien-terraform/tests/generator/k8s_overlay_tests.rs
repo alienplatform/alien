@@ -548,6 +548,7 @@ fn registered_kubernetes_module_installs_provider_rendered_helm_values() {
                 provider_source: "pkg.example.com/acme/app".to_string(),
                 provider_version: "1.0.0".to_string(),
                 resource_type: "deployment".to_string(),
+                release_id: Some("rel-test".to_string()),
                 setup_target: "kubernetes".to_string(),
                 setup_fingerprint: "test".to_string(),
                 setup_fingerprint_version: 1,
@@ -574,6 +575,12 @@ fn registered_kubernetes_module_installs_provider_rendered_helm_values() {
         .expect("registered module with helm install should include helm.tf");
     assert!(helm.contains("alien_deployment.this.helm_values"));
     assert!(!helm.contains("local.helm_values"));
+
+    let import = module
+        .get("import.tf")
+        .expect("registered module should include import.tf");
+    assert!(import.contains("release_id"));
+    assert!(import.contains("\"rel-test\""));
 
     let providers = module
         .get("providers.tf")
@@ -617,6 +624,7 @@ fn registered_gke_kubernetes_module_declares_dynamic_network_inputs() {
                 provider_source: "pkg.example.com/acme/app".to_string(),
                 provider_version: "1.0.0".to_string(),
                 resource_type: "deployment".to_string(),
+                release_id: Some("rel-test".to_string()),
                 setup_target: "kubernetes".to_string(),
                 setup_fingerprint: "test".to_string(),
                 setup_fingerprint_version: 1,
