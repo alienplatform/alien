@@ -753,10 +753,7 @@ fn versions_body(
         ));
     }
     if include_helm_provider {
-        provider_attrs.push(attr(
-            "helm",
-            provider_decl_attr("hashicorp/helm", ">= 2.13"),
-        ));
+        provider_attrs.push(attr("helm", provider_decl_attr("hashicorp/helm", ">= 3.0")));
     }
     provider_attrs.push(attr(
         "random",
@@ -1355,13 +1352,22 @@ fn providers_body(
         structures.push(Structure::Block(Block {
             identifier: Identifier::sanitized("provider"),
             labels: vec![BlockLabel::String("helm".to_string())],
-            body: Body::from(vec![nested(block(
+            body: Body::from(vec![attr(
                 "kubernetes",
-                kubernetes_provider_body(target),
-            ))]),
+                provider_config_object(kubernetes_provider_body(target)),
+            )]),
         }));
     }
     Body::from(structures)
+}
+
+fn provider_config_object(items: Vec<Structure>) -> Expression {
+    expr::object(items.into_iter().filter_map(|item| {
+        let Structure::Attribute(attribute) = item else {
+            return None;
+        };
+        Some((attribute.key.to_string(), attribute.expr))
+    }))
 }
 
 fn kubernetes_provider_body(target: TerraformTarget) -> Vec<Structure> {
