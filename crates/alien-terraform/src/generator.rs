@@ -94,6 +94,7 @@ pub struct TerraformRegistration {
     /// `provider_name` to form the full Terraform type, e.g.
     /// `<provider_name>_<resource_type>`.
     pub resource_type: String,
+    pub release_id: Option<String>,
     pub setup_target: String,
     pub setup_fingerprint: String,
     pub setup_fingerprint_version: u32,
@@ -320,7 +321,6 @@ pub fn generate_terraform_module(
             &stack_settings,
             imported_resources,
             &shared_locals,
-            options.registration.is_some(),
             has_remote_management,
         )?)?,
     );
@@ -811,33 +811,20 @@ fn variables_body(
 
     blocks.push(nested(resource_prefix_variable_block()));
 
-    if registration.is_some() {
-        blocks.push(nested(variable_block(
-            "deployment_name",
-            "Human-readable application name used in setup and cloud IAM review metadata.",
-            Some(Expression::String(deployment_name_default.to_string())),
-            false,
-        )));
-        blocks.push(nested(variable_block(
-            "deployment_group_token",
-            "Install token used when registering the resolved cloud resources.",
-            None,
-            true,
-        )));
-    } else {
-        blocks.push(nested(variable_block(
-            "name",
-            "Human-readable application name shown in setup and cloud IAM review metadata.",
-            None,
-            false,
-        )));
-        blocks.push(nested(variable_block(
-            "token",
-            "Install token from the application setup page. This is the same token used by the deploy CLI --token flag.",
-            None,
-            true,
-        )));
-    }
+    blocks.push(nested(variable_block(
+        "name",
+        "Human-readable application name shown in setup and cloud IAM review metadata.",
+        registration
+            .is_some()
+            .then(|| Expression::String(deployment_name_default.to_string())),
+        false,
+    )));
+    blocks.push(nested(variable_block(
+        "token",
+        "Install token from the application setup page. This is the same token used by the deploy CLI --token flag.",
+        None,
+        true,
+    )));
     blocks.push(nested(variable_block(
         "manager_url",
         "Optional manager endpoint used by pull-style runtimes.",
@@ -1435,7 +1422,6 @@ fn locals_body(
     stack_settings: &StackSettings,
     imported_resources: Vec<Expression>,
     extra: &IndexMap<String, Expression>,
-    registration: bool,
     has_remote_management: bool,
 ) -> Result<Body> {
     let mut body: Vec<Structure> = Vec::new();
@@ -1446,14 +1432,7 @@ fn locals_body(
             "var.resource_prefix == \"\" ? format(\"a%s\", random_id.resource_prefix.hex) : var.resource_prefix",
         ),
     ));
-    body.push(attr(
-        "deployment_name",
-        expr::raw(if registration {
-            "var.deployment_name"
-        } else {
-            "var.name"
-        }),
-    ));
+    body.push(attr("deployment_name", expr::raw("var.name")));
     if matches!(target.cloud_platform(), alien_core::Platform::Gcp) {
         body.push(attr(
             "gcp_custom_role_prefix",
@@ -1671,10 +1650,7 @@ fn import_body(
     });
     if let Some(registration) = registration {
         let mut body = vec![
-            attr(
-                "deployment_group_token",
-                expr::raw("var.deployment_group_token"),
-            ),
+            attr("token", expr::raw("var.token")),
             attr("name", expr::raw("local.deployment_name")),
             attr("resource_prefix", expr::raw("local.resource_prefix")),
             attr(
@@ -1707,6 +1683,9 @@ fn import_body(
             attr("stack_settings", expr::raw("local.deployment_settings")),
             attr("resources", expr::raw("local.deployment_resources")),
         ];
+        if let Some(release_id) = &registration.release_id {
+            body.push(attr("release_id", Expression::String(release_id.clone())));
+        }
         if target.is_kubernetes() {
             body.push(attr(
                 "base_platform",
@@ -1959,7 +1938,7 @@ fn readme_md(
     display_name: Option<&str>,
 ) -> String {
     let apply_args = if registration.is_some() {
-        "-var='deployment_group_token=...'".to_string()
+        "-var='token=...'".to_string()
     } else {
         format!("-var='name={}' -var='token=...'", stack.id())
     };
@@ -2009,6 +1988,7 @@ mod tests {
             provider_source: "registry.example.com/acme/example-app".to_string(),
             provider_version: "1.0.2".to_string(),
             resource_type: "deployment".to_string(),
+            release_id: Some("rel-test".to_string()),
             setup_target: "aws".to_string(),
             setup_fingerprint: "fp-test".to_string(),
             setup_fingerprint_version: 1,
