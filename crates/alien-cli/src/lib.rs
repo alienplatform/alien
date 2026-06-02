@@ -94,7 +94,7 @@ impl Cli {
             #[cfg(feature = "platform")]
             Some(Commands::Platform(PlatformCommand::Link(args))) => args.json,
             #[cfg(feature = "platform")]
-            Some(Commands::Platform(PlatformCommand::Login(args))) => args.json,
+            Some(Commands::Platform(PlatformCommand::Login(_))) => false,
             #[cfg(feature = "platform")]
             Some(Commands::Platform(PlatformCommand::Workspaces(args))) => args.json,
             #[cfg(feature = "platform")]
