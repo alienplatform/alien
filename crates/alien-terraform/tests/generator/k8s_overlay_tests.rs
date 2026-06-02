@@ -8,7 +8,10 @@
 //! carries `azure.workload.identity/client-id`. Both modules pass
 //! `terraform fmt -check` + `terraform validate` against the cloud providers.
 
-use super::helpers::{assert_terraform_valid, render, snapshot_module};
+use super::helpers::{
+    assert_terraform_valid, assert_terraform_variable_plan_invalid_contains, render,
+    snapshot_module,
+};
 use alien_core::{
     AzureResourceGroup, Container, ContainerCode, Ingress, KubernetesCertificateMode,
     KubernetesCluster, KubernetesClusterOwnership, KubernetesClusterProvider,
@@ -186,7 +189,7 @@ fn managed_kubernetes_cluster_emitters_export_runtime_metadata() {
         let main = module.get("locals.tf").expect("locals should render");
         assert!(main.contains("kubernetes_exposure"));
         assert!(main.contains(
-            "exposure = jsondecode(try(jsondecode(var.stack_settings_json).kubernetes.exposure, null) == null ? jsonencode(local.kubernetes_exposure) : jsonencode(jsondecode(var.stack_settings_json).kubernetes.exposure))"
+            "exposure = jsondecode(try(jsondecode(var.advanced_settings_json).kubernetes.exposure, null) == null ? jsonencode(local.kubernetes_exposure) : jsonencode(jsondecode(var.advanced_settings_json).kubernetes.exposure))"
         ));
         match target {
             TerraformTarget::Eks => {
@@ -414,7 +417,7 @@ fn eks_managed_cluster_with_remote_management_irsa_is_valid() {
             ResourceLifecycle::Frozen,
         )
         .add(
-            RemoteStackManagement::new("remote-stack-management".to_string()).build(),
+            RemoteStackManagement::new("management".to_string()).build(),
             ResourceLifecycle::Frozen,
         )
         .build();
@@ -425,11 +428,18 @@ fn eks_managed_cluster_with_remote_management_irsa_is_valid() {
 
     let module = render(&stack, TerraformTarget::Eks, settings);
     let locals = module.get("locals.tf").expect("locals should render");
-    let management_config_line = locals
-        .lines()
-        .find(|line| line.contains("deployment_management_config"))
-        .expect("locals should include deployment_management_config");
-    assert!(management_config_line.ends_with("= null"));
+    assert!(
+        locals.contains("deployment_management_config"),
+        "locals should include deployment_management_config"
+    );
+    assert!(
+        locals.contains(r#"var.deployment_model == "push""#),
+        "management config should follow the typed deployment_model input"
+    );
+    assert!(
+        locals.contains("} : null"),
+        "pull-mode deployments should register without push management config"
+    );
     snapshot_module("eks_managed_cluster_remote_management_irsa", &module);
     assert_terraform_valid(&module, "eks_managed_cluster_remote_management_irsa");
 }
@@ -472,13 +482,61 @@ fn managed_kubernetes_cluster_preserves_stack_settings_exposure() {
     let locals = module.get("locals.tf").expect("locals should render");
     let variables = module.get("variables.tf").expect("variables should render");
 
+    assert!(variables.contains(r#"variable "custom_domain_name""#));
+    assert!(variables.contains(r#"variable "custom_domain_certificate_arn""#));
     assert!(variables.contains("api.example.com"));
-    assert!(variables.contains("certificateArn"));
     assert!(variables.contains("arn:aws:acm:us-east-1:123456789012:certificate/customer"));
+    assert!(locals.contains("generated_kubernetes_exposure"));
+    assert!(locals.contains("custom_domain_name"));
+    assert!(locals.contains("certificateArn = var.custom_domain_certificate_arn"));
     assert!(locals.contains(
-        "exposure = jsondecode(try(jsondecode(var.stack_settings_json).kubernetes.exposure, null) == null ? jsonencode(local.kubernetes_exposure) : jsonencode(jsondecode(var.stack_settings_json).kubernetes.exposure))"
+        "exposure = jsondecode(try(jsondecode(var.advanced_settings_json).kubernetes.exposure, null) == null ? jsonencode(local.kubernetes_exposure) : jsonencode(jsondecode(var.advanced_settings_json).kubernetes.exposure))"
     ));
     assert_terraform_valid(&module, "eks_custom_exposure");
+}
+
+#[test]
+fn eks_custom_domain_requires_acm_certificate_arn() {
+    let stack = Stack::new("eks-custom-domain-without-cert".to_string())
+        .add(
+            KubernetesCluster::new("kubernetes".to_string())
+                .provider(KubernetesClusterProvider::Eks)
+                .ownership(KubernetesClusterOwnership::Managed)
+                .namespace("default".to_string())
+                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let settings = StackSettings {
+        kubernetes: Some(KubernetesSettings {
+            cluster: None,
+            exposure: Some(KubernetesExposureSettings::Custom {
+                domain: "api.example.com".to_string(),
+                route: KubernetesRouteProfile::Ingress(KubernetesIngressRouteProfile {
+                    controller: Some("eks.amazonaws.com/alb".to_string()),
+                    ingress_class_name: "alb".to_string(),
+                    labels: Default::default(),
+                    annotations: Default::default(),
+                    provider: None,
+                }),
+                certificate: KubernetesCertificateMode::None,
+            }),
+        }),
+        ..StackSettings::default()
+    };
+
+    let module = render(&stack, TerraformTarget::Eks, settings);
+    assert_terraform_variable_plan_invalid_contains(
+        &module,
+        "eks_custom_domain_requires_acm_certificate_arn",
+        &[
+            ("name", "example"),
+            ("token", "example-token"),
+            ("custom_domain_name", "api.example.com"),
+        ],
+        "custom_domain_certificate_arn must be a valid AWS ACM certificate ARN",
+    );
 }
 
 #[test]
@@ -530,12 +588,12 @@ fn managed_kubernetes_cluster_emitters_do_not_apply_in_cluster_manifests() {
 
 #[test]
 fn registered_kubernetes_module_installs_provider_rendered_helm_values() {
-    let stack = Stack::new("eks-manager-fetch-values".to_string())
+    let stack = Stack::new("eks-registered-setup-values".to_string())
         .add(
             KubernetesCluster::new("kubernetes".to_string())
                 .provider(KubernetesClusterProvider::Eks)
                 .ownership(KubernetesClusterOwnership::Managed)
-                .namespace("alien".to_string())
+                .namespace("production".to_string())
                 .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
                 .build(),
             ResourceLifecycle::Frozen,
@@ -550,7 +608,7 @@ fn registered_kubernetes_module_installs_provider_rendered_helm_values() {
             registry: &registry,
             stack_settings: StackSettings::default(),
             registration: Some(TerraformRegistration {
-                provider_name: "alien".to_string(),
+                provider_name: "acme_app".to_string(),
                 provider_source: "pkg.example.com/acme/app".to_string(),
                 provider_version: "1.0.0".to_string(),
                 resource_type: "deployment".to_string(),
@@ -561,7 +619,7 @@ fn registered_kubernetes_module_installs_provider_rendered_helm_values() {
             }),
             helm_install: Some(TerraformHelmInstall {
                 chart_ref: "oci://pkg.example.com/acme/app/helm".to_string(),
-                release_name: "acme-agent".to_string(),
+                release_name: "acme-operator".to_string(),
             }),
             supported_aws_regions: Vec::new(),
         },
@@ -580,14 +638,14 @@ fn registered_kubernetes_module_installs_provider_rendered_helm_values() {
     let helm = module
         .get("helm.tf")
         .expect("registered module with helm install should include helm.tf");
-    assert!(helm.contains("alien_deployment.this.helm_values"));
+    assert!(helm.contains("acme_app_deployment.this.helm_values"));
     assert!(!helm.contains("local.helm_values"));
 
-    let import = module
-        .get("import.tf")
-        .expect("registered module should include import.tf");
-    assert!(import.contains("release_id"));
-    assert!(import.contains("\"rel-test\""));
+    let registration = module
+        .get("registration.tf")
+        .expect("registered module should include registration.tf");
+    assert!(registration.contains("release_id"));
+    assert!(registration.contains("\"rel-test\""));
 
     let providers = module
         .get("providers.tf")
@@ -598,12 +656,12 @@ fn registered_kubernetes_module_installs_provider_rendered_helm_values() {
 
 #[test]
 fn registered_gke_kubernetes_module_declares_dynamic_network_inputs() {
-    let stack = Stack::new("gke-manager-fetch-values".to_string())
+    let stack = Stack::new("gke-registered-setup-values".to_string())
         .add(
             KubernetesCluster::new("kubernetes".to_string())
                 .provider(KubernetesClusterProvider::Gke)
                 .ownership(KubernetesClusterOwnership::Managed)
-                .namespace("alien".to_string())
+                .namespace("production".to_string())
                 .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
                 .build(),
             ResourceLifecycle::Frozen,
@@ -627,7 +685,7 @@ fn registered_gke_kubernetes_module_declares_dynamic_network_inputs() {
             registry: &registry,
             stack_settings: StackSettings::default(),
             registration: Some(TerraformRegistration {
-                provider_name: "alien".to_string(),
+                provider_name: "acme_app".to_string(),
                 provider_source: "pkg.example.com/acme/app".to_string(),
                 provider_version: "1.0.0".to_string(),
                 resource_type: "deployment".to_string(),
@@ -638,7 +696,7 @@ fn registered_gke_kubernetes_module_declares_dynamic_network_inputs() {
             }),
             helm_install: Some(TerraformHelmInstall {
                 chart_ref: "oci://pkg.example.com/acme/app/helm".to_string(),
-                release_name: "acme-agent".to_string(),
+                release_name: "acme-operator".to_string(),
             }),
             supported_aws_regions: Vec::new(),
         },

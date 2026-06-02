@@ -24,12 +24,15 @@ Metadata:
     - Label:
         default: Operations
       Parameters:
+      - DeploymentModel
       - UpdatesMode
       - TelemetryMode
       - HeartbeatsMode
     ParameterLabels:
       CertificateArn:
         default: Certificate ARN
+      DeploymentModel:
+        default: Deployment model
       DomainName:
         default: Domain name
       HeartbeatsMode:
@@ -37,9 +40,9 @@ Metadata:
       HostedZoneId:
         default: Hosted zone ID
       ManagingAccountId:
-        default: Manager account ID
+        default: Image account ID
       ManagingRoleArn:
-        default: Manager role ARN
+        default: Management role ARN
       TelemetryMode:
         default: Telemetry
       Token:
@@ -53,7 +56,8 @@ Parameters:
     NoEcho: true
   ManagingRoleArn:
     Type: String
-    Description: Manager IAM role ARN allowed to assume generated management roles.
+    Description: ARN of the management identity allowed to assume setup-created roles.
+    Default: ''
   ManagingAccountId:
     Type: String
     Description: AWS account ID for the management account that hosts application container images.
@@ -78,9 +82,17 @@ Parameters:
     Type: String
     Description: ACM certificate ARN for the custom domain. Required when DomainName is set.
     Default: ''
+    AllowedPattern: ^$|^arn:aws(-[a-z]+)?:acm:[a-z0-9-]+:[0-9]{12}:certificate/.+$
+  DeploymentModel:
+    Type: String
+    Description: How runtime updates are delivered after setup.
+    Default: push
+    AllowedValues:
+    - push
+    - pull
   UpdatesMode:
     Type: String
-    Description: How updates are applied after import.
+    Description: How updates are applied after setup registration.
     Default: auto
     AllowedValues:
     - auto
@@ -101,11 +113,28 @@ Parameters:
     - "off"
     - "on"
 Conditions:
+  DeploymentModelPush:
+    Fn::Equals:
+    - Ref: DeploymentModel
+    - push
   HasDomainName:
     Fn::Not:
     - Fn::Equals:
       - Ref: DomainName
       - ''
+Rules:
+  CustomDomainCertificate:
+    Assertions:
+    - Assert:
+        Fn::Or:
+        - Fn::Equals:
+          - Ref: DomainName
+          - ''
+        - Fn::Not:
+          - Fn::Equals:
+            - Ref: CertificateArn
+            - ''
+      AssertDescription: CertificateArn must be set to an AWS ACM certificate ARN when DomainName is set.
 Resources: {}
 Outputs:
   DeploymentSourceKind:
@@ -130,21 +159,25 @@ Outputs:
     Description: Setup compatibility fingerprint.
   DeploymentSetupImportFormatVersion:
     Value: 1
-    Description: Setup import payload format version.
+    Description: Setup registration payload format version.
   DeploymentSetupFingerprintVersion:
     Value: 1
     Description: Setup fingerprint algorithm version.
   DeploymentManagementConfig:
     Value:
       Fn::ToJsonString:
-        platform: aws
-        managingRoleArn:
-          Ref: ManagingRoleArn
-    Description: Manager import ManagementConfig JSON.
+        Fn::If:
+        - DeploymentModelPush
+        - platform: aws
+          managingRoleArn:
+            Ref: ManagingRoleArn
+        - Ref: AWS::NoValue
+    Description: Deployment registration management configuration JSON.
   DeploymentStackSettings:
     Value:
       Fn::ToJsonString:
-        deploymentModel: push
+        deploymentModel:
+          Ref: DeploymentModel
         updates:
           Ref: UpdatesMode
         telemetry:
@@ -165,7 +198,7 @@ Outputs:
                     certificateArn:
                       Ref: CertificateArn
           - Ref: AWS::NoValue
-    Description: Manager import StackSettings JSON.
+    Description: Deployment registration settings JSON.
   DeploymentResources:
     Value: '[]'
-    Description: Manager import resources JSON.
+    Description: Deployment registration resources JSON.

@@ -1,4 +1,4 @@
-//! Azure RemoteStackManagement — management User-Assigned Managed Identity
+//! Azure management access — User-Assigned Managed Identity
 //! plus Federated Identity Credential.
 //!
 //! Mirrors `AzureRemoteStackManagementController`:
@@ -61,7 +61,7 @@ impl TfEmitter for AzureRemoteStackManagementEmitter {
                     expr::raw("var.azure_resource_group_name"),
                 ),
                 attr("location", expr::raw("var.azure_location")),
-                attr("tags", tags(ctx, "remote-stack-management")),
+                attr("tags", tags(ctx, "management")),
             ],
         ));
 

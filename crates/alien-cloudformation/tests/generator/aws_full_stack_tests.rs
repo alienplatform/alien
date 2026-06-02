@@ -12,7 +12,7 @@ use alien_core::{
     StackSettings, Storage, UpdatesMode, Vault, Worker, WorkerCode, WorkerTrigger,
 };
 
-const LAMBDA_ARN: &str = "arn:aws:lambda:us-east-1:123456789012:function:alien-import";
+const LAMBDA_ARN: &str = "arn:aws:lambda:us-east-1:123456789012:function:setup-registration";
 
 #[test]
 fn aws_full_stack_with_create_network_renders_audit_ready_template() {

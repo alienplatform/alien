@@ -2,7 +2,7 @@
 //!
 //! Each scenario produces a multi-file snapshot covering every rendered
 //! file separated by `=== <path> ===` markers, runs `helm lint`, and
-//! `helm template` + `kubeconform` against both the manager-fetch path
+//! `helm template` + `kubeconform` against both the registered-setup path
 //! (default values.yaml) and the external-bindings initialize path
 //! (examples/onprem.yaml).
 

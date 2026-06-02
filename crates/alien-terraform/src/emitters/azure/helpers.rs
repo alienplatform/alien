@@ -202,7 +202,7 @@ pub fn permission_context(label: &str) -> PermissionContext {
         .with_resource_group("${var.azure_resource_group_name}".to_string())
         .with_managing_subscription_id("${var.azure_subscription_id}".to_string())
         .with_managing_resource_group("${var.azure_resource_group_name}".to_string())
-        .with_storage_account_name("${local.alien_storage_account_name}".to_string())
+        .with_storage_account_name("${local.default_storage_account_name}".to_string())
         .with_service_account_name(label.to_string())
 }
 
@@ -217,7 +217,7 @@ pub fn permission_context(label: &str) -> PermissionContext {
 ///
 /// ```hcl
 /// locals {
-///   alien_storage_account_name = substr(
+///   default_storage_account_name = substr(
 ///     replace(lower("${local.resource_prefix}default"), "-", ""),
 ///     0,
 ///     24,

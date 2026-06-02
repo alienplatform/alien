@@ -33,7 +33,7 @@ impl TerraformTarget {
         }
     }
 
-    /// The platform where the application runtime will run after import.
+    /// The platform where the application runtime will run after setup registration.
     pub fn deployment_platform(self) -> Platform {
         if self.is_kubernetes() {
             Platform::Kubernetes

@@ -41,17 +41,61 @@ variable "token" {
   sensitive   = true
 }
 
-variable "manager_url" {
+variable "management_url" {
   type        = string
-  description = "Optional manager endpoint used by pull-style runtimes."
+  description = "Optional management endpoint used by pull-style runtimes."
   default     = ""
 }
 
-variable "stack_settings_json" {
+variable "deployment_model" {
   type        = string
-  description = "Optional JSON-encoded StackSettings override supplied by deployment installers."
+  description = "How runtime updates are delivered after setup."
+  default     = "push"
+
+  validation {
+    condition     = contains(["push", "pull"], var.deployment_model)
+    error_message = "deployment_model must be one of: push, pull."
+  }
+}
+
+variable "advanced_settings_json" {
+  type        = string
+  description = "Advanced JSON-encoded deployment settings. Most installations should use the typed variables in this module instead."
   default     = "{}"
   sensitive   = true
+}
+
+variable "updates_mode" {
+  type        = string
+  description = "How application updates are delivered after setup."
+  default     = "auto"
+
+  validation {
+    condition     = contains(["auto", "approval-required"], var.updates_mode)
+    error_message = "updates_mode must be one of: auto, approval-required."
+  }
+}
+
+variable "telemetry_mode" {
+  type        = string
+  description = "How logs, metrics, and traces are collected."
+  default     = "auto"
+
+  validation {
+    condition     = contains(["off", "auto", "approval-required"], var.telemetry_mode)
+    error_message = "telemetry_mode must be one of: off, auto, approval-required."
+  }
+}
+
+variable "heartbeats_mode" {
+  type        = string
+  description = "Whether runtime health checks are enabled."
+  default     = "on"
+
+  validation {
+    condition     = contains(["off", "on"], var.heartbeats_mode)
+    error_message = "heartbeats_mode must be one of: off, on."
+  }
 }
 
 variable "gcp_project" {
@@ -67,7 +111,7 @@ variable "gcp_region" {
 
 variable "managing_service_account_email" {
   type        = string
-  description = "Email of the manager's service account that may impersonate the management identity. Empty disables the binding."
+  description = "Email of the management service account allowed to impersonate setup-created identities. Empty disables the binding."
   default     = ""
 }
 
@@ -103,7 +147,7 @@ locals {
   deployment_target            = "gcp"
   deployment_region            = var.gcp_region
   deployment_management_config = null
-  deployment_settings          = jsondecode(var.stack_settings_json)
+  deployment_settings          = merge(jsondecode(var.advanced_settings_json), { deploymentModel = var.deployment_model, updates = var.updates_mode, telemetry = var.telemetry_mode, heartbeats = var.heartbeats_mode })
   deployment_resources = [
     {
       id   = "assets"
@@ -141,8 +185,8 @@ resource "google_storage_bucket_iam_member" "assets_public_read" {
   member = "allUsers"
 }
 
-=== import.tf ===
-resource "terraform_data" "deployment_import" {
+=== registration.tf ===
+resource "terraform_data" "deployment_registration" {
   input = {
     platform                    = local.deployment_platform
     token                       = var.token
@@ -152,7 +196,7 @@ resource "terraform_data" "deployment_import" {
     setup_import_format_version = 1
     setup_fingerprint           = ""
     setup_fingerprint_version   = 0
-    manager_url                 = var.manager_url
+    management_url              = var.management_url
     management_config           = local.deployment_management_config
     stack_settings              = local.deployment_settings
     resources                   = local.deployment_resources
@@ -191,7 +235,7 @@ output "deployment_setup_target" {
 
 output "deployment_setup_import_format_version" {
   value       = 1
-  description = "Setup import payload format version."
+  description = "Setup registration payload format version."
 }
 
 output "deployment_setup_fingerprint" {
@@ -206,31 +250,72 @@ output "deployment_setup_fingerprint_version" {
 
 output "deployment_management_config" {
   value       = jsonencode(local.deployment_management_config)
-  description = "Manager import ManagementConfig JSON."
+  description = "Deployment registration management configuration JSON."
 }
 
 output "deployment_stack_settings" {
   value       = jsonencode(local.deployment_settings)
-  description = "Manager import StackSettings JSON."
+  description = "Deployment registration settings JSON."
   sensitive   = true
 }
 
 output "deployment_resources" {
   value       = jsonencode(local.deployment_resources)
-  description = "Manager import resources JSON."
+  description = "Deployment registration resource metadata JSON."
 }
 
 === README.md ===
-# Terraform module - acme-public
+# Deployment setup - acme-public
 
 Target: `gcp`.
 
-Run:
+This module creates setup-owned infrastructure, grants the management access needed after setup, and prepares deployment registration metadata. Review the generated `.tf` files before applying; each resource file maps to one setup resource.
+
+## Inputs
+
+Required:
+
+- `token`: install token from the setup page.
+- `name`: deployment name to include in the registration metadata.
+
+Common optional settings:
+
+- `resource_prefix`: stable physical-name prefix. Leave empty to generate one.
+- `management_url`: optional management endpoint used by pull-style runtimes.
+- `deployment_model`: `push` or `pull`.
+- `updates_mode`: `auto` or `approval-required`.
+- `telemetry_mode`: `off`, `auto`, or `approval-required`.
+- `heartbeats_mode`: `off` or `on`.
+- `advanced_settings_json`: advanced deployment settings JSON. Most installs should use typed variables instead.
+
+GCP settings:
+
+- `gcp_project`: target GCP project ID.
+- `gcp_region`: target GCP region.
+- `managing_service_account_email`: management service account allowed to impersonate setup-created identities.
+- `gcp_manage_custom_roles`: whether this module creates project custom roles.
+- `gcp_custom_role_prefix`: custom role ID prefix when roles are managed outside this module.
+
+## Run
+
+Use your organization's normal backend and approval workflow. A typical local review looks like:
 
 ```bash
-terraform init -backend=false
+export TF_VAR_name="acme-public"
+export TF_VAR_token="..."
+terraform init
 terraform validate
-terraform apply -var='name=acme-public' -var='token=...'
+terraform plan -out=tfplan
+terraform apply tfplan
 ```
 
-This module exposes `deployment_management_config` / `deployment_stack_settings` / `deployment_resources` for external registration flows.
+## Registration
+
+This module exposes `deployment_management_config`, `deployment_stack_settings`, and `deployment_resources` outputs for registration flows managed outside Terraform.
+
+## Outputs
+
+- `deployment_management_config`: management endpoint and credential-boundary metadata.
+- `deployment_stack_settings`: deployment settings JSON assembled from typed variables and `advanced_settings_json`.
+- `deployment_resources`: setup-owned resource metadata handed to the deployment runtime.
+- `deployment_id` and `deployment_token`: emitted only when Terraform performs registration.

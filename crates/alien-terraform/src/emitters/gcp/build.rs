@@ -27,7 +27,7 @@ impl TfEmitter for GcpBuildEmitter {
         let mut fragment = TfFragment::default();
 
         let mut substitutions: Vec<(String, Expression)> = vec![(
-            "_ALIEN_BUILD_ID".to_string(),
+            "_DEPLOYMENT_BUILD_ID".to_string(),
             Expression::String(build.id.clone()),
         )];
         for (k, v) in &build.environment {

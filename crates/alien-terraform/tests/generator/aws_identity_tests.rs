@@ -1,4 +1,4 @@
-//! AWS identity & network — service-account / remote-stack-management /
+//! AWS identity & network — service-account / management /
 //! network (Create + ByoVpcAws + UseDefault).
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};

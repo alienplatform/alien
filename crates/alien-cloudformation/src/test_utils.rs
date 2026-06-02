@@ -30,14 +30,19 @@ impl LinterRun {
     }
 
     pub fn is_ok(&self) -> bool {
-        matches!(self.status, LinterStatus::Passed | LinterStatus::Skipped(_))
+        matches!(self.status, LinterStatus::Passed)
     }
 
     pub fn assert_ok(&self, context: impl AsRef<str>) {
         match &self.status {
             LinterStatus::Passed => {}
             LinterStatus::Skipped(reason) => {
-                eprintln!("skipped {} for {}: {}", self.tool, context.as_ref(), reason);
+                panic!(
+                    "{} was skipped for {}\nreason: {}",
+                    self.tool,
+                    context.as_ref(),
+                    reason
+                );
             }
             LinterStatus::Failed(code) => {
                 panic!(

@@ -69,6 +69,35 @@ fn aws_storage_minimal_uses_safe_defaults() {
 }
 
 #[test]
+fn storage_only_template_omits_custom_domain_inputs() {
+    let stack = Stack::new("storage-minimal".to_string())
+        .add(
+            Storage::new("data".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    let yaml = render_built_ins(
+        &stack,
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        "aws storage custom-domain inputs",
+    );
+    let template: serde_json::Value =
+        serde_yaml::from_str(&yaml).expect("template YAML should parse");
+
+    assert!(template["Parameters"].get("DomainName").is_none());
+    assert!(template["Parameters"].get("HostedZoneId").is_none());
+    assert!(template["Parameters"].get("CertificateArn").is_none());
+    assert!(template["Conditions"].get("HasDomainName").is_none());
+    assert!(template["Rules"].get("CustomDomainCertificate").is_none());
+
+    let stack_settings =
+        &template["Outputs"]["DeploymentStackSettings"]["Value"]["Fn::ToJsonString"];
+    assert!(stack_settings.get("domains").is_none());
+}
+
+#[test]
 fn aws_vault_resource_permissions_attach_to_service_account_role() {
     let stack = Stack::new("vault-permissions".to_string())
         .permission(

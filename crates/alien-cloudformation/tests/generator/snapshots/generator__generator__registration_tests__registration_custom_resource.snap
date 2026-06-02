@@ -16,30 +16,21 @@ Metadata:
       - ManagingRoleArn
       - ManagingAccountId
     - Label:
-        default: Custom domain
-      Parameters:
-      - DomainName
-      - HostedZoneId
-      - CertificateArn
-    - Label:
         default: Operations
       Parameters:
+      - DeploymentModel
       - UpdatesMode
       - TelemetryMode
       - HeartbeatsMode
     ParameterLabels:
-      CertificateArn:
-        default: Certificate ARN
-      DomainName:
-        default: Domain name
+      DeploymentModel:
+        default: Deployment model
       HeartbeatsMode:
         default: Heartbeats
-      HostedZoneId:
-        default: Hosted zone ID
       ManagingAccountId:
-        default: Manager account ID
+        default: Image account ID
       ManagingRoleArn:
-        default: Manager role ARN
+        default: Management role ARN
       TelemetryMode:
         default: Telemetry
       Token:
@@ -53,7 +44,8 @@ Parameters:
     NoEcho: true
   ManagingRoleArn:
     Type: String
-    Description: Manager IAM role ARN allowed to assume generated management roles.
+    Description: ARN of the management identity allowed to assume setup-created roles.
+    Default: ''
   ManagingAccountId:
     Type: String
     Description: AWS account ID for the management account that hosts application container images.
@@ -66,21 +58,16 @@ Parameters:
     - create-new
     - use-existing
     - use-default
-  DomainName:
+  DeploymentModel:
     Type: String
-    Description: Optional custom domain for public endpoints. Leave unset to expose through the generated load balancer DNS name over HTTP.
-    Default: ''
-  HostedZoneId:
-    Type: String
-    Description: Route 53 hosted zone ID for the custom domain. Not needed for the auto-generated domain.
-    Default: ''
-  CertificateArn:
-    Type: String
-    Description: ACM certificate ARN for the custom domain. Required when DomainName is set.
-    Default: ''
+    Description: How runtime updates are delivered after setup.
+    Default: push
+    AllowedValues:
+    - push
+    - pull
   UpdatesMode:
     Type: String
-    Description: How updates are applied after import.
+    Description: How updates are applied after setup registration.
     Default: auto
     AllowedValues:
     - auto
@@ -101,21 +88,20 @@ Parameters:
     - "off"
     - "on"
 Conditions:
-  HasDomainName:
-    Fn::Not:
-    - Fn::Equals:
-      - Ref: DomainName
-      - ''
+  DeploymentModelPush:
+    Fn::Equals:
+    - Ref: DeploymentModel
+    - push
 Resources:
   LogsBucket:
     Type: AWS::S3::Bucket
     Properties:
       BucketName:
         Fn::Sub: ${AWS::StackName}-logs-bucket
-  DeploymentStackImport:
+  DeploymentRegistration:
     Type: AWS::CloudFormation::CustomResource
     Properties:
-      ServiceToken: arn:aws:lambda:us-east-1:123456789012:function:alien-import
+      ServiceToken: arn:aws:lambda:us-east-1:123456789012:function:setup-registration
       Token:
         Ref: Token
       DeploymentName:
@@ -131,11 +117,15 @@ Resources:
       SetupFingerprint: test
       SetupFingerprintVersion: 1
       ManagementConfig:
-        platform: aws
-        managingRoleArn:
-          Ref: ManagingRoleArn
+        Fn::If:
+        - DeploymentModelPush
+        - platform: aws
+          managingRoleArn:
+            Ref: ManagingRoleArn
+        - Ref: AWS::NoValue
       StackSettings:
-        deploymentModel: push
+        deploymentModel:
+          Ref: DeploymentModel
         updates:
           Ref: UpdatesMode
         telemetry:
@@ -144,18 +134,6 @@ Resources:
           Ref: HeartbeatsMode
         network:
           Ref: AWS::NoValue
-        domains:
-          Fn::If:
-          - HasDomainName
-          - customDomains:
-              default:
-                domain:
-                  Ref: DomainName
-                certificate:
-                  aws:
-                    certificateArn:
-                      Ref: CertificateArn
-          - Ref: AWS::NoValue
       Resources:
       - id: logs-bucket
         type: sample-resource

@@ -1,7 +1,7 @@
 //! CFN Outputs chunking + source-function rejection.
 //!
 //! `AWS::CloudFormation::Output` values cap at 4 KB; the generator
-//! splits the resolved import payload into `DeploymentResources0` / `...1` /
+//! splits the resolved registration payload into `DeploymentResources0` / `...1` /
 //! `…N` chunks once the assembled JSON exceeds a budget. Reviewers see
 //! the chunk shape via these tests, not via a full template snapshot
 //! (which would include 80+ buckets — not useful to read).
