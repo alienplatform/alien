@@ -1,6 +1,5 @@
 ---
 source: crates/alien-helm/tests/generator/helpers.rs
-assertion_line: 35
 expression: buf
 ---
 === Chart.yaml ===
@@ -155,6 +154,12 @@ clusterBootstrap:
       controller: eks.amazonaws.com/alb
       scheme: internet-facing
       subnetIds: []
+    azureApplicationGatewayForContainers:
+      enabled: false
+      applicationLoadBalancer:
+        name: ""
+        namespace: ""
+        associationSubnetId: ""
   compute:
     eksAutoMode:
       arm64NodePool:
@@ -187,6 +192,8 @@ basePlatformConfig:
     region: ""
   azure:
     location: ""
+    subscriptionId: ""
+    tenantId: ""
 serviceAccountPrefix: ""
 managerServiceAccount:
   annotations: {}
@@ -443,7 +450,9 @@ ephemeralStorage:
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "location": { "type": "string" }
+            "location": { "type": "string" },
+            "subscriptionId": { "type": "string" },
+            "tenantId": { "type": "string" }
           }
         }
       }
@@ -510,6 +519,22 @@ ephemeralStorage:
                 "subnetIds": {
                   "type": "array",
                   "items": { "type": "string" }
+                }
+              }
+            },
+            "azureApplicationGatewayForContainers": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "applicationLoadBalancer": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": { "type": "string" },
+                    "namespace": { "type": "string" },
+                    "associationSubnetId": { "type": "string" }
+                  }
                 }
               }
             }
@@ -800,6 +825,9 @@ rules:
   - apiGroups: ["networking.gke.io"]
     resources: ["healthcheckpolicies"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["alb.networking.azure.io"]
+    resources: ["healthcheckpolicy"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   {{- end }}
 
 === templates/rolebinding.yaml ===
@@ -1056,6 +1084,18 @@ spec:
             {{- if and (eq .Values.basePlatform "gcp") .Values.basePlatformConfig.gcp.region }}
             - name: GCP_REGION
               value: {{ .Values.basePlatformConfig.gcp.region | quote }}
+            {{- end }}
+            {{- if and (eq .Values.basePlatform "azure") .Values.basePlatformConfig.azure.subscriptionId }}
+            - name: AZURE_SUBSCRIPTION_ID
+              value: {{ .Values.basePlatformConfig.azure.subscriptionId | quote }}
+            {{- end }}
+            {{- if and (eq .Values.basePlatform "azure") .Values.basePlatformConfig.azure.tenantId }}
+            - name: AZURE_TENANT_ID
+              value: {{ .Values.basePlatformConfig.azure.tenantId | quote }}
+            {{- end }}
+            {{- if and (eq .Values.basePlatform "azure") .Values.basePlatformConfig.azure.location }}
+            - name: AZURE_REGION
+              value: {{ .Values.basePlatformConfig.azure.location | quote }}
             {{- end }}
             # `required` chart guardrail: any helm upgrade that does not
             # carry the full values document fails to render (Helm aborts
@@ -1335,6 +1375,24 @@ spec:
     apiGroup: eks.amazonaws.com
     kind: IngressClassParams
     name: {{ $ingressClassName | quote }}
+{{ end }}
+{{- $azureAgc := dig "ingress" "azureApplicationGatewayForContainers" dict $bootstrap -}}
+{{- if dig "enabled" false $azureAgc }}
+{{- $azureAlb := required "clusterBootstrap.ingress.azureApplicationGatewayForContainers.applicationLoadBalancer is required when enabled" $azureAgc.applicationLoadBalancer -}}
+{{- $azureAlbName := required "clusterBootstrap.ingress.azureApplicationGatewayForContainers.applicationLoadBalancer.name is required when enabled" $azureAlb.name -}}
+{{- $azureAlbNamespace := required "clusterBootstrap.ingress.azureApplicationGatewayForContainers.applicationLoadBalancer.namespace is required when enabled" $azureAlb.namespace -}}
+{{- $azureAssociationSubnetId := required "clusterBootstrap.ingress.azureApplicationGatewayForContainers.applicationLoadBalancer.associationSubnetId is required when enabled" $azureAlb.associationSubnetId -}}
+---
+apiVersion: alb.networking.azure.io/v1
+kind: ApplicationLoadBalancer
+metadata:
+  name: {{ $azureAlbName | quote }}
+  namespace: {{ $azureAlbNamespace | quote }}
+  labels:
+    {{- include "alien.labels" . | nindent 4 }}
+spec:
+  associations:
+    - {{ $azureAssociationSubnetId | quote }}
 {{ end }}
 {{- $eksArm64NodePool := dig "compute" "eksAutoMode" "arm64NodePool" dict $bootstrap -}}
 {{- if dig "enabled" false $eksArm64NodePool }}
