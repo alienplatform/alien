@@ -1,4 +1,4 @@
-//! GCP RemoteStackManagement — service account the manager impersonates.
+//! GCP management access — service account the manager impersonates.
 //!
 //! Mirrors `GcpRemoteStackManagementController`:
 //!

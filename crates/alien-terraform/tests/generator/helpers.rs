@@ -68,3 +68,42 @@ pub fn assert_terraform_valid(module: &ModuleFiles, context: &str) {
     test_utils::terraform_fmt_check(&files).assert_ok(format!("{context} terraform fmt -check"));
     test_utils::terraform_validate(&files).assert_ok(format!("{context} terraform validate"));
 }
+
+/// Run Terraform planning against the generated variable declarations and
+/// require a specific diagnostic fragment.
+pub fn assert_terraform_variable_plan_invalid_contains(
+    module: &ModuleFiles,
+    context: &str,
+    vars: &[(&str, &str)],
+    expected: &str,
+) {
+    let mut files = IndexMap::new();
+    files.insert(
+        "variables.tf".to_string(),
+        module
+            .get("variables.tf")
+            .expect("variables.tf should render")
+            .to_string(),
+    );
+    test_utils::terraform_fmt_check(&files).assert_ok(format!("{context} terraform fmt -check"));
+
+    let result = test_utils::terraform_plan_with_vars(&files, vars);
+    match &result.status {
+        test_utils::LinterStatus::Failed(_) => {
+            let diagnostics = format!("{}\n{}", result.stdout, result.stderr);
+            assert!(
+                diagnostics.contains(expected),
+                "terraform plan failed for {context}, but diagnostics did not contain {expected:?}\ncommand: {}\nstdout:\n{}\nstderr:\n{}",
+                result.command,
+                result.stdout,
+                result.stderr
+            );
+        }
+        test_utils::LinterStatus::Passed => {
+            panic!("terraform plan unexpectedly passed for {context}");
+        }
+        test_utils::LinterStatus::Skipped(reason) => {
+            panic!("terraform plan was skipped for {context}\nreason: {reason}");
+        }
+    }
+}

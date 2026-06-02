@@ -17,6 +17,15 @@ let value: DomainWithUsage = {
   usage: {
     deploymentUrlProjects: [],
     portalBindings: [],
+    packageDomains: [],
+    managerBindings: [
+      {
+        id: "<id>",
+        managerId: "<id>",
+        managerName: "<value>",
+        hostname: "adolescent-space.name",
+      },
+    ],
   },
 };
 ```

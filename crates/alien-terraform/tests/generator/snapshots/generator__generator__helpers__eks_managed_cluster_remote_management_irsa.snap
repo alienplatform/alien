@@ -1,11 +1,10 @@
 ---
 source: crates/alien-terraform/tests/generator/helpers.rs
-assertion_line: 61
 expression: buf
 ---
 === versions.tf ===
 terraform {
-  required_version = ">= 1.5.0"
+  required_version = ">= 1.9.0"
 
   required_providers {
     aws = {
@@ -46,17 +45,61 @@ variable "token" {
   sensitive   = true
 }
 
-variable "manager_url" {
+variable "management_url" {
   type        = string
-  description = "Optional manager endpoint used by pull-style runtimes."
+  description = "Optional management endpoint used by pull-style runtimes."
   default     = ""
 }
 
-variable "stack_settings_json" {
+variable "deployment_model" {
   type        = string
-  description = "Optional JSON-encoded StackSettings override supplied by deployment installers."
-  default     = "{\"network\":{\"type\":\"create\",\"availability_zones\":2},\"deploymentModel\":\"pull\"}"
+  description = "How runtime updates are delivered after setup."
+  default     = "pull"
+
+  validation {
+    condition     = contains(["push", "pull"], var.deployment_model)
+    error_message = "deployment_model must be one of: push, pull."
+  }
+}
+
+variable "advanced_settings_json" {
+  type        = string
+  description = "Advanced JSON-encoded deployment settings. Most installations should use the typed variables in this module instead."
+  default     = "{}"
   sensitive   = true
+}
+
+variable "updates_mode" {
+  type        = string
+  description = "How application updates are delivered after setup."
+  default     = "auto"
+
+  validation {
+    condition     = contains(["auto", "approval-required"], var.updates_mode)
+    error_message = "updates_mode must be one of: auto, approval-required."
+  }
+}
+
+variable "telemetry_mode" {
+  type        = string
+  description = "How logs, metrics, and traces are collected."
+  default     = "auto"
+
+  validation {
+    condition     = contains(["off", "auto", "approval-required"], var.telemetry_mode)
+    error_message = "telemetry_mode must be one of: off, auto, approval-required."
+  }
+}
+
+variable "heartbeats_mode" {
+  type        = string
+  description = "Whether runtime health checks are enabled."
+  default     = "on"
+
+  validation {
+    condition     = contains(["off", "on"], var.heartbeats_mode)
+    error_message = "heartbeats_mode must be one of: off, on."
+  }
 }
 
 variable "aws_region" {
@@ -67,13 +110,13 @@ variable "aws_region" {
 
 variable "managing_role_arn" {
   type        = string
-  description = "ARN of the manager IAM identity allowed to assume management roles."
+  description = "ARN of the management identity allowed to assume setup-created roles."
   default     = ""
 }
 
 variable "managing_account_id" {
   type        = string
-  description = "Account ID hosting the manager. Referenced by resource-side IAM policies that scope cross-account image pulls. Empty disables those grants."
+  description = "AWS account ID that hosts application container images. Empty disables scoped cross-account image-pull grants."
   default     = ""
 }
 
@@ -131,6 +174,23 @@ variable "kubernetes_namespace" {
   default     = "default"
 }
 
+variable "custom_domain_name" {
+  type        = string
+  description = "Optional custom domain for public Kubernetes routes. Leave empty to use the generated load balancer hostname."
+  default     = ""
+}
+
+variable "custom_domain_certificate_arn" {
+  type        = string
+  description = "ACM certificate ARN for custom_domain_name. Required when custom_domain_name is set."
+  default     = ""
+
+  validation {
+    condition     = var.custom_domain_certificate_arn == "" ? var.custom_domain_name == "" : can(regex("^arn:aws(-[a-z]+)?:acm:[a-z0-9-]+:[0-9]{12}:certificate/.+$", var.custom_domain_certificate_arn))
+    error_message = "custom_domain_certificate_arn must be a valid AWS ACM certificate ARN when custom_domain_name is set."
+  }
+}
+
 variable "eks_cluster_name" {
   type        = string
   description = "Existing EKS cluster name that Helm will install into."
@@ -153,42 +213,14 @@ resource "random_id" "resource_prefix" {
 
 === locals.tf ===
 locals {
-  resource_prefix                = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
-  deployment_name                = var.name
-  deployment_platform            = "kubernetes"
-  deployment_base_platform       = "aws"
-  deployment_target              = "eks"
-  deployment_region              = data.aws_region.current.region
-  deployment_management_config   = null
-  deployment_kubernetes_settings = merge(try(jsondecode(var.stack_settings_json).kubernetes, {}), { exposure = jsondecode(try(jsondecode(var.stack_settings_json).kubernetes.exposure, null) == null ? jsonencode(local.kubernetes_exposure) : jsonencode(jsondecode(var.stack_settings_json).kubernetes.exposure)) })
-  deployment_settings            = merge(jsondecode(var.stack_settings_json), { network = jsondecode(var.network_mode == "create-new" ? jsonencode({ type = "create", cidr = var.vpc_cidr == "" ? null : var.vpc_cidr, availabilityZones = var.availability_zones }) : var.network_mode == "use-existing" ? jsonencode({ type = "byo-vpc-aws", vpcId = var.vpc_id, publicSubnetIds = var.public_subnet_ids, privateSubnetIds = var.private_subnet_ids, securityGroupIds = var.security_group_ids }) : jsonencode({ type = "use-default" })), kubernetes = local.deployment_kubernetes_settings })
-  deployment_resources = [
-    {
-      id   = "kubernetes"
-      type = "kubernetes-cluster"
-      importData = {
-        provider           = "eks"
-        ownership          = var.kubernetes_cluster_mode == "create" ? "managed" : "managed"
-        namespace          = var.kubernetes_namespace
-        clusterName        = local.kubernetes_cluster_name
-        clusterId          = local.kubernetes_cluster_name
-        cloudMetadataReady = true
-      }
-    },
-    {
-      id   = "remote-stack-management"
-      type = "remote-stack-management"
-      importData = {
-        roleName                     = aws_iam_role.remote_stack_management.name
-        roleArn                      = aws_iam_role.remote_stack_management.arn
-        managementPermissionsApplied = true
-      }
-    }
-  ]
-  kubernetes_cluster_name = var.kubernetes_cluster_mode == "create" ? aws_eks_cluster.kubernetes[0].name : var.eks_cluster_name
-  kubernetes_kube_context = local.kubernetes_cluster_name
-  kubernetes_kubeconfig   = var.kubernetes_cluster_mode == "create" ? yamlencode({ apiVersion = "v1", kind = "Config", clusters = [{ name = aws_eks_cluster.kubernetes[0].name, cluster = { server = aws_eks_cluster.kubernetes[0].endpoint, "certificate-authority-data" = aws_eks_cluster.kubernetes[0].certificate_authority[0].data } }], contexts = [{ name = aws_eks_cluster.kubernetes[0].name, context = { cluster = aws_eks_cluster.kubernetes[0].name, user = aws_eks_cluster.kubernetes[0].name } }], "current-context" = aws_eks_cluster.kubernetes[0].name, users = [{ name = aws_eks_cluster.kubernetes[0].name, user = { exec = { apiVersion = "client.authentication.k8s.io/v1beta1", command = "aws", args = ["eks", "get-token", "--cluster-name", aws_eks_cluster.kubernetes[0].name, "--region", var.aws_region] } } }] }) : ""
-  kubernetes_exposure = {
+  resource_prefix              = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
+  deployment_name              = var.name
+  deployment_platform          = "kubernetes"
+  deployment_base_platform     = "aws"
+  deployment_target            = "eks"
+  deployment_region            = data.aws_region.current.region
+  deployment_management_config = var.deployment_model == "push" ? { platform = "aws", managingRoleArn = var.managing_role_arn } : null
+  generated_kubernetes_exposure = {
     mode = "generated"
     route = {
       routeApi         = "ingress"
@@ -207,12 +239,41 @@ locals {
       mode = "none"
     }
   }
+  kubernetes_exposure            = jsondecode(var.custom_domain_name == "" ? jsonencode(local.generated_kubernetes_exposure) : jsonencode(merge(local.generated_kubernetes_exposure, { mode = "custom", domain = var.custom_domain_name, certificate = { mode = "awsAcmArn", certificateArn = var.custom_domain_certificate_arn } })))
+  deployment_kubernetes_settings = merge(try(jsondecode(var.advanced_settings_json).kubernetes, {}), { exposure = jsondecode(try(jsondecode(var.advanced_settings_json).kubernetes.exposure, null) == null ? jsonencode(local.kubernetes_exposure) : jsonencode(jsondecode(var.advanced_settings_json).kubernetes.exposure)) })
+  deployment_settings            = merge(jsondecode(var.advanced_settings_json), { deploymentModel = var.deployment_model, updates = var.updates_mode, telemetry = var.telemetry_mode, heartbeats = var.heartbeats_mode, network = jsondecode(var.network_mode == "create-new" ? jsonencode({ type = "create", cidr = var.vpc_cidr == "" ? null : var.vpc_cidr, availabilityZones = var.availability_zones }) : var.network_mode == "use-existing" ? jsonencode({ type = "byo-vpc-aws", vpcId = var.vpc_id, publicSubnetIds = var.public_subnet_ids, privateSubnetIds = var.private_subnet_ids, securityGroupIds = var.security_group_ids }) : jsonencode({ type = "use-default" })), kubernetes = local.deployment_kubernetes_settings })
+  deployment_resources = [
+    {
+      id   = "kubernetes"
+      type = "kubernetes-cluster"
+      importData = {
+        provider           = "eks"
+        ownership          = var.kubernetes_cluster_mode == "create" ? "managed" : "managed"
+        namespace          = var.kubernetes_namespace
+        clusterName        = local.kubernetes_cluster_name
+        clusterId          = local.kubernetes_cluster_name
+        cloudMetadataReady = true
+      }
+    },
+    {
+      id   = "management"
+      type = "remote-stack-management"
+      importData = {
+        roleName                     = aws_iam_role.management.name
+        roleArn                      = aws_iam_role.management.arn
+        managementPermissionsApplied = true
+      }
+    }
+  ]
+  kubernetes_cluster_name   = var.kubernetes_cluster_mode == "create" ? aws_eks_cluster.kubernetes[0].name : var.eks_cluster_name
+  kubernetes_kube_context   = local.kubernetes_cluster_name
+  kubernetes_kubeconfig     = var.kubernetes_cluster_mode == "create" ? yamlencode({ apiVersion = "v1", kind = "Config", clusters = [{ name = aws_eks_cluster.kubernetes[0].name, cluster = { server = aws_eks_cluster.kubernetes[0].endpoint, "certificate-authority-data" = aws_eks_cluster.kubernetes[0].certificate_authority[0].data } }], contexts = [{ name = aws_eks_cluster.kubernetes[0].name, context = { cluster = aws_eks_cluster.kubernetes[0].name, user = aws_eks_cluster.kubernetes[0].name } }], "current-context" = aws_eks_cluster.kubernetes[0].name, users = [{ name = aws_eks_cluster.kubernetes[0].name, user = { exec = { apiVersion = "client.authentication.k8s.io/v1beta1", command = "aws", args = ["eks", "get-token", "--cluster-name", aws_eks_cluster.kubernetes[0].name, "--region", var.aws_region] } } }] }) : ""
   eks_oidc_issuer_host_path = trimprefix(data.aws_eks_cluster.target.identity[0].oidc[0].issuer, "https://")
   eks_oidc_provider_arn     = var.kubernetes_cluster_mode == "create" ? aws_iam_openid_connect_provider.eks[0].arn : data.aws_iam_openid_connect_provider.eks_existing[0].arn
   helm_service_accounts     = {}
   helm_manager_service_account = {
     annotations = {
-      "eks.amazonaws.com/role-arn" = aws_iam_role.remote_stack_management.arn
+      "eks.amazonaws.com/role-arn" = aws_iam_role.management.arn
     }
     labels = {}
   }
@@ -259,8 +320,8 @@ resource "aws_iam_openid_connect_provider" "eks" {
     data.tls_certificate.eks_oidc.certificates[0].sha1_fingerprint
   ]
   tags = {
-    Name                    = "${local.resource_prefix}-eks-oidc"
-    "alien-resource-prefix" = local.resource_prefix
+    Name                         = "${local.resource_prefix}-eks-oidc"
+    "deployment-resource-prefix" = local.resource_prefix
   }
 }
 
@@ -519,8 +580,8 @@ resource "aws_eks_addon" "kubernetes_coredns" {
   ]
 }
 
-=== remote_stack_management.tf ===
-data "aws_iam_policy_document" "remote_stack_management_assume_role" {
+=== management.tf ===
+data "aws_iam_policy_document" "management_assume_role" {
   statement {
     effect = "Allow"
     actions = [
@@ -552,35 +613,35 @@ data "aws_iam_policy_document" "remote_stack_management_assume_role" {
   }
 }
 
-resource "aws_iam_role" "remote_stack_management" {
+resource "aws_iam_role" "management" {
   name               = length(format("%s-%s", local.resource_prefix, "management")) <= 64 ? format("%s-%s", local.resource_prefix, "management") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "management"), 0, 55), substr(sha1(format("%s-%s", local.resource_prefix, "management")), 0, 8))
-  assume_role_policy = data.aws_iam_policy_document.remote_stack_management_assume_role.json
+  assume_role_policy = data.aws_iam_policy_document.management_assume_role.json
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
-    resource        = "remote-stack-management"
-    "resource-type" = "remote-stack-management"
+    resource        = "management"
+    "resource-type" = "management"
   }
 }
 
-resource "aws_iam_policy" "remote_stack_management_managed_policy_0" {
+resource "aws_iam_policy" "management_managed_policy_0" {
   name   = length(format("%s-%s", local.resource_prefix, "deployment-management-0")) <= 128 ? format("%s-%s", local.resource_prefix, "deployment-management-0") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "deployment-management-0"), 0, 119), substr(sha1(format("%s-%s", local.resource_prefix, "deployment-management-0")), 0, 8))
   policy = jsonencode({ Statement = [{ Action = ["eks:DescribeCluster"], Effect = "Allow", Resource = ["arn:aws:eks:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:cluster/${var.kubernetes_cluster_mode == "create" ? format("%s-k8s", local.resource_prefix) : var.eks_cluster_name}"], Sid = "KubernetesClusterHeartbeat" }], Version = "2012-10-17" })
 }
 
-resource "aws_iam_role_policy_attachment" "remote_stack_management_managed_policy_0_attachment" {
-  role       = aws_iam_role.remote_stack_management.name
-  policy_arn = aws_iam_policy.remote_stack_management_managed_policy_0.arn
+resource "aws_iam_role_policy_attachment" "management_managed_policy_0_attachment" {
+  role       = aws_iam_role.management.name
+  policy_arn = aws_iam_policy.management_managed_policy_0.arn
 }
 
-resource "aws_iam_role_policy" "remote_stack_management_self_read" {
+resource "aws_iam_role_policy" "management_self_read" {
   name   = "deployment-management-self-read"
-  role   = aws_iam_role.remote_stack_management.id
-  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "ReadOwnManagementRole", Effect = "Allow", Action = "iam:GetRole", Resource = aws_iam_role.remote_stack_management.arn }] })
+  role   = aws_iam_role.management.id
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "ReadOwnManagementRole", Effect = "Allow", Action = "iam:GetRole", Resource = aws_iam_role.management.arn }] })
 }
 
-=== import.tf ===
-resource "terraform_data" "deployment_import" {
+=== registration.tf ===
+resource "terraform_data" "deployment_registration" {
   input = {
     platform                    = local.deployment_platform
     token                       = var.token
@@ -590,7 +651,7 @@ resource "terraform_data" "deployment_import" {
     setup_import_format_version = 1
     setup_fingerprint           = ""
     setup_fingerprint_version   = 0
-    manager_url                 = var.manager_url
+    management_url              = var.management_url
     management_config           = local.deployment_management_config
     stack_settings              = local.deployment_settings
     resources                   = local.deployment_resources
@@ -622,10 +683,10 @@ resource "terraform_data" "deployment_import" {
     aws_eks_addon.kubernetes_ebs_csi,
     aws_eks_addon.kubernetes_kube_proxy,
     aws_eks_addon.kubernetes_coredns,
-    aws_iam_role.remote_stack_management,
-    aws_iam_policy.remote_stack_management_managed_policy_0,
-    aws_iam_role_policy_attachment.remote_stack_management_managed_policy_0_attachment,
-    aws_iam_role_policy.remote_stack_management_self_read
+    aws_iam_role.management,
+    aws_iam_policy.management_managed_policy_0,
+    aws_iam_role_policy_attachment.management_managed_policy_0_attachment,
+    aws_iam_role_policy.management_self_read
   ]
 }
 
@@ -657,7 +718,7 @@ output "deployment_setup_target" {
 
 output "deployment_setup_import_format_version" {
   value       = 1
-  description = "Setup import payload format version."
+  description = "Setup registration payload format version."
 }
 
 output "deployment_setup_fingerprint" {
@@ -672,18 +733,18 @@ output "deployment_setup_fingerprint_version" {
 
 output "deployment_management_config" {
   value       = jsonencode(local.deployment_management_config)
-  description = "Manager import ManagementConfig JSON."
+  description = "Deployment registration management configuration JSON."
 }
 
 output "deployment_stack_settings" {
   value       = jsonencode(local.deployment_settings)
-  description = "Manager import StackSettings JSON."
+  description = "Deployment registration settings JSON."
   sensitive   = true
 }
 
 output "deployment_resources" {
   value       = jsonencode(local.deployment_resources)
-  description = "Manager import resources JSON."
+  description = "Deployment registration resource metadata JSON."
 }
 
 output "deployment_base_platform" {
@@ -703,16 +764,68 @@ output "kubernetes_kube_context" {
 }
 
 === README.md ===
-# Terraform module - eks-managed-remote-management
+# Deployment setup - eks-managed-remote-management
 
 Target: `eks`.
 
-Run:
+This module creates setup-owned infrastructure, grants the management access needed after setup, and prepares deployment registration metadata. Review the generated `.tf` files before applying; each resource file maps to one setup resource.
+
+## Inputs
+
+Required:
+
+- `token`: install token from the setup page.
+- `name`: deployment name to include in the registration metadata.
+
+Common optional settings:
+
+- `resource_prefix`: stable physical-name prefix. Leave empty to generate one.
+- `management_url`: optional management endpoint used by pull-style runtimes.
+- `deployment_model`: `push` or `pull`.
+- `updates_mode`: `auto` or `approval-required`.
+- `telemetry_mode`: `off`, `auto`, or `approval-required`.
+- `heartbeats_mode`: `off` or `on`.
+- `advanced_settings_json`: advanced deployment settings JSON. Most installs should use typed variables instead.
+
+AWS settings:
+
+- `aws_region`: AWS region used by the provider.
+- `managing_role_arn`: management identity allowed to assume setup-created roles.
+- `managing_account_id`: account that hosts application container images. Empty disables scoped cross-account image-pull grants.
+
+Network settings:
+
+- `network_mode`: `create-new`, `use-existing`, or `use-default`.
+- `vpc_cidr`, `availability_zones`: used with `create-new`.
+- `vpc_id`, `public_subnet_ids`, `private_subnet_ids`, `security_group_ids`: required with `use-existing`.
+
+Kubernetes settings:
+
+- `kubernetes_cluster_mode`: `create` or `existing`.
+- `kubernetes_namespace`: namespace for runtime resources.
+- `eks_cluster_name`: existing EKS cluster name when `kubernetes_cluster_mode = "existing"`.
+- `custom_domain_name`, `custom_domain_certificate_arn`: optional EKS public route hostname and ACM certificate ARN. Leave empty to use the generated load balancer hostname.
+
+## Run
+
+Use your organization's normal backend and approval workflow. A typical local review looks like:
 
 ```bash
-terraform init -backend=false
+export TF_VAR_name="eks-managed-remote-management"
+export TF_VAR_token="..."
+terraform init
 terraform validate
-terraform apply -var='name=eks-managed-remote-management' -var='token=...'
+terraform plan -out=tfplan
+terraform apply tfplan
 ```
 
-This module exposes `deployment_management_config` / `deployment_stack_settings` / `deployment_resources` for external registration flows.
+## Registration
+
+This module exposes `deployment_management_config`, `deployment_stack_settings`, and `deployment_resources` outputs for registration flows managed outside Terraform.
+
+## Outputs
+
+- `deployment_management_config`: management endpoint and credential-boundary metadata.
+- `deployment_stack_settings`: deployment settings JSON assembled from typed variables and `advanced_settings_json`.
+- `deployment_resources`: setup-owned resource metadata handed to the deployment runtime.
+- `deployment_id` and `deployment_token`: emitted only when Terraform performs registration.

@@ -1,4 +1,4 @@
-//! Azure identity & network — service-account / remote-stack-management /
+//! Azure identity & network — service-account / management /
 //! network (Create + ByoVnetAzure + UseDefault).
 //!
 //! Mirrors the GCP identity test layout. Service-account covers the
@@ -102,7 +102,7 @@ fn azure_remote_stack_management_emits_uami_with_federated_credential() {
 
     assert!(
         !rendered.contains("time_sleep\" \"azure_rbac_propagation\""),
-        "Azure setup/live handoff waits in the imported frozen controller, not Terraform"
+        "Azure setup/live handoff waits in the registered frozen controller, not Terraform"
     );
     assert!(
         !rendered.contains("hashicorp/time"),

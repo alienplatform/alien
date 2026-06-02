@@ -33,6 +33,8 @@ pub struct ResolvedKubernetesConfig {
     pub client_key_data: Option<String>,
     /// Bearer token for authentication
     pub bearer_token: Option<String>,
+    /// Bearer token file for authentication. Used for projected service account tokens that rotate.
+    pub bearer_token_file: Option<String>,
     /// Whether to skip TLS verification
     pub insecure_skip_tls_verify: bool,
     /// Additional headers to include in requests
@@ -186,6 +188,7 @@ impl KubernetesClientConfigExt for KubernetesClientConfig {
                     client_certificate_data: client_certificate_data.clone(),
                     client_key_data: client_key_data.clone(),
                     bearer_token: token.clone(),
+                    bearer_token_file: None,
                     insecure_skip_tls_verify: false, // Manual config defaults to secure
                     additional_headers: additional_headers.clone(),
                 })
@@ -323,13 +326,6 @@ async fn resolve_incluster(
         "https://kubernetes.default.svc".to_string()
     };
 
-    // Read service account token
-    let bearer_token =
-        tokio::fs::read_to_string("/var/run/secrets/kubernetes.io/serviceaccount/token")
-            .await
-            .ok()
-            .map(|token| token.trim().to_string());
-
     // Read CA certificate
     let certificate_authority_data =
         tokio::fs::read("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt")
@@ -342,7 +338,8 @@ async fn resolve_incluster(
         certificate_authority_data,
         client_certificate_data: None,
         client_key_data: None,
-        bearer_token,
+        bearer_token: None,
+        bearer_token_file: Some("/var/run/secrets/kubernetes.io/serviceaccount/token".to_string()),
         insecure_skip_tls_verify: false, // In-cluster should always verify TLS
         additional_headers: additional_headers.unwrap_or_default(),
     })

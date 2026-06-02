@@ -117,7 +117,7 @@ impl AwsArtifactRegistryController {
         let request = CreateRoleRequest::builder()
             .role_name(pull_role_name.clone())
             .assume_role_policy_document(assume_role_policy)
-            .description(format!("Alien ECR pull role for registry {}", config.id))
+            .description(format!("Runtime ECR pull role for registry {}", config.id))
             .tags(
                 standard_resource_tags(ctx.resource_prefix, &config.id)
                     .into_iter()
@@ -213,7 +213,7 @@ impl AwsArtifactRegistryController {
         let request = CreateRoleRequest::builder()
             .role_name(push_role_name.clone())
             .assume_role_policy_document(assume_role_policy)
-            .description(format!("Alien ECR push role for registry {}", config.id))
+            .description(format!("Runtime ECR push role for registry {}", config.id))
             .tags(
                 standard_resource_tags(ctx.resource_prefix, &config.id)
                     .into_iter()

@@ -58,7 +58,7 @@ export type CreateProjectFromTemplateCloudformationRequest = {
 };
 
 /**
- * Agent image package configuration. Required when Helm is enabled. If null, agent image packages will not be generated.
+ * Operator image package configuration. Required when Helm is enabled. If null, Operator image packages will not be generated.
  */
 export type CreateProjectFromTemplateAgentImageRequest = {
   /**
@@ -66,11 +66,11 @@ export type CreateProjectFromTemplateAgentImageRequest = {
    */
   displayName: string;
   /**
-   * Binary name (e.g., "acme-agent")
+   * Image name (e.g., "acme-operator")
    */
   name: string;
   /**
-   * Whether agent image package generation is enabled
+   * Whether Operator image package generation is enabled
    */
   enabled: boolean;
 };
@@ -123,7 +123,7 @@ export type CreateProjectFromTemplatePackagesConfigRequest = {
     | null
     | undefined;
   /**
-   * Agent image package configuration. Required when Helm is enabled. If null, agent image packages will not be generated.
+   * Operator image package configuration. Required when Helm is enabled. If null, Operator image packages will not be generated.
    */
   agentImage?: CreateProjectFromTemplateAgentImageRequest | null | undefined;
   /**
@@ -268,7 +268,7 @@ export type CreateProjectFromTemplateCloudformationResponse = {
 };
 
 /**
- * Agent image package configuration. Required when Helm is enabled. If null, agent image packages will not be generated.
+ * Operator image package configuration. Required when Helm is enabled. If null, Operator image packages will not be generated.
  */
 export type CreateProjectFromTemplateAgentImageResponse = {
   /**
@@ -276,11 +276,11 @@ export type CreateProjectFromTemplateAgentImageResponse = {
    */
   displayName: string;
   /**
-   * Binary name (e.g., "acme-agent")
+   * Image name (e.g., "acme-operator")
    */
   name: string;
   /**
-   * Whether agent image package generation is enabled
+   * Whether Operator image package generation is enabled
    */
   enabled: boolean;
 };
@@ -333,7 +333,7 @@ export type CreateProjectFromTemplatePackagesConfigResponse = {
     | null
     | undefined;
   /**
-   * Agent image package configuration. Required when Helm is enabled. If null, agent image packages will not be generated.
+   * Operator image package configuration. Required when Helm is enabled. If null, Operator image packages will not be generated.
    */
   agentImage?: CreateProjectFromTemplateAgentImageResponse | null | undefined;
   /**

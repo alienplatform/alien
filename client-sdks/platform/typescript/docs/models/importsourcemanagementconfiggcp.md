@@ -15,7 +15,7 @@ let value: ImportSourceManagementConfigGcp = {
 
 ## Fields
 
-| Field                                      | Type                                       | Required                                   | Description                                |
-| ------------------------------------------ | ------------------------------------------ | ------------------------------------------ | ------------------------------------------ |
-| `serviceAccountEmail`                      | *string*                                   | :heavy_check_mark:                         | Service account email for management roles |
-| `platform`                                 | *"gcp"*                                    | :heavy_check_mark:                         | N/A                                        |
+| Field                                                                  | Type                                                                   | Required                                                               | Description                                                            |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `serviceAccountEmail`                                                  | *string*                                                               | :heavy_check_mark:                                                     | Service account email for management roles                             |
+| `platform`                                                             | [models.ImportSourcePlatformGcp](../models/importsourceplatformgcp.md) | :heavy_check_mark:                                                     | N/A                                                                    |

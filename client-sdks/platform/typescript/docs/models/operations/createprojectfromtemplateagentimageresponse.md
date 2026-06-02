@@ -1,6 +1,6 @@
 # CreateProjectFromTemplateAgentImageResponse
 
-Agent image package configuration. Required when Helm is enabled. If null, agent image packages will not be generated.
+Operator image package configuration. Required when Helm is enabled. If null, Operator image packages will not be generated.
 
 ## Example Usage
 
@@ -19,5 +19,5 @@ let value: CreateProjectFromTemplateAgentImageResponse = {
 | Field                                                     | Type                                                      | Required                                                  | Description                                               |
 | --------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- |
 | `displayName`                                             | *string*                                                  | :heavy_check_mark:                                        | Human-friendly display name for logs and startup messages |
-| `name`                                                    | *string*                                                  | :heavy_check_mark:                                        | Binary name (e.g., "acme-agent")                          |
-| `enabled`                                                 | *boolean*                                                 | :heavy_check_mark:                                        | Whether agent image package generation is enabled         |
+| `name`                                                    | *string*                                                  | :heavy_check_mark:                                        | Image name (e.g., "acme-operator")                        |
+| `enabled`                                                 | *boolean*                                                 | :heavy_check_mark:                                        | Whether Operator image package generation is enabled      |

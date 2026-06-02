@@ -161,7 +161,7 @@ fn gcp_vault_management_permissions_disambiguate_iam_member_labels() {
             PermissionProfile::new().resource("secrets", ["vault/heartbeat", "vault/management"]),
         ))
         .add(
-            RemoteStackManagement::new("remote-stack-management".to_string()).build(),
+            RemoteStackManagement::new("management".to_string()).build(),
             ResourceLifecycle::Frozen,
         )
         .add(
@@ -175,12 +175,8 @@ fn gcp_vault_management_permissions_disambiguate_iam_member_labels() {
         .map(|(_, contents)| contents)
         .collect::<String>();
 
-    assert!(rendered.contains(
-        "secretmanager_viewer_remote_stack_management_secrets_vault_heartbeat_binding_0"
-    ));
-    assert!(rendered.contains(
-        "secretmanager_viewer_remote_stack_management_secrets_vault_management_binding_0"
-    ));
+    assert!(rendered.contains("secretmanager_viewer_management_secrets_vault_heartbeat_binding_0"));
+    assert!(rendered.contains("secretmanager_viewer_management_secrets_vault_management_binding_0"));
     assert_terraform_valid(&module, "gcp_vault_management_permission_labels");
 }
 

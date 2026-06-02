@@ -5881,6 +5881,7 @@ export type HeartbeatStatus42 = {
 };
 
 export type DataAzureVnet = {
+  applicationGatewaySubnetName?: string | null | undefined;
   cidrBlock?: string | null | undefined;
   isByoVnet: boolean;
   lastByoVnetVerificationErrorCode?: string | null | undefined;
@@ -21923,6 +21924,7 @@ export function heartbeatStatus42ToJSON(
 
 /** @internal */
 export type DataAzureVnet$Outbound = {
+  applicationGatewaySubnetName?: string | null | undefined;
   cidrBlock?: string | null | undefined;
   isByoVnet: boolean;
   lastByoVnetVerificationErrorCode?: string | null | undefined;
@@ -21944,6 +21946,7 @@ export const DataAzureVnet$outboundSchema: z.ZodType<
   DataAzureVnet$Outbound,
   DataAzureVnet
 > = z.object({
+  applicationGatewaySubnetName: z.nullable(z.string()).optional(),
   cidrBlock: z.nullable(z.string()).optional(),
   isByoVnet: z.boolean(),
   lastByoVnetVerificationErrorCode: z.nullable(z.string()).optional(),

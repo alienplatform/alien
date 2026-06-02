@@ -13,6 +13,7 @@ use alien_core::{
     Stack, StackSettings, ToolchainConfig, Worker, WorkerCode,
 };
 use alien_helm::{generate_helm_chart, HelmOptions, HelmRegistry};
+use serde_json::{json, Value};
 
 #[test]
 fn pure_worker_chart_emits_service_for_public_ingress() {
@@ -50,24 +51,36 @@ fn chart_values_include_kubernetes_exposure_contract() {
                     provider: None,
                 }),
                 certificate: KubernetesCertificateMode::ManagedTlsSecret {
-                    secret_name_template: "alien-{{ resourceId }}-tls".to_string(),
+                    secret_name_template: "deployment-{{ resourceId }}-tls".to_string(),
                 },
             }),
         }),
         ..StackSettings::default()
     };
     let chart = render(&stack, settings);
-    let values = chart.files.get("values.yaml").expect("values.yaml");
+    assert_helm_valid(&chart, "kubernetes exposure contract");
 
-    assert!(values.contains("stackSettings:"));
-    assert!(values.contains("kubernetes:"));
-    assert!(values.contains("exposure:"));
-    assert!(values.contains("mode: generated"));
-    assert!(values.contains("routeApi: ingress"));
-    assert!(values.contains("ingressClassName: alien-alb"));
-    assert!(values.contains("mode: managedTlsSecret"));
-    assert!(values.contains("secretNameTemplate: alien-{{ resourceId }}-tls"));
-    assert!(!values.contains("secret_name_template"));
+    let values_yaml = chart.files.get("values.yaml").expect("values.yaml");
+    let values: Value = serde_yaml::from_str(values_yaml).expect("values.yaml should parse");
+
+    assert_eq!(
+        values.pointer("/stackSettings/kubernetes/exposure"),
+        Some(&json!({
+            "mode": "generated",
+            "route": {
+                "routeApi": "ingress",
+                "controller": "eks.amazonaws.com/alb",
+                "ingressClassName": "alien-alb",
+            },
+            "certificate": {
+                "mode": "managedTlsSecret",
+                "secretNameTemplate": "deployment-{{ resourceId }}-tls",
+            },
+        }))
+    );
+    assert!(values
+        .pointer("/stackSettings/kubernetes/exposure/certificate/secret_name_template")
+        .is_none());
 }
 
 #[test]
@@ -124,7 +137,7 @@ fn chart_role_rbac_is_selected_by_kubernetes_route_api() {
                     provider: None,
                 }),
                 certificate: KubernetesCertificateMode::ManagedTlsSecret {
-                    secret_name_template: "alien-{{ resourceId }}-tls".to_string(),
+                    secret_name_template: "deployment-{{ resourceId }}-tls".to_string(),
                 },
             }),
         }),
@@ -172,10 +185,9 @@ fn chart_role_rbac_is_selected_by_kubernetes_route_api() {
                 .contains(r#"resources: ["healthcheckpolicy"]"#));
             assert!(!rendered.stdout.contains(r#"resources: ["ingresses"]"#));
         }
-        LinterStatus::Skipped(reason) => {
-            eprintln!("skipped rendered route RBAC assertions: {reason}");
+        LinterStatus::Skipped(_) | LinterStatus::Failed(_) => {
+            rendered.assert_ok("rendered route RBAC")
         }
-        LinterStatus::Failed(_) => rendered.assert_ok("rendered route RBAC"),
     }
 }
 
@@ -210,7 +222,7 @@ fn manager_chart_uses_explicit_secrets_and_restricted_defaults() {
 }
 
 #[test]
-fn gcp_base_platform_config_renders_agent_environment() {
+fn gcp_base_platform_config_renders_operator_environment() {
     let stack = Stack::new("gcp-runtime-config".to_string()).build();
     let chart = render(&stack, StackSettings::default());
     let files = chart.files.clone();
@@ -231,10 +243,9 @@ fn gcp_base_platform_config_renders_agent_environment() {
             assert!(rendered.stdout.contains("name: GCP_REGION"));
             assert!(rendered.stdout.contains("value: \"us-east4\""));
         }
-        LinterStatus::Skipped(reason) => {
-            eprintln!("skipped GCP runtime config render assertions: {reason}");
+        LinterStatus::Skipped(_) | LinterStatus::Failed(_) => {
+            rendered.assert_ok("GCP runtime config render")
         }
-        LinterStatus::Failed(_) => rendered.assert_ok("GCP runtime config render"),
     }
 }
 
@@ -260,10 +271,9 @@ fn cluster_bootstrap_renders_only_when_enabled() {
             assert!(!default_rendered.stdout.contains("kind: NodePool"));
             assert!(!default_rendered.stdout.contains("metrics-server"));
         }
-        LinterStatus::Skipped(reason) => {
-            eprintln!("skipped default cluster bootstrap assertions: {reason}");
+        LinterStatus::Skipped(_) | LinterStatus::Failed(_) => {
+            default_rendered.assert_ok("default cluster bootstrap render")
         }
-        LinterStatus::Failed(_) => default_rendered.assert_ok("default cluster bootstrap render"),
     }
 
     let enabled_values = values
@@ -300,10 +310,9 @@ fn cluster_bootstrap_renders_only_when_enabled() {
                 .stdout
                 .contains("registry.k8s.io/metrics-server/metrics-server:v0.8.1"));
         }
-        LinterStatus::Skipped(reason) => {
-            eprintln!("skipped enabled cluster bootstrap assertions: {reason}");
+        LinterStatus::Skipped(_) | LinterStatus::Failed(_) => {
+            enabled_rendered.assert_ok("enabled cluster bootstrap render")
         }
-        LinterStatus::Failed(_) => enabled_rendered.assert_ok("enabled cluster bootstrap render"),
     }
 }
 
@@ -350,10 +359,7 @@ fn heartbeat_collection_rbac_is_namespace_scoped_with_optional_node_reads() {
             assert!(rendered.stdout.contains(r#"apiGroups: ["metrics.k8s.io"]"#));
             assert!(rendered.stdout.contains(r#"resources: ["pods"]"#));
         }
-        LinterStatus::Skipped(reason) => {
-            eprintln!("skipped rendered RBAC assertions: {reason}");
-        }
-        LinterStatus::Failed(_) => {
+        LinterStatus::Skipped(_) | LinterStatus::Failed(_) => {
             rendered.assert_ok("rendered heartbeat RBAC node collection disabled")
         }
     }

@@ -7,7 +7,8 @@ import * as z from "zod";
 import { NetworkHeartbeatStatusSchema } from "./network-heartbeat-status-schema.js";
 
 export const AzureVnetNetworkHeartbeatDataSchema = z.object({
-    "cidrBlock": z.string().nullish(),
+    "applicationGatewaySubnetName": z.string().nullish(),
+"cidrBlock": z.string().nullish(),
 "isByoVnet": z.boolean(),
 "lastByoVnetVerificationErrorCode": z.string().nullish(),
 "location": z.string().nullish(),

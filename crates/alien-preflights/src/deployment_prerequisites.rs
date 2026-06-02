@@ -8,8 +8,8 @@
 use crate::error::Result;
 use crate::{CheckResult, DeploymentPrerequisiteCheck};
 use alien_core::{
-    ComputeBackend, ComputeCluster, Container, DeploymentConfig, ExposeProtocol, Platform, Stack,
-    StackState,
+    ComputeBackend, ComputeCluster, Container, DeploymentConfig, EnvironmentVariable,
+    ExposeProtocol, Platform, Stack, StackState, Worker,
 };
 
 fn is_cloud_platform(platform: Platform) -> bool {
@@ -129,6 +129,121 @@ impl DeploymentPrerequisiteCheck for DomainMetadataRequiredCheck {
     }
 }
 
+/// Validates that targeted environment variables resolve to resources in the final stack.
+pub struct TargetResourcesResolveCheck;
+
+#[async_trait::async_trait]
+impl DeploymentPrerequisiteCheck for TargetResourcesResolveCheck {
+    fn description(&self) -> &'static str {
+        "Environment variable target resources should resolve"
+    }
+
+    fn should_run(
+        &self,
+        _stack: &Stack,
+        _stack_state: &StackState,
+        config: &DeploymentConfig,
+    ) -> bool {
+        config
+            .environment_variables
+            .variables
+            .iter()
+            .any(|variable| variable.target_resources.is_some())
+    }
+
+    async fn check(
+        &self,
+        stack: &Stack,
+        _stack_state: &StackState,
+        config: &DeploymentConfig,
+    ) -> Result<CheckResult> {
+        let resource_ids = environment_variable_target_resource_ids(stack);
+        let mut errors = Vec::new();
+
+        for variable in &config.environment_variables.variables {
+            validate_target_resources(variable, &resource_ids, &mut errors);
+        }
+
+        if errors.is_empty() {
+            Ok(CheckResult::success())
+        } else {
+            Ok(CheckResult::failed(errors))
+        }
+    }
+}
+
+fn environment_variable_target_resource_ids(stack: &Stack) -> Vec<&str> {
+    stack
+        .resources()
+        .filter_map(|(id, entry)| {
+            if entry.config.downcast_ref::<Worker>().is_some()
+                || entry.config.downcast_ref::<Container>().is_some()
+            {
+                Some(id.as_str())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn validate_target_resources(
+    variable: &EnvironmentVariable,
+    resource_ids: &[&str],
+    errors: &mut Vec<String>,
+) {
+    let Some(patterns) = variable.target_resources.as_ref() else {
+        return;
+    };
+
+    if patterns.is_empty() {
+        errors.push(format!(
+            "Environment variable '{}' has an empty targetResources list; omit targetResources to target every resource.",
+            variable.name
+        ));
+        return;
+    }
+
+    for pattern in patterns {
+        match target_resource_pattern_matches(pattern, resource_ids) {
+            Ok(true) => {}
+            Ok(false) => errors.push(format!(
+                "Environment variable '{}' targetResources pattern '{}' did not match any resource in the final stack.",
+                variable.name, pattern
+            )),
+            Err(reason) => errors.push(format!(
+                "Environment variable '{}' targetResources pattern '{}' is invalid: {reason}.",
+                variable.name, pattern
+            )),
+        }
+    }
+}
+
+fn target_resource_pattern_matches(
+    pattern: &str,
+    resource_ids: &[&str],
+) -> std::result::Result<bool, &'static str> {
+    if pattern.is_empty() {
+        return Err("patterns cannot be empty");
+    }
+
+    let wildcard_count = pattern.matches('*').count();
+    if wildcard_count == 0 {
+        return Ok(resource_ids
+            .iter()
+            .any(|resource_id| *resource_id == pattern));
+    }
+
+    if wildcard_count != 1 || !pattern.ends_with('*') {
+        return Err("only trailing '*' wildcard patterns are supported");
+    }
+
+    let prefix = pattern.strip_suffix('*').unwrap_or(pattern);
+    Ok(resource_ids
+        .iter()
+        .any(|resource_id| resource_id.starts_with(prefix)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -136,8 +251,9 @@ mod tests {
     use alien_core::permissions::PermissionProfile;
     use alien_core::{
         permissions::PermissionsConfig, CertificateStatus, ContainerCode, DnsRecordStatus,
-        DomainMetadata, EnvironmentVariablesSnapshot, Ingress, Resource, ResourceDomainInfo,
-        ResourceEntry, ResourceLifecycle, ResourceSpec, Worker, WorkerCode,
+        DomainMetadata, EnvironmentVariable, EnvironmentVariableType, EnvironmentVariablesSnapshot,
+        Ingress, Resource, ResourceDomainInfo, ResourceEntry, ResourceLifecycle, ResourceSpec,
+        Storage, Worker, WorkerCode,
     };
     use indexmap::IndexMap;
     use std::collections::HashMap;
@@ -166,6 +282,20 @@ mod tests {
             manager_url: None,
             deployment_token: None,
             native_image_host: None,
+        }
+    }
+
+    fn targeted_env(name: &str, target_resources: Option<Vec<&str>>) -> EnvironmentVariable {
+        EnvironmentVariable {
+            name: name.to_string(),
+            value: "value".to_string(),
+            var_type: EnvironmentVariableType::Plain,
+            target_resources: target_resources.map(|patterns| {
+                patterns
+                    .into_iter()
+                    .map(std::string::ToString::to_string)
+                    .collect()
+            }),
         }
     }
 
@@ -279,6 +409,15 @@ mod tests {
         }
     }
 
+    fn create_storage_entry(id: &str) -> ResourceEntry {
+        ResourceEntry {
+            config: Resource::new(Storage::new(id.to_string()).build()),
+            lifecycle: ResourceLifecycle::Frozen,
+            dependencies: Vec::new(),
+            remote_access: false,
+        }
+    }
+
     #[tokio::test]
     async fn managed_container_backend_fails_without_compute_backend_on_cloud() {
         let mut resources = IndexMap::new();
@@ -387,5 +526,85 @@ mod tests {
             .unwrap();
 
         assert!(result.success);
+    }
+
+    #[tokio::test]
+    async fn target_resources_allows_global_exact_and_suffix_patterns() {
+        let mut resources = IndexMap::new();
+        resources.insert("api".to_string(), create_container_entry("api"));
+        resources.insert(
+            "deepstore-agent-write".to_string(),
+            create_container_entry("deepstore-agent-write"),
+        );
+        let stack = create_stack(resources);
+        let mut config = deployment_config();
+        config.environment_variables.variables = vec![
+            targeted_env("GLOBAL", None),
+            targeted_env("STAR_ALL", Some(vec!["*"])),
+            targeted_env("API_KEY", Some(vec!["api"])),
+            targeted_env("DEEPSTORE_MODE", Some(vec!["deepstore-agent-*"])),
+        ];
+        let check = TargetResourcesResolveCheck;
+
+        assert!(check.should_run(&stack, &stack_state(Platform::Aws), &config));
+        let result = check
+            .check(&stack, &stack_state(Platform::Aws), &config)
+            .await
+            .unwrap();
+
+        assert!(result.success);
+    }
+
+    #[tokio::test]
+    async fn target_resources_rejects_patterns_that_only_match_non_compute_resources() {
+        let mut resources = IndexMap::new();
+        resources.insert("api".to_string(), create_container_entry("api"));
+        resources.insert("storage".to_string(), create_storage_entry("storage"));
+        let stack = create_stack(resources);
+        let mut config = deployment_config();
+        config.environment_variables.variables =
+            vec![targeted_env("STORAGE_ONLY", Some(vec!["storage"]))];
+        let check = TargetResourcesResolveCheck;
+
+        let result = check
+            .check(&stack, &stack_state(Platform::Aws), &config)
+            .await
+            .unwrap();
+
+        assert!(!result.success);
+        let errors = result.errors.join("\n");
+        assert!(errors.contains("STORAGE_ONLY"));
+        assert!(errors.contains("storage"));
+    }
+
+    #[tokio::test]
+    async fn target_resources_rejects_empty_unmatched_and_invalid_patterns() {
+        let mut resources = IndexMap::new();
+        resources.insert("api".to_string(), create_container_entry("api"));
+        let stack = create_stack(resources);
+        let mut config = deployment_config();
+        config.environment_variables.variables = vec![
+            targeted_env("EMPTY", Some(vec![])),
+            targeted_env("MISSING", Some(vec!["worker"])),
+            targeted_env("BAD_WILDCARD", Some(vec!["api*extra"])),
+            targeted_env("MISS_WILDCARD", Some(vec!["worker-*"])),
+        ];
+        let check = TargetResourcesResolveCheck;
+
+        let result = check
+            .check(&stack, &stack_state(Platform::Aws), &config)
+            .await
+            .unwrap();
+
+        assert!(!result.success);
+        let errors = result.errors.join("\n");
+        assert!(errors.contains("EMPTY"));
+        assert!(errors.contains("empty targetResources list"));
+        assert!(errors.contains("MISSING"));
+        assert!(errors.contains("worker"));
+        assert!(errors.contains("BAD_WILDCARD"));
+        assert!(errors.contains("api*extra"));
+        assert!(errors.contains("MISS_WILDCARD"));
+        assert!(errors.contains("worker-*"));
     }
 }

@@ -33,6 +33,7 @@ export type DeploymentSetupStackSettingsPolicyAwsUnion =
 
 export type DeploymentSetupStackSettingsPolicyAzure = {
   keyVaultCertificateId: string;
+  keyVaultResourceId?: string | null | undefined;
 };
 
 export type DeploymentSetupStackSettingsPolicyAzureUnion =
@@ -860,6 +861,10 @@ export type DeploymentSetupStackSettingsPolicyTypeByoVnetAzure = ClosedEnum<
 
 export type DeploymentSetupStackSettingsPolicyNetworkByoVnetAzure = {
   /**
+   * Name of the dedicated classic Application Gateway subnet within the VNet.
+   */
+  applicationGatewaySubnetName?: string | null | undefined;
+  /**
    * Name of the private subnet within the VNet
    */
   privateSubnetName: string;
@@ -1214,10 +1219,12 @@ export const DeploymentSetupStackSettingsPolicyAzure$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   keyVaultCertificateId: z.string(),
+  keyVaultResourceId: z.nullable(z.string()).optional(),
 });
 /** @internal */
 export type DeploymentSetupStackSettingsPolicyAzure$Outbound = {
   keyVaultCertificateId: string;
+  keyVaultResourceId?: string | null | undefined;
 };
 
 /** @internal */
@@ -1226,6 +1233,7 @@ export const DeploymentSetupStackSettingsPolicyAzure$outboundSchema: z.ZodType<
   DeploymentSetupStackSettingsPolicyAzure
 > = z.object({
   keyVaultCertificateId: z.string(),
+  keyVaultResourceId: z.nullable(z.string()).optional(),
 });
 
 export function deploymentSetupStackSettingsPolicyAzureToJSON(
@@ -4814,12 +4822,14 @@ export const DeploymentSetupStackSettingsPolicyTypeByoVnetAzure$outboundSchema:
 export const DeploymentSetupStackSettingsPolicyNetworkByoVnetAzure$inboundSchema:
   z.ZodType<DeploymentSetupStackSettingsPolicyNetworkByoVnetAzure, unknown> = z
     .object({
+      application_gateway_subnet_name: z.nullable(z.string()).optional(),
       private_subnet_name: z.string(),
       public_subnet_name: z.string(),
       type: DeploymentSetupStackSettingsPolicyTypeByoVnetAzure$inboundSchema,
       vnet_resource_id: z.string(),
     }).transform((v) => {
       return remap$(v, {
+        "application_gateway_subnet_name": "applicationGatewaySubnetName",
         "private_subnet_name": "privateSubnetName",
         "public_subnet_name": "publicSubnetName",
         "vnet_resource_id": "vnetResourceId",
@@ -4827,6 +4837,7 @@ export const DeploymentSetupStackSettingsPolicyNetworkByoVnetAzure$inboundSchema
     });
 /** @internal */
 export type DeploymentSetupStackSettingsPolicyNetworkByoVnetAzure$Outbound = {
+  application_gateway_subnet_name?: string | null | undefined;
   private_subnet_name: string;
   public_subnet_name: string;
   type: string;
@@ -4839,12 +4850,14 @@ export const DeploymentSetupStackSettingsPolicyNetworkByoVnetAzure$outboundSchem
     DeploymentSetupStackSettingsPolicyNetworkByoVnetAzure$Outbound,
     DeploymentSetupStackSettingsPolicyNetworkByoVnetAzure
   > = z.object({
+    applicationGatewaySubnetName: z.nullable(z.string()).optional(),
     privateSubnetName: z.string(),
     publicSubnetName: z.string(),
     type: DeploymentSetupStackSettingsPolicyTypeByoVnetAzure$outboundSchema,
     vnetResourceId: z.string(),
   }).transform((v) => {
     return remap$(v, {
+      applicationGatewaySubnetName: "application_gateway_subnet_name",
       privateSubnetName: "private_subnet_name",
       publicSubnetName: "public_subnet_name",
       vnetResourceId: "vnet_resource_id",

@@ -12,7 +12,7 @@ use crate::{
 use alien_core::{import::EmitContext, Result};
 
 /// Generator-side trait that emits raw CloudFormation resources plus the
-/// expression that resolves to this resource's typed `ImportData` at apply time.
+/// expression that resolves to this resource's typed registration data at apply time.
 pub trait CfEmitter: Send + Sync {
     /// Emit the raw `AWS::*` resources that back this stack resource. The
     /// generator merges them into the template body.
@@ -29,9 +29,9 @@ pub trait CfEmitter: Send + Sync {
         self.emit_resources(ctx)
     }
 
-    /// Emit an expression that resolves to this resource's typed `ImportData`
-    /// at apply time (typically a `Fn::GetAtt` / `Ref` object). Embedded into
-    /// the auto-import payload by the generator.
+    /// Emit an expression that resolves to this resource's typed registration
+    /// data at apply time (typically a `Fn::GetAtt` / `Ref` object). Embedded
+    /// into the setup registration payload by the generator.
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<CfExpression>;
 
     /// Expression that resolves to this resource's runtime binding payload.

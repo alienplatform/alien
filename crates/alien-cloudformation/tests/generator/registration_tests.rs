@@ -8,7 +8,7 @@ use alien_cloudformation::RegistrationMode;
 use alien_core::{ResourceLifecycle, ResourceRef, Stack, StackSettings};
 use indexmap::indexmap;
 
-const LAMBDA_ARN: &str = "arn:aws:lambda:us-east-1:123456789012:function:alien-import";
+const LAMBDA_ARN: &str = "arn:aws:lambda:us-east-1:123456789012:function:setup-registration";
 
 #[test]
 fn outputs_fallback_emits_6_standard_outputs_plus_resources() {
@@ -57,7 +57,7 @@ fn regional_both_emits_mapping_plus_outputs() {
         RegistrationMode::RegionalBoth {
             lambda_arns_by_region: indexmap! {
                 "us-east-1".to_string() => LAMBDA_ARN.to_string(),
-                "eu-west-1".to_string() => "arn:aws:lambda:eu-west-1:123456789012:function:alien-import".to_string(),
+                "eu-west-1".to_string() => "arn:aws:lambda:eu-west-1:123456789012:function:setup-registration".to_string(),
             },
             callback_url: Some("https://api.dev.example.com".to_string()),
         },

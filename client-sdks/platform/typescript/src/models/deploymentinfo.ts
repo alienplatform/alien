@@ -468,8 +468,8 @@ export type DeploymentInfoHelm = {
    * OCI chart reference
    */
   chartRef: string;
-  managerFetchExample: string;
-  localImportExample: string;
+  managerFetchExample?: string | undefined;
+  localImportExample?: string | undefined;
 };
 
 export type Packages = {
@@ -486,7 +486,7 @@ export type Packages = {
 /**
  * Represents the target cloud platform.
  */
-export const TargetsPlatformEnum = {
+export const TargetsPlatform = {
   Aws: "aws",
   Gcp: "gcp",
   Azure: "azure",
@@ -497,11 +497,23 @@ export const TargetsPlatformEnum = {
 /**
  * Represents the target cloud platform.
  */
-export type TargetsPlatformEnum = ClosedEnum<typeof TargetsPlatformEnum>;
+export type TargetsPlatform = ClosedEnum<typeof TargetsPlatform>;
+
+export const TargetsPlatformKubernetes = {
+  Kubernetes: "kubernetes",
+} as const;
+export type TargetsPlatformKubernetes = ClosedEnum<
+  typeof TargetsPlatformKubernetes
+>;
 
 export type DeploymentInfoManagementConfigKubernetes = {
-  platform: "kubernetes";
+  platform: TargetsPlatformKubernetes;
 };
+
+export const TargetsPlatformAzure = {
+  Azure: "azure",
+} as const;
+export type TargetsPlatformAzure = ClosedEnum<typeof TargetsPlatformAzure>;
 
 /**
  * Azure management configuration extracted from stack settings
@@ -519,8 +531,13 @@ export type DeploymentInfoManagementConfigAzure = {
    * OIDC subject claim trusted by the target-side managed identity.
    */
   oidcSubject: string;
-  platform: "azure";
+  platform: TargetsPlatformAzure;
 };
+
+export const TargetsPlatformGcp = {
+  Gcp: "gcp",
+} as const;
+export type TargetsPlatformGcp = ClosedEnum<typeof TargetsPlatformGcp>;
 
 /**
  * GCP management configuration extracted from stack settings
@@ -530,8 +547,13 @@ export type DeploymentInfoManagementConfigGcp = {
    * Service account email for management roles
    */
   serviceAccountEmail: string;
-  platform: "gcp";
+  platform: TargetsPlatformGcp;
 };
+
+export const TargetsPlatformAws = {
+  Aws: "aws",
+} as const;
+export type TargetsPlatformAws = ClosedEnum<typeof TargetsPlatformAws>;
 
 /**
  * AWS management configuration extracted from stack settings
@@ -541,7 +563,7 @@ export type DeploymentInfoManagementConfigAws = {
    * The managing AWS IAM role ARN that can assume cross-account roles
    */
   managingRoleArn: string;
-  platform: "aws";
+  platform: TargetsPlatformAws;
 };
 
 /**
@@ -553,16 +575,17 @@ export type DeploymentInfoManagementConfigAws = {
  * This is NOT user-specified - it's derived from the Manager's ServiceAccount.
  */
 export type DeploymentInfoManagementConfigUnion =
+  | DeploymentInfoManagementConfigAzure
   | DeploymentInfoManagementConfigAws
   | DeploymentInfoManagementConfigGcp
-  | DeploymentInfoManagementConfigAzure
-  | DeploymentInfoManagementConfigKubernetes;
+  | DeploymentInfoManagementConfigKubernetes
+  | any;
 
 export type InstallContextTargets = {
   /**
    * Represents the target cloud platform.
    */
-  platform: TargetsPlatformEnum;
+  platform: TargetsPlatform;
   managerUrl: string;
   /**
    * Management configuration for different cloud platforms.
@@ -572,11 +595,14 @@ export type InstallContextTargets = {
    * Platform-derived configuration for cross-account/cross-tenant access.
    * This is NOT user-specified - it's derived from the Manager's ServiceAccount.
    */
-  managementConfig:
+  managementConfig?:
+    | DeploymentInfoManagementConfigAzure
     | DeploymentInfoManagementConfigAws
     | DeploymentInfoManagementConfigGcp
-    | DeploymentInfoManagementConfigAzure
-    | DeploymentInfoManagementConfigKubernetes;
+    | DeploymentInfoManagementConfigKubernetes
+    | any
+    | null
+    | undefined;
   awsManagingAccountId?: string | undefined;
 };
 
@@ -1086,8 +1112,8 @@ export const DeploymentInfoHelm$inboundSchema: z.ZodType<
   outputs: z.lazy(() => HelmOutputs$inboundSchema).optional(),
   error: z.nullable(z.any()).optional(),
   chartRef: z.string(),
-  managerFetchExample: z.string(),
-  localImportExample: z.string(),
+  managerFetchExample: z.string().optional(),
+  localImportExample: z.string().optional(),
 });
 
 export function deploymentInfoHelmFromJSON(
@@ -1121,16 +1147,20 @@ export function packagesFromJSON(
 }
 
 /** @internal */
-export const TargetsPlatformEnum$inboundSchema: z.ZodEnum<
-  typeof TargetsPlatformEnum
-> = z.enum(TargetsPlatformEnum);
+export const TargetsPlatform$inboundSchema: z.ZodEnum<typeof TargetsPlatform> =
+  z.enum(TargetsPlatform);
+
+/** @internal */
+export const TargetsPlatformKubernetes$inboundSchema: z.ZodEnum<
+  typeof TargetsPlatformKubernetes
+> = z.enum(TargetsPlatformKubernetes);
 
 /** @internal */
 export const DeploymentInfoManagementConfigKubernetes$inboundSchema: z.ZodType<
   DeploymentInfoManagementConfigKubernetes,
   unknown
 > = z.object({
-  platform: z.literal("kubernetes"),
+  platform: TargetsPlatformKubernetes$inboundSchema,
 });
 
 export function deploymentInfoManagementConfigKubernetesFromJSON(
@@ -1150,6 +1180,11 @@ export function deploymentInfoManagementConfigKubernetesFromJSON(
 }
 
 /** @internal */
+export const TargetsPlatformAzure$inboundSchema: z.ZodEnum<
+  typeof TargetsPlatformAzure
+> = z.enum(TargetsPlatformAzure);
+
+/** @internal */
 export const DeploymentInfoManagementConfigAzure$inboundSchema: z.ZodType<
   DeploymentInfoManagementConfigAzure,
   unknown
@@ -1157,7 +1192,7 @@ export const DeploymentInfoManagementConfigAzure$inboundSchema: z.ZodType<
   managingTenantId: z.string(),
   oidcIssuer: z.string(),
   oidcSubject: z.string(),
-  platform: z.literal("azure"),
+  platform: TargetsPlatformAzure$inboundSchema,
 });
 
 export function deploymentInfoManagementConfigAzureFromJSON(
@@ -1172,12 +1207,17 @@ export function deploymentInfoManagementConfigAzureFromJSON(
 }
 
 /** @internal */
+export const TargetsPlatformGcp$inboundSchema: z.ZodEnum<
+  typeof TargetsPlatformGcp
+> = z.enum(TargetsPlatformGcp);
+
+/** @internal */
 export const DeploymentInfoManagementConfigGcp$inboundSchema: z.ZodType<
   DeploymentInfoManagementConfigGcp,
   unknown
 > = z.object({
   serviceAccountEmail: z.string(),
-  platform: z.literal("gcp"),
+  platform: TargetsPlatformGcp$inboundSchema,
 });
 
 export function deploymentInfoManagementConfigGcpFromJSON(
@@ -1191,12 +1231,17 @@ export function deploymentInfoManagementConfigGcpFromJSON(
 }
 
 /** @internal */
+export const TargetsPlatformAws$inboundSchema: z.ZodEnum<
+  typeof TargetsPlatformAws
+> = z.enum(TargetsPlatformAws);
+
+/** @internal */
 export const DeploymentInfoManagementConfigAws$inboundSchema: z.ZodType<
   DeploymentInfoManagementConfigAws,
   unknown
 > = z.object({
   managingRoleArn: z.string(),
-  platform: z.literal("aws"),
+  platform: TargetsPlatformAws$inboundSchema,
 });
 
 export function deploymentInfoManagementConfigAwsFromJSON(
@@ -1214,10 +1259,11 @@ export const DeploymentInfoManagementConfigUnion$inboundSchema: z.ZodType<
   DeploymentInfoManagementConfigUnion,
   unknown
 > = z.union([
+  z.lazy(() => DeploymentInfoManagementConfigAzure$inboundSchema),
   z.lazy(() => DeploymentInfoManagementConfigAws$inboundSchema),
   z.lazy(() => DeploymentInfoManagementConfigGcp$inboundSchema),
-  z.lazy(() => DeploymentInfoManagementConfigAzure$inboundSchema),
   z.lazy(() => DeploymentInfoManagementConfigKubernetes$inboundSchema),
+  z.any(),
 ]);
 
 export function deploymentInfoManagementConfigUnionFromJSON(
@@ -1236,14 +1282,17 @@ export const InstallContextTargets$inboundSchema: z.ZodType<
   InstallContextTargets,
   unknown
 > = z.object({
-  platform: TargetsPlatformEnum$inboundSchema,
+  platform: TargetsPlatform$inboundSchema,
   managerUrl: z.string(),
-  managementConfig: z.union([
-    z.lazy(() => DeploymentInfoManagementConfigAws$inboundSchema),
-    z.lazy(() => DeploymentInfoManagementConfigGcp$inboundSchema),
-    z.lazy(() => DeploymentInfoManagementConfigAzure$inboundSchema),
-    z.lazy(() => DeploymentInfoManagementConfigKubernetes$inboundSchema),
-  ]),
+  managementConfig: z.nullable(
+    z.union([
+      z.lazy(() => DeploymentInfoManagementConfigAzure$inboundSchema),
+      z.lazy(() => DeploymentInfoManagementConfigAws$inboundSchema),
+      z.lazy(() => DeploymentInfoManagementConfigGcp$inboundSchema),
+      z.lazy(() => DeploymentInfoManagementConfigKubernetes$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   awsManagingAccountId: z.string().optional(),
 });
 

@@ -5,17 +5,13 @@ use crate::traits::{
 use alien_core::bindings::GcpServiceAccountBinding;
 use alien_core::{ClientConfig, GcpClientConfig as CoreGcpClientConfig, GcpCredentials};
 use alien_error::Context;
-use alien_gcp_clients::{
-    iam::{GenerateAccessTokenRequest, IamApi, IamClient},
-    GcpClientConfig,
-};
+use alien_gcp_clients::{GcpClientConfig, GcpImpersonationConfig};
 use async_trait::async_trait;
 use reqwest::Client;
 
 /// GCP Service Account binding implementation
 #[derive(Debug)]
 pub struct GcpServiceAccount {
-    client: IamClient,
     config: GcpClientConfig,
     binding: GcpServiceAccountBinding,
 }
@@ -26,12 +22,8 @@ impl GcpServiceAccount {
         config: GcpClientConfig,
         binding: GcpServiceAccountBinding,
     ) -> Self {
-        let iam_client = IamClient::new(http_client, config.clone());
-        Self {
-            client: iam_client,
-            config,
-            binding,
-        }
+        let _ = http_client;
+        Self { config, binding }
     }
 
     /// Get the service account email from the binding, resolving template expressions if needed
@@ -79,25 +71,21 @@ impl ServiceAccount for GcpServiceAccount {
             .scopes
             .unwrap_or_else(|| vec!["https://www.googleapis.com/auth/cloud-platform".to_string()]);
 
-        let token_request = GenerateAccessTokenRequest::builder().scope(scopes).build();
-
-        let response = self
-            .client
-            .generate_access_token(email.clone(), token_request)
-            .await
-            .context(ErrorData::Other {
-                message: format!(
-                    "Failed to generate access token for service account '{}'",
-                    email
-                ),
-            })?;
-
-        // Create new GCP client config with the impersonated access token
         let impersonated_config = CoreGcpClientConfig {
             project_id: self.config.project_id.clone(),
             region: self.config.region.clone(),
-            credentials: GcpCredentials::AccessToken {
-                token: response.access_token,
+            credentials: GcpCredentials::ImpersonatedServiceAccount {
+                source: Box::new(self.config.clone()),
+                config: GcpImpersonationConfig {
+                    service_account_email: email,
+                    scopes,
+                    delegates: None,
+                    lifetime: request
+                        .duration_seconds
+                        .map(|seconds| format!("{}s", seconds.clamp(1, 3600))),
+                    target_project_id: None,
+                    target_region: None,
+                },
             },
             service_overrides: self.config.service_overrides.clone(),
             project_number: self.config.project_number.clone(),

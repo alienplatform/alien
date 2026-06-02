@@ -115,9 +115,8 @@ export function DeploymentMethod({
     const baseUrl = "https://get.alien.dev"
 
     if (os === "windows") {
-      return `# Download and run the installer
-Invoke-WebRequest -Uri "${baseUrl}/install.ps1" -OutFile "install.ps1"
-.\\install.ps1`
+      return `# Install via PowerShell
+irm "${baseUrl}/install.ps1" | iex`
     }
 
     return `# Install via curl

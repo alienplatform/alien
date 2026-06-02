@@ -16,30 +16,21 @@ Metadata:
       - ManagingRoleArn
       - ManagingAccountId
     - Label:
-        default: Custom domain
-      Parameters:
-      - DomainName
-      - HostedZoneId
-      - CertificateArn
-    - Label:
         default: Operations
       Parameters:
+      - DeploymentModel
       - UpdatesMode
       - TelemetryMode
       - HeartbeatsMode
     ParameterLabels:
-      CertificateArn:
-        default: Certificate ARN
-      DomainName:
-        default: Domain name
+      DeploymentModel:
+        default: Deployment model
       HeartbeatsMode:
         default: Heartbeats
-      HostedZoneId:
-        default: Hosted zone ID
       ManagingAccountId:
-        default: Manager account ID
+        default: Image account ID
       ManagingRoleArn:
-        default: Manager role ARN
+        default: Management role ARN
       TelemetryMode:
         default: Telemetry
       Token:
@@ -53,7 +44,8 @@ Parameters:
     NoEcho: true
   ManagingRoleArn:
     Type: String
-    Description: Manager IAM role ARN allowed to assume generated management roles.
+    Description: ARN of the management identity allowed to assume setup-created roles.
+    Default: ''
   ManagingAccountId:
     Type: String
     Description: AWS account ID for the management account that hosts application container images.
@@ -66,21 +58,16 @@ Parameters:
     - create-new
     - use-existing
     - use-default
-  DomainName:
+  DeploymentModel:
     Type: String
-    Description: Optional custom domain for public endpoints. Leave unset to expose through the generated load balancer DNS name over HTTP.
-    Default: ''
-  HostedZoneId:
-    Type: String
-    Description: Route 53 hosted zone ID for the custom domain. Not needed for the auto-generated domain.
-    Default: ''
-  CertificateArn:
-    Type: String
-    Description: ACM certificate ARN for the custom domain. Required when DomainName is set.
-    Default: ''
+    Description: How runtime updates are delivered after setup.
+    Default: push
+    AllowedValues:
+    - push
+    - pull
   UpdatesMode:
     Type: String
-    Description: How updates are applied after import.
+    Description: How updates are applied after setup registration.
     Default: auto
     AllowedValues:
     - auto
@@ -101,11 +88,10 @@ Parameters:
     - "off"
     - "on"
 Conditions:
-  HasDomainName:
-    Fn::Not:
-    - Fn::Equals:
-      - Ref: DomainName
-      - ''
+  DeploymentModelPush:
+    Fn::Equals:
+    - Ref: DeploymentModel
+    - push
 Resources:
   RegistryRepository:
     Type: AWS::ECR::Repository
@@ -131,7 +117,7 @@ Resources:
                 type: expire
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -179,7 +165,7 @@ Resources:
             - Fn::Sub: arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${AWS::StackName}-registry-*
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -233,7 +219,7 @@ Resources:
             - Fn::Sub: arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${AWS::StackName}-registry-*
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -266,21 +252,25 @@ Outputs:
     Description: Setup compatibility fingerprint.
   DeploymentSetupImportFormatVersion:
     Value: 1
-    Description: Setup import payload format version.
+    Description: Setup registration payload format version.
   DeploymentSetupFingerprintVersion:
     Value: 1
     Description: Setup fingerprint algorithm version.
   DeploymentManagementConfig:
     Value:
       Fn::ToJsonString:
-        platform: aws
-        managingRoleArn:
-          Ref: ManagingRoleArn
-    Description: Manager import ManagementConfig JSON.
+        Fn::If:
+        - DeploymentModelPush
+        - platform: aws
+          managingRoleArn:
+            Ref: ManagingRoleArn
+        - Ref: AWS::NoValue
+    Description: Deployment registration management configuration JSON.
   DeploymentStackSettings:
     Value:
       Fn::ToJsonString:
-        deploymentModel: push
+        deploymentModel:
+          Ref: DeploymentModel
         updates:
           Ref: UpdatesMode
         telemetry:
@@ -289,19 +279,7 @@ Outputs:
           Ref: HeartbeatsMode
         network:
           Ref: AWS::NoValue
-        domains:
-          Fn::If:
-          - HasDomainName
-          - customDomains:
-              default:
-                domain:
-                  Ref: DomainName
-                certificate:
-                  aws:
-                    certificateArn:
-                      Ref: CertificateArn
-          - Ref: AWS::NoValue
-    Description: Manager import StackSettings JSON.
+    Description: Deployment registration settings JSON.
   DeploymentResources:
     Value:
       Fn::ToJsonString:
@@ -326,4 +304,4 @@ Outputs:
             Fn::GetAtt:
             - RegistryPushRole
             - Arn
-    Description: Manager import resources JSON.
+    Description: Deployment registration resources JSON.

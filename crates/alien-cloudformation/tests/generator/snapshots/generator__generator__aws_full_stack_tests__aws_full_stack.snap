@@ -1,6 +1,5 @@
 ---
 source: crates/alien-cloudformation/tests/generator/aws_full_stack_tests.rs
-assertion_line: 118
 expression: yaml
 ---
 AWSTemplateFormatVersion: 2010-09-09
@@ -35,6 +34,7 @@ Metadata:
     - Label:
         default: Operations
       Parameters:
+      - DeploymentModel
       - UpdatesMode
       - TelemetryMode
       - HeartbeatsMode
@@ -43,6 +43,8 @@ Metadata:
         default: Availability zones
       CertificateArn:
         default: Certificate ARN
+      DeploymentModel:
+        default: Deployment model
       DomainName:
         default: Domain name
       HeartbeatsMode:
@@ -50,9 +52,9 @@ Metadata:
       HostedZoneId:
         default: Hosted zone ID
       ManagingAccountId:
-        default: Manager account ID
+        default: Image account ID
       ManagingRoleArn:
-        default: Manager role ARN
+        default: Management role ARN
       NetworkMode:
         default: Network
       PrivateSubnetIds:
@@ -78,7 +80,8 @@ Parameters:
     NoEcho: true
   ManagingRoleArn:
     Type: String
-    Description: Manager IAM role ARN allowed to assume generated management roles.
+    Description: ARN of the management identity allowed to assume setup-created roles.
+    Default: ''
   ManagingAccountId:
     Type: String
     Description: AWS account ID for the management account that hosts application container images.
@@ -131,9 +134,17 @@ Parameters:
     Type: String
     Description: ACM certificate ARN for the custom domain. Required when DomainName is set.
     Default: ''
+    AllowedPattern: ^$|^arn:aws(-[a-z]+)?:acm:[a-z0-9-]+:[0-9]{12}:certificate/.+$
+  DeploymentModel:
+    Type: String
+    Description: How runtime updates are delivered after setup.
+    Default: push
+    AllowedValues:
+    - push
+    - pull
   UpdatesMode:
     Type: String
-    Description: How updates are applied after import.
+    Description: How updates are applied after setup registration.
     Default: approval-required
     AllowedValues:
     - auto
@@ -154,6 +165,10 @@ Parameters:
     - "off"
     - "on"
 Conditions:
+  DeploymentModelPush:
+    Fn::Equals:
+    - Ref: DeploymentModel
+    - push
   NetworkModeCreate:
     Fn::Equals:
     - Ref: NetworkMode
@@ -193,6 +208,19 @@ Conditions:
     - Fn::Equals:
       - Ref: DomainName
       - ''
+Rules:
+  CustomDomainCertificate:
+    Assertions:
+    - Assert:
+        Fn::Or:
+        - Fn::Equals:
+          - Ref: DomainName
+          - ''
+        - Fn::Not:
+          - Fn::Equals:
+            - Ref: CertificateArn
+            - ''
+      AssertDescription: CertificateArn must be set to an AWS ACM certificate ARN when DomainName is set.
 Resources:
   DefaultNetworkVpc:
     Type: AWS::EC2::VPC
@@ -206,7 +234,7 @@ Resources:
       EnableDnsHostnames: true
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -220,7 +248,7 @@ Resources:
     Properties:
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -259,7 +287,7 @@ Resources:
       MapPublicIpOnLaunch: true
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -289,7 +317,7 @@ Resources:
           - 8
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -320,7 +348,7 @@ Resources:
       MapPublicIpOnLaunch: true
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -350,7 +378,7 @@ Resources:
           - 8
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -381,7 +409,7 @@ Resources:
       MapPublicIpOnLaunch: true
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -411,7 +439,7 @@ Resources:
           - 8
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -427,7 +455,7 @@ Resources:
         Ref: DefaultNetworkVpc
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -454,7 +482,7 @@ Resources:
         Ref: DefaultNetworkVpc
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -479,7 +507,7 @@ Resources:
         Ref: DefaultNetworkPublicSubnet1
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -558,7 +586,7 @@ Resources:
         CidrIp: 0.0.0.0/0
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -608,7 +636,7 @@ Resources:
             Sid: SendSqsMessages
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -636,14 +664,14 @@ Resources:
                 Ref: ManagingRoleArn
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
       - Key: resource
         Value: management
       - Key: resource-type
-        Value: remote-stack-management
+        Value: management
   ManagementRoleManagementPolicy1:
     Type: AWS::IAM::ManagedPolicy
     Properties:
@@ -657,7 +685,7 @@ Resources:
             StringEquals:
               aws:RequestTag/deployment:
                 Fn::Sub: ${AWS::StackName}
-              aws:RequestTag/managed-by: deployment
+              aws:RequestTag/managed-by: runtime
           Effect: Allow
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*
@@ -698,7 +726,7 @@ Resources:
             StringEquals:
               aws:ResourceTag/deployment:
                 Fn::Sub: ${AWS::StackName}
-              aws:ResourceTag/managed-by: deployment
+              aws:ResourceTag/managed-by: runtime
           Effect: Allow
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*
@@ -726,7 +754,7 @@ Resources:
             StringEquals:
               aws:ResourceTag/deployment:
                 Fn::Sub: ${AWS::StackName}
-              aws:ResourceTag/managed-by: deployment
+              aws:ResourceTag/managed-by: runtime
           Effect: Allow
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*
@@ -760,7 +788,7 @@ Resources:
             StringEquals:
               aws:RequestTag/deployment:
                 Fn::Sub: ${AWS::StackName}
-              aws:RequestTag/managed-by: deployment
+              aws:RequestTag/managed-by: runtime
           Effect: Allow
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:acm:${AWS::Region}:${AWS::AccountId}:certificate/*
@@ -774,7 +802,7 @@ Resources:
             StringEquals:
               aws:ResourceTag/deployment:
                 Fn::Sub: ${AWS::StackName}
-              aws:ResourceTag/managed-by: deployment
+              aws:ResourceTag/managed-by: runtime
           Effect: Allow
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:acm:${AWS::Region}:${AWS::AccountId}:certificate/*
@@ -786,7 +814,7 @@ Resources:
             StringEquals:
               aws:RequestTag/deployment:
                 Fn::Sub: ${AWS::StackName}
-              aws:RequestTag/managed-by: deployment
+              aws:RequestTag/managed-by: runtime
           Effect: Allow
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis
@@ -799,7 +827,7 @@ Resources:
             StringEquals:
               aws:ResourceTag/deployment:
                 Fn::Sub: ${AWS::StackName}
-              aws:ResourceTag/managed-by: deployment
+              aws:ResourceTag/managed-by: runtime
           Effect: Allow
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*
@@ -813,7 +841,7 @@ Resources:
             StringEquals:
               aws:RequestTag/deployment:
                 Fn::Sub: ${AWS::StackName}
-              aws:RequestTag/managed-by: deployment
+              aws:RequestTag/managed-by: runtime
           Effect: Allow
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*
@@ -842,7 +870,7 @@ Resources:
             StringEquals:
               aws:ResourceTag/deployment:
                 Fn::Sub: ${AWS::StackName}
-              aws:ResourceTag/managed-by: deployment
+              aws:ResourceTag/managed-by: runtime
           Effect: Allow
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*
@@ -857,7 +885,7 @@ Resources:
             StringEquals:
               aws:RequestTag/deployment:
                 Fn::Sub: ${AWS::StackName}
-              aws:RequestTag/managed-by: deployment
+              aws:RequestTag/managed-by: runtime
           Effect: Allow
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${AWS::StackName}-*
@@ -871,7 +899,7 @@ Resources:
             StringEquals:
               aws:ResourceTag/deployment:
                 Fn::Sub: ${AWS::StackName}
-              aws:ResourceTag/managed-by: deployment
+              aws:ResourceTag/managed-by: runtime
           Effect: Allow
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${AWS::StackName}-*
@@ -954,7 +982,7 @@ Resources:
         Status: Enabled
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -1019,7 +1047,7 @@ Resources:
       MessageRetentionPeriod: 345600
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -1050,7 +1078,7 @@ Resources:
         PointInTimeRecoveryEnabled: true
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -1064,7 +1092,7 @@ Resources:
     Type: AWS::IAM::Policy
     Properties:
       PolicyName:
-        Fn::Sub: alien-mgmt-secrets-vault-policy
+        Fn::Sub: management-secrets-vault-policy
       PolicyDocument:
         Version: 2012-10-17
         Statement:
@@ -1101,7 +1129,7 @@ Resources:
                 type: expire
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -1151,7 +1179,7 @@ Resources:
             - Fn::Sub: arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${AWS::StackName}-registry-*
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -1207,7 +1235,7 @@ Resources:
             - Fn::Sub: arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${AWS::StackName}-registry-*
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -1260,7 +1288,7 @@ Resources:
             Ref: BuilderLogGroup
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -1270,10 +1298,10 @@ Resources:
         Value: build
     DependsOn:
     - BuilderLogGroup
-  DeploymentStackImport:
+  DeploymentRegistration:
     Type: AWS::CloudFormation::CustomResource
     Properties:
-      ServiceToken: arn:aws:lambda:us-east-1:123456789012:function:alien-import
+      ServiceToken: arn:aws:lambda:us-east-1:123456789012:function:setup-registration
       Token:
         Ref: Token
       DeploymentName:
@@ -1289,11 +1317,15 @@ Resources:
       SetupFingerprint: test
       SetupFingerprintVersion: 1
       ManagementConfig:
-        platform: aws
-        managingRoleArn:
-          Ref: ManagingRoleArn
+        Fn::If:
+        - DeploymentModelPush
+        - platform: aws
+          managingRoleArn:
+            Ref: ManagingRoleArn
+        - Ref: AWS::NoValue
       StackSettings:
-        deploymentModel: push
+        deploymentModel:
+          Ref: DeploymentModel
         updates:
           Ref: UpdatesMode
         telemetry:
@@ -1536,9 +1568,9 @@ Outputs:
   DeploymentId:
     Value:
       Fn::GetAtt:
-      - DeploymentStackImport
+      - DeploymentRegistration
       - DeploymentId
-    Description: Imported deployment ID.
+    Description: Registered deployment ID.
   DeploymentResourcePrefix:
     Value:
       Ref: AWS::StackName
@@ -1558,21 +1590,25 @@ Outputs:
     Description: Setup compatibility fingerprint.
   DeploymentSetupImportFormatVersion:
     Value: 1
-    Description: Setup import payload format version.
+    Description: Setup registration payload format version.
   DeploymentSetupFingerprintVersion:
     Value: 1
     Description: Setup fingerprint algorithm version.
   DeploymentManagementConfig:
     Value:
       Fn::ToJsonString:
-        platform: aws
-        managingRoleArn:
-          Ref: ManagingRoleArn
-    Description: Manager import ManagementConfig JSON.
+        Fn::If:
+        - DeploymentModelPush
+        - platform: aws
+          managingRoleArn:
+            Ref: ManagingRoleArn
+        - Ref: AWS::NoValue
+    Description: Deployment registration management configuration JSON.
   DeploymentStackSettings:
     Value:
       Fn::ToJsonString:
-        deploymentModel: push
+        deploymentModel:
+          Ref: DeploymentModel
         updates:
           Ref: UpdatesMode
         telemetry:
@@ -1614,7 +1650,7 @@ Outputs:
                     certificateArn:
                       Ref: CertificateArn
           - Ref: AWS::NoValue
-    Description: Manager import StackSettings JSON.
+    Description: Deployment registration settings JSON.
   DeploymentResources:
     Value:
       Fn::ToJsonString:
@@ -1795,4 +1831,4 @@ Outputs:
             - Arn
           buildEnvVars:
             PROFILE: release
-    Description: Manager import resources JSON.
+    Description: Deployment registration resources JSON.

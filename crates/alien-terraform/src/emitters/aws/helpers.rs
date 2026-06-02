@@ -15,7 +15,7 @@ use crate::{
 use alien_core::{
     import::EmitContext, ErrorData, Network, NetworkSettings, PermissionSet, ResourceDefinition,
     ResourceRef, ResourceType, Result, ServiceAccount, ALIEN_MANAGED_BY_TAG_KEY,
-    ALIEN_MANAGED_BY_TAG_VALUE, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
+    ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{
@@ -107,7 +107,7 @@ pub fn tags(ctx: &EmitContext<'_>, alien_resource_type: &'static str) -> Express
     expr::object([
         (
             ALIEN_MANAGED_BY_TAG_KEY,
-            Expression::String(ALIEN_MANAGED_BY_TAG_VALUE.to_string()),
+            Expression::String("setup".to_string()),
         ),
         (ALIEN_STACK_TAG_KEY, expr::raw("local.resource_prefix")),
         (

@@ -25,7 +25,7 @@ export type RequestType = ClosedEnum<typeof RequestType>;
 /**
  * Cloud platform of the imported stack
  */
-export const CloudFormationCallbackRequestPlatformEnum = {
+export const CloudFormationCallbackRequestPlatform = {
   Aws: "aws",
   Gcp: "gcp",
   Azure: "azure",
@@ -36,8 +36,8 @@ export const CloudFormationCallbackRequestPlatformEnum = {
 /**
  * Cloud platform of the imported stack
  */
-export type CloudFormationCallbackRequestPlatformEnum = ClosedEnum<
-  typeof CloudFormationCallbackRequestPlatformEnum
+export type CloudFormationCallbackRequestPlatform = ClosedEnum<
+  typeof CloudFormationCallbackRequestPlatform
 >;
 
 /**
@@ -82,6 +82,7 @@ export type CloudFormationCallbackRequestAwsUnion =
 
 export type CloudFormationCallbackRequestAzure = {
   keyVaultCertificateId: string;
+  keyVaultResourceId?: string | null | undefined;
 };
 
 export type CloudFormationCallbackRequestAzureUnion =
@@ -913,6 +914,10 @@ export type CloudFormationCallbackRequestTypeByoVnetAzure = ClosedEnum<
 
 export type CloudFormationCallbackRequestNetworkByoVnetAzure = {
   /**
+   * Name of the dedicated classic Application Gateway subnet within the VNet.
+   */
+  applicationGatewaySubnetName?: string | null | undefined;
+  /**
    * Name of the private subnet within the VNet
    */
   privateSubnetName: string;
@@ -1101,9 +1106,23 @@ export type CloudFormationCallbackRequestStackSettings = {
   updates?: CloudFormationCallbackRequestUpdates | undefined;
 };
 
+export const CloudFormationCallbackRequestPlatformKubernetes = {
+  Kubernetes: "kubernetes",
+} as const;
+export type CloudFormationCallbackRequestPlatformKubernetes = ClosedEnum<
+  typeof CloudFormationCallbackRequestPlatformKubernetes
+>;
+
 export type CloudFormationCallbackRequestManagementConfigKubernetes = {
-  platform: "kubernetes";
+  platform: CloudFormationCallbackRequestPlatformKubernetes;
 };
+
+export const CloudFormationCallbackRequestPlatformAzure = {
+  Azure: "azure",
+} as const;
+export type CloudFormationCallbackRequestPlatformAzure = ClosedEnum<
+  typeof CloudFormationCallbackRequestPlatformAzure
+>;
 
 /**
  * Azure management configuration extracted from stack settings
@@ -1121,8 +1140,15 @@ export type CloudFormationCallbackRequestManagementConfigAzure = {
    * OIDC subject claim trusted by the target-side managed identity.
    */
   oidcSubject: string;
-  platform: "azure";
+  platform: CloudFormationCallbackRequestPlatformAzure;
 };
+
+export const CloudFormationCallbackRequestPlatformGcp = {
+  Gcp: "gcp",
+} as const;
+export type CloudFormationCallbackRequestPlatformGcp = ClosedEnum<
+  typeof CloudFormationCallbackRequestPlatformGcp
+>;
 
 /**
  * GCP management configuration extracted from stack settings
@@ -1132,8 +1158,15 @@ export type CloudFormationCallbackRequestManagementConfigGcp = {
    * Service account email for management roles
    */
   serviceAccountEmail: string;
-  platform: "gcp";
+  platform: CloudFormationCallbackRequestPlatformGcp;
 };
+
+export const CloudFormationCallbackRequestPlatformAws = {
+  Aws: "aws",
+} as const;
+export type CloudFormationCallbackRequestPlatformAws = ClosedEnum<
+  typeof CloudFormationCallbackRequestPlatformAws
+>;
 
 /**
  * AWS management configuration extracted from stack settings
@@ -1143,7 +1176,7 @@ export type CloudFormationCallbackRequestManagementConfigAws = {
    * The managing AWS IAM role ARN that can assume cross-account roles
    */
   managingRoleArn: string;
-  platform: "aws";
+  platform: CloudFormationCallbackRequestPlatformAws;
 };
 
 /**
@@ -1155,10 +1188,11 @@ export type CloudFormationCallbackRequestManagementConfigAws = {
  * This is NOT user-specified - it's derived from the Manager's ServiceAccount.
  */
 export type CloudFormationCallbackRequestManagementConfigUnion =
+  | CloudFormationCallbackRequestManagementConfigAzure
   | CloudFormationCallbackRequestManagementConfigAws
   | CloudFormationCallbackRequestManagementConfigGcp
-  | CloudFormationCallbackRequestManagementConfigAzure
-  | CloudFormationCallbackRequestManagementConfigKubernetes;
+  | CloudFormationCallbackRequestManagementConfigKubernetes
+  | any;
 
 /**
  * Resolved setup import payload
@@ -1180,7 +1214,7 @@ export type CloudFormationCallbackRequestSource = {
   /**
    * Cloud platform of the imported stack
    */
-  platform: CloudFormationCallbackRequestPlatformEnum;
+  platform: CloudFormationCallbackRequestPlatform;
   /**
    * Base cloud platform for cloud-backed Kubernetes imports.
    */
@@ -1217,11 +1251,14 @@ export type CloudFormationCallbackRequestSource = {
    * Platform-derived configuration for cross-account/cross-tenant access.
    * This is NOT user-specified - it's derived from the Manager's ServiceAccount.
    */
-  managementConfig:
+  managementConfig?:
+    | CloudFormationCallbackRequestManagementConfigAzure
     | CloudFormationCallbackRequestManagementConfigAws
     | CloudFormationCallbackRequestManagementConfigGcp
-    | CloudFormationCallbackRequestManagementConfigAzure
-    | CloudFormationCallbackRequestManagementConfigKubernetes;
+    | CloudFormationCallbackRequestManagementConfigKubernetes
+    | any
+    | null
+    | undefined;
   resources: Array<ImportedResource>;
 };
 
@@ -1242,10 +1279,9 @@ export const RequestType$outboundSchema: z.ZodEnum<typeof RequestType> = z.enum(
 );
 
 /** @internal */
-export const CloudFormationCallbackRequestPlatformEnum$outboundSchema:
-  z.ZodEnum<typeof CloudFormationCallbackRequestPlatformEnum> = z.enum(
-    CloudFormationCallbackRequestPlatformEnum,
-  );
+export const CloudFormationCallbackRequestPlatform$outboundSchema: z.ZodEnum<
+  typeof CloudFormationCallbackRequestPlatform
+> = z.enum(CloudFormationCallbackRequestPlatform);
 
 /** @internal */
 export const CloudFormationCallbackRequestBasePlatform$outboundSchema:
@@ -1309,6 +1345,7 @@ export function cloudFormationCallbackRequestAwsUnionToJSON(
 /** @internal */
 export type CloudFormationCallbackRequestAzure$Outbound = {
   keyVaultCertificateId: string;
+  keyVaultResourceId?: string | null | undefined;
 };
 
 /** @internal */
@@ -1317,6 +1354,7 @@ export const CloudFormationCallbackRequestAzure$outboundSchema: z.ZodType<
   CloudFormationCallbackRequestAzure
 > = z.object({
   keyVaultCertificateId: z.string(),
+  keyVaultResourceId: z.nullable(z.string()).optional(),
 });
 
 export function cloudFormationCallbackRequestAzureToJSON(
@@ -3259,6 +3297,7 @@ export const CloudFormationCallbackRequestTypeByoVnetAzure$outboundSchema:
 
 /** @internal */
 export type CloudFormationCallbackRequestNetworkByoVnetAzure$Outbound = {
+  application_gateway_subnet_name?: string | null | undefined;
   private_subnet_name: string;
   public_subnet_name: string;
   type: string;
@@ -3271,12 +3310,14 @@ export const CloudFormationCallbackRequestNetworkByoVnetAzure$outboundSchema:
     CloudFormationCallbackRequestNetworkByoVnetAzure$Outbound,
     CloudFormationCallbackRequestNetworkByoVnetAzure
   > = z.object({
+    applicationGatewaySubnetName: z.nullable(z.string()).optional(),
     privateSubnetName: z.string(),
     publicSubnetName: z.string(),
     type: CloudFormationCallbackRequestTypeByoVnetAzure$outboundSchema,
     vnetResourceId: z.string(),
   }).transform((v) => {
     return remap$(v, {
+      applicationGatewaySubnetName: "application_gateway_subnet_name",
       privateSubnetName: "private_subnet_name",
       publicSubnetName: "public_subnet_name",
       vnetResourceId: "vnet_resource_id",
@@ -3589,8 +3630,14 @@ export function cloudFormationCallbackRequestStackSettingsToJSON(
 }
 
 /** @internal */
+export const CloudFormationCallbackRequestPlatformKubernetes$outboundSchema:
+  z.ZodEnum<typeof CloudFormationCallbackRequestPlatformKubernetes> = z.enum(
+    CloudFormationCallbackRequestPlatformKubernetes,
+  );
+
+/** @internal */
 export type CloudFormationCallbackRequestManagementConfigKubernetes$Outbound = {
-  platform: "kubernetes";
+  platform: string;
 };
 
 /** @internal */
@@ -3599,7 +3646,7 @@ export const CloudFormationCallbackRequestManagementConfigKubernetes$outboundSch
     CloudFormationCallbackRequestManagementConfigKubernetes$Outbound,
     CloudFormationCallbackRequestManagementConfigKubernetes
   > = z.object({
-    platform: z.literal("kubernetes"),
+    platform: CloudFormationCallbackRequestPlatformKubernetes$outboundSchema,
   });
 
 export function cloudFormationCallbackRequestManagementConfigKubernetesToJSON(
@@ -3613,11 +3660,17 @@ export function cloudFormationCallbackRequestManagementConfigKubernetesToJSON(
 }
 
 /** @internal */
+export const CloudFormationCallbackRequestPlatformAzure$outboundSchema:
+  z.ZodEnum<typeof CloudFormationCallbackRequestPlatformAzure> = z.enum(
+    CloudFormationCallbackRequestPlatformAzure,
+  );
+
+/** @internal */
 export type CloudFormationCallbackRequestManagementConfigAzure$Outbound = {
   managingTenantId: string;
   oidcIssuer: string;
   oidcSubject: string;
-  platform: "azure";
+  platform: string;
 };
 
 /** @internal */
@@ -3629,7 +3682,7 @@ export const CloudFormationCallbackRequestManagementConfigAzure$outboundSchema:
     managingTenantId: z.string(),
     oidcIssuer: z.string(),
     oidcSubject: z.string(),
-    platform: z.literal("azure"),
+    platform: CloudFormationCallbackRequestPlatformAzure$outboundSchema,
   });
 
 export function cloudFormationCallbackRequestManagementConfigAzureToJSON(
@@ -3644,9 +3697,14 @@ export function cloudFormationCallbackRequestManagementConfigAzureToJSON(
 }
 
 /** @internal */
+export const CloudFormationCallbackRequestPlatformGcp$outboundSchema: z.ZodEnum<
+  typeof CloudFormationCallbackRequestPlatformGcp
+> = z.enum(CloudFormationCallbackRequestPlatformGcp);
+
+/** @internal */
 export type CloudFormationCallbackRequestManagementConfigGcp$Outbound = {
   serviceAccountEmail: string;
-  platform: "gcp";
+  platform: string;
 };
 
 /** @internal */
@@ -3656,7 +3714,7 @@ export const CloudFormationCallbackRequestManagementConfigGcp$outboundSchema:
     CloudFormationCallbackRequestManagementConfigGcp
   > = z.object({
     serviceAccountEmail: z.string(),
-    platform: z.literal("gcp"),
+    platform: CloudFormationCallbackRequestPlatformGcp$outboundSchema,
   });
 
 export function cloudFormationCallbackRequestManagementConfigGcpToJSON(
@@ -3671,9 +3729,14 @@ export function cloudFormationCallbackRequestManagementConfigGcpToJSON(
 }
 
 /** @internal */
+export const CloudFormationCallbackRequestPlatformAws$outboundSchema: z.ZodEnum<
+  typeof CloudFormationCallbackRequestPlatformAws
+> = z.enum(CloudFormationCallbackRequestPlatformAws);
+
+/** @internal */
 export type CloudFormationCallbackRequestManagementConfigAws$Outbound = {
   managingRoleArn: string;
-  platform: "aws";
+  platform: string;
 };
 
 /** @internal */
@@ -3683,7 +3746,7 @@ export const CloudFormationCallbackRequestManagementConfigAws$outboundSchema:
     CloudFormationCallbackRequestManagementConfigAws
   > = z.object({
     managingRoleArn: z.string(),
-    platform: z.literal("aws"),
+    platform: CloudFormationCallbackRequestPlatformAws$outboundSchema,
   });
 
 export function cloudFormationCallbackRequestManagementConfigAwsToJSON(
@@ -3699,10 +3762,11 @@ export function cloudFormationCallbackRequestManagementConfigAwsToJSON(
 
 /** @internal */
 export type CloudFormationCallbackRequestManagementConfigUnion$Outbound =
+  | CloudFormationCallbackRequestManagementConfigAzure$Outbound
   | CloudFormationCallbackRequestManagementConfigAws$Outbound
   | CloudFormationCallbackRequestManagementConfigGcp$Outbound
-  | CloudFormationCallbackRequestManagementConfigAzure$Outbound
-  | CloudFormationCallbackRequestManagementConfigKubernetes$Outbound;
+  | CloudFormationCallbackRequestManagementConfigKubernetes$Outbound
+  | any;
 
 /** @internal */
 export const CloudFormationCallbackRequestManagementConfigUnion$outboundSchema:
@@ -3711,17 +3775,18 @@ export const CloudFormationCallbackRequestManagementConfigUnion$outboundSchema:
     CloudFormationCallbackRequestManagementConfigUnion
   > = z.union([
     z.lazy(() =>
+      CloudFormationCallbackRequestManagementConfigAzure$outboundSchema
+    ),
+    z.lazy(() =>
       CloudFormationCallbackRequestManagementConfigAws$outboundSchema
     ),
     z.lazy(() =>
       CloudFormationCallbackRequestManagementConfigGcp$outboundSchema
     ),
     z.lazy(() =>
-      CloudFormationCallbackRequestManagementConfigAzure$outboundSchema
-    ),
-    z.lazy(() =>
       CloudFormationCallbackRequestManagementConfigKubernetes$outboundSchema
     ),
+    z.any(),
   ]);
 
 export function cloudFormationCallbackRequestManagementConfigUnionToJSON(
@@ -3749,11 +3814,14 @@ export type CloudFormationCallbackRequestSource$Outbound = {
   setupFingerprint: string;
   setupFingerprintVersion: number;
   stackSettings: CloudFormationCallbackRequestStackSettings$Outbound;
-  managementConfig:
+  managementConfig?:
+    | CloudFormationCallbackRequestManagementConfigAzure$Outbound
     | CloudFormationCallbackRequestManagementConfigAws$Outbound
     | CloudFormationCallbackRequestManagementConfigGcp$Outbound
-    | CloudFormationCallbackRequestManagementConfigAzure$Outbound
-    | CloudFormationCallbackRequestManagementConfigKubernetes$Outbound;
+    | CloudFormationCallbackRequestManagementConfigKubernetes$Outbound
+    | any
+    | null
+    | undefined;
   resources: Array<ImportedResource$Outbound>;
 };
 
@@ -3766,7 +3834,7 @@ export const CloudFormationCallbackRequestSource$outboundSchema: z.ZodType<
   resourcePrefix: z.string(),
   sourceKind: ImportSourceKind$outboundSchema.optional(),
   releaseId: z.string().optional(),
-  platform: CloudFormationCallbackRequestPlatformEnum$outboundSchema,
+  platform: CloudFormationCallbackRequestPlatform$outboundSchema,
   basePlatform: CloudFormationCallbackRequestBasePlatform$outboundSchema
     .optional(),
   region: z.string(),
@@ -3777,20 +3845,23 @@ export const CloudFormationCallbackRequestSource$outboundSchema: z.ZodType<
   stackSettings: z.lazy(() =>
     CloudFormationCallbackRequestStackSettings$outboundSchema
   ),
-  managementConfig: z.union([
-    z.lazy(() =>
-      CloudFormationCallbackRequestManagementConfigAws$outboundSchema
-    ),
-    z.lazy(() =>
-      CloudFormationCallbackRequestManagementConfigGcp$outboundSchema
-    ),
-    z.lazy(() =>
-      CloudFormationCallbackRequestManagementConfigAzure$outboundSchema
-    ),
-    z.lazy(() =>
-      CloudFormationCallbackRequestManagementConfigKubernetes$outboundSchema
-    ),
-  ]),
+  managementConfig: z.nullable(
+    z.union([
+      z.lazy(() =>
+        CloudFormationCallbackRequestManagementConfigAzure$outboundSchema
+      ),
+      z.lazy(() =>
+        CloudFormationCallbackRequestManagementConfigAws$outboundSchema
+      ),
+      z.lazy(() =>
+        CloudFormationCallbackRequestManagementConfigGcp$outboundSchema
+      ),
+      z.lazy(() =>
+        CloudFormationCallbackRequestManagementConfigKubernetes$outboundSchema
+      ),
+      z.any(),
+    ]),
+  ).optional(),
   resources: z.array(ImportedResource$outboundSchema),
 });
 

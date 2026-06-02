@@ -336,7 +336,7 @@ impl GcpNetworkController {
         // Create custom-mode VPC (we control subnets)
         let network = GcpNetwork::builder()
             .name(network_name.clone())
-            .description(format!("Alien-managed VPC for {}", ctx.resource_prefix))
+            .description(format!("Runtime-managed VPC for {}", ctx.resource_prefix))
             .auto_create_subnetworks(false)
             .routing_config(NetworkRoutingConfig {
                 routing_mode: Some(RoutingMode::Regional),
@@ -453,7 +453,10 @@ impl GcpNetworkController {
 
         let subnetwork = Subnetwork::builder()
             .name(subnetwork_name.clone())
-            .description(format!("Alien-managed subnet for {}", ctx.resource_prefix))
+            .description(format!(
+                "Runtime-managed subnet for {}",
+                ctx.resource_prefix
+            ))
             .network(network_self_link)
             .ip_cidr_range(cidr_block)
             .private_ip_google_access(true)
@@ -568,7 +571,10 @@ impl GcpNetworkController {
 
         let router = Router::builder()
             .name(router_name.clone())
-            .description(format!("Alien-managed router for {}", ctx.resource_prefix))
+            .description(format!(
+                "Runtime-managed router for {}",
+                ctx.resource_prefix
+            ))
             .network(network_self_link)
             .build();
 

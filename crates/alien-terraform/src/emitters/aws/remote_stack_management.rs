@@ -1,4 +1,4 @@
-//! AWS RemoteStackManagement — cross-account IAM role.
+//! AWS management access — cross-account IAM role.
 //!
 //! Trust policy allows the manager identity (passed as
 //! `var.managing_role_arn`) to assume the role.
@@ -46,7 +46,7 @@ impl TfEmitter for AwsRemoteStackManagementEmitter {
             [
                 attr("name", iam_role_name_template("management")),
                 attr("assume_role_policy", trust_policy()),
-                attr("tags", tags(ctx, "remote-stack-management")),
+                attr("tags", tags(ctx, "management")),
             ],
         ));
 

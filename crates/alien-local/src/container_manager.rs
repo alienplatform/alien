@@ -30,7 +30,7 @@ use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
 /// Default Docker network name for Alien containers.
-const NETWORK_NAME: &str = "alien-network";
+const NETWORK_NAME: &str = "deployment-network";
 
 /// Allocates a host port, preferring a saved port if available.
 ///
@@ -189,7 +189,7 @@ pub struct LocalRuntimeStatus {
 /// Manager for local containers using Docker.
 ///
 /// Uses the bollard crate to interact with the Docker daemon.
-/// All containers are connected to a shared `alien-network` for DNS-based
+/// All containers are connected to a shared `deployment-network` for DNS-based
 /// service discovery.
 #[derive(Debug)]
 pub struct LocalContainerManager {
@@ -238,7 +238,7 @@ impl LocalContainerManager {
 
     /// Ensures the Docker network exists.
     ///
-    /// Creates `alien-network` if it doesn't exist. This network is used
+    /// Creates `deployment-network` if it doesn't exist. This network is used
     /// for DNS-based service discovery between containers.
     pub async fn ensure_network(&self) -> Result<()> {
         // Check if network exists
@@ -463,7 +463,7 @@ impl LocalContainerManager {
     /// Starts a container.
     ///
     /// Creates and starts a Docker container with the given configuration.
-    /// The container is connected to `alien-network` with DNS aliases for
+    /// The container is connected to `deployment-network` with DNS aliases for
     /// service discovery.
     ///
     /// # Arguments

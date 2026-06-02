@@ -41,7 +41,7 @@ export class Sync extends ClientSDK {
   }
 
   /**
-   * Reconcile deployment state. Push model (with session) verifies lock ownership. Pull model (no session) verifies the deployment is unlocked. Accepts full DeploymentState after step() execution.
+   * Reconcile deployment state. Push model requests that include a session verify lock ownership. Pull model state reports are accepted as authz-gated agent progress even when they carry an agent-sync session. Accepts full DeploymentState after step() execution.
    */
   async reconcile(
     request: operations.SyncReconcileRequest,

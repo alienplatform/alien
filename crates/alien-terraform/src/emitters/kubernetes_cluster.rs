@@ -777,7 +777,10 @@ fn add_eks_workload_identity_data(fragment: &mut TfFragment, label: &str) {
                 "tags",
                 expr::object([
                     ("Name", expr::template("${local.resource_prefix}-eks-oidc")),
-                    ("alien-resource-prefix", expr::raw("local.resource_prefix")),
+                    (
+                        "deployment-resource-prefix",
+                        expr::raw("local.resource_prefix"),
+                    ),
                 ]),
             ),
         ],
@@ -786,7 +789,7 @@ fn add_eks_workload_identity_data(fragment: &mut TfFragment, label: &str) {
 
 fn generated_kubernetes_exposure_count_expr(cluster_mode_condition: &str) -> Expression {
     expr::raw(format!(
-        "({cluster_mode_condition}) && try(jsondecode(var.stack_settings_json).kubernetes.exposure.mode, \"generated\") == \"generated\" ? 1 : 0"
+        "({cluster_mode_condition}) && try(jsondecode(var.advanced_settings_json).kubernetes.exposure.mode, \"generated\") == \"generated\" ? 1 : 0"
     ))
 }
 

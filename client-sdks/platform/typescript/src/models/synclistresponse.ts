@@ -210,6 +210,7 @@ export type SyncListResponseAwsUnion = SyncListResponseAws | any;
 
 export type SyncListResponseAzureStackSettings = {
   keyVaultCertificateId: string;
+  keyVaultResourceId?: string | null | undefined;
 };
 
 export type SyncListResponseAzureUnion =
@@ -1014,6 +1015,10 @@ export type SyncListResponseTypeByoVnetAzure = ClosedEnum<
 >;
 
 export type SyncListResponseNetworkByoVnetAzure = {
+  /**
+   * Name of the dedicated classic Application Gateway subnet within the VNet.
+   */
+  applicationGatewaySubnetName?: string | null | undefined;
   /**
    * Name of the private subnet within the VNet
    */
@@ -3320,6 +3325,7 @@ export const SyncListResponseAzureStackSettings$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   keyVaultCertificateId: z.string(),
+  keyVaultResourceId: z.nullable(z.string()).optional(),
 });
 
 export function syncListResponseAzureStackSettingsFromJSON(
@@ -4684,12 +4690,14 @@ export const SyncListResponseNetworkByoVnetAzure$inboundSchema: z.ZodType<
   SyncListResponseNetworkByoVnetAzure,
   unknown
 > = z.object({
+  application_gateway_subnet_name: z.nullable(z.string()).optional(),
   private_subnet_name: z.string(),
   public_subnet_name: z.string(),
   type: SyncListResponseTypeByoVnetAzure$inboundSchema,
   vnet_resource_id: z.string(),
 }).transform((v) => {
   return remap$(v, {
+    "application_gateway_subnet_name": "applicationGatewaySubnetName",
     "private_subnet_name": "privateSubnetName",
     "public_subnet_name": "publicSubnetName",
     "vnet_resource_id": "vnetResourceId",

@@ -298,7 +298,7 @@ mod tests {
     fn remote_stack_management_entry() -> ResourceEntry {
         ResourceEntry {
             config: alien_core::Resource::new(
-                RemoteStackManagement::new("remote-stack-management".to_string()).build(),
+                RemoteStackManagement::new("management".to_string()).build(),
             ),
             lifecycle: ResourceLifecycle::Frozen,
             dependencies: Vec::new(),
@@ -325,10 +325,7 @@ mod tests {
                 remote_access: false,
             },
         );
-        resources.insert(
-            "remote-stack-management".to_string(),
-            remote_stack_management_entry(),
-        );
+        resources.insert("management".to_string(), remote_stack_management_entry());
 
         let mut profiles = IndexMap::new();
         profiles.insert("test-profile".to_string(), PermissionProfile::new());
@@ -616,10 +613,7 @@ mod tests {
                 remote_access: false,
             },
         );
-        resources.insert(
-            "remote-stack-management".to_string(),
-            remote_stack_management_entry(),
-        );
+        resources.insert("management".to_string(), remote_stack_management_entry());
 
         let mut profiles = IndexMap::new();
         profiles.insert("test-profile".to_string(), PermissionProfile::new());
@@ -688,10 +682,7 @@ mod tests {
                 remote_access: false,
             },
         );
-        resources.insert(
-            "remote-stack-management".to_string(),
-            remote_stack_management_entry(),
-        );
+        resources.insert("management".to_string(), remote_stack_management_entry());
 
         let stack = Stack {
             id: "test-stack".to_string(),

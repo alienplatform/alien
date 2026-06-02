@@ -421,8 +421,9 @@ mod tests {
     use crate::traits::DeploymentRecord;
 
     use super::{
-        deployment_needs_target, deployment_state_from_record, management_platform, release_stack_platform,
-        should_ignore_agent_state_report, validate_initialize_base_platform, ReconcileRequest,
+        deployment_needs_target, deployment_state_from_record, management_platform,
+        release_stack_platform, should_ignore_agent_state_report,
+        validate_initialize_base_platform, ReconcileRequest,
     };
 
     #[test]

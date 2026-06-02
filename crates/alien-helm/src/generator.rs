@@ -2,7 +2,7 @@
 //!
 //! Drives per-resource [`HelmEmitter`]s through the [`HelmRegistry`] and
 //! assembles the chart shell — `Chart.yaml`, the templates, and the
-//! values + schema for both bootstrap paths (`manager-fetch path` when
+//! values + schema for both bootstrap paths (`registered setup` when
 //! `management.deploymentId` is set; external-bindings initialize otherwise).
 
 use crate::{
@@ -37,7 +37,7 @@ pub struct HelmOptions<'a> {
     pub chart_name: String,
 }
 
-/// Inputs for rendering the manager-fetch `values.yaml` used after setup import.
+/// Inputs for rendering `values.yaml` from registered setup state.
 pub struct ManagerFetchHelmValuesOptions<'a> {
     pub deployment_id: &'a str,
     pub deployment_name: &'a str,
@@ -145,7 +145,7 @@ pub fn generate_helm_chart(stack: &Stack, options: HelmOptions<'_>) -> Result<He
     })
 }
 
-/// Render one complete manager-fetch values file from imported deployment state.
+/// Render one complete values file from registered deployment state.
 pub fn render_manager_fetch_values(options: ManagerFetchHelmValuesOptions<'_>) -> Result<String> {
     validate_runtime_encryption_key(options.runtime_encryption_key)?;
 
@@ -234,7 +234,7 @@ pub fn render_manager_fetch_values(options: ManagerFetchHelmValuesOptions<'_>) -
     ));
 
     append_manager_service_account(&mut yaml, options.stack_state, options.base_platform)?;
-    append_imported_service_accounts(
+    append_registered_service_accounts(
         &mut yaml,
         &analysis,
         options.stack_state,
@@ -320,7 +320,7 @@ impl ChartAnalysis {
                 fail_if_daemon_source_remains(resource_id, daemon)?;
             }
 
-            // Frozen resources contribute agent-local infrastructure bindings; live
+            // Frozen resources contribute operator-local infrastructure bindings; live
             // (workload) resources do not — they ARE the workload.
             if entry.lifecycle != ResourceLifecycle::Frozen {
                 continue;
@@ -420,7 +420,7 @@ fn values_yaml(analysis: &ChartAnalysis, stack_settings: &StackSettings) -> Resu
 
 runtime:
   image:
-    repository: ghcr.io/alienplatform/alien-agent
+    repository: registry.example.com/deployment/operator
     tag: latest
     pullPolicy: IfNotPresent
   imagePullSecrets: []
@@ -479,7 +479,7 @@ runtime:
     enabled: true
     sizeLimit: 256Mi
   data:
-    mountPath: /var/lib/alien-agent
+    mountPath: /var/lib/deployment-operator
     persistence:
       enabled: false
       existingClaim: ""
@@ -614,7 +614,7 @@ fn append_service_accounts(yaml: &mut String, analysis: &ChartAnalysis) {
     }
 }
 
-fn append_imported_service_accounts(
+fn append_registered_service_accounts(
     yaml: &mut String,
     analysis: &ChartAnalysis,
     stack_state: &alien_core::StackState,
@@ -917,14 +917,12 @@ fn azure_remote_stack_management_access_config(
         serde_json::from_str(&outputs.access_configuration)
             .into_alien_error()
             .context(ErrorData::GenericError {
-                message: "Failed to parse Azure remote-stack-management access configuration"
-                    .to_string(),
+                message: "Failed to parse Azure management access configuration".to_string(),
             })?;
 
     if access_config.uami_client_id.is_empty() {
         return Err(AlienError::new(ErrorData::GenericError {
-            message: "Azure remote-stack-management access configuration is missing uamiClientId"
-                .to_string(),
+            message: "Azure management access configuration is missing uamiClientId".to_string(),
         }));
     }
 
@@ -1384,7 +1382,7 @@ fn values_schema_json() -> String {
   },
   "oneOf": [
     {
-      "title": "manager-fetch path",
+      "title": "registered setup",
       "required": ["management"],
       "properties": {
         "management": {
@@ -1416,11 +1414,11 @@ fn values_schema_json() -> String {
 }
 
 fn helpers_tpl() -> String {
-    r#"{{- define "alien.name" -}}
+    r#"{{- define "deployment.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
-{{- define "alien.fullname" -}}
+{{- define "deployment.fullname" -}}
 {{- if .Values.fullnameOverride -}}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
@@ -1428,48 +1426,48 @@ fn helpers_tpl() -> String {
 {{- end -}}
 {{- end -}}
 
-{{- define "alien.labels" -}}
-app.kubernetes.io/name: {{ include "alien.name" . }}
+{{- define "deployment.labels" -}}
+app.kubernetes.io/name: {{ include "deployment.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- end -}}
 
-{{- define "alien.managerServiceAccountName" -}}
-{{- $prefix := default (include "alien.fullname" .) .Values.serviceAccountPrefix -}}
+{{- define "deployment.managerServiceAccountName" -}}
+{{- $prefix := default (include "deployment.fullname" .) .Values.serviceAccountPrefix -}}
 {{- $raw := printf "%s-manager-sa" $prefix | lower -}}
 {{- regexReplaceAll "[^a-z0-9-]" $raw "-" | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
-{{- define "alien.serviceAccountName" -}}
-{{- $prefix := default (include "alien.fullname" .root) .root.Values.serviceAccountPrefix -}}
+{{- define "deployment.serviceAccountName" -}}
+{{- $prefix := default (include "deployment.fullname" .root) .root.Values.serviceAccountPrefix -}}
 {{- $raw := printf "%s-%s-sa" $prefix .name | lower -}}
 {{- regexReplaceAll "[^a-z0-9-]" $raw "-" | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
-{{- define "alien.resourceName" -}}
+{{- define "deployment.resourceName" -}}
 {{- $raw := .name | lower -}}
 {{- regexReplaceAll "[^a-z0-9-]" $raw "-" | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
-{{- define "alien.managementSecretName" -}}
-{{- default (include "alien.fullname" .) .Values.management.existingSecret.name -}}
+{{- define "deployment.managementSecretName" -}}
+{{- default (include "deployment.fullname" .) .Values.management.existingSecret.name -}}
 {{- end -}}
 
-{{- define "alien.managementSecretTokenKey" -}}
+{{- define "deployment.managementSecretTokenKey" -}}
 {{- default "sync-token" .Values.management.existingSecret.tokenKey -}}
 {{- end -}}
 
-{{- define "alien.encryptionSecretName" -}}
-{{- default (include "alien.fullname" .) .Values.runtime.encryption.existingSecret.name -}}
+{{- define "deployment.encryptionSecretName" -}}
+{{- default (include "deployment.fullname" .) .Values.runtime.encryption.existingSecret.name -}}
 {{- end -}}
 
-{{- define "alien.encryptionSecretKey" -}}
+{{- define "deployment.encryptionSecretKey" -}}
 {{- default "encryption-key" .Values.runtime.encryption.existingSecret.key -}}
 {{- end -}}
 
-{{- define "alien.heartbeatNodeClusterRoleName" -}}
-{{- printf "%s-heartbeat-nodes" (include "alien.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- define "deployment.heartbeatNodeClusterRoleName" -}}
+{{- printf "%s-heartbeat-nodes" (include "deployment.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 "#
     .to_string()
@@ -1479,9 +1477,9 @@ fn serviceaccount_tpl() -> String {
     r#"apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: {{ include "alien.managerServiceAccountName" . }}
+  name: {{ include "deployment.managerServiceAccountName" . }}
   labels:
-    {{- include "alien.labels" . | nindent 4 }}
+    {{- include "deployment.labels" . | nindent 4 }}
     {{- with .Values.managerServiceAccount.labels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
@@ -1494,9 +1492,9 @@ metadata:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: {{ include "alien.serviceAccountName" (dict "root" $ "name" $name) }}
+  name: {{ include "deployment.serviceAccountName" (dict "root" $ "name" $name) }}
   labels:
-    {{- include "alien.labels" $ | nindent 4 }}
+    {{- include "deployment.labels" $ | nindent 4 }}
     {{- with $account.labels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
@@ -1519,9 +1517,9 @@ fn role_tpl() -> String {
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: {{ include "alien.fullname" . }}
+  name: {{ include "deployment.fullname" . }}
   labels:
-    {{- include "alien.labels" . | nindent 4 }}
+    {{- include "deployment.labels" . | nindent 4 }}
 rules:
   - apiGroups: [""]
     resources: ["configmaps", "secrets", "services", "pods", "pods/log", "persistentvolumeclaims"]
@@ -1565,16 +1563,16 @@ fn rolebinding_tpl() -> String {
     r#"apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ include "alien.fullname" . }}
+  name: {{ include "deployment.fullname" . }}
   labels:
-    {{- include "alien.labels" . | nindent 4 }}
+    {{- include "deployment.labels" . | nindent 4 }}
 subjects:
   - kind: ServiceAccount
-    name: {{ include "alien.managerServiceAccountName" . }}
+    name: {{ include "deployment.managerServiceAccountName" . }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: {{ include "alien.fullname" . }}
+  name: {{ include "deployment.fullname" . }}
 "#
     .to_string()
 }
@@ -1585,9 +1583,9 @@ fn clusterrole_tpl() -> String {
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "alien.heartbeatNodeClusterRoleName" . }}
+  name: {{ include "deployment.heartbeatNodeClusterRoleName" . }}
   labels:
-    {{- include "alien.labels" . | nindent 4 }}
+    {{- include "deployment.labels" . | nindent 4 }}
 rules:
   - apiGroups: [""]
     resources: ["nodes"]
@@ -1606,17 +1604,17 @@ fn clusterrolebinding_tpl() -> String {
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ include "alien.heartbeatNodeClusterRoleName" . }}
+  name: {{ include "deployment.heartbeatNodeClusterRoleName" . }}
   labels:
-    {{- include "alien.labels" . | nindent 4 }}
+    {{- include "deployment.labels" . | nindent 4 }}
 subjects:
   - kind: ServiceAccount
-    name: {{ include "alien.managerServiceAccountName" . }}
+    name: {{ include "deployment.managerServiceAccountName" . }}
     namespace: {{ .Release.Namespace }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: {{ include "alien.heartbeatNodeClusterRoleName" . }}
+  name: {{ include "deployment.heartbeatNodeClusterRoleName" . }}
 {{- end }}
 "#
     .to_string()
@@ -1629,9 +1627,9 @@ fn secret_tpl() -> String {
 apiVersion: v1
 kind: Secret
 metadata:
-  name: {{ include "alien.fullname" . }}
+  name: {{ include "deployment.fullname" . }}
   labels:
-    {{- include "alien.labels" . | nindent 4 }}
+    {{- include "deployment.labels" . | nindent 4 }}
 type: Opaque
 stringData:
   {{- if $createManagementSecret }}
@@ -1653,9 +1651,9 @@ fn configmap_tpl() -> String {
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "alien.fullname" . }}
+  name: {{ include "deployment.fullname" . }}
   labels:
-    {{- include "alien.labels" . | nindent 4 }}
+    {{- include "deployment.labels" . | nindent 4 }}
 data:
   stack.json: |-
 {{ .Files.Get "files/stack.json" | indent 4 }}
@@ -1670,19 +1668,19 @@ fn deployment_tpl() -> String {
     r#"apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "alien.fullname" . }}
+  name: {{ include "deployment.fullname" . }}
   labels:
-    {{- include "alien.labels" . | nindent 4 }}
+    {{- include "deployment.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.runtime.replicas }}
   selector:
     matchLabels:
-      app.kubernetes.io/name: {{ include "alien.name" . }}
+      app.kubernetes.io/name: {{ include "deployment.name" . }}
       app.kubernetes.io/instance: {{ .Release.Name }}
   template:
     metadata:
       labels:
-        {{- include "alien.labels" . | nindent 8 }}
+        {{- include "deployment.labels" . | nindent 8 }}
         {{- with .Values.runtime.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -1691,7 +1689,7 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
     spec:
-      serviceAccountName: {{ include "alien.managerServiceAccountName" . }}
+      serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
       automountServiceAccountToken: {{ .Values.runtime.automountServiceAccountToken }}
       securityContext:
         {{- toYaml .Values.runtime.security.podSecurityContext | nindent 8 }}
@@ -1722,7 +1720,7 @@ spec:
       runtimeClassName: {{ .Values.runtime.scheduling.runtimeClassName | quote }}
       {{- end }}
       containers:
-        - name: agent
+        - name: operator
           image: "{{ .Values.runtime.image.repository }}:{{ .Values.runtime.image.tag }}"
           imagePullPolicy: {{ .Values.runtime.image.pullPolicy }}
           securityContext:
@@ -1758,7 +1756,7 @@ spec:
             {{- end }}
             - name: SYNC_URL
               value: {{ .Values.management.url | quote }}
-            - name: AGENT_NAME
+            - name: OPERATOR_NAME
               value: {{ .Values.management.name | quote }}
             {{- if .Values.management.deploymentId }}
             - name: DEPLOYMENT_ID
@@ -1766,17 +1764,19 @@ spec:
             {{- end }}
             - name: KUBERNETES_NAMESPACE
               value: {{ .Release.Namespace | quote }}
+            - name: DATA_DIR
+              value: {{ .Values.runtime.data.mountPath | quote }}
             - name: SYNC_TOKEN_FILE
-              value: /etc/alien/secrets/sync-token
-            - name: AGENT_ENCRYPTION_KEY_FILE
-              value: /etc/alien/secrets/encryption-key
+              value: /etc/deployment/secrets/sync-token
+            - name: OPERATOR_ENCRYPTION_KEY_FILE
+              value: /etc/deployment/secrets/encryption-key
             - name: STACK_SETTINGS_FILE
-              value: /etc/alien/config/stack-settings.json
+              value: /etc/deployment/config/stack-settings.json
             - name: PUBLIC_URLS_FILE
-              value: /etc/alien/config/public-urls.json
+              value: /etc/deployment/config/public-urls.json
             {{- if .Values.infrastructure }}
             - name: EXTERNAL_BINDINGS_FILE
-              value: /etc/alien/secrets/external-bindings.json
+              value: /etc/deployment/secrets/external-bindings.json
             {{- end }}
             - name: SYNC_INTERVAL
               value: "30"
@@ -1809,19 +1809,19 @@ spec:
           {{- end }}
           volumeMounts:
             - name: config
-              mountPath: /etc/alien/config
+              mountPath: /etc/deployment/config
               readOnly: true
             - name: management-token
-              mountPath: /etc/alien/secrets/sync-token
+              mountPath: /etc/deployment/secrets/sync-token
               subPath: sync-token
               readOnly: true
             - name: encryption-key
-              mountPath: /etc/alien/secrets/encryption-key
-              subPath: {{ include "alien.encryptionSecretKey" . }}
+              mountPath: /etc/deployment/secrets/encryption-key
+              subPath: {{ include "deployment.encryptionSecretKey" . }}
               readOnly: true
             {{- if .Values.infrastructure }}
             - name: external-bindings
-              mountPath: /etc/alien/secrets/external-bindings.json
+              mountPath: /etc/deployment/secrets/external-bindings.json
               subPath: external-bindings.json
               readOnly: true
             {{- end }}
@@ -1836,22 +1836,22 @@ spec:
       volumes:
         - name: config
           configMap:
-            name: {{ include "alien.fullname" . }}
+            name: {{ include "deployment.fullname" . }}
         - name: management-token
           secret:
-            secretName: {{ include "alien.managementSecretName" . }}
+            secretName: {{ include "deployment.managementSecretName" . }}
             items:
-              - key: {{ include "alien.managementSecretTokenKey" . }}
+              - key: {{ include "deployment.managementSecretTokenKey" . }}
                 path: sync-token
             defaultMode: 384
         - name: encryption-key
           secret:
-            secretName: {{ include "alien.encryptionSecretName" . }}
+            secretName: {{ include "deployment.encryptionSecretName" . }}
             defaultMode: 384
         {{- if .Values.infrastructure }}
         - name: external-bindings
           secret:
-            secretName: {{ include "alien.fullname" . }}
+            secretName: {{ include "deployment.fullname" . }}
             items:
               - key: external-bindings.json
                 path: external-bindings.json
@@ -1865,7 +1865,7 @@ spec:
         - name: runtime-data
           {{- if .Values.runtime.data.persistence.enabled }}
           persistentVolumeClaim:
-            claimName: {{ default (printf "%s-runtime-data" (include "alien.fullname" .)) .Values.runtime.data.persistence.existingClaim }}
+            claimName: {{ default (printf "%s-runtime-data" (include "deployment.fullname" .)) .Values.runtime.data.persistence.existingClaim }}
           {{- else }}
           emptyDir: {}
           {{- end }}
@@ -1878,13 +1878,13 @@ fn service_tpl() -> String {
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "alien.fullname" . }}
+  name: {{ include "deployment.fullname" . }}
   labels:
-    {{- include "alien.labels" . | nindent 4 }}
+    {{- include "deployment.labels" . | nindent 4 }}
 spec:
   type: {{ .Values.runtime.api.service.type }}
   selector:
-    app.kubernetes.io/name: {{ include "alien.name" . }}
+    app.kubernetes.io/name: {{ include "deployment.name" . }}
     app.kubernetes.io/instance: {{ .Release.Name }}
   ports:
     - name: http
@@ -1900,9 +1900,9 @@ fn pvc_tpl() -> String {
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ printf "%s-runtime-data" (include "alien.fullname" .) }}
+  name: {{ printf "%s-runtime-data" (include "deployment.fullname" .) }}
   labels:
-    {{- include "alien.labels" . | nindent 4 }}
+    {{- include "deployment.labels" . | nindent 4 }}
 spec:
   accessModes:
     {{- toYaml .Values.runtime.data.persistence.accessModes | nindent 4 }}
@@ -1922,9 +1922,9 @@ fn poddisruptionbudget_tpl() -> String {
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: {{ include "alien.fullname" . }}
+  name: {{ include "deployment.fullname" . }}
   labels:
-    {{- include "alien.labels" . | nindent 4 }}
+    {{- include "deployment.labels" . | nindent 4 }}
 spec:
   {{- if hasKey .Values.runtime.pdb "maxUnavailable" }}
   maxUnavailable: {{ .Values.runtime.pdb.maxUnavailable }}
@@ -1933,7 +1933,7 @@ spec:
   {{- end }}
   selector:
     matchLabels:
-      app.kubernetes.io/name: {{ include "alien.name" . }}
+      app.kubernetes.io/name: {{ include "deployment.name" . }}
       app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 "#
@@ -1945,13 +1945,13 @@ fn networkpolicy_tpl() -> String {
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "alien.fullname" . }}
+  name: {{ include "deployment.fullname" . }}
   labels:
-    {{- include "alien.labels" . | nindent 4 }}
+    {{- include "deployment.labels" . | nindent 4 }}
 spec:
   podSelector:
     matchLabels:
-      app.kubernetes.io/name: {{ include "alien.name" . }}
+      app.kubernetes.io/name: {{ include "deployment.name" . }}
       app.kubernetes.io/instance: {{ .Release.Name }}
   policyTypes:
     {{- if .Values.runtime.networkPolicy.ingress.enabled }}
@@ -1978,15 +1978,15 @@ fn app_service_tpl() -> String {
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "alien.resourceName" (dict "root" $ "name" $id) }}
+  name: {{ include "deployment.resourceName" (dict "root" $ "name" $id) }}
   labels:
-    {{- include "alien.labels" $ | nindent 4 }}
-    alien.dev/resource-id: {{ $id | quote }}
+    {{- include "deployment.labels" $ | nindent 4 }}
+    resource-id: {{ $id | quote }}
 spec:
   type: {{ if eq $service.type "loadBalancer" }}LoadBalancer{{ else }}ClusterIP{{ end }}
   selector:
-    app: {{ include "alien.resourceName" (dict "root" $ "name" $id) }}
-    managed-by: alien
+    app: {{ include "deployment.resourceName" (dict "root" $ "name" $id) }}
+    managed-by: deployment
     component: {{ $service.component | quote }}
   ports:
     - name: http
@@ -2011,7 +2011,7 @@ metadata:
   annotations:
     storageclass.kubernetes.io/is-default-class: "true"
   labels:
-    {{- include "alien.labels" . | nindent 4 }}
+    {{- include "deployment.labels" . | nindent 4 }}
 provisioner: {{ $provisioner | quote }}
 {{ with $storage.parameters }}
 parameters:
@@ -2033,7 +2033,7 @@ kind: IngressClassParams
 metadata:
   name: {{ $ingressClassName | quote }}
   labels:
-    {{- include "alien.labels" . | nindent 4 }}
+    {{- include "deployment.labels" . | nindent 4 }}
 spec:
   scheme: {{ default "internet-facing" $eksAlb.scheme | quote }}
   {{ with $eksAlb.subnetIds }}
@@ -2049,7 +2049,7 @@ kind: IngressClass
 metadata:
   name: {{ $ingressClassName | quote }}
   labels:
-    {{- include "alien.labels" . | nindent 4 }}
+    {{- include "deployment.labels" . | nindent 4 }}
 spec:
   controller: {{ $controller | quote }}
   parameters:
@@ -2070,7 +2070,7 @@ metadata:
   name: {{ $azureAlbName | quote }}
   namespace: {{ $azureAlbNamespace | quote }}
   labels:
-    {{- include "alien.labels" . | nindent 4 }}
+    {{- include "deployment.labels" . | nindent 4 }}
 spec:
   associations:
     - {{ $azureAssociationSubnetId | quote }}
@@ -2085,7 +2085,7 @@ kind: NodePool
 metadata:
   name: {{ $nodePoolName | quote }}
   labels:
-    {{- include "alien.labels" . | nindent 4 }}
+    {{- include "deployment.labels" . | nindent 4 }}
 spec:
   template:
     spec:
@@ -2132,7 +2132,7 @@ metadata:
   namespace: kube-system
   labels:
     k8s-app: metrics-server
-    {{- include "alien.labels" . | nindent 4 }}
+    {{- include "deployment.labels" . | nindent 4 }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -2143,7 +2143,7 @@ metadata:
     rbac.authorization.k8s.io/aggregate-to-admin: "true"
     rbac.authorization.k8s.io/aggregate-to-edit: "true"
     rbac.authorization.k8s.io/aggregate-to-view: "true"
-    {{- include "alien.labels" . | nindent 4 }}
+    {{- include "deployment.labels" . | nindent 4 }}
 rules:
   - apiGroups: ["metrics.k8s.io"]
     resources: ["pods", "nodes"]
@@ -2155,7 +2155,7 @@ metadata:
   name: system:metrics-server
   labels:
     k8s-app: metrics-server
-    {{- include "alien.labels" . | nindent 4 }}
+    {{- include "deployment.labels" . | nindent 4 }}
 rules:
   - apiGroups: [""]
     resources: ["nodes/metrics"]
@@ -2171,7 +2171,7 @@ metadata:
   namespace: kube-system
   labels:
     k8s-app: metrics-server
-    {{- include "alien.labels" . | nindent 4 }}
+    {{- include "deployment.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -2187,7 +2187,7 @@ metadata:
   name: metrics-server:system:auth-delegator
   labels:
     k8s-app: metrics-server
-    {{- include "alien.labels" . | nindent 4 }}
+    {{- include "deployment.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -2203,7 +2203,7 @@ metadata:
   name: system:metrics-server
   labels:
     k8s-app: metrics-server
-    {{- include "alien.labels" . | nindent 4 }}
+    {{- include "deployment.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -2220,7 +2220,7 @@ metadata:
   namespace: kube-system
   labels:
     k8s-app: metrics-server
-    {{- include "alien.labels" . | nindent 4 }}
+    {{- include "deployment.labels" . | nindent 4 }}
 spec:
   selector:
     k8s-app: metrics-server
@@ -2237,7 +2237,7 @@ metadata:
   namespace: kube-system
   labels:
     k8s-app: metrics-server
-    {{- include "alien.labels" . | nindent 4 }}
+    {{- include "deployment.labels" . | nindent 4 }}
 spec:
   selector:
     matchLabels:
@@ -2294,7 +2294,7 @@ metadata:
   name: v1beta1.metrics.k8s.io
   labels:
     k8s-app: metrics-server
-    {{- include "alien.labels" . | nindent 4 }}
+    {{- include "deployment.labels" . | nindent 4 }}
 spec:
   service:
     name: metrics-server
@@ -2347,7 +2347,7 @@ fn cloud_identity_example(
     annotation: &str,
     identity_prefix: &str,
 ) -> String {
-    let mut yaml = manager_fetch_example_values();
+    let mut yaml = registered_setup_example_values();
     yaml.push_str("serviceAccounts:\n");
     if analysis.service_accounts.is_empty() {
         yaml.push_str("  {}\n");
@@ -2372,11 +2372,11 @@ fn cloud_identity_example(
     yaml
 }
 
-fn manager_fetch_example_values() -> String {
+fn registered_setup_example_values() -> String {
     r#"management:
   token: "dg_replace_me"
   name: "production"
-  url: "https://manager.example.com"
+  url: "https://management.example.com"
   deploymentId: "dep_replace_me"
   updates: auto
   telemetry: auto
@@ -2390,7 +2390,7 @@ fn external_bindings_initialize_example_values() -> String {
     r#"management:
   token: "dg_replace_me"
   name: "production"
-  url: "https://manager.example.com"
+  url: "https://management.example.com"
   deploymentId: null
   updates: auto
   telemetry: auto
@@ -2410,7 +2410,7 @@ stackSettings:
 
 fn readme_md(chart_name: &str, stack: &Stack) -> String {
     format!(
-        "# {chart_name}\n\nInstall this chart into an existing Kubernetes cluster:\n\n```bash\nhelm install {chart_name} ./{} --namespace production --create-namespace --values values.yaml\n```\n\nThe generated `values.yaml` contains placeholders for management, service-account identity annotations, agent-local infrastructure bindings, and the Kubernetes exposure profile. The chart no longer renders per-app public `Ingress` objects from `services.*.host` or hostless ingress values; public endpoints are runtime-owned through `stackSettings.kubernetes.exposure`.\n\nSee `examples/<target>.yaml` for ready-to-use values matching EKS / GKE / AKS / on-prem.\n",
+        "# {chart_name}\n\nInstall this chart into an existing Kubernetes cluster:\n\n```bash\nhelm install {chart_name} ./{} --namespace production --create-namespace --values values.yaml\n```\n\nThe generated `values.yaml` contains placeholders for management, service-account identity annotations, operator-local infrastructure bindings, and the Kubernetes exposure profile. The chart no longer renders per-app public `Ingress` objects from `services.*.host` or hostless ingress values; public endpoints are runtime-owned through `stackSettings.kubernetes.exposure`.\n\nSee `examples/<target>.yaml` for ready-to-use values matching EKS / GKE / AKS / on-prem.\n",
         stack.id()
     )
 }
@@ -2517,20 +2517,20 @@ mod tests {
         let files = chart.files.clone();
         crate::test_utils::helm_lint(&files).assert_ok("helm chart");
         crate::test_utils::helm_template_and_validate(&files, None)
-            .assert_ok("helm template manager-fetch path");
+            .assert_ok("helm template registered setup");
         crate::test_utils::helm_template_and_validate(&files, Some(&files["examples/onprem.yaml"]))
             .assert_ok("helm template external-bindings initialize path");
     }
 
     #[test]
-    fn manager_fetch_values_include_runtime_encryption_key() {
+    fn registered_setup_values_include_runtime_encryption_key() {
         let stack_state =
             alien_core::StackState::with_resource_prefix(Platform::Kubernetes, "e2e123".into());
 
         let values = render_manager_fetch_values(ManagerFetchHelmValuesOptions {
             deployment_id: "dep_123",
             deployment_name: "deployment",
-            manager_url: "https://manager.example.com",
+            manager_url: "https://management.example.com",
             deployment_token: "token",
             runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
             stack: &sample_stack(),
@@ -2541,21 +2541,21 @@ mod tests {
             gcp_project_id: None,
             azure_location: None,
         })
-        .expect("manager-fetch values should render");
+        .expect("registered setup values should render");
 
         assert!(values.contains("runtime:\n  encryption:\n"));
         assert!(values.contains(&format!("    key: '{}'", TEST_RUNTIME_ENCRYPTION_KEY)));
     }
 
     #[test]
-    fn manager_fetch_values_reject_invalid_runtime_encryption_key() {
+    fn registered_setup_values_reject_invalid_runtime_encryption_key() {
         let stack_state =
             alien_core::StackState::with_resource_prefix(Platform::Kubernetes, "e2e123".into());
 
         let error = render_manager_fetch_values(ManagerFetchHelmValuesOptions {
             deployment_id: "dep_123",
             deployment_name: "deployment",
-            manager_url: "https://manager.example.com",
+            manager_url: "https://management.example.com",
             deployment_token: "token",
             runtime_encryption_key: "replace-me-with-a-stable-64-character-encryption-secret",
             stack: &sample_stack(),
@@ -2574,7 +2574,7 @@ mod tests {
     }
 
     #[test]
-    fn manager_fetch_values_enable_eks_cluster_bootstrap_from_imported_config() {
+    fn registered_setup_values_enable_eks_cluster_bootstrap_from_registered_config() {
         let cluster = KubernetesCluster::new("kubernetes".to_string())
             .provider(KubernetesClusterProvider::Eks)
             .ownership(KubernetesClusterOwnership::Managed)
@@ -2599,7 +2599,7 @@ mod tests {
         let values = render_manager_fetch_values(ManagerFetchHelmValuesOptions {
             deployment_id: "dep_123",
             deployment_name: "deployment",
-            manager_url: "https://manager.example.com",
+            manager_url: "https://management.example.com",
             deployment_token: "token",
             runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
             stack: &stack,
@@ -2610,7 +2610,7 @@ mod tests {
             gcp_project_id: None,
             azure_location: None,
         })
-        .expect("manager-fetch values should render");
+        .expect("registered setup values should render");
 
         assert!(values.contains("clusterBootstrap:"));
         assert!(values
@@ -2621,12 +2621,12 @@ mod tests {
     }
 
     #[test]
-    fn manager_fetch_values_use_azure_workload_identity_client_id() {
+    fn registered_setup_values_use_azure_workload_identity_client_id() {
         let mut stack_state =
             alien_core::StackState::with_resource_prefix(Platform::Kubernetes, "e2e123".into());
-        let rsm = RemoteStackManagement::new("remote-stack-management".to_string()).build();
+        let rsm = RemoteStackManagement::new("management".to_string()).build();
         stack_state.resources.insert(
-            "remote-stack-management".to_string(),
+            "management".to_string(),
             StackResourceState::new_pending(
                 RemoteStackManagement::RESOURCE_TYPE.to_string(),
                 Resource::new(rsm),
@@ -2649,7 +2649,7 @@ mod tests {
         let values = render_manager_fetch_values(ManagerFetchHelmValuesOptions {
             deployment_id: "dep_123",
             deployment_name: "deployment",
-            manager_url: "https://manager.example.com",
+            manager_url: "https://management.example.com",
             deployment_token: "token",
             runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
             stack: &sample_stack(),
@@ -2660,7 +2660,7 @@ mod tests {
             gcp_project_id: None,
             azure_location: Some("eastus"),
         })
-        .expect("manager-fetch values should render");
+        .expect("registered setup values should render");
 
         assert!(values.contains(
             "'azure.workload.identity/client-id': '11111111-2222-3333-4444-555555555555'"
@@ -2672,7 +2672,7 @@ mod tests {
     }
 
     #[test]
-    fn manager_fetch_values_include_azure_agc_cluster_bootstrap() {
+    fn registered_setup_values_include_azure_agc_cluster_bootstrap() {
         let mut stack_state =
             alien_core::StackState::with_resource_prefix(Platform::Kubernetes, "e2e123".into());
         let cluster = KubernetesCluster::new("kubernetes".to_string())
@@ -2718,7 +2718,7 @@ mod tests {
         let values = render_manager_fetch_values(ManagerFetchHelmValuesOptions {
             deployment_id: "dep_123",
             deployment_name: "deployment",
-            manager_url: "https://manager.example.com",
+            manager_url: "https://management.example.com",
             deployment_token: "token",
             runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
             stack: &sample_stack(),
@@ -2729,7 +2729,7 @@ mod tests {
             gcp_project_id: None,
             azure_location: Some("eastus"),
         })
-        .expect("manager-fetch values should render");
+        .expect("registered setup values should render");
 
         assert!(values.contains("azureApplicationGatewayForContainers:"));
         assert!(values.contains("enabled: true"));

@@ -12,6 +12,6 @@ let value: CloudFormationCallbackRequestManagementConfigKubernetes = {
 
 ## Fields
 
-| Field              | Type               | Required           | Description        |
-| ------------------ | ------------------ | ------------------ | ------------------ |
-| `platform`         | *"kubernetes"*     | :heavy_check_mark: | N/A                |
+| Field                                                                                                                  | Type                                                                                                                   | Required                                                                                                               | Description                                                                                                            |
+| ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `platform`                                                                                                             | [models.CloudFormationCallbackRequestPlatformKubernetes](../models/cloudformationcallbackrequestplatformkubernetes.md) | :heavy_check_mark:                                                                                                     | N/A                                                                                                                    |

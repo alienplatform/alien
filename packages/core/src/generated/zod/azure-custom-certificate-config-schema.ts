@@ -6,7 +6,8 @@
 import * as z from "zod";
 
 export const AzureCustomCertificateConfigSchema = z.object({
-    "keyVaultCertificateId": z.string()
+    "keyVaultCertificateId": z.string(),
+"keyVaultResourceId": z.string().nullish()
     })
 
 export type AzureCustomCertificateConfig = z.infer<typeof AzureCustomCertificateConfigSchema>

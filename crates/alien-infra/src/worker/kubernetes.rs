@@ -1012,7 +1012,7 @@ impl KubernetesWorkerController {
     fn build_labels(&self, function_name: &str) -> BTreeMap<String, String> {
         let mut labels = BTreeMap::new();
         labels.insert("app".to_string(), function_name.to_string());
-        labels.insert("managed-by".to_string(), "alien".to_string());
+        labels.insert("managed-by".to_string(), "runtime".to_string());
         labels.insert("component".to_string(), "worker".to_string());
         labels
     }

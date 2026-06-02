@@ -2,7 +2,7 @@
 //!
 //! Splits the rendered module into one `.tf` file per Alien stack resource,
 //! plus the supporting `versions.tf` / `variables.tf` / `providers.tf` /
-//! `locals.tf` / `import.tf` / `outputs.tf`. Mapping between `alien.ts`
+//! `locals.tf` / `registration.tf` / `outputs.tf`. Mapping between `alien.ts`
 //! resource ids and `.tf` files is 1:1 \u2014 reviewers find "what does the
 //! `data` storage actually become" by opening `data.tf`.
 //!
@@ -24,8 +24,10 @@ use crate::{
 };
 use alien_core::{
     import::{EmitContext, CURRENT_SETUP_IMPORT_FORMAT_VERSION},
-    ownership_policy_for_resource_type, DeploymentModel, ErrorData, Network, NetworkSettings,
-    RemoteStackManagement, Result, Stack, StackSettings,
+    ownership_policy_for_resource_type, DeploymentModel, ErrorData, HeartbeatsMode,
+    KubernetesCertificateMode, KubernetesExposureSettings, KubernetesSettings, Network,
+    NetworkSettings, RemoteStackManagement, Result, Stack, StackSettings, TelemetryMode,
+    UpdatesMode,
 };
 use alien_error::{AlienError, IntoAlienError};
 use hcl::{
@@ -38,7 +40,7 @@ use std::collections::HashSet;
 
 /// Generated Terraform module \u2014 one `.tf` file per Alien stack resource
 /// plus the supporting framework (`versions.tf` / `variables.tf` /
-/// `providers.tf` / `locals.tf` / `import.tf` / `outputs.tf` / `README.md`).
+/// `providers.tf` / `locals.tf` / `registration.tf` / `outputs.tf` / `README.md`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModuleFiles {
     /// Path -> contents, in render order. Iterating the module preserves
@@ -78,7 +80,7 @@ pub struct TerraformOptions<'a> {
     /// self-registration can install the chart because the chart needs the
     /// manager deployment id and deployment token.
     pub helm_install: Option<TerraformHelmInstall>,
-    /// AWS regions supported by the Alien environment that produced this
+    /// AWS regions supported by the environment that produced this
     /// module. Empty means no generated region validation.
     pub supported_aws_regions: Vec<String>,
 }
@@ -189,7 +191,7 @@ pub fn generate_terraform_module(
     }
 
     let mut per_resource: IndexMap<String, TfFragment> = IndexMap::new();
-    let mut imported_resources: Vec<Expression> = Vec::new();
+    let mut registration_resources: Vec<Expression> = Vec::new();
     let mut shared_locals: IndexMap<String, Expression> = IndexMap::new();
 
     for (resource_id, resource) in stack.resources() {
@@ -216,11 +218,11 @@ pub fn generate_terraform_module(
         shared_locals.extend(local_contributions);
         per_resource.insert(resource_id.clone(), fragment);
 
-        let import_ref = emitter.emit_import_ref(&ctx)?;
-        imported_resources.push(expr::object([
+        let registration_data = emitter.emit_import_ref(&ctx)?;
+        registration_resources.push(expr::object([
             ("id", Expression::String(resource_id.to_string())),
             ("type", Expression::String(resource_type.to_string())),
-            ("importData", import_ref),
+            ("importData", registration_data),
         ]));
     }
 
@@ -321,7 +323,7 @@ pub fn generate_terraform_module(
         render_body(locals_body(
             target,
             &stack_settings,
-            imported_resources,
+            registration_resources,
             &shared_locals,
             has_remote_management,
         )?)?,
@@ -341,8 +343,8 @@ pub fn generate_terraform_module(
         );
     }
     files.insert(
-        "import.tf".to_string(),
-        render_body(import_body(
+        "registration.tf".to_string(),
+        render_body(registration_body(
             target,
             options.registration.as_ref(),
             &import_depends_on,
@@ -372,6 +374,8 @@ pub fn generate_terraform_module(
             target,
             options.registration.as_ref(),
             options.display_name.as_deref(),
+            &stack_settings,
+            options.helm_install.as_ref(),
         ),
     );
 
@@ -718,9 +722,14 @@ fn versions_body(
     include_helm_provider: bool,
     include_azapi_provider: bool,
 ) -> Body {
+    let required_version = if matches!(target, TerraformTarget::Eks) {
+        ">= 1.9.0"
+    } else {
+        ">= 1.5.0"
+    };
     let mut required: Vec<Structure> = vec![attr(
         "required_version",
-        Expression::String(">= 1.5.0".to_string()),
+        Expression::String(required_version.to_string()),
     )];
 
     let mut provider_attrs: Vec<Structure> = Vec::new();
@@ -803,13 +812,7 @@ fn variables_body(
     supported_aws_regions: &[String],
 ) -> Result<Body> {
     let mut blocks: Vec<Structure> = Vec::new();
-    let stack_settings_default = serde_json::to_string(stack_settings)
-        .into_alien_error()
-        .map_err(|err| {
-            AlienError::new(ErrorData::JsonSerializationFailed {
-                reason: format!("failed to serialize StackSettings: {err}"),
-            })
-        })?;
+    let advanced_settings_default = advanced_settings_default_json(target, stack_settings)?;
 
     blocks.push(nested(resource_prefix_variable_block()));
 
@@ -828,29 +831,53 @@ fn variables_body(
         true,
     )));
     blocks.push(nested(variable_block(
-        "manager_url",
-        "Optional manager endpoint used by pull-style runtimes.",
+        "management_url",
+        "Optional management endpoint used by pull-style runtimes.",
         Some(Expression::String("".to_string())),
         false,
     )));
+    blocks.push(nested(string_enum_variable_block(
+        "deployment_model",
+        "How runtime updates are delivered after setup.",
+        deployment_model(stack_settings.deployment_model),
+        &["push", "pull"],
+    )));
     blocks.push(nested(variable_block(
-        "stack_settings_json",
-        "Optional JSON-encoded StackSettings override supplied by deployment installers.",
-        Some(Expression::String(stack_settings_default)),
+        "advanced_settings_json",
+        "Advanced JSON-encoded deployment settings. Most installations should use the typed variables in this module instead.",
+        Some(Expression::String(advanced_settings_default)),
         true,
+    )));
+    blocks.push(nested(string_enum_variable_block(
+        "updates_mode",
+        "How application updates are delivered after setup.",
+        updates_mode(stack_settings.updates),
+        &["auto", "approval-required"],
+    )));
+    blocks.push(nested(string_enum_variable_block(
+        "telemetry_mode",
+        "How logs, metrics, and traces are collected.",
+        telemetry_mode(stack_settings.telemetry),
+        &["off", "auto", "approval-required"],
+    )));
+    blocks.push(nested(string_enum_variable_block(
+        "heartbeats_mode",
+        "Whether runtime health checks are enabled.",
+        heartbeats_mode(stack_settings.heartbeats),
+        &["off", "on"],
     )));
 
     if matches!(target.cloud_platform(), alien_core::Platform::Aws) {
         blocks.push(nested(aws_region_variable_block(supported_aws_regions)));
         blocks.push(nested(variable_block(
             "managing_role_arn",
-            "ARN of the manager IAM identity allowed to assume management roles.",
+            "ARN of the management identity allowed to assume setup-created roles.",
             Some(Expression::String(String::new())),
             false,
         )));
         blocks.push(nested(variable_block(
             "managing_account_id",
-            "Account ID hosting the manager. Referenced by resource-side IAM policies that scope cross-account image pulls. Empty disables those grants.",
+            "AWS account ID that hosts application container images. Empty disables scoped cross-account image-pull grants.",
             Some(Expression::String(String::new())),
             false,
         )));
@@ -912,7 +939,7 @@ fn variables_body(
         )));
         blocks.push(nested(variable_block(
             "managing_service_account_email",
-            "Email of the manager's service account that may impersonate the management identity. Empty disables the binding.",
+            "Email of the management service account allowed to impersonate setup-created identities. Empty disables the binding.",
             Some(Expression::String(String::new())),
             false,
         )));
@@ -995,7 +1022,7 @@ fn variables_body(
         if needs_azure_management_inputs {
             blocks.push(nested(variable_block(
                 "azure_managing_tenant_id",
-                "Azure tenant ID the manager uses for cross-tenant access.",
+                "Azure tenant ID that hosts the management identity for cross-tenant access.",
                 Some(Expression::String(String::new())),
                 false,
             )));
@@ -1026,6 +1053,21 @@ fn variables_body(
             Some(Expression::String("default".to_string())),
             false,
         )));
+        if matches!(target, TerraformTarget::Eks) {
+            let custom_domain_defaults =
+                EksCustomDomainDefaults::from_settings(stack_settings.kubernetes.as_ref());
+            blocks.push(nested(variable_block(
+                "custom_domain_name",
+                "Optional custom domain for public Kubernetes routes. Leave empty to use the generated load balancer hostname.",
+                Some(Expression::String(
+                    custom_domain_defaults.domain_name.unwrap_or_default(),
+                )),
+                false,
+            )));
+            blocks.push(nested(custom_domain_certificate_arn_variable_block(
+                custom_domain_defaults.certificate_arn.unwrap_or_default(),
+            )));
+        }
     }
     if target.is_kubernetes() && registration.is_some() && helm_install.is_some() {
         blocks.push(nested(bool_variable_block(
@@ -1143,6 +1185,87 @@ fn resource_prefix_variable_block() -> Block {
     }
 }
 
+fn advanced_settings_default_json(
+    target: TerraformTarget,
+    stack_settings: &StackSettings,
+) -> Result<String> {
+    let mut value = serde_json::to_value(stack_settings)
+        .into_alien_error()
+        .map_err(|err| {
+            AlienError::new(ErrorData::JsonSerializationFailed {
+                reason: format!("failed to serialize StackSettings: {err}"),
+            })
+        })?;
+
+    if let serde_json::Value::Object(ref mut object) = value {
+        object.remove("deploymentModel");
+        object.remove("updates");
+        object.remove("telemetry");
+        object.remove("heartbeats");
+        if (matches!(target.cloud_platform(), alien_core::Platform::Aws)
+            && has_dynamic_aws_network_settings(stack_settings.network.as_ref()))
+            || (matches!(target.cloud_platform(), alien_core::Platform::Gcp)
+                && has_dynamic_gcp_network_settings(stack_settings.network.as_ref()))
+        {
+            object.remove("network");
+        }
+        if target.is_kubernetes() {
+            remove_kubernetes_exposure_default(object);
+        }
+    }
+
+    serde_json::to_string(&value)
+        .into_alien_error()
+        .map_err(|err| {
+            AlienError::new(ErrorData::JsonSerializationFailed {
+                reason: format!("failed to serialize advanced settings default: {err}"),
+            })
+        })
+}
+
+fn remove_kubernetes_exposure_default(object: &mut serde_json::Map<String, serde_json::Value>) {
+    let Some(serde_json::Value::Object(kubernetes)) = object.get_mut("kubernetes") else {
+        return;
+    };
+    kubernetes.remove("exposure");
+    if kubernetes.is_empty() {
+        object.remove("kubernetes");
+    }
+}
+
+#[derive(Default)]
+struct EksCustomDomainDefaults {
+    domain_name: Option<String>,
+    certificate_arn: Option<String>,
+}
+
+impl EksCustomDomainDefaults {
+    fn from_settings(settings: Option<&KubernetesSettings>) -> Self {
+        let Some(KubernetesSettings {
+            exposure:
+                Some(KubernetesExposureSettings::Custom {
+                    domain,
+                    certificate,
+                    ..
+                }),
+            ..
+        }) = settings
+        else {
+            return Self::default();
+        };
+
+        Self {
+            domain_name: Some(domain.clone()),
+            certificate_arn: match certificate {
+                KubernetesCertificateMode::AwsAcmArn { certificate_arn } => {
+                    Some(certificate_arn.clone())
+                }
+                _ => None,
+            },
+        }
+    }
+}
+
 fn aws_region_variable_block(supported_aws_regions: &[String]) -> Block {
     let default_region = supported_aws_regions
         .first()
@@ -1181,7 +1304,7 @@ fn aws_region_variable_block(supported_aws_regions: &[String]) -> Block {
                 attr(
                     "error_message",
                     Expression::String(format!(
-                        "aws_region must be one of the AWS regions supported by this Alien environment: {regions}."
+                        "aws_region must be one of the AWS regions supported by this environment: {regions}."
                     )),
                 ),
             ],
@@ -1246,6 +1369,48 @@ fn bool_variable_block(name: &str, description: &str, default: Option<bool>) -> 
     }
 }
 
+fn string_enum_variable_block(
+    name: &str,
+    description: &str,
+    default: &str,
+    allowed_values: &[&str],
+) -> Block {
+    let allowed = Expression::Array(
+        allowed_values
+            .iter()
+            .map(|value| Expression::String((*value).to_string()))
+            .collect(),
+    );
+    let allowed_text = allowed_values.join(", ");
+    Block {
+        identifier: Identifier::sanitized("variable"),
+        labels: vec![BlockLabel::String(name.to_string())],
+        body: Body::from(vec![
+            attr("type", expr::raw("string")),
+            attr("description", Expression::String(description.to_string())),
+            attr("default", Expression::String(default.to_string())),
+            nested(block(
+                "validation",
+                [
+                    attr(
+                        "condition",
+                        Expression::FuncCall(Box::new(
+                            hcl::expr::FuncCall::builder(Identifier::sanitized("contains"))
+                                .arg(allowed)
+                                .arg(expr::raw(format!("var.{name}")))
+                                .build(),
+                        )),
+                    ),
+                    attr(
+                        "error_message",
+                        Expression::String(format!("{name} must be one of: {allowed_text}.")),
+                    ),
+                ],
+            )),
+        ]),
+    }
+}
+
 fn variable_block(
     name: &str,
     description: &str,
@@ -1266,6 +1431,44 @@ fn variable_block(
         identifier: Identifier::sanitized("variable"),
         labels: vec![BlockLabel::String(name.to_string())],
         body: Body::from(body),
+    }
+}
+
+fn custom_domain_certificate_arn_variable_block(default: String) -> Block {
+    Block {
+        identifier: Identifier::sanitized("variable"),
+        labels: vec![BlockLabel::String(
+            "custom_domain_certificate_arn".to_string(),
+        )],
+        body: Body::from(vec![
+            attr("type", expr::raw("string")),
+            attr(
+                "description",
+                Expression::String(
+                    "ACM certificate ARN for custom_domain_name. Required when custom_domain_name is set."
+                        .to_string(),
+                ),
+            ),
+            attr("default", Expression::String(default)),
+            nested(block(
+                "validation",
+                [
+                    attr(
+                        "condition",
+                        expr::raw(
+                            r#"var.custom_domain_certificate_arn == "" ? var.custom_domain_name == "" : can(regex("^arn:aws(-[a-z]+)?:acm:[a-z0-9-]+:[0-9]{12}:certificate/.+$", var.custom_domain_certificate_arn))"#,
+                        ),
+                    ),
+                    attr(
+                        "error_message",
+                        Expression::String(
+                            "custom_domain_certificate_arn must be a valid AWS ACM certificate ARN when custom_domain_name is set."
+                                .to_string(),
+                        ),
+                    ),
+                ],
+            )),
+        ]),
     }
 }
 
@@ -1424,7 +1627,7 @@ fn resource_prefix_body() -> Body {
 fn locals_body(
     target: TerraformTarget,
     stack_settings: &StackSettings,
-    imported_resources: Vec<Expression>,
+    registration_resources: Vec<Expression>,
     extra: &IndexMap<String, Expression>,
     has_remote_management: bool,
 ) -> Result<Body> {
@@ -1462,24 +1665,45 @@ fn locals_body(
     body.push(attr("deployment_region", region_expression(target)));
     body.push(attr(
         "deployment_management_config",
-        if has_remote_management && stack_settings.deployment_model == DeploymentModel::Push {
+        if has_remote_management {
             management_config_expression(target)
         } else {
             expr::raw("null")
         },
     ));
     if target.is_kubernetes() {
-        if !extra.contains_key("kubernetes_exposure") {
+        let generated_kubernetes_exposure = extra
+            .get("kubernetes_exposure")
+            .cloned()
+            .unwrap_or_else(|| {
+                expr::object([("mode", Expression::String("disabled".to_string()))])
+            });
+        if matches!(target, TerraformTarget::Eks) {
+            body.push(attr(
+                "generated_kubernetes_exposure",
+                generated_kubernetes_exposure,
+            ));
             body.push(attr(
                 "kubernetes_exposure",
-                expr::object([("mode", Expression::String("disabled".to_string()))]),
+                expr::raw(
+                    r#"jsondecode(var.custom_domain_name == "" ? jsonencode(local.generated_kubernetes_exposure) : jsonencode(merge(local.generated_kubernetes_exposure, {
+  mode   = "custom"
+  domain = var.custom_domain_name
+  certificate = {
+    mode           = "awsAcmArn"
+    certificateArn = var.custom_domain_certificate_arn
+  }
+})))"#,
+                ),
             ));
+        } else {
+            body.push(attr("kubernetes_exposure", generated_kubernetes_exposure));
         }
         body.push(attr(
             "deployment_kubernetes_settings",
             expr::raw(
-                r#"merge(try(jsondecode(var.stack_settings_json).kubernetes, {}), {
-  exposure = jsondecode(try(jsondecode(var.stack_settings_json).kubernetes.exposure, null) == null ? jsonencode(local.kubernetes_exposure) : jsonencode(jsondecode(var.stack_settings_json).kubernetes.exposure))
+                r#"merge(try(jsondecode(var.advanced_settings_json).kubernetes, {}), {
+  exposure = jsondecode(try(jsondecode(var.advanced_settings_json).kubernetes.exposure, null) == null ? jsonencode(local.kubernetes_exposure) : jsonencode(jsondecode(var.advanced_settings_json).kubernetes.exposure))
 })"#,
             ),
         ));
@@ -1490,7 +1714,7 @@ fn locals_body(
     ));
     body.push(attr(
         "deployment_resources",
-        Expression::Array(imported_resources),
+        Expression::Array(registration_resources),
     ));
 
     if target.is_kubernetes() {
@@ -1505,6 +1729,9 @@ fn locals_body(
     }
 
     for (name, value) in extra {
+        if target.is_kubernetes() && name == "kubernetes_exposure" {
+            continue;
+        }
         body.push(attr(name, value.clone()));
     }
     Ok(Body::from(vec![Structure::Block(Block {
@@ -1524,33 +1751,30 @@ fn region_expression(target: TerraformTarget) -> Expression {
 }
 
 fn management_config_expression(target: TerraformTarget) -> Expression {
-    let mut object: indexmap::IndexMap<&str, Expression> = indexmap::IndexMap::new();
-    object.insert(
-        "platform",
-        Expression::String(target.cloud_platform().as_str().to_string()),
-    );
     match target.cloud_platform() {
-        alien_core::Platform::Aws => {
-            object.insert("managingRoleArn", expr::raw("var.managing_role_arn"));
-        }
-        alien_core::Platform::Gcp => {
-            object.insert("projectId", expr::raw("var.gcp_project"));
-            object.insert(
-                "serviceAccountEmail",
-                expr::raw("var.managing_service_account_email"),
-            );
-        }
-        alien_core::Platform::Azure => {
-            object.insert(
-                "managingTenantId",
-                expr::raw("var.azure_managing_tenant_id"),
-            );
-            object.insert("oidcIssuer", expr::raw("var.azure_oidc_issuer"));
-            object.insert("oidcSubject", expr::raw("var.azure_oidc_subject"));
-        }
-        _ => {}
+        alien_core::Platform::Aws => expr::raw(
+            r#"var.deployment_model == "push" ? {
+  platform        = "aws"
+  managingRoleArn = var.managing_role_arn
+} : null"#,
+        ),
+        alien_core::Platform::Gcp => expr::raw(
+            r#"var.deployment_model == "push" ? {
+  platform            = "gcp"
+  projectId           = var.gcp_project
+  serviceAccountEmail = var.managing_service_account_email
+} : null"#,
+        ),
+        alien_core::Platform::Azure => expr::raw(
+            r#"var.deployment_model == "push" ? {
+  platform          = "azure"
+  managingTenantId  = var.azure_managing_tenant_id
+  oidcIssuer        = var.azure_oidc_issuer
+  oidcSubject       = var.azure_oidc_subject
+} : null"#,
+        ),
+        platform => Expression::String(platform.as_str().to_string()),
     }
-    expr::object(object.into_iter().map(|(k, v)| (k, v)))
 }
 
 fn stack_settings_expression(
@@ -1567,7 +1791,11 @@ fn stack_settings_expression(
                 ""
             };
             return expr::raw(format!(
-                r#"merge(jsondecode(var.stack_settings_json), {{
+                r#"merge(jsondecode(var.advanced_settings_json), {{
+  deploymentModel = var.deployment_model
+  updates    = var.updates_mode
+  telemetry  = var.telemetry_mode
+  heartbeats = var.heartbeats_mode
   network = jsondecode(
     var.network_mode == "create-new" ? jsonencode({{
       type              = "create"
@@ -1596,7 +1824,11 @@ fn stack_settings_expression(
                 ""
             };
             return expr::raw(format!(
-                r#"merge(jsondecode(var.stack_settings_json), {{
+                r#"merge(jsondecode(var.advanced_settings_json), {{
+  deploymentModel = var.deployment_model
+  updates    = var.updates_mode
+  telemetry  = var.telemetry_mode
+  heartbeats = var.heartbeats_mode
   network = jsondecode(
     var.network_mode == "create-new" ? jsonencode({{
       type              = "create"
@@ -1617,12 +1849,54 @@ fn stack_settings_expression(
         }
         _ if target.is_kubernetes() => {
             return expr::raw(
-                r#"merge(jsondecode(var.stack_settings_json), {
+                r#"merge(jsondecode(var.advanced_settings_json), {
+  deploymentModel = var.deployment_model
+  updates    = var.updates_mode
+  telemetry  = var.telemetry_mode
+  heartbeats = var.heartbeats_mode
   kubernetes = local.deployment_kubernetes_settings
 })"#,
             );
         }
-        _ => return expr::raw("jsondecode(var.stack_settings_json)"),
+        _ => {
+            return expr::raw(
+                r#"merge(jsondecode(var.advanced_settings_json), {
+  deploymentModel = var.deployment_model
+  updates    = var.updates_mode
+  telemetry  = var.telemetry_mode
+  heartbeats = var.heartbeats_mode
+})"#,
+            );
+        }
+    }
+}
+
+fn deployment_model(model: DeploymentModel) -> &'static str {
+    match model {
+        DeploymentModel::Push => "push",
+        DeploymentModel::Pull => "pull",
+    }
+}
+
+fn updates_mode(mode: UpdatesMode) -> &'static str {
+    match mode {
+        UpdatesMode::Auto => "auto",
+        UpdatesMode::ApprovalRequired => "approval-required",
+    }
+}
+
+fn telemetry_mode(mode: TelemetryMode) -> &'static str {
+    match mode {
+        TelemetryMode::Off => "off",
+        TelemetryMode::Auto => "auto",
+        TelemetryMode::ApprovalRequired => "approval-required",
+    }
+}
+
+fn heartbeats_mode(mode: HeartbeatsMode) -> &'static str {
+    match mode {
+        HeartbeatsMode::Off => "off",
+        HeartbeatsMode::On => "on",
     }
 }
 
@@ -1641,7 +1915,7 @@ fn has_dynamic_gcp_network_settings(network: Option<&NetworkSettings>) -> bool {
     matches!(network, Some(NetworkSettings::Create { .. }))
 }
 
-fn import_body(
+fn registration_body(
     target: TerraformTarget,
     registration: Option<&TerraformRegistration>,
     depends_on: &[Expression],
@@ -1679,7 +1953,7 @@ fn import_body(
             ),
             attr("platform", expr::raw("local.deployment_platform")),
             attr("region", expr::raw("local.deployment_region")),
-            attr("manager_url", expr::raw("var.manager_url")),
+            attr("management_url", expr::raw("var.management_url")),
             attr(
                 "management_config",
                 expr::raw("local.deployment_management_config"),
@@ -1744,7 +2018,7 @@ fn import_body(
                             .unwrap_or_default(),
                     ))),
                 ),
-                ("manager_url", expr::raw("var.manager_url")),
+                ("management_url", expr::raw("var.management_url")),
                 (
                     "management_config",
                     expr::raw("local.deployment_management_config"),
@@ -1766,7 +2040,7 @@ fn import_body(
 
     Body::from(vec![Structure::Block(resource_block(
         "terraform_data",
-        "deployment_import",
+        "deployment_registration",
         body,
     ))])
 }
@@ -1838,7 +2112,7 @@ fn outputs_body(target: TerraformTarget, registration: Option<&TerraformRegistra
             Expression::Number(hcl::Number::from(i64::from(
                 CURRENT_SETUP_IMPORT_FORMAT_VERSION,
             ))),
-            "Setup import payload format version.",
+            "Setup registration payload format version.",
         ),
         (
             "deployment_setup_fingerprint",
@@ -1861,17 +2135,17 @@ fn outputs_body(target: TerraformTarget, registration: Option<&TerraformRegistra
         (
             "deployment_management_config",
             expr::raw("jsonencode(local.deployment_management_config)"),
-            "Manager import ManagementConfig JSON.",
+            "Deployment registration management configuration JSON.",
         ),
         (
             "deployment_stack_settings",
             expr::raw("jsonencode(local.deployment_settings)"),
-            "Manager import StackSettings JSON.",
+            "Deployment registration settings JSON.",
         ),
         (
             "deployment_resources",
             expr::raw("jsonencode(local.deployment_resources)"),
-            "Manager import resources JSON.",
+            "Deployment registration resource metadata JSON.",
         ),
     ];
     if let Some(registration) = registration {
@@ -1881,7 +2155,7 @@ fn outputs_body(target: TerraformTarget, registration: Option<&TerraformRegistra
                 "{}.this.deployment_id",
                 registration.provider_resource_type()
             )),
-            "Manager deployment id assigned by the Terraform registration provider.",
+            "Deployment id assigned by the Terraform registration provider.",
         ));
         outputs.push((
             "deployment_token",
@@ -1940,34 +2214,137 @@ fn readme_md(
     target: TerraformTarget,
     registration: Option<&TerraformRegistration>,
     display_name: Option<&str>,
+    stack_settings: &StackSettings,
+    helm_install: Option<&TerraformHelmInstall>,
 ) -> String {
-    let apply_args = if registration.is_some() {
-        "-var='token=...'".to_string()
+    let required_env = if registration.is_some() {
+        "export TF_VAR_token=\"...\"".to_string()
     } else {
-        format!("-var='name={}' -var='token=...'", stack.id())
+        format!(
+            "export TF_VAR_name=\"{}\"\nexport TF_VAR_token=\"...\"",
+            stack.id()
+        )
     };
     let registration_note = registration
-        .map(|registration| {
-            format!(
-                "Self-registering setup packages create `{}`; other renderers can use `deployment_management_config` / `deployment_stack_settings` / `deployment_resources` with their own registration flow.\n",
-                registration.provider_resource_type()
-            )
+        .map(|_| {
+            "Terraform registers the deployment after the setup resources are ready. The registration step consumes `local.deployment_management_config`, `local.deployment_settings`, and `local.deployment_resources`; keep those values intact if your organization wraps this module.\n".to_string()
         })
         .unwrap_or_else(|| {
-            "This module exposes `deployment_management_config` / `deployment_stack_settings` / `deployment_resources` for external registration flows.\n".to_string()
+            "This module exposes `deployment_management_config`, `deployment_stack_settings`, and `deployment_resources` outputs for registration flows managed outside Terraform.\n".to_string()
         });
 
     let display_name = display_name.unwrap_or_else(|| stack.id());
+    let mut input_sections = vec![readme_required_inputs(registration.is_some())];
+    input_sections.push(readme_common_inputs());
+    if matches!(target.cloud_platform(), alien_core::Platform::Aws) {
+        input_sections.push(readme_aws_inputs());
+    }
+    if matches!(target.cloud_platform(), alien_core::Platform::Gcp) {
+        input_sections.push(readme_gcp_inputs());
+    }
+    if matches!(target.cloud_platform(), alien_core::Platform::Azure) {
+        input_sections.push(readme_azure_inputs(target));
+    }
+    if has_dynamic_aws_network_settings(stack_settings.network.as_ref())
+        || has_dynamic_gcp_network_settings(stack_settings.network.as_ref())
+    {
+        input_sections.push(readme_network_inputs(target));
+    }
+    if target.is_kubernetes() {
+        input_sections.push(readme_kubernetes_inputs(
+            target,
+            registration.is_some(),
+            helm_install,
+        ));
+    }
+    let inputs = input_sections.join("\n\n");
     format!(
-        "# Terraform module - {}\n\n\
-Target: `{}`.\n\n\
-Run:\n\n\
-```bash\nterraform init -backend=false\nterraform validate\nterraform apply {}\n```\n\n\
-{}",
-        display_name,
-        target.name(),
-        apply_args,
-        registration_note
+        "# Deployment setup - {display_name}\n\n\
+Target: `{target}`.\n\n\
+This module creates setup-owned infrastructure, grants the management access needed after setup, and prepares deployment registration metadata. Review the generated `.tf` files before applying; each resource file maps to one setup resource.\n\n\
+## Inputs\n\n\
+{inputs}\n\n\
+## Run\n\n\
+Use your organization's normal backend and approval workflow. A typical local review looks like:\n\n\
+```bash\n{required_env}\nterraform init\nterraform validate\nterraform plan -out=tfplan\nterraform apply tfplan\n```\n\n\
+## Registration\n\n\
+{registration_note}\n\
+## Outputs\n\n\
+- `deployment_management_config`: management endpoint and credential-boundary metadata.\n\
+- `deployment_stack_settings`: deployment settings JSON assembled from typed variables and `advanced_settings_json`.\n\
+- `deployment_resources`: setup-owned resource metadata handed to the deployment runtime.\n\
+- `deployment_id` and `deployment_token`: emitted only when Terraform performs registration.",
+        display_name = display_name,
+        target = target.name(),
+        inputs = inputs,
+        required_env = required_env,
+        registration_note = registration_note
+    )
+}
+
+fn readme_required_inputs(has_registration: bool) -> String {
+    let name = if has_registration {
+        "- `name`: optional display name. Defaults to the package name."
+    } else {
+        "- `name`: deployment name to include in the registration metadata."
+    };
+    format!("Required:\n\n- `token`: install token from the setup page.\n{name}")
+}
+
+fn readme_common_inputs() -> String {
+    "Common optional settings:\n\n- `resource_prefix`: stable physical-name prefix. Leave empty to generate one.\n- `management_url`: optional management endpoint used by pull-style runtimes.\n- `deployment_model`: `push` or `pull`.\n- `updates_mode`: `auto` or `approval-required`.\n- `telemetry_mode`: `off`, `auto`, or `approval-required`.\n- `heartbeats_mode`: `off` or `on`.\n- `advanced_settings_json`: advanced deployment settings JSON. Most installs should use typed variables instead.".to_string()
+}
+
+fn readme_aws_inputs() -> String {
+    "AWS settings:\n\n- `aws_region`: AWS region used by the provider.\n- `managing_role_arn`: management identity allowed to assume setup-created roles.\n- `managing_account_id`: account that hosts application container images. Empty disables scoped cross-account image-pull grants.".to_string()
+}
+
+fn readme_gcp_inputs() -> String {
+    "GCP settings:\n\n- `gcp_project`: target GCP project ID.\n- `gcp_region`: target GCP region.\n- `managing_service_account_email`: management service account allowed to impersonate setup-created identities.\n- `gcp_manage_custom_roles`: whether this module creates project custom roles.\n- `gcp_custom_role_prefix`: custom role ID prefix when roles are managed outside this module.".to_string()
+}
+
+fn readme_azure_inputs(target: TerraformTarget) -> String {
+    let tenant = if target == TerraformTarget::Aks {
+        "\n- `azure_tenant_id`: tenant ID for target AKS Kubernetes API identities."
+    } else {
+        ""
+    };
+    format!(
+        "Azure settings:\n\n- `azure_subscription_id`: target subscription ID.\n- `azure_location`: Azure location.\n- `azure_resource_group_name`: target resource group name.{tenant}\n- `azure_managing_tenant_id`, `azure_oidc_issuer`, `azure_oidc_subject`: management identity trust settings when this setup grants Azure management access."
+    )
+}
+
+fn readme_network_inputs(target: TerraformTarget) -> String {
+    match target.cloud_platform() {
+        alien_core::Platform::Aws => "Network settings:\n\n- `network_mode`: `create-new`, `use-existing`, or `use-default`.\n- `vpc_cidr`, `availability_zones`: used with `create-new`.\n- `vpc_id`, `public_subnet_ids`, `private_subnet_ids`, `security_group_ids`: required with `use-existing`.".to_string(),
+        alien_core::Platform::Gcp => "Network settings:\n\n- `network_mode`: `create-new`, `use-existing`, or `use-default`.\n- `network_cidr`, `availability_zones`: used with `create-new`.\n- `network_name`, `subnet_name`, `network_region`: required with `use-existing`.".to_string(),
+        _ => String::new(),
+    }
+}
+
+fn readme_kubernetes_inputs(
+    target: TerraformTarget,
+    has_registration: bool,
+    helm_install: Option<&TerraformHelmInstall>,
+) -> String {
+    let cluster_name = match target {
+        TerraformTarget::Eks => "\n- `eks_cluster_name`: existing EKS cluster name when `kubernetes_cluster_mode = \"existing\"`.",
+        TerraformTarget::Gke => "\n- `gke_cluster_name`, `gke_cluster_location`: existing GKE cluster when `kubernetes_cluster_mode = \"existing\"`.",
+        TerraformTarget::Aks => "\n- `aks_cluster_name`, `aks_cluster_resource_group_name`: existing AKS cluster when `kubernetes_cluster_mode = \"existing\"`.",
+        _ => "",
+    };
+    let helm = if has_registration && helm_install.is_some() {
+        "\n- `helm_install_enabled`: set to `false` to use Terraform only for infrastructure and install the Helm chart separately.\n- `helm_release_name`, `helm_chart`: Helm release and chart reference used when Terraform installs the Operator chart."
+    } else {
+        ""
+    };
+    let exposure = if target == TerraformTarget::Eks {
+        "\n- `custom_domain_name`, `custom_domain_certificate_arn`: optional EKS public route hostname and ACM certificate ARN. Leave empty to use the generated load balancer hostname."
+    } else {
+        ""
+    };
+    format!(
+        "Kubernetes settings:\n\n- `kubernetes_cluster_mode`: `create` or `existing`.\n- `kubernetes_namespace`: namespace for runtime resources.{cluster_name}{exposure}{helm}"
     )
 }
 
@@ -2010,9 +2387,13 @@ mod tests {
         assert!(versions.contains("example_app ="));
         assert!(versions.contains("registry.example.com/acme/example-app"));
 
-        let import = render_body(import_body(TerraformTarget::Aws, Some(&registration), &[]))
-            .expect("registration import render");
-        assert!(import.contains("resource \"example_app_deployment\" \"this\""));
+        let registration_body = render_body(registration_body(
+            TerraformTarget::Aws,
+            Some(&registration),
+            &[],
+        ))
+        .expect("registration render");
+        assert!(registration_body.contains("resource \"example_app_deployment\" \"this\""));
 
         let outputs =
             render_body(outputs_body(TerraformTarget::Aws, Some(&registration))).expect("outputs");
@@ -2037,11 +2418,11 @@ mod tests {
                 ResourceLifecycle::Live,
                 vec![ResourceRef::new(
                     RemoteStackManagement::RESOURCE_TYPE,
-                    "remote-stack-management",
+                    "management",
                 )],
             )
             .add(
-                RemoteStackManagement::new("remote-stack-management".to_string()).build(),
+                RemoteStackManagement::new("management".to_string()).build(),
                 ResourceLifecycle::Frozen,
             )
             .build();
@@ -2069,7 +2450,7 @@ mod tests {
             },
         );
         per_resource.insert(
-            "remote-stack-management".to_string(),
+            "management".to_string(),
             TfFragment {
                 resource_blocks: vec![resource_block(
                     "google_project_iam_member",

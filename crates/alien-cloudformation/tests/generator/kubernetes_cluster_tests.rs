@@ -78,7 +78,7 @@ fn eks_target_remote_management_uses_manager_service_account_irsa_for_pull() {
             ResourceLifecycle::Frozen,
         )
         .add(
-            RemoteStackManagement::new("remote-stack-management".to_string()).build(),
+            RemoteStackManagement::new("management".to_string()).build(),
             ResourceLifecycle::Frozen,
         )
         .build();
@@ -98,7 +98,7 @@ fn eks_target_remote_management_uses_manager_service_account_irsa_for_pull() {
 
     assert!(yaml.contains("DeploymentManagementConfig:"));
     assert!(yaml.contains("Value: 'null'") || yaml.contains("Value: null"));
-    assert!(yaml.contains("RemoteStackManagementRole:"));
+    assert!(yaml.contains("ManagementRole:"));
     assert!(yaml.contains("sts:AssumeRoleWithWebIdentity"));
     assert!(yaml.contains("system:serviceaccount:alien:${AWS::StackName}-manager-sa"));
 }
@@ -191,6 +191,52 @@ fn eks_target_preserves_configured_kubernetes_exposure() {
     assert!(yaml.contains("mode: none"));
     assert!(yaml.contains("ingressClassName: custom-alb"));
     assert!(!yaml.contains("managedAcmImport"));
+}
+
+#[test]
+fn eks_custom_domain_requires_acm_certificate_arn() {
+    let stack = Stack::new("kubernetes".to_string())
+        .add(
+            KubernetesCluster::new("kubernetes".to_string())
+                .provider(KubernetesClusterProvider::Eks)
+                .ownership(KubernetesClusterOwnership::Managed)
+                .namespace("default".to_string())
+                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    let yaml = render_built_ins_target(
+        &stack,
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        CloudFormationTarget::Eks,
+        "kubernetes",
+        "eks custom domain certificate validation",
+    );
+    let template: serde_json::Value =
+        serde_yaml::from_str(&yaml).expect("template YAML should parse");
+
+    assert_eq!(
+        template["Parameters"]["CertificateArn"]["AllowedPattern"],
+        serde_json::Value::String(
+            "^$|^arn:aws(-[a-z]+)?:acm:[a-z0-9-]+:[0-9]{12}:certificate/.+$".to_string()
+        )
+    );
+
+    let rule = &template["Rules"]["CustomDomainCertificate"]["Assertions"][0];
+    assert_eq!(
+        rule["AssertDescription"],
+        serde_json::Value::String(
+            "CertificateArn must be set to an AWS ACM certificate ARN when DomainName is set."
+                .to_string()
+        )
+    );
+    assert!(
+        rule["Assert"]["Fn::Or"].is_array(),
+        "custom-domain certificate rule should be a CloudFormation Fn::Or assertion"
+    );
 }
 
 #[test]

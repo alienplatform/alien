@@ -62,6 +62,7 @@ export type CreateManagerResponseAwsUnion3 = CreateManagerResponseAws3 | any;
 
 export type CreateManagerResponseAzure3 = {
   keyVaultCertificateId: string;
+  keyVaultResourceId?: string | null | undefined;
 };
 
 export type CreateManagerResponseAzureUnion3 =
@@ -887,6 +888,10 @@ export type CreateManagerResponseTypeByoVnetAzure3 = ClosedEnum<
 
 export type CreateManagerResponseNetworkByoVnetAzure3 = {
   /**
+   * Name of the dedicated classic Application Gateway subnet within the VNet.
+   */
+  applicationGatewaySubnetName?: string | null | undefined;
+  /**
    * Name of the private subnet within the VNet
    */
   privateSubnetName: string;
@@ -1120,6 +1125,7 @@ export type CreateManagerResponseAwsUnion2 = CreateManagerResponseAws2 | any;
 
 export type CreateManagerResponseAzure2 = {
   keyVaultCertificateId: string;
+  keyVaultResourceId?: string | null | undefined;
 };
 
 export type CreateManagerResponseAzureUnion2 =
@@ -1945,6 +1951,10 @@ export type CreateManagerResponseTypeByoVnetAzure2 = ClosedEnum<
 
 export type CreateManagerResponseNetworkByoVnetAzure2 = {
   /**
+   * Name of the dedicated classic Application Gateway subnet within the VNet.
+   */
+  applicationGatewaySubnetName?: string | null | undefined;
+  /**
    * Name of the private subnet within the VNet
    */
   privateSubnetName: string;
@@ -2173,6 +2183,7 @@ export type CreateManagerResponseAwsUnion1 = CreateManagerResponseAws1 | any;
 
 export type CreateManagerResponseAzure1 = {
   keyVaultCertificateId: string;
+  keyVaultResourceId?: string | null | undefined;
 };
 
 export type CreateManagerResponseAzureUnion1 =
@@ -2998,6 +3009,10 @@ export type CreateManagerResponseTypeByoVnetAzure1 = ClosedEnum<
 
 export type CreateManagerResponseNetworkByoVnetAzure1 = {
   /**
+   * Name of the dedicated classic Application Gateway subnet within the VNet.
+   */
+  applicationGatewaySubnetName?: string | null | undefined;
+  /**
    * Name of the private subnet within the VNet
    */
   privateSubnetName: string;
@@ -3327,6 +3342,7 @@ export const CreateManagerResponseAzure3$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   keyVaultCertificateId: z.string(),
+  keyVaultResourceId: z.nullable(z.string()).optional(),
 });
 
 export function createManagerResponseAzure3FromJSON(
@@ -4783,12 +4799,14 @@ export const CreateManagerResponseNetworkByoVnetAzure3$inboundSchema: z.ZodType<
   CreateManagerResponseNetworkByoVnetAzure3,
   unknown
 > = z.object({
+  application_gateway_subnet_name: z.nullable(z.string()).optional(),
   private_subnet_name: z.string(),
   public_subnet_name: z.string(),
   type: CreateManagerResponseTypeByoVnetAzure3$inboundSchema,
   vnet_resource_id: z.string(),
 }).transform((v) => {
   return remap$(v, {
+    "application_gateway_subnet_name": "applicationGatewaySubnetName",
     "private_subnet_name": "privateSubnetName",
     "public_subnet_name": "publicSubnetName",
     "vnet_resource_id": "vnetResourceId",
@@ -5095,6 +5113,7 @@ export const CreateManagerResponseAzure2$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   keyVaultCertificateId: z.string(),
+  keyVaultResourceId: z.nullable(z.string()).optional(),
 });
 
 export function createManagerResponseAzure2FromJSON(
@@ -6551,12 +6570,14 @@ export const CreateManagerResponseNetworkByoVnetAzure2$inboundSchema: z.ZodType<
   CreateManagerResponseNetworkByoVnetAzure2,
   unknown
 > = z.object({
+  application_gateway_subnet_name: z.nullable(z.string()).optional(),
   private_subnet_name: z.string(),
   public_subnet_name: z.string(),
   type: CreateManagerResponseTypeByoVnetAzure2$inboundSchema,
   vnet_resource_id: z.string(),
 }).transform((v) => {
   return remap$(v, {
+    "application_gateway_subnet_name": "applicationGatewaySubnetName",
     "private_subnet_name": "privateSubnetName",
     "public_subnet_name": "publicSubnetName",
     "vnet_resource_id": "vnetResourceId",
@@ -6858,6 +6879,7 @@ export const CreateManagerResponseAzure1$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   keyVaultCertificateId: z.string(),
+  keyVaultResourceId: z.nullable(z.string()).optional(),
 });
 
 export function createManagerResponseAzure1FromJSON(
@@ -8314,12 +8336,14 @@ export const CreateManagerResponseNetworkByoVnetAzure1$inboundSchema: z.ZodType<
   CreateManagerResponseNetworkByoVnetAzure1,
   unknown
 > = z.object({
+  application_gateway_subnet_name: z.nullable(z.string()).optional(),
   private_subnet_name: z.string(),
   public_subnet_name: z.string(),
   type: CreateManagerResponseTypeByoVnetAzure1$inboundSchema,
   vnet_resource_id: z.string(),
 }).transform((v) => {
   return remap$(v, {
+    "application_gateway_subnet_name": "applicationGatewaySubnetName",
     "private_subnet_name": "privateSubnetName",
     "public_subnet_name": "publicSubnetName",
     "vnet_resource_id": "vnetResourceId",

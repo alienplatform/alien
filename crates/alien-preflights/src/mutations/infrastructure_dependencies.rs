@@ -35,7 +35,7 @@ impl StackMutation for InfrastructureDependenciesMutation {
         matches!(
             stack_state.platform,
             Platform::Azure | Platform::Gcp | Platform::Kubernetes
-        ) || stack.resources.contains_key("remote-stack-management")
+        ) || remote_stack_management_id(stack).is_some()
     }
 
     async fn mutate(
@@ -104,11 +104,13 @@ impl InfrastructureDependenciesMutation {
             ));
         }
 
-        if stack.resources.contains_key("remote-stack-management") && !is_infrastructure_resource {
-            dependencies.push(ResourceRef::new(
-                RemoteStackManagement::RESOURCE_TYPE,
-                "remote-stack-management",
-            ));
+        if !is_infrastructure_resource {
+            if let Some(management_id) = remote_stack_management_id(stack) {
+                dependencies.push(ResourceRef::new(
+                    RemoteStackManagement::RESOURCE_TYPE,
+                    management_id,
+                ));
+            }
         }
 
         if !is_infrastructure_resource {
@@ -345,6 +347,14 @@ impl InfrastructureDependenciesMutation {
     }
 }
 
+fn remote_stack_management_id(stack: &Stack) -> Option<&str> {
+    stack
+        .resources
+        .iter()
+        .find(|(_, entry)| entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE)
+        .map(|(resource_id, _)| resource_id.as_str())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -449,7 +459,7 @@ mod tests {
     async fn kubernetes_cluster_does_not_depend_on_remote_management() {
         let stack = Stack::new("test-stack".to_string())
             .add(
-                RemoteStackManagement::new("remote-stack-management".to_string()).build(),
+                RemoteStackManagement::new("management".to_string()).build(),
                 ResourceLifecycle::Frozen,
             )
             .add(
@@ -478,10 +488,8 @@ mod tests {
             .mutate(stack, &stack_state, &config)
             .await
             .unwrap();
-        let remote_management = ResourceRef::new(
-            RemoteStackManagement::RESOURCE_TYPE,
-            "remote-stack-management",
-        );
+        let remote_management =
+            ResourceRef::new(RemoteStackManagement::RESOURCE_TYPE, "management");
 
         assert!(!result
             .resources
