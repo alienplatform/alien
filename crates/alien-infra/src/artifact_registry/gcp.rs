@@ -144,7 +144,7 @@ impl GcpArtifactRegistryController {
 
                 let repository = Repository {
                     format: Some(RepositoryFormat::Docker),
-                    description: Some(format!("Alien Artifact Registry for {}", config.id)),
+                    description: Some(format!("Runtime Artifact Registry for {}", config.id)),
                     ..Default::default()
                 };
 
@@ -271,7 +271,7 @@ impl GcpArtifactRegistryController {
 
         let service_account = ServiceAccount::builder()
             .display_name(format!(
-                "Alien Artifact Registry pull SA for registry {}",
+                "Runtime Artifact Registry pull SA for registry {}",
                 config.id
             ))
             .description(format!(
@@ -332,7 +332,7 @@ impl GcpArtifactRegistryController {
 
         let service_account = ServiceAccount::builder()
             .display_name(format!(
-                "Alien Artifact Registry push SA for registry {}",
+                "Runtime Artifact Registry push SA for registry {}",
                 config.id
             ))
             .description(format!(

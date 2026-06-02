@@ -182,7 +182,7 @@ resource "aws_s3_bucket" "assets" {
   bucket        = "${local.resource_prefix}-assets"
   force_destroy = true
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "assets"
     "resource-type" = "storage"
@@ -235,7 +235,7 @@ resource "aws_sqs_queue" "jobs" {
   visibility_timeout_seconds = 30
   message_retention_seconds  = 345600
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "jobs"
     "resource-type" = "queue"
@@ -273,7 +273,7 @@ resource "aws_dynamodb_table" "metadata" {
   }
 
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "metadata"
     "resource-type" = "kv"

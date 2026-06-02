@@ -815,12 +815,6 @@ async function run() {
         setupFingerprint: "<value>",
         setupFingerprintVersion: 688409,
         stackSettings: {},
-        managementConfig: {
-          managingTenantId: "<id>",
-          oidcIssuer: "<value>",
-          oidcSubject: "<value>",
-          platform: "azure",
-        },
         resources: [
           {
             id: "<id>",
@@ -876,12 +870,6 @@ async function run() {
         setupFingerprint: "<value>",
         setupFingerprintVersion: 688409,
         stackSettings: {},
-        managementConfig: {
-          managingTenantId: "<id>",
-          oidcIssuer: "<value>",
-          oidcSubject: "<value>",
-          platform: "azure",
-        },
         resources: [
           {
             id: "<id>",

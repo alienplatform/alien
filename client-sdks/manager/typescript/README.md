@@ -188,6 +188,7 @@ passthrough; single-tenant impls ignore it. See the trait doc on
 
 ### [Releases](docs/sdks/releases/README.md)
 
+* [listReleases](docs/sdks/releases/README.md#listreleases)
 * [createRelease](docs/sdks/releases/README.md#createrelease)
 * [getLatestRelease](docs/sdks/releases/README.md#getlatestrelease)
 * [getRelease](docs/sdks/releases/README.md#getrelease)
@@ -266,6 +267,7 @@ passthrough; single-tenant impls ignore it. See the trait doc on
 - [`releasesCreateRelease`](docs/sdks/releases/README.md#createrelease)
 - [`releasesGetLatestRelease`](docs/sdks/releases/README.md#getlatestrelease)
 - [`releasesGetRelease`](docs/sdks/releases/README.md#getrelease)
+- [`releasesListReleases`](docs/sdks/releases/README.md#listreleases)
 - [`stackImportStackImport`](docs/sdks/stackimport/README.md#stackimport) - `POST /v1/stack/import` — Inbound: deployment-group bearer.
 - [`syncAcquire`](docs/sdks/sync/README.md#acquire) - `POST /v1/sync/acquire` — Inbound: workspace / dg / deployment bearer.
 `caller: &Subject` is threaded into `DeploymentStore::acquire` so
@@ -426,7 +428,7 @@ run();
 
 
 **Inherit from [`AlienManagerError`](./src/models/errors/alienmanagererror.ts)**:
-* [`ErrorResponse`](./src/models/errors/errorresponse.ts): Error response wrapper for API endpoints. Applicable to 8 of 31 methods.*
+* [`ErrorResponse`](./src/models/errors/errorresponse.ts): Error response wrapper for API endpoints. Applicable to 8 of 32 methods.*
 * [`ResponseValidationError`](./src/models/errors/responsevalidationerror.ts): Type mismatch between the data returned from the server and the structure expected by the SDK. See `error.rawValue` for the raw value and `error.pretty()` for a nicely formatted multi-line string.
 
 </details>

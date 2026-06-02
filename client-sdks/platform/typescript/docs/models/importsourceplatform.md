@@ -1,13 +1,13 @@
-# ImportSourcePlatformEnum
+# ImportSourcePlatform
 
 Cloud platform of the imported stack
 
 ## Example Usage
 
 ```typescript
-import { ImportSourcePlatformEnum } from "@alienplatform/platform-api/models";
+import { ImportSourcePlatform } from "@alienplatform/platform-api/models";
 
-let value: ImportSourcePlatformEnum = "gcp";
+let value: ImportSourcePlatform = "gcp";
 ```
 
 ## Values

@@ -47,13 +47,11 @@ async fn test_remote_management_dependency_is_wired_after_all_mutations() {
         .await
         .unwrap();
 
-    let remote_management = alien_core::ResourceRef::new(
-        RemoteStackManagement::RESOURCE_TYPE,
-        "remote-stack-management",
-    );
+    let remote_management =
+        alien_core::ResourceRef::new(RemoteStackManagement::RESOURCE_TYPE, "management");
 
     assert!(
-        result.resources.contains_key("remote-stack-management"),
+        result.resources.contains_key("management"),
         "remote management should be added for managed AWS deployments"
     );
 
@@ -69,11 +67,7 @@ async fn test_remote_management_dependency_is_wired_after_all_mutations() {
         "storage should depend on remote management"
     );
 
-    let remote_management_deps = &result
-        .resources
-        .get("remote-stack-management")
-        .unwrap()
-        .dependencies;
+    let remote_management_deps = &result.resources.get("management").unwrap().dependencies;
     assert!(
         !remote_management_deps.contains(&remote_management),
         "remote management should not depend on itself"
@@ -120,10 +114,7 @@ async fn azure_remote_management_dependencies_do_not_cycle() {
         alien_core::AzureResourceGroup::RESOURCE_TYPE,
         "default-resource-group",
     );
-    let remote_management = ResourceRef::new(
-        RemoteStackManagement::RESOURCE_TYPE,
-        "remote-stack-management",
-    );
+    let remote_management = ResourceRef::new(RemoteStackManagement::RESOURCE_TYPE, "management");
     let service_bus_namespace = ResourceRef::new(
         alien_core::AzureServiceBusNamespace::RESOURCE_TYPE,
         "default-service-bus-namespace",
@@ -143,11 +134,7 @@ async fn azure_remote_management_dependencies_do_not_cycle() {
         "resource group must not depend on remote management"
     );
 
-    let remote_management_deps = &result
-        .resources
-        .get("remote-stack-management")
-        .unwrap()
-        .dependencies;
+    let remote_management_deps = &result.resources.get("management").unwrap().dependencies;
     assert!(
         remote_management_deps.contains(&resource_group),
         "remote management should be created inside the resource group"

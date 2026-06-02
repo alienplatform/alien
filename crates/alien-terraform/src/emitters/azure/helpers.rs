@@ -87,7 +87,7 @@ pub fn resource_prefix_template(suffix: &str) -> Expression {
 /// accepts arbitrary string values, no kebab-case constraint.
 pub fn tags(ctx: &EmitContext<'_>, alien_resource_type: &'static str) -> Expression {
     expr::object([
-        ("managed-by", Expression::String("deployment".to_string())),
+        ("managed-by", Expression::String("setup".to_string())),
         ("deployment", expr::raw("local.resource_prefix")),
         ("resource", Expression::String(ctx.resource_id.to_string())),
         (

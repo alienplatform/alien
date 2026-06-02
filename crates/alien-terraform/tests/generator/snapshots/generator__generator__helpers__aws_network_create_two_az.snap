@@ -214,7 +214,7 @@ resource "aws_vpc" "default_network" {
   enable_dns_support   = true
   enable_dns_hostnames = true
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "default-network"
     "resource-type" = "network"
@@ -225,7 +225,7 @@ resource "aws_internet_gateway" "default_network" {
   count  = var.network_mode == "create-new" ? 1 : 0
   vpc_id = aws_vpc.default_network[0].id
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "default-network"
     "resource-type" = "network"
@@ -239,7 +239,7 @@ resource "aws_subnet" "default_network_public" {
   availability_zone       = data.aws_availability_zones.available.names[count.index]
   map_public_ip_on_launch = true
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "default-network"
     "resource-type" = "network"
@@ -252,7 +252,7 @@ resource "aws_subnet" "default_network_private" {
   cidr_block        = cidrsubnet(aws_vpc.default_network[0].cidr_block, 8, count.index + var.availability_zones)
   availability_zone = data.aws_availability_zones.available.names[count.index]
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "default-network"
     "resource-type" = "network"
@@ -263,7 +263,7 @@ resource "aws_eip" "default_network_nat" {
   count  = var.network_mode == "create-new" ? 1 : 0
   domain = "vpc"
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "default-network"
     "resource-type" = "network"
@@ -275,7 +275,7 @@ resource "aws_nat_gateway" "default_network" {
   allocation_id = aws_eip.default_network_nat[0].id
   subnet_id     = aws_subnet.default_network_public[0].id
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "default-network"
     "resource-type" = "network"
@@ -292,7 +292,7 @@ resource "aws_route_table" "default_network_public" {
   }
 
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "default-network"
     "resource-type" = "network"
@@ -309,7 +309,7 @@ resource "aws_route_table" "default_network_private" {
   }
 
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "default-network"
     "resource-type" = "network"
@@ -344,7 +344,7 @@ resource "aws_security_group" "default_network_workload" {
   }
 
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "default-network"
     "resource-type" = "network"

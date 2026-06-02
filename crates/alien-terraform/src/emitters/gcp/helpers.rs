@@ -104,7 +104,7 @@ pub fn artifact_registry_repository_id_from_local(local_name: &str) -> Expressio
 pub fn labels(ctx: &EmitContext<'_>, alien_resource_type: &'static str) -> Expression {
     let resource_id_label = sanitize_label_value(ctx.resource_id);
     expr::object([
-        ("managed-by", Expression::String("deployment".to_string())),
+        ("managed-by", Expression::String("setup".to_string())),
         ("deployment", expr::raw("local.resource_prefix")),
         ("resource", Expression::String(resource_id_label)),
         (

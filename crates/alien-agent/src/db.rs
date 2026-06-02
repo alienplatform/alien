@@ -91,8 +91,9 @@ impl AgentDb {
         if encryption_key.len() != 64 || !encryption_key.chars().all(|c| c.is_ascii_hexdigit()) {
             return Err(alien_error::AlienError::new(
                 crate::error::ErrorData::ConfigurationError {
-                    message: "AGENT_ENCRYPTION_KEY must be exactly 64 hex characters (256 bits)"
-                        .to_string(),
+                    message:
+                        "AGENT_ENCRYPTION_KEY or OPERATOR_ENCRYPTION_KEY must be exactly 64 hex characters (256 bits)"
+                            .to_string(),
                 },
             ));
         }

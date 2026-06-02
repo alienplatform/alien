@@ -51,7 +51,7 @@ fn chart_values_include_kubernetes_exposure_contract() {
                     provider: None,
                 }),
                 certificate: KubernetesCertificateMode::ManagedTlsSecret {
-                    secret_name_template: "alien-{{ resourceId }}-tls".to_string(),
+                    secret_name_template: "deployment-{{ resourceId }}-tls".to_string(),
                 },
             }),
         }),
@@ -74,7 +74,7 @@ fn chart_values_include_kubernetes_exposure_contract() {
             },
             "certificate": {
                 "mode": "managedTlsSecret",
-                "secretNameTemplate": "alien-{{ resourceId }}-tls",
+                "secretNameTemplate": "deployment-{{ resourceId }}-tls",
             },
         }))
     );
@@ -137,7 +137,7 @@ fn chart_role_rbac_is_selected_by_kubernetes_route_api() {
                     provider: None,
                 }),
                 certificate: KubernetesCertificateMode::ManagedTlsSecret {
-                    secret_name_template: "alien-{{ resourceId }}-tls".to_string(),
+                    secret_name_template: "deployment-{{ resourceId }}-tls".to_string(),
                 },
             }),
         }),

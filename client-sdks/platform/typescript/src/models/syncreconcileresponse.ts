@@ -6846,6 +6846,17 @@ export type SyncReconcileResponseMonitoring = {
    * Example: "https://api.axiom.co/v1/metrics"
    */
   metricsEndpoint?: string | null | undefined;
+  /**
+   * Resource attributes attached to every OTLP signal emitted for this deployment.
+   *
+   * @remarks
+   *
+   * Platform managers use this for stable identity such as `alien.workspace_id`,
+   * `alien.project_id`, `alien.deployment_group_id`, and `alien.deployment_id`.
+   * Runtime-specific resource attributes such as `service.name` remain owned by
+   * the runtime/exporter.
+   */
+  resourceAttributes?: { [k: string]: string } | undefined;
 };
 
 export type SyncReconcileResponseMonitoringUnion =
@@ -6876,6 +6887,7 @@ export type SyncReconcileResponseStackSettingsAwsUnion =
 
 export type AzureTargetStackSettings = {
   keyVaultCertificateId: string;
+  keyVaultResourceId?: string | null | undefined;
 };
 
 export type TargetStackSettingsAzureUnion = AzureTargetStackSettings | any;
@@ -7696,6 +7708,10 @@ export type SyncReconcileResponseTypeByoVnetAzure = ClosedEnum<
 >;
 
 export type SyncReconcileResponseNetworkByoVnetAzure = {
+  /**
+   * Name of the dedicated classic Application Gateway subnet within the VNet.
+   */
+  applicationGatewaySubnetName?: string | null | undefined;
   /**
    * Name of the private subnet within the VNet
    */
@@ -21024,6 +21040,7 @@ export const SyncReconcileResponseMonitoring$inboundSchema: z.ZodType<
   logsEndpoint: z.string(),
   metricsAuthHeader: z.nullable(z.string()).optional(),
   metricsEndpoint: z.nullable(z.string()).optional(),
+  resourceAttributes: z.record(z.string(), z.string()).optional(),
 });
 
 export function syncReconcileResponseMonitoringFromJSON(
@@ -21109,6 +21126,7 @@ export const AzureTargetStackSettings$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   keyVaultCertificateId: z.string(),
+  keyVaultResourceId: z.nullable(z.string()).optional(),
 });
 
 export function azureTargetStackSettingsFromJSON(
@@ -22559,12 +22577,14 @@ export const SyncReconcileResponseNetworkByoVnetAzure$inboundSchema: z.ZodType<
   SyncReconcileResponseNetworkByoVnetAzure,
   unknown
 > = z.object({
+  application_gateway_subnet_name: z.nullable(z.string()).optional(),
   private_subnet_name: z.string(),
   public_subnet_name: z.string(),
   type: SyncReconcileResponseTypeByoVnetAzure$inboundSchema,
   vnet_resource_id: z.string(),
 }).transform((v) => {
   return remap$(v, {
+    "application_gateway_subnet_name": "applicationGatewaySubnetName",
     "private_subnet_name": "privateSubnetName",
     "public_subnet_name": "publicSubnetName",
     "vnet_resource_id": "vnetResourceId",

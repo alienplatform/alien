@@ -174,7 +174,7 @@ resource "google_artifact_registry_repository" "registry" {
   format        = "DOCKER"
   description   = "Application container artifact registry (registry)"
   labels = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "registry"
     "resource-type" = "artifact-registry"

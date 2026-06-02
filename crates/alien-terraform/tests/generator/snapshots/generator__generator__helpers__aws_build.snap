@@ -159,7 +159,7 @@ resource "aws_iam_role" "builder_role" {
   name               = length(format("%s-%s", local.resource_prefix, "builder-build")) <= 64 ? format("%s-%s", local.resource_prefix, "builder-build") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "builder-build"), 0, 55), substr(sha1(format("%s-%s", local.resource_prefix, "builder-build")), 0, 8))
   assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { Service = "codebuild.amazonaws.com" }, Action = "sts:AssumeRole" }] })
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "builder"
     "resource-type" = "build"
@@ -176,7 +176,7 @@ resource "aws_cloudwatch_log_group" "builder_logs" {
   name              = "/aws/codebuild/${local.resource_prefix}-builder"
   retention_in_days = 30
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "builder"
     "resource-type" = "build"
@@ -217,7 +217,7 @@ resource "aws_codebuild_project" "builder" {
   }
 
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "builder"
     "resource-type" = "build"

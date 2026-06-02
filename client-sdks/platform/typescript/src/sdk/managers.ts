@@ -8,6 +8,7 @@ import { managersDelete } from "../funcs/managersDelete.js";
 import { managersGenerateManagerToken } from "../funcs/managersGenerateManagerToken.js";
 import { managersGet } from "../funcs/managersGet.js";
 import { managersGetDeployment } from "../funcs/managersGetDeployment.js";
+import { managersGetDomainBinding } from "../funcs/managersGetDomainBinding.js";
 import { managersGetManagementConfig } from "../funcs/managersGetManagementConfig.js";
 import { managersList } from "../funcs/managersList.js";
 import { managersListEvents } from "../funcs/managersListEvents.js";
@@ -17,6 +18,7 @@ import { managersResolveGcpOAuthProvider } from "../funcs/managersResolveGcpOAut
 import { managersRetry } from "../funcs/managersRetry.js";
 import { managersRetrySetup } from "../funcs/managersRetrySetup.js";
 import { managersUpdate } from "../funcs/managersUpdate.js";
+import { managersUpdateDomainBinding } from "../funcs/managersUpdateDomainBinding.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
 import * as models from "../models/index.js";
 import * as operations from "../models/operations/index.js";
@@ -115,6 +117,34 @@ export class Managers extends ClientSDK {
     options?: RequestOptions,
   ): Promise<operations.DeleteManagerResponse> {
     return unwrapAsync(managersDelete(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Get the custom domain binding for a private manager.
+   */
+  async getDomainBinding(
+    request: operations.GetManagerDomainBindingRequest,
+    options?: RequestOptions,
+  ): Promise<models.ManagerDomainBindingResponse> {
+    return unwrapAsync(managersGetDomainBinding(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Create, update, or remove the custom domain binding for a private manager.
+   */
+  async updateDomainBinding(
+    request: operations.UpdateManagerDomainBindingRequest,
+    options?: RequestOptions,
+  ): Promise<models.ManagerDomainBindingResponse> {
+    return unwrapAsync(managersUpdateDomainBinding(
       this,
       request,
       options,

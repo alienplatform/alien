@@ -269,7 +269,7 @@ resource "aws_s3_bucket" "data" {
   bucket        = "${local.resource_prefix}-data"
   force_destroy = true
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "data"
     "resource-type" = "storage"
@@ -357,7 +357,7 @@ resource "aws_iam_role" "execution_sa" {
   name               = length(format("%s-%s", local.resource_prefix, "execution-sa")) <= 64 ? format("%s-%s", local.resource_prefix, "execution-sa") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "execution-sa"), 0, 55), substr(sha1(format("%s-%s", local.resource_prefix, "execution-sa")), 0, 8))
   assume_role_policy = data.aws_iam_policy_document.execution_sa_assume_role.json
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "execution-sa"
     "resource-type" = "service-account"

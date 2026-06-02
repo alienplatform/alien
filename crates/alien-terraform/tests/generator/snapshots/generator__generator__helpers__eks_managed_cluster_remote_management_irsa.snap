@@ -617,7 +617,7 @@ resource "aws_iam_role" "management" {
   name               = length(format("%s-%s", local.resource_prefix, "management")) <= 64 ? format("%s-%s", local.resource_prefix, "management") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "management"), 0, 55), substr(sha1(format("%s-%s", local.resource_prefix, "management")), 0, 8))
   assume_role_policy = data.aws_iam_policy_document.management_assume_role.json
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "management"
     "resource-type" = "management"

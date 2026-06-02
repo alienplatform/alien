@@ -45,3 +45,9 @@ const value: models.CloudFormationCallbackRequestManagementConfigKubernetes = {
 };
 ```
 
+### `any`
+
+```typescript
+const value: any = "<value>";
+```
+

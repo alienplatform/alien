@@ -176,6 +176,7 @@ pub enum GcpCredentials {
     /// Use a refreshable service account impersonation source.
     ImpersonatedServiceAccount {
         /// Source configuration used to call IAMCredentials.
+        #[cfg_attr(feature = "openapi", schema(value_type = Object))]
         source: Box<GcpClientConfig>,
         /// Service account impersonation request.
         config: GcpImpersonationConfig,

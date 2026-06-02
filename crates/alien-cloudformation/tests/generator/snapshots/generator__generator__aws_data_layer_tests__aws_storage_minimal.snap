@@ -124,7 +124,7 @@ Resources:
         RestrictPublicBuckets: true
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName

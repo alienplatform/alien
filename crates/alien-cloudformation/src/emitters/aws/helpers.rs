@@ -7,9 +7,9 @@
 
 use crate::template::{CfExpression, CfResource};
 use alien_core::{
-    import::EmitContext, ErrorData, Network, NetworkSettings, ResourceDefinition, ResourceRef,
-    ResourceType, Result, ServiceAccount, Storage, Worker, ALIEN_MANAGED_BY_TAG_KEY,
-    ALIEN_MANAGED_BY_TAG_VALUE, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
+    import::EmitContext, ErrorData, Network, NetworkSettings, RemoteStackManagement,
+    ResourceDefinition, ResourceRef, ResourceType, Result, ServiceAccount, Storage, Worker,
+    ALIEN_MANAGED_BY_TAG_KEY, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
 };
 use alien_error::AlienError;
 use indexmap::IndexMap;
@@ -84,14 +84,22 @@ pub fn stack_name(suffix: &str) -> CfExpression {
 /// Standard resource tags.
 pub fn tags(ctx: &EmitContext<'_>) -> CfExpression {
     CfExpression::list([
-        tag(ALIEN_MANAGED_BY_TAG_KEY, ALIEN_MANAGED_BY_TAG_VALUE),
+        tag(ALIEN_MANAGED_BY_TAG_KEY, "setup"),
         tag_expr(ALIEN_STACK_TAG_KEY, CfExpression::ref_("AWS::StackName")),
         tag(ALIEN_RESOURCE_TAG_KEY, ctx.resource_id),
-        tag(
+        tag_expr(
             "resource-type",
-            ctx.resource.config.resource_type().as_ref(),
+            CfExpression::from(resource_type_tag_value(ctx)),
         ),
     ])
+}
+
+fn resource_type_tag_value(ctx: &EmitContext<'_>) -> String {
+    if ctx.resource.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE {
+        "management".to_string()
+    } else {
+        ctx.resource.config.resource_type().to_string()
+    }
 }
 
 pub fn tag(key: &str, value: &str) -> CfExpression {

@@ -163,7 +163,7 @@ resource "azurerm_resource_group" "default_resource_group" {
   name     = var.azure_resource_group_name
   location = var.azure_location
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "default-resource-group"
     "resource-type" = "resource-group"
@@ -184,7 +184,7 @@ resource "azurerm_key_vault" "secrets" {
   soft_delete_retention_days    = 90
   public_network_access_enabled = true
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "secrets"
     "resource-type" = "vault"

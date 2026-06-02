@@ -202,6 +202,7 @@ export type DeploymentAwsUnion = DeploymentAws | any;
 
 export type DeploymentAzureStackSettings = {
   keyVaultCertificateId: string;
+  keyVaultResourceId?: string | null | undefined;
 };
 
 export type DeploymentAzureUnion = DeploymentAzureStackSettings | any;
@@ -985,6 +986,10 @@ export type DeploymentTypeByoVnetAzure = ClosedEnum<
 >;
 
 export type DeploymentNetworkByoVnetAzure = {
+  /**
+   * Name of the dedicated classic Application Gateway subnet within the VNet.
+   */
+  applicationGatewaySubnetName?: string | null | undefined;
   /**
    * Name of the private subnet within the VNet
    */
@@ -3192,6 +3197,7 @@ export const DeploymentAzureStackSettings$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   keyVaultCertificateId: z.string(),
+  keyVaultResourceId: z.nullable(z.string()).optional(),
 });
 
 export function deploymentAzureStackSettingsFromJSON(
@@ -4501,12 +4507,14 @@ export const DeploymentNetworkByoVnetAzure$inboundSchema: z.ZodType<
   DeploymentNetworkByoVnetAzure,
   unknown
 > = z.object({
+  application_gateway_subnet_name: z.nullable(z.string()).optional(),
   private_subnet_name: z.string(),
   public_subnet_name: z.string(),
   type: DeploymentTypeByoVnetAzure$inboundSchema,
   vnet_resource_id: z.string(),
 }).transform((v) => {
   return remap$(v, {
+    "application_gateway_subnet_name": "applicationGatewaySubnetName",
     "private_subnet_name": "privateSubnetName",
     "public_subnet_name": "publicSubnetName",
     "vnet_resource_id": "vnetResourceId",

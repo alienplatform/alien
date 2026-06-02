@@ -29,9 +29,6 @@ let value: DeploymentInfo = {
       "key": {
         platform: "gcp",
         managerUrl: "https://low-possession.com/",
-        managementConfig: {
-          platform: "kubernetes",
-        },
       },
     },
   },
@@ -48,6 +45,8 @@ let value: DeploymentInfo = {
     ],
     azure: [
       "<value 1>",
+      "<value 2>",
+      "<value 3>",
     ],
   },
 };

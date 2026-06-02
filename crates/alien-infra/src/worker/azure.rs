@@ -3701,9 +3701,9 @@ impl AzureWorkerController {
 
         // Tags for traceability
         let mut tags = HashMap::new();
-        tags.insert("alien-resource".to_string(), "worker".to_string());
-        tags.insert("alien-worker-id".to_string(), func.id.clone());
-        tags.insert("alien-stack".to_string(), ctx.resource_prefix.to_string());
+        tags.insert("resource-type".to_string(), "worker".to_string());
+        tags.insert("resource".to_string(), func.id.clone());
+        tags.insert("deployment".to_string(), ctx.resource_prefix.to_string());
 
         let _resource_group_name = get_resource_group_name(ctx.state)?;
         let environment_id = azure_utils::get_container_apps_environment_resource_id(ctx.state)?;

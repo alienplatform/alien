@@ -811,14 +811,11 @@ impl AzureContainerAppsEnvironmentController {
 
         let mut tags = HashMap::new();
         tags.insert(
-            "alien-resource".to_string(),
+            "resource-type".to_string(),
             "container-apps-environment".to_string(),
         );
-        tags.insert(
-            "alien-environment-id".to_string(),
-            ctx.desired_config.id().to_string(),
-        );
-        tags.insert("alien-stack".to_string(), ctx.resource_prefix.to_string());
+        tags.insert("resource".to_string(), ctx.desired_config.id().to_string());
+        tags.insert("deployment".to_string(), ctx.resource_prefix.to_string());
 
         // Get VNet configuration if a Network resource exists
         let vnet_configuration = self.get_vnet_configuration(ctx);

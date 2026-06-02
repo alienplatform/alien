@@ -149,7 +149,7 @@ phases:
                 }),
             })
             .service_role(role_arn)
-            .description(format!("Alien build project: {}", cfg.id))
+            .description(format!("Runtime build project: {}", cfg.id))
             .tags(
                 standard_resource_tags(ctx.resource_prefix, &cfg.id)
                     .into_iter()
@@ -374,7 +374,7 @@ phases:
                 }),
             })
             .service_role(role_arn)
-            .description(format!("Alien build project: {}", current_config.id))
+            .description(format!("Runtime build project: {}", current_config.id))
             .build();
 
         client
@@ -649,7 +649,7 @@ mod tests {
                     "arn:aws:codebuild:us-east-1:123456789012:project/{}",
                     project_name
                 ))
-                .description(format!("Alien build project: {}", project_name))
+                .description(format!("Runtime build project: {}", project_name))
                 .build(),
         }
     }
@@ -662,7 +662,7 @@ mod tests {
                     "arn:aws:codebuild:us-east-1:123456789012:project/{}",
                     project_name
                 ))
-                .description(format!("Alien build project: {}", project_name))
+                .description(format!("Runtime build project: {}", project_name))
                 .build(),
         }
     }

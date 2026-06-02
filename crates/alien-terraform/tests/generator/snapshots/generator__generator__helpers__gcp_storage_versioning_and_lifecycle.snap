@@ -172,7 +172,7 @@ resource "google_storage_bucket" "audit" {
   force_destroy               = true
   public_access_prevention    = "enforced"
   labels = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "audit"
     "resource-type" = "storage"

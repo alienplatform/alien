@@ -26,7 +26,8 @@ export const NetworkSettingsSchema = z.union([z.object({
 "subnet_name": z.string().describe("The name of the subnet to use"),
 "type": z.enum(["byo-vpc-gcp"])
     }), z.object({
-    "private_subnet_name": z.string().describe("Name of the private subnet within the VNet"),
+    "application_gateway_subnet_name": z.string().describe("Name of the dedicated classic Application Gateway subnet within the VNet.").nullish(),
+"private_subnet_name": z.string().describe("Name of the private subnet within the VNet"),
 "public_subnet_name": z.string().describe("Name of the public subnet within the VNet"),
 "type": z.enum(["byo-vnet-azure"]),
 "vnet_resource_id": z.string().describe("The full resource ID of the existing VNet")

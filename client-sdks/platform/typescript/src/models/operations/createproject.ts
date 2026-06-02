@@ -70,7 +70,7 @@ export type CreateProjectCloudformationRequest = {
 };
 
 /**
- * Agent image package configuration. Required when Helm is enabled. If null, agent image packages will not be generated.
+ * Operator image package configuration. Required when Helm is enabled. If null, Operator image packages will not be generated.
  */
 export type CreateProjectAgentImageRequest = {
   /**
@@ -78,11 +78,11 @@ export type CreateProjectAgentImageRequest = {
    */
   displayName: string;
   /**
-   * Binary name (e.g., "acme-agent")
+   * Image name (e.g., "acme-operator")
    */
   name: string;
   /**
-   * Whether agent image package generation is enabled
+   * Whether Operator image package generation is enabled
    */
   enabled: boolean;
 };
@@ -132,7 +132,7 @@ export type CreateProjectPackagesConfigRequest = {
    */
   cloudformation?: CreateProjectCloudformationRequest | null | undefined;
   /**
-   * Agent image package configuration. Required when Helm is enabled. If null, agent image packages will not be generated.
+   * Operator image package configuration. Required when Helm is enabled. If null, Operator image packages will not be generated.
    */
   agentImage?: CreateProjectAgentImageRequest | null | undefined;
   /**
@@ -270,7 +270,7 @@ export type CreateProjectCloudformationResponse = {
 };
 
 /**
- * Agent image package configuration. Required when Helm is enabled. If null, agent image packages will not be generated.
+ * Operator image package configuration. Required when Helm is enabled. If null, Operator image packages will not be generated.
  */
 export type CreateProjectAgentImageResponse = {
   /**
@@ -278,11 +278,11 @@ export type CreateProjectAgentImageResponse = {
    */
   displayName: string;
   /**
-   * Binary name (e.g., "acme-agent")
+   * Image name (e.g., "acme-operator")
    */
   name: string;
   /**
-   * Whether agent image package generation is enabled
+   * Whether Operator image package generation is enabled
    */
   enabled: boolean;
 };
@@ -332,7 +332,7 @@ export type CreateProjectPackagesConfigResponse = {
    */
   cloudformation?: CreateProjectCloudformationResponse | null | undefined;
   /**
-   * Agent image package configuration. Required when Helm is enabled. If null, agent image packages will not be generated.
+   * Operator image package configuration. Required when Helm is enabled. If null, Operator image packages will not be generated.
    */
   agentImage?: CreateProjectAgentImageResponse | null | undefined;
   /**

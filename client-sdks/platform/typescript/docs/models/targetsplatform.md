@@ -1,13 +1,13 @@
-# TargetsPlatformEnum
+# TargetsPlatform
 
 Represents the target cloud platform.
 
 ## Example Usage
 
 ```typescript
-import { TargetsPlatformEnum } from "@alienplatform/platform-api/models";
+import { TargetsPlatform } from "@alienplatform/platform-api/models";
 
-let value: TargetsPlatformEnum = "azure";
+let value: TargetsPlatform = "aws";
 ```
 
 ## Values

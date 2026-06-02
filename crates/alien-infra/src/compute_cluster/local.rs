@@ -20,7 +20,7 @@ use alien_local::LocalRuntimeStatus;
 use alien_macros::controller;
 use chrono::Utc;
 
-const LOCAL_NETWORK_NAME: &str = "alien-network";
+const LOCAL_NETWORK_NAME: &str = "deployment-network";
 
 /// Local ComputeCluster controller.
 ///
@@ -34,7 +34,7 @@ const LOCAL_NETWORK_NAME: &str = "alien-network";
 /// - Machine autoscaling
 #[controller]
 pub struct LocalComputeClusterController {
-    /// Docker network name (always "alien-network" for local)
+    /// Docker network name (always "deployment-network" for local)
     pub(crate) network_name: Option<String>,
 }
 
@@ -75,11 +75,11 @@ impl LocalComputeClusterController {
                 resource_id: Some(config.id.clone()),
             })?;
 
-        self.network_name = Some("alien-network".to_string());
+        self.network_name = Some(LOCAL_NETWORK_NAME.to_string());
 
         info!(
             cluster_id = %config.id,
-            network = "alien-network",
+            network = LOCAL_NETWORK_NAME,
             "Local container cluster ready"
         );
 

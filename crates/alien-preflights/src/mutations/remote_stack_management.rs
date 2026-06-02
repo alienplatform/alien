@@ -61,9 +61,10 @@ impl StackMutation for RemoteStackManagementMutation {
             return false;
         }
 
-        // Check if RemoteStackManagement already exists
-        let remote_mgmt_id = "remote-stack-management";
-        !stack.resources.iter().any(|(id, _)| id == remote_mgmt_id)
+        !stack
+            .resources
+            .values()
+            .any(|entry| entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE)
     }
 
     async fn mutate(
@@ -78,7 +79,7 @@ impl StackMutation for RemoteStackManagementMutation {
             platform
         );
 
-        let remote_mgmt_id = "remote-stack-management";
+        let remote_mgmt_id = "management";
 
         // Create the RemoteStackManagement resource
         let remote_stack_management =

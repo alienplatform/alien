@@ -5,7 +5,7 @@ use std::collections::HashMap;
 pub const ALIEN_STACK_TAG_KEY: &str = "deployment";
 pub const ALIEN_RESOURCE_TAG_KEY: &str = "resource";
 pub const ALIEN_MANAGED_BY_TAG_KEY: &str = "managed-by";
-pub const ALIEN_MANAGED_BY_TAG_VALUE: &str = "deployment";
+pub const ALIEN_MANAGED_BY_TAG_VALUE: &str = "runtime";
 
 pub fn standard_resource_tags(
     stack_prefix: impl Into<String>,

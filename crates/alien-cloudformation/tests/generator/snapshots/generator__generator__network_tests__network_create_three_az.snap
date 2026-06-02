@@ -191,7 +191,7 @@ Resources:
       EnableDnsHostnames: true
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -205,7 +205,7 @@ Resources:
     Properties:
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -244,7 +244,7 @@ Resources:
       MapPublicIpOnLaunch: true
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -274,7 +274,7 @@ Resources:
           - 8
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -305,7 +305,7 @@ Resources:
       MapPublicIpOnLaunch: true
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -335,7 +335,7 @@ Resources:
           - 8
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -366,7 +366,7 @@ Resources:
       MapPublicIpOnLaunch: true
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -396,7 +396,7 @@ Resources:
           - 8
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -412,7 +412,7 @@ Resources:
         Ref: DefaultNetworkVpc
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -439,7 +439,7 @@ Resources:
         Ref: DefaultNetworkVpc
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -464,7 +464,7 @@ Resources:
         Ref: DefaultNetworkPublicSubnet1
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -543,7 +543,7 @@ Resources:
         CidrIp: 0.0.0.0/0
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName

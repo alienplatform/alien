@@ -234,7 +234,7 @@ Resources:
       EnableDnsHostnames: true
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -248,7 +248,7 @@ Resources:
     Properties:
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -287,7 +287,7 @@ Resources:
       MapPublicIpOnLaunch: true
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -317,7 +317,7 @@ Resources:
           - 8
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -348,7 +348,7 @@ Resources:
       MapPublicIpOnLaunch: true
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -378,7 +378,7 @@ Resources:
           - 8
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -409,7 +409,7 @@ Resources:
       MapPublicIpOnLaunch: true
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -439,7 +439,7 @@ Resources:
           - 8
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -455,7 +455,7 @@ Resources:
         Ref: DefaultNetworkVpc
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -482,7 +482,7 @@ Resources:
         Ref: DefaultNetworkVpc
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -507,7 +507,7 @@ Resources:
         Ref: DefaultNetworkPublicSubnet1
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -586,7 +586,7 @@ Resources:
         CidrIp: 0.0.0.0/0
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -636,7 +636,7 @@ Resources:
             Sid: SendSqsMessages
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -664,14 +664,14 @@ Resources:
                 Ref: ManagingRoleArn
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
       - Key: resource
         Value: management
       - Key: resource-type
-        Value: remote-stack-management
+        Value: management
   ManagementRoleManagementPolicy1:
     Type: AWS::IAM::ManagedPolicy
     Properties:
@@ -685,7 +685,7 @@ Resources:
             StringEquals:
               aws:RequestTag/deployment:
                 Fn::Sub: ${AWS::StackName}
-              aws:RequestTag/managed-by: deployment
+              aws:RequestTag/managed-by: runtime
           Effect: Allow
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*
@@ -726,7 +726,7 @@ Resources:
             StringEquals:
               aws:ResourceTag/deployment:
                 Fn::Sub: ${AWS::StackName}
-              aws:ResourceTag/managed-by: deployment
+              aws:ResourceTag/managed-by: runtime
           Effect: Allow
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*
@@ -754,7 +754,7 @@ Resources:
             StringEquals:
               aws:ResourceTag/deployment:
                 Fn::Sub: ${AWS::StackName}
-              aws:ResourceTag/managed-by: deployment
+              aws:ResourceTag/managed-by: runtime
           Effect: Allow
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*
@@ -788,7 +788,7 @@ Resources:
             StringEquals:
               aws:RequestTag/deployment:
                 Fn::Sub: ${AWS::StackName}
-              aws:RequestTag/managed-by: deployment
+              aws:RequestTag/managed-by: runtime
           Effect: Allow
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:acm:${AWS::Region}:${AWS::AccountId}:certificate/*
@@ -802,7 +802,7 @@ Resources:
             StringEquals:
               aws:ResourceTag/deployment:
                 Fn::Sub: ${AWS::StackName}
-              aws:ResourceTag/managed-by: deployment
+              aws:ResourceTag/managed-by: runtime
           Effect: Allow
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:acm:${AWS::Region}:${AWS::AccountId}:certificate/*
@@ -814,7 +814,7 @@ Resources:
             StringEquals:
               aws:RequestTag/deployment:
                 Fn::Sub: ${AWS::StackName}
-              aws:RequestTag/managed-by: deployment
+              aws:RequestTag/managed-by: runtime
           Effect: Allow
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis
@@ -827,7 +827,7 @@ Resources:
             StringEquals:
               aws:ResourceTag/deployment:
                 Fn::Sub: ${AWS::StackName}
-              aws:ResourceTag/managed-by: deployment
+              aws:ResourceTag/managed-by: runtime
           Effect: Allow
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*
@@ -841,7 +841,7 @@ Resources:
             StringEquals:
               aws:RequestTag/deployment:
                 Fn::Sub: ${AWS::StackName}
-              aws:RequestTag/managed-by: deployment
+              aws:RequestTag/managed-by: runtime
           Effect: Allow
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*
@@ -870,7 +870,7 @@ Resources:
             StringEquals:
               aws:ResourceTag/deployment:
                 Fn::Sub: ${AWS::StackName}
-              aws:ResourceTag/managed-by: deployment
+              aws:ResourceTag/managed-by: runtime
           Effect: Allow
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*
@@ -885,7 +885,7 @@ Resources:
             StringEquals:
               aws:RequestTag/deployment:
                 Fn::Sub: ${AWS::StackName}
-              aws:RequestTag/managed-by: deployment
+              aws:RequestTag/managed-by: runtime
           Effect: Allow
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${AWS::StackName}-*
@@ -899,7 +899,7 @@ Resources:
             StringEquals:
               aws:ResourceTag/deployment:
                 Fn::Sub: ${AWS::StackName}
-              aws:ResourceTag/managed-by: deployment
+              aws:ResourceTag/managed-by: runtime
           Effect: Allow
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${AWS::StackName}-*
@@ -982,7 +982,7 @@ Resources:
         Status: Enabled
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -1047,7 +1047,7 @@ Resources:
       MessageRetentionPeriod: 345600
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -1078,7 +1078,7 @@ Resources:
         PointInTimeRecoveryEnabled: true
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -1129,7 +1129,7 @@ Resources:
                 type: expire
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -1179,7 +1179,7 @@ Resources:
             - Fn::Sub: arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${AWS::StackName}-registry-*
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -1235,7 +1235,7 @@ Resources:
             - Fn::Sub: arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${AWS::StackName}-registry-*
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -1288,7 +1288,7 @@ Resources:
             Ref: BuilderLogGroup
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName

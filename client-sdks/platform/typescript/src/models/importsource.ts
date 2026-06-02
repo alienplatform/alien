@@ -18,7 +18,7 @@ import {
 /**
  * Cloud platform of the imported stack
  */
-export const ImportSourcePlatformEnum = {
+export const ImportSourcePlatform = {
   Aws: "aws",
   Gcp: "gcp",
   Azure: "azure",
@@ -29,9 +29,7 @@ export const ImportSourcePlatformEnum = {
 /**
  * Cloud platform of the imported stack
  */
-export type ImportSourcePlatformEnum = ClosedEnum<
-  typeof ImportSourcePlatformEnum
->;
+export type ImportSourcePlatform = ClosedEnum<typeof ImportSourcePlatform>;
 
 /**
  * Base cloud platform for cloud-backed Kubernetes imports.
@@ -73,6 +71,7 @@ export type ImportSourceAwsUnion = ImportSourceAws | any;
 
 export type ImportSourceAzure = {
   keyVaultCertificateId: string;
+  keyVaultResourceId?: string | null | undefined;
 };
 
 export type ImportSourceAzureUnion = ImportSourceAzure | any;
@@ -859,6 +858,10 @@ export type ImportSourceTypeByoVnetAzure = ClosedEnum<
 
 export type ImportSourceNetworkByoVnetAzure = {
   /**
+   * Name of the dedicated classic Application Gateway subnet within the VNet.
+   */
+  applicationGatewaySubnetName?: string | null | undefined;
+  /**
    * Name of the private subnet within the VNet
    */
   privateSubnetName: string;
@@ -1038,9 +1041,23 @@ export type ImportSourceStackSettings = {
   updates?: ImportSourceUpdates | undefined;
 };
 
+export const ImportSourcePlatformKubernetes = {
+  Kubernetes: "kubernetes",
+} as const;
+export type ImportSourcePlatformKubernetes = ClosedEnum<
+  typeof ImportSourcePlatformKubernetes
+>;
+
 export type ImportSourceManagementConfigKubernetes = {
-  platform: "kubernetes";
+  platform: ImportSourcePlatformKubernetes;
 };
+
+export const ImportSourcePlatformAzure = {
+  Azure: "azure",
+} as const;
+export type ImportSourcePlatformAzure = ClosedEnum<
+  typeof ImportSourcePlatformAzure
+>;
 
 /**
  * Azure management configuration extracted from stack settings
@@ -1058,8 +1075,15 @@ export type ImportSourceManagementConfigAzure = {
    * OIDC subject claim trusted by the target-side managed identity.
    */
   oidcSubject: string;
-  platform: "azure";
+  platform: ImportSourcePlatformAzure;
 };
+
+export const ImportSourcePlatformGcp = {
+  Gcp: "gcp",
+} as const;
+export type ImportSourcePlatformGcp = ClosedEnum<
+  typeof ImportSourcePlatformGcp
+>;
 
 /**
  * GCP management configuration extracted from stack settings
@@ -1069,8 +1093,15 @@ export type ImportSourceManagementConfigGcp = {
    * Service account email for management roles
    */
   serviceAccountEmail: string;
-  platform: "gcp";
+  platform: ImportSourcePlatformGcp;
 };
+
+export const ImportSourcePlatformAws = {
+  Aws: "aws",
+} as const;
+export type ImportSourcePlatformAws = ClosedEnum<
+  typeof ImportSourcePlatformAws
+>;
 
 /**
  * AWS management configuration extracted from stack settings
@@ -1080,7 +1111,7 @@ export type ImportSourceManagementConfigAws = {
    * The managing AWS IAM role ARN that can assume cross-account roles
    */
   managingRoleArn: string;
-  platform: "aws";
+  platform: ImportSourcePlatformAws;
 };
 
 /**
@@ -1092,10 +1123,11 @@ export type ImportSourceManagementConfigAws = {
  * This is NOT user-specified - it's derived from the Manager's ServiceAccount.
  */
 export type ImportSourceManagementConfigUnion =
+  | ImportSourceManagementConfigAzure
   | ImportSourceManagementConfigAws
   | ImportSourceManagementConfigGcp
-  | ImportSourceManagementConfigAzure
-  | ImportSourceManagementConfigKubernetes;
+  | ImportSourceManagementConfigKubernetes
+  | any;
 
 /**
  * Resolved setup import payload
@@ -1117,7 +1149,7 @@ export type ImportSource = {
   /**
    * Cloud platform of the imported stack
    */
-  platform: ImportSourcePlatformEnum;
+  platform: ImportSourcePlatform;
   /**
    * Base cloud platform for cloud-backed Kubernetes imports.
    */
@@ -1154,18 +1186,21 @@ export type ImportSource = {
    * Platform-derived configuration for cross-account/cross-tenant access.
    * This is NOT user-specified - it's derived from the Manager's ServiceAccount.
    */
-  managementConfig:
+  managementConfig?:
+    | ImportSourceManagementConfigAzure
     | ImportSourceManagementConfigAws
     | ImportSourceManagementConfigGcp
-    | ImportSourceManagementConfigAzure
-    | ImportSourceManagementConfigKubernetes;
+    | ImportSourceManagementConfigKubernetes
+    | any
+    | null
+    | undefined;
   resources: Array<ImportedResource>;
 };
 
 /** @internal */
-export const ImportSourcePlatformEnum$outboundSchema: z.ZodEnum<
-  typeof ImportSourcePlatformEnum
-> = z.enum(ImportSourcePlatformEnum);
+export const ImportSourcePlatform$outboundSchema: z.ZodEnum<
+  typeof ImportSourcePlatform
+> = z.enum(ImportSourcePlatform);
 
 /** @internal */
 export const ImportSourceBasePlatform$outboundSchema: z.ZodEnum<
@@ -1216,6 +1251,7 @@ export function importSourceAwsUnionToJSON(
 /** @internal */
 export type ImportSourceAzure$Outbound = {
   keyVaultCertificateId: string;
+  keyVaultResourceId?: string | null | undefined;
 };
 
 /** @internal */
@@ -1224,6 +1260,7 @@ export const ImportSourceAzure$outboundSchema: z.ZodType<
   ImportSourceAzure
 > = z.object({
   keyVaultCertificateId: z.string(),
+  keyVaultResourceId: z.nullable(z.string()).optional(),
 });
 
 export function importSourceAzureToJSON(
@@ -2887,6 +2924,7 @@ export const ImportSourceTypeByoVnetAzure$outboundSchema: z.ZodEnum<
 
 /** @internal */
 export type ImportSourceNetworkByoVnetAzure$Outbound = {
+  application_gateway_subnet_name?: string | null | undefined;
   private_subnet_name: string;
   public_subnet_name: string;
   type: string;
@@ -2898,12 +2936,14 @@ export const ImportSourceNetworkByoVnetAzure$outboundSchema: z.ZodType<
   ImportSourceNetworkByoVnetAzure$Outbound,
   ImportSourceNetworkByoVnetAzure
 > = z.object({
+  applicationGatewaySubnetName: z.nullable(z.string()).optional(),
   privateSubnetName: z.string(),
   publicSubnetName: z.string(),
   type: ImportSourceTypeByoVnetAzure$outboundSchema,
   vnetResourceId: z.string(),
 }).transform((v) => {
   return remap$(v, {
+    applicationGatewaySubnetName: "application_gateway_subnet_name",
     privateSubnetName: "private_subnet_name",
     publicSubnetName: "public_subnet_name",
     vnetResourceId: "vnet_resource_id",
@@ -3163,8 +3203,13 @@ export function importSourceStackSettingsToJSON(
 }
 
 /** @internal */
+export const ImportSourcePlatformKubernetes$outboundSchema: z.ZodEnum<
+  typeof ImportSourcePlatformKubernetes
+> = z.enum(ImportSourcePlatformKubernetes);
+
+/** @internal */
 export type ImportSourceManagementConfigKubernetes$Outbound = {
-  platform: "kubernetes";
+  platform: string;
 };
 
 /** @internal */
@@ -3172,7 +3217,7 @@ export const ImportSourceManagementConfigKubernetes$outboundSchema: z.ZodType<
   ImportSourceManagementConfigKubernetes$Outbound,
   ImportSourceManagementConfigKubernetes
 > = z.object({
-  platform: z.literal("kubernetes"),
+  platform: ImportSourcePlatformKubernetes$outboundSchema,
 });
 
 export function importSourceManagementConfigKubernetesToJSON(
@@ -3187,11 +3232,16 @@ export function importSourceManagementConfigKubernetesToJSON(
 }
 
 /** @internal */
+export const ImportSourcePlatformAzure$outboundSchema: z.ZodEnum<
+  typeof ImportSourcePlatformAzure
+> = z.enum(ImportSourcePlatformAzure);
+
+/** @internal */
 export type ImportSourceManagementConfigAzure$Outbound = {
   managingTenantId: string;
   oidcIssuer: string;
   oidcSubject: string;
-  platform: "azure";
+  platform: string;
 };
 
 /** @internal */
@@ -3202,7 +3252,7 @@ export const ImportSourceManagementConfigAzure$outboundSchema: z.ZodType<
   managingTenantId: z.string(),
   oidcIssuer: z.string(),
   oidcSubject: z.string(),
-  platform: z.literal("azure"),
+  platform: ImportSourcePlatformAzure$outboundSchema,
 });
 
 export function importSourceManagementConfigAzureToJSON(
@@ -3216,9 +3266,14 @@ export function importSourceManagementConfigAzureToJSON(
 }
 
 /** @internal */
+export const ImportSourcePlatformGcp$outboundSchema: z.ZodEnum<
+  typeof ImportSourcePlatformGcp
+> = z.enum(ImportSourcePlatformGcp);
+
+/** @internal */
 export type ImportSourceManagementConfigGcp$Outbound = {
   serviceAccountEmail: string;
-  platform: "gcp";
+  platform: string;
 };
 
 /** @internal */
@@ -3227,7 +3282,7 @@ export const ImportSourceManagementConfigGcp$outboundSchema: z.ZodType<
   ImportSourceManagementConfigGcp
 > = z.object({
   serviceAccountEmail: z.string(),
-  platform: z.literal("gcp"),
+  platform: ImportSourcePlatformGcp$outboundSchema,
 });
 
 export function importSourceManagementConfigGcpToJSON(
@@ -3241,9 +3296,14 @@ export function importSourceManagementConfigGcpToJSON(
 }
 
 /** @internal */
+export const ImportSourcePlatformAws$outboundSchema: z.ZodEnum<
+  typeof ImportSourcePlatformAws
+> = z.enum(ImportSourcePlatformAws);
+
+/** @internal */
 export type ImportSourceManagementConfigAws$Outbound = {
   managingRoleArn: string;
-  platform: "aws";
+  platform: string;
 };
 
 /** @internal */
@@ -3252,7 +3312,7 @@ export const ImportSourceManagementConfigAws$outboundSchema: z.ZodType<
   ImportSourceManagementConfigAws
 > = z.object({
   managingRoleArn: z.string(),
-  platform: z.literal("aws"),
+  platform: ImportSourcePlatformAws$outboundSchema,
 });
 
 export function importSourceManagementConfigAwsToJSON(
@@ -3267,20 +3327,22 @@ export function importSourceManagementConfigAwsToJSON(
 
 /** @internal */
 export type ImportSourceManagementConfigUnion$Outbound =
+  | ImportSourceManagementConfigAzure$Outbound
   | ImportSourceManagementConfigAws$Outbound
   | ImportSourceManagementConfigGcp$Outbound
-  | ImportSourceManagementConfigAzure$Outbound
-  | ImportSourceManagementConfigKubernetes$Outbound;
+  | ImportSourceManagementConfigKubernetes$Outbound
+  | any;
 
 /** @internal */
 export const ImportSourceManagementConfigUnion$outboundSchema: z.ZodType<
   ImportSourceManagementConfigUnion$Outbound,
   ImportSourceManagementConfigUnion
 > = z.union([
+  z.lazy(() => ImportSourceManagementConfigAzure$outboundSchema),
   z.lazy(() => ImportSourceManagementConfigAws$outboundSchema),
   z.lazy(() => ImportSourceManagementConfigGcp$outboundSchema),
-  z.lazy(() => ImportSourceManagementConfigAzure$outboundSchema),
   z.lazy(() => ImportSourceManagementConfigKubernetes$outboundSchema),
+  z.any(),
 ]);
 
 export function importSourceManagementConfigUnionToJSON(
@@ -3307,11 +3369,14 @@ export type ImportSource$Outbound = {
   setupFingerprint: string;
   setupFingerprintVersion: number;
   stackSettings: ImportSourceStackSettings$Outbound;
-  managementConfig:
+  managementConfig?:
+    | ImportSourceManagementConfigAzure$Outbound
     | ImportSourceManagementConfigAws$Outbound
     | ImportSourceManagementConfigGcp$Outbound
-    | ImportSourceManagementConfigAzure$Outbound
-    | ImportSourceManagementConfigKubernetes$Outbound;
+    | ImportSourceManagementConfigKubernetes$Outbound
+    | any
+    | null
+    | undefined;
   resources: Array<ImportedResource$Outbound>;
 };
 
@@ -3324,7 +3389,7 @@ export const ImportSource$outboundSchema: z.ZodType<
   resourcePrefix: z.string(),
   sourceKind: ImportSourceKind$outboundSchema.optional(),
   releaseId: z.string().optional(),
-  platform: ImportSourcePlatformEnum$outboundSchema,
+  platform: ImportSourcePlatform$outboundSchema,
   basePlatform: ImportSourceBasePlatform$outboundSchema.optional(),
   region: z.string(),
   setupTarget: z.string(),
@@ -3332,12 +3397,15 @@ export const ImportSource$outboundSchema: z.ZodType<
   setupFingerprint: z.string(),
   setupFingerprintVersion: z.int(),
   stackSettings: z.lazy(() => ImportSourceStackSettings$outboundSchema),
-  managementConfig: z.union([
-    z.lazy(() => ImportSourceManagementConfigAws$outboundSchema),
-    z.lazy(() => ImportSourceManagementConfigGcp$outboundSchema),
-    z.lazy(() => ImportSourceManagementConfigAzure$outboundSchema),
-    z.lazy(() => ImportSourceManagementConfigKubernetes$outboundSchema),
-  ]),
+  managementConfig: z.nullable(
+    z.union([
+      z.lazy(() => ImportSourceManagementConfigAzure$outboundSchema),
+      z.lazy(() => ImportSourceManagementConfigAws$outboundSchema),
+      z.lazy(() => ImportSourceManagementConfigGcp$outboundSchema),
+      z.lazy(() => ImportSourceManagementConfigKubernetes$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   resources: z.array(ImportedResource$outboundSchema),
 });
 

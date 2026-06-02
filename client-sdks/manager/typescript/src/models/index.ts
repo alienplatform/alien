@@ -101,6 +101,7 @@ export * from "./leaserequest.js";
 export * from "./leaseresponse.js";
 export * from "./listdeploymentgroupsresponse.js";
 export * from "./listdeploymentsresponse.js";
+export * from "./listreleasesresponse.js";
 export * from "./localoperation.js";
 export * from "./localruntimeeventsnapshot.js";
 export * from "./localruntimeeventsubject.js";

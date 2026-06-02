@@ -171,7 +171,7 @@ resource "aws_ecr_repository" "registry" {
 
   force_delete = false
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "registry"
     "resource-type" = "artifact-registry"
@@ -191,7 +191,7 @@ resource "aws_iam_role" "registry_pull" {
   name               = length(format("%s-%s", local.resource_prefix, "registry-pull")) <= 64 ? format("%s-%s", local.resource_prefix, "registry-pull") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "registry-pull"), 0, 55), substr(sha1(format("%s-%s", local.resource_prefix, "registry-pull")), 0, 8))
   assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { AWS = var.managing_role_arn }, Action = "sts:AssumeRole" }] })
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "registry"
     "resource-type" = "artifact-registry"
@@ -202,7 +202,7 @@ resource "aws_iam_role" "registry_push" {
   name               = length(format("%s-%s", local.resource_prefix, "registry-push")) <= 64 ? format("%s-%s", local.resource_prefix, "registry-push") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "registry-push"), 0, 55), substr(sha1(format("%s-%s", local.resource_prefix, "registry-push")), 0, 8))
   assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { AWS = var.managing_role_arn }, Action = "sts:AssumeRole" }] })
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "registry"
     "resource-type" = "artifact-registry"

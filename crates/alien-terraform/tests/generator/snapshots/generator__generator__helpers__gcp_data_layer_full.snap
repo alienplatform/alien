@@ -200,7 +200,7 @@ resource "google_storage_bucket" "assets" {
   force_destroy               = true
   public_access_prevention    = "enforced"
   labels = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "assets"
     "resource-type" = "storage"
@@ -216,7 +216,7 @@ resource "google_pubsub_topic" "jobs" {
   name    = "${local.resource_prefix}-jobs"
   project = var.gcp_project
   labels = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "jobs"
     "resource-type" = "queue"
@@ -236,7 +236,7 @@ resource "google_pubsub_subscription" "jobs" {
   }
 
   labels = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "jobs"
     "resource-type" = "queue"

@@ -16,6 +16,7 @@ Each example is a self-contained template you can initialize with `alien init`.
 ```bash
 # Install Alien
 curl -fsSL https://alien.dev/install | sh
+export PATH="$HOME/.local/bin:$PATH"
 
 # Create a project from a template
 alien init my-app

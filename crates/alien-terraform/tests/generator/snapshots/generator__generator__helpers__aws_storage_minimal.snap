@@ -156,7 +156,7 @@ resource "aws_s3_bucket" "data" {
   bucket        = "${local.resource_prefix}-data"
   force_destroy = true
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "data"
     "resource-type" = "storage"

@@ -139,7 +139,10 @@ impl RemoteAccessResolver {
 
         let impersonation_config = ImpersonationConfig::Aws(AwsImpersonationConfig {
             role_arn: role_arn.clone(),
-            session_name: Some(format!("alien-remote-access-{}", Uuid::new_v4().simple())),
+            session_name: Some(format!(
+                "deployment-remote-access-{}",
+                Uuid::new_v4().simple()
+            )),
             duration_seconds: Some(3600),
             external_id: None,
             target_region,

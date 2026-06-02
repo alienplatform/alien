@@ -128,7 +128,8 @@ async fn invoke_command(
         ..Default::default()
     };
     let commands_url = format!("{}/v1", manager_url.trim_end_matches('/'));
-    let client = CommandsClient::with_http_client(&commands_url, &deployment_id, http_client, config);
+    let client =
+        CommandsClient::with_http_client(&commands_url, &deployment_id, http_client, config);
 
     let result: serde_json::Value = client
         .invoke(command, params)

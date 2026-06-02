@@ -49,7 +49,7 @@ fn get_management_identity_name(prefix: &str) -> String {
 }
 
 fn get_fic_name(prefix: &str) -> String {
-    format!("{}-alien-fic", prefix)
+    format!("{}-management-fic", prefix)
 }
 
 fn management_role_definition_scope(
@@ -1274,7 +1274,7 @@ impl AzureRemoteStackManagementController {
             uami_client_id: Some("12345678-1234-1234-1234-123456789012".to_string()),
             uami_principal_id: Some("87654321-4321-4321-4321-210987654321".to_string()),
             tenant_id: Some("tenant-1234".to_string()),
-            fic_name: Some(format!("{}-alien-fic", prefix)),
+            fic_name: Some(format!("{}-management-fic", prefix)),
             role_definition_id: Some(format!(
                 "/subscriptions/sub-1234/providers/Microsoft.Authorization/roleDefinitions/{}-mgmt-role",
                 prefix

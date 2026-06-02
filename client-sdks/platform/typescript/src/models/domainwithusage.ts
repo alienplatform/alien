@@ -30,9 +30,23 @@ export type PortalBinding = {
   hostname: string;
 };
 
+export type DomainWithUsagePackageDomain = {
+  id: string;
+  hostname: string;
+};
+
+export type ManagerBinding = {
+  id: string;
+  managerId: string;
+  managerName: string;
+  hostname: string;
+};
+
 export type DomainWithUsageUsage = {
   deploymentUrlProjects: Array<DeploymentUrlProject>;
   portalBindings: Array<PortalBinding>;
+  packageDomains: Array<DomainWithUsagePackageDomain>;
+  managerBindings: Array<ManagerBinding>;
 };
 
 export type DomainWithUsage = {
@@ -101,6 +115,44 @@ export function portalBindingFromJSON(
 }
 
 /** @internal */
+export const DomainWithUsagePackageDomain$inboundSchema: z.ZodType<
+  DomainWithUsagePackageDomain,
+  unknown
+> = z.object({
+  id: z.string(),
+  hostname: z.string(),
+});
+
+export function domainWithUsagePackageDomainFromJSON(
+  jsonString: string,
+): SafeParseResult<DomainWithUsagePackageDomain, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DomainWithUsagePackageDomain$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DomainWithUsagePackageDomain' from JSON`,
+  );
+}
+
+/** @internal */
+export const ManagerBinding$inboundSchema: z.ZodType<ManagerBinding, unknown> =
+  z.object({
+    id: z.string(),
+    managerId: z.string(),
+    managerName: z.string(),
+    hostname: z.string(),
+  });
+
+export function managerBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<ManagerBinding, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ManagerBinding$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ManagerBinding' from JSON`,
+  );
+}
+
+/** @internal */
 export const DomainWithUsageUsage$inboundSchema: z.ZodType<
   DomainWithUsageUsage,
   unknown
@@ -109,6 +161,10 @@ export const DomainWithUsageUsage$inboundSchema: z.ZodType<
     z.lazy(() => DeploymentUrlProject$inboundSchema),
   ),
   portalBindings: z.array(z.lazy(() => PortalBinding$inboundSchema)),
+  packageDomains: z.array(
+    z.lazy(() => DomainWithUsagePackageDomain$inboundSchema),
+  ),
+  managerBindings: z.array(z.lazy(() => ManagerBinding$inboundSchema)),
 });
 
 export function domainWithUsageUsageFromJSON(

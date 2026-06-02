@@ -58,7 +58,7 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${managedByTag}": "deployment"
+                "aws:ResourceTag/${managedByTag}": "runtime"
               }
             }
           },
@@ -70,7 +70,7 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${managedByTag}": "deployment"
+                "aws:ResourceTag/${managedByTag}": "runtime"
               }
             }
           }
@@ -107,7 +107,7 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${managedByTag}": "deployment"
+                "aws:ResourceTag/${managedByTag}": "runtime"
               }
             }
           },
@@ -118,7 +118,7 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${managedByTag}": "deployment"
+                "aws:ResourceTag/${managedByTag}": "runtime"
               }
             }
           }

@@ -35,11 +35,11 @@
   "packageManager": "pnpm@10.11.0",
   "pnpm": {
     "overrides": {
-      "@alienplatform/sdk": "file:packages/sdk",
-      "@alienplatform/core": "file:packages/core",
-      "@alienplatform/typescript-config": "file:packages/config-typescript",
-      "@alienplatform/testing": "file:packages/testing",
-      "@alienplatform/platform-api": "file:client-sdks/platform/typescript"
+      "@alienplatform/sdk": "link:packages/sdk",
+      "@alienplatform/core": "link:packages/core",
+      "@alienplatform/typescript-config": "link:packages/config-typescript",
+      "@alienplatform/testing": "link:packages/testing",
+      "@alienplatform/platform-api": "link:client-sdks/platform/typescript"
     }
   }
 }

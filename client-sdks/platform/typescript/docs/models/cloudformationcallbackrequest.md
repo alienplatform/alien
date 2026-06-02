@@ -22,10 +22,17 @@ let value: CloudFormationCallbackRequest = {
     setupFingerprint: "<value>",
     setupFingerprintVersion: 14476,
     stackSettings: {},
-    managementConfig: {
-      platform: "kubernetes",
-    },
-    resources: [],
+    resources: [
+      {
+        id: "<id>",
+        type: "<value>",
+        importData: {
+          "key": "<value>",
+          "key1": "<value>",
+          "key2": "<value>",
+        },
+      },
+    ],
   },
 };
 ```

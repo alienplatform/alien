@@ -34,6 +34,24 @@ export type PersistImportedDeploymentRequestPlatformEnum = ClosedEnum<
 >;
 
 /**
+ * Base cloud platform for cloud-backed Kubernetes imports.
+ */
+export const PersistImportedDeploymentRequestBasePlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Base cloud platform for cloud-backed Kubernetes imports.
+ */
+export type PersistImportedDeploymentRequestBasePlatform = ClosedEnum<
+  typeof PersistImportedDeploymentRequestBasePlatform
+>;
+
+/**
  * Deployment model: how updates are delivered to the remote environment.
  */
 export const PersistImportedDeploymentRequestDeploymentModel = {
@@ -57,6 +75,7 @@ export type PersistImportedDeploymentRequestAwsUnion =
 
 export type PersistImportedDeploymentRequestAzureStackSettings = {
   keyVaultCertificateId: string;
+  keyVaultResourceId?: string | null | undefined;
 };
 
 export type PersistImportedDeploymentRequestAzureUnion =
@@ -891,6 +910,10 @@ export type PersistImportedDeploymentRequestTypeByoVnetAzure = ClosedEnum<
 >;
 
 export type PersistImportedDeploymentRequestNetworkByoVnetAzure = {
+  /**
+   * Name of the dedicated classic Application Gateway subnet within the VNet.
+   */
+  applicationGatewaySubnetName?: string | null | undefined;
   /**
    * Name of the private subnet within the VNet
    */
@@ -2652,6 +2675,10 @@ export type PersistImportedDeploymentRequest = {
    */
   platform: PersistImportedDeploymentRequestPlatformEnum;
   /**
+   * Base cloud platform for cloud-backed Kubernetes imports.
+   */
+  basePlatform?: PersistImportedDeploymentRequestBasePlatform | undefined;
+  /**
    * User-customizable deployment settings specified at deploy time.
    *
    * @remarks
@@ -2743,6 +2770,12 @@ export const PersistImportedDeploymentRequestPlatformEnum$outboundSchema:
   );
 
 /** @internal */
+export const PersistImportedDeploymentRequestBasePlatform$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestBasePlatform> = z.enum(
+    PersistImportedDeploymentRequestBasePlatform,
+  );
+
+/** @internal */
 export const PersistImportedDeploymentRequestDeploymentModel$outboundSchema:
   z.ZodEnum<typeof PersistImportedDeploymentRequestDeploymentModel> = z.enum(
     PersistImportedDeploymentRequestDeploymentModel,
@@ -2799,6 +2832,7 @@ export function persistImportedDeploymentRequestAwsUnionToJSON(
 /** @internal */
 export type PersistImportedDeploymentRequestAzureStackSettings$Outbound = {
   keyVaultCertificateId: string;
+  keyVaultResourceId?: string | null | undefined;
 };
 
 /** @internal */
@@ -2808,6 +2842,7 @@ export const PersistImportedDeploymentRequestAzureStackSettings$outboundSchema:
     PersistImportedDeploymentRequestAzureStackSettings
   > = z.object({
     keyVaultCertificateId: z.string(),
+    keyVaultResourceId: z.nullable(z.string()).optional(),
   });
 
 export function persistImportedDeploymentRequestAzureStackSettingsToJSON(
@@ -4812,6 +4847,7 @@ export const PersistImportedDeploymentRequestTypeByoVnetAzure$outboundSchema:
 
 /** @internal */
 export type PersistImportedDeploymentRequestNetworkByoVnetAzure$Outbound = {
+  application_gateway_subnet_name?: string | null | undefined;
   private_subnet_name: string;
   public_subnet_name: string;
   type: string;
@@ -4824,12 +4860,14 @@ export const PersistImportedDeploymentRequestNetworkByoVnetAzure$outboundSchema:
     PersistImportedDeploymentRequestNetworkByoVnetAzure$Outbound,
     PersistImportedDeploymentRequestNetworkByoVnetAzure
   > = z.object({
+    applicationGatewaySubnetName: z.nullable(z.string()).optional(),
     privateSubnetName: z.string(),
     publicSubnetName: z.string(),
     type: PersistImportedDeploymentRequestTypeByoVnetAzure$outboundSchema,
     vnetResourceId: z.string(),
   }).transform((v) => {
     return remap$(v, {
+      applicationGatewaySubnetName: "application_gateway_subnet_name",
       privateSubnetName: "private_subnet_name",
       publicSubnetName: "public_subnet_name",
       vnetResourceId: "vnet_resource_id",
@@ -8117,6 +8155,7 @@ export type PersistImportedDeploymentRequest$Outbound = {
   deploymentGroupId: string;
   managerId: string;
   platform: string;
+  basePlatform?: string | undefined;
   stackSettings: PersistImportedDeploymentRequestStackSettings$Outbound;
   stackState?: any | null | undefined;
   environmentInfo?:
@@ -8156,6 +8195,8 @@ export const PersistImportedDeploymentRequest$outboundSchema: z.ZodType<
   deploymentGroupId: z.string(),
   managerId: z.string(),
   platform: PersistImportedDeploymentRequestPlatformEnum$outboundSchema,
+  basePlatform: PersistImportedDeploymentRequestBasePlatform$outboundSchema
+    .optional(),
   stackSettings: z.lazy(() =>
     PersistImportedDeploymentRequestStackSettings$outboundSchema
   ),

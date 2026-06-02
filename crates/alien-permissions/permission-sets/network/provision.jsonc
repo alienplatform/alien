@@ -33,7 +33,7 @@
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${managedByTag}": "deployment"
+                "aws:RequestTag/${managedByTag}": "runtime"
               }
             }
           }
@@ -78,7 +78,7 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${managedByTag}": "deployment"
+                "aws:ResourceTag/${managedByTag}": "runtime"
               }
             }
           }

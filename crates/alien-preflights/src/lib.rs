@@ -257,6 +257,9 @@ impl PreflightRegistry {
         registry.add_deployment_prerequisite_check(Box::new(
             deployment_prerequisites::DomainMetadataRequiredCheck,
         ));
+        registry.add_deployment_prerequisite_check(Box::new(
+            deployment_prerequisites::TargetResourcesResolveCheck,
+        ));
 
         // Add compatibility checks
         registry.add_compatibility_check(Box::new(compatibility::PermissionProfilesUnchangedCheck));

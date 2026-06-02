@@ -154,10 +154,10 @@ mod tests {
     async fn test_allows_frozen_setup_resources() {
         let mut resources = IndexMap::new();
         resources.insert(
-            "remote-stack-management".to_string(),
+            "management".to_string(),
             ResourceEntry {
                 config: alien_core::Resource::new(
-                    RemoteStackManagement::new("remote-stack-management".to_string()).build(),
+                    RemoteStackManagement::new("management".to_string()).build(),
                 ),
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(),
@@ -176,6 +176,6 @@ mod tests {
         let result = check.check(&stack, Platform::Aws).await.unwrap();
         assert!(!result.success);
         assert!(!result.errors.is_empty());
-        assert!(result.errors[0].contains("remote-stack-management"));
+        assert!(result.errors[0].contains("management"));
     }
 }

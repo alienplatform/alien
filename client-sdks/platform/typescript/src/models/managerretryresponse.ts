@@ -59,6 +59,7 @@ export type ManagerRetryResponseAwsUnion3 = ManagerRetryResponseAws3 | any;
 
 export type ManagerRetryResponseAzure3 = {
   keyVaultCertificateId: string;
+  keyVaultResourceId?: string | null | undefined;
 };
 
 export type ManagerRetryResponseAzureUnion3 = ManagerRetryResponseAzure3 | any;
@@ -876,6 +877,10 @@ export type ManagerRetryResponseTypeByoVnetAzure3 = ClosedEnum<
 
 export type ManagerRetryResponseNetworkByoVnetAzure3 = {
   /**
+   * Name of the dedicated classic Application Gateway subnet within the VNet.
+   */
+  applicationGatewaySubnetName?: string | null | undefined;
+  /**
    * Name of the private subnet within the VNet
    */
   privateSubnetName: string;
@@ -1109,6 +1114,7 @@ export type ManagerRetryResponseAwsUnion2 = ManagerRetryResponseAws2 | any;
 
 export type ManagerRetryResponseAzure2 = {
   keyVaultCertificateId: string;
+  keyVaultResourceId?: string | null | undefined;
 };
 
 export type ManagerRetryResponseAzureUnion2 = ManagerRetryResponseAzure2 | any;
@@ -1926,6 +1932,10 @@ export type ManagerRetryResponseTypeByoVnetAzure2 = ClosedEnum<
 
 export type ManagerRetryResponseNetworkByoVnetAzure2 = {
   /**
+   * Name of the dedicated classic Application Gateway subnet within the VNet.
+   */
+  applicationGatewaySubnetName?: string | null | undefined;
+  /**
    * Name of the private subnet within the VNet
    */
   privateSubnetName: string;
@@ -2154,6 +2164,7 @@ export type ManagerRetryResponseAwsUnion1 = ManagerRetryResponseAws1 | any;
 
 export type ManagerRetryResponseAzure1 = {
   keyVaultCertificateId: string;
+  keyVaultResourceId?: string | null | undefined;
 };
 
 export type ManagerRetryResponseAzureUnion1 = ManagerRetryResponseAzure1 | any;
@@ -2971,6 +2982,10 @@ export type ManagerRetryResponseTypeByoVnetAzure1 = ClosedEnum<
 
 export type ManagerRetryResponseNetworkByoVnetAzure1 = {
   /**
+   * Name of the dedicated classic Application Gateway subnet within the VNet.
+   */
+  applicationGatewaySubnetName?: string | null | undefined;
+  /**
    * Name of the private subnet within the VNet
    */
   privateSubnetName: string;
@@ -3305,6 +3320,7 @@ export const ManagerRetryResponseAzure3$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   keyVaultCertificateId: z.string(),
+  keyVaultResourceId: z.nullable(z.string()).optional(),
 });
 
 export function managerRetryResponseAzure3FromJSON(
@@ -4748,12 +4764,14 @@ export const ManagerRetryResponseNetworkByoVnetAzure3$inboundSchema: z.ZodType<
   ManagerRetryResponseNetworkByoVnetAzure3,
   unknown
 > = z.object({
+  application_gateway_subnet_name: z.nullable(z.string()).optional(),
   private_subnet_name: z.string(),
   public_subnet_name: z.string(),
   type: ManagerRetryResponseTypeByoVnetAzure3$inboundSchema,
   vnet_resource_id: z.string(),
 }).transform((v) => {
   return remap$(v, {
+    "application_gateway_subnet_name": "applicationGatewaySubnetName",
     "private_subnet_name": "privateSubnetName",
     "public_subnet_name": "publicSubnetName",
     "vnet_resource_id": "vnetResourceId",
@@ -5052,6 +5070,7 @@ export const ManagerRetryResponseAzure2$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   keyVaultCertificateId: z.string(),
+  keyVaultResourceId: z.nullable(z.string()).optional(),
 });
 
 export function managerRetryResponseAzure2FromJSON(
@@ -6495,12 +6514,14 @@ export const ManagerRetryResponseNetworkByoVnetAzure2$inboundSchema: z.ZodType<
   ManagerRetryResponseNetworkByoVnetAzure2,
   unknown
 > = z.object({
+  application_gateway_subnet_name: z.nullable(z.string()).optional(),
   private_subnet_name: z.string(),
   public_subnet_name: z.string(),
   type: ManagerRetryResponseTypeByoVnetAzure2$inboundSchema,
   vnet_resource_id: z.string(),
 }).transform((v) => {
   return remap$(v, {
+    "application_gateway_subnet_name": "applicationGatewaySubnetName",
     "private_subnet_name": "privateSubnetName",
     "public_subnet_name": "publicSubnetName",
     "vnet_resource_id": "vnetResourceId",
@@ -6794,6 +6815,7 @@ export const ManagerRetryResponseAzure1$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   keyVaultCertificateId: z.string(),
+  keyVaultResourceId: z.nullable(z.string()).optional(),
 });
 
 export function managerRetryResponseAzure1FromJSON(
@@ -8237,12 +8259,14 @@ export const ManagerRetryResponseNetworkByoVnetAzure1$inboundSchema: z.ZodType<
   ManagerRetryResponseNetworkByoVnetAzure1,
   unknown
 > = z.object({
+  application_gateway_subnet_name: z.nullable(z.string()).optional(),
   private_subnet_name: z.string(),
   public_subnet_name: z.string(),
   type: ManagerRetryResponseTypeByoVnetAzure1$inboundSchema,
   vnet_resource_id: z.string(),
 }).transform((v) => {
   return remap$(v, {
+    "application_gateway_subnet_name": "applicationGatewaySubnetName",
     "private_subnet_name": "privateSubnetName",
     "public_subnet_name": "publicSubnetName",
     "vnet_resource_id": "vnetResourceId",

@@ -271,10 +271,8 @@ pub async fn stack_import(
             let stack_settings = match updated.stack_settings {
                 Some(settings) => settings,
                 None => {
-                    return ErrorData::internal(
-                        "imported deployment is missing stack_settings",
-                    )
-                    .into_response();
+                    return ErrorData::internal("imported deployment is missing stack_settings")
+                        .into_response();
                 }
             };
             return (

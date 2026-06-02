@@ -136,7 +136,7 @@ Resources:
           Prefix: ''
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -180,7 +180,7 @@ Resources:
       MessageRetentionPeriod: 345600
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName
@@ -211,7 +211,7 @@ Resources:
         PointInTimeRecoveryEnabled: true
       Tags:
       - Key: managed-by
-        Value: deployment
+        Value: setup
       - Key: deployment
         Value:
           Ref: AWS::StackName

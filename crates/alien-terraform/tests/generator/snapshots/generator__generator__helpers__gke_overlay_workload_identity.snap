@@ -266,7 +266,7 @@ resource "google_storage_bucket" "data" {
   force_destroy               = true
   public_access_prevention    = "enforced"
   labels = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "data"
     "resource-type" = "storage"

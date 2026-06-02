@@ -1,6 +1,6 @@
 # ConfigAgentImage
 
-Branding configuration for the agent binary.
+Branding configuration for the Operator image.
 
 ## Example Usage
 
@@ -19,5 +19,5 @@ let value: ConfigAgentImage = {
 | Field                                                     | Type                                                      | Required                                                  | Description                                               |
 | --------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- |
 | `displayName`                                             | *string*                                                  | :heavy_check_mark:                                        | Human-friendly display name for logs and startup messages |
-| `name`                                                    | *string*                                                  | :heavy_check_mark:                                        | Binary name (e.g., "acme-agent")                          |
+| `name`                                                    | *string*                                                  | :heavy_check_mark:                                        | Image name (e.g., "acme-operator")                        |
 | `type`                                                    | *"agent-image"*                                           | :heavy_check_mark:                                        | N/A                                                       |

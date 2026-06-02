@@ -533,6 +533,7 @@ mod oauth_flow {
 
         let token_result = oauth_client
             .exchange_refresh_token(&RefreshToken::new(refresh.to_string()))
+            .add_extra_param("resource", base)
             .request_async(&http_client)
             .await
             .into_alien_error()

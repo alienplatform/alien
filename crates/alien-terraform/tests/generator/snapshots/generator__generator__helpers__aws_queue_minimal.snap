@@ -159,7 +159,7 @@ resource "aws_sqs_queue" "jobs" {
   visibility_timeout_seconds = 30
   message_retention_seconds  = 345600
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "jobs"
     "resource-type" = "queue"

@@ -20,8 +20,13 @@ Alien provides a better model: **managed self-hosting**.
 
 Install the CLI:
 
-```bash
+```bash title="macOS / Linux"
 curl -fsSL https://alien.dev/install | sh
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+```powershell title="Windows"
+irm https://alien.dev/install.ps1 | iex
 ```
 
 Create a project and start developing:

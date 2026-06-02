@@ -279,7 +279,7 @@ resource "aws_vpc" "default_network" {
   enable_dns_support   = true
   enable_dns_hostnames = true
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "default-network"
     "resource-type" = "network"
@@ -290,7 +290,7 @@ resource "aws_internet_gateway" "default_network" {
   count  = var.network_mode == "create-new" ? 1 : 0
   vpc_id = aws_vpc.default_network[0].id
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "default-network"
     "resource-type" = "network"
@@ -304,7 +304,7 @@ resource "aws_subnet" "default_network_public" {
   availability_zone       = data.aws_availability_zones.available.names[count.index]
   map_public_ip_on_launch = true
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "default-network"
     "resource-type" = "network"
@@ -317,7 +317,7 @@ resource "aws_subnet" "default_network_private" {
   cidr_block        = cidrsubnet(aws_vpc.default_network[0].cidr_block, 8, count.index + var.availability_zones)
   availability_zone = data.aws_availability_zones.available.names[count.index]
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "default-network"
     "resource-type" = "network"
@@ -328,7 +328,7 @@ resource "aws_eip" "default_network_nat" {
   count  = var.network_mode == "create-new" ? 1 : 0
   domain = "vpc"
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "default-network"
     "resource-type" = "network"
@@ -340,7 +340,7 @@ resource "aws_nat_gateway" "default_network" {
   allocation_id = aws_eip.default_network_nat[0].id
   subnet_id     = aws_subnet.default_network_public[0].id
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "default-network"
     "resource-type" = "network"
@@ -357,7 +357,7 @@ resource "aws_route_table" "default_network_public" {
   }
 
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "default-network"
     "resource-type" = "network"
@@ -374,7 +374,7 @@ resource "aws_route_table" "default_network_private" {
   }
 
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "default-network"
     "resource-type" = "network"
@@ -409,7 +409,7 @@ resource "aws_security_group" "default_network_workload" {
   }
 
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "default-network"
     "resource-type" = "network"
@@ -421,7 +421,7 @@ resource "aws_iam_role" "execution_sa" {
   name               = length(format("%s-%s", local.resource_prefix, "execution-sa")) <= 64 ? format("%s-%s", local.resource_prefix, "execution-sa") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "execution-sa"), 0, 55), substr(sha1(format("%s-%s", local.resource_prefix, "execution-sa")), 0, 8))
   assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { Service = ["codebuild.amazonaws.com", "lambda.amazonaws.com"] }, Action = "sts:AssumeRole" }] })
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "execution-sa"
     "resource-type" = "service-account"
@@ -445,7 +445,7 @@ resource "aws_iam_role" "management" {
   name               = length(format("%s-%s", local.resource_prefix, "management")) <= 64 ? format("%s-%s", local.resource_prefix, "management") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "management"), 0, 55), substr(sha1(format("%s-%s", local.resource_prefix, "management")), 0, 8))
   assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "AllowManagingRole", Effect = "Allow", Principal = { AWS = var.managing_role_arn }, Action = "sts:AssumeRole", Condition = { StringEquals = { "aws:PrincipalArn" = var.managing_role_arn } } }] })
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "management"
     "resource-type" = "management"
@@ -454,7 +454,7 @@ resource "aws_iam_role" "management" {
 
 resource "aws_iam_policy" "management_managed_policy_0" {
   name   = length(format("%s-%s", local.resource_prefix, "deployment-management-0")) <= 128 ? format("%s-%s", local.resource_prefix, "deployment-management-0") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "deployment-management-0"), 0, 119), substr(sha1(format("%s-%s", local.resource_prefix, "deployment-management-0")), 0, 8))
-  policy = jsonencode({ Statement = [{ Action = ["lambda:UpdateFunctionCode", "lambda:UpdateFunctionConfiguration", "lambda:PublishVersion", "lambda:CreateAlias", "lambda:DeleteAlias", "lambda:UpdateAlias", "lambda:PutFunctionConcurrency", "lambda:DeleteFunctionConcurrency", "lambda:PutFunctionEventInvokeConfig", "lambda:DeleteFunctionEventInvokeConfig", "lambda:GetFunction", "lambda:GetFunctionConfiguration", "lambda:ListVersionsByFunction", "lambda:ListAliases", "lambda:GetPolicy", "lambda:ListTags", "lambda:GetFunctionUrlConfig", "lambda:GetCodeSigningConfig", "lambda:GetFunctionEventInvokeConfig", "lambda:AddPermission", "lambda:RemovePermission", "lambda:GetEventSourceMapping", "lambda:ListEventSourceMappings", "lambda:UpdateEventSourceMapping"], Condition = { StringEquals = { "aws:ResourceTag/deployment" = "${local.resource_prefix}", "aws:ResourceTag/managed-by" = "deployment" } }, Effect = "Allow", Resource = ["arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${local.resource_prefix}-*"], Sid = "UpdateLambdaFunctions" }, { Action = ["iam:PassRole"], Effect = "Allow", Resource = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*-sa"], Sid = "PassLambdaExecutionRoles" }, { Action = ["ecr:GetAuthorizationToken"], Effect = "Allow", Resource = ["*"], Sid = "GetEcrLoginToken" }, { Action = ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"], Effect = "Allow", Resource = ["arn:aws:ecr:*:${var.managing_account_id}:repository/*"], Sid = "ReadDeploymentContainerImages" }, { Action = ["acm:ImportCertificate", "acm:AddTagsToCertificate"], Condition = { StringEquals = { "aws:RequestTag/deployment" = "${local.resource_prefix}", "aws:RequestTag/managed-by" = "deployment" } }, Effect = "Allow", Resource = ["arn:aws:acm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:certificate/*"], Sid = "ImportTlsCertificates" }, { Action = ["acm:ImportCertificate", "acm:AddTagsToCertificate", "acm:DeleteCertificate", "acm:DescribeCertificate"], Condition = { StringEquals = { "aws:ResourceTag/deployment" = "${local.resource_prefix}", "aws:ResourceTag/managed-by" = "deployment" } }, Effect = "Allow", Resource = ["arn:aws:acm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:certificate/*"], Sid = "ManageTlsCertificates" }, { Action = ["apigateway:POST", "apigateway:PUT"], Condition = { StringEquals = { "aws:RequestTag/deployment" = "${local.resource_prefix}", "aws:RequestTag/managed-by" = "deployment" } }, Effect = "Allow", Resource = ["arn:aws:apigateway:${data.aws_region.current.region}::/apis", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames", "arn:aws:apigateway:${data.aws_region.current.region}::/tags/*"], Sid = "CreateHttpApiEndpoints" }, { Action = ["apigateway:POST"], Condition = { StringEquals = { "aws:ResourceTag/deployment" = "${local.resource_prefix}", "aws:ResourceTag/managed-by" = "deployment" } }, Effect = "Allow", Resource = ["arn:aws:apigateway:${data.aws_region.current.region}::/apis/*", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*/apimappings"], Sid = "CreateHttpApiRoutes" }, { Action = ["apigateway:TagResource", "apigateway:PUT"], Condition = { StringEquals = { "aws:RequestTag/deployment" = "${local.resource_prefix}", "aws:RequestTag/managed-by" = "deployment" } }, Effect = "Allow", Resource = ["arn:aws:apigateway:${data.aws_region.current.region}::/apis/*", "arn:aws:apigateway:${data.aws_region.current.region}::/apis/*/stages", "arn:aws:apigateway:${data.aws_region.current.region}::/apis/*/stages/*", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*", "arn:aws:apigateway:${data.aws_region.current.region}::/tags/*"], Sid = "TagHttpApiEndpoints" }, { Action = ["apigateway:GET", "apigateway:DELETE", "apigateway:PATCH", "apigateway:PUT"], Condition = { StringEquals = { "aws:ResourceTag/deployment" = "${local.resource_prefix}", "aws:ResourceTag/managed-by" = "deployment" } }, Effect = "Allow", Resource = ["arn:aws:apigateway:${data.aws_region.current.region}::/apis/*", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*/apimappings", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*/apimappings/*"], Sid = "ManageHttpApiEndpoints" }, { Action = ["events:PutRule", "events:TagResource"], Condition = { StringEquals = { "aws:RequestTag/deployment" = "${local.resource_prefix}", "aws:RequestTag/managed-by" = "deployment" } }, Effect = "Allow", Resource = ["arn:aws:events:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:rule/${local.resource_prefix}-*"], Sid = "CreateEventbridgeSchedules" }, { Action = ["events:DeleteRule", "events:DescribeRule", "events:PutTargets", "events:RemoveTargets"], Condition = { StringEquals = { "aws:ResourceTag/deployment" = "${local.resource_prefix}", "aws:ResourceTag/managed-by" = "deployment" } }, Effect = "Allow", Resource = ["arn:aws:events:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:rule/${local.resource_prefix}-*"], Sid = "ManageEventbridgeSchedules" }, { Action = ["s3:GetBucketLocation", "s3:GetBucketVersioning", "s3:GetLifecycleConfiguration", "s3:GetBucketPolicy", "s3:GetBucketAcl", "s3:GetEncryptionConfiguration", "s3:GetBucketPublicAccessBlock"], Effect = "Allow", Resource = ["arn:aws:s3:::${local.resource_prefix}-*"], Sid = "CheckS3BucketHealth" }], Version = "2012-10-17" })
+  policy = jsonencode({ Statement = [{ Action = ["lambda:UpdateFunctionCode", "lambda:UpdateFunctionConfiguration", "lambda:PublishVersion", "lambda:CreateAlias", "lambda:DeleteAlias", "lambda:UpdateAlias", "lambda:PutFunctionConcurrency", "lambda:DeleteFunctionConcurrency", "lambda:PutFunctionEventInvokeConfig", "lambda:DeleteFunctionEventInvokeConfig", "lambda:GetFunction", "lambda:GetFunctionConfiguration", "lambda:ListVersionsByFunction", "lambda:ListAliases", "lambda:GetPolicy", "lambda:ListTags", "lambda:GetFunctionUrlConfig", "lambda:GetCodeSigningConfig", "lambda:GetFunctionEventInvokeConfig", "lambda:AddPermission", "lambda:RemovePermission", "lambda:GetEventSourceMapping", "lambda:ListEventSourceMappings", "lambda:UpdateEventSourceMapping"], Condition = { StringEquals = { "aws:ResourceTag/deployment" = "${local.resource_prefix}", "aws:ResourceTag/managed-by" = "runtime" } }, Effect = "Allow", Resource = ["arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:function:${local.resource_prefix}-*"], Sid = "UpdateLambdaFunctions" }, { Action = ["iam:PassRole"], Effect = "Allow", Resource = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.resource_prefix}-*-sa"], Sid = "PassLambdaExecutionRoles" }, { Action = ["ecr:GetAuthorizationToken"], Effect = "Allow", Resource = ["*"], Sid = "GetEcrLoginToken" }, { Action = ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"], Effect = "Allow", Resource = ["arn:aws:ecr:*:${var.managing_account_id}:repository/*"], Sid = "ReadDeploymentContainerImages" }, { Action = ["acm:ImportCertificate", "acm:AddTagsToCertificate"], Condition = { StringEquals = { "aws:RequestTag/deployment" = "${local.resource_prefix}", "aws:RequestTag/managed-by" = "runtime" } }, Effect = "Allow", Resource = ["arn:aws:acm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:certificate/*"], Sid = "ImportTlsCertificates" }, { Action = ["acm:ImportCertificate", "acm:AddTagsToCertificate", "acm:DeleteCertificate", "acm:DescribeCertificate"], Condition = { StringEquals = { "aws:ResourceTag/deployment" = "${local.resource_prefix}", "aws:ResourceTag/managed-by" = "runtime" } }, Effect = "Allow", Resource = ["arn:aws:acm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:certificate/*"], Sid = "ManageTlsCertificates" }, { Action = ["apigateway:POST", "apigateway:PUT"], Condition = { StringEquals = { "aws:RequestTag/deployment" = "${local.resource_prefix}", "aws:RequestTag/managed-by" = "runtime" } }, Effect = "Allow", Resource = ["arn:aws:apigateway:${data.aws_region.current.region}::/apis", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames", "arn:aws:apigateway:${data.aws_region.current.region}::/tags/*"], Sid = "CreateHttpApiEndpoints" }, { Action = ["apigateway:POST"], Condition = { StringEquals = { "aws:ResourceTag/deployment" = "${local.resource_prefix}", "aws:ResourceTag/managed-by" = "runtime" } }, Effect = "Allow", Resource = ["arn:aws:apigateway:${data.aws_region.current.region}::/apis/*", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*/apimappings"], Sid = "CreateHttpApiRoutes" }, { Action = ["apigateway:TagResource", "apigateway:PUT"], Condition = { StringEquals = { "aws:RequestTag/deployment" = "${local.resource_prefix}", "aws:RequestTag/managed-by" = "runtime" } }, Effect = "Allow", Resource = ["arn:aws:apigateway:${data.aws_region.current.region}::/apis/*", "arn:aws:apigateway:${data.aws_region.current.region}::/apis/*/stages", "arn:aws:apigateway:${data.aws_region.current.region}::/apis/*/stages/*", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*", "arn:aws:apigateway:${data.aws_region.current.region}::/tags/*"], Sid = "TagHttpApiEndpoints" }, { Action = ["apigateway:GET", "apigateway:DELETE", "apigateway:PATCH", "apigateway:PUT"], Condition = { StringEquals = { "aws:ResourceTag/deployment" = "${local.resource_prefix}", "aws:ResourceTag/managed-by" = "runtime" } }, Effect = "Allow", Resource = ["arn:aws:apigateway:${data.aws_region.current.region}::/apis/*", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*/apimappings", "arn:aws:apigateway:${data.aws_region.current.region}::/domainnames/*/apimappings/*"], Sid = "ManageHttpApiEndpoints" }, { Action = ["events:PutRule", "events:TagResource"], Condition = { StringEquals = { "aws:RequestTag/deployment" = "${local.resource_prefix}", "aws:RequestTag/managed-by" = "runtime" } }, Effect = "Allow", Resource = ["arn:aws:events:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:rule/${local.resource_prefix}-*"], Sid = "CreateEventbridgeSchedules" }, { Action = ["events:DeleteRule", "events:DescribeRule", "events:PutTargets", "events:RemoveTargets"], Condition = { StringEquals = { "aws:ResourceTag/deployment" = "${local.resource_prefix}", "aws:ResourceTag/managed-by" = "runtime" } }, Effect = "Allow", Resource = ["arn:aws:events:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:rule/${local.resource_prefix}-*"], Sid = "ManageEventbridgeSchedules" }, { Action = ["s3:GetBucketLocation", "s3:GetBucketVersioning", "s3:GetLifecycleConfiguration", "s3:GetBucketPolicy", "s3:GetBucketAcl", "s3:GetEncryptionConfiguration", "s3:GetBucketPublicAccessBlock"], Effect = "Allow", Resource = ["arn:aws:s3:::${local.resource_prefix}-*"], Sid = "CheckS3BucketHealth" }], Version = "2012-10-17" })
 }
 
 resource "aws_iam_role_policy_attachment" "management_managed_policy_0_attachment" {
@@ -483,7 +483,7 @@ resource "aws_s3_bucket" "assets" {
   bucket        = "${local.resource_prefix}-assets"
   force_destroy = true
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "assets"
     "resource-type" = "storage"
@@ -542,7 +542,7 @@ resource "aws_sqs_queue" "jobs" {
   visibility_timeout_seconds = 1080
   message_retention_seconds  = 345600
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "jobs"
     "resource-type" = "queue"
@@ -580,7 +580,7 @@ resource "aws_dynamodb_table" "metadata" {
   }
 
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "metadata"
     "resource-type" = "kv"
@@ -613,7 +613,7 @@ resource "aws_ecr_repository" "registry" {
 
   force_delete = false
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "registry"
     "resource-type" = "artifact-registry"
@@ -633,7 +633,7 @@ resource "aws_iam_role" "registry_pull" {
   name               = length(format("%s-%s", local.resource_prefix, "registry-pull")) <= 64 ? format("%s-%s", local.resource_prefix, "registry-pull") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "registry-pull"), 0, 55), substr(sha1(format("%s-%s", local.resource_prefix, "registry-pull")), 0, 8))
   assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { AWS = aws_iam_role.execution_sa.arn }, Action = "sts:AssumeRole" }] })
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "registry"
     "resource-type" = "artifact-registry"
@@ -644,7 +644,7 @@ resource "aws_iam_role" "registry_push" {
   name               = length(format("%s-%s", local.resource_prefix, "registry-push")) <= 64 ? format("%s-%s", local.resource_prefix, "registry-push") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "registry-push"), 0, 55), substr(sha1(format("%s-%s", local.resource_prefix, "registry-push")), 0, 8))
   assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { AWS = aws_iam_role.execution_sa.arn }, Action = "sts:AssumeRole" }] })
   tags = {
-    "managed-by"    = "deployment"
+    "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "registry"
     "resource-type" = "artifact-registry"
