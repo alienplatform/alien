@@ -22,3 +22,6 @@ tempfile = { workspace = true, optional = true }
 [dev-dependencies]
 insta = { workspace = true }
 tempfile = { workspace = true }
+# Activate the `test-utils` feature so external integration tests can reach
+# `alien_helm::test_utils::*` (the module is gated on `test-utils`).
+alien-helm = { path = ".", features = ["test-utils"] }

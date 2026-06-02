@@ -158,6 +158,21 @@ async fn run(args: Args, init_hook: InitHook) -> Result<()> {
 
     let cli_sync_token = load_sync_token(args.sync_token_file.as_deref()).await?;
 
+    // Stack settings are loaded up front so they can be forwarded on the
+    // `initialize` call (multi-tenant managers like managerx require them
+    // to construct the deployment row; single-tenant OSS ignores them).
+    let stack_settings_json = load_config_value(
+        args.stack_settings.clone(),
+        args.stack_settings_file.as_deref(),
+        "stack settings",
+        false,
+    )
+    .await?;
+    let initial_stack_settings = parse_json_opt::<alien_core::StackSettings>(
+        stack_settings_json.clone(),
+        "stack settings",
+    )?;
+
     let effective_sync_url = args
         .sync_url
         .or_else(|| embedded_config.as_ref().and_then(|c| c.manager_url.clone()));
@@ -182,6 +197,16 @@ async fn run(args: Args, init_hook: InitHook) -> Result<()> {
 
             if let Some(stored_deployment_id) = db.get_deployment_id().await? {
                 info!("   Using stored deployment ID: {}", stored_deployment_id);
+                // Prefer the deployment-scoped token previously returned by
+                // `/v1/initialize` over the chart-mounted deployment-group
+                // token. The platform API rejects `/v1/sync/acquire` calls
+                // made with a deployment-group token (403 Forbidden), so
+                // without this restoration step pod restarts silently lose
+                // sync until the agent re-initializes.
+                if let Some(stored_token) = db.get_sync_token().await? {
+                    info!("   Using stored deployment-scoped sync token");
+                    sync_token = stored_token;
+                }
             } else if let Some(deployment_id) = configured_deployment_id {
                 info!("   Using configured deployment ID: {}", deployment_id);
                 db.set_deployment_id(&deployment_id).await?;
@@ -193,6 +218,7 @@ async fn run(args: Args, init_hook: InitHook) -> Result<()> {
                     &sync_token,
                     args.platform,
                     args.agent_name.as_deref(),
+                    initial_stack_settings.as_ref(),
                 )
                 .await?;
 
@@ -201,6 +227,9 @@ async fn run(args: Args, init_hook: InitHook) -> Result<()> {
                 if let Some(ref dt) = deployment_token {
                     info!("   Received deployment-scoped token from manager");
                     sync_token = dt.clone();
+                    // Persist so pod restarts don't fall back to the
+                    // chart-mounted deployment-group token.
+                    db.set_sync_token(&sync_token).await?;
                 }
 
                 info!(
@@ -249,13 +278,8 @@ async fn run(args: Args, init_hook: InitHook) -> Result<()> {
     )
     .await?;
     let public_urls = parse_json_opt::<HashMap<String, String>>(public_urls_json, "public URLs")?;
-    let stack_settings_json = load_config_value(
-        args.stack_settings,
-        args.stack_settings_file.as_deref(),
-        "stack settings",
-        false,
-    )
-    .await?;
+    // Re-parse from the JSON we loaded up front so the downstream code path
+    // sees the same `StackSettings` that was forwarded to `initialize`.
     let mut stack_settings =
         parse_json_opt::<alien_core::StackSettings>(stack_settings_json, "stack settings")?
             .unwrap_or_default();
@@ -460,6 +484,7 @@ async fn initialize_with_manager(
     token: &str,
     platform: Platform,
     agent_name: Option<&str>,
+    stack_settings: Option<&alien_core::StackSettings>,
 ) -> Result<(String, Option<String>)> {
     use alien_manager_api::types::Platform as SdkPlatform;
     use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
@@ -505,6 +530,25 @@ async fn initialize_with_manager(
 
     if let Some(name) = default_name {
         builder = builder.body_map(|b| b.name(name));
+    }
+
+    // Forward chart/CLI-provided stack settings. Multi-tenant embedders
+    // (alien-managerx) require this on initialize to construct the
+    // deployment row; the OSS standalone manager accepts it and ignores
+    // anything it doesn't use.
+    if let Some(settings) = stack_settings {
+        let sdk_settings: alien_manager_api::types::StackSettings = serde_json::from_value(
+            serde_json::to_value(settings).into_alien_error().context(
+                ErrorData::ConfigurationError {
+                    message: "Failed to serialize stack settings for initialize".to_string(),
+                },
+            )?,
+        )
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to deserialize stack settings into SDK type".to_string(),
+        })?;
+        builder = builder.body_map(|b| b.stack_settings(sdk_settings));
     }
 
     let response = builder

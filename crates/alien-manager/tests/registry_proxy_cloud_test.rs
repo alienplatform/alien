@@ -435,7 +435,7 @@ impl CloudProxyTest {
             environment_info: None,
             runtime_metadata: None,
             retry_requested: false,
-            protocol_version: 0,
+            protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
         };
         deployment_store
             .reconcile(
@@ -448,6 +448,11 @@ impl CloudProxyTest {
                     heartbeats: vec![],
                     error: None,
                     suggested_delay_ms: None,
+                    agent_version: None,
+                    agent_os: None,
+                    agent_arch: None,
+                    regime: None,
+                    agent_image_repository: None,
                 },
             )
             .await

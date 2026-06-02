@@ -110,6 +110,26 @@ pub struct AgentSyncRequest {
     /// the agent's progress (status, stack_state, etc.).
     #[serde(default)]
     pub current_state: Option<serde_json::Value>,
+    /// Agent binary version (from `env!("CARGO_PKG_VERSION")` at build time).
+    /// Lets the manager build fleet inventory and decide whether to send an
+    /// `agent_target` in the response.
+    #[serde(default)]
+    pub agent_version: Option<String>,
+    /// Agent host OS — `linux` / `macos` / `windows`.
+    #[serde(default)]
+    pub agent_os: Option<String>,
+    /// Agent host arch — `x86_64` / `aarch64`.
+    #[serde(default)]
+    pub agent_arch: Option<String>,
+    /// Supervisor regime — `os-service` / `kubernetes`.
+    #[serde(default)]
+    pub regime: Option<String>,
+    /// Image repository the agent was pulled from (no tag), injected by
+    /// the chart at install time. Surfaced in the dashboard so admins see
+    /// the registry a pinned tag will be pulled from. Optional and
+    /// Kubernetes-only.
+    #[serde(default)]
+    pub agent_image_repository: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -128,6 +148,11 @@ pub struct AgentSyncResponse {
     /// to poll for pending commands instead of the agent's local sync URL.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub commands_url: Option<String>,
+    /// Desired agent self-update target. The payload carries either `binary`
+    /// (OS-service flow) or `helm` (Kubernetes flow); the agent picks the
+    /// one matching its regime.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_target: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -330,6 +355,14 @@ async fn reconcile(
                 error: req.error,
                 suggested_delay_ms: req.suggested_delay_ms,
                 heartbeats: req.heartbeats,
+                // Non-agent reconcile path (push/platform-api) doesn't carry
+                // the agent self-update inventory; leave it out of the
+                // forwarded request.
+                agent_version: None,
+                agent_os: None,
+                agent_arch: None,
+                regime: None,
+                agent_image_repository: None,
             },
         )
         .await
@@ -500,7 +533,6 @@ mod tests {
                         "memory": null,
                         "workload": null,
                         "pods": [],
-                        "instances": [],
                         "events": []
                     }
                 },
@@ -655,6 +687,12 @@ mod tests {
             created_at: now,
             updated_at: Some(now),
             error: None,
+            agent_version: None,
+            agent_os: None,
+            agent_arch: None,
+            regime: None,
+            agent_image_repository: None,
+            target_agent_version: None,
         }
     }
 }
@@ -699,6 +737,31 @@ async fn agent_sync(
         return ErrorData::forbidden("Access denied").into_response();
     }
 
+    // Persist the agent self-update inventory the agent reported on this sync
+    // (`agent_version`, `agent_os`, `agent_arch`, `regime`). Runs on every
+    // sync regardless of whether the agent reported a state change, so the
+    // manager has a fleet-wide view of which version each host is on. Old
+    // agents that don't send these fields are no-ops.
+    if let Err(e) = state
+        .deployment_store
+        .update_agent_metadata(
+            &subject,
+            &req.deployment_id,
+            req.agent_version.as_deref(),
+            req.agent_os.as_deref(),
+            req.agent_arch.as_deref(),
+            req.regime.as_deref(),
+            req.agent_image_repository.as_deref(),
+        )
+        .await
+    {
+        tracing::warn!(
+            deployment_id = %req.deployment_id,
+            error = %e,
+            "Failed to persist agent self-update inventory; continuing sync"
+        );
+    }
+
     // If the agent reported its current state, persist it to the deployment record.
     // This is how pull-mode agents propagate status changes (e.g. Pending → Running)
     // back to the manager so that API consumers can observe deployment progress.
@@ -735,6 +798,15 @@ async fn agent_sync(
                                 heartbeats: vec![],
                                 error: None,
                                 suggested_delay_ms: None,
+                                // Forward the agent self-update inventory the
+                                // agent reported on this sync so multi-tenant
+                                // embedders can persist it in their own
+                                // deployment row.
+                                agent_version: req.agent_version.clone(),
+                                agent_os: req.agent_os.clone(),
+                                agent_arch: req.agent_arch.clone(),
+                                regime: req.regime.clone(),
+                                agent_image_repository: req.agent_image_repository.clone(),
                             },
                         )
                         .await
@@ -937,6 +1009,13 @@ async fn agent_sync(
         None
     };
 
+    // Agent upgrade decision: if the deployment has a pinned target version
+    // that differs from what the agent just reported, drive an upgrade via
+    // `agent_target` in the response.
+    let agent_target =
+        build_agent_target(&deployment, req.agent_version.as_deref(), req.regime.as_deref())
+            .and_then(|t| serde_json::to_value(t).ok());
+
     Json(AgentSyncResponse {
         current_state,
         target: match target.map(|t| serde_json::to_value(&t)).transpose() {
@@ -948,8 +1027,53 @@ async fn agent_sync(
             }
         },
         commands_url: Some(state.config.commands_base_url()),
+        agent_target,
     })
     .into_response()
+}
+
+/// Build `AgentTarget` when `deployment.target_agent_version` is set AND
+/// differs from what the agent just reported. The regime field controls
+/// which sub-target (`binary` for os-service, `helm` for kubernetes) gets
+/// populated.
+///
+/// k8s-only MVP: only the helm path is wired. chart_repo / chart_version are
+/// emitted as empty strings — the agent re-uses its current chart_ref (from
+/// the existing helm release metadata) and only the values overlay flips the
+/// `runtime.image.tag`. This avoids per-version chart re-publication.
+fn build_agent_target(
+    deployment: &crate::traits::DeploymentRecord,
+    reported_version: Option<&str>,
+    regime: Option<&str>,
+) -> Option<alien_core::sync::AgentTarget> {
+    let target_version = deployment.target_agent_version.as_deref()?;
+    if reported_version == Some(target_version) {
+        return None;
+    }
+    let helm = (regime == Some("kubernetes")).then(|| alien_core::sync::AgentHelmTarget {
+        // Agent reads chart_repo/chart_version directly; when empty it falls
+        // back to its `ALIEN_AGENT_CHART_REF` / `ALIEN_AGENT_CHART_VERSION`
+        // env vars (injected by the chart at install time). Leaving blank
+        // here keeps the manager out of the per-project chart catalog —
+        // upgrade follow-on can plumb explicit refs when chart shape changes
+        // between agent versions, which it doesn't today.
+        chart_repo: String::new(),
+        chart_version: String::new(),
+        values: serde_json::json!({
+            "runtime": { "image": { "tag": target_version } }
+        }),
+        sensitive_values: Default::default(),
+    });
+    if helm.is_none() {
+        // os-service path not in this MVP — skip without emitting.
+        return None;
+    }
+    Some(alien_core::sync::AgentTarget {
+        version: target_version.to_string(),
+        min_supported_version: target_version.to_string(),
+        binary: None,
+        helm,
+    })
 }
 
 fn release_stack_platform(platform: Platform) -> Platform {
