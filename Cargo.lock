@@ -708,6 +708,7 @@ dependencies = [
  "base64 0.22.1",
  "dotenvy",
  "k8s-openapi",
+ "mockall",
  "rand 0.9.3",
  "regex",
  "reqwest",

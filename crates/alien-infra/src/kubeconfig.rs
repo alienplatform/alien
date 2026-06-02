@@ -558,6 +558,33 @@ impl AuthInfo {
                             }
                             cmd.env("AWS_REGION", &aws_config.region);
                         }
+                        alien_aws_clients::AwsCredentials::SessionCredentials {
+                            access_key_id,
+                            secret_access_key,
+                            session_token,
+                            ..
+                        } => {
+                            tracing::debug!(
+                                "Injecting AWS session credentials for kubeconfig exec command"
+                            );
+                            cmd.env("AWS_ACCESS_KEY_ID", access_key_id);
+                            cmd.env("AWS_SECRET_ACCESS_KEY", secret_access_key);
+                            cmd.env("AWS_SESSION_TOKEN", session_token);
+                            cmd.env("AWS_REGION", &aws_config.region);
+                        }
+                        alien_aws_clients::AwsCredentials::Imds { .. } => {
+                            tracing::debug!(
+                                "Using AWS IMDS credentials for kubeconfig exec command"
+                            );
+                            cmd.env("AWS_REGION", &aws_config.region);
+                        }
+                        alien_aws_clients::AwsCredentials::Profile { name } => {
+                            tracing::debug!(
+                                "Using AWS profile credentials for kubeconfig exec command"
+                            );
+                            cmd.env("AWS_PROFILE", name);
+                            cmd.env("AWS_REGION", &aws_config.region);
+                        }
                         alien_aws_clients::AwsCredentials::WebIdentity { config } => {
                             tracing::debug!(
                                 "Setting AWS web identity credentials for kubeconfig exec command"

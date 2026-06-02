@@ -266,37 +266,26 @@ impl GcpClientConfigExt for GcpClientConfig {
         Self::from_env(&env_vars).await
     }
 
-    /// Impersonate a GCP service account and return a new platform config with impersonated credentials
+    /// Impersonate a GCP service account and return a refreshable platform config.
     async fn impersonate(&self, config: GcpImpersonationConfig) -> Result<GcpClientConfig> {
-        use crate::gcp::iam::{GenerateAccessTokenRequest, IamApi, IamClient};
-
         let has_target_project = config.target_project_id.is_some();
         let target_project_id = config
             .target_project_id
+            .clone()
             .unwrap_or_else(|| self.project_id.clone());
-        let target_region = config.target_region.unwrap_or_else(|| self.region.clone());
+        let target_region = config
+            .target_region
+            .clone()
+            .unwrap_or_else(|| self.region.clone());
 
-        let iam_client = IamClient::new(Client::new(), self.clone());
-
-        let token_request = GenerateAccessTokenRequest::builder()
-            .scope(config.scopes)
-            .maybe_delegates(config.delegates)
-            .maybe_lifetime(config.lifetime)
-            .build();
-
-        let token_response = iam_client
-            .generate_access_token(config.service_account_email.clone(), token_request)
-            .await?;
-
-        // Use target overrides when provided (cross-project impersonation).
         Ok(GcpClientConfig {
             project_id: target_project_id,
             region: target_region,
-            credentials: GcpCredentials::AccessToken {
-                token: token_response.access_token,
+            credentials: GcpCredentials::ImpersonatedServiceAccount {
+                source: Box::new(self.clone()),
+                config,
             },
             service_overrides: self.service_overrides.clone(),
-            // Reset project_number when switching projects — it must be re-resolved.
             project_number: if has_target_project {
                 None
             } else {
@@ -309,6 +298,11 @@ impl GcpClientConfigExt for GcpClientConfig {
     async fn get_bearer_token(&self, _audience: &str) -> Result<String> {
         match &self.credentials {
             GcpCredentials::AccessToken { token } => Ok(token.clone()),
+            GcpCredentials::ImpersonatedServiceAccount { source, config } => {
+                generate_impersonated_access_token(source, config)
+                    .await
+                    .map(|response| response.access_token)
+            }
             GcpCredentials::ServiceAccountKey { json } => self.generate_jwt_token(json).await,
             GcpCredentials::ServiceMetadata => self.fetch_metadata_token().await,
             GcpCredentials::ProjectedServiceAccount { token_file, .. } => {
@@ -1088,6 +1082,24 @@ impl GcpClientConfigExt for GcpClientConfig {
             project_number: None,
         }
     }
+}
+
+async fn generate_impersonated_access_token(
+    source: &GcpClientConfig,
+    config: &GcpImpersonationConfig,
+) -> Result<crate::gcp::iam::GenerateAccessTokenResponse> {
+    use crate::gcp::iam::{GenerateAccessTokenRequest, IamApi, IamClient};
+
+    let iam_client = IamClient::new(Client::new(), source.clone());
+    let token_request = GenerateAccessTokenRequest::builder()
+        .scope(config.scopes.clone())
+        .maybe_delegates(config.delegates.clone())
+        .maybe_lifetime(config.lifetime.clone())
+        .build();
+
+    iam_client
+        .generate_access_token(config.service_account_email.clone(), token_request)
+        .await
 }
 
 fn gcp_region_from_zone(zone: &str) -> Option<String> {

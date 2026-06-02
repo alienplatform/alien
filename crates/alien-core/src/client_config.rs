@@ -59,7 +59,7 @@ pub struct AwsWebIdentityConfig {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", tag = "type")]
 pub enum AwsCredentials {
-    /// Direct access keys
+    /// Static direct access keys.
     AccessKeys {
         /// AWS Access Key ID
         access_key_id: String,
@@ -67,6 +67,27 @@ pub enum AwsCredentials {
         secret_access_key: String,
         /// Optional AWS Session Token
         session_token: Option<String>,
+    },
+    /// Temporary AWS session credentials with an expiration time.
+    SessionCredentials {
+        /// AWS Access Key ID
+        access_key_id: String,
+        /// AWS Secret Access Key
+        secret_access_key: String,
+        /// AWS Session Token
+        session_token: String,
+        /// Credential expiration as an RFC3339 timestamp
+        expires_at: String,
+    },
+    /// AWS Instance Metadata Service credentials.
+    Imds {
+        /// Optional IMDS endpoint override
+        endpoint: Option<String>,
+    },
+    /// AWS profile credentials loaded via the AWS CLI.
+    Profile {
+        /// AWS profile name
+        name: String,
     },
     /// Web Identity Token for OIDC authentication
     WebIdentity {
@@ -90,6 +111,25 @@ impl std::fmt::Debug for AwsCredentials {
                     "session_token",
                     &session_token.as_ref().map(|_| "[REDACTED]"),
                 )
+                .finish(),
+            AwsCredentials::SessionCredentials {
+                access_key_id,
+                expires_at,
+                ..
+            } => f
+                .debug_struct("AwsCredentials::SessionCredentials")
+                .field("access_key_id", access_key_id)
+                .field("secret_access_key", &"[REDACTED]")
+                .field("session_token", &"[REDACTED]")
+                .field("expires_at", expires_at)
+                .finish(),
+            AwsCredentials::Imds { endpoint } => f
+                .debug_struct("AwsCredentials::Imds")
+                .field("endpoint", endpoint)
+                .finish(),
+            AwsCredentials::Profile { name } => f
+                .debug_struct("AwsCredentials::Profile")
+                .field("name", name)
                 .finish(),
             AwsCredentials::WebIdentity { config } => f
                 .debug_struct("AwsCredentials::WebIdentity")
@@ -132,6 +172,14 @@ pub struct GcpServiceOverrides {
 pub enum GcpCredentials {
     /// Use an already-minted OAuth2 access token.
     AccessToken { token: String },
+
+    /// Use a refreshable service account impersonation source.
+    ImpersonatedServiceAccount {
+        /// Source configuration used to call IAMCredentials.
+        source: Box<GcpClientConfig>,
+        /// Service account impersonation request.
+        config: GcpImpersonationConfig,
+    },
 
     /// Use a full Service Account JSON key (as string). A short-lived JWT will
     /// be created and exchanged for a bearer token automatically.
@@ -180,6 +228,12 @@ impl std::fmt::Debug for GcpCredentials {
             GcpCredentials::AccessToken { .. } => f
                 .debug_struct("GcpCredentials::AccessToken")
                 .field("token", &"[REDACTED]")
+                .finish(),
+            GcpCredentials::ImpersonatedServiceAccount { source, config } => f
+                .debug_struct("GcpCredentials::ImpersonatedServiceAccount")
+                .field("source_project_id", &source.project_id)
+                .field("source_region", &source.region)
+                .field("service_account_email", &config.service_account_email)
                 .finish(),
             GcpCredentials::ServiceAccountKey { .. } => f
                 .debug_struct("GcpCredentials::ServiceAccountKey")
@@ -304,6 +358,13 @@ pub enum AzureCredentials {
         /// The bearer token to use for authentication
         token: String,
     },
+    /// Azure VM IMDS managed identity.
+    VmManagedIdentity {
+        /// The client ID of the user-assigned managed identity
+        client_id: String,
+        /// Optional IMDS endpoint override
+        identity_endpoint: Option<String>,
+    },
     /// Azure AD Workload Identity (federated identity)
     WorkloadIdentity {
         /// The client ID of the managed identity or application
@@ -338,6 +399,14 @@ impl std::fmt::Debug for AzureCredentials {
             AzureCredentials::AccessToken { .. } => f
                 .debug_struct("AzureCredentials::AccessToken")
                 .field("token", &"[REDACTED]")
+                .finish(),
+            AzureCredentials::VmManagedIdentity {
+                client_id,
+                identity_endpoint,
+            } => f
+                .debug_struct("AzureCredentials::VmManagedIdentity")
+                .field("client_id", client_id)
+                .field("identity_endpoint", identity_endpoint)
                 .finish(),
             AzureCredentials::WorkloadIdentity {
                 client_id,

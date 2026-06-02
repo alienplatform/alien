@@ -115,8 +115,7 @@ impl AwsClientConfigExt for AwsClientConfig {
 
         let target_region = config.target_region.unwrap_or_else(|| self.region.clone());
 
-        // If using WebIdentity (IRSA), first exchange the token for real temporary credentials
-        // before calling AssumeRole, which requires valid signed credentials.
+        // Resolve the source before calling AssumeRole, which requires signed credentials.
         let base_config = self.get_web_identity_credentials().await?;
         let sts_client = StsClient::new(Client::new(), base_config);
 
@@ -138,18 +137,20 @@ impl AwsClientConfigExt for AwsClientConfig {
         Ok(AwsClientConfig {
             account_id: target_account_id,
             region: target_region,
-            credentials: AwsCredentials::AccessKeys {
+            credentials: AwsCredentials::SessionCredentials {
                 access_key_id: credentials.access_key_id,
                 secret_access_key: credentials.secret_access_key,
-                session_token: Some(credentials.session_token),
+                session_token: credentials.session_token,
+                expires_at: credentials.expiration,
             },
             service_overrides: self.service_overrides.clone(),
         })
     }
 
-    /// Get AWS credentials from this config
-    /// For web identity tokens, this will return placeholder credentials
-    /// Call get_web_identity_credentials() to get actual credentials
+    /// Get AWS credentials from this config.
+    ///
+    /// Refreshable sources must be resolved before this synchronous method is
+    /// called. Callers that sign requests should use `AwsCredentialProvider`.
     fn get_credentials(&self) -> Credentials {
         match &self.credentials {
             AwsCredentials::AccessKeys {
@@ -163,22 +164,31 @@ impl AwsClientConfigExt for AwsClientConfig {
                 None,
                 "ProvidedCredentials",
             ),
-            AwsCredentials::WebIdentity { .. } => {
-                // For web identity, we need to assume the role first
-                // This method returns placeholder credentials
-                Credentials::new(
-                    "PLACEHOLDER_ACCESS_KEY".to_string(),
-                    "PLACEHOLDER_SECRET_KEY".to_string(),
-                    None,
-                    None,
-                    "WebIdentityPlaceholder",
-                )
-            }
+            AwsCredentials::SessionCredentials {
+                access_key_id,
+                secret_access_key,
+                session_token,
+                ..
+            } => Credentials::new(
+                access_key_id.clone(),
+                secret_access_key.clone(),
+                Some(session_token.clone()),
+                None,
+                "SessionCredentials",
+            ),
+            AwsCredentials::Imds { .. }
+            | AwsCredentials::Profile { .. }
+            | AwsCredentials::WebIdentity { .. } => Credentials::new(
+                "PLACEHOLDER_ACCESS_KEY".to_string(),
+                "PLACEHOLDER_SECRET_KEY".to_string(),
+                None,
+                None,
+                "UnresolvedCredentialSource",
+            ),
         }
     }
 
-    /// Get credentials for web identity token authentication
-    /// This method reads the token file and assumes the role
+    /// Get credentials for refreshable credential sources.
     async fn get_web_identity_credentials(&self) -> Result<AwsClientConfig> {
         match &self.credentials {
             AwsCredentials::WebIdentity { config } => {
@@ -186,7 +196,6 @@ impl AwsClientConfigExt for AwsClientConfig {
                 use reqwest::Client;
                 use uuid::Uuid;
 
-                // Read the web identity token from file
                 let token = std::fs::read_to_string(&config.web_identity_token_file)
                     .into_alien_error()
                     .context(ErrorData::InvalidClientConfig {
@@ -199,7 +208,6 @@ impl AwsClientConfigExt for AwsClientConfig {
                     .trim()
                     .to_string();
 
-                // Create a temporary config with placeholder credentials to call STS
                 let temp_config = AwsClientConfig {
                     account_id: self.account_id.clone(),
                     region: self.region.clone(),
@@ -233,16 +241,34 @@ impl AwsClientConfigExt for AwsClientConfig {
                 Ok(AwsClientConfig {
                     account_id: self.account_id.clone(),
                     region: self.region.clone(),
-                    credentials: AwsCredentials::AccessKeys {
+                    credentials: AwsCredentials::SessionCredentials {
                         access_key_id: credentials.access_key_id,
                         secret_access_key: credentials.secret_access_key,
-                        session_token: Some(credentials.session_token),
+                        session_token: credentials.session_token,
+                        expires_at: credentials.expiration,
                     },
                     service_overrides: self.service_overrides.clone(),
                 })
             }
-            AwsCredentials::AccessKeys { .. } => {
-                // Already have access keys, return self
+            AwsCredentials::Imds { endpoint } => {
+                let credentials = load_imds_session_credentials(endpoint.as_deref()).await?;
+                Ok(AwsClientConfig {
+                    account_id: self.account_id.clone(),
+                    region: self.region.clone(),
+                    credentials,
+                    service_overrides: self.service_overrides.clone(),
+                })
+            }
+            AwsCredentials::Profile { name } => {
+                let credentials = load_profile_session_credentials(name)?;
+                Ok(AwsClientConfig {
+                    account_id: self.account_id.clone(),
+                    region: self.region.clone(),
+                    credentials,
+                    service_overrides: self.service_overrides.clone(),
+                })
+            }
+            AwsCredentials::AccessKeys { .. } | AwsCredentials::SessionCredentials { .. } => {
                 Ok(self.clone())
             }
         }
@@ -365,12 +391,18 @@ async fn resolve_credentials(
 
     if profile_is_explicit(environment_variables) {
         let profile = profile_name(environment_variables);
-        return load_profile_credentials(&profile);
+        return Ok(AwsCredentials::Profile { name: profile });
     }
 
     let imds_error = if !metadata_disabled(environment_variables) {
-        match load_imds_credentials(environment_variables).await {
-            Ok(credentials) => return Ok(credentials),
+        match discover_imds_credentials(environment_variables).await {
+            Ok(()) => {
+                return Ok(AwsCredentials::Imds {
+                    endpoint: environment_variables
+                        .get("AWS_EC2_METADATA_SERVICE_ENDPOINT")
+                        .cloned(),
+                })
+            }
             Err(error) => Some(error),
         }
     } else {
@@ -378,8 +410,8 @@ async fn resolve_credentials(
     };
 
     let profile = profile_name(environment_variables);
-    match load_profile_credentials(&profile) {
-        Ok(credentials) => Ok(credentials),
+    match load_profile_session_credentials(&profile) {
+        Ok(_) => Ok(AwsCredentials::Profile { name: profile }),
         Err(profile_error) => {
             if let Some(imds_error) = imds_error {
                 return Err(AlienError::new(ErrorData::InvalidClientConfig {
@@ -413,16 +445,18 @@ struct AwsImdsCredentials {
     access_key_id: String,
     secret_access_key: String,
     token: String,
+    expiration: String,
 }
 
-async fn load_imds_credentials(
-    environment_variables: &HashMap<String, String>,
-) -> Result<AwsCredentials> {
+async fn discover_imds_credentials(environment_variables: &HashMap<String, String>) -> Result<()> {
     let endpoint = environment_variables
         .get("AWS_EC2_METADATA_SERVICE_ENDPOINT")
-        .map(String::as_str)
-        .unwrap_or(AWS_IMDS_ENDPOINT)
-        .trim_end_matches('/');
+        .map(String::as_str);
+    load_imds_session_credentials(endpoint).await.map(|_| ())
+}
+
+async fn load_imds_session_credentials(endpoint: Option<&str>) -> Result<AwsCredentials> {
+    let endpoint = endpoint.unwrap_or(AWS_IMDS_ENDPOINT).trim_end_matches('/');
 
     let client = reqwest::Client::builder()
         .build()
@@ -521,10 +555,11 @@ async fn load_imds_credentials(
             errors: None,
         })?;
 
-    Ok(AwsCredentials::AccessKeys {
+    Ok(AwsCredentials::SessionCredentials {
         access_key_id: credentials.access_key_id,
         secret_access_key: credentials.secret_access_key,
-        session_token: Some(credentials.token),
+        session_token: credentials.token,
+        expires_at: credentials.expiration,
     })
 }
 
@@ -650,7 +685,12 @@ async fn infer_account_id(
         service_overrides: service_overrides.cloned(),
     };
 
-    if matches!(probe_config.credentials, AwsCredentials::WebIdentity { .. }) {
+    if matches!(
+        probe_config.credentials,
+        AwsCredentials::WebIdentity { .. }
+            | AwsCredentials::Imds { .. }
+            | AwsCredentials::Profile { .. }
+    ) {
         probe_config = probe_config.get_web_identity_credentials().await?;
     }
 
@@ -682,7 +722,7 @@ fn profile_name(environment_variables: &HashMap<String, String>) -> String {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn load_profile_credentials(profile: &str) -> Result<AwsCredentials> {
+fn load_profile_session_credentials(profile: &str) -> Result<AwsCredentials> {
     let output = std::process::Command::new("aws")
         .args([
             "configure",
@@ -720,15 +760,24 @@ fn load_profile_credentials(profile: &str) -> Result<AwsCredentials> {
             errors: None,
         })?;
 
-    Ok(AwsCredentials::AccessKeys {
-        access_key_id: exported.access_key_id,
-        secret_access_key: exported.secret_access_key,
-        session_token: exported.session_token,
-    })
+    if let (Some(session_token), Some(expires_at)) = (exported.session_token, exported.expiration) {
+        Ok(AwsCredentials::SessionCredentials {
+            access_key_id: exported.access_key_id,
+            secret_access_key: exported.secret_access_key,
+            session_token,
+            expires_at,
+        })
+    } else {
+        Ok(AwsCredentials::AccessKeys {
+            access_key_id: exported.access_key_id,
+            secret_access_key: exported.secret_access_key,
+            session_token: None,
+        })
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
-fn load_profile_credentials(profile: &str) -> Result<AwsCredentials> {
+fn load_profile_session_credentials(profile: &str) -> Result<AwsCredentials> {
     Err(AlienError::new(ErrorData::InvalidClientConfig {
         message: format!(
             "AWS_PROFILE ('{}') is not supported in wasm builds; provide explicit credentials",
@@ -772,6 +821,7 @@ struct AwsCliExportCredentials {
     access_key_id: String,
     secret_access_key: String,
     session_token: Option<String>,
+    expiration: Option<String>,
 }
 
 /// Extract the AWS account ID from a role ARN.
