@@ -59,14 +59,14 @@
       // launch templates. That authorization check covers every EC2 resource
       // referenced by the template and ASG placement, not only the template.
       {
+        "label": "Use runtime launch templates",
         "grant": {
           "actions": ["ec2:RunInstances"]
         },
         "binding": {
           "stack": {
             "resources": [
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:launch-template/*",
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:launch-template/*"
             ],
             "condition": {
               "StringEquals": {
@@ -77,13 +77,47 @@
           },
           "resource": {
             "resources": [
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:launch-template/*",
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:launch-template/*"
             ],
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
                 "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      // The ComputeCluster security group is setup-owned boundary
+      // infrastructure. Runtime may use it to launch workers, but may not
+      // mutate or delete it through this permission.
+      {
+        "label": "Use setup compute security groups",
+        "grant": {
+          "actions": ["ec2:RunInstances"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "setup",
+                "aws:ResourceTag/${resourceTag}": "compute"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "setup",
+                "aws:ResourceTag/${resourceTag}": "compute"
               }
             }
           }
