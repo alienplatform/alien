@@ -7,7 +7,7 @@ use crate::error::{ErrorData, Result};
 use crate::{run_agent_with_cancel, AgentConfig, InstanceLock};
 use alien_core::embedded_config::{load_embedded_config, AgentConfig as EmbeddedAgentConfig};
 use alien_core::Platform;
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use clap::Parser;
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -588,8 +588,19 @@ async fn initialize_with_manager(
         .send()
         .await
         .map_err(alien_manager_api::convert_sdk_error)
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to call initialize endpoint".to_string(),
+        .map_err(|e| {
+            // Preserve a 409 (deployment name already exists) verbatim
+            // so the caller's `e.http_status_code == Some(409)` arm can
+            // trigger the rejoin fall-through. Wrapping with
+            // `ConfigurationError` here would override the status to 500
+            // and the agent would crash instead of recovering.
+            if e.http_status_code == Some(409) {
+                AlienError::new(ErrorData::DeploymentNameAlreadyExists)
+            } else {
+                e.context(ErrorData::ConfigurationError {
+                    message: "Failed to call initialize endpoint".to_string(),
+                })
+            }
         })?;
 
     let init_response = response.into_inner();
