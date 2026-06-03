@@ -109,7 +109,16 @@ runtime:
   data:
     mountPath: /var/lib/alien-agent
     persistence:
-      enabled: false
+      # Enabled by default: the agent's `data_dir` holds its persistent
+      # deployment_id + sync-token. Without a PVC, any pod restart (e.g.
+      # the rolling restart triggered by self-update / `agent_target.helm`)
+      # wipes that state, the new pod re-runs `/v1/initialize`, hits a
+      # name-conflict 409, crashloops, and helm `--atomic` rolls back.
+      # Operators on clusters without a default StorageClass must either
+      # set `storageClassName`, point at an `existingClaim`, or
+      # explicitly disable this and accept that self-update will not
+      # survive a pod roll.
+      enabled: true
       existingClaim: ""
       storageClassName: ""
       accessModes:
