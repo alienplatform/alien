@@ -428,12 +428,31 @@ runtime:
   podAnnotations: {}
   automountServiceAccountToken: true
   encryption:
-    # Set this explicitly, or reference an existing Secret below.
-    key: "replace-me-with-a-stable-64-character-encryption-secret"
+    # Leave empty to let the chart generate a stable random 64-hex-char key
+    # on first install (preserved across upgrades via `lookup`). To pin the
+    # key explicitly, set it here (must be 64 hex chars = 256-bit AES). To
+    # source it from an external secret store, set `existingSecret.name`.
+    key: ""
     existingSecret:
       name: ""
       key: encryption-key
+  # Agent self-update inputs the agent passes to the Helm-runner Job it
+  # spawns on `agent_target.helm`. Set chartRef + chartVersion to the OCI
+  # ref + version used at install time — the agent re-uses them in
+  # `helm upgrade --reuse-values`. Leave blank if you don't want to enable
+  # in-cluster agent upgrades for this install.
+  upgrade:
+    chartRef: ""
+    chartVersion: ""
+    helmRunnerImage: "alpine/helm:3.18.4"
+    # Extra flags appended to the `helm upgrade` command the agent's
+    # helm-runner Job runs (e.g. `--plain-http` for local-dev OCI
+    # registries served over HTTP). Production should leave empty.
+    extraArgs: ""
   replicas: 1
+  # Helm's --atomic --wait gives up after this many seconds if /readyz
+  # hasn't returned 200 — the revision is then rolled back automatically.
+  progressDeadlineSeconds: 120
   resources:
     requests:
       cpu: 100m
@@ -447,16 +466,20 @@ runtime:
     service:
       type: ClusterIP
   probes:
+    # /livez is process liveness; /readyz turns 200 only after the agent
+    # completes at least one /v1/sync round-trip with the manager — the
+    # gate Helm's --atomic --wait relies on so a freshly-rolled agent
+    # is not considered ready until it has actually reached the manager.
     liveness:
       enabled: true
-      path: /health
+      path: /livez
       initialDelaySeconds: 10
       periodSeconds: 10
       timeoutSeconds: 2
       failureThreshold: 3
     readiness:
       enabled: true
-      path: /health
+      path: /readyz
       initialDelaySeconds: 5
       periodSeconds: 10
       timeoutSeconds: 2
@@ -481,7 +504,16 @@ runtime:
   data:
     mountPath: /var/lib/deployment-operator
     persistence:
-      enabled: false
+      # Enabled by default: the agent's `data_dir` holds its persistent
+      # deployment_id + sync-token. Without a PVC, any pod restart (e.g.
+      # the rolling restart triggered by self-update / `agent_target.helm`)
+      # wipes that state, the new pod re-runs `/v1/initialize`, hits a
+      # name-conflict 409, crashloops, and helm `--atomic` rolls back.
+      # Operators on clusters without a default StorageClass must either
+      # set `storageClassName`, point at an `existingClaim`, or
+      # explicitly disable this and accept that self-update will not
+      # survive a pod roll.
+      enabled: true
       existingClaim: ""
       storageClassName: ""
       accessModes:
@@ -553,7 +585,7 @@ clusterBootstrap:
 
     append_service_accounts(&mut yaml, analysis);
     append_stack_settings(&mut yaml, stack_settings)?;
-    yaml.push_str("\ninfrastructure: null\n\nbasePlatform: null\nbasePlatformConfig:\n  gcp:\n    projectId: \"\"\n    region: \"\"\n  aws:\n    region: \"\"\n  azure:\n    location: \"\"\n    subscriptionId: \"\"\n    tenantId: \"\"\nserviceAccountPrefix: \"\"\nmanagerServiceAccount:\n  annotations: {}\n  labels: {}\n");
+    yaml.push_str("\ninfrastructure: null\n\nbasePlatform: null\nbasePlatformConfig:\n  gcp:\n    projectId: \"\"\n    region: \"\"\n  aws:\n    region: \"\"\n  azure:\n    location: \"\"\n    subscriptionId: \"\"\n    tenantId: \"\"\nserviceAccountPrefix: \"\"\nmanagerServiceAccount:\n  annotations: {}\n  labels: {}\n\n# Agent self-update. When the agent receives agent_target.helm on /v1/sync\n# it creates a short-lived Helm-runner Job that runs `helm upgrade --atomic`.\n# The Job runs as `alien-agent-upgrader`; we keep the SA optional so charts\n# that don't want self-update can disable it.\nupgrader:\n  enabled: true\n");
     append_services(&mut yaml, analysis);
     yaml.push_str("\npublicUrls: {}\n");
 
@@ -1069,7 +1101,18 @@ fn values_schema_json() -> String {
             }
           }
         },
+        "upgrade": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "chartRef": { "type": "string" },
+            "chartVersion": { "type": "string" },
+            "helmRunnerImage": { "type": "string" },
+            "extraArgs": { "type": "string" }
+          }
+        },
         "replicas": { "type": "integer", "minimum": 1 },
+        "progressDeadlineSeconds": { "type": "integer", "minimum": 1 },
         "resources": { "type": "object" },
         "api": {
           "type": "object",
@@ -1349,6 +1392,13 @@ fn values_schema_json() -> String {
       }
     },
     "serviceAccountPrefix": { "type": "string" },
+    "upgrader": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" }
+      }
+    },
     "services": {
       "type": "object",
       "additionalProperties": {
@@ -1439,6 +1489,18 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- regexReplaceAll "[^a-z0-9-]" $raw "-" | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{/*
+  ServiceAccount used by the Helm-runner Job the agent creates when it
+  acts on agent_target.helm. Held as a least-privilege boundary; bound
+  to the existing Role so the Job can mutate the Deployment + release
+  Secrets.
+*/}}
+{{- define "deployment.upgraderServiceAccountName" -}}
+{{- $prefix := default (include "deployment.fullname" .) .Values.serviceAccountPrefix -}}
+{{- $raw := printf "%s-upgrader-sa" $prefix | lower -}}
+{{- regexReplaceAll "[^a-z0-9-]" $raw "-" | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
 {{- define "deployment.serviceAccountName" -}}
 {{- $prefix := default (include "deployment.fullname" .root) .root.Values.serviceAccountPrefix -}}
 {{- $raw := printf "%s-%s-sa" $prefix .name | lower -}}
@@ -1468,6 +1530,14 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 
 {{- define "deployment.heartbeatNodeClusterRoleName" -}}
 {{- printf "%s-heartbeat-nodes" (include "deployment.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{- /* Name of the ClusterRole that grants the agent self-update Job permission
+       to manage the chart-owned cluster-scoped resources (currently just the
+       heartbeat ClusterRole+Binding). Only created when both `upgrader.enabled`
+       and the heartbeat node-collection feature are on. */ -}}
+{{- define "deployment.upgraderClusterRoleName" -}}
+{{- printf "%s-upgrader" (include "deployment.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 "#
     .to_string()
@@ -1504,6 +1574,22 @@ metadata:
   {{- end }}
 ---
 {{- end }}
+{{- if .Values.upgrader.enabled }}
+# alien-agent-upgrader is the ServiceAccount used by the Helm-runner Job
+# the agent creates when it acts on agent_target.helm. It exists as a
+# least-privilege boundary for the Job — the agent pod itself uses
+# `alien-agent-manager-sa` and only needs to create Jobs + stage
+# ConfigMaps/Secrets. Operators are not restricted by this — the
+# protection against bad helm upgrades is the chart's `required` values,
+# not RBAC.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "deployment.upgraderServiceAccountName" . }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+---
+{{- end }}
 "#
     .to_string()
 }
@@ -1523,6 +1609,17 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["configmaps", "secrets", "services", "pods", "pods/log", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # ServiceAccounts + RBAC objects need to live here for `helm upgrade
+  # --reuse-values` to inspect (and patch) the release's existing
+  # resources during agent self-update. Without this, the upgrader SA
+  # — which is bound to this Role — can't `get` the SAs the chart
+  # already created and helm 4xx's out.
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
     resources: ["events"]
@@ -1569,6 +1666,18 @@ metadata:
 subjects:
   - kind: ServiceAccount
     name: {{ include "deployment.managerServiceAccountName" . }}
+  {{- /* Execution ServiceAccounts (workers/daemons/containers) need RBAC to
+         read their own vault secrets (e.g. the injected ALIEN_COMMANDS_TOKEN).
+         Without this binding, the worker pod gets 403 reading any secret
+         provisioned by the KubernetesVaultController. */}}
+  {{- range $name, $account := .Values.serviceAccounts }}
+  - kind: ServiceAccount
+    name: {{ include "deployment.serviceAccountName" (dict "root" $ "name" $name) }}
+  {{- end }}
+  {{- if .Values.upgrader.enabled }}
+  - kind: ServiceAccount
+    name: {{ include "deployment.upgraderServiceAccountName" . }}
+  {{- end }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -1593,6 +1702,40 @@ rules:
   - apiGroups: ["metrics.k8s.io"]
     resources: ["nodes"]
     verbs: ["get", "list", "watch"]
+{{- if .Values.upgrader.enabled }}
+---
+# Narrow cluster-scoped RBAC for the agent self-update helm-runner Job.
+# The chart creates exactly one cluster-scoped resource type pair —
+# the heartbeat ClusterRole + ClusterRoleBinding above — and the
+# upgrader SA needs to be able to `get/update/patch/delete` them
+# during `helm upgrade --reuse-values`. `resourceNames` scopes this
+# to ONLY the chart's own cluster objects; no enumeration of other
+# tenants' cluster resources. Verbs are deliberately minimal (no
+# `list`/`watch`, no `create` — chart install is what creates them
+# the first time, run by the customer's helm operator). If a future
+# chart version introduces new cluster-scoped resources, add their
+# names to `resourceNames` (and a `create` verb on a separate rule
+# without `resourceNames` if the upgrader needs to add new ones).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "deployment.upgraderClusterRoleName" . }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles", "clusterrolebindings"]
+    resourceNames:
+      # The heartbeat-nodes cluster pair — the existing reason the
+      # upgrader needs cluster-scope access at all.
+      - {{ include "deployment.heartbeatNodeClusterRoleName" . | quote }}
+      # And the upgrader cluster pair itself — helm now tracks these as
+      # chart-owned, so every `helm upgrade --reuse-values` does a `get`
+      # on them to compute the diff. Without self-reference, the first
+      # upgrade trips on `clusterroles "<name>-upgrader" is forbidden`.
+      - {{ include "deployment.upgraderClusterRoleName" . | quote }}
+    verbs: ["get", "update", "patch", "delete"]
+{{- end }}
 {{- end }}
 "#
     .to_string()
@@ -1615,14 +1758,63 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: {{ include "deployment.heartbeatNodeClusterRoleName" . }}
+{{- if .Values.upgrader.enabled }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "deployment.upgraderClusterRoleName" . }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "deployment.upgraderServiceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "deployment.upgraderClusterRoleName" . }}
+{{- end }}
 {{- end }}
 "#
     .to_string()
 }
 
 fn secret_tpl() -> String {
+    // Encryption key resolution order:
+    //   1. user-provided `runtime.encryption.key`
+    //   2. existing in-cluster Secret's encryption-key (preserves the key
+    //      across `helm upgrade` so previously-encrypted data stays readable)
+    //   3. freshly generated via `randBytes 32` — crypto/rand-backed in
+    //      sprig 3.2+; if your Helm bundles an older sprig, set the key
+    //      explicitly via `runtime.encryption.key` or
+    //      `runtime.encryption.existingSecret.name`.
+    //
+    // `lookup` returns nil during `helm template` (no cluster access), so
+    // a `helm template | kubectl apply -f -` workflow would generate a
+    // fresh key on each render — install via `helm install/upgrade` to
+    // keep the key stable, or always set `runtime.encryption.key`.
     r#"{{- $createManagementSecret := not .Values.management.existingSecret.name -}}
 {{- $createEncryptionSecret := not .Values.runtime.encryption.existingSecret.name -}}
+{{- $encryptionKey := "" -}}
+{{- if $createEncryptionSecret -}}
+  {{- $providedKey := .Values.runtime.encryption.key | default "" | trim -}}
+  {{- $existingKey := "" -}}
+  {{- $existingSecret := lookup "v1" "Secret" .Release.Namespace (include "deployment.fullname" .) -}}
+  {{- if and $existingSecret $existingSecret.data -}}
+    {{- with index $existingSecret.data "encryption-key" -}}
+      {{- $existingKey = b64dec . -}}
+    {{- end -}}
+  {{- end -}}
+  {{- if $providedKey -}}
+    {{- $encryptionKey = $providedKey -}}
+  {{- else if $existingKey -}}
+    {{- $encryptionKey = $existingKey -}}
+  {{- else -}}
+    {{- /* sprig randBytes returns base64; b64dec to raw bytes then hex */ -}}
+    {{- $encryptionKey = printf "%x" (b64dec (randBytes 32)) -}}
+  {{- end -}}
+{{- end -}}
 {{- if or $createManagementSecret $createEncryptionSecret .Values.infrastructure }}
 apiVersion: v1
 kind: Secret
@@ -1633,10 +1825,10 @@ metadata:
 type: Opaque
 stringData:
   {{- if $createManagementSecret }}
-  sync-token: {{ .Values.management.token | quote }}
+  sync-token: {{ required "management.token or management.existingSecret.name is required — pass the full values document" .Values.management.token | quote }}
   {{- end }}
   {{- if $createEncryptionSecret }}
-  encryption-key: {{ required "runtime.encryption.key or runtime.encryption.existingSecret.name is required" .Values.runtime.encryption.key | quote }}
+  encryption-key: {{ $encryptionKey | quote }}
   {{- end }}
   {{- if .Values.infrastructure }}
   external-bindings.json: {{ toJson .Values.infrastructure | quote }}
@@ -1673,6 +1865,11 @@ metadata:
     {{- include "deployment.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.runtime.replicas }}
+  # Recreate guarantees exactly one agent runs at any time, so the
+  # InstanceLock is never contended — even during a self-update.
+  strategy:
+    type: Recreate
+  progressDeadlineSeconds: {{ .Values.runtime.progressDeadlineSeconds | default 120 }}
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ include "deployment.name" . }}
@@ -1754,16 +1951,62 @@ spec:
             - name: AZURE_REGION
               value: {{ .Values.basePlatformConfig.azure.location | quote }}
             {{- end }}
+            # `required` chart guardrail: any helm upgrade that does not
+            # carry the full values document fails to render (Helm aborts
+            # before touching the release). This is the protection against
+            # bare `helm upgrade` silently resetting the agent's manager
+            # config — manager-triggered, operator-triggered, or otherwise.
             - name: SYNC_URL
-              value: {{ .Values.management.url | quote }}
+              value: {{ required "management.url is required — pass the full values document" .Values.management.url | quote }}
             - name: OPERATOR_NAME
-              value: {{ .Values.management.name | quote }}
+              value: {{ required "management.name is required — pass the full values document" .Values.management.name | quote }}
             {{- if .Values.management.deploymentId }}
             - name: DEPLOYMENT_ID
               value: {{ .Values.management.deploymentId | quote }}
             {{- end }}
             - name: KUBERNETES_NAMESPACE
               value: {{ .Release.Namespace | quote }}
+            - name: KUBERNETES_HELM_RELEASE
+              value: {{ .Release.Name | quote }}
+            - name: ALIEN_AGENT_UPGRADER_SA
+              value: {{ include "deployment.upgraderServiceAccountName" . | quote }}
+            # Reported back on /v1/sync so the dashboard can surface the
+            # registry an admin will pull a new tag from when pinning a
+            # target agent version.
+            - name: ALIEN_AGENT_IMAGE_REPOSITORY
+              value: {{ .Values.runtime.image.repository | quote }}
+            {{- if .Values.runtime.upgrade.chartRef }}
+            # Used by the agent when it receives `agent_target.helm` and
+            # spawns a Helm-runner Job to apply the new version. The Job
+            # runs `helm upgrade --reuse-values` against this chart so only
+            # the manager-supplied `values` override (e.g. image.tag) flips.
+            - name: ALIEN_AGENT_CHART_REF
+              value: {{ .Values.runtime.upgrade.chartRef | quote }}
+            {{- end }}
+            {{- if .Values.runtime.upgrade.chartVersion }}
+            - name: ALIEN_AGENT_CHART_VERSION
+              value: {{ .Values.runtime.upgrade.chartVersion | quote }}
+            {{- end }}
+            {{- if .Values.runtime.upgrade.helmRunnerImage }}
+            - name: ALIEN_AGENT_HELM_RUNNER_IMAGE
+              value: {{ .Values.runtime.upgrade.helmRunnerImage | quote }}
+            {{- end }}
+            {{- if .Values.runtime.upgrade.extraArgs }}
+            # Extra flags spliced into the `helm upgrade` command the
+            # agent's helm-runner Job runs. Use sparingly — exists for
+            # local-dev/insecure OCI registries (`--plain-http`) and
+            # similar one-off escape hatches; production should leave empty.
+            - name: ALIEN_AGENT_HELM_EXTRA_ARGS
+              value: {{ .Values.runtime.upgrade.extraArgs | quote }}
+            {{- end }}
+            {{- if .Values.serviceAccountPrefix }}
+            # Pin the deployment's resource_prefix to the same value used for
+            # ServiceAccount naming, so Helm-created SAs and vault secret names
+            # stay aligned across agent restarts (pull-model storage is ephemeral
+            # and the agent would otherwise regenerate a random prefix each time).
+            - name: ALIEN_RESOURCE_PREFIX
+              value: {{ .Values.serviceAccountPrefix | quote }}
+            {{- end }}
             - name: DATA_DIR
               value: {{ .Values.runtime.data.mountPath | quote }}
             - name: SYNC_TOKEN_FILE
@@ -2516,8 +2759,18 @@ mod tests {
 
         let files = chart.files.clone();
         crate::test_utils::helm_lint(&files).assert_ok("helm chart");
-        crate::test_utils::helm_template_and_validate(&files, None)
-            .assert_ok("helm template registered setup");
+        // Manager-fetch path: a token + deploymentId are required (the chart
+        // refuses to install without them — guards against half-configured
+        // values).
+        let manager_fetch_values = r#"
+management:
+  url: "https://manager.example.com"
+  name: "test-manager"
+  token: "test-sync-token"
+  deploymentId: "test-deployment-id"
+"#;
+        crate::test_utils::helm_template_and_validate(&files, Some(manager_fetch_values))
+            .assert_ok("helm template manager-fetch path / registered setup");
         crate::test_utils::helm_template_and_validate(&files, Some(&files["examples/onprem.yaml"]))
             .assert_ok("helm template external-bindings initialize path");
     }

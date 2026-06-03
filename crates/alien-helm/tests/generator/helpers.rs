@@ -37,13 +37,33 @@ pub fn snapshot_chart(name: &str, chart: &HelmChart) {
     insta::assert_snapshot!(name, buf);
 }
 
+/// Minimal `management` block that satisfies the chart's `required`
+/// guardrails on the manager-fetch path. Templates abort without these.
+pub const MANAGER_FETCH_VALUES: &str = r#"
+management:
+  url: "https://manager.example.com"
+  name: "test-manager"
+  token: "test-sync-token"
+  deploymentId: "test-deployment-id"
+"#;
+
+/// Patch the chart's default `values.yaml` so the manager-fetch
+/// `required` guardrails are satisfied. Used by tests that drive the
+/// chart with values.yaml content as the starting point.
+pub fn patch_values_with_manager_fetch(values_yaml: &str) -> String {
+    values_yaml
+        .replace("  token: \"\"", "  token: \"test-sync-token\"")
+        .replace("  name: \"\"", "  name: \"test-manager\"")
+        .replace("  url: \"\"", "  url: \"https://manager.example.com\"")
+}
+
 /// Run `helm lint` + `helm template` + `kubeconform` against the chart
 /// for the default values and every generated example values file.
 pub fn assert_helm_valid(chart: &HelmChart, context: &str) {
     let files = linter_files(chart);
     test_utils::helm_lint(&files).assert_ok(format!("{context} helm lint"));
-    test_utils::helm_template_and_validate(&files, None)
-        .assert_ok(format!("{context} helm template default values"));
+    test_utils::helm_template_and_validate(&files, Some(MANAGER_FETCH_VALUES))
+        .assert_ok(format!("{context} helm template manager-fetch default values"));
 
     for (path, values) in files
         .iter()

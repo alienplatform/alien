@@ -87,6 +87,7 @@ pub fn create_router(state: AppState) -> Router {
         RouterOptions {
             include_initialize: true,
             include_install: true,
+            include_rejoin: true,
         },
     )
     .layer(cors)
@@ -96,6 +97,11 @@ pub fn create_router(state: AppState) -> Router {
 pub struct RouterOptions {
     pub include_initialize: bool,
     pub include_install: bool,
+    /// Whether to mount `/v1/rejoin`. Multi-tenant embedders set this
+    /// to `false` and provide their own override that forwards to the
+    /// SaaS rejoin endpoint where audit / token-rotation semantics
+    /// differ.
+    pub include_rejoin: bool,
 }
 
 /// Like [`create_router`], but lets the caller opt-out of specific routes.
@@ -143,6 +149,9 @@ pub fn create_router_inner(state: AppState, options: RouterOptions) -> Router {
     }
     if options.include_initialize {
         router = router.merge(sync::initialize_router());
+    }
+    if options.include_rejoin {
+        router = router.merge(sync::rejoin_router());
     }
 
     router.with_state(state)

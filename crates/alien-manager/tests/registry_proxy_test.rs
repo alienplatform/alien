@@ -325,7 +325,7 @@ async fn setup() -> TestSetup {
             environment_info: None,
             runtime_metadata: None,
             retry_requested: false,
-            protocol_version: 0,
+            protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
         };
         deployment_store
             .reconcile(
@@ -338,6 +338,11 @@ async fn setup() -> TestSetup {
                     heartbeats: vec![],
                     error: None,
                     suggested_delay_ms: None,
+                    agent_version: None,
+                    agent_os: None,
+                    agent_arch: None,
+                    regime: None,
+                    agent_image_repository: None,
                 },
             )
             .await
@@ -798,7 +803,7 @@ async fn test_proxy_push_then_pull() {
             environment_info: None,
             runtime_metadata: None,
             retry_requested: false,
-            protocol_version: 0,
+            protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
         };
         s.deployment_store
             .reconcile(
@@ -811,6 +816,11 @@ async fn test_proxy_push_then_pull() {
                     heartbeats: vec![],
                     error: None,
                     suggested_delay_ms: None,
+                    agent_version: None,
+                    agent_os: None,
+                    agent_arch: None,
+                    regime: None,
+                    agent_image_repository: None,
                 },
             )
             .await

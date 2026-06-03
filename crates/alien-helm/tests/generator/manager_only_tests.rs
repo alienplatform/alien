@@ -3,7 +3,10 @@
 //! IRSA / Workload Identity / Federated Identity.
 
 use super::{
-    helpers::{assert_helm_valid, render, snapshot_chart},
+    helpers::{
+        assert_helm_valid, patch_values_with_manager_fetch, render, snapshot_chart,
+        MANAGER_FETCH_VALUES,
+    },
     test_utils::{self, LinterStatus},
 };
 use alien_core::{
@@ -159,7 +162,7 @@ fn chart_role_rbac_is_selected_by_kubernetes_route_api() {
     assert!(role.contains("eq $routeApi \"ingress\""));
     assert!(role.contains("eq $routeApi \"gateway\""));
 
-    let rendered = test_utils::helm_template(&chart.files, None);
+    let rendered = test_utils::helm_template(&chart.files, Some(MANAGER_FETCH_VALUES));
     match &rendered.status {
         LinterStatus::Passed => {
             assert!(rendered
@@ -227,10 +230,12 @@ fn gcp_base_platform_config_renders_operator_environment() {
     let chart = render(&stack, StackSettings::default());
     let files = chart.files.clone();
     let values = files.get("values.yaml").expect("values.yaml");
-    let gcp_values = values
-        .replace("basePlatform: null", "basePlatform: gcp")
-        .replace("projectId: \"\"", "projectId: alien-test-target")
-        .replace("region: \"\"", "region: us-east4");
+    let gcp_values = patch_values_with_manager_fetch(
+        &values
+            .replace("basePlatform: null", "basePlatform: gcp")
+            .replace("projectId: \"\"", "projectId: alien-test-target")
+            .replace("region: \"\"", "region: us-east4"),
+    );
 
     let rendered = test_utils::helm_template(&files, Some(&gcp_values));
     match &rendered.status {
@@ -262,7 +267,7 @@ fn cluster_bootstrap_renders_only_when_enabled() {
     assert!(values.contains("eksAutoMode:"));
     assert!(values.contains("arm64NodePool:"));
 
-    let default_rendered = test_utils::helm_template(&files, None);
+    let default_rendered = test_utils::helm_template(&files, Some(MANAGER_FETCH_VALUES));
     match &default_rendered.status {
         LinterStatus::Passed => {
             assert!(!default_rendered.stdout.contains("kind: StorageClass"));
@@ -276,12 +281,14 @@ fn cluster_bootstrap_renders_only_when_enabled() {
         }
     }
 
-    let enabled_values = values
-        .replace(
-        "clusterBootstrap:\n  metricsServer:\n    enabled: false\n    image: registry.k8s.io/metrics-server/metrics-server:v0.8.1\n  storageClass:\n    default:\n      enabled: false\n      name: \"\"\n      provisioner: \"\"\n      parameters: {}\n  ingress:\n    eksAutoMode:\n      enabled: false",
-        "clusterBootstrap:\n  metricsServer:\n    enabled: true\n    image: registry.k8s.io/metrics-server/metrics-server:v0.8.1\n  storageClass:\n    default:\n      enabled: true\n      name: gp3\n      provisioner: ebs.csi.eks.amazonaws.com\n      parameters:\n        type: gp3\n        fsType: ext4\n        encrypted: \"true\"\n  ingress:\n    eksAutoMode:\n      enabled: true",
-        )
-        .replace("arm64NodePool:\n        enabled: false", "arm64NodePool:\n        enabled: true");
+    let enabled_values = patch_values_with_manager_fetch(
+        &values
+            .replace(
+            "clusterBootstrap:\n  metricsServer:\n    enabled: false\n    image: registry.k8s.io/metrics-server/metrics-server:v0.8.1\n  storageClass:\n    default:\n      enabled: false\n      name: \"\"\n      provisioner: \"\"\n      parameters: {}\n  ingress:\n    eksAutoMode:\n      enabled: false",
+            "clusterBootstrap:\n  metricsServer:\n    enabled: true\n    image: registry.k8s.io/metrics-server/metrics-server:v0.8.1\n  storageClass:\n    default:\n      enabled: true\n      name: gp3\n      provisioner: ebs.csi.eks.amazonaws.com\n      parameters:\n        type: gp3\n        fsType: ext4\n        encrypted: \"true\"\n  ingress:\n    eksAutoMode:\n      enabled: true",
+            )
+            .replace("arm64NodePool:\n        enabled: false", "arm64NodePool:\n        enabled: true"),
+    );
     let enabled_rendered = test_utils::helm_template(&files, Some(&enabled_values));
     match &enabled_rendered.status {
         LinterStatus::Passed => {
@@ -336,13 +343,14 @@ fn heartbeat_collection_rbac_is_namespace_scoped_with_optional_node_reads() {
     assert!(cluster_role.contains(r#"resources: ["nodes"]"#));
     assert!(cluster_role.contains(r#"apiGroups: ["metrics.k8s.io"]"#));
 
-    test_utils::helm_template_and_validate(&files, None).assert_ok("heartbeat RBAC default values");
+    test_utils::helm_template_and_validate(&files, Some(MANAGER_FETCH_VALUES))
+        .assert_ok("heartbeat RBAC default values");
 
     let values = files.get("values.yaml").expect("values.yaml");
-    let disabled_values = values.replace(
+    let disabled_values = patch_values_with_manager_fetch(&values.replace(
         "heartbeat:\n  collection:\n    nodes:\n      enabled: true",
         "heartbeat:\n  collection:\n    nodes:\n      enabled: false",
-    );
+    ));
     test_utils::helm_template_and_validate(&files, Some(&disabled_values))
         .assert_ok("heartbeat RBAC node collection disabled");
 

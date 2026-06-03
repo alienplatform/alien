@@ -43,6 +43,7 @@ use utoipa::OpenApi;
         crate::routes::sync::release,
         crate::routes::sync::agent_sync,
         crate::routes::sync::initialize,
+        crate::routes::sync::rejoin,
         // Credentials
         crate::routes::credentials::resolve_credentials,
     ),
@@ -81,6 +82,8 @@ use utoipa::OpenApi;
         crate::routes::sync::AgentSyncResponse,
         crate::routes::sync::InitializeRequest,
         crate::routes::sync::InitializeResponse,
+        crate::routes::sync::RejoinRequest,
+        crate::routes::sync::RejoinResponse,
         // Credentials types
         crate::routes::credentials::ResolveCredentialsRequest,
         crate::routes::credentials::ResolveCredentialsResponse,

@@ -69,6 +69,26 @@ pub struct DeploymentRecord {
     pub created_at: DateTime<Utc>,
     pub updated_at: Option<DateTime<Utc>>,
     pub error: Option<serde_json::Value>,
+    // Agent self-update inventory, written by the sync handler.
+    // All four are NULL until the agent has actually reported in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_os: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_arch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub regime: Option<String>,
+    // Image repository the agent was pulled from, reported on sync.
+    // Surfaced in the dashboard pin-version UI so admins see the registry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_image_repository: Option<String>,
+
+    // Desired agent version. When set AND ≠ `agent_version`, the sync
+    // handler emits `agent_target` in the response so the agent triggers
+    // an upgrade. NULL = no pin, no upgrade.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_agent_version: Option<String>,
 }
 
 impl std::fmt::Debug for DeploymentRecord {
@@ -207,6 +227,16 @@ pub struct ReconcileData {
     pub error: Option<serde_json::Value>,
     pub suggested_delay_ms: Option<u64>,
     pub heartbeats: Vec<ResourceHeartbeat>,
+    /// Agent self-update inventory the agent reported on this sync. Forwarded
+    /// by multi-tenant embedders into their platform-side reconcile request so
+    /// the SaaS dashboard can show fleet inventory. Each `None` means "leave
+    /// the existing column untouched" rather than "blank it" — important for
+    /// back-compat with agents that don't report these fields.
+    pub agent_version: Option<String>,
+    pub agent_os: Option<String>,
+    pub agent_arch: Option<String>,
+    pub regime: Option<String>,
+    pub agent_image_repository: Option<String>,
 }
 
 /// Persistence for deployments and deployment groups.
@@ -309,6 +339,37 @@ pub trait DeploymentStore: Send + Sync {
         &self,
         caller: &crate::auth::Subject,
         id: &str,
+    ) -> Result<(), AlienError>;
+
+    /// Persist the agent self-update inventory reported on a `SyncRequest`
+    /// (`agent_version`, `agent_os`, `agent_arch`, `regime`, image repo).
+    /// Called on every agent sync — alongside the heartbeat update — so the
+    /// manager has a fleet-wide view of which version + registry each host
+    /// is on and can decide whether to send an `agent_target` in the
+    /// response. A field of `None` leaves the corresponding column
+    /// untouched.
+    async fn update_agent_metadata(
+        &self,
+        caller: &crate::auth::Subject,
+        id: &str,
+        agent_version: Option<&str>,
+        agent_os: Option<&str>,
+        agent_arch: Option<&str>,
+        regime: Option<&str>,
+        agent_image_repository: Option<&str>,
+    ) -> Result<(), AlienError>;
+
+    /// Set (or clear with `None`) the deployment's target agent version.
+    /// When set AND different from the agent's reported `agent_version` the
+    /// sync handler emits `agent_target` on every /v1/sync until the agent
+    /// catches up. This is the admin-side knob behind the dashboard's
+    /// "Set target version" control and the standalone manager's
+    /// `PUT /v1/deployments/:id/target-agent-version` endpoint.
+    async fn set_target_agent_version(
+        &self,
+        caller: &crate::auth::Subject,
+        id: &str,
+        target_agent_version: Option<&str>,
     ) -> Result<(), AlienError>;
 
     async fn set_redeploy(&self, caller: &crate::auth::Subject, id: &str)

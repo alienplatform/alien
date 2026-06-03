@@ -7,7 +7,7 @@ use crate::error::{ErrorData, Result};
 use crate::{run_agent_with_cancel, AgentConfig, InstanceLock};
 use alien_core::embedded_config::{load_embedded_config, AgentConfig as EmbeddedAgentConfig};
 use alien_core::Platform;
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use clap::Parser;
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -163,6 +163,21 @@ async fn run(mut args: Args, init_hook: InitHook) -> Result<()> {
 
     let cli_sync_token = load_sync_token(args.sync_token_file.as_deref()).await?;
 
+    // Stack settings are loaded up front so they can be forwarded on the
+    // `initialize` call (multi-tenant managers like managerx require them
+    // to construct the deployment row; single-tenant OSS ignores them).
+    let stack_settings_json = load_config_value(
+        args.stack_settings.clone(),
+        args.stack_settings_file.as_deref(),
+        "stack settings",
+        false,
+    )
+    .await?;
+    let initial_stack_settings = parse_json_opt::<alien_core::StackSettings>(
+        stack_settings_json.clone(),
+        "stack settings",
+    )?;
+
     let effective_sync_url = args
         .sync_url
         .or_else(|| embedded_config.as_ref().and_then(|c| c.manager_url.clone()));
@@ -187,25 +202,72 @@ async fn run(mut args: Args, init_hook: InitHook) -> Result<()> {
 
             if let Some(stored_deployment_id) = db.get_deployment_id().await? {
                 info!("   Using stored deployment ID: {}", stored_deployment_id);
+                // Prefer the deployment-scoped token previously returned by
+                // `/v1/initialize` over the chart-mounted deployment-group
+                // token. The platform API rejects `/v1/sync/acquire` calls
+                // made with a deployment-group token (403 Forbidden), so
+                // without this restoration step pod restarts silently lose
+                // sync until the agent re-initializes.
+                if let Some(stored_token) = db.get_sync_token().await? {
+                    info!("   Using stored deployment-scoped sync token");
+                    sync_token = stored_token;
+                }
             } else if let Some(deployment_id) = configured_deployment_id {
                 info!("   Using configured deployment ID: {}", deployment_id);
                 db.set_deployment_id(&deployment_id).await?;
             } else {
                 info!("   First startup, initializing with manager...");
 
-                let (initialized_deployment_id, deployment_token) = initialize_with_manager(
+                let init_result = initialize_with_manager(
                     &sync_url,
                     &sync_token,
                     args.platform,
                     args.agent_name.as_deref(),
+                    initial_stack_settings.as_ref(),
                 )
-                .await?;
+                .await;
+
+                let (initialized_deployment_id, deployment_token) = match init_result {
+                    Ok(v) => v,
+                    // 409 from initialize means a deployment with our name
+                    // already exists in this dg — the canonical cause is
+                    // that we *had* state (deployment_id + dep-scoped token)
+                    // in `data_dir` but it was wiped (emptyDir on chart
+                    // default, manual reset, etc.). Re-acquiring a fresh
+                    // deployment-scoped token over the existing row is
+                    // exactly what `/v1/rejoin` exists for; fall through to
+                    // it instead of crashing the agent.
+                    Err(e) if e.http_status_code == Some(409) => {
+                        info!(
+                            "   Name already exists — assuming local state was wiped, rejoining…"
+                        );
+                        let agent_name = args.agent_name.clone().or_else(|| {
+                            std::env::var("HOSTNAME")
+                                .ok()
+                                .or_else(|| hostname::get().ok().and_then(|h| h.into_string().ok()))
+                        });
+                        let name = agent_name.ok_or_else(|| {
+                            AlienError::new(ErrorData::ConfigurationError {
+                                message: "Cannot rejoin without a deployment name — pass --agent-name or set AGENT_NAME / HOSTNAME"
+                                    .to_string(),
+                            })
+                        })?;
+                        let (dep_id, dep_token) =
+                            rejoin_with_manager(&sync_url, &sync_token, &name).await?;
+                        info!(deployment_id = %dep_id, "   Rejoined existing deployment");
+                        (dep_id, Some(dep_token))
+                    }
+                    Err(e) => return Err(e),
+                };
 
                 db.set_deployment_id(&initialized_deployment_id).await?;
 
                 if let Some(ref dt) = deployment_token {
                     info!("   Received deployment-scoped token from manager");
                     sync_token = dt.clone();
+                    // Persist so pod restarts don't fall back to the
+                    // chart-mounted deployment-group token.
+                    db.set_sync_token(&sync_token).await?;
                 }
 
                 info!(
@@ -254,13 +316,8 @@ async fn run(mut args: Args, init_hook: InitHook) -> Result<()> {
     )
     .await?;
     let public_urls = parse_json_opt::<HashMap<String, String>>(public_urls_json, "public URLs")?;
-    let stack_settings_json = load_config_value(
-        args.stack_settings,
-        args.stack_settings_file.as_deref(),
-        "stack settings",
-        false,
-    )
-    .await?;
+    // Re-parse from the JSON we loaded up front so the downstream code path
+    // sees the same `StackSettings` that was forwarded to `initialize`.
     let mut stack_settings =
         parse_json_opt::<alien_core::StackSettings>(stack_settings_json, "stack settings")?
             .unwrap_or_default();
@@ -465,6 +522,7 @@ async fn initialize_with_manager(
     token: &str,
     platform: Platform,
     agent_name: Option<&str>,
+    stack_settings: Option<&alien_core::StackSettings>,
 ) -> Result<(String, Option<String>)> {
     use alien_manager_api::types::Platform as SdkPlatform;
     use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
@@ -512,17 +570,95 @@ async fn initialize_with_manager(
         builder = builder.body_map(|b| b.name(name));
     }
 
+    // Forward chart/CLI-provided stack settings. Multi-tenant embedders
+    // (alien-managerx) require this on initialize to construct the
+    // deployment row; the OSS standalone manager accepts it and ignores
+    // anything it doesn't use.
+    if let Some(settings) = stack_settings {
+        let sdk_settings: alien_manager_api::types::StackSettings = serde_json::from_value(
+            serde_json::to_value(settings).into_alien_error().context(
+                ErrorData::ConfigurationError {
+                    message: "Failed to serialize stack settings for initialize".to_string(),
+                },
+            )?,
+        )
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to deserialize stack settings into SDK type".to_string(),
+        })?;
+        builder = builder.body_map(|b| b.stack_settings(sdk_settings));
+    }
+
     let response = builder
         .send()
         .await
         .map_err(alien_manager_api::convert_sdk_error)
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to call initialize endpoint".to_string(),
+        .map_err(|e| {
+            // Preserve a 409 (deployment name already exists) verbatim
+            // so the caller's `e.http_status_code == Some(409)` arm can
+            // trigger the rejoin fall-through. Wrapping with
+            // `ConfigurationError` here would override the status to 500
+            // and the agent would crash instead of recovering.
+            if e.http_status_code == Some(409) {
+                AlienError::new(ErrorData::DeploymentNameAlreadyExists)
+            } else {
+                e.context(ErrorData::ConfigurationError {
+                    message: "Failed to call initialize endpoint".to_string(),
+                })
+            }
         })?;
 
     let init_response = response.into_inner();
 
     Ok((init_response.deployment_id, init_response.token))
+}
+
+/// Re-acquire a deployment-scoped sync token from the manager after the
+/// agent's persistent state was wiped (chart-default emptyDir, manual
+/// reset, etc.). Called only on a 409 from `initialize_with_manager` —
+/// the existing deployment row is reattached to and a fresh sync token
+/// is minted.
+async fn rejoin_with_manager(
+    sync_url: &url::Url,
+    token: &str,
+    deployment_name: &str,
+) -> Result<(String, String)> {
+    use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_str(&format!("Bearer {}", token))
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Invalid token format".to_string(),
+            })?,
+    );
+    headers.insert(USER_AGENT, HeaderValue::from_static("alien-agent"));
+
+    let http_client = reqwest::Client::builder()
+        .default_headers(headers)
+        .build()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to create HTTP client".to_string(),
+        })?;
+
+    let base_url = sync_url.as_str().trim_end_matches('/');
+    let client = alien_manager_api::Client::new_with_client(base_url, http_client);
+
+    let response = client
+        .rejoin()
+        .body_map(|b| b.name(deployment_name.to_string()))
+        .send()
+        .await
+        .map_err(alien_manager_api::convert_sdk_error)
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to call rejoin endpoint".to_string(),
+        })?;
+
+    let r = response.into_inner();
+    Ok((r.deployment_id, r.token))
 }
 
 fn setup_tracing(verbose: bool) {
