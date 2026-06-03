@@ -10,9 +10,11 @@ import {
   DeploymentPortalDomain$inboundSchema,
 } from "./deploymentportaldomain.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
+import { PackageDomain, PackageDomain$inboundSchema } from "./packagedomain.js";
 
 export type DeploymentPortalDomainResponse = {
   deploymentPortalDomain: DeploymentPortalDomain | null;
+  packageDomain: PackageDomain | null;
 };
 
 /** @internal */
@@ -21,6 +23,7 @@ export const DeploymentPortalDomainResponse$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   deploymentPortalDomain: z.nullable(DeploymentPortalDomain$inboundSchema),
+  packageDomain: z.nullable(PackageDomain$inboundSchema),
 });
 
 export function deploymentPortalDomainResponseFromJSON(

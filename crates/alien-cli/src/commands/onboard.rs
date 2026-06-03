@@ -416,9 +416,10 @@ async fn onboard_standalone(args: OnboardArgs, ctx: ExecutionMode, name: String)
     println!();
     println!("{}", dim_label("Share with the customer's admin:"));
     println!(
-        "  curl -fsSL {}/install | bash",
+        "  curl -fsSL {}/install | sh",
         mgr.manager_url.trim_end_matches('/')
     );
+    println!("  export PATH=\"$HOME/.local/bin:$PATH\"");
     println!("  alien-deploy deploy \\");
     println!("    --token {} \\", token_response.token);
     println!("    --name <deployment-name> \\");

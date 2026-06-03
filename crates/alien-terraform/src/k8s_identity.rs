@@ -90,7 +90,7 @@ pub(crate) fn overlay_per_resource(
 
     if !service_accounts.is_empty() {
         shared_locals.insert(
-            "alien_kubernetes_namespace".to_string(),
+            "kubernetes_namespace".to_string(),
             expr::raw("var.kubernetes_namespace"),
         );
     }
@@ -253,7 +253,10 @@ fn add_eks_cluster_data(fragment: &mut TfFragment, cluster_label: Option<&str>) 
                 "tags",
                 expr::object([
                     ("Name", expr::template("${local.resource_prefix}-eks-oidc")),
-                    ("alien-resource-prefix", expr::raw("local.resource_prefix")),
+                    (
+                        "deployment-resource-prefix",
+                        expr::raw("local.resource_prefix"),
+                    ),
                 ]),
             ),
         ],

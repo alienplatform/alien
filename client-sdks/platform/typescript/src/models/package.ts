@@ -51,14 +51,14 @@ export type ConfigTerraform = {
    */
   displayName?: string | null | undefined;
   /**
-   * AWS regions supported by the Alien environment that built this package.
+   * AWS regions supported by the environment that built this package.
    */
   supportedAwsRegions?: Array<string> | undefined;
   type: "terraform";
 };
 
 /**
- * Branding configuration for the agent binary.
+ * Branding configuration for the Operator image.
  */
 export type ConfigAgentImage = {
   /**
@@ -66,7 +66,7 @@ export type ConfigAgentImage = {
    */
   displayName: string;
   /**
-   * Binary name (e.g., "acme-agent")
+   * Image name (e.g., "acme-operator")
    */
   name: string;
   type: "agent-image";
@@ -96,7 +96,7 @@ export type ConfigCloudformation = {
    */
   displayName?: string | null | undefined;
   /**
-   * AWS regions supported by the Alien environment that built this package.
+   * AWS regions supported by the environment that built this package.
    */
   supportedAwsRegions?: Array<string> | undefined;
   type: "cloudformation";
@@ -313,7 +313,7 @@ export const OutputsTypeAgentImage = {
 export type OutputsTypeAgentImage = ClosedEnum<typeof OutputsTypeAgentImage>;
 
 /**
- * Outputs from an agent image package build
+ * Outputs from an Operator image package build
  */
 export type OutputsAgentImage = {
   /**
@@ -321,7 +321,7 @@ export type OutputsAgentImage = {
    */
   digest: string;
   /**
-   * Full image reference (e.g., "public.ecr.aws/acme/agents/project-id:1.2.3")
+   * Full image reference (e.g., "public.ecr.aws/acme/operators/project-id:1.2.3")
    */
   image: string;
   type: OutputsTypeAgentImage;

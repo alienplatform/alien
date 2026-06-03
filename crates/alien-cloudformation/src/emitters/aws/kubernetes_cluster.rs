@@ -536,7 +536,7 @@ fn node_group(
 
 fn eks_tags(ctx: &EmitContext<'_>) -> CfExpression {
     CfExpression::object([
-        ("managed-by", CfExpression::from("deployment")),
+        ("managed-by", CfExpression::from("setup")),
         ("deployment", CfExpression::ref_("AWS::StackName")),
         ("resource", CfExpression::from(ctx.resource_id)),
         (

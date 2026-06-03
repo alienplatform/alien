@@ -1,4 +1,4 @@
-//! GCP identity & network — service-account / remote-stack-management /
+//! GCP identity & network — service-account / management /
 //! network (Create + ByoVpcGcp + UseDefault).
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};

@@ -19,12 +19,6 @@ let value: ForwardImportRequest = {
     setupFingerprint: "<value>",
     setupFingerprintVersion: 188662,
     stackSettings: {},
-    managementConfig: {
-      managingTenantId: "<id>",
-      oidcIssuer: "<value>",
-      oidcSubject: "<value>",
-      platform: "azure",
-    },
     resources: [
       {
         id: "<id>",

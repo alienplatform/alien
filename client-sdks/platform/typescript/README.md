@@ -229,6 +229,8 @@ run();
 * [cancelSetup](docs/sdks/managers/README.md#cancelsetup) - Cancel pending private-manager setup, revoke setup/runtime tokens, and remove the undeployed manager record.
 * [get](docs/sdks/managers/README.md#get) - Retrieve a manager by ID.
 * [delete](docs/sdks/managers/README.md#delete) - Delete a manager by ID.
+* [getDomainBinding](docs/sdks/managers/README.md#getdomainbinding) - Get the custom domain binding for a private manager.
+* [updateDomainBinding](docs/sdks/managers/README.md#updatedomainbinding) - Create, update, or remove the custom domain binding for a private manager.
 * [getManagementConfig](docs/sdks/managers/README.md#getmanagementconfig) - Get the management configuration for a manager.
 * [provision](docs/sdks/managers/README.md#provision) - Enqueue provisioning for a manager by ID.
 * [update](docs/sdks/managers/README.md#update) - Update a manager to a specific release ID or active release.
@@ -281,7 +283,7 @@ run();
 
 * [list](docs/sdks/sync/README.md#list) - List full deployment records for manager operational loops. This endpoint is intentionally separate from the public deployments list, which returns lightweight UI rows.
 * [acquire](docs/sdks/sync/README.md#acquire) - Acquire a batch of deployments for processing. Used by Manager to atomically lock deployments matching filters. Each deployment in the batch must be released after processing.
-* [reconcile](docs/sdks/sync/README.md#reconcile) - Reconcile deployment state. Push model (with session) verifies lock ownership. Pull model (no session) verifies the deployment is unlocked. Accepts full DeploymentState after step() execution.
+* [reconcile](docs/sdks/sync/README.md#reconcile) - Reconcile deployment state. Push model requests that include a session verify lock ownership. Pull model state reports are accepted as authz-gated agent progress even when they carry an agent-sync session. Accepts full DeploymentState after step() execution.
 * [release](docs/sdks/sync/README.md#release) - Release a deployment lock. Must be called after processing an acquired deployment, even if processing failed. This is critical to avoid deadlocks.
 
 ### [User](docs/sdks/user/README.md)
@@ -377,6 +379,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`managersGenerateManagerToken`](docs/sdks/managers/README.md#generatemanagertoken) - Generate a short-lived JWT for direct browser → manager communication. Used for fetching command payloads and querying logs without routing sensitive data through the platform API.
 - [`managersGet`](docs/sdks/managers/README.md#get) - Retrieve a manager by ID.
 - [`managersGetDeployment`](docs/sdks/managers/README.md#getdeployment) - Get deployment details for a private manager (internal deployment platform, status, resources).
+- [`managersGetDomainBinding`](docs/sdks/managers/README.md#getdomainbinding) - Get the custom domain binding for a private manager.
 - [`managersGetManagementConfig`](docs/sdks/managers/README.md#getmanagementconfig) - Get the management configuration for a manager.
 - [`managersList`](docs/sdks/managers/README.md#list) - Retrieve all managers.
 - [`managersListEvents`](docs/sdks/managers/README.md#listevents) - Retrieve all events of a manager.
@@ -386,6 +389,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`managersRetry`](docs/sdks/managers/README.md#retry) - Retry private-manager setup. Returns a fresh setup action before the internal deployment exists, or requests retry for the internal deployment after it exists.
 - [`managersRetrySetup`](docs/sdks/managers/README.md#retrysetup) - Revoke previous private-manager setup tokens and issue a fresh setup token/config.
 - [`managersUpdate`](docs/sdks/managers/README.md#update) - Update a manager to a specific release ID or active release.
+- [`managersUpdateDomainBinding`](docs/sdks/managers/README.md#updatedomainbinding) - Create, update, or remove the custom domain binding for a private manager.
 - [`packagesCancel`](docs/sdks/packages/README.md#cancel) - Cancel a pending or building package.
 - [`packagesGet`](docs/sdks/packages/README.md#get) - Get details of a specific package.
 - [`packagesList`](docs/sdks/packages/README.md#list) - List packages with optional filters. Returns packages ordered by creation date (newest first).
@@ -412,7 +416,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`resourcesListOverview`](docs/sdks/resources/README.md#listoverview)
 - [`syncAcquire`](docs/sdks/sync/README.md#acquire) - Acquire a batch of deployments for processing. Used by Manager to atomically lock deployments matching filters. Each deployment in the batch must be released after processing.
 - [`syncList`](docs/sdks/sync/README.md#list) - List full deployment records for manager operational loops. This endpoint is intentionally separate from the public deployments list, which returns lightweight UI rows.
-- [`syncReconcile`](docs/sdks/sync/README.md#reconcile) - Reconcile deployment state. Push model (with session) verifies lock ownership. Pull model (no session) verifies the deployment is unlocked. Accepts full DeploymentState after step() execution.
+- [`syncReconcile`](docs/sdks/sync/README.md#reconcile) - Reconcile deployment state. Push model requests that include a session verify lock ownership. Pull model state reports are accepted as authz-gated agent progress even when they carry an agent-sync session. Accepts full DeploymentState after step() execution.
 - [`syncRelease`](docs/sdks/sync/README.md#release) - Release a deployment lock. Must be called after processing an acquired deployment, even if processing failed. This is critical to avoid deadlocks.
 - [`userCompleteProfileSetup`](docs/sdks/user/README.md#completeprofilesetup) - Complete the required beta intake and profile setup dialog.
 - [`userCreateWorkspace`](docs/sdks/user/README.md#createworkspace) - Create a new workspace. The current user will be automatically added as an admin.

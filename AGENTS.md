@@ -456,6 +456,15 @@ The retry logic belongs at a higher level (e.g., the executor, job runner, or AP
 
 Tests must be **strict**. Assert as much as possible—the test should fail if the entire flow didn't pass.
 
+When writing or changing code, think carefully about the real testing strategy: what would actually prove this works, and what would catch meaningful bugs? Do not generate shallow tests just to create coverage; a test that only asserts implementation artifacts, such as checking that a generated CloudFormation template contains a string, is usually worse than no test.
+
+- **No test is better than a meaningless test.**
+- Being creative and finding fast, practical ways to truly validate code is one of the hardest parts of engineering, but also one of the most rewarding.
+- Prefer validation that exercises real behavior: run `cfn-validate`, generate and inspect the CloudFormation template, verify AWS behavior with web searches, run the relevant end-to-end flow, or deploy and destroy a real stack when appropriate.
+- Do the validation yourself whenever possible. Do not call something “manual testing” if you can generate the artifact, inspect it, run commands, search the web, or otherwise verify it directly as the agent.
+- When a good validation path is not practical to automate as a test, leave a clear code comment or PR note like: “To test this, generate X, run Y, inspect Z, and verify A/B against AWS docs.”
+- If you find existing junk tests, remove them or substantially improve them instead of preserving fake coverage.
+
 ### Dangerous Patterns to Avoid
 
 ```rust

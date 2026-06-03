@@ -472,7 +472,7 @@ impl AzurePermissionsHelper {
                 condition_version: None,
                 delegated_managed_identity_resource_id: None,
                 description: Some(
-                    "Alien-managed role assignment for resource-scoped permissions".to_string(),
+                    "Runtime-managed role assignment for resource-scoped permissions".to_string(),
                 ),
                 created_by: None,
                 created_on: None,

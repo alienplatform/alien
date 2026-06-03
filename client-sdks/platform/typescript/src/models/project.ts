@@ -116,7 +116,7 @@ export type ProjectCloudformation = {
 };
 
 /**
- * Agent image package configuration. Required when Helm is enabled. If null, agent image packages will not be generated.
+ * Operator image package configuration. Required when Helm is enabled. If null, Operator image packages will not be generated.
  */
 export type ProjectAgentImage = {
   /**
@@ -124,11 +124,11 @@ export type ProjectAgentImage = {
    */
   displayName: string;
   /**
-   * Binary name (e.g., "acme-agent")
+   * Image name (e.g., "acme-operator")
    */
   name: string;
   /**
-   * Whether agent image package generation is enabled
+   * Whether Operator image package generation is enabled
    */
   enabled: boolean;
 };
@@ -178,7 +178,7 @@ export type ProjectPackagesConfig = {
    */
   cloudformation?: ProjectCloudformation | null | undefined;
   /**
-   * Agent image package configuration. Required when Helm is enabled. If null, agent image packages will not be generated.
+   * Operator image package configuration. Required when Helm is enabled. If null, Operator image packages will not be generated.
    */
   agentImage?: ProjectAgentImage | null | undefined;
   /**

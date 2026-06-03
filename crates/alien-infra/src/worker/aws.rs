@@ -431,7 +431,7 @@ impl AwsWorkerController {
             .role(role_arn)
             .code(code)
             .package_type("Image".to_string())
-            .description(format!("Alien worker: {}", cfg.id))
+            .description(format!("Runtime worker: {}", cfg.id))
             .timeout(cfg.timeout_seconds as i32)
             .memory_size(cfg.memory_mb as i32)
             .publish(false)

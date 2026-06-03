@@ -1792,8 +1792,8 @@ impl GcpWorkerController {
             retain_acked_messages: Some(false),
             message_retention_duration: None,
             labels: Some(std::collections::HashMap::from([
-                ("alien-commands".to_string(), cfg.id.clone()),
-                ("alien-stack".to_string(), ctx.resource_prefix.to_string()),
+                ("commands".to_string(), cfg.id.clone()),
+                ("deployment".to_string(), ctx.resource_prefix.to_string()),
             ])),
             enable_message_ordering: Some(false),
             expiration_policy: None,
@@ -3706,10 +3706,7 @@ impl GcpWorkerController {
 
         // Build revision template
         let template = RevisionTemplate::builder()
-            .labels(HashMap::from([(
-                "alien-worker".to_string(),
-                cfg.id.clone(),
-            )]))
+            .labels(HashMap::from([("worker".to_string(), cfg.id.clone())]))
             .scaling(
                 alien_gcp_clients::cloudrun::RevisionScaling::builder()
                     .min_instance_count(0) // Scale to zero
@@ -3738,11 +3735,11 @@ impl GcpWorkerController {
         // domain-restricted sharing enabled (which blocks allUsers in IAM).
         let is_public = cfg.ingress == Ingress::Public;
         let service = Service::builder()
-            .description(format!("Alien worker: {}", cfg.id))
+            .description(format!("Runtime worker: {}", cfg.id))
             .labels(HashMap::from([
-                ("alien-resource".to_string(), "worker".to_string()),
-                ("alien-worker-id".to_string(), cfg.id.clone()),
-                ("alien-stack".to_string(), ctx.resource_prefix.to_string()),
+                ("resource-type".to_string(), "worker".to_string()),
+                ("resource".to_string(), cfg.id.clone()),
+                ("deployment".to_string(), ctx.resource_prefix.to_string()),
             ]))
             .ingress(ingress)
             .template(template)
@@ -4205,8 +4202,8 @@ impl GcpWorkerController {
             retain_acked_messages: Some(false),
             message_retention_duration: None,
             labels: Some(std::collections::HashMap::from([
-                ("alien-worker".to_string(), worker_config.id.clone()),
-                ("alien-stack".to_string(), ctx.resource_prefix.to_string()),
+                ("worker".to_string(), worker_config.id.clone()),
+                ("deployment".to_string(), ctx.resource_prefix.to_string()),
             ])),
             enable_message_ordering: Some(false),
             expiration_policy: None,
@@ -4556,9 +4553,9 @@ impl GcpWorkerController {
             retain_acked_messages: Some(false),
             message_retention_duration: None,
             labels: Some(std::collections::HashMap::from([
-                ("alien-worker".to_string(), worker_config.id.clone()),
-                ("alien-stack".to_string(), ctx.resource_prefix.to_string()),
-                ("alien-storage".to_string(), storage_ref.id.clone()),
+                ("worker".to_string(), worker_config.id.clone()),
+                ("deployment".to_string(), ctx.resource_prefix.to_string()),
+                ("storage".to_string(), storage_ref.id.clone()),
             ])),
             enable_message_ordering: Some(false),
             expiration_policy: None,

@@ -30,6 +30,12 @@ pub mod storage_accounts;
 pub mod tables;
 pub mod token_cache;
 
+const AZURE_IMDS_ENDPOINT: &str = "http://169.254.169.254/metadata/identity/oauth2/token";
+
+fn scope_to_resource(scope: &str) -> String {
+    scope.trim_end_matches("/.default").to_string()
+}
+
 /// Get a bearer token using Azure AD Workload Identity (federated identity)
 async fn get_workload_identity_token(
     client_id: &str,
@@ -226,6 +232,10 @@ async fn get_impersonated_token(
                 field_name: Some("credentials".to_string()),
             }))
         }
+        AzureCredentials::VmManagedIdentity { .. } => Err(AlienError::new(ErrorData::InvalidInput {
+            message: "Cannot mint an impersonated access token from VM managed identity. Return a managed identity credential source instead.".to_string(),
+            field_name: Some("credentials".to_string()),
+        })),
         AzureCredentials::ServicePrincipal {
             client_id,
             client_secret,
@@ -430,6 +440,11 @@ impl AzureClientConfigExt for AzureClientConfig {
                 identity_endpoint: identity_endpoint.clone(),
                 identity_header: identity_header.clone(),
             }
+        } else if let Some(client_id) = environment_variables.get("AZURE_CLIENT_ID") {
+            AzureCredentials::VmManagedIdentity {
+                client_id: client_id.clone(),
+                identity_endpoint: environment_variables.get("AZURE_IMDS_ENDPOINT").cloned(),
+            }
         } else {
             return Err(AlienError::new(ErrorData::InvalidClientConfig {
                 message: "Missing Azure credentials environment variables. Provide one of: AZURE_ACCESS_TOKEN, AZURE_CLIENT_ID+AZURE_CLIENT_SECRET, AZURE_CLIENT_ID+AZURE_FEDERATED_TOKEN_FILE, or AZURE_CLIENT_ID+IDENTITY_ENDPOINT+IDENTITY_HEADER".to_string(),
@@ -485,10 +500,40 @@ impl AzureClientConfigExt for AzureClientConfig {
     /// Note: This implementation assumes the current service principal has permission to obtain tokens
     /// for the target managed identity. In practice, you would need appropriate RBAC permissions.
     async fn impersonate(&self, config: AzureImpersonationConfig) -> Result<AzureClientConfig> {
-        // For Azure impersonation, we need to get an access token for the target identity
-        // This typically involves using the current credentials to request a token on behalf of the target identity
-
-        let token = get_impersonated_token(self, &config).await?;
+        let credentials = match &self.credentials {
+            AzureCredentials::WorkloadIdentity {
+                federated_token_file,
+                authority_host,
+                ..
+            } => AzureCredentials::WorkloadIdentity {
+                client_id: config.client_id.clone(),
+                tenant_id: config
+                    .tenant_id
+                    .clone()
+                    .unwrap_or_else(|| self.tenant_id.clone()),
+                federated_token_file: federated_token_file.clone(),
+                authority_host: authority_host.clone(),
+            },
+            AzureCredentials::ManagedIdentity {
+                identity_endpoint,
+                identity_header,
+                ..
+            } => AzureCredentials::ManagedIdentity {
+                client_id: config.client_id.clone(),
+                identity_endpoint: identity_endpoint.clone(),
+                identity_header: identity_header.clone(),
+            },
+            AzureCredentials::VmManagedIdentity {
+                identity_endpoint, ..
+            } => AzureCredentials::VmManagedIdentity {
+                client_id: config.client_id.clone(),
+                identity_endpoint: identity_endpoint.clone(),
+            },
+            AzureCredentials::ServicePrincipal { .. } | AzureCredentials::AccessToken { .. } => {
+                let token = get_impersonated_token(self, &config).await?;
+                AzureCredentials::AccessToken { token }
+            }
+        };
 
         // Use target overrides when provided (cross-subscription impersonation).
         Ok(AzureClientConfig {
@@ -497,7 +542,7 @@ impl AzureClientConfigExt for AzureClientConfig {
                 .unwrap_or_else(|| self.subscription_id.clone()),
             tenant_id: config.tenant_id.unwrap_or_else(|| self.tenant_id.clone()),
             region: config.target_region.or_else(|| self.region.clone()),
-            credentials: AzureCredentials::AccessToken { token },
+            credentials,
             service_overrides: self.service_overrides.clone(),
         })
     }
@@ -603,13 +648,13 @@ impl AzureClientConfigExt for AzureClientConfig {
                 }
 
                 // Managed identity uses "resource" (not "scope"), strip ".default" suffix
-                let resource = scope.trim_end_matches("/.default");
+                let resource = scope_to_resource(scope);
 
                 let client = reqwest::Client::new();
                 let response = client
                     .get(identity_endpoint)
                     .query(&[
-                        ("resource", resource),
+                        ("resource", resource.as_str()),
                         ("api-version", "2019-08-01"),
                         ("client_id", client_id),
                     ])
@@ -633,6 +678,66 @@ impl AzureClientConfigExt for AzureClientConfig {
                     ),
                         },
                     )?;
+
+                Ok(token_response.access_token)
+            }
+            AzureCredentials::VmManagedIdentity {
+                client_id,
+                identity_endpoint,
+            } => {
+                #[derive(Deserialize)]
+                struct TokenResponse {
+                    access_token: String,
+                }
+
+                let endpoint = identity_endpoint.as_deref().unwrap_or(AZURE_IMDS_ENDPOINT);
+                let resource = scope_to_resource(scope);
+
+                let client = reqwest::Client::new();
+                let response = client
+                    .get(endpoint)
+                    .query(&[
+                        ("api-version", "2018-02-01"),
+                        ("resource", resource.as_str()),
+                        ("client_id", client_id.as_str()),
+                    ])
+                    .header("Metadata", "true")
+                    .send()
+                    .await
+                    .into_alien_error()
+                    .context(ErrorData::AuthenticationError {
+                        message: format!(
+                            "Failed to get Azure VM managed identity token for resource '{}'",
+                            resource
+                        ),
+                    })?;
+
+                let status = response.status();
+                let response_text = response.text().await.into_alien_error().context(
+                    ErrorData::AuthenticationError {
+                        message: format!(
+                        "Failed to read Azure VM managed identity token response for resource '{}'",
+                        resource
+                    ),
+                    },
+                )?;
+                if !status.is_success() {
+                    return Err(AlienError::new(ErrorData::AuthenticationError {
+                        message: format!(
+                            "Failed to get Azure VM managed identity token for resource '{}': HTTP {}: {}",
+                            resource, status, response_text
+                        ),
+                    }));
+                }
+
+                let token_response: TokenResponse = serde_json::from_str(&response_text)
+                    .into_alien_error()
+                    .context(ErrorData::AuthenticationError {
+                        message: format!(
+                            "Failed to parse Azure VM managed identity token response for resource '{}': {}",
+                            resource, response_text
+                        ),
+                    })?;
 
                 Ok(token_response.access_token)
             }

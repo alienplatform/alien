@@ -1348,15 +1348,9 @@ async fn upsert_tls_secret(
     resource_id: &str,
 ) -> Result<()> {
     let mut annotations = BTreeMap::new();
-    annotations.insert(
-        "alien.dev/certificate-id".to_string(),
-        certificate_id.to_string(),
-    );
+    annotations.insert("certificate-id".to_string(), certificate_id.to_string());
     if let Some(issued_at) = issued_at {
-        annotations.insert(
-            "alien.dev/certificate-issued-at".to_string(),
-            issued_at.to_string(),
-        );
+        annotations.insert("certificate-issued-at".to_string(), issued_at.to_string());
     }
 
     let mut secret = Secret {
@@ -1693,8 +1687,8 @@ fn endpoint_labels(
     BTreeMap::from([
         ("app".to_string(), target.workload_name.to_string()),
         ("component".to_string(), target.component.to_string()),
-        ("managed-by".to_string(), "alien".to_string()),
-        ("alien.dev/endpoint".to_string(), name.to_string()),
+        ("managed-by".to_string(), "runtime".to_string()),
+        ("endpoint".to_string(), name.to_string()),
     ])
 }
 
@@ -2200,8 +2194,8 @@ mod tests {
     #[test]
     fn secret_template_supports_resource_tokens() {
         assert_eq!(
-            render_secret_name_template("alien-{{ resourceId }}-tls", "api", "api-v1"),
-            "alien-api-tls"
+            render_secret_name_template("deployment-{{ resourceId }}-tls", "api", "api-v1"),
+            "deployment-api-tls"
         );
         assert_eq!(
             render_secret_name_template("alien-{{ workloadName }}-tls", "api", "api-v1"),
@@ -2250,7 +2244,7 @@ mod tests {
 
     #[cfg(feature = "aws")]
     #[test]
-    fn acm_tags_keep_alien_boundary_tags_authoritative() {
+    fn acm_tags_keep_runtime_boundary_tags_authoritative() {
         let tags = acm_tags(
             "stack-1",
             "api",
@@ -2263,7 +2257,7 @@ mod tests {
 
         assert_eq!(tags.get("deployment"), Some(&"stack-1".to_string()));
         assert_eq!(tags.get("resource"), Some(&"api".to_string()));
-        assert_eq!(tags.get("managed-by"), Some(&"deployment".to_string()));
+        assert_eq!(tags.get("managed-by"), Some(&"runtime".to_string()));
         assert_eq!(tags.get("team"), Some(&"platform".to_string()));
     }
 }

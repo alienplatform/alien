@@ -5,12 +5,22 @@
 import { releasesCreateRelease } from "../funcs/releasesCreateRelease.js";
 import { releasesGetLatestRelease } from "../funcs/releasesGetLatestRelease.js";
 import { releasesGetRelease } from "../funcs/releasesGetRelease.js";
+import { releasesListReleases } from "../funcs/releasesListReleases.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
 import * as models from "../models/index.js";
 import * as operations from "../models/operations/index.js";
 import { unwrapAsync } from "../types/fp.js";
 
 export class Releases extends ClientSDK {
+  async listReleases(
+    options?: RequestOptions,
+  ): Promise<models.ListReleasesResponse> {
+    return unwrapAsync(releasesListReleases(
+      this,
+      options,
+    ));
+  }
+
   async createRelease(
     request: models.CreateReleaseRequest,
     options?: RequestOptions,

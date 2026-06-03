@@ -36,6 +36,7 @@ export type Aws = PrepareDeploymentStackAws | any;
 
 export type PrepareDeploymentStackAzure = {
   keyVaultCertificateId: string;
+  keyVaultResourceId?: string | null | undefined;
 };
 
 export type Azure = PrepareDeploymentStackAzure | any;
@@ -798,6 +799,10 @@ export type TypeByoVnetAzure = ClosedEnum<typeof TypeByoVnetAzure>;
 
 export type NetworkByoVnetAzure = {
   /**
+   * Name of the dedicated classic Application Gateway subnet within the VNet.
+   */
+  applicationGatewaySubnetName?: string | null | undefined;
+  /**
    * Name of the private subnet within the VNet
    */
   privateSubnetName: string;
@@ -1044,6 +1049,7 @@ export function awsToJSON(aws: Aws): string {
 /** @internal */
 export type PrepareDeploymentStackAzure$Outbound = {
   keyVaultCertificateId: string;
+  keyVaultResourceId?: string | null | undefined;
 };
 
 /** @internal */
@@ -1052,6 +1058,7 @@ export const PrepareDeploymentStackAzure$outboundSchema: z.ZodType<
   PrepareDeploymentStackAzure
 > = z.object({
   keyVaultCertificateId: z.string(),
+  keyVaultResourceId: z.nullable(z.string()).optional(),
 });
 
 export function prepareDeploymentStackAzureToJSON(
@@ -2530,6 +2537,7 @@ export const TypeByoVnetAzure$outboundSchema: z.ZodEnum<
 
 /** @internal */
 export type NetworkByoVnetAzure$Outbound = {
+  application_gateway_subnet_name?: string | null | undefined;
   private_subnet_name: string;
   public_subnet_name: string;
   type: string;
@@ -2541,12 +2549,14 @@ export const NetworkByoVnetAzure$outboundSchema: z.ZodType<
   NetworkByoVnetAzure$Outbound,
   NetworkByoVnetAzure
 > = z.object({
+  applicationGatewaySubnetName: z.nullable(z.string()).optional(),
   privateSubnetName: z.string(),
   publicSubnetName: z.string(),
   type: TypeByoVnetAzure$outboundSchema,
   vnetResourceId: z.string(),
 }).transform((v) => {
   return remap$(v, {
+    applicationGatewaySubnetName: "application_gateway_subnet_name",
     privateSubnetName: "private_subnet_name",
     publicSubnetName: "public_subnet_name",
     vnetResourceId: "vnet_resource_id",

@@ -116,7 +116,7 @@ pub fn sample_stack() -> Stack {
 }
 
 /// `Stack`-flavored helper for output-chunking tests — generates `n`
-/// sample resources, each with a long id so the import payload exceeds
+/// sample resources, each with a long id so the registration payload exceeds
 /// the per-output byte budget.
 pub fn many_sample_resources(n: usize) -> Stack {
     let mut stack = Stack::new("chunked".to_string());

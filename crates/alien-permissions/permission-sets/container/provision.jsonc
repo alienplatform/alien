@@ -25,7 +25,7 @@
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${managedByTag}": "deployment"
+                "aws:RequestTag/${managedByTag}": "runtime"
               }
             }
           },
@@ -41,7 +41,7 @@
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${resourceTag}": "${resourceName}",
-                "aws:RequestTag/${managedByTag}": "deployment"
+                "aws:RequestTag/${managedByTag}": "runtime"
               }
             }
           }
@@ -67,7 +67,7 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${managedByTag}": "deployment"
+                "aws:ResourceTag/${managedByTag}": "runtime"
               }
             }
           },
@@ -83,7 +83,7 @@
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
                 "aws:ResourceTag/${resourceTag}": "${resourceName}",
-                "aws:ResourceTag/${managedByTag}": "deployment"
+                "aws:ResourceTag/${managedByTag}": "runtime"
               }
             }
           }
@@ -100,7 +100,7 @@
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${managedByTag}": "deployment"
+                "aws:RequestTag/${managedByTag}": "runtime"
               }
             }
           },
@@ -110,7 +110,7 @@
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${resourceTag}": "${resourceName}",
-                "aws:RequestTag/${managedByTag}": "deployment"
+                "aws:RequestTag/${managedByTag}": "runtime"
               }
             }
           }
@@ -126,7 +126,7 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${managedByTag}": "deployment"
+                "aws:ResourceTag/${managedByTag}": "runtime"
               }
             }
           },
@@ -136,7 +136,7 @@
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
                 "aws:ResourceTag/${resourceTag}": "${resourceName}",
-                "aws:ResourceTag/${managedByTag}": "deployment"
+                "aws:ResourceTag/${managedByTag}": "runtime"
               }
             }
           }
@@ -195,7 +195,7 @@
               "StringEquals": {
                 "ec2:CreateAction": "CreateSecurityGroup",
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${managedByTag}": "deployment"
+                "aws:RequestTag/${managedByTag}": "runtime"
               }
             }
           },
@@ -206,7 +206,7 @@
                 "ec2:CreateAction": "CreateSecurityGroup",
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${resourceTag}": "${resourceName}",
-                "aws:RequestTag/${managedByTag}": "deployment"
+                "aws:RequestTag/${managedByTag}": "runtime"
               }
             }
           }
@@ -214,7 +214,11 @@
       },
       {
         "grant": {
-          "actions": ["ec2:DeleteSecurityGroup", "ec2:AuthorizeSecurityGroupIngress"]
+          "actions": [
+            "ec2:DeleteSecurityGroup",
+            "ec2:AuthorizeSecurityGroupIngress",
+            "ec2:RevokeSecurityGroupIngress"
+          ]
         },
         "binding": {
           "stack": {
@@ -222,7 +226,7 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${managedByTag}": "deployment"
+                "aws:ResourceTag/${managedByTag}": "runtime"
               }
             }
           },
@@ -232,7 +236,7 @@
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
                 "aws:ResourceTag/${resourceTag}": "${resourceName}",
-                "aws:ResourceTag/${managedByTag}": "deployment"
+                "aws:ResourceTag/${managedByTag}": "runtime"
               }
             }
           }
@@ -263,7 +267,7 @@
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
-                "aws:RequestTag/${managedByTag}": "deployment"
+                "aws:RequestTag/${managedByTag}": "runtime"
               }
             }
           },
@@ -273,7 +277,7 @@
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${resourceTag}": "${resourceName}",
-                "aws:RequestTag/${managedByTag}": "deployment"
+                "aws:RequestTag/${managedByTag}": "runtime"
               }
             }
           }
@@ -293,7 +297,7 @@
             "condition": {
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
-                "aws:ResourceTag/${managedByTag}": "deployment"
+                "aws:ResourceTag/${managedByTag}": "runtime"
               }
             }
           },
@@ -303,7 +307,7 @@
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
                 "aws:ResourceTag/${resourceTag}": "${resourceName}",
-                "aws:ResourceTag/${managedByTag}": "deployment"
+                "aws:ResourceTag/${managedByTag}": "runtime"
               }
             }
           }

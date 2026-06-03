@@ -565,12 +565,9 @@ impl AzureStorageAccountController {
         let location = azure_config.region.as_deref().unwrap_or("East US");
 
         let mut tags = HashMap::new();
-        tags.insert("alien-resource".to_string(), "storage".to_string());
-        tags.insert(
-            "alien-storage-id".to_string(),
-            ctx.desired_config.id().to_string(),
-        );
-        tags.insert("alien-stack".to_string(), ctx.resource_prefix.to_string());
+        tags.insert("resource-type".to_string(), "storage".to_string());
+        tags.insert("resource".to_string(), ctx.desired_config.id().to_string());
+        tags.insert("deployment".to_string(), ctx.resource_prefix.to_string());
 
         StorageAccountCreateParameters {
             extended_location: None,

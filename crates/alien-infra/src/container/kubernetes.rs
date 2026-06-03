@@ -213,7 +213,10 @@ impl KubernetesContainerController {
                 )
                 .await?;
 
-            match deployment_client.create_statefulset(&namespace, &statefulset).await {
+            match deployment_client
+                .create_statefulset(&namespace, &statefulset)
+                .await
+            {
                 Ok(_) => {
                     info!(statefulset_name=%container_name, namespace=%namespace, "StatefulSet creation initiated");
                 }
@@ -265,7 +268,10 @@ impl KubernetesContainerController {
                 )
                 .await?;
 
-            match deployment_client.create_deployment(&namespace, &deployment).await {
+            match deployment_client
+                .create_deployment(&namespace, &deployment)
+                .await
+            {
                 Ok(_) => {
                     info!(deployment_name=%container_name, namespace=%namespace, "Deployment creation initiated");
                 }
@@ -1231,11 +1237,11 @@ impl KubernetesContainerController {
                 name: Some(secret_name.clone()),
                 namespace: Some(namespace.to_string()),
                 labels: Some(BTreeMap::from([
-                    ("managed-by".to_string(), "alien".to_string()),
-                    ("alien.dev/resource-id".to_string(), config.id.clone()),
+                    ("managed-by".to_string(), "runtime".to_string()),
+                    ("resource-id".to_string(), config.id.clone()),
                 ])),
                 annotations: Some(BTreeMap::from([(
-                    "alien.dev/env-secret-checksum".to_string(),
+                    "env-secret-checksum".to_string(),
                     checksum.clone(),
                 )])),
                 ..Default::default()
@@ -1442,10 +1448,7 @@ impl KubernetesContainerController {
             )
             .await?;
         let pod_annotations = env_secret_plan.map(|plan| {
-            BTreeMap::from([(
-                "alien.dev/env-secret-checksum".to_string(),
-                plan.checksum.clone(),
-            )])
+            BTreeMap::from([("env-secret-checksum".to_string(), plan.checksum.clone())])
         });
 
         let deployment = Deployment {
@@ -1500,10 +1503,7 @@ impl KubernetesContainerController {
             )
             .await?;
         let pod_annotations = env_secret_plan.map(|plan| {
-            BTreeMap::from([(
-                "alien.dev/env-secret-checksum".to_string(),
-                plan.checksum.clone(),
-            )])
+            BTreeMap::from([("env-secret-checksum".to_string(), plan.checksum.clone())])
         });
 
         // Build volume claim templates for persistent storage
@@ -1778,7 +1778,7 @@ impl KubernetesContainerController {
     fn build_labels(&self, container_name: &str) -> BTreeMap<String, String> {
         let mut labels = BTreeMap::new();
         labels.insert("app".to_string(), container_name.to_string());
-        labels.insert("managed-by".to_string(), "alien".to_string());
+        labels.insert("managed-by".to_string(), "runtime".to_string());
         labels.insert("component".to_string(), "container".to_string());
         labels
     }
@@ -1789,7 +1789,7 @@ impl KubernetesContainerController {
         container_name: &str,
     ) -> bool {
         labels.is_some_and(|labels| {
-            labels.get("managed-by").map(String::as_str) == Some("alien")
+            labels.get("managed-by").map(String::as_str) == Some("runtime")
                 && labels.get("component").map(String::as_str) == Some("container")
                 && labels.get("app").map(String::as_str) == Some(container_name)
         })

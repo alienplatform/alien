@@ -180,6 +180,7 @@ export type NewDeploymentRequestAwsUnion = NewDeploymentRequestAws | any;
 
 export type NewDeploymentRequestAzure = {
   keyVaultCertificateId: string;
+  keyVaultResourceId?: string | null | undefined;
 };
 
 export type NewDeploymentRequestAzureUnion = NewDeploymentRequestAzure | any;
@@ -997,6 +998,10 @@ export type NewDeploymentRequestTypeByoVnetAzure = ClosedEnum<
 
 export type NewDeploymentRequestNetworkByoVnetAzure = {
   /**
+   * Name of the dedicated classic Application Gateway subnet within the VNet.
+   */
+  applicationGatewaySubnetName?: string | null | undefined;
+  /**
    * Name of the private subnet within the VNet
    */
   privateSubnetName: string;
@@ -1484,6 +1489,7 @@ export function newDeploymentRequestAwsUnionToJSON(
 /** @internal */
 export type NewDeploymentRequestAzure$Outbound = {
   keyVaultCertificateId: string;
+  keyVaultResourceId?: string | null | undefined;
 };
 
 /** @internal */
@@ -1492,6 +1498,7 @@ export const NewDeploymentRequestAzure$outboundSchema: z.ZodType<
   NewDeploymentRequestAzure
 > = z.object({
   keyVaultCertificateId: z.string(),
+  keyVaultResourceId: z.nullable(z.string()).optional(),
 });
 
 export function newDeploymentRequestAzureToJSON(
@@ -3264,6 +3271,7 @@ export const NewDeploymentRequestTypeByoVnetAzure$outboundSchema: z.ZodEnum<
 
 /** @internal */
 export type NewDeploymentRequestNetworkByoVnetAzure$Outbound = {
+  application_gateway_subnet_name?: string | null | undefined;
   private_subnet_name: string;
   public_subnet_name: string;
   type: string;
@@ -3275,12 +3283,14 @@ export const NewDeploymentRequestNetworkByoVnetAzure$outboundSchema: z.ZodType<
   NewDeploymentRequestNetworkByoVnetAzure$Outbound,
   NewDeploymentRequestNetworkByoVnetAzure
 > = z.object({
+  applicationGatewaySubnetName: z.nullable(z.string()).optional(),
   privateSubnetName: z.string(),
   publicSubnetName: z.string(),
   type: NewDeploymentRequestTypeByoVnetAzure$outboundSchema,
   vnetResourceId: z.string(),
 }).transform((v) => {
   return remap$(v, {
+    applicationGatewaySubnetName: "application_gateway_subnet_name",
     privateSubnetName: "private_subnet_name",
     publicSubnetName: "public_subnet_name",
     vnetResourceId: "vnet_resource_id",

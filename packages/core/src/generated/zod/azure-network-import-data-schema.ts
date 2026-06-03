@@ -9,7 +9,9 @@ import * as z from "zod";
  * @description Azure Network ImportData — VNet + subnets + NAT topology.
  */
 export const AzureNetworkImportDataSchema = z.object({
-    "isByoVnet": z.boolean().describe("True when the VNet is owned outside this stack."),
+    "applicationGatewaySubnetId": z.string().describe("Dedicated subnet for classic Azure Application Gateway ingress.").nullish(),
+"applicationGatewaySubnetName": z.string().describe("Dedicated subnet name for classic Azure Application Gateway ingress.").nullish(),
+"isByoVnet": z.boolean().describe("True when the VNet is owned outside this stack."),
 "natGatewayId": z.string().describe("NAT gateway resource id when one was created.").nullish(),
 "networkSecurityGroupId": z.string().describe("Network Security Group resource id attached to workload subnets.").nullish(),
 "resourceGroup": z.string().describe("Resource group containing the VNet."),

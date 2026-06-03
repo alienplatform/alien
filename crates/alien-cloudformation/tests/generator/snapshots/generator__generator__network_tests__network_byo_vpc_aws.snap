@@ -26,32 +26,23 @@ Metadata:
       - PrivateSubnetIds
       - SecurityGroupIds
     - Label:
-        default: Custom domain
-      Parameters:
-      - DomainName
-      - HostedZoneId
-      - CertificateArn
-    - Label:
         default: Operations
       Parameters:
+      - DeploymentModel
       - UpdatesMode
       - TelemetryMode
       - HeartbeatsMode
     ParameterLabels:
       AvailabilityZones:
         default: Availability zones
-      CertificateArn:
-        default: Certificate ARN
-      DomainName:
-        default: Domain name
+      DeploymentModel:
+        default: Deployment model
       HeartbeatsMode:
         default: Heartbeats
-      HostedZoneId:
-        default: Hosted zone ID
       ManagingAccountId:
-        default: Manager account ID
+        default: Image account ID
       ManagingRoleArn:
-        default: Manager role ARN
+        default: Management role ARN
       NetworkMode:
         default: Network
       PrivateSubnetIds:
@@ -77,7 +68,8 @@ Parameters:
     NoEcho: true
   ManagingRoleArn:
     Type: String
-    Description: Manager IAM role ARN allowed to assume generated management roles.
+    Description: ARN of the management identity allowed to assume setup-created roles.
+    Default: ''
   ManagingAccountId:
     Type: String
     Description: AWS account ID for the management account that hosts application container images.
@@ -118,21 +110,16 @@ Parameters:
     Type: CommaDelimitedList
     Description: Only used with use-existing. Existing security group IDs.
     Default: sg-0123456789abcdef0
-  DomainName:
+  DeploymentModel:
     Type: String
-    Description: Optional custom domain for public endpoints. Leave unset to expose through the generated load balancer DNS name over HTTP.
-    Default: ''
-  HostedZoneId:
-    Type: String
-    Description: Route 53 hosted zone ID for the custom domain. Not needed for the auto-generated domain.
-    Default: ''
-  CertificateArn:
-    Type: String
-    Description: ACM certificate ARN for the custom domain. Required when DomainName is set.
-    Default: ''
+    Description: How runtime updates are delivered after setup.
+    Default: push
+    AllowedValues:
+    - push
+    - pull
   UpdatesMode:
     Type: String
-    Description: How updates are applied after import.
+    Description: How updates are applied after setup registration.
     Default: auto
     AllowedValues:
     - auto
@@ -153,6 +140,10 @@ Parameters:
     - "off"
     - "on"
 Conditions:
+  DeploymentModelPush:
+    Fn::Equals:
+    - Ref: DeploymentModel
+    - push
   NetworkModeCreate:
     Fn::Equals:
     - Ref: NetworkMode
@@ -165,11 +156,6 @@ Conditions:
     Fn::Not:
     - Fn::Equals:
       - Ref: VpcCidr
-      - ''
-  HasDomainName:
-    Fn::Not:
-    - Fn::Equals:
-      - Ref: DomainName
       - ''
 Resources:
   LogsBucket:
@@ -200,21 +186,25 @@ Outputs:
     Description: Setup compatibility fingerprint.
   DeploymentSetupImportFormatVersion:
     Value: 1
-    Description: Setup import payload format version.
+    Description: Setup registration payload format version.
   DeploymentSetupFingerprintVersion:
     Value: 1
     Description: Setup fingerprint algorithm version.
   DeploymentManagementConfig:
     Value:
       Fn::ToJsonString:
-        platform: aws
-        managingRoleArn:
-          Ref: ManagingRoleArn
-    Description: Manager import ManagementConfig JSON.
+        Fn::If:
+        - DeploymentModelPush
+        - platform: aws
+          managingRoleArn:
+            Ref: ManagingRoleArn
+        - Ref: AWS::NoValue
+    Description: Deployment registration management configuration JSON.
   DeploymentStackSettings:
     Value:
       Fn::ToJsonString:
-        deploymentModel: push
+        deploymentModel:
+          Ref: DeploymentModel
         updates:
           Ref: UpdatesMode
         telemetry:
@@ -244,19 +234,7 @@ Outputs:
               security_group_ids:
                 Ref: SecurityGroupIds
             - type: use-default
-        domains:
-          Fn::If:
-          - HasDomainName
-          - customDomains:
-              default:
-                domain:
-                  Ref: DomainName
-                certificate:
-                  aws:
-                    certificateArn:
-                      Ref: CertificateArn
-          - Ref: AWS::NoValue
-    Description: Manager import StackSettings JSON.
+    Description: Deployment registration settings JSON.
   DeploymentResources:
     Value:
       Fn::ToJsonString:
@@ -269,4 +247,4 @@ Outputs:
             Fn::GetAtt:
             - LogsBucket
             - Arn
-    Description: Manager import resources JSON.
+    Description: Deployment registration resources JSON.

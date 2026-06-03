@@ -46,7 +46,7 @@ impl TfEmitter for AwsVaultEmitter {
                         &permission_set,
                         &format!("{owner_label}_vault_{vault_label_segment}_set_{idx}"),
                         &format!(
-                            "alien-{}-{}",
+                            "access-{}-{}",
                             vault.id(),
                             iam_policy_name_sanitize(&permission_set.id)
                         ),
@@ -73,7 +73,7 @@ impl TfEmitter for AwsVaultEmitter {
                         &permission_set,
                         &format!("{management_label}_vault_{vault_label_segment}_set_{idx}"),
                         &format!(
-                            "alien-mgmt-{}-{}",
+                            "management-{}-{}",
                             vault.id(),
                             iam_policy_name_sanitize(&permission_set.id)
                         ),

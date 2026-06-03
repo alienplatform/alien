@@ -45,3 +45,9 @@ const value: models.DeploymentInfoManagementConfigKubernetes = {
 };
 ```
 
+### `any`
+
+```typescript
+const value: any = "<value>";
+```
+

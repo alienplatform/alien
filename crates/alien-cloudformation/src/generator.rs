@@ -7,9 +7,9 @@ use crate::{
 };
 use alien_core::{
     import::{EmitContext, CURRENT_SETUP_IMPORT_FORMAT_VERSION},
-    ownership_policy_for_resource_type, DomainSettings, ErrorData, HeartbeatsMode,
-    KubernetesCluster, KubernetesSettings, Network, NetworkSettings, Platform, Result, Stack,
-    StackSettings, TelemetryMode, UpdatesMode, Worker, WorkerCode,
+    ownership_policy_for_resource_type, DeploymentModel, DomainSettings, ErrorData, HeartbeatsMode,
+    Ingress, KubernetesCluster, KubernetesSettings, Network, NetworkSettings, Platform, Result,
+    Stack, StackSettings, TelemetryMode, UpdatesMode, Worker, WorkerCode,
 };
 use alien_error::AlienError;
 use indexmap::{indexmap, IndexMap};
@@ -32,6 +32,7 @@ const PARAM_SECURITY_GROUP_IDS: &str = "SecurityGroupIds";
 const PARAM_DOMAIN_NAME: &str = "DomainName";
 const PARAM_HOSTED_ZONE_ID: &str = "HostedZoneId";
 const PARAM_CERTIFICATE_ARN: &str = "CertificateArn";
+const PARAM_DEPLOYMENT_MODEL: &str = "DeploymentModel";
 const PARAM_UPDATES_MODE: &str = "UpdatesMode";
 const PARAM_TELEMETRY_MODE: &str = "TelemetryMode";
 const PARAM_HEARTBEATS_MODE: &str = "HeartbeatsMode";
@@ -44,6 +45,7 @@ const CONDITION_NETWORK_MODE_CREATE: &str = "NetworkModeCreate";
 const CONDITION_NETWORK_MODE_USE_EXISTING: &str = "NetworkModeUseExisting";
 const CONDITION_HAS_VPC_CIDR: &str = "HasVpcCidr";
 const CONDITION_HAS_DOMAIN_NAME: &str = "HasDomainName";
+const CONDITION_DEPLOYMENT_MODEL_PUSH: &str = "DeploymentModelPush";
 
 const OUTPUT_SOURCE_KIND: &str = "DeploymentSourceKind";
 const OUTPUT_DEPLOYMENT_ID: &str = "DeploymentId";
@@ -64,6 +66,7 @@ const CLOUDFORMATION_MAX_OUTPUTS: usize = 200;
 const MAPPING_REGIONAL_CUSTOM_RESOURCE_SERVICE_TOKENS: &str = "RegionalCustomResourceServiceTokens";
 const MAPPING_SERVICE_TOKEN_KEY: &str = "ServiceToken";
 const RULE_SUPPORTED_AWS_REGION: &str = "SupportedAwsRegion";
+const RULE_CUSTOM_DOMAIN_CERTIFICATE: &str = "CustomDomainCertificate";
 
 /// Registration behavior for the generated CloudFormation template.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -239,12 +242,23 @@ pub fn generate_cloudformation_template(
         outputs: IndexMap::new(),
     };
 
-    add_standard_parameters(&mut template, &stack_settings);
-    add_supported_region_rule(&mut template, &options.registration);
-    add_standard_conditions(&mut template, stack, &stack_settings);
-    add_console_interface_metadata(&mut template, &stack_settings);
+    let supports_custom_domain = stack_supports_custom_domain(stack, options.target);
 
-    let mut imported_resources = Vec::new();
+    add_standard_parameters(&mut template, &stack_settings, supports_custom_domain);
+    add_supported_region_rule(&mut template, &options.registration);
+    if supports_custom_domain {
+        add_custom_domain_certificate_rule(&mut template);
+    }
+    add_standard_conditions(
+        &mut template,
+        stack,
+        &stack_settings,
+        options.target,
+        supports_custom_domain,
+    );
+    add_console_interface_metadata(&mut template, &stack_settings, supports_custom_domain);
+
+    let mut registration_resources = Vec::new();
     let mut emitted_resource_ids: IndexMap<String, Vec<String>> = IndexMap::new();
 
     for (resource_id, resource) in stack.resources() {
@@ -279,11 +293,11 @@ pub fn generate_cloudformation_template(
             insert_resource(&mut template, emitted)?;
         }
 
-        let import_data = emitter.emit_import_ref(&ctx)?;
-        imported_resources.push(CfExpression::object([
+        let registration_data = emitter.emit_import_ref(&ctx)?;
+        registration_resources.push(CfExpression::object([
             ("id", CfExpression::from(resource_id.as_str())),
             ("type", CfExpression::from(resource_type.as_ref())),
-            ("importData", import_data),
+            ("importData", registration_data),
         ]));
     }
 
@@ -298,8 +312,9 @@ pub fn generate_cloudformation_template(
         options.target,
         &stack_settings,
         kubernetes_namespace.clone(),
+        supports_custom_domain,
     );
-    let resources = CfExpression::list(imported_resources);
+    let resources = CfExpression::list(registration_resources);
 
     apply_resource_dependencies(stack, &emitted_resource_ids, &mut template);
 
@@ -326,6 +341,16 @@ pub fn generate_cloudformation_template(
     }
 
     Ok(template)
+}
+
+fn stack_supports_custom_domain(stack: &Stack, target: CloudFormationTarget) -> bool {
+    target.is_kubernetes()
+        || stack.resources().any(|(_resource_id, resource)| {
+            resource
+                .config
+                .downcast_ref::<Worker>()
+                .is_some_and(|worker| worker.ingress == Ingress::Public)
+        })
 }
 
 fn regional_service_token(
@@ -438,7 +463,7 @@ fn quote_yaml_1_1_mode_scalars(yaml: &str) -> String {
 }
 
 /// Generate a CloudFormation stack policy that prevents stack updates from
-/// mutating resources Alien manages after import.
+/// mutating runtime-managed resources after setup registration.
 pub fn generate_cloudformation_stack_policy(_stack: &Stack) -> Result<serde_json::Value> {
     Ok(json!({ "Statement": [] }))
 }
@@ -607,7 +632,11 @@ fn apply_resource_dependencies(
     }
 }
 
-fn add_standard_parameters(template: &mut CfTemplate, settings: &StackSettings) {
+fn add_standard_parameters(
+    template: &mut CfTemplate,
+    settings: &StackSettings,
+    supports_custom_domain: bool,
+) {
     template.parameters.insert(
         PARAM_TOKEN.to_string(),
         string_parameter(
@@ -620,7 +649,7 @@ fn add_standard_parameters(template: &mut CfTemplate, settings: &StackSettings) 
     template.parameters.insert(
         PARAM_MANAGING_ROLE_ARN.to_string(),
         string_parameter(
-            "Manager IAM role ARN allowed to assume generated management roles.",
+            "ARN of the management identity allowed to assume setup-created roles.",
             Some(String::new()),
             None,
             false,
@@ -638,31 +667,44 @@ fn add_standard_parameters(template: &mut CfTemplate, settings: &StackSettings) 
 
     add_network_parameters(template, settings.network.as_ref());
 
-    let domain_defaults = DomainParameterDefaults::from_settings(settings.domains.as_ref());
+    if supports_custom_domain {
+        let domain_defaults = DomainParameterDefaults::from_settings(settings.domains.as_ref());
+        template.parameters.insert(
+            PARAM_DOMAIN_NAME.to_string(),
+            string_parameter(
+                "Optional custom domain for public endpoints. Leave unset to expose through the generated load balancer DNS name over HTTP.",
+                Some(domain_defaults.domain_name.unwrap_or_default()),
+                None,
+                false,
+            ),
+        );
+        template.parameters.insert(
+            PARAM_HOSTED_ZONE_ID.to_string(),
+            string_parameter(
+                "Route 53 hosted zone ID for the custom domain. Not needed for the auto-generated domain.",
+                Some(String::new()),
+                None,
+                false,
+            ),
+        );
+        template.parameters.insert(
+            PARAM_CERTIFICATE_ARN.to_string(),
+            string_parameter_with_allowed_pattern(
+                "ACM certificate ARN for the custom domain. Required when DomainName is set.",
+                Some(domain_defaults.certificate_arn.unwrap_or_default()),
+                None,
+                Some("^$|^arn:aws(-[a-z]+)?:acm:[a-z0-9-]+:[0-9]{12}:certificate/.+$".to_string()),
+                false,
+            ),
+        );
+    }
+
     template.parameters.insert(
-        PARAM_DOMAIN_NAME.to_string(),
+        PARAM_DEPLOYMENT_MODEL.to_string(),
         string_parameter(
-            "Optional custom domain for public endpoints. Leave unset to expose through the generated load balancer DNS name over HTTP.",
-            Some(domain_defaults.domain_name.unwrap_or_default()),
-            None,
-            false,
-        ),
-    );
-    template.parameters.insert(
-        PARAM_HOSTED_ZONE_ID.to_string(),
-        string_parameter(
-            "Route 53 hosted zone ID for the custom domain. Not needed for the auto-generated domain.",
-            Some(String::new()),
-            None,
-            false,
-        ),
-    );
-    template.parameters.insert(
-        PARAM_CERTIFICATE_ARN.to_string(),
-        string_parameter(
-            "ACM certificate ARN for the custom domain. Required when DomainName is set.",
-            Some(domain_defaults.certificate_arn.unwrap_or_default()),
-            None,
+            "How runtime updates are delivered after setup.",
+            Some(deployment_model(settings.deployment_model).to_string()),
+            Some(vec![CfExpression::from("push"), CfExpression::from("pull")]),
             false,
         ),
     );
@@ -670,7 +712,7 @@ fn add_standard_parameters(template: &mut CfTemplate, settings: &StackSettings) 
     template.parameters.insert(
         PARAM_UPDATES_MODE.to_string(),
         string_parameter(
-            "How updates are applied after import.",
+            "How updates are applied after setup registration.",
             Some(updates_mode(settings.updates).to_string()),
             Some(vec![
                 CfExpression::from("auto"),
@@ -796,14 +838,42 @@ fn add_supported_region_rule(template: &mut CfTemplate, registration: &Registrat
                     CfExpression::ref_("AWS::Region"),
                 ),
                 assert_description: format!(
-                    "This template can only be launched in AWS regions supported by this Alien environment: {regions}."
+                    "This template can only be launched in AWS regions supported by this environment: {regions}."
                 ),
             }],
         },
     );
 }
 
-fn add_standard_conditions(template: &mut CfTemplate, stack: &Stack, settings: &StackSettings) {
+fn add_custom_domain_certificate_rule(template: &mut CfTemplate) {
+    template.rules.insert(
+        RULE_CUSTOM_DOMAIN_CERTIFICATE.to_string(),
+        CfRule {
+            assertions: vec![CfRuleAssertion {
+                assertion: CfExpression::or([
+                    equals_ref(PARAM_DOMAIN_NAME, ""),
+                    CfExpression::not(equals_ref(PARAM_CERTIFICATE_ARN, "")),
+                ]),
+                assert_description: "CertificateArn must be set to an AWS ACM certificate ARN when DomainName is set.".to_string(),
+            }],
+        },
+    );
+}
+
+fn add_standard_conditions(
+    template: &mut CfTemplate,
+    stack: &Stack,
+    settings: &StackSettings,
+    target: CloudFormationTarget,
+    supports_custom_domain: bool,
+) {
+    if !target.is_kubernetes() {
+        template.conditions.insert(
+            CONDITION_DEPLOYMENT_MODEL_PUSH.to_string(),
+            equals_ref(PARAM_DEPLOYMENT_MODEL, "push"),
+        );
+    }
+
     let has_created_network = stack_has_created_network(stack);
     if has_dynamic_aws_network_settings(settings.network.as_ref()) || has_created_network {
         template.conditions.insert(
@@ -851,10 +921,12 @@ fn add_standard_conditions(template: &mut CfTemplate, stack: &Stack, settings: &
             CfExpression::not(equals_ref(PARAM_VPC_CIDR, "")),
         );
     }
-    template.conditions.insert(
-        CONDITION_HAS_DOMAIN_NAME.to_string(),
-        CfExpression::not(equals_ref(PARAM_DOMAIN_NAME, "")),
-    );
+    if supports_custom_domain {
+        template.conditions.insert(
+            CONDITION_HAS_DOMAIN_NAME.to_string(),
+            CfExpression::not(equals_ref(PARAM_DOMAIN_NAME, "")),
+        );
+    }
 }
 
 fn stack_has_created_network(stack: &Stack) -> bool {
@@ -877,7 +949,11 @@ fn has_dynamic_aws_network_settings(network: Option<&NetworkSettings>) -> bool {
     )
 }
 
-fn add_console_interface_metadata(template: &mut CfTemplate, settings: &StackSettings) {
+fn add_console_interface_metadata(
+    template: &mut CfTemplate,
+    settings: &StackSettings,
+    supports_custom_domain: bool,
+) {
     let network_parameters = network_parameter_names(settings.network.as_ref());
     let mut parameter_groups = vec![json!({
         "Label": { "default": "Registration" },
@@ -893,13 +969,20 @@ fn add_console_interface_metadata(template: &mut CfTemplate, settings: &StackSet
             "Parameters": network_parameters
         }));
     }
-    parameter_groups.push(json!({
-        "Label": { "default": "Custom domain" },
-        "Parameters": [PARAM_DOMAIN_NAME, PARAM_HOSTED_ZONE_ID, PARAM_CERTIFICATE_ARN]
-    }));
+    if supports_custom_domain {
+        parameter_groups.push(json!({
+            "Label": { "default": "Custom domain" },
+            "Parameters": [PARAM_DOMAIN_NAME, PARAM_HOSTED_ZONE_ID, PARAM_CERTIFICATE_ARN]
+        }));
+    }
     parameter_groups.push(json!({
         "Label": { "default": "Operations" },
-        "Parameters": [PARAM_UPDATES_MODE, PARAM_TELEMETRY_MODE, PARAM_HEARTBEATS_MODE]
+        "Parameters": [
+            PARAM_DEPLOYMENT_MODEL,
+            PARAM_UPDATES_MODE,
+            PARAM_TELEMETRY_MODE,
+            PARAM_HEARTBEATS_MODE
+        ]
     }));
 
     let mut parameter_labels = serde_json::Map::new();
@@ -907,12 +990,12 @@ fn add_console_interface_metadata(template: &mut CfTemplate, settings: &StackSet
     insert_parameter_label(
         &mut parameter_labels,
         PARAM_MANAGING_ROLE_ARN,
-        "Manager role ARN",
+        "Management role ARN",
     );
     insert_parameter_label(
         &mut parameter_labels,
         PARAM_MANAGING_ACCOUNT_ID,
-        "Manager account ID",
+        "Image account ID",
     );
     for parameter in network_parameter_names(settings.network.as_ref()) {
         let label = match parameter {
@@ -927,16 +1010,23 @@ fn add_console_interface_metadata(template: &mut CfTemplate, settings: &StackSet
         };
         insert_parameter_label(&mut parameter_labels, parameter, label);
     }
-    insert_parameter_label(&mut parameter_labels, PARAM_DOMAIN_NAME, "Domain name");
+    if supports_custom_domain {
+        insert_parameter_label(&mut parameter_labels, PARAM_DOMAIN_NAME, "Domain name");
+        insert_parameter_label(
+            &mut parameter_labels,
+            PARAM_HOSTED_ZONE_ID,
+            "Hosted zone ID",
+        );
+        insert_parameter_label(
+            &mut parameter_labels,
+            PARAM_CERTIFICATE_ARN,
+            "Certificate ARN",
+        );
+    }
     insert_parameter_label(
         &mut parameter_labels,
-        PARAM_HOSTED_ZONE_ID,
-        "Hosted zone ID",
-    );
-    insert_parameter_label(
-        &mut parameter_labels,
-        PARAM_CERTIFICATE_ARN,
-        "Certificate ARN",
+        PARAM_DEPLOYMENT_MODEL,
+        "Deployment model",
     );
     insert_parameter_label(&mut parameter_labels, PARAM_UPDATES_MODE, "Updates");
     insert_parameter_label(&mut parameter_labels, PARAM_TELEMETRY_MODE, "Telemetry");
@@ -997,11 +1087,11 @@ fn add_custom_resource(
         })
         .collect();
     let mut resource = CfResource::new(
-        "DeploymentStackImport".to_string(),
+        "DeploymentRegistration".to_string(),
         "AWS::CloudFormation::CustomResource".to_string(),
     );
     resource.depends_on = depends_on;
-    // Emit an explicit name so imported deployments mirror the CFN stack list
+    // Emit an explicit name so registered deployments mirror the CFN stack list
     // verbatim; callers who want a different identity can rewire the property
     // post-rendering.
     resource.properties = indexmap! {
@@ -1052,8 +1142,8 @@ fn add_outputs(
         template.outputs.insert(
             OUTPUT_DEPLOYMENT_ID.to_string(),
             output(
-                "Imported deployment ID.",
-                CfExpression::get_att("DeploymentStackImport", "DeploymentId"),
+                "Registered deployment ID.",
+                CfExpression::get_att("DeploymentRegistration", "DeploymentId"),
             ),
         );
     }
@@ -1101,7 +1191,7 @@ fn add_outputs(
     template.outputs.insert(
         OUTPUT_SETUP_IMPORT_FORMAT_VERSION.to_string(),
         output(
-            "Setup import payload format version.",
+            "Setup registration payload format version.",
             CfExpression::from(CURRENT_SETUP_IMPORT_FORMAT_VERSION),
         ),
     );
@@ -1115,14 +1205,14 @@ fn add_outputs(
     template.outputs.insert(
         OUTPUT_MANAGEMENT_CONFIG.to_string(),
         output(
-            "Manager import ManagementConfig JSON.",
+            "Deployment registration management configuration JSON.",
             json_output_value(management_config),
         ),
     );
     template.outputs.insert(
         OUTPUT_STACK_SETTINGS.to_string(),
         output(
-            "Manager import StackSettings JSON.",
+            "Deployment registration settings JSON.",
             CfExpression::to_json_string(stack_settings),
         ),
     );
@@ -1158,7 +1248,7 @@ fn add_resource_outputs(template: &mut CfTemplate, resources: CfExpression) -> R
         };
         template.outputs.insert(
             OUTPUT_RESOURCES.to_string(),
-            output("Manager import resources JSON.", value),
+            output("Deployment registration resources JSON.", value),
         );
         return Ok(());
     }
@@ -1167,7 +1257,7 @@ fn add_resource_outputs(template: &mut CfTemplate, resources: CfExpression) -> R
         template.outputs.insert(
             format!("{OUTPUT_RESOURCES}{index}"),
             output(
-                "Manager import resources JSON chunk. Reassemble chunks in numeric suffix order.",
+                "Deployment registration resources JSON chunk. Reassemble chunks in numeric suffix order.",
                 CfExpression::to_json_string(chunk),
             ),
         );
@@ -1235,17 +1325,22 @@ fn stack_settings_expression(
     target: CloudFormationTarget,
     settings: &StackSettings,
     kubernetes_namespace: Option<CfExpression>,
+    supports_custom_domain: bool,
 ) -> CfExpression {
     let mut values = vec![
-        ("deploymentModel", CfExpression::from("push")),
+        (
+            "deploymentModel",
+            CfExpression::ref_(PARAM_DEPLOYMENT_MODEL),
+        ),
         ("updates", CfExpression::ref_(PARAM_UPDATES_MODE)),
         ("telemetry", CfExpression::ref_(PARAM_TELEMETRY_MODE)),
         ("heartbeats", CfExpression::ref_(PARAM_HEARTBEATS_MODE)),
         ("network", network_expression(settings.network.as_ref())),
-        ("domains", domains_expression()),
     ];
+    if supports_custom_domain {
+        values.push(("domains", domains_expression()));
+    }
     if target.is_kubernetes() {
-        values[0] = ("deploymentModel", CfExpression::from("pull"));
         values.push((
             "kubernetes",
             kubernetes_settings_expression(settings.kubernetes.as_ref(), kubernetes_namespace),
@@ -1495,13 +1590,17 @@ fn management_config_expression(target: CloudFormationTarget) -> CfExpression {
         return CfExpression::Null;
     }
 
-    CfExpression::object([
-        ("platform", CfExpression::from("aws")),
-        (
-            "managingRoleArn",
-            CfExpression::ref_(PARAM_MANAGING_ROLE_ARN),
-        ),
-    ])
+    CfExpression::if_(
+        CONDITION_DEPLOYMENT_MODEL_PUSH,
+        CfExpression::object([
+            ("platform", CfExpression::from("aws")),
+            (
+                "managingRoleArn",
+                CfExpression::ref_(PARAM_MANAGING_ROLE_ARN),
+            ),
+        ]),
+        CfExpression::no_value(),
+    )
 }
 
 fn string_parameter(
@@ -1510,11 +1609,22 @@ fn string_parameter(
     allowed_values: Option<Vec<CfExpression>>,
     no_echo: bool,
 ) -> CfParameter {
+    string_parameter_with_allowed_pattern(description, default, allowed_values, None, no_echo)
+}
+
+fn string_parameter_with_allowed_pattern(
+    description: &str,
+    default: Option<String>,
+    allowed_values: Option<Vec<CfExpression>>,
+    allowed_pattern: Option<String>,
+    no_echo: bool,
+) -> CfParameter {
     CfParameter {
         parameter_type: "String".to_string(),
         description: Some(description.to_string()),
         default: default.map(CfExpression::from),
         allowed_values,
+        allowed_pattern,
         no_echo: no_echo.then_some(true),
     }
 }
@@ -1529,6 +1639,7 @@ fn number_parameter(
         description: Some(description.to_string()),
         default: Some(CfExpression::from(default)),
         allowed_values,
+        allowed_pattern: None,
         no_echo: None,
     }
 }
@@ -1539,6 +1650,7 @@ fn comma_list_parameter(description: &str, default: Vec<String>) -> CfParameter 
         description: Some(description.to_string()),
         default: Some(CfExpression::from(default.join(","))),
         allowed_values: None,
+        allowed_pattern: None,
         no_echo: None,
     }
 }
@@ -1556,6 +1668,13 @@ fn output(description: &str, value: CfExpression) -> CfOutput {
         description: Some(description.to_string()),
         value,
         export: None,
+    }
+}
+
+fn deployment_model(model: DeploymentModel) -> &'static str {
+    match model {
+        DeploymentModel::Push => "push",
+        DeploymentModel::Pull => "pull",
     }
 }
 

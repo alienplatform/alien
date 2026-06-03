@@ -459,7 +459,7 @@ impl AzureNetworkController {
                 }),
                 ..Default::default()
             }),
-            tags: [("managed-by".to_string(), "alien".to_string())]
+            tags: [("managed-by".to_string(), "runtime".to_string())]
                 .into_iter()
                 .collect(),
             ..Default::default()
@@ -829,7 +829,7 @@ impl AzureNetworkController {
                 public_ip_allocation_method: Some(IpAllocationMethod::Static),
                 ..Default::default()
             }),
-            tags: [("managed-by".to_string(), "alien".to_string())]
+            tags: [("managed-by".to_string(), "runtime".to_string())]
                 .into_iter()
                 .collect(),
             ..Default::default()
@@ -931,7 +931,7 @@ impl AzureNetworkController {
                 idle_timeout_in_minutes: Some(4),
                 ..Default::default()
             }),
-            tags: [("managed-by".to_string(), "alien".to_string())]
+            tags: [("managed-by".to_string(), "runtime".to_string())]
                 .into_iter()
                 .collect(),
             ..Default::default()
@@ -1148,7 +1148,7 @@ impl AzureNetworkController {
                 }],
                 ..Default::default()
             }),
-            tags: [("managed-by".to_string(), "alien".to_string())]
+            tags: [("managed-by".to_string(), "runtime".to_string())]
                 .into_iter()
                 .collect(),
             ..Default::default()

@@ -1,5 +1,10 @@
 use indexmap::IndexMap;
-use std::{ffi::OsStr, fs, path::Path, process::Command};
+use std::{
+    ffi::{OsStr, OsString},
+    fs,
+    path::Path,
+    process::Command,
+};
 
 /// Files written for linters that operate on a directory.
 pub type LinterFiles = IndexMap<String, String>;
@@ -34,14 +39,19 @@ impl LinterRun {
     }
 
     pub fn is_ok(&self) -> bool {
-        matches!(self.status, LinterStatus::Passed | LinterStatus::Skipped(_))
+        matches!(self.status, LinterStatus::Passed)
     }
 
     pub fn assert_ok(&self, context: impl AsRef<str>) {
         match &self.status {
             LinterStatus::Passed => {}
             LinterStatus::Skipped(reason) => {
-                eprintln!("skipped {} for {}: {}", self.tool, context.as_ref(), reason);
+                panic!(
+                    "{} was skipped for {}\nreason: {}",
+                    self.tool,
+                    context.as_ref(),
+                    reason
+                );
             }
             LinterStatus::Failed(code) => {
                 panic!(
@@ -89,6 +99,35 @@ pub fn terraform_validate(files: &LinterFiles) -> LinterRun {
         }
 
         run_command("terraform", [OsStr::new("validate")], Some(dir.path()))
+    })
+}
+
+/// Run `terraform init -backend=false` and `terraform plan` with explicit
+/// variables. This is useful for input validation rules that `validate` parses
+/// but does not evaluate.
+pub fn terraform_plan_with_vars(files: &LinterFiles, vars: &[(&str, &str)]) -> LinterRun {
+    run_when_enabled("terraform plan", || {
+        let dir = write_files_to_temp_dir(files)?;
+        let init = run_command(
+            "terraform",
+            [OsStr::new("init"), OsStr::new("-backend=false")],
+            Some(dir.path()),
+        )?;
+        if !matches!(init.status, LinterStatus::Passed) {
+            return Ok(init);
+        }
+
+        let mut args = vec![
+            OsString::from("plan"),
+            OsString::from("-input=false"),
+            OsString::from("-no-color"),
+        ];
+        for (name, value) in vars {
+            args.push(OsString::from("-var"));
+            args.push(OsString::from(format!("{name}={value}")));
+        }
+
+        run_command("terraform", args, Some(dir.path()))
     })
 }
 

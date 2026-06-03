@@ -109,6 +109,8 @@ fn extract_kubernetes_resource_info(response_text: &str, url: &str) -> (String, 
 pub struct KubernetesAuthConfig {
     /// Bearer token for authentication
     pub bearer_token: Option<String>,
+    /// Bearer token file for authentication
+    pub bearer_token_file: Option<String>,
     /// Client certificate data (base64 encoded)
     pub client_certificate_data: Option<String>,
     /// Client key data (base64 encoded)
@@ -125,6 +127,7 @@ impl From<&ResolvedKubernetesConfig> for KubernetesAuthConfig {
     fn from(config: &ResolvedKubernetesConfig) -> Self {
         Self {
             bearer_token: config.bearer_token.clone(),
+            bearer_token_file: config.bearer_token_file.clone(),
             client_certificate_data: config.client_certificate_data.clone(),
             client_key_data: config.client_key_data.clone(),
             certificate_authority_data: config.certificate_authority_data.clone(),
@@ -147,6 +150,16 @@ impl KubernetesRequestSigner for reqwest::RequestBuilder {
         // Add bearer token if provided
         if let Some(ref token) = config.bearer_token {
             builder = builder.bearer_auth(token);
+        } else if let Some(ref token_file) = config.bearer_token_file {
+            let token = std::fs::read_to_string(token_file)
+                .into_alien_error()
+                .context(ErrorData::DataLoadError {
+                    message: format!(
+                        "Failed to read Kubernetes bearer token file: {}",
+                        token_file
+                    ),
+                })?;
+            builder = builder.bearer_auth(token.trim());
         }
 
         // Add additional headers
@@ -496,4 +509,65 @@ pub async fn sign_send_no_response(
         .with_retry()
         .send_no_response()
         .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Seek, Write};
+
+    fn auth_config_with_token_file(token_file: String) -> KubernetesAuthConfig {
+        KubernetesAuthConfig {
+            bearer_token: None,
+            bearer_token_file: Some(token_file),
+            client_certificate_data: None,
+            client_key_data: None,
+            certificate_authority_data: None,
+            insecure_skip_tls_verify: false,
+            additional_headers: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn sign_kubernetes_request_rereads_bearer_token_file() {
+        let mut token_file = tempfile::NamedTempFile::new().expect("token file");
+        write!(token_file, "first-token\n").expect("write first token");
+        token_file.flush().expect("flush first token");
+
+        let client = reqwest::Client::new();
+        let config = auth_config_with_token_file(token_file.path().display().to_string());
+
+        let first_request = client
+            .get("http://example.com")
+            .sign_kubernetes_request(&config)
+            .expect("sign first request")
+            .build()
+            .expect("build first request");
+        assert_eq!(
+            first_request
+                .headers()
+                .get(reqwest::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer first-token")
+        );
+
+        token_file.as_file_mut().set_len(0).expect("truncate token");
+        token_file.rewind().expect("rewind token");
+        write!(token_file, "second-token\n").expect("write second token");
+        token_file.flush().expect("flush second token");
+
+        let second_request = client
+            .get("http://example.com")
+            .sign_kubernetes_request(&config)
+            .expect("sign second request")
+            .build()
+            .expect("build second request");
+        assert_eq!(
+            second_request
+                .headers()
+                .get(reqwest::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer second-token")
+        );
+    }
 }

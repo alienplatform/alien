@@ -128,8 +128,13 @@ pub fn cli_main() {
     cli_main_with_hook(NOOP_INIT);
 }
 
-async fn run(args: Args, init_hook: InitHook) -> Result<()> {
+async fn run(mut args: Args, init_hook: InitHook) -> Result<()> {
     let embedded_config: Option<EmbeddedAgentConfig> = load_embedded_config().ok().flatten();
+
+    args.agent_name = args.agent_name.or_else(|| env_string("OPERATOR_NAME"));
+    args.encryption_key_file = args
+        .encryption_key_file
+        .or_else(|| env_path("OPERATOR_ENCRYPTION_KEY_FILE"));
 
     setup_tracing(args.verbose);
 
@@ -790,12 +795,20 @@ async fn load_encryption_key(file: Option<&std::path::Path>) -> Result<String> {
     if let Some(path) = file {
         return read_secret_file(path, "encryption key").await;
     }
-    match std::env::var("AGENT_ENCRYPTION_KEY") {
-        Ok(value) if !value.is_empty() => Ok(value),
+    match env_string("AGENT_ENCRYPTION_KEY").or_else(|| env_string("OPERATOR_ENCRYPTION_KEY")) {
+        Some(value) => Ok(value),
         _ => Err(AlienError::new(ErrorData::ConfigurationError {
-            message: "Encryption key required: pass --encryption-key-file <PATH> (mode 0600) or set AGENT_ENCRYPTION_KEY".to_string(),
+            message: "Encryption key required: pass --encryption-key-file <PATH> (mode 0600), set AGENT_ENCRYPTION_KEY, or set OPERATOR_ENCRYPTION_KEY".to_string(),
         })),
     }
+}
+
+fn env_string(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|value| !value.is_empty())
+}
+
+fn env_path(name: &str) -> Option<PathBuf> {
+    env_string(name).map(PathBuf::from)
 }
 
 async fn load_sync_token(file: Option<&std::path::Path>) -> Result<Option<String>> {

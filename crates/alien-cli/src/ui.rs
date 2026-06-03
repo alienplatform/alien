@@ -1571,7 +1571,7 @@ mod tests {
             "push-stack",
             None,
             &AlienEvent::PushingStack {
-                stack: "vicaro-data-plane".to_string(),
+                stack: "customer-data-plane".to_string(),
                 platform: "kubernetes".to_string(),
                 destination: Some("managed registry".to_string()),
             },

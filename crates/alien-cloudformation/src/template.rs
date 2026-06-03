@@ -66,6 +66,8 @@ pub struct CfParameter {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allowed_values: Option<Vec<CfExpression>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub allowed_pattern: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub no_echo: Option<bool>,
 }
 

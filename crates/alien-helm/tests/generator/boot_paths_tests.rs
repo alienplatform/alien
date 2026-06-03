@@ -1,5 +1,5 @@
 //! Verifies the dual-path `values.schema.json` accepts both bootstrap
-//! shapes — `manager-fetch path` (default `values.yaml`) and
+//! shapes — `registered setup` (default `values.yaml`) and
 //! `external-bindings initialize path` (`examples/onprem.yaml`).
 
 use super::{helpers::render, test_utils};
@@ -9,7 +9,7 @@ use alien_core::{
 };
 
 #[test]
-fn schema_accepts_manager_fetch_default_values() {
+fn schema_accepts_registered_setup_default_values() {
     let stack = Stack::new("boot-mgr".to_string())
         .add(
             Storage::new("data".to_string()).build(),
@@ -28,8 +28,8 @@ management:
   token: "test-sync-token"
   deploymentId: "test-deployment-id"
 "#;
-    alien_helm::test_utils::helm_template_and_validate(&files, Some(manager_fetch_values))
-        .assert_ok("manager-fetch path");
+    test_utils::helm_template_and_validate(&files, Some(manager_fetch_values))
+        .assert_ok("manager-fetch path / registered setup");
 }
 
 #[test]

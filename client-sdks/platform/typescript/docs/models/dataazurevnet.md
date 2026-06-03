@@ -22,6 +22,7 @@ let value: DataAzureVnet = {
 
 | Field                                                      | Type                                                       | Required                                                   | Description                                                |
 | ---------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- |
+| `applicationGatewaySubnetName`                             | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
 | `cidrBlock`                                                | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
 | `isByoVnet`                                                | *boolean*                                                  | :heavy_check_mark:                                         | N/A                                                        |
 | `lastByoVnetVerificationErrorCode`                         | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
