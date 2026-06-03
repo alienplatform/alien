@@ -213,14 +213,47 @@ async fn run(args: Args, init_hook: InitHook) -> Result<()> {
             } else {
                 info!("   First startup, initializing with manager...");
 
-                let (initialized_deployment_id, deployment_token) = initialize_with_manager(
+                let init_result = initialize_with_manager(
                     &sync_url,
                     &sync_token,
                     args.platform,
                     args.agent_name.as_deref(),
                     initial_stack_settings.as_ref(),
                 )
-                .await?;
+                .await;
+
+                let (initialized_deployment_id, deployment_token) = match init_result {
+                    Ok(v) => v,
+                    // 409 from initialize means a deployment with our name
+                    // already exists in this dg — the canonical cause is
+                    // that we *had* state (deployment_id + dep-scoped token)
+                    // in `data_dir` but it was wiped (emptyDir on chart
+                    // default, manual reset, etc.). Re-acquiring a fresh
+                    // deployment-scoped token over the existing row is
+                    // exactly what `/v1/rejoin` exists for; fall through to
+                    // it instead of crashing the agent.
+                    Err(e) if e.http_status_code == Some(409) => {
+                        info!(
+                            "   Name already exists — assuming local state was wiped, rejoining…"
+                        );
+                        let agent_name = args.agent_name.clone().or_else(|| {
+                            std::env::var("HOSTNAME")
+                                .ok()
+                                .or_else(|| hostname::get().ok().and_then(|h| h.into_string().ok()))
+                        });
+                        let name = agent_name.ok_or_else(|| {
+                            AlienError::new(ErrorData::ConfigurationError {
+                                message: "Cannot rejoin without a deployment name — pass --agent-name or set AGENT_NAME / HOSTNAME"
+                                    .to_string(),
+                            })
+                        })?;
+                        let (dep_id, dep_token) =
+                            rejoin_with_manager(&sync_url, &sync_token, &name).await?;
+                        info!(deployment_id = %dep_id, "   Rejoined existing deployment");
+                        (dep_id, Some(dep_token))
+                    }
+                    Err(e) => return Err(e),
+                };
 
                 db.set_deployment_id(&initialized_deployment_id).await?;
 
@@ -562,6 +595,54 @@ async fn initialize_with_manager(
     let init_response = response.into_inner();
 
     Ok((init_response.deployment_id, init_response.token))
+}
+
+/// Re-acquire a deployment-scoped sync token from the manager after the
+/// agent's persistent state was wiped (chart-default emptyDir, manual
+/// reset, etc.). Called only on a 409 from `initialize_with_manager` —
+/// the existing deployment row is reattached to and a fresh sync token
+/// is minted.
+async fn rejoin_with_manager(
+    sync_url: &url::Url,
+    token: &str,
+    deployment_name: &str,
+) -> Result<(String, String)> {
+    use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_str(&format!("Bearer {}", token))
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Invalid token format".to_string(),
+            })?,
+    );
+    headers.insert(USER_AGENT, HeaderValue::from_static("alien-agent"));
+
+    let http_client = reqwest::Client::builder()
+        .default_headers(headers)
+        .build()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to create HTTP client".to_string(),
+        })?;
+
+    let base_url = sync_url.as_str().trim_end_matches('/');
+    let client = alien_manager_api::Client::new_with_client(base_url, http_client);
+
+    let response = client
+        .rejoin()
+        .body_map(|b| b.name(deployment_name.to_string()))
+        .send()
+        .await
+        .map_err(alien_manager_api::convert_sdk_error)
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to call rejoin endpoint".to_string(),
+        })?;
+
+    let r = response.into_inner();
+    Ok((r.deployment_id, r.token))
 }
 
 fn setup_tracing(verbose: bool) {

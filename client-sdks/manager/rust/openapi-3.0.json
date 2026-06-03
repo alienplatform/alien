@@ -929,11 +929,52 @@
         ]
       }
     },
+    "/v1/rejoin": {
+      "post": {
+        "tags": [
+          "sync"
+        ],
+        "summary": "`POST /v1/rejoin` — re-acquire a deployment-scoped sync token for an\nexisting deployment by name. The OSS handler is intentionally lean:\nthe dg-token caller specifies the name, the store looks up the row,\nand a fresh `Deployment` token is minted and returned. Returns\n`404 Deployment not found` when no row matches — agents should fall\nback to `/v1/initialize` in that case.",
+        "description": "Distinct from `/v1/initialize`'s idempotency branch because the agent\nwants an explicit, distinguishable code path for \"I lost local state,\nplease re-attach me\" vs \"I'm a brand-new pod claiming a name\". The\nplatform-mode override forwards this to the SaaS rejoin endpoint\nwhere audit / event semantics differ.",
+        "operationId": "rejoin",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RejoinRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Existing deployment rejoined; fresh token returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RejoinResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No deployment with that name in caller's deployment group"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/releases": {
       "get": {
         "tags": [
           "releases"
         ],
+        "summary": "`GET /v1/releases` — Inbound: workspace / project bearer (or authenticated\nuser). Outbound: caller bearer (passthrough). Returns only releases the\ncaller may read.",
         "operationId": "list_releases",
         "responses": {
           "200": {
@@ -1380,17 +1421,45 @@
           "deploymentId"
         ],
         "properties": {
+          "agentArch": {
+            "type": "string",
+            "description": "Agent host arch — `x86_64` / `aarch64`.",
+            "nullable": true
+          },
+          "agentImageRepository": {
+            "type": "string",
+            "description": "Image repository the agent was pulled from (no tag), injected by\nthe chart at install time. Surfaced in the dashboard so admins see\nthe registry a pinned tag will be pulled from. Optional and\nKubernetes-only.",
+            "nullable": true
+          },
+          "agentOs": {
+            "type": "string",
+            "description": "Agent host OS — `linux` / `macos` / `windows`.",
+            "nullable": true
+          },
+          "agentVersion": {
+            "type": "string",
+            "description": "Agent binary version (from `env!(\"CARGO_PKG_VERSION\")` at build time).\nLets the manager build fleet inventory and decide whether to send an\n`agent_target` in the response.",
+            "nullable": true
+          },
           "currentState": {
             "description": "Current deployment state as reported by the agent.\nWhen present, the manager updates the deployment record to reflect\nthe agent's progress (status, stack_state, etc.)."
           },
           "deploymentId": {
             "type": "string"
+          },
+          "regime": {
+            "type": "string",
+            "description": "Supervisor regime — `os-service` / `kubernetes`.",
+            "nullable": true
           }
         }
       },
       "AgentSyncResponse": {
         "type": "object",
         "properties": {
+          "agentTarget": {
+            "description": "Desired agent self-update target. The payload carries either `binary`\n(OS-service flow) or `helm` (Kubernetes flow); the agent picks the\none matching its regime."
+          },
           "commandsUrl": {
             "type": "string",
             "description": "Public URL for the commands API. Cloud-deployed workers use this\nto poll for pending commands instead of the agent's local sync URL.",
@@ -3126,6 +3195,10 @@
         "properties": {
           "keyVaultCertificateId": {
             "type": "string"
+          },
+          "keyVaultResourceId": {
+            "type": "string",
+            "nullable": true
           }
         }
       },
@@ -3987,6 +4060,10 @@
           "isByoVnet"
         ],
         "properties": {
+          "applicationGatewaySubnetName": {
+            "type": "string",
+            "nullable": true
+          },
           "cidrBlock": {
             "type": "string",
             "nullable": true
@@ -4380,6 +4457,43 @@
           }
         }
       },
+      "ComputeCapacityBlocker": {
+        "type": "object",
+        "required": [
+          "category",
+          "message",
+          "observedAt"
+        ],
+        "properties": {
+          "category": {
+            "$ref": "#/components/schemas/ComputeCapacityBlockerCategory"
+          },
+          "message": {
+            "type": "string"
+          },
+          "observedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "providerCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "providerReference": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "ComputeCapacityBlockerCategory": {
+        "type": "string",
+        "enum": [
+          "quota",
+          "capacity",
+          "allocation",
+          "other"
+        ]
+      },
       "ComputeCapacityGroupStatus": {
         "type": "object",
         "required": [
@@ -4388,6 +4502,10 @@
           "desiredMachines"
         ],
         "properties": {
+          "capacityBlocker": {
+            "$ref": "#/components/schemas/ComputeCapacityBlocker",
+            "nullable": true
+          },
           "currentMachines": {
             "type": "integer",
             "format": "int32",
@@ -5060,6 +5178,22 @@
           "createdAt"
         ],
         "properties": {
+          "agentArch": {
+            "type": "string",
+            "nullable": true
+          },
+          "agentImageRepository": {
+            "type": "string",
+            "nullable": true
+          },
+          "agentOs": {
+            "type": "string",
+            "nullable": true
+          },
+          "agentVersion": {
+            "type": "string",
+            "nullable": true
+          },
           "createdAt": {
             "type": "string"
           },
@@ -5093,6 +5227,10 @@
           "platform": {
             "$ref": "#/components/schemas/Platform"
           },
+          "regime": {
+            "type": "string",
+            "nullable": true
+          },
           "retryRequested": {
             "type": "boolean"
           },
@@ -5101,6 +5239,10 @@
           "stackState": {},
           "status": {
             "type": "string"
+          },
+          "targetAgentVersion": {
+            "type": "string",
+            "nullable": true
           },
           "updatedAt": {
             "type": "string",
@@ -7847,7 +7989,8 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/ReleaseResponse"
-            }
+            },
+            "description": "Releases the caller may read, newest first."
           }
         }
       },
@@ -8894,6 +9037,11 @@
               "type"
             ],
             "properties": {
+              "application_gateway_subnet_name": {
+                "type": "string",
+                "description": "Name of the dedicated classic Application Gateway subnet within the VNet.",
+                "nullable": true
+              },
               "private_subnet_name": {
                 "type": "string",
                 "description": "Name of the private subnet within the VNet"
@@ -9309,6 +9457,33 @@
           },
           "success": {
             "type": "boolean"
+          }
+        }
+      },
+      "RejoinRequest": {
+        "type": "object",
+        "description": "`POST /v1/rejoin` — re-acquire a deployment-scoped sync token for an\nagent whose persistent state was wiped (e.g. emptyDir on pod restart).\n\nThe agent calls this when `/v1/initialize` returns a name-conflict\nerror: the deployment row already exists, so creating it would 409,\nbut the agent legitimately needs a new sync token to keep operating\nagainst it. Auth is the same dg bearer the chart originally mounted.\n\n`name` is required — without it the server can't disambiguate which\nrow to reattach to.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "RejoinResponse": {
+        "type": "object",
+        "required": [
+          "deploymentId",
+          "token"
+        ],
+        "properties": {
+          "deploymentId": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string"
           }
         }
       },

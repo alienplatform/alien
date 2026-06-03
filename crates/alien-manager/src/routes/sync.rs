@@ -177,6 +177,31 @@ pub struct InitializeResponse {
     pub token: Option<String>,
 }
 
+/// `POST /v1/rejoin` — re-acquire a deployment-scoped sync token for an
+/// agent whose persistent state was wiped (e.g. emptyDir on pod restart).
+///
+/// The agent calls this when `/v1/initialize` returns a name-conflict
+/// error: the deployment row already exists, so creating it would 409,
+/// but the agent legitimately needs a new sync token to keep operating
+/// against it. Auth is the same dg bearer the chart originally mounted.
+///
+/// `name` is required — without it the server can't disambiguate which
+/// row to reattach to.
+#[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct RejoinRequest {
+    pub name: String,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct RejoinResponse {
+    pub deployment_id: String,
+    pub token: String,
+}
+
 // --- Router ---
 
 pub fn router() -> Router<AppState> {
@@ -193,6 +218,16 @@ pub fn router() -> Router<AppState> {
 /// (for example, one that proxies token creation to an upstream API).
 pub fn initialize_router() -> Router<AppState> {
     Router::new().route("/v1/initialize", post(initialize))
+}
+
+/// Router for the `/v1/rejoin` endpoint only.
+///
+/// Same separation rationale as `initialize_router` — multi-tenant
+/// embedders override this with one that forwards to their upstream API
+/// so token issuance lives on the SaaS side, not in the local manager
+/// store.
+pub fn rejoin_router() -> Router<AppState> {
+    Router::new().route("/v1/rejoin", post(rejoin))
 }
 
 // --- Handlers ---
@@ -1178,6 +1213,82 @@ fn release_info_from_record(
         description: None,
         stack: release.stacks.get(&release_stack_platform)?.clone(),
     })
+}
+
+/// `POST /v1/rejoin` — re-acquire a deployment-scoped sync token for an
+/// existing deployment by name. The OSS handler is intentionally lean:
+/// the dg-token caller specifies the name, the store looks up the row,
+/// and a fresh `Deployment` token is minted and returned. Returns
+/// `404 Deployment not found` when no row matches — agents should fall
+/// back to `/v1/initialize` in that case.
+///
+/// Distinct from `/v1/initialize`'s idempotency branch because the agent
+/// wants an explicit, distinguishable code path for "I lost local state,
+/// please re-attach me" vs "I'm a brand-new pod claiming a name". The
+/// platform-mode override forwards this to the SaaS rejoin endpoint
+/// where audit / event semantics differ.
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/v1/rejoin",
+    tag = "sync",
+    request_body = RejoinRequest,
+    responses(
+        (status = 200, description = "Existing deployment rejoined; fresh token returned", body = RejoinResponse),
+        (status = 404, description = "No deployment with that name in caller's deployment group"),
+    ),
+    security(
+        ("bearer" = [])
+    )
+))]
+async fn rejoin(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<RejoinRequest>,
+) -> Response {
+    let subject = match auth::require_auth(&state, &headers).await {
+        Ok(s) => s,
+        Err(e) => return e.into_response(),
+    };
+
+    let dg_id = match subject.scope.clone() {
+        crate::auth::Scope::DeploymentGroup {
+            deployment_group_id,
+            ..
+        } => deployment_group_id,
+        _ => {
+            return ErrorData::forbidden("Rejoin requires a deployment-group token").into_response();
+        }
+    };
+
+    let existing = match state
+        .deployment_store
+        .get_deployment_by_name(&subject, &dg_id, &req.name)
+        .await
+    {
+        Ok(Some(d)) => d,
+        Ok(None) => return ErrorData::not_found_deployment(&req.name).into_response(),
+        Err(e) => return e.into_response(),
+    };
+
+    let (raw_token, key_prefix, key_hash) = ids::generate_token(TokenType::Deployment.prefix());
+    match state
+        .token_store
+        .create_token(CreateTokenParams {
+            token_type: TokenType::Deployment,
+            key_prefix,
+            key_hash,
+            deployment_group_id: Some(dg_id),
+            deployment_id: Some(existing.id.clone()),
+        })
+        .await
+    {
+        Ok(_) => Json(RejoinResponse {
+            deployment_id: existing.id,
+            token: raw_token,
+        })
+        .into_response(),
+        Err(e) => e.into_response(),
+    }
 }
 
 /// `POST /v1/initialize` — Inbound: deployment-group bearer (typical),
