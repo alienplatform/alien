@@ -5,10 +5,6 @@
 import * as z from "zod/v4";
 import { safeParse } from "../lib/schemas.js";
 import { Result as SafeParseResult } from "../types/fp.js";
-import {
-  DeploymentPortalManagedDnsRecord,
-  DeploymentPortalManagedDnsRecord$inboundSchema,
-} from "./deploymentportalmanageddnsrecord.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import {
   ManagerDomainBindingStatus,
@@ -117,7 +113,6 @@ export type ManagerDomainBinding = {
   domainId: string;
   hostname: string;
   status: ManagerDomainBindingStatus;
-  managedDnsRecords: Array<DeploymentPortalManagedDnsRecord>;
   /**
    * Canonical error container that provides a structured way to represent errors
    *
@@ -174,7 +169,6 @@ export const ManagerDomainBinding$inboundSchema: z.ZodType<
   domainId: z.string(),
   hostname: z.string(),
   status: ManagerDomainBindingStatus$inboundSchema,
-  managedDnsRecords: z.array(DeploymentPortalManagedDnsRecord$inboundSchema),
   error: z.nullable(z.lazy(() => ManagerDomainBindingError$inboundSchema))
     .optional(),
   lockedAt: z.nullable(

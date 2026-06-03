@@ -11,5 +11,5 @@ let value: ManagerDomainBindingStatus = "active";
 ## Values
 
 ```typescript
-"waiting-for-domain" | "waiting-for-deployment" | "pending-edge" | "pending-health" | "active" | "failed" | "deleting"
+"waiting-for-domain" | "waiting-for-deployment" | "pending-endpoint" | "pending-health" | "active" | "failed" | "deleting"
 ```

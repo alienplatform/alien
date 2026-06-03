@@ -1,13 +1,13 @@
 {
   "name": "@alienplatform/platform-api",
-  "version": "1.5.1",
+  "version": "1.0.166",
   "author": "Alien Software, Inc. <hi@alien.dev>",
   "homepage": "https://alien.dev",
   "license": "FSL-1.1-Apache-2.0",
   "repository": {
-    "directory": "client-sdks/platform/typescript",
     "type": "git",
-    "url": "https://github.com/alienplatform/alien.git"
+    "url": "https://github.com/alienplatform/alien.git",
+    "directory": "client-sdks/platform/typescript"
   },
   "type": "module",
   "main": "./esm/index.js",
@@ -52,7 +52,7 @@
   "sideEffects": false,
   "scripts": {
     "lint": "eslint --cache --max-warnings=0 src",
-    "build": "node --max-old-space-size=8192 node_modules/typescript/bin/tsc",
+    "build": "tsc",
     "prepublishOnly": "npm run build"
   },
   "peerDependencies": {

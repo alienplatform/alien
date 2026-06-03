@@ -28,10 +28,43 @@ pub enum DnsRecordStatus {
     Failed,
 }
 
-/// Certificate and DNS metadata for a public resource.
+/// Certificate and DNS metadata for a managed hostname.
 ///
 /// Includes decrypted certificate data for issued certificates.
 /// Private keys are deployment-scoped secrets (like environment variables).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedDomainInfo {
+    /// Fully qualified domain name.
+    pub fqdn: String,
+    /// Certificate ID (for tracking/logging).
+    pub certificate_id: String,
+    /// Current certificate status
+    pub certificate_status: CertificateStatus,
+    /// Current DNS record status
+    pub dns_status: DnsRecordStatus,
+    /// Last DNS error message. Present when DNS previously failed, even if status
+    /// was reset to pending for retry. Used to surface actionable error context
+    /// in WaitingForDns failure messages.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dns_error: Option<String>,
+    /// Full PEM certificate chain (only present if status is "issued").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub certificate_chain: Option<String>,
+    /// Decrypted private key (only present if status is "issued").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub private_key: Option<String>,
+    /// ISO 8601 timestamp when certificate was issued (for renewal detection).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issued_at: Option<String>,
+}
+
+/// Certificate and DNS metadata for a public resource.
+///
+/// The direct fields describe the primary generated hostname. `aliases`
+/// contains additional managed hostnames that route directly to the same
+/// resource.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
@@ -58,6 +91,9 @@ pub struct ResourceDomainInfo {
     /// ISO 8601 timestamp when certificate was issued (for renewal detection).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub issued_at: Option<String>,
+    /// Additional managed hostnames for the resource.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<ManagedDomainInfo>,
 }
 
 /// Domain metadata for auto-managed public resources (no private keys).

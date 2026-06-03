@@ -4887,6 +4887,7 @@ mod tests {
                         .to_string(),
                 ),
                 issued_at: Some("2024-01-01T00:00:00Z".to_string()),
+                aliases: Vec::new(),
             },
         );
         DomainMetadata {

@@ -758,6 +758,39 @@ impl StackExecutor {
                                 );
                             }
                         }
+                    } else if matches!(
+                        current_resource_state.status,
+                        ResourceStatus::Running | ResourceStatus::UpdateFailed
+                    ) {
+                        if let Some(resource_controller) =
+                            current_resource_state.get_internal_controller()?
+                        {
+                            let context = ResourceControllerContext {
+                                desired_config: &desired_config.resource,
+                                platform: controller_platform_for_state(
+                                    self.client_config.platform(),
+                                    current_resource_state,
+                                ),
+                                client_config: self.client_config.clone(),
+                                state,
+                                resource_prefix: &state.resource_prefix,
+                                registry: &self.resource_registry,
+                                desired_stack: &self.desired_stack,
+                                service_provider: &self.service_provider,
+                                deployment_config: &self.deployment_config,
+                                heartbeat_collector: HeartbeatCollector::default(),
+                            };
+
+                            if resource_controller.needs_update(&context)? {
+                                debug!(
+                                    "Scheduling UPDATE transition for '{}' due to deployment config drift",
+                                    resource_id
+                                );
+                                plan_result
+                                    .updates
+                                    .insert(resource_id.clone(), desired_config.resource.clone());
+                            }
+                        }
                     } else {
                         // Configs match, no update action needed from diffing.
                         // The resource will proceed based on its current state later.

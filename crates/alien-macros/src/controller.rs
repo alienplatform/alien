@@ -216,6 +216,7 @@ pub fn controller_impl(_args: TokenStream, input: TokenStream) -> TokenStream {
     let mut default_state = None;
     let mut all_states = Vec::new();
     let mut get_binding_params_method = None;
+    let mut needs_update_method = None;
 
     for item in &item_impl.items {
         match item {
@@ -223,6 +224,12 @@ pub fn controller_impl(_args: TokenStream, input: TokenStream) -> TokenStream {
                 // Check for get_binding_params method
                 if method.sig.ident == "get_binding_params" {
                     get_binding_params_method = Some(method.clone());
+                    continue;
+                }
+
+                // Check for needs_update method
+                if method.sig.ident == "needs_update" {
+                    needs_update_method = Some(method.clone());
                     continue;
                 }
 
@@ -299,6 +306,7 @@ pub fn controller_impl(_args: TokenStream, input: TokenStream) -> TokenStream {
         &terminal_states,
         &flow_entries,
         get_binding_params_method.as_ref(),
+        needs_update_method.as_ref(),
     );
 
     // Generate handler methods
@@ -463,6 +471,7 @@ fn generate_controller_impl(
     terminal_states: &[(Ident, ExprPath)],
     flow_entries: &HashMap<String, (Ident, FlowEntryAttr)>,
     get_binding_params_method: Option<&ImplItemFn>,
+    needs_update_method: Option<&ImplItemFn>,
 ) -> TokenStream2 {
     let step_match_arms = generate_step_match_arms(state_enum_name, handler_action_name, handlers);
     let get_status_match_arms =
@@ -476,6 +485,21 @@ fn generate_controller_impl(
         let method_block = &method.block;
         quote! {
             fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
+                #method_block
+            }
+        }
+    } else {
+        quote! {}
+    };
+
+    let needs_update_impl = if let Some(method) = needs_update_method {
+        // Include the user's implementation directly in the trait
+        let method_block = &method.block;
+        quote! {
+            fn needs_update(
+                &self,
+                ctx: &crate::core::ResourceControllerContext<'_>,
+            ) -> crate::Result<bool> {
                 #method_block
             }
         }
@@ -547,6 +571,8 @@ fn generate_controller_impl(
             }
 
             #get_binding_params_impl
+
+            #needs_update_impl
 
             fn reset_stay_count(&mut self) {
                 self._internal_stay_count = None;

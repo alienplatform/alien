@@ -1,5 +1,6 @@
 ---
 source: crates/alien-helm/tests/generator/helpers.rs
+assertion_line: 37
 expression: buf
 ---
 === Chart.yaml ===
@@ -896,8 +897,12 @@ spec:
             - name: PLATFORM
               value: kubernetes
             {{- if .Values.basePlatform }}
-            - name: BASE_PLATFORM
+            - name: ALIEN_BASE_PLATFORM
               value: {{ .Values.basePlatform | quote }}
+            {{- end }}
+            {{- if and (eq .Values.basePlatform "aws") .Values.basePlatformConfig.aws.region }}
+            - name: AWS_REGION
+              value: {{ .Values.basePlatformConfig.aws.region | quote }}
             {{- end }}
             {{- if and (eq .Values.basePlatform "gcp") .Values.basePlatformConfig.gcp.projectId }}
             - name: GCP_PROJECT_ID
@@ -1121,6 +1126,13 @@ parameters:
 reclaimPolicy: Delete
 volumeBindingMode: WaitForFirstConsumer
 allowVolumeExpansion: true
+{{- if eq $provisioner "ebs.csi.eks.amazonaws.com" }}
+allowedTopologies:
+  - matchLabelExpressions:
+      - key: eks.amazonaws.com/compute-type
+        values:
+          - auto
+{{ end }}
 {{ end }}
 {{- $eksAlb := dig "ingress" "eksAutoMode" dict $bootstrap -}}
 {{- if dig "enabled" false $eksAlb }}

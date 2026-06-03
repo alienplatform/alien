@@ -235,7 +235,7 @@ fn gcp_base_platform_config_renders_operator_environment() {
     let rendered = test_utils::helm_template(&files, Some(&gcp_values));
     match &rendered.status {
         LinterStatus::Passed => {
-            assert!(rendered.stdout.contains("name: BASE_PLATFORM"));
+            assert!(rendered.stdout.contains("name: ALIEN_BASE_PLATFORM"));
             assert!(rendered.stdout.contains("value: \"gcp\""));
             assert!(rendered.stdout.contains("name: GCP_PROJECT_ID"));
             assert!(rendered.stdout.contains("value: \"alien-test-target\""));
@@ -245,6 +245,30 @@ fn gcp_base_platform_config_renders_operator_environment() {
         }
         LinterStatus::Skipped(_) | LinterStatus::Failed(_) => {
             rendered.assert_ok("GCP runtime config render")
+        }
+    }
+}
+
+#[test]
+fn aws_base_platform_config_renders_operator_environment() {
+    let stack = Stack::new("aws-runtime-config".to_string()).build();
+    let chart = render(&stack, StackSettings::default());
+    let files = chart.files.clone();
+    let values = files.get("values.yaml").expect("values.yaml");
+    let aws_values = values
+        .replace("basePlatform: null", "basePlatform: aws")
+        .replace("region: \"\"", "region: us-east-1");
+
+    let rendered = test_utils::helm_template(&files, Some(&aws_values));
+    match &rendered.status {
+        LinterStatus::Passed => {
+            assert!(rendered.stdout.contains("name: ALIEN_BASE_PLATFORM"));
+            assert!(rendered.stdout.contains("value: \"aws\""));
+            assert!(rendered.stdout.contains("name: AWS_REGION"));
+            assert!(rendered.stdout.contains("value: \"us-east-1\""));
+        }
+        LinterStatus::Skipped(_) | LinterStatus::Failed(_) => {
+            rendered.assert_ok("AWS runtime config render")
         }
     }
 }

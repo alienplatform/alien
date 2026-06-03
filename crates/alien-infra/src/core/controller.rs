@@ -694,6 +694,17 @@ pub trait ResourceController: Send + Sync + Debug {
     /// Returns the new state boxed as a trait object if the transition is valid, otherwise None.
     fn transition_to_update(&mut self) -> Result<()>;
 
+    /// Returns whether this controller needs an update even when the resource
+    /// config itself is unchanged.
+    ///
+    /// Use this for deployment-level inputs that are intentionally not stored
+    /// inside `Resource`, such as managed endpoint metadata or runtime URL
+    /// overrides. The executor calls this only for stable resources that can
+    /// transition to update.
+    fn needs_update(&self, _context: &ResourceControllerContext<'_>) -> Result<bool> {
+        Ok(false)
+    }
+
     /// Derives the high-level ResourceStatus from the internal state.
     fn get_status(&self) -> ResourceStatus;
 

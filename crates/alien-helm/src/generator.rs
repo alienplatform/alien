@@ -755,7 +755,7 @@ fn append_cluster_bootstrap(
     yaml.push_str("    default:\n");
     yaml.push_str(&format!("      enabled: {}\n", eks_managed));
     yaml.push_str("      name: \"gp3\"\n");
-    yaml.push_str("      provisioner: \"ebs.csi.aws.com\"\n");
+    yaml.push_str("      provisioner: \"ebs.csi.eks.amazonaws.com\"\n");
     yaml.push_str("      parameters:\n");
     yaml.push_str("        type: \"gp3\"\n");
     yaml.push_str("        fsType: \"ext4\"\n");
@@ -1729,8 +1729,12 @@ spec:
             - name: PLATFORM
               value: kubernetes
             {{- if .Values.basePlatform }}
-            - name: BASE_PLATFORM
+            - name: ALIEN_BASE_PLATFORM
               value: {{ .Values.basePlatform | quote }}
+            {{- end }}
+            {{- if and (eq .Values.basePlatform "aws") .Values.basePlatformConfig.aws.region }}
+            - name: AWS_REGION
+              value: {{ .Values.basePlatformConfig.aws.region | quote }}
             {{- end }}
             {{- if and (eq .Values.basePlatform "gcp") .Values.basePlatformConfig.gcp.projectId }}
             - name: GCP_PROJECT_ID
@@ -2022,6 +2026,13 @@ parameters:
 reclaimPolicy: Delete
 volumeBindingMode: WaitForFirstConsumer
 allowVolumeExpansion: true
+{{- if eq $provisioner "ebs.csi.eks.amazonaws.com" }}
+allowedTopologies:
+  - matchLabelExpressions:
+      - key: eks.amazonaws.com/compute-type
+        values:
+          - auto
+{{ end }}
 {{ end }}
 {{- $eksAlb := dig "ingress" "eksAutoMode" dict $bootstrap -}}
 {{- if dig "enabled" false $eksAlb }}

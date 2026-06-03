@@ -11,6 +11,7 @@
             "elasticloadbalancing:DescribeTargetGroups",
             "elasticloadbalancing:DescribeTargetHealth",
             "elasticloadbalancing:DescribeListeners",
+            "elasticloadbalancing:ModifyListener",
             "ec2:DescribeVolumes"
           ]
         },
@@ -89,6 +90,8 @@
             "compute.sslCertificates.create",
             "compute.sslCertificates.delete",
             "compute.sslCertificates.get",
+            "compute.targetHttpsProxies.get",
+            "compute.targetHttpsProxies.setSslCertificates",
             "compute.healthChecks.get",
             "compute.globalForwardingRules.get",
             "compute.disks.get"
@@ -111,11 +114,14 @@
           "actions": [
             "Microsoft.Network/loadBalancers/read",
             "Microsoft.Network/publicIPAddresses/read",
+            "Microsoft.Network/applicationGateways/read",
+            "Microsoft.Network/applicationGateways/write",
             "Microsoft.Compute/disks/read"
           ],
           "dataActions": [
             "Microsoft.KeyVault/vaults/certificates/import/action",
-            "Microsoft.KeyVault/vaults/certificates/read"
+            "Microsoft.KeyVault/vaults/certificates/read",
+            "Microsoft.KeyVault/vaults/certificates/delete"
           ]
         },
         "binding": {

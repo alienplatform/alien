@@ -8,7 +8,7 @@ import { ClosedEnum } from "../types/enums.js";
 export const ManagerDomainBindingStatus = {
   WaitingForDomain: "waiting-for-domain",
   WaitingForDeployment: "waiting-for-deployment",
-  PendingEdge: "pending-edge",
+  PendingEndpoint: "pending-endpoint",
   PendingHealth: "pending-health",
   Active: "active",
   Failed: "failed",

@@ -1956,9 +1956,12 @@ fn registration_body(
             attr("management_url", expr::raw("var.management_url")),
             attr(
                 "management_config",
-                expr::raw("local.deployment_management_config"),
+                expr::raw("jsondecode(jsonencode(local.deployment_management_config))"),
             ),
-            attr("stack_settings", expr::raw("local.deployment_settings")),
+            attr(
+                "stack_settings",
+                expr::raw("jsondecode(jsonencode(local.deployment_settings))"),
+            ),
             attr("resources", expr::raw("local.deployment_resources")),
         ];
         if let Some(release_id) = &registration.release_id {
@@ -2394,6 +2397,11 @@ mod tests {
         ))
         .expect("registration render");
         assert!(registration_body.contains("resource \"example_app_deployment\" \"this\""));
+        assert!(registration_body.contains(
+            "management_config = jsondecode(jsonencode(local.deployment_management_config))"
+        ));
+        assert!(registration_body
+            .contains("stack_settings = jsondecode(jsonencode(local.deployment_settings))"));
 
         let outputs =
             render_body(outputs_body(TerraformTarget::Aws, Some(&registration))).expect("outputs");

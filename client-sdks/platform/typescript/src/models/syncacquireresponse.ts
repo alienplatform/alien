@@ -4608,6 +4608,88 @@ export type SyncAcquireResponseComputeBackendUnion =
 /**
  * Certificate status in the certificate lifecycle
  */
+export const SyncAcquireResponseAliasCertificateStatus = {
+  Pending: "pending",
+  Issued: "issued",
+  Renewing: "renewing",
+  RenewalFailed: "renewal-failed",
+  Failed: "failed",
+  Deleting: "deleting",
+} as const;
+/**
+ * Certificate status in the certificate lifecycle
+ */
+export type SyncAcquireResponseAliasCertificateStatus = ClosedEnum<
+  typeof SyncAcquireResponseAliasCertificateStatus
+>;
+
+/**
+ * DNS record status in the DNS lifecycle
+ */
+export const SyncAcquireResponseAliasDnsStatus = {
+  Pending: "pending",
+  Active: "active",
+  Updating: "updating",
+  Deleting: "deleting",
+  Failed: "failed",
+} as const;
+/**
+ * DNS record status in the DNS lifecycle
+ */
+export type SyncAcquireResponseAliasDnsStatus = ClosedEnum<
+  typeof SyncAcquireResponseAliasDnsStatus
+>;
+
+/**
+ * Certificate and DNS metadata for a managed hostname.
+ *
+ * @remarks
+ *
+ * Includes decrypted certificate data for issued certificates.
+ * Private keys are deployment-scoped secrets (like environment variables).
+ */
+export type SyncAcquireResponseAlias = {
+  /**
+   * Full PEM certificate chain (only present if status is "issued").
+   */
+  certificateChain?: string | null | undefined;
+  /**
+   * Certificate ID (for tracking/logging).
+   */
+  certificateId: string;
+  /**
+   * Certificate status in the certificate lifecycle
+   */
+  certificateStatus: SyncAcquireResponseAliasCertificateStatus;
+  /**
+   * Last DNS error message. Present when DNS previously failed, even if status
+   *
+   * @remarks
+   * was reset to pending for retry. Used to surface actionable error context
+   * in WaitingForDns failure messages.
+   */
+  dnsError?: string | null | undefined;
+  /**
+   * DNS record status in the DNS lifecycle
+   */
+  dnsStatus: SyncAcquireResponseAliasDnsStatus;
+  /**
+   * Fully qualified domain name.
+   */
+  fqdn: string;
+  /**
+   * ISO 8601 timestamp when certificate was issued (for renewal detection).
+   */
+  issuedAt?: string | null | undefined;
+  /**
+   * Decrypted private key (only present if status is "issued").
+   */
+  privateKey?: string | null | undefined;
+};
+
+/**
+ * Certificate status in the certificate lifecycle
+ */
 export const SyncAcquireResponseCertificateStatus = {
   Pending: "pending",
   Issued: "issued",
@@ -4645,10 +4727,15 @@ export type SyncAcquireResponseDnsStatus = ClosedEnum<
  *
  * @remarks
  *
- * Includes decrypted certificate data for issued certificates.
- * Private keys are deployment-scoped secrets (like environment variables).
+ * The direct fields describe the primary generated hostname. `aliases`
+ * contains additional managed hostnames that route directly to the same
+ * resource.
  */
 export type SyncAcquireResponseDomainMetadataResources = {
+  /**
+   * Additional managed hostnames for the resource.
+   */
+  aliases?: Array<SyncAcquireResponseAlias> | undefined;
   /**
    * Full PEM certificate chain (only present if status is "issued").
    */
@@ -15402,6 +15489,41 @@ export function syncAcquireResponseComputeBackendUnionFromJSON(
 }
 
 /** @internal */
+export const SyncAcquireResponseAliasCertificateStatus$inboundSchema: z.ZodEnum<
+  typeof SyncAcquireResponseAliasCertificateStatus
+> = z.enum(SyncAcquireResponseAliasCertificateStatus);
+
+/** @internal */
+export const SyncAcquireResponseAliasDnsStatus$inboundSchema: z.ZodEnum<
+  typeof SyncAcquireResponseAliasDnsStatus
+> = z.enum(SyncAcquireResponseAliasDnsStatus);
+
+/** @internal */
+export const SyncAcquireResponseAlias$inboundSchema: z.ZodType<
+  SyncAcquireResponseAlias,
+  unknown
+> = z.object({
+  certificateChain: z.nullable(z.string()).optional(),
+  certificateId: z.string(),
+  certificateStatus: SyncAcquireResponseAliasCertificateStatus$inboundSchema,
+  dnsError: z.nullable(z.string()).optional(),
+  dnsStatus: SyncAcquireResponseAliasDnsStatus$inboundSchema,
+  fqdn: z.string(),
+  issuedAt: z.nullable(z.string()).optional(),
+  privateKey: z.nullable(z.string()).optional(),
+});
+
+export function syncAcquireResponseAliasFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseAlias, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseAlias$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseAlias' from JSON`,
+  );
+}
+
+/** @internal */
 export const SyncAcquireResponseCertificateStatus$inboundSchema: z.ZodEnum<
   typeof SyncAcquireResponseCertificateStatus
 > = z.enum(SyncAcquireResponseCertificateStatus);
@@ -15414,6 +15536,8 @@ export const SyncAcquireResponseDnsStatus$inboundSchema: z.ZodEnum<
 /** @internal */
 export const SyncAcquireResponseDomainMetadataResources$inboundSchema:
   z.ZodType<SyncAcquireResponseDomainMetadataResources, unknown> = z.object({
+    aliases: z.array(z.lazy(() => SyncAcquireResponseAlias$inboundSchema))
+      .optional(),
     certificateChain: z.nullable(z.string()).optional(),
     certificateId: z.string(),
     certificateStatus: SyncAcquireResponseCertificateStatus$inboundSchema,

@@ -4630,6 +4630,88 @@ export type SyncReconcileResponseComputeBackendUnion =
 /**
  * Certificate status in the certificate lifecycle
  */
+export const SyncReconcileResponseAliasCertificateStatus = {
+  Pending: "pending",
+  Issued: "issued",
+  Renewing: "renewing",
+  RenewalFailed: "renewal-failed",
+  Failed: "failed",
+  Deleting: "deleting",
+} as const;
+/**
+ * Certificate status in the certificate lifecycle
+ */
+export type SyncReconcileResponseAliasCertificateStatus = ClosedEnum<
+  typeof SyncReconcileResponseAliasCertificateStatus
+>;
+
+/**
+ * DNS record status in the DNS lifecycle
+ */
+export const SyncReconcileResponseAliasDnsStatus = {
+  Pending: "pending",
+  Active: "active",
+  Updating: "updating",
+  Deleting: "deleting",
+  Failed: "failed",
+} as const;
+/**
+ * DNS record status in the DNS lifecycle
+ */
+export type SyncReconcileResponseAliasDnsStatus = ClosedEnum<
+  typeof SyncReconcileResponseAliasDnsStatus
+>;
+
+/**
+ * Certificate and DNS metadata for a managed hostname.
+ *
+ * @remarks
+ *
+ * Includes decrypted certificate data for issued certificates.
+ * Private keys are deployment-scoped secrets (like environment variables).
+ */
+export type SyncReconcileResponseAlias = {
+  /**
+   * Full PEM certificate chain (only present if status is "issued").
+   */
+  certificateChain?: string | null | undefined;
+  /**
+   * Certificate ID (for tracking/logging).
+   */
+  certificateId: string;
+  /**
+   * Certificate status in the certificate lifecycle
+   */
+  certificateStatus: SyncReconcileResponseAliasCertificateStatus;
+  /**
+   * Last DNS error message. Present when DNS previously failed, even if status
+   *
+   * @remarks
+   * was reset to pending for retry. Used to surface actionable error context
+   * in WaitingForDns failure messages.
+   */
+  dnsError?: string | null | undefined;
+  /**
+   * DNS record status in the DNS lifecycle
+   */
+  dnsStatus: SyncReconcileResponseAliasDnsStatus;
+  /**
+   * Fully qualified domain name.
+   */
+  fqdn: string;
+  /**
+   * ISO 8601 timestamp when certificate was issued (for renewal detection).
+   */
+  issuedAt?: string | null | undefined;
+  /**
+   * Decrypted private key (only present if status is "issued").
+   */
+  privateKey?: string | null | undefined;
+};
+
+/**
+ * Certificate status in the certificate lifecycle
+ */
 export const SyncReconcileResponseCertificateStatus = {
   Pending: "pending",
   Issued: "issued",
@@ -4667,10 +4749,15 @@ export type SyncReconcileResponseDnsStatus = ClosedEnum<
  *
  * @remarks
  *
- * Includes decrypted certificate data for issued certificates.
- * Private keys are deployment-scoped secrets (like environment variables).
+ * The direct fields describe the primary generated hostname. `aliases`
+ * contains additional managed hostnames that route directly to the same
+ * resource.
  */
 export type DomainMetadataTargetResources = {
+  /**
+   * Additional managed hostnames for the resource.
+   */
+  aliases?: Array<SyncReconcileResponseAlias> | undefined;
   /**
    * Full PEM certificate chain (only present if status is "issued").
    */
@@ -16751,6 +16838,42 @@ export function syncReconcileResponseComputeBackendUnionFromJSON(
 }
 
 /** @internal */
+export const SyncReconcileResponseAliasCertificateStatus$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponseAliasCertificateStatus> = z.enum(
+    SyncReconcileResponseAliasCertificateStatus,
+  );
+
+/** @internal */
+export const SyncReconcileResponseAliasDnsStatus$inboundSchema: z.ZodEnum<
+  typeof SyncReconcileResponseAliasDnsStatus
+> = z.enum(SyncReconcileResponseAliasDnsStatus);
+
+/** @internal */
+export const SyncReconcileResponseAlias$inboundSchema: z.ZodType<
+  SyncReconcileResponseAlias,
+  unknown
+> = z.object({
+  certificateChain: z.nullable(z.string()).optional(),
+  certificateId: z.string(),
+  certificateStatus: SyncReconcileResponseAliasCertificateStatus$inboundSchema,
+  dnsError: z.nullable(z.string()).optional(),
+  dnsStatus: SyncReconcileResponseAliasDnsStatus$inboundSchema,
+  fqdn: z.string(),
+  issuedAt: z.nullable(z.string()).optional(),
+  privateKey: z.nullable(z.string()).optional(),
+});
+
+export function syncReconcileResponseAliasFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncReconcileResponseAlias, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncReconcileResponseAlias$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncReconcileResponseAlias' from JSON`,
+  );
+}
+
+/** @internal */
 export const SyncReconcileResponseCertificateStatus$inboundSchema: z.ZodEnum<
   typeof SyncReconcileResponseCertificateStatus
 > = z.enum(SyncReconcileResponseCertificateStatus);
@@ -16765,6 +16888,8 @@ export const DomainMetadataTargetResources$inboundSchema: z.ZodType<
   DomainMetadataTargetResources,
   unknown
 > = z.object({
+  aliases: z.array(z.lazy(() => SyncReconcileResponseAlias$inboundSchema))
+    .optional(),
   certificateChain: z.nullable(z.string()).optional(),
   certificateId: z.string(),
   certificateStatus: SyncReconcileResponseCertificateStatus$inboundSchema,
