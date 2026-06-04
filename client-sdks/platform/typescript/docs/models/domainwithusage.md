@@ -14,18 +14,17 @@ let value: DomainWithUsage = {
   status: "pending-verification",
   createdAt: new Date("2025-12-13T18:16:52.351Z"),
   updatedAt: new Date("2025-02-11T22:17:17.700Z"),
+  endpoints: [],
   usage: {
     deploymentUrlProjects: [],
     portalBindings: [],
-    packageDomains: [],
-    managerBindings: [
+    packageDomains: [
       {
         id: "<id>",
-        managerId: "<id>",
-        managerName: "<value>",
-        hostname: "adolescent-space.name",
+        hostname: "faint-submitter.com",
       },
     ],
+    managerBindings: [],
   },
 };
 ```
@@ -46,4 +45,5 @@ let value: DomainWithUsage = {
 | `createdAt`                                                                                   | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
 | `updatedAt`                                                                                   | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
 | `verifiedAt`                                                                                  | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_minus_sign:                                                                            | N/A                                                                                           |                                                                                               |
+| `endpoints`                                                                                   | [models.DomainEndpoint](../models/domainendpoint.md)[]                                        | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
 | `usage`                                                                                       | [models.DomainWithUsageUsage](../models/domainwithusageusage.md)                              | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |

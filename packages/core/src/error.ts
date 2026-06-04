@@ -388,7 +388,7 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
           code: "GENERIC_ERROR",
           message: `HTTP request failed with status ${error.status}`,
           retryable: false,
-          internal: false,
+          internal: true,
           httpStatusCode: error.status,
           context: {
             url: error.url,
@@ -409,7 +409,7 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
         code: "GENERIC_ERROR",
         message: errorBody?.message || `HTTP request failed with status ${error.status}`,
         retryable: false,
-        internal: false,
+        internal: true,
         httpStatusCode: error.status,
         context: {
           url: error.url,
@@ -438,7 +438,7 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
       code: "GENERIC_ERROR",
       message,
       retryable: false,
-      internal: false,
+      internal: true,
       httpStatusCode: 500,
       context: {
         originalError: serialized,

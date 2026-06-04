@@ -3,7 +3,7 @@
  */
 
 import { AlienCore } from "../core.js";
-import { encodeFormQuery, encodeSimple } from "../lib/encodings.js";
+import { encodeFormQuery, encodeJSON, encodeSimple } from "../lib/encodings.js";
 import * as M from "../lib/matchers.js";
 import { compactMap } from "../lib/primitives.js";
 import { safeParse } from "../lib/schemas.js";
@@ -21,12 +21,13 @@ import {
 import * as errors from "../models/errors/index.js";
 import { ResponseValidationError } from "../models/errors/responsevalidationerror.js";
 import { SDKValidationError } from "../models/errors/sdkvalidationerror.js";
+import * as models from "../models/index.js";
 import * as operations from "../models/operations/index.js";
 import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Delete a deployment by ID. Non-force deletes enqueue cleanup; force deletes only remove the record.
+ * Delete, detach, or forget a deployment by ID.
  */
 export function deploymentsDelete(
   client: AlienCore,
@@ -34,7 +35,7 @@ export function deploymentsDelete(
   options?: RequestOptions,
 ): APIPromise<
   Result<
-    operations.DeleteDeploymentResponse,
+    models.DeleteDeploymentResponse,
     | errors.APIError
     | AlienError
     | ResponseValidationError
@@ -60,7 +61,7 @@ async function $do(
 ): Promise<
   [
     Result<
-      operations.DeleteDeploymentResponse,
+      models.DeleteDeploymentResponse,
       | errors.APIError
       | AlienError
       | ResponseValidationError
@@ -83,7 +84,9 @@ async function $do(
     return [parsed, { status: "invalid" }];
   }
   const payload = parsed.value;
-  const body = null;
+  const body = encodeJSON("body", payload.DeleteDeploymentRequest, {
+    explode: true,
+  });
 
   const pathParams = {
     id: encodeSimple("id", payload.id, {
@@ -92,15 +95,14 @@ async function $do(
     }),
   };
 
-  const path = pathToFunc("/v1/deployments/{id}")(pathParams);
+  const path = pathToFunc("/v1/deployments/{id}/delete")(pathParams);
 
   const query = encodeFormQuery({
-    "deleteScope": payload.deleteScope,
-    "force": payload.force,
     "workspace": payload.workspace,
   });
 
   const headers = new Headers(compactMap({
+    "Content-Type": "application/json",
     Accept: "application/json",
   }));
 
@@ -125,7 +127,7 @@ async function $do(
 
   const requestRes = client._createRequest(context, {
     security: requestSecurity,
-    method: "DELETE",
+    method: "POST",
     baseURL: options?.serverURL,
     path: path,
     headers: headers,
@@ -155,7 +157,7 @@ async function $do(
   };
 
   const [result] = await M.match<
-    operations.DeleteDeploymentResponse,
+    models.DeleteDeploymentResponse,
     | errors.APIError
     | AlienError
     | ResponseValidationError
@@ -166,7 +168,7 @@ async function $do(
     | UnexpectedClientError
     | SDKValidationError
   >(
-    M.json(202, operations.DeleteDeploymentResponse$inboundSchema),
+    M.json(202, models.DeleteDeploymentResponse$inboundSchema),
     M.jsonErr([400, 404, 409], errors.APIError$inboundSchema),
     M.jsonErr(500, errors.APIError$inboundSchema),
     M.fail("4XX"),

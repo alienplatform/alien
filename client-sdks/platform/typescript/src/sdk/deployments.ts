@@ -110,20 +110,6 @@ export class Deployments extends ClientSDK {
   }
 
   /**
-   * Delete a deployment by ID. Non-force deletes enqueue cleanup; force deletes only remove the record.
-   */
-  async delete(
-    request: operations.DeleteDeploymentRequest,
-    options?: RequestOptions,
-  ): Promise<operations.DeleteDeploymentResponse> {
-    return unwrapAsync(deploymentsDelete(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  /**
    * Get deployment connection information including command endpoint and resource URLs.
    */
   async getInfo(
@@ -159,6 +145,20 @@ export class Deployments extends ClientSDK {
     options?: RequestOptions,
   ): Promise<operations.AcceptCloudFormationCallbackResponse> {
     return unwrapAsync(deploymentsAcceptCloudFormationCallback(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Delete, detach, or forget a deployment by ID.
+   */
+  async delete(
+    request: operations.DeleteDeploymentRequest,
+    options?: RequestOptions,
+  ): Promise<models.DeleteDeploymentResponse> {
+    return unwrapAsync(deploymentsDelete(
       this,
       request,
       options,

@@ -7,18 +7,17 @@ use serde::{Deserialize, Serialize};
 
 use super::{DeploymentStatus, EnvironmentInfo, ReleaseInfo};
 
-/// Scope for a delete operation.
+/// Resource set selected for deployment cleanup.
 ///
-/// Full deletes are setup/admin owned and may remove both Frozen and Live
-/// resources. Live-only deletes are used by setup handoff resources
-/// (Terraform/CloudFormation) so Alien removes only the resources it owns
-/// before setup tears down Frozen resources.
+/// `All` is used for deployments where Alien owns the full recorded stack.
+/// `Live` is used when setup tools own Frozen resources and Alien should only
+/// delete resources it owns before setup tears down its part.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
-pub enum DeleteScope {
-    Full,
-    LiveOnly,
+pub enum DeleteResourceMode {
+    All,
+    Live,
 }
 
 /// Runtime metadata for deployment
@@ -46,16 +45,16 @@ pub struct RuntimeMetadata {
     #[serde(default, skip_serializing_if = "is_false")]
     pub registry_access_granted: bool,
 
-    /// Scope selected by the caller that requested deletion.
+    /// Resource set selected for cleanup.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub delete_scope: Option<DeleteScope>,
+    pub delete_resource_mode: Option<DeleteResourceMode>,
 
-    /// Delete scope requested while another actor owns the deployment lock.
+    /// Cleanup resource set requested while another actor owns the deployment lock.
     ///
     /// The lock owner consumes this on its next reconcile and yields to
     /// deletion without overwriting the queued delete request.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub pending_delete_scope: Option<DeleteScope>,
+    pub pending_delete_resource_mode: Option<DeleteResourceMode>,
 }
 
 /// Deployment state

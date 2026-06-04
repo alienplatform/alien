@@ -21,6 +21,11 @@ pub use environment_variables::*;
 pub mod k8s_secret_bindings;
 pub use k8s_secret_bindings::*;
 
+#[cfg(feature = "kubernetes")]
+pub mod k8s_environment_secrets;
+#[cfg(feature = "kubernetes")]
+pub use k8s_environment_secrets::*;
+
 mod azure_permissions_helper;
 pub use azure_permissions_helper::*;
 

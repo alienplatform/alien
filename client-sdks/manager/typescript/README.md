@@ -188,7 +188,9 @@ passthrough; single-tenant impls ignore it. See the trait doc on
 
 ### [Releases](docs/sdks/releases/README.md)
 
-* [listReleases](docs/sdks/releases/README.md#listreleases)
+* [listReleases](docs/sdks/releases/README.md#listreleases) - `GET /v1/releases` — Inbound: workspace / project bearer (or authenticated
+user). Outbound: caller bearer (passthrough). Returns only releases the
+caller may read.
 * [createRelease](docs/sdks/releases/README.md#createrelease)
 * [getLatestRelease](docs/sdks/releases/README.md#getlatestrelease)
 * [getRelease](docs/sdks/releases/README.md#getrelease)
@@ -267,7 +269,9 @@ passthrough; single-tenant impls ignore it. See the trait doc on
 - [`releasesCreateRelease`](docs/sdks/releases/README.md#createrelease)
 - [`releasesGetLatestRelease`](docs/sdks/releases/README.md#getlatestrelease)
 - [`releasesGetRelease`](docs/sdks/releases/README.md#getrelease)
-- [`releasesListReleases`](docs/sdks/releases/README.md#listreleases)
+- [`releasesListReleases`](docs/sdks/releases/README.md#listreleases) - `GET /v1/releases` — Inbound: workspace / project bearer (or authenticated
+user). Outbound: caller bearer (passthrough). Returns only releases the
+caller may read.
 - [`stackImportStackImport`](docs/sdks/stackimport/README.md#stackimport) - `POST /v1/stack/import` — Inbound: deployment-group bearer.
 - [`syncAcquire`](docs/sdks/sync/README.md#acquire) - `POST /v1/sync/acquire` — Inbound: workspace / dg / deployment bearer.
 `caller: &Subject` is threaded into `DeploymentStore::acquire` so

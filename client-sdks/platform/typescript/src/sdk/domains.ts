@@ -3,6 +3,7 @@
  */
 
 import { domainsCreate } from "../funcs/domainsCreate.js";
+import { domainsCreateEndpoint } from "../funcs/domainsCreateEndpoint.js";
 import { domainsDelete } from "../funcs/domainsDelete.js";
 import { domainsGet } from "../funcs/domainsGet.js";
 import { domainsList } from "../funcs/domainsList.js";
@@ -28,13 +29,27 @@ export class Domains extends ClientSDK {
   }
 
   /**
-   * Create a workspace domain.
+   * Create a workspace domain and optional initial endpoints.
    */
   async create(
     request?: operations.CreateDomainRequest | undefined,
     options?: RequestOptions,
   ): Promise<models.DomainWithUsage> {
     return unwrapAsync(domainsCreate(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Create an endpoint under a workspace domain.
+   */
+  async createEndpoint(
+    request: operations.CreateDomainEndpointRequest,
+    options?: RequestOptions,
+  ): Promise<models.DomainWithUsage> {
+    return unwrapAsync(domainsCreateEndpoint(
       this,
       request,
       options,

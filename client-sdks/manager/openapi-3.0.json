@@ -726,8 +726,10 @@
             "description": "Not found"
           }
         }
-      },
-      "delete": {
+      }
+    },
+    "/v1/deployments/{id}/delete": {
+      "post": {
         "tags": [
           "deployments"
         ],
@@ -741,26 +743,18 @@
             "schema": {
               "type": "string"
             }
-          },
-          {
-            "name": "force",
-            "in": "query",
-            "description": "Force delete without running cleanup (immediately removes record)",
-            "required": false,
-            "schema": {
-              "type": "boolean"
-            }
-          },
-          {
-            "name": "deleteScope",
-            "in": "query",
-            "description": "Delete scope: full or liveOnly",
-            "required": false,
-            "schema": {
-              "$ref": "#/components/schemas/DeleteScope"
-            }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteDeploymentRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "202": {
             "description": "Deployment deletion enqueued"
@@ -930,6 +924,33 @@
       }
     },
     "/v1/releases": {
+      "get": {
+        "tags": [
+          "releases"
+        ],
+        "summary": "`GET /v1/releases` — Inbound: workspace / project bearer (or authenticated\nuser). Outbound: caller bearer (passthrough). Returns only releases the\ncaller may read.",
+        "operationId": "list_releases",
+        "responses": {
+          "200": {
+            "description": "Releases listed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListReleasesResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
       "post": {
         "tags": [
           "releases"
@@ -1668,12 +1689,24 @@
             }
           },
           "cpu": {
-            "$ref": "#/components/schemas/MetricSample",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MetricSample"
+              }
+            ]
           },
           "memory": {
-            "$ref": "#/components/schemas/MetricSample",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MetricSample"
+              }
+            ]
           },
           "name": {
             "type": "string"
@@ -2720,12 +2753,24 @@
             }
           },
           "cpu": {
-            "$ref": "#/components/schemas/MetricSample",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MetricSample"
+              }
+            ]
           },
           "memory": {
-            "$ref": "#/components/schemas/MetricSample",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MetricSample"
+              }
+            ]
           },
           "name": {
             "type": "string"
@@ -3100,6 +3145,10 @@
         "properties": {
           "keyVaultCertificateId": {
             "type": "string"
+          },
+          "keyVaultResourceId": {
+            "type": "string",
+            "nullable": true
           }
         }
       },
@@ -3961,6 +4010,10 @@
           "isByoVnet"
         ],
         "properties": {
+          "applicationGatewaySubnetName": {
+            "type": "string",
+            "nullable": true
+          },
           "cidrBlock": {
             "type": "string",
             "nullable": true
@@ -4086,9 +4139,15 @@
                 "nullable": true
               },
               "storageGetRequest": {
-                "$ref": "#/components/schemas/PresignedRequest",
-                "description": "Pre-signed request for retrieving the body (for deployments)",
-                "nullable": true
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/PresignedRequest",
+                    "description": "Pre-signed request for retrieving the body (for deployments)"
+                  }
+                ]
               },
               "storagePutUsed": {
                 "type": "boolean",
@@ -4233,12 +4292,24 @@
             "type": "string"
           },
           "params": {
-            "$ref": "#/components/schemas/BodySpec",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BodySpec"
+              }
+            ]
           },
           "response": {
-            "$ref": "#/components/schemas/CommandResponse",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CommandResponse"
+              }
+            ]
           }
         }
       },
@@ -4329,9 +4400,15 @@
             "description": "Command identifier"
           },
           "response": {
-            "$ref": "#/components/schemas/CommandResponse",
-            "description": "Response data (only for succeeded/failed state)",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CommandResponse",
+                "description": "Response data (only for succeeded/failed state)"
+              }
+            ]
           },
           "state": {
             "$ref": "#/components/schemas/CommandState",
@@ -4354,6 +4431,43 @@
           }
         }
       },
+      "ComputeCapacityBlocker": {
+        "type": "object",
+        "required": [
+          "category",
+          "message",
+          "observedAt"
+        ],
+        "properties": {
+          "category": {
+            "$ref": "#/components/schemas/ComputeCapacityBlockerCategory"
+          },
+          "message": {
+            "type": "string"
+          },
+          "observedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "providerCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "providerReference": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "ComputeCapacityBlockerCategory": {
+        "type": "string",
+        "enum": [
+          "quota",
+          "capacity",
+          "allocation",
+          "other"
+        ]
+      },
       "ComputeCapacityGroupStatus": {
         "type": "object",
         "required": [
@@ -4362,6 +4476,16 @@
           "desiredMachines"
         ],
         "properties": {
+          "capacityBlocker": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ComputeCapacityBlocker"
+              }
+            ]
+          },
           "currentMachines": {
             "type": "integer",
             "format": "int32",
@@ -4392,8 +4516,14 @@
             "nullable": true
           },
           "recommendation": {
-            "$ref": "#/components/schemas/ComputeCapacityRecommendation",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ComputeCapacityRecommendation"
+              }
+            ]
           }
         }
       },
@@ -4419,8 +4549,14 @@
             "nullable": true
           },
           "utilization": {
-            "$ref": "#/components/schemas/MetricSample",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MetricSample"
+              }
+            ]
           }
         }
       },
@@ -4676,9 +4812,15 @@
             "description": "Current command state"
           },
           "storageUpload": {
-            "$ref": "#/components/schemas/StorageUpload",
-            "description": "Storage upload info (only for storage mode)",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StorageUpload",
+                "description": "Storage upload info (only for storage mode)"
+              }
+            ]
           }
         }
       },
@@ -4726,8 +4868,14 @@
             "nullable": true
           },
           "stackSettings": {
-            "$ref": "#/components/schemas/StackSettings",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StackSettings"
+              }
+            ]
           }
         }
       },
@@ -4754,8 +4902,14 @@
         ],
         "properties": {
           "gitMetadata": {
-            "$ref": "#/components/schemas/GitMetadata",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GitMetadata"
+              }
+            ]
           },
           "projectId": {
             "type": "string",
@@ -4787,24 +4941,48 @@
         "description": "Platform-specific certificate references for custom domains.",
         "properties": {
           "aws": {
-            "$ref": "#/components/schemas/AwsCustomCertificateConfig",
-            "description": "AWS ACM certificate ARN",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AwsCustomCertificateConfig",
+                "description": "AWS ACM certificate ARN"
+              }
+            ]
           },
           "azure": {
-            "$ref": "#/components/schemas/AzureCustomCertificateConfig",
-            "description": "Azure Key Vault certificate ID",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AzureCustomCertificateConfig",
+                "description": "Azure Key Vault certificate ID"
+              }
+            ]
           },
           "gcp": {
-            "$ref": "#/components/schemas/GcpCustomCertificateConfig",
-            "description": "GCP Certificate Manager certificate name",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GcpCustomCertificateConfig",
+                "description": "GCP Certificate Manager certificate name"
+              }
+            ]
           },
           "kubernetes": {
-            "$ref": "#/components/schemas/KubernetesCustomCertificateConfig",
-            "description": "Kubernetes TLS Secret reference for Secret-backed route profiles.",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/KubernetesCustomCertificateConfig",
+                "description": "Kubernetes TLS Secret reference for Secret-backed route profiles."
+              }
+            ]
           }
         }
       },
@@ -4935,12 +5113,31 @@
           }
         ]
       },
-      "DeleteScope": {
+      "DeleteDeploymentMode": {
         "type": "string",
-        "description": "Scope for a delete operation.\n\nFull deletes are setup/admin owned and may remove both Frozen and Live\nresources. Live-only deletes are used by setup handoff resources\n(Terraform/CloudFormation) so Alien removes only the resources it owns\nbefore setup tears down Frozen resources.",
         "enum": [
-          "full",
-          "liveOnly"
+          "clean",
+          "detach",
+          "forget"
+        ]
+      },
+      "DeleteDeploymentRequest": {
+        "type": "object",
+        "required": [
+          "mode"
+        ],
+        "properties": {
+          "mode": {
+            "$ref": "#/components/schemas/DeleteDeploymentMode"
+          }
+        }
+      },
+      "DeleteResourceMode": {
+        "type": "string",
+        "description": "Resource set selected for deployment cleanup.\n\n`All` is used for deployments where Alien owns the full recorded stack.\n`Live` is used when setup tools own Frozen resources and Alien should only\ndelete resources it owns before setup tears down its part.",
+        "enum": [
+          "all",
+          "live"
         ]
       },
       "DeploymentGroupMinimal": {
@@ -5042,8 +5239,14 @@
             "nullable": true
           },
           "deploymentGroup": {
-            "$ref": "#/components/schemas/DeploymentGroupMinimal",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DeploymentGroupMinimal"
+              }
+            ]
           },
           "deploymentGroupId": {
             "type": "string"
@@ -5058,8 +5261,14 @@
             "type": "string"
           },
           "importSource": {
-            "$ref": "#/components/schemas/ImportSourceKind",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ImportSourceKind"
+              }
+            ]
           },
           "name": {
             "type": "string"
@@ -5521,12 +5730,24 @@
             }
           },
           "cpu": {
-            "$ref": "#/components/schemas/MetricSample",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MetricSample"
+              }
+            ]
           },
           "memory": {
-            "$ref": "#/components/schemas/MetricSample",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MetricSample"
+              }
+            ]
           },
           "name": {
             "type": "string"
@@ -6237,8 +6458,14 @@
             "type": "string"
           },
           "cpu": {
-            "$ref": "#/components/schemas/MetricSample",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MetricSample"
+              }
+            ]
           },
           "events": {
             "type": "array",
@@ -6251,8 +6478,14 @@
             "nullable": true
           },
           "memory": {
-            "$ref": "#/components/schemas/MetricSample",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MetricSample"
+              }
+            ]
           },
           "replicaUnits": {
             "type": "array",
@@ -6315,21 +6548,39 @@
         "type": "object",
         "properties": {
           "basePlatform": {
-            "$ref": "#/components/schemas/Platform",
-            "description": "Optional base cloud platform for Kubernetes setup targets such as\nEKS/GKE/AKS. The runtime platform remains Kubernetes.",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Platform",
+                "description": "Optional base cloud platform for Kubernetes setup targets such as\nEKS/GKE/AKS. The runtime platform remains Kubernetes."
+              }
+            ]
           },
           "name": {
             "type": "string",
             "nullable": true
           },
           "platform": {
-            "$ref": "#/components/schemas/Platform",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Platform"
+              }
+            ]
           },
           "stackSettings": {
-            "$ref": "#/components/schemas/StackSettings",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StackSettings"
+              }
+            ]
           }
         }
       },
@@ -6565,8 +6816,14 @@
         ],
         "properties": {
           "cpu": {
-            "$ref": "#/components/schemas/MetricSample",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MetricSample"
+              }
+            ]
           },
           "events": {
             "type": "array",
@@ -6575,8 +6832,14 @@
             }
           },
           "memory": {
-            "$ref": "#/components/schemas/MetricSample",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MetricSample"
+              }
+            ]
           },
           "name": {
             "type": "string"
@@ -6664,8 +6927,14 @@
             "nullable": true
           },
           "usage": {
-            "$ref": "#/components/schemas/KubernetesNodeUsage",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/KubernetesNodeUsage"
+              }
+            ]
           }
         }
       },
@@ -6686,9 +6955,15 @@
         ],
         "properties": {
           "cloud": {
-            "$ref": "#/components/schemas/KubernetesCloudReference",
-            "description": "Optional provider-specific cloud identity for existing clusters.",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/KubernetesCloudReference",
+                "description": "Optional provider-specific cloud identity for existing clusters."
+              }
+            ]
           },
           "namespace": {
             "type": "string",
@@ -6714,8 +6989,14 @@
         ],
         "properties": {
           "cpu": {
-            "$ref": "#/components/schemas/MetricSample",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MetricSample"
+              }
+            ]
           },
           "events": {
             "type": "array",
@@ -6724,8 +7005,14 @@
             }
           },
           "memory": {
-            "$ref": "#/components/schemas/MetricSample",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MetricSample"
+              }
+            ]
           },
           "name": {
             "type": "string"
@@ -6752,8 +7039,14 @@
             "$ref": "#/components/schemas/WorkloadHeartbeatStatus"
           },
           "workload": {
-            "$ref": "#/components/schemas/KubernetesWorkloadStatus",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/KubernetesWorkloadStatus"
+              }
+            ]
           },
           "workloadKind": {
             "$ref": "#/components/schemas/KubernetesWorkloadKind"
@@ -6788,8 +7081,14 @@
             "type": "boolean"
           },
           "cpu": {
-            "$ref": "#/components/schemas/MetricSample",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MetricSample"
+              }
+            ]
           },
           "events": {
             "type": "array",
@@ -6798,8 +7097,14 @@
             }
           },
           "memory": {
-            "$ref": "#/components/schemas/MetricSample",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MetricSample"
+              }
+            ]
           },
           "name": {
             "type": "string"
@@ -6826,8 +7131,14 @@
             "$ref": "#/components/schemas/WorkloadHeartbeatStatus"
           },
           "workload": {
-            "$ref": "#/components/schemas/KubernetesWorkloadStatus",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/KubernetesWorkloadStatus"
+              }
+            ]
           }
         }
       },
@@ -6887,8 +7198,14 @@
             "nullable": true
           },
           "involvedObject": {
-            "$ref": "#/components/schemas/KubernetesEventInvolvedObject",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/KubernetesEventInvolvedObject"
+              }
+            ]
           },
           "lastTimestamp": {
             "type": "string",
@@ -6899,15 +7216,27 @@
             "type": "string"
           },
           "raw": {
-            "$ref": "#/components/schemas/Value",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Value"
+              }
+            ]
           },
           "reason": {
             "type": "string"
           },
           "source": {
-            "$ref": "#/components/schemas/KubernetesEventSource",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/KubernetesEventSource"
+              }
+            ]
           },
           "type": {
             "type": "string",
@@ -7041,9 +7370,15 @@
             "minimum": 0
           },
           "provider": {
-            "$ref": "#/components/schemas/KubernetesRouteProviderOptions",
-            "description": "Provider-specific route options that are required by the selected class.",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/KubernetesRouteProviderOptions",
+                "description": "Provider-specific route options that are required by the selected class."
+              }
+            ]
           }
         }
       },
@@ -7078,9 +7413,15 @@
             }
           },
           "provider": {
-            "$ref": "#/components/schemas/KubernetesRouteProviderOptions",
-            "description": "Provider-specific route options that are required by the selected class.",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/KubernetesRouteProviderOptions",
+                "description": "Provider-specific route options that are required by the selected class."
+              }
+            ]
           }
         }
       },
@@ -7111,12 +7452,24 @@
         "type": "object",
         "properties": {
           "cpu": {
-            "$ref": "#/components/schemas/MetricSample",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MetricSample"
+              }
+            ]
           },
           "memory": {
-            "$ref": "#/components/schemas/MetricSample",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MetricSample"
+              }
+            ]
           },
           "pods": {
             "type": "integer",
@@ -7130,12 +7483,24 @@
         "type": "object",
         "properties": {
           "cpu": {
-            "$ref": "#/components/schemas/MetricSample",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MetricSample"
+              }
+            ]
           },
           "memory": {
-            "$ref": "#/components/schemas/MetricSample",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MetricSample"
+              }
+            ]
           }
         }
       },
@@ -7172,12 +7537,24 @@
         ],
         "properties": {
           "cpu": {
-            "$ref": "#/components/schemas/MetricSample",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MetricSample"
+              }
+            ]
           },
           "memory": {
-            "$ref": "#/components/schemas/MetricSample",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MetricSample"
+              }
+            ]
           },
           "name": {
             "type": "string"
@@ -7393,14 +7770,26 @@
         "description": "Kubernetes runtime substrate configuration.\n\nThis controls how setup chooses the cluster backing `Platform::Kubernetes`\ndeployments. When omitted, cloud-backed Kubernetes deployments default to a\nmanaged cluster and generic/on-prem Kubernetes defaults to an external\ncluster.",
         "properties": {
           "cluster": {
-            "$ref": "#/components/schemas/KubernetesClusterSettings",
-            "description": "Cluster selection or creation settings.",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/KubernetesClusterSettings",
+                "description": "Cluster selection or creation settings."
+              }
+            ]
           },
           "exposure": {
-            "$ref": "#/components/schemas/KubernetesExposureSettings",
-            "description": "Public HTTPS exposure contract shared by setup, Helm, and runtime.",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/KubernetesExposureSettings",
+                "description": "Public HTTPS exposure contract shared by setup, Helm, and runtime."
+              }
+            ]
           }
         }
       },
@@ -7436,8 +7825,14 @@
         ],
         "properties": {
           "cpu": {
-            "$ref": "#/components/schemas/MetricSample",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MetricSample"
+              }
+            ]
           },
           "events": {
             "type": "array",
@@ -7446,8 +7841,14 @@
             }
           },
           "memory": {
-            "$ref": "#/components/schemas/MetricSample",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MetricSample"
+              }
+            ]
           },
           "name": {
             "type": "string"
@@ -7479,8 +7880,14 @@
             "minimum": 0
           },
           "workload": {
-            "$ref": "#/components/schemas/KubernetesWorkloadStatus",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/KubernetesWorkloadStatus"
+              }
+            ]
           },
           "workloadKind": {
             "$ref": "#/components/schemas/KubernetesWorkloadKind"
@@ -7811,6 +8218,21 @@
           }
         }
       },
+      "ListReleasesResponse": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReleaseResponse"
+            },
+            "description": "Releases the caller may read, newest first."
+          }
+        }
+      },
       "LocalArtifactRegistryHeartbeatData": {
         "type": "object",
         "required": [
@@ -7913,12 +8335,24 @@
             "nullable": true
           },
           "containerUnit": {
-            "$ref": "#/components/schemas/LocalRuntimeUnitStatus",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/LocalRuntimeUnitStatus"
+              }
+            ]
           },
           "cpu": {
-            "$ref": "#/components/schemas/MetricSample",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MetricSample"
+              }
+            ]
           },
           "events": {
             "type": "array",
@@ -7935,8 +8369,14 @@
             "nullable": true
           },
           "memory": {
-            "$ref": "#/components/schemas/MetricSample",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MetricSample"
+              }
+            ]
           },
           "name": {
             "type": "string",
@@ -7980,8 +8420,14 @@
             "type": "boolean"
           },
           "daemonInstance": {
-            "$ref": "#/components/schemas/LocalRuntimeUnitStatus",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/LocalRuntimeUnitStatus"
+              }
+            ]
           },
           "daemonName": {
             "type": "string"
@@ -8098,15 +8544,27 @@
             "type": "string"
           },
           "raw": {
-            "$ref": "#/components/schemas/Value",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Value"
+              }
+            ]
           },
           "severity": {
             "$ref": "#/components/schemas/HeartbeatIssueSeverity"
           },
           "subject": {
-            "$ref": "#/components/schemas/LocalRuntimeEventSubject",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/LocalRuntimeEventSubject"
+              }
+            ]
           },
           "timestamp": {
             "type": "string",
@@ -8151,15 +8609,27 @@
         ],
         "properties": {
           "cpu": {
-            "$ref": "#/components/schemas/MetricSample",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MetricSample"
+              }
+            ]
           },
           "kind": {
             "$ref": "#/components/schemas/LocalRuntimeUnitKind"
           },
           "memory": {
-            "$ref": "#/components/schemas/MetricSample",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MetricSample"
+              }
+            ]
           },
           "name": {
             "type": "string"
@@ -8289,8 +8759,14 @@
             "type": "boolean"
           },
           "cpu": {
-            "$ref": "#/components/schemas/MetricSample",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MetricSample"
+              }
+            ]
           },
           "events": {
             "type": "array",
@@ -8302,8 +8778,14 @@
             "type": "boolean"
           },
           "memory": {
-            "$ref": "#/components/schemas/MetricSample",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MetricSample"
+              }
+            ]
           },
           "pid": {
             "type": "integer",
@@ -8312,8 +8794,14 @@
             "nullable": true
           },
           "process": {
-            "$ref": "#/components/schemas/LocalRuntimeUnitStatus",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/LocalRuntimeUnitStatus"
+              }
+            ]
           },
           "readinessProbeOk": {
             "type": "boolean",
@@ -8333,8 +8821,14 @@
         "type": "object",
         "properties": {
           "details": {
-            "$ref": "#/components/schemas/Value",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Value"
+              }
+            ]
           },
           "id": {
             "type": "string",
@@ -8371,8 +8865,14 @@
             "nullable": true
           },
           "details": {
-            "$ref": "#/components/schemas/Value",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Value"
+              }
+            ]
           },
           "eventId": {
             "type": "string",
@@ -8389,8 +8889,14 @@
             "nullable": true
           },
           "involvedObject": {
-            "$ref": "#/components/schemas/ManagedRuntimeEventInvolvedObject",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ManagedRuntimeEventInvolvedObject"
+              }
+            ]
           },
           "lastTimestamp": {
             "type": "string",
@@ -8401,15 +8907,27 @@
             "type": "string"
           },
           "raw": {
-            "$ref": "#/components/schemas/Value",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Value"
+              }
+            ]
           },
           "reason": {
             "type": "string"
           },
           "source": {
-            "$ref": "#/components/schemas/ManagedRuntimeEventSource",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ManagedRuntimeEventSource"
+              }
+            ]
           },
           "type": {
             "type": "string",
@@ -8439,8 +8957,14 @@
         ],
         "properties": {
           "cpu": {
-            "$ref": "#/components/schemas/MetricSample",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MetricSample"
+              }
+            ]
           },
           "ip": {
             "type": "string",
@@ -8451,8 +8975,14 @@
             "nullable": true
           },
           "memory": {
-            "$ref": "#/components/schemas/MetricSample",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MetricSample"
+              }
+            ]
           },
           "message": {
             "type": "string",
@@ -8854,6 +9384,11 @@
               "type"
             ],
             "properties": {
+              "application_gateway_subnet_name": {
+                "type": "string",
+                "description": "Name of the dedicated classic Application Gateway subnet within the VNet.",
+                "nullable": true
+              },
               "private_subnet_name": {
                 "type": "string",
                 "description": "Name of the private subnet within the VNet"
@@ -9301,8 +9836,14 @@
             "type": "string"
           },
           "gitMetadata": {
-            "$ref": "#/components/schemas/GitMetadataResponse",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GitMetadataResponse"
+              }
+            ]
           },
           "id": {
             "type": "string"
@@ -10168,9 +10709,15 @@
         ],
         "properties": {
           "basePlatform": {
-            "$ref": "#/components/schemas/Platform",
-            "description": "Optional base cloud platform for Kubernetes setup targets such as\nEKS/GKE/AKS. The runtime platform remains Kubernetes.",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Platform",
+                "description": "Optional base cloud platform for Kubernetes setup targets such as\nEKS/GKE/AKS. The runtime platform remains Kubernetes."
+              }
+            ]
           },
           "deploymentGroupToken": {
             "type": "string",
@@ -10181,9 +10728,15 @@
             "description": "User-chosen deployment name. Must be unique within the deployment\ngroup; the manager returns 409 on collision rather than silently\nresolving to an existing deployment. Each setup adapter picks\nthe natural source: CloudFormation defaults to the CFN stack name,\nHelm to `{namespace}/{release}`, Terraform requires an explicit\n`name` attribute on the `alien_deployment` resource."
           },
           "managementConfig": {
-            "$ref": "#/components/schemas/ManagementConfig",
-            "description": "Platform-derived management configuration, when this setup creates a\ncross-account/cross-tenant management identity.",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ManagementConfig",
+                "description": "Platform-derived management configuration, when this setup creates a\ncross-account/cross-tenant management identity."
+              }
+            ]
           },
           "platform": {
             "$ref": "#/components/schemas/Platform",
@@ -10230,9 +10783,15 @@
             "description": "Setup target this package was generated for."
           },
           "sourceKind": {
-            "$ref": "#/components/schemas/ImportSourceKind",
-            "description": "Optional source label for observability. Does not affect import\nbehavior — the manager dispatches the same `ImporterRegistry`\nregardless of which setup package emitted the payload.",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ImportSourceKind",
+                "description": "Optional source label for observability. Does not affect import\nbehavior — the manager dispatches the same `ImporterRegistry`\nregardless of which setup package emitted the payload."
+              }
+            ]
           },
           "stackSettings": {
             "$ref": "#/components/schemas/StackSettings",
@@ -10285,9 +10844,15 @@
             "description": "The current resource configuration."
           },
           "controllerPlatform": {
-            "$ref": "#/components/schemas/Platform",
-            "description": "Platform whose controller owns this resource state. Defaults to the\ncontaining stack platform when absent.",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Platform",
+                "description": "Platform whose controller owns this resource state. Defaults to the\ncontaining stack platform when absent."
+              }
+            ]
           },
           "dependencies": {
             "type": "array",
@@ -10297,27 +10862,51 @@
             "description": "Complete list of dependencies for this resource, including infrastructure dependencies.\nThis preserves the full dependency information from the stack definition."
           },
           "error": {
-            "$ref": "#/components/schemas/AlienError",
-            "description": "Stores the last error encountered during a failed step transition.",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AlienError",
+                "description": "Stores the last error encountered during a failed step transition."
+              }
+            ]
           },
           "lastFailedState": {
             "description": "Stores the controller state that failed, used for manual retry operations.\nThis allows resuming from the exact point where the failure occurred.\nStored as JSON to make the struct serializable and movable to alien-core."
           },
           "lifecycle": {
-            "$ref": "#/components/schemas/ResourceLifecycle",
-            "description": "The lifecycle of the resource (Frozen or Live).\nDefaults to Live if not specified.",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResourceLifecycle",
+                "description": "The lifecycle of the resource (Frozen or Live).\nDefaults to Live if not specified."
+              }
+            ]
           },
           "outputs": {
-            "$ref": "#/components/schemas/BaseResourceOutputs",
-            "description": "Outputs generated by the resource (e.g., ARN, URL, Bucket Name).",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BaseResourceOutputs",
+                "description": "Outputs generated by the resource (e.g., ARN, URL, Bucket Name)."
+              }
+            ]
           },
           "previousConfig": {
-            "$ref": "#/components/schemas/BaseResource",
-            "description": "The previous resource configuration during updates.\nThis is set when an update is initiated and cleared when the update completes or fails.",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BaseResource",
+                "description": "The previous resource configuration during updates.\nThis is set when an update is initiated and cleared when the update completes or fails."
+              }
+            ]
           },
           "remoteBindingParams": {
             "description": "Binding parameters for remote access.\nOnly populated when the resource has `remote_access: true` in its ResourceEntry.\nThis is the JSON serialization of the binding configuration (e.g., StorageBinding, VaultBinding).\nPopulated by controllers during provisioning using get_binding_params()."
@@ -10347,9 +10936,15 @@
             "description": "Deployment model: push (Manager) or pull (Agent).\nDefault: Push.\n- Push: Manager drives updates. For cloud platforms, requires cross-account\n  credentials established during initial setup. For push-mode local\n  deployments (currently `alien dev`), the manager has direct access —\n  no bootstrap needed.\n- Pull: Agent in the target environment drives updates via polling.\n  Required for Kubernetes and remote local deployments."
           },
           "domains": {
-            "$ref": "#/components/schemas/DomainSettings",
-            "description": "Domain configuration (future).",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DomainSettings",
+                "description": "Domain configuration (future)."
+              }
+            ]
           },
           "externalBindings": {
             "type": "object",
@@ -10361,14 +10956,26 @@
             "description": "How heartbeat health checks are handled.\n- off: No heartbeat permissions\n- on: Heartbeat enabled (default)"
           },
           "kubernetes": {
-            "$ref": "#/components/schemas/KubernetesSettings",
-            "description": "Kubernetes runtime substrate configuration.",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/KubernetesSettings",
+                "description": "Kubernetes runtime substrate configuration."
+              }
+            ]
           },
           "network": {
-            "$ref": "#/components/schemas/NetworkSettings",
-            "description": "Network configuration for the stack (VPC/VNet settings).\nIf `None`, an isolated VPC with NAT is auto-created when the stack has resources\nthat require networking (e.g., containers). Set explicitly to customize:\n`UseDefault` for the provider's default network (fast, dev/test only),\n`Create` for an isolated VPC with managed NAT (production), or `ByoVpc*`\nto reference an existing customer-managed VPC.",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/NetworkSettings",
+                "description": "Network configuration for the stack (VPC/VNet settings).\nIf `None`, an isolated VPC with NAT is auto-created when the stack has resources\nthat require networking (e.g., containers). Set explicitly to customize:\n`UseDefault` for the provider's default network (fast, dev/test only),\n`Create` for an isolated VPC with managed NAT (production), or `ByoVpc*`\nto reference an existing customer-managed VPC."
+              }
+            ]
           },
           "telemetry": {
             "$ref": "#/components/schemas/TelemetryMode",
@@ -10552,12 +11159,24 @@
         "description": "Request to store payload data directly in KV by command_id.\n\nThis bypasses the normal command lifecycle (create → dispatch → respond)\nand writes params/response directly into KV. Used by the demo service\nto populate payload data for commands created outside the command flow.",
         "properties": {
           "params": {
-            "$ref": "#/components/schemas/BodySpec",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BodySpec"
+              }
+            ]
           },
           "response": {
-            "$ref": "#/components/schemas/CommandResponse",
-            "nullable": true
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CommandResponse"
+              }
+            ]
           }
         }
       },

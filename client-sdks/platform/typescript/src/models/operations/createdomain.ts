@@ -5,8 +5,19 @@
 import * as z from "zod/v4";
 import { remap as remap$ } from "../../lib/primitives.js";
 
+export type Setup = {
+  deploymentPortal?: boolean | undefined;
+  packages?: boolean | undefined;
+  /**
+   * Unique identifier for the project.
+   */
+  deploymentUrlProjectId?: string | null | undefined;
+  managerIds?: Array<string> | undefined;
+};
+
 export type CreateDomainRequestBody = {
   domain: string;
+  setup?: Setup | undefined;
 };
 
 export type CreateDomainRequest = {
@@ -18,8 +29,29 @@ export type CreateDomainRequest = {
 };
 
 /** @internal */
+export type Setup$Outbound = {
+  deploymentPortal?: boolean | undefined;
+  packages?: boolean | undefined;
+  deploymentUrlProjectId?: string | null | undefined;
+  managerIds?: Array<string> | undefined;
+};
+
+/** @internal */
+export const Setup$outboundSchema: z.ZodType<Setup$Outbound, Setup> = z.object({
+  deploymentPortal: z.boolean().optional(),
+  packages: z.boolean().optional(),
+  deploymentUrlProjectId: z.nullable(z.string()).optional(),
+  managerIds: z.array(z.string()).optional(),
+});
+
+export function setupToJSON(setup: Setup): string {
+  return JSON.stringify(Setup$outboundSchema.parse(setup));
+}
+
+/** @internal */
 export type CreateDomainRequestBody$Outbound = {
   domain: string;
+  setup?: Setup$Outbound | undefined;
 };
 
 /** @internal */
@@ -28,6 +60,7 @@ export const CreateDomainRequestBody$outboundSchema: z.ZodType<
   CreateDomainRequestBody
 > = z.object({
   domain: z.string(),
+  setup: z.lazy(() => Setup$outboundSchema).optional(),
 });
 
 export function createDomainRequestBodyToJSON(

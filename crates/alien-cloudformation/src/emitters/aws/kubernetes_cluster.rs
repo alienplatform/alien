@@ -47,11 +47,8 @@ fn eks_resources(ctx: &EmitContext<'_>, prefix: &str) -> Vec<CfResource> {
     let private_route_table_id = resource_id(prefix, "PrivateRouteTable");
     let cluster_role_id = resource_id(prefix, "ClusterRole");
     let node_role_id = resource_id(prefix, "NodeRole");
-    let managed_node_role_id = resource_id(prefix, "ManagedNodeRole");
     let cluster_id = cluster_id(prefix);
-    let node_group_id = resource_id(prefix, "NodeGroup");
     let oidc_provider_id = resource_id(prefix, "OidcProvider");
-    let ebs_csi_role_id = resource_id(prefix, "EbsCsiRole");
 
     let mut resources = Vec::new();
     if default_network(ctx).is_none() {
@@ -130,16 +127,6 @@ fn eks_resources(ctx: &EmitContext<'_>, prefix: &str) -> Vec<CfResource> {
                 "arn:aws:iam::aws:policy/AmazonEKSWorkerNodeMinimalPolicy",
             ],
         ),
-        iam_role(
-            ctx,
-            &managed_node_role_id,
-            "ec2.amazonaws.com",
-            &[
-                "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy",
-                "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPullOnly",
-                "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy",
-            ],
-        ),
     ]);
 
     resources.push(eks_cluster(
@@ -155,25 +142,6 @@ fn eks_resources(ctx: &EmitContext<'_>, prefix: &str) -> Vec<CfResource> {
         &cluster_id,
         "vpc-cni",
         None,
-    ));
-    resources.push(node_group(
-        ctx,
-        &node_group_id,
-        &cluster_id,
-        &managed_node_role_id,
-        prefix,
-    ));
-    resources.push(ebs_csi_role(
-        ctx,
-        &ebs_csi_role_id,
-        &oidc_provider_id,
-        &cluster_id,
-    ));
-    resources.push(eks_addon(
-        &resource_id(prefix, "EbsCsiAddon"),
-        &cluster_id,
-        "aws-ebs-csi-driver",
-        Some(CfExpression::get_att(&ebs_csi_role_id, "Arn")),
     ));
     resources.push(eks_addon(
         &resource_id(prefix, "KubeProxyAddon"),
@@ -464,7 +432,10 @@ fn eks_cluster(
             ("Enabled", CfExpression::from(true)),
             (
                 "NodePools",
-                CfExpression::list([CfExpression::from("system")]),
+                CfExpression::list([
+                    CfExpression::from("system"),
+                    CfExpression::from("general-purpose"),
+                ]),
             ),
             ("NodeRoleArn", CfExpression::get_att(node_role_id, "Arn")),
         ]),
@@ -488,62 +459,6 @@ fn eks_cluster(
         .depends_on
         .extend([cluster_role_id.to_string(), node_role_id.to_string()]);
     resource
-}
-
-fn node_group(
-    ctx: &EmitContext<'_>,
-    id: &str,
-    cluster_id: &str,
-    role_id: &str,
-    prefix: &str,
-) -> CfResource {
-    let mut resource = CfResource::new(id.to_string(), "AWS::EKS::Nodegroup".to_string());
-    resource
-        .properties
-        .insert("ClusterName".to_string(), CfExpression::ref_(cluster_id));
-    resource.properties.insert(
-        "NodeRole".to_string(),
-        CfExpression::get_att(role_id, "Arn"),
-    );
-    resource
-        .properties
-        .insert("Subnets".to_string(), eks_private_subnet_ids(ctx, prefix));
-    resource.properties.insert(
-        "AmiType".to_string(),
-        CfExpression::from("AL2023_ARM_64_STANDARD"),
-    );
-    resource
-        .properties
-        .insert("CapacityType".to_string(), CfExpression::from("ON_DEMAND"));
-    resource.properties.insert(
-        "InstanceTypes".to_string(),
-        CfExpression::list([CfExpression::from("t4g.medium")]),
-    );
-    resource.properties.insert(
-        "ScalingConfig".to_string(),
-        CfExpression::object([
-            ("DesiredSize", CfExpression::from(2u8)),
-            ("MaxSize", CfExpression::from(3u8)),
-            ("MinSize", CfExpression::from(2u8)),
-        ]),
-    );
-    resource
-        .properties
-        .insert("Tags".to_string(), eks_tags(ctx));
-    resource.depends_on.push(cluster_id.to_string());
-    resource
-}
-
-fn eks_tags(ctx: &EmitContext<'_>) -> CfExpression {
-    CfExpression::object([
-        ("managed-by", CfExpression::from("setup")),
-        ("deployment", CfExpression::ref_("AWS::StackName")),
-        ("resource", CfExpression::from(ctx.resource_id)),
-        (
-            "resource-type",
-            CfExpression::from(ctx.resource.config.resource_type().as_ref()),
-        ),
-    ])
 }
 
 fn eks_addon(
@@ -580,86 +495,6 @@ fn oidc_provider(id: &str, cluster_id: &str) -> CfResource {
     );
     resource.depends_on.push(cluster_id.to_string());
     resource
-}
-
-fn ebs_csi_role(
-    ctx: &EmitContext<'_>,
-    id: &str,
-    oidc_provider_id: &str,
-    cluster_id: &str,
-) -> CfResource {
-    let mut resource = CfResource::new(id.to_string(), "AWS::IAM::Role".to_string());
-    resource.properties.insert(
-        "RoleName".to_string(),
-        CfExpression::sub(format!("${{AWS::StackName}}-{id}")),
-    );
-    resource.properties.insert(
-        "AssumeRolePolicyDocument".to_string(),
-        irsa_policy_document(
-            oidc_provider_id,
-            cluster_id,
-            "kube-system",
-            "ebs-csi-controller-sa",
-        ),
-    );
-    resource.properties.insert(
-        "ManagedPolicyArns".to_string(),
-        CfExpression::list([CfExpression::from(
-            "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy",
-        )]),
-    );
-    resource.properties.insert("Tags".to_string(), tags(ctx));
-    resource.depends_on.push(oidc_provider_id.to_string());
-    resource
-}
-
-fn irsa_policy_document(
-    oidc_provider_id: &str,
-    cluster_id: &str,
-    namespace: &str,
-    service_account_name: &str,
-) -> CfExpression {
-    CfExpression::object([(
-        "Fn::Sub",
-        CfExpression::list([
-            CfExpression::from(format!(
-                r#"{{
-  "Version": "2012-10-17",
-  "Statement": [{{
-    "Effect": "Allow",
-    "Principal": {{"Federated": "${{OidcProviderArn}}"}},
-    "Action": "sts:AssumeRoleWithWebIdentity",
-    "Condition": {{
-      "StringEquals": {{
-        "${{OidcIssuerHostPath}}:aud": "sts.amazonaws.com",
-        "${{OidcIssuerHostPath}}:sub": "system:serviceaccount:{namespace}:{service_account_name}"
-      }}
-    }}
-  }}]
-}}"#
-            )),
-            CfExpression::object([
-                ("OidcProviderArn", CfExpression::ref_(oidc_provider_id)),
-                ("OidcIssuerHostPath", oidc_issuer_host_path(cluster_id)),
-            ]),
-        ]),
-    )])
-}
-
-fn oidc_issuer_host_path(cluster_id: &str) -> CfExpression {
-    CfExpression::object([(
-        "Fn::Select",
-        CfExpression::list([
-            CfExpression::from(1u8),
-            CfExpression::object([(
-                "Fn::Split",
-                CfExpression::list([
-                    CfExpression::from("https://"),
-                    CfExpression::get_att(cluster_id, "OpenIdConnectIssuerUrl"),
-                ]),
-            )]),
-        ]),
-    )])
 }
 
 fn cidr_block(vpc_id: &str, index: usize) -> CfExpression {

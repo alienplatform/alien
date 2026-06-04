@@ -3,7 +3,7 @@
 //! These tests exercise the full alien_deployment::step() lifecycle with no cloud I/O.
 
 use alien_core::{
-    ClientConfig, DeleteScope, DeploymentConfig, DeploymentState, DeploymentStatus,
+    ClientConfig, DeleteResourceMode, DeploymentConfig, DeploymentState, DeploymentStatus,
     EnvironmentVariable, EnvironmentVariableType, EnvironmentVariablesSnapshot, Platform,
     ReleaseInfo, ResourceEntry, ResourceLifecycle, RuntimeMetadata, Stack, StackSettings,
     StackState, Storage, Worker, WorkerCode,
@@ -109,7 +109,7 @@ fn start_update(state: &mut DeploymentState, new_release: ReleaseInfo) {
 fn start_delete(state: &mut DeploymentState) {
     state.status = DeploymentStatus::DeletePending;
     let mut runtime_metadata = state.runtime_metadata.clone().unwrap_or_default();
-    runtime_metadata.delete_scope = Some(DeleteScope::Full);
+    runtime_metadata.delete_resource_mode = Some(DeleteResourceMode::All);
     state.runtime_metadata = Some(runtime_metadata);
     // Keep target_release when starting delete - it's needed for preflight/mutation steps
     if state.target_release.is_none() && state.current_release.is_some() {
@@ -772,7 +772,7 @@ async fn assert_failed_retry_transition(
 
     if failed_status == DeploymentStatus::DeleteFailed {
         state.runtime_metadata = Some(RuntimeMetadata {
-            delete_scope: Some(DeleteScope::Full),
+            delete_resource_mode: Some(DeleteResourceMode::All),
             ..Default::default()
         });
     }

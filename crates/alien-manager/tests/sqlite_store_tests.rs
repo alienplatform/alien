@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use alien_core::{DeleteScope, DeploymentState, DeploymentStatus, Platform, StackSettings};
+use alien_core::{DeleteResourceMode, DeploymentState, DeploymentStatus, Platform, StackSettings};
 use alien_manager::auth::{Role, Scope, Subject, SubjectKind};
 use alien_manager::stores::sqlite::{
     SqliteDatabase, SqliteDeploymentStore, SqliteReleaseStore, SqliteTokenStore,
@@ -132,7 +132,7 @@ async fn list_by_status() {
     // Instead, use set_redeploy which sets "update-pending"
     store.set_redeploy(&test_subject(), &dep1.id).await.unwrap();
     store
-        .set_delete_pending(&test_subject(), &dep2.id, DeleteScope::Full)
+        .set_delete_pending(&test_subject(), &dep2.id, DeleteResourceMode::All)
         .await
         .unwrap();
 
@@ -234,7 +234,7 @@ async fn update_status() {
 
     // set_delete_pending
     store
-        .set_delete_pending(&test_subject(), &dep.id, DeleteScope::LiveOnly)
+        .set_delete_pending(&test_subject(), &dep.id, DeleteResourceMode::Live)
         .await
         .unwrap();
     let fetched = store
@@ -244,13 +244,16 @@ async fn update_status() {
         .unwrap();
     assert_eq!(fetched.status, "delete-pending");
     assert_eq!(
-        fetched.runtime_metadata.unwrap_or_default().delete_scope,
-        Some(DeleteScope::LiveOnly)
+        fetched
+            .runtime_metadata
+            .unwrap_or_default()
+            .delete_resource_mode,
+        Some(DeleteResourceMode::Live)
     );
 
     // set_delete_pending again should fail (already delete-pending)
     let result = store
-        .set_delete_pending(&test_subject(), &dep.id, DeleteScope::Full)
+        .set_delete_pending(&test_subject(), &dep.id, DeleteResourceMode::All)
         .await;
     assert!(result.is_err());
 

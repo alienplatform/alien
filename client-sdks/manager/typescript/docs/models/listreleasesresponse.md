@@ -14,4 +14,4 @@ let value: ListReleasesResponse = {
 
 | Field                                                    | Type                                                     | Required                                                 | Description                                              |
 | -------------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------------- |
-| `items`                                                  | [models.ReleaseResponse](../models/releaseresponse.md)[] | :heavy_check_mark:                                       | N/A                                                      |
+| `items`                                                  | [models.ReleaseResponse](../models/releaseresponse.md)[] | :heavy_check_mark:                                       | Releases the caller may read, newest first.              |

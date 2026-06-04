@@ -12,6 +12,11 @@ import * as operations from "../models/operations/index.js";
 import { unwrapAsync } from "../types/fp.js";
 
 export class Releases extends ClientSDK {
+  /**
+   * `GET /v1/releases` — Inbound: workspace / project bearer (or authenticated
+   * user). Outbound: caller bearer (passthrough). Returns only releases the
+   * caller may read.
+   */
   async listReleases(
     options?: RequestOptions,
   ): Promise<models.ListReleasesResponse> {

@@ -242,10 +242,6 @@ export type UpdateProject = {
    * Project default private managers for new push deployments.
    */
   defaultManagers?: UpdateProjectDefaultManagers | null | undefined;
-  /**
-   * Selected domain for this project's deployment portal (null = default first-party portal)
-   */
-  portalDomainId?: string | null | undefined;
 };
 
 /** @internal */
@@ -514,7 +510,6 @@ export type UpdateProject$Outbound = {
   packagesConfig?: UpdateProjectPackagesConfig$Outbound | null | undefined;
   domainId?: string | null | undefined;
   defaultManagers?: UpdateProjectDefaultManagers$Outbound | null | undefined;
-  portalDomainId?: string | null | undefined;
 };
 
 /** @internal */
@@ -536,7 +531,6 @@ export const UpdateProject$outboundSchema: z.ZodType<
   defaultManagers: z.nullable(
     z.lazy(() => UpdateProjectDefaultManagers$outboundSchema),
   ).optional(),
-  portalDomainId: z.nullable(z.string()).optional(),
 });
 
 export function updateProjectToJSON(updateProject: UpdateProject): string {

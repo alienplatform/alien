@@ -167,7 +167,7 @@ describe("AlienError.from() with JS Error types", () => {
     expect(alienError.code).toBe("GENERIC_ERROR")
     expect(alienError.message).toBe("Something went wrong")
     expect(alienError.retryable).toBe(false)
-    expect(alienError.internal).toBe(false)
+    expect(alienError.internal).toBe(true)
     expect(alienError.httpStatusCode).toBe(500)
     expect(alienError.context?.originalError).toEqual({
       name: "Error",
@@ -175,6 +175,13 @@ describe("AlienError.from() with JS Error types", () => {
       stack: expect.any(String),
     })
     expect(alienError.context?.errorType).toBe("Error")
+    expect(alienError.toExternal()).toEqual({
+      code: "GENERIC_ERROR",
+      message: "Internal server error",
+      retryable: false,
+      internal: false,
+      httpStatusCode: 500,
+    })
   })
 
   it("converts TypeError", async () => {
@@ -557,7 +564,7 @@ describe("External API Sanitization", async () => {
     })
   })
 
-  it("preserves non-internal errors deep in chain", async () => {
+  it("sanitizes unknown errors deep in otherwise public chains", async () => {
     const chainedError = (await AlienError.from(new Error("Network timeout")))
       .withContext(
         DatabaseError.create({
@@ -575,15 +582,15 @@ describe("External API Sanitization", async () => {
 
     const external = chainedError.toExternal()
 
-    // All errors in this chain are non-internal, so should be preserved
     expect(external.code).toBe("AUTH_FAILED")
     expect((external.source as AlienErrorOptions)?.code).toBe("DATABASE_CONNECTION_FAILED")
-    expect(((external.source as AlienErrorOptions)?.source as AlienErrorOptions)?.code).toBe(
-      "GENERIC_ERROR",
-    )
-    expect(((external.source as AlienErrorOptions)?.source as AlienErrorOptions)?.message).toBe(
-      "Network timeout",
-    )
+    expect(((external.source as AlienErrorOptions)?.source as AlienErrorOptions)).toEqual({
+      code: "GENERIC_ERROR",
+      message: "Internal server error",
+      retryable: false,
+      internal: false,
+      httpStatusCode: 500,
+    })
   })
 
   it("handles mixed internal/external in chain", async () => {

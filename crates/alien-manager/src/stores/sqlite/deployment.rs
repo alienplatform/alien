@@ -7,7 +7,7 @@ use std::sync::Arc;
 use tracing::warn;
 
 use alien_core::{
-    import::ImportSourceKind, DeleteScope, EnvironmentInfo, EnvironmentVariable, Platform,
+    import::ImportSourceKind, DeleteResourceMode, EnvironmentInfo, EnvironmentVariable, Platform,
     RuntimeMetadata, StackState,
 };
 use alien_error::{AlienError, Context, GenericError, IntoAlienError};
@@ -659,7 +659,7 @@ impl DeploymentStore for SqliteDeploymentStore {
         &self,
         caller: &crate::auth::Subject,
         id: &str,
-        delete_scope: DeleteScope,
+        delete_resource_mode: DeleteResourceMode,
     ) -> Result<(), AlienError> {
         let deployment = self
             .get_deployment(caller, id)
@@ -676,7 +676,7 @@ impl DeploymentStore for SqliteDeploymentStore {
         }
 
         let mut runtime_metadata = deployment.runtime_metadata.unwrap_or_default();
-        runtime_metadata.delete_scope = Some(delete_scope);
+        runtime_metadata.delete_resource_mode = Some(delete_resource_mode);
         let runtime_metadata_json = serde_json::to_string(&runtime_metadata)
             .into_alien_error()
             .context(GenericError {

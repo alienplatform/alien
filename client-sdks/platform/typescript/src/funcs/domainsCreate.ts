@@ -27,7 +27,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Create a workspace domain.
+ * Create a workspace domain and optional initial endpoints.
  */
 export function domainsCreate(
   client: AlienCore,

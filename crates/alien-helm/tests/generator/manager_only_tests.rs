@@ -122,7 +122,7 @@ fn chart_removes_manual_public_ingress_values_and_template() {
 }
 
 #[test]
-fn chart_role_rbac_is_selected_by_kubernetes_route_api() {
+fn chart_role_rbac_allows_every_cleanup_route_resource() {
     let stack = Stack::new("route-rbac".to_string()).build();
     let settings = StackSettings {
         kubernetes: Some(KubernetesSettings {
@@ -156,7 +156,6 @@ fn chart_role_rbac_is_selected_by_kubernetes_route_api() {
     assert!(role.contains("resources: [\"healthcheckpolicies\"]"));
     assert!(role.contains("alb.networking.azure.io"));
     assert!(role.contains("resources: [\"healthcheckpolicy\"]"));
-    assert!(role.contains("eq $routeApi \"ingress\""));
     assert!(role.contains("eq $routeApi \"gateway\""));
 
     let rendered = test_utils::helm_template(&chart.files, None);
@@ -183,7 +182,6 @@ fn chart_role_rbac_is_selected_by_kubernetes_route_api() {
             assert!(rendered
                 .stdout
                 .contains(r#"resources: ["healthcheckpolicy"]"#));
-            assert!(!rendered.stdout.contains(r#"resources: ["ingresses"]"#));
         }
         LinterStatus::Skipped(_) | LinterStatus::Failed(_) => {
             rendered.assert_ok("rendered route RBAC")
@@ -336,6 +334,33 @@ fn cluster_bootstrap_renders_only_when_enabled() {
         }
         LinterStatus::Skipped(_) | LinterStatus::Failed(_) => {
             enabled_rendered.assert_ok("enabled cluster bootstrap render")
+        }
+    }
+}
+
+#[test]
+fn uninstall_cleanup_hook_preserves_pvcs_by_default() {
+    let stack = Stack::new("cleanup-hook".to_string()).build();
+    let chart = render(&stack, StackSettings::default());
+    let files = chart.files.clone();
+
+    let rendered = test_utils::helm_template(&files, None);
+    match &rendered.status {
+        LinterStatus::Passed => {
+            assert!(rendered.stdout.contains("kind: Job"));
+            assert!(rendered.stdout.contains("helm.sh/hook"));
+            assert!(rendered.stdout.contains("pre-delete"));
+            assert!(rendered.stdout.contains("selector='managed-by=runtime'"));
+            assert!(rendered
+                .stdout
+                .contains("delete deployments.apps,statefulsets.apps"));
+            assert!(rendered
+                .stdout
+                .contains("Preserving runtime PersistentVolumeClaims"));
+            assert!(!rendered.stdout.contains("delete persistentvolumeclaims -l"));
+        }
+        LinterStatus::Skipped(_) | LinterStatus::Failed(_) => {
+            rendered.assert_ok("uninstall cleanup hook render")
         }
     }
 }

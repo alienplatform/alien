@@ -52,6 +52,8 @@ use utoipa::OpenApi;
         crate::routes::deployments::CreateDeploymentResponse,
         crate::routes::deployments::DeploymentResponse,
         crate::routes::deployments::DeploymentGroupMinimal,
+        crate::routes::deployments::DeleteDeploymentRequest,
+        crate::routes::deployments::DeleteDeploymentMode,
         crate::routes::deployments::ListDeploymentsResponse,
         crate::routes::deployments::DeploymentInfoResponse,
         // Release types
@@ -90,7 +92,7 @@ use utoipa::OpenApi;
         crate::routes::health::HealthResponse,
         // Core types
         alien_core::Platform,
-        alien_core::DeleteScope,
+        alien_core::DeleteResourceMode,
     )),
     tags(
         (name = "health", description = "Health check"),

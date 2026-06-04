@@ -1428,67 +1428,63 @@ export type SyncReconcileResponseCurrentPlatform = ClosedEnum<
 >;
 
 /**
- * Scope for a delete operation.
+ * Resource set selected for deployment cleanup.
  *
  * @remarks
  *
- * Full deletes are setup/admin owned and may remove both Frozen and Live
- * resources. Live-only deletes are used by setup handoff resources
- * (Terraform/CloudFormation) so Alien removes only the resources it owns
- * before setup tears down Frozen resources.
+ * `All` is used for deployments where Alien owns the full recorded stack.
+ * `Live` is used when setup tools own Frozen resources and Alien should only
+ * delete resources it owns before setup tears down its part.
  */
-export const SyncReconcileResponseDeleteScopeEnum = {
-  Full: "full",
-  LiveOnly: "liveOnly",
+export const SyncReconcileResponseDeleteResourceModeEnum = {
+  All: "all",
+  Live: "live",
 } as const;
 /**
- * Scope for a delete operation.
+ * Resource set selected for deployment cleanup.
  *
  * @remarks
  *
- * Full deletes are setup/admin owned and may remove both Frozen and Live
- * resources. Live-only deletes are used by setup handoff resources
- * (Terraform/CloudFormation) so Alien removes only the resources it owns
- * before setup tears down Frozen resources.
+ * `All` is used for deployments where Alien owns the full recorded stack.
+ * `Live` is used when setup tools own Frozen resources and Alien should only
+ * delete resources it owns before setup tears down its part.
  */
-export type SyncReconcileResponseDeleteScopeEnum = ClosedEnum<
-  typeof SyncReconcileResponseDeleteScopeEnum
+export type SyncReconcileResponseDeleteResourceModeEnum = ClosedEnum<
+  typeof SyncReconcileResponseDeleteResourceModeEnum
 >;
 
-export type SyncReconcileResponseDeleteScopeUnion =
-  | SyncReconcileResponseDeleteScopeEnum
+export type SyncReconcileResponseDeleteResourceModeUnion =
+  | SyncReconcileResponseDeleteResourceModeEnum
   | any;
 
 /**
- * Scope for a delete operation.
+ * Resource set selected for deployment cleanup.
  *
  * @remarks
  *
- * Full deletes are setup/admin owned and may remove both Frozen and Live
- * resources. Live-only deletes are used by setup handoff resources
- * (Terraform/CloudFormation) so Alien removes only the resources it owns
- * before setup tears down Frozen resources.
+ * `All` is used for deployments where Alien owns the full recorded stack.
+ * `Live` is used when setup tools own Frozen resources and Alien should only
+ * delete resources it owns before setup tears down its part.
  */
-export const SyncReconcileResponsePendingDeleteScopeEnum = {
-  Full: "full",
-  LiveOnly: "liveOnly",
+export const SyncReconcileResponsePendingDeleteResourceModeEnum = {
+  All: "all",
+  Live: "live",
 } as const;
 /**
- * Scope for a delete operation.
+ * Resource set selected for deployment cleanup.
  *
  * @remarks
  *
- * Full deletes are setup/admin owned and may remove both Frozen and Live
- * resources. Live-only deletes are used by setup handoff resources
- * (Terraform/CloudFormation) so Alien removes only the resources it owns
- * before setup tears down Frozen resources.
+ * `All` is used for deployments where Alien owns the full recorded stack.
+ * `Live` is used when setup tools own Frozen resources and Alien should only
+ * delete resources it owns before setup tears down its part.
  */
-export type SyncReconcileResponsePendingDeleteScopeEnum = ClosedEnum<
-  typeof SyncReconcileResponsePendingDeleteScopeEnum
+export type SyncReconcileResponsePendingDeleteResourceModeEnum = ClosedEnum<
+  typeof SyncReconcileResponsePendingDeleteResourceModeEnum
 >;
 
-export type SyncReconcileResponsePendingDeleteScopeUnion =
-  | SyncReconcileResponsePendingDeleteScopeEnum
+export type SyncReconcileResponsePendingDeleteResourceModeUnion =
+  | SyncReconcileResponsePendingDeleteResourceModeEnum
   | any;
 
 export const SyncReconcileResponsePreparedStackManagementEnum = {
@@ -2737,7 +2733,11 @@ export type SyncReconcileResponsePreparedStackUnion =
  * Stores deployment state that needs to persist across step calls.
  */
 export type SyncReconcileResponseRuntimeMetadata = {
-  deleteScope?: SyncReconcileResponseDeleteScopeEnum | any | null | undefined;
+  deleteResourceMode?:
+    | SyncReconcileResponseDeleteResourceModeEnum
+    | any
+    | null
+    | undefined;
   /**
    * Hash of the environment variables snapshot that was last synced to the vault
    *
@@ -2745,8 +2745,8 @@ export type SyncReconcileResponseRuntimeMetadata = {
    * Used to avoid redundant sync operations during incremental deployment
    */
   lastSyncedEnvVarsHash?: string | null | undefined;
-  pendingDeleteScope?:
-    | SyncReconcileResponsePendingDeleteScopeEnum
+  pendingDeleteResourceMode?:
+    | SyncReconcileResponsePendingDeleteResourceModeEnum
     | any
     | null
     | undefined;
@@ -11729,53 +11729,61 @@ export const SyncReconcileResponseCurrentPlatform$inboundSchema: z.ZodEnum<
 > = z.enum(SyncReconcileResponseCurrentPlatform);
 
 /** @internal */
-export const SyncReconcileResponseDeleteScopeEnum$inboundSchema: z.ZodEnum<
-  typeof SyncReconcileResponseDeleteScopeEnum
-> = z.enum(SyncReconcileResponseDeleteScopeEnum);
-
-/** @internal */
-export const SyncReconcileResponseDeleteScopeUnion$inboundSchema: z.ZodType<
-  SyncReconcileResponseDeleteScopeUnion,
-  unknown
-> = z.union([SyncReconcileResponseDeleteScopeEnum$inboundSchema, z.any()]);
-
-export function syncReconcileResponseDeleteScopeUnionFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncReconcileResponseDeleteScopeUnion, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      SyncReconcileResponseDeleteScopeUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncReconcileResponseDeleteScopeUnion' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncReconcileResponsePendingDeleteScopeEnum$inboundSchema:
-  z.ZodEnum<typeof SyncReconcileResponsePendingDeleteScopeEnum> = z.enum(
-    SyncReconcileResponsePendingDeleteScopeEnum,
+export const SyncReconcileResponseDeleteResourceModeEnum$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponseDeleteResourceModeEnum> = z.enum(
+    SyncReconcileResponseDeleteResourceModeEnum,
   );
 
 /** @internal */
-export const SyncReconcileResponsePendingDeleteScopeUnion$inboundSchema:
-  z.ZodType<SyncReconcileResponsePendingDeleteScopeUnion, unknown> = z.union([
-    SyncReconcileResponsePendingDeleteScopeEnum$inboundSchema,
+export const SyncReconcileResponseDeleteResourceModeUnion$inboundSchema:
+  z.ZodType<SyncReconcileResponseDeleteResourceModeUnion, unknown> = z.union([
+    SyncReconcileResponseDeleteResourceModeEnum$inboundSchema,
     z.any(),
   ]);
 
-export function syncReconcileResponsePendingDeleteScopeUnionFromJSON(
+export function syncReconcileResponseDeleteResourceModeUnionFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  SyncReconcileResponsePendingDeleteScopeUnion,
+  SyncReconcileResponseDeleteResourceModeUnion,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      SyncReconcileResponsePendingDeleteScopeUnion$inboundSchema.parse(
+      SyncReconcileResponseDeleteResourceModeUnion$inboundSchema.parse(
         JSON.parse(x),
       ),
-    `Failed to parse 'SyncReconcileResponsePendingDeleteScopeUnion' from JSON`,
+    `Failed to parse 'SyncReconcileResponseDeleteResourceModeUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponsePendingDeleteResourceModeEnum$inboundSchema:
+  z.ZodEnum<typeof SyncReconcileResponsePendingDeleteResourceModeEnum> = z.enum(
+    SyncReconcileResponsePendingDeleteResourceModeEnum,
+  );
+
+/** @internal */
+export const SyncReconcileResponsePendingDeleteResourceModeUnion$inboundSchema:
+  z.ZodType<SyncReconcileResponsePendingDeleteResourceModeUnion, unknown> = z
+    .union([
+      SyncReconcileResponsePendingDeleteResourceModeEnum$inboundSchema,
+      z.any(),
+    ]);
+
+export function syncReconcileResponsePendingDeleteResourceModeUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponsePendingDeleteResourceModeUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponsePendingDeleteResourceModeUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponsePendingDeleteResourceModeUnion' from JSON`,
   );
 }
 
@@ -13887,13 +13895,16 @@ export const SyncReconcileResponseRuntimeMetadata$inboundSchema: z.ZodType<
   SyncReconcileResponseRuntimeMetadata,
   unknown
 > = z.object({
-  deleteScope: z.nullable(
-    z.union([SyncReconcileResponseDeleteScopeEnum$inboundSchema, z.any()]),
+  deleteResourceMode: z.nullable(
+    z.union([
+      SyncReconcileResponseDeleteResourceModeEnum$inboundSchema,
+      z.any(),
+    ]),
   ).optional(),
   lastSyncedEnvVarsHash: z.nullable(z.string()).optional(),
-  pendingDeleteScope: z.nullable(
+  pendingDeleteResourceMode: z.nullable(
     z.union([
-      SyncReconcileResponsePendingDeleteScopeEnum$inboundSchema,
+      SyncReconcileResponsePendingDeleteResourceModeEnum$inboundSchema,
       z.any(),
     ]),
   ).optional(),

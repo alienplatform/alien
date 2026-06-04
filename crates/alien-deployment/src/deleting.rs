@@ -1,7 +1,7 @@
 use crate::{
     DeploymentConfig, DeploymentState, DeploymentStatus, DeploymentStepResult, ErrorData, Result,
 };
-use alien_core::{DeleteScope, ResourceLifecycle, ResourceStatus, StackState, StackStatus};
+use alien_core::{DeleteResourceMode, ResourceLifecycle, ResourceStatus, StackState, StackStatus};
 use alien_error::{AlienError, Context};
 use alien_infra::StackExecutor;
 use tracing::info;
@@ -21,7 +21,7 @@ pub async fn handle_delete_pending(
 
     // Clone current first before moving any fields
     let mut next = current.clone();
-    let delete_scope = delete_scope(&current)?;
+    let delete_resource_mode = delete_resource_mode(&current)?;
 
     // Stack state is required
     let mut stack_state = current.stack_state.ok_or_else(|| {
@@ -30,15 +30,15 @@ pub async fn handle_delete_pending(
         })
     })?;
 
-    if delete_scope == DeleteScope::LiveOnly {
+    if delete_resource_mode == DeleteResourceMode::Live {
         include_runtime_managed_resources_in_live_delete(&mut stack_state);
     }
 
     // Prepare stack for destroy (handles failed resources appropriately)
     use alien_infra::state_utils::StackStateExt;
-    let prepared = match delete_scope {
-        DeleteScope::Full => stack_state.prepare_for_destroy(),
-        DeleteScope::LiveOnly => {
+    let prepared = match delete_resource_mode {
+        DeleteResourceMode::All => stack_state.prepare_for_destroy(),
+        DeleteResourceMode::Live => {
             stack_state.prepare_for_destroy_with_lifecycle_filter(&[ResourceLifecycle::Live])
         }
     }
@@ -69,7 +69,7 @@ pub async fn handle_delete_pending(
 /// This step:
 /// 1. Executes one deletion step
 /// 2. Updates stack state with the result
-/// 3. Transitions to Deleted when the selected delete scope is deleted
+/// 3. Transitions to Deleted when the selected resource set is deleted
 pub async fn handle_deleting(
     current: DeploymentState,
     config: DeploymentConfig,
@@ -92,10 +92,10 @@ pub async fn handle_deleting(
     // For deletion, we work with stack_state.resources which already contains
     // all deployed resources (including those added by mutations during initial deployment)
 
-    let delete_scope = delete_scope(&current_cloned)?;
-    let lifecycle_filter = match delete_scope {
-        DeleteScope::Full => None,
-        DeleteScope::LiveOnly => Some(vec![ResourceLifecycle::Live]),
+    let delete_resource_mode = delete_resource_mode(&current_cloned)?;
+    let lifecycle_filter = match delete_resource_mode {
+        DeleteResourceMode::All => None,
+        DeleteResourceMode::Live => Some(vec![ResourceLifecycle::Live]),
     };
 
     // Create executor for deletion.
@@ -118,16 +118,16 @@ pub async fn handle_deleting(
                 message: "Failed to execute deletion step".to_string(),
             })?;
 
-    // Compute status for the selected delete scope.
-    let stack_status = compute_delete_scope_status(&step_result.next_state, delete_scope).context(
-        ErrorData::StackExecutionFailed {
-            message: "Failed to compute stack status".to_string(),
-        },
-    )?;
+    // Compute status for the selected resource set.
+    let stack_status =
+        compute_delete_resource_mode_status(&step_result.next_state, delete_resource_mode)
+            .context(ErrorData::StackExecutionFailed {
+                message: "Failed to compute stack status".to_string(),
+            })?;
 
     // Check if all resources are deleted
     let result = if stack_status == StackStatus::Deleted {
-        info!(delete_scope = ?delete_scope, "Delete scope completed, transitioning to Deleted");
+        info!(delete_resource_mode = ?delete_resource_mode, "Delete resource mode completed, transitioning to Deleted");
 
         // Note: Cross-account access removal happens in the manager after this step
         // The manager has access to the artifact registry binding
@@ -211,7 +211,7 @@ pub async fn handle_delete_failed(
     }
 
     info!("Preparing stack for destroy");
-    let delete_scope = delete_scope(&current)?;
+    let delete_resource_mode = delete_resource_mode(&current)?;
 
     let mut stack_state = current.stack_state.ok_or_else(|| {
         AlienError::new(ErrorData::MissingConfiguration {
@@ -219,15 +219,15 @@ pub async fn handle_delete_failed(
         })
     })?;
 
-    if delete_scope == DeleteScope::LiveOnly {
+    if delete_resource_mode == DeleteResourceMode::Live {
         include_runtime_managed_resources_in_live_delete(&mut stack_state);
     }
 
     // Prepare stack for destroy (handles failed resources appropriately)
     use alien_infra::state_utils::StackStateExt;
-    let prepared = match delete_scope {
-        DeleteScope::Full => stack_state.prepare_for_destroy(),
-        DeleteScope::LiveOnly => {
+    let prepared = match delete_resource_mode {
+        DeleteResourceMode::All => stack_state.prepare_for_destroy(),
+        DeleteResourceMode::Live => {
             stack_state.prepare_for_destroy_with_lifecycle_filter(&[ResourceLifecycle::Live])
         }
     }
@@ -255,25 +255,25 @@ pub async fn handle_delete_failed(
     })
 }
 
-fn delete_scope(state: &DeploymentState) -> Result<DeleteScope> {
+fn delete_resource_mode(state: &DeploymentState) -> Result<DeleteResourceMode> {
     state
         .runtime_metadata
         .as_ref()
-        .and_then(|metadata| metadata.delete_scope)
+        .and_then(|metadata| metadata.delete_resource_mode)
         .ok_or_else(|| {
             AlienError::new(ErrorData::MissingConfiguration {
-                message: "deleteScope is required before deleting a deployment".to_string(),
+                message: "deleteResourceMode is required before deleting a deployment".to_string(),
             })
         })
 }
 
-fn compute_delete_scope_status(
+fn compute_delete_resource_mode_status(
     stack_state: &alien_core::StackState,
-    delete_scope: DeleteScope,
+    delete_resource_mode: DeleteResourceMode,
 ) -> alien_core::Result<StackStatus> {
-    match delete_scope {
-        DeleteScope::Full => stack_state.compute_stack_status(),
-        DeleteScope::LiveOnly => {
+    match delete_resource_mode {
+        DeleteResourceMode::All => stack_state.compute_stack_status(),
+        DeleteResourceMode::Live => {
             let statuses: Vec<ResourceStatus> = stack_state
                 .resources
                 .values()

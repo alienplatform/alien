@@ -3,9 +3,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use alien_core::{
-    import::ImportSourceKind, DeleteScope, DeploymentConfig, DeploymentState, EnvironmentInfo,
-    EnvironmentVariable, ManagementConfig, Platform, ResourceHeartbeat, RuntimeMetadata,
-    StackSettings, StackState,
+    import::ImportSourceKind, DeleteResourceMode, DeploymentConfig, DeploymentState,
+    EnvironmentInfo, EnvironmentVariable, ManagementConfig, Platform, ResourceHeartbeat,
+    RuntimeMetadata, StackSettings, StackState,
 };
 use alien_error::AlienError;
 
@@ -302,7 +302,7 @@ pub trait DeploymentStore: Send + Sync {
         &self,
         caller: &crate::auth::Subject,
         id: &str,
-        delete_scope: DeleteScope,
+        delete_resource_mode: DeleteResourceMode,
     ) -> Result<(), AlienError>;
 
     async fn set_retry_requested(

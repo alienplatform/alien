@@ -9,6 +9,10 @@ import {
   ImportSourceKind,
   ImportSourceKind$outboundSchema,
 } from "./importsourcekind.js";
+import {
+  KubernetesBasePlatform,
+  KubernetesBasePlatform$outboundSchema,
+} from "./kubernetesbaseplatform.js";
 
 export const ModePersist = {
   Persist: "persist",
@@ -31,24 +35,6 @@ export const PersistImportedDeploymentRequestPlatformEnum = {
  */
 export type PersistImportedDeploymentRequestPlatformEnum = ClosedEnum<
   typeof PersistImportedDeploymentRequestPlatformEnum
->;
-
-/**
- * Base cloud platform for cloud-backed Kubernetes imports.
- */
-export const PersistImportedDeploymentRequestBasePlatform = {
-  Aws: "aws",
-  Gcp: "gcp",
-  Azure: "azure",
-  Kubernetes: "kubernetes",
-  Local: "local",
-  Test: "test",
-} as const;
-/**
- * Base cloud platform for cloud-backed Kubernetes imports.
- */
-export type PersistImportedDeploymentRequestBasePlatform = ClosedEnum<
-  typeof PersistImportedDeploymentRequestBasePlatform
 >;
 
 /**
@@ -1236,67 +1222,64 @@ export type PersistImportedDeploymentRequestEnvironmentInfoUnion =
   | any;
 
 /**
- * Scope for a delete operation.
+ * Resource set selected for deployment cleanup.
  *
  * @remarks
  *
- * Full deletes are setup/admin owned and may remove both Frozen and Live
- * resources. Live-only deletes are used by setup handoff resources
- * (Terraform/CloudFormation) so Alien removes only the resources it owns
- * before setup tears down Frozen resources.
+ * `All` is used for deployments where Alien owns the full recorded stack.
+ * `Live` is used when setup tools own Frozen resources and Alien should only
+ * delete resources it owns before setup tears down its part.
  */
-export const PersistImportedDeploymentRequestDeleteScopeEnum = {
-  Full: "full",
-  LiveOnly: "liveOnly",
+export const PersistImportedDeploymentRequestDeleteResourceModeEnum = {
+  All: "all",
+  Live: "live",
 } as const;
 /**
- * Scope for a delete operation.
+ * Resource set selected for deployment cleanup.
  *
  * @remarks
  *
- * Full deletes are setup/admin owned and may remove both Frozen and Live
- * resources. Live-only deletes are used by setup handoff resources
- * (Terraform/CloudFormation) so Alien removes only the resources it owns
- * before setup tears down Frozen resources.
+ * `All` is used for deployments where Alien owns the full recorded stack.
+ * `Live` is used when setup tools own Frozen resources and Alien should only
+ * delete resources it owns before setup tears down its part.
  */
-export type PersistImportedDeploymentRequestDeleteScopeEnum = ClosedEnum<
-  typeof PersistImportedDeploymentRequestDeleteScopeEnum
+export type PersistImportedDeploymentRequestDeleteResourceModeEnum = ClosedEnum<
+  typeof PersistImportedDeploymentRequestDeleteResourceModeEnum
 >;
 
-export type PersistImportedDeploymentRequestDeleteScopeUnion =
-  | PersistImportedDeploymentRequestDeleteScopeEnum
+export type PersistImportedDeploymentRequestDeleteResourceModeUnion =
+  | PersistImportedDeploymentRequestDeleteResourceModeEnum
   | any;
 
 /**
- * Scope for a delete operation.
+ * Resource set selected for deployment cleanup.
  *
  * @remarks
  *
- * Full deletes are setup/admin owned and may remove both Frozen and Live
- * resources. Live-only deletes are used by setup handoff resources
- * (Terraform/CloudFormation) so Alien removes only the resources it owns
- * before setup tears down Frozen resources.
+ * `All` is used for deployments where Alien owns the full recorded stack.
+ * `Live` is used when setup tools own Frozen resources and Alien should only
+ * delete resources it owns before setup tears down its part.
  */
-export const PersistImportedDeploymentRequestPendingDeleteScopeEnum = {
-  Full: "full",
-  LiveOnly: "liveOnly",
+export const PersistImportedDeploymentRequestPendingDeleteResourceModeEnum = {
+  All: "all",
+  Live: "live",
 } as const;
 /**
- * Scope for a delete operation.
+ * Resource set selected for deployment cleanup.
  *
  * @remarks
  *
- * Full deletes are setup/admin owned and may remove both Frozen and Live
- * resources. Live-only deletes are used by setup handoff resources
- * (Terraform/CloudFormation) so Alien removes only the resources it owns
- * before setup tears down Frozen resources.
+ * `All` is used for deployments where Alien owns the full recorded stack.
+ * `Live` is used when setup tools own Frozen resources and Alien should only
+ * delete resources it owns before setup tears down its part.
  */
-export type PersistImportedDeploymentRequestPendingDeleteScopeEnum = ClosedEnum<
-  typeof PersistImportedDeploymentRequestPendingDeleteScopeEnum
->;
+export type PersistImportedDeploymentRequestPendingDeleteResourceModeEnum =
+  ClosedEnum<
+    typeof PersistImportedDeploymentRequestPendingDeleteResourceModeEnum
+  >;
 
-export type PersistImportedDeploymentRequestPendingDeleteScopeUnion =
-  | PersistImportedDeploymentRequestPendingDeleteScopeEnum
+export type PersistImportedDeploymentRequestPendingDeleteResourceModeUnion =
+  | PersistImportedDeploymentRequestPendingDeleteResourceModeEnum
   | any;
 
 export const PersistImportedDeploymentRequestManagementEnum = {
@@ -2540,8 +2523,8 @@ export type PersistImportedDeploymentRequestPreparedStackUnion =
  * Stores deployment state that needs to persist across step calls.
  */
 export type PersistImportedDeploymentRequestRuntimeMetadata = {
-  deleteScope?:
-    | PersistImportedDeploymentRequestDeleteScopeEnum
+  deleteResourceMode?:
+    | PersistImportedDeploymentRequestDeleteResourceModeEnum
     | any
     | null
     | undefined;
@@ -2552,8 +2535,8 @@ export type PersistImportedDeploymentRequestRuntimeMetadata = {
    * Used to avoid redundant sync operations during incremental deployment
    */
   lastSyncedEnvVarsHash?: string | null | undefined;
-  pendingDeleteScope?:
-    | PersistImportedDeploymentRequestPendingDeleteScopeEnum
+  pendingDeleteResourceMode?:
+    | PersistImportedDeploymentRequestPendingDeleteResourceModeEnum
     | any
     | null
     | undefined;
@@ -2677,7 +2660,7 @@ export type PersistImportedDeploymentRequest = {
   /**
    * Base cloud platform for cloud-backed Kubernetes imports.
    */
-  basePlatform?: PersistImportedDeploymentRequestBasePlatform | undefined;
+  basePlatform?: KubernetesBasePlatform | undefined;
   /**
    * User-customizable deployment settings specified at deploy time.
    *
@@ -2767,12 +2750,6 @@ export const ModePersist$outboundSchema: z.ZodEnum<typeof ModePersist> = z.enum(
 export const PersistImportedDeploymentRequestPlatformEnum$outboundSchema:
   z.ZodEnum<typeof PersistImportedDeploymentRequestPlatformEnum> = z.enum(
     PersistImportedDeploymentRequestPlatformEnum,
-  );
-
-/** @internal */
-export const PersistImportedDeploymentRequestBasePlatform$outboundSchema:
-  z.ZodEnum<typeof PersistImportedDeploymentRequestBasePlatform> = z.enum(
-    PersistImportedDeploymentRequestBasePlatform,
   );
 
 /** @internal */
@@ -5415,64 +5392,63 @@ export function persistImportedDeploymentRequestEnvironmentInfoUnionToJSON(
 }
 
 /** @internal */
-export const PersistImportedDeploymentRequestDeleteScopeEnum$outboundSchema:
-  z.ZodEnum<typeof PersistImportedDeploymentRequestDeleteScopeEnum> = z.enum(
-    PersistImportedDeploymentRequestDeleteScopeEnum,
-  );
+export const PersistImportedDeploymentRequestDeleteResourceModeEnum$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestDeleteResourceModeEnum> = z
+    .enum(PersistImportedDeploymentRequestDeleteResourceModeEnum);
 
 /** @internal */
-export type PersistImportedDeploymentRequestDeleteScopeUnion$Outbound =
+export type PersistImportedDeploymentRequestDeleteResourceModeUnion$Outbound =
   | string
   | any;
 
 /** @internal */
-export const PersistImportedDeploymentRequestDeleteScopeUnion$outboundSchema:
+export const PersistImportedDeploymentRequestDeleteResourceModeUnion$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestDeleteScopeUnion$Outbound,
-    PersistImportedDeploymentRequestDeleteScopeUnion
+    PersistImportedDeploymentRequestDeleteResourceModeUnion$Outbound,
+    PersistImportedDeploymentRequestDeleteResourceModeUnion
   > = z.union([
-    PersistImportedDeploymentRequestDeleteScopeEnum$outboundSchema,
+    PersistImportedDeploymentRequestDeleteResourceModeEnum$outboundSchema,
     z.any(),
   ]);
 
-export function persistImportedDeploymentRequestDeleteScopeUnionToJSON(
-  persistImportedDeploymentRequestDeleteScopeUnion:
-    PersistImportedDeploymentRequestDeleteScopeUnion,
+export function persistImportedDeploymentRequestDeleteResourceModeUnionToJSON(
+  persistImportedDeploymentRequestDeleteResourceModeUnion:
+    PersistImportedDeploymentRequestDeleteResourceModeUnion,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestDeleteScopeUnion$outboundSchema.parse(
-      persistImportedDeploymentRequestDeleteScopeUnion,
-    ),
+    PersistImportedDeploymentRequestDeleteResourceModeUnion$outboundSchema
+      .parse(persistImportedDeploymentRequestDeleteResourceModeUnion),
   );
 }
 
 /** @internal */
-export const PersistImportedDeploymentRequestPendingDeleteScopeEnum$outboundSchema:
-  z.ZodEnum<typeof PersistImportedDeploymentRequestPendingDeleteScopeEnum> = z
-    .enum(PersistImportedDeploymentRequestPendingDeleteScopeEnum);
+export const PersistImportedDeploymentRequestPendingDeleteResourceModeEnum$outboundSchema:
+  z.ZodEnum<
+    typeof PersistImportedDeploymentRequestPendingDeleteResourceModeEnum
+  > = z.enum(PersistImportedDeploymentRequestPendingDeleteResourceModeEnum);
 
 /** @internal */
-export type PersistImportedDeploymentRequestPendingDeleteScopeUnion$Outbound =
+export type PersistImportedDeploymentRequestPendingDeleteResourceModeUnion$Outbound =
   | string
   | any;
 
 /** @internal */
-export const PersistImportedDeploymentRequestPendingDeleteScopeUnion$outboundSchema:
+export const PersistImportedDeploymentRequestPendingDeleteResourceModeUnion$outboundSchema:
   z.ZodType<
-    PersistImportedDeploymentRequestPendingDeleteScopeUnion$Outbound,
-    PersistImportedDeploymentRequestPendingDeleteScopeUnion
+    PersistImportedDeploymentRequestPendingDeleteResourceModeUnion$Outbound,
+    PersistImportedDeploymentRequestPendingDeleteResourceModeUnion
   > = z.union([
-    PersistImportedDeploymentRequestPendingDeleteScopeEnum$outboundSchema,
+    PersistImportedDeploymentRequestPendingDeleteResourceModeEnum$outboundSchema,
     z.any(),
   ]);
 
-export function persistImportedDeploymentRequestPendingDeleteScopeUnionToJSON(
-  persistImportedDeploymentRequestPendingDeleteScopeUnion:
-    PersistImportedDeploymentRequestPendingDeleteScopeUnion,
+export function persistImportedDeploymentRequestPendingDeleteResourceModeUnionToJSON(
+  persistImportedDeploymentRequestPendingDeleteResourceModeUnion:
+    PersistImportedDeploymentRequestPendingDeleteResourceModeUnion,
 ): string {
   return JSON.stringify(
-    PersistImportedDeploymentRequestPendingDeleteScopeUnion$outboundSchema
-      .parse(persistImportedDeploymentRequestPendingDeleteScopeUnion),
+    PersistImportedDeploymentRequestPendingDeleteResourceModeUnion$outboundSchema
+      .parse(persistImportedDeploymentRequestPendingDeleteResourceModeUnion),
   );
 }
 
@@ -7943,9 +7919,9 @@ export function persistImportedDeploymentRequestPreparedStackUnionToJSON(
 
 /** @internal */
 export type PersistImportedDeploymentRequestRuntimeMetadata$Outbound = {
-  deleteScope?: string | any | null | undefined;
+  deleteResourceMode?: string | any | null | undefined;
   lastSyncedEnvVarsHash?: string | null | undefined;
-  pendingDeleteScope?: string | any | null | undefined;
+  pendingDeleteResourceMode?: string | any | null | undefined;
   preparedStack?:
     | PersistImportedDeploymentRequestPreparedStack$Outbound
     | any
@@ -7960,16 +7936,16 @@ export const PersistImportedDeploymentRequestRuntimeMetadata$outboundSchema:
     PersistImportedDeploymentRequestRuntimeMetadata$Outbound,
     PersistImportedDeploymentRequestRuntimeMetadata
   > = z.object({
-    deleteScope: z.nullable(
+    deleteResourceMode: z.nullable(
       z.union([
-        PersistImportedDeploymentRequestDeleteScopeEnum$outboundSchema,
+        PersistImportedDeploymentRequestDeleteResourceModeEnum$outboundSchema,
         z.any(),
       ]),
     ).optional(),
     lastSyncedEnvVarsHash: z.nullable(z.string()).optional(),
-    pendingDeleteScope: z.nullable(
+    pendingDeleteResourceMode: z.nullable(
       z.union([
-        PersistImportedDeploymentRequestPendingDeleteScopeEnum$outboundSchema,
+        PersistImportedDeploymentRequestPendingDeleteResourceModeEnum$outboundSchema,
         z.any(),
       ]),
     ).optional(),
@@ -8195,8 +8171,7 @@ export const PersistImportedDeploymentRequest$outboundSchema: z.ZodType<
   deploymentGroupId: z.string(),
   managerId: z.string(),
   platform: PersistImportedDeploymentRequestPlatformEnum$outboundSchema,
-  basePlatform: PersistImportedDeploymentRequestBasePlatform$outboundSchema
-    .optional(),
+  basePlatform: KubernetesBasePlatform$outboundSchema.optional(),
   stackSettings: z.lazy(() =>
     PersistImportedDeploymentRequestStackSettings$outboundSchema
   ),

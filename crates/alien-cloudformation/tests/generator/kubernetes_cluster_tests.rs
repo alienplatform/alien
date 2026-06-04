@@ -54,15 +54,18 @@ fn eks_target_renders_managed_cluster_and_kubernetes_import_payload() {
         .split("KubernetesNodeRole:")
         .nth(1)
         .expect("template should include EKS node role")
-        .split("KubernetesManagedNodeRole:")
+        .split("Kubernetes:")
         .next()
-        .expect("node role should precede managed node role");
+        .expect("node role should precede cluster");
     assert!(node_role.contains("sts:AssumeRole"));
     assert!(!node_role.contains("sts:TagSession"));
+    assert!(!yaml.contains("Type: AWS::EKS::Nodegroup"));
+    assert!(!yaml.contains("KubernetesManagedNodeRole:"));
+    assert!(!yaml.contains("t4g.medium"));
     assert!(!yaml.contains("managedAcmImport"));
     assert!(yaml.contains("NodePools:"));
     assert!(yaml.contains("- system"));
-    assert!(!yaml.contains("general-purpose"));
+    assert!(yaml.contains("- general-purpose"));
 }
 
 #[test]
@@ -142,7 +145,8 @@ fn eks_target_irsa_references_generated_cluster_resource() {
     assert!(!yaml.contains("- Kubernetes\n"));
     assert!(yaml.contains("KubernetesOidcProvider:"));
     assert!(yaml.contains("OpenIdConnectIssuerUrl"));
-    assert!(yaml.contains("system:serviceaccount:kube-system:ebs-csi-controller-sa"));
+    assert!(!yaml.contains("EbsCsiAddon"));
+    assert!(!yaml.contains("aws-ebs-csi-driver"));
 }
 
 #[test]

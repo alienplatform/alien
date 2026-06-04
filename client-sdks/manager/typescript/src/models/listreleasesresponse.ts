@@ -12,6 +12,9 @@ import {
 } from "./releaseresponse.js";
 
 export type ListReleasesResponse = {
+  /**
+   * Releases the caller may read, newest first.
+   */
   items: Array<ReleaseResponse>;
 };
 

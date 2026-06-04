@@ -57,6 +57,19 @@ export const DeploymentPlatform = {
  */
 export type DeploymentPlatform = ClosedEnum<typeof DeploymentPlatform>;
 
+/**
+ * Underlying cloud platform for Kubernetes deployments.
+ */
+export const DeploymentBasePlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+} as const;
+/**
+ * Underlying cloud platform for Kubernetes deployments.
+ */
+export type DeploymentBasePlatform = ClosedEnum<typeof DeploymentBasePlatform>;
+
 export const DeploymentPlatformTest = {
   Test: "test",
 } as const;
@@ -1468,65 +1481,63 @@ export type DeploymentStackState = {
 };
 
 /**
- * Scope for a delete operation.
+ * Resource set selected for deployment cleanup.
  *
  * @remarks
  *
- * Full deletes are setup/admin owned and may remove both Frozen and Live
- * resources. Live-only deletes are used by setup handoff resources
- * (Terraform/CloudFormation) so Alien removes only the resources it owns
- * before setup tears down Frozen resources.
+ * `All` is used for deployments where Alien owns the full recorded stack.
+ * `Live` is used when setup tools own Frozen resources and Alien should only
+ * delete resources it owns before setup tears down its part.
  */
-export const DeploymentDeleteScopeEnum = {
-  Full: "full",
-  LiveOnly: "liveOnly",
+export const DeploymentDeleteResourceModeEnum = {
+  All: "all",
+  Live: "live",
 } as const;
 /**
- * Scope for a delete operation.
+ * Resource set selected for deployment cleanup.
  *
  * @remarks
  *
- * Full deletes are setup/admin owned and may remove both Frozen and Live
- * resources. Live-only deletes are used by setup handoff resources
- * (Terraform/CloudFormation) so Alien removes only the resources it owns
- * before setup tears down Frozen resources.
+ * `All` is used for deployments where Alien owns the full recorded stack.
+ * `Live` is used when setup tools own Frozen resources and Alien should only
+ * delete resources it owns before setup tears down its part.
  */
-export type DeploymentDeleteScopeEnum = ClosedEnum<
-  typeof DeploymentDeleteScopeEnum
+export type DeploymentDeleteResourceModeEnum = ClosedEnum<
+  typeof DeploymentDeleteResourceModeEnum
 >;
 
-export type DeploymentDeleteScopeUnion = DeploymentDeleteScopeEnum | any;
+export type DeploymentDeleteResourceModeUnion =
+  | DeploymentDeleteResourceModeEnum
+  | any;
 
 /**
- * Scope for a delete operation.
+ * Resource set selected for deployment cleanup.
  *
  * @remarks
  *
- * Full deletes are setup/admin owned and may remove both Frozen and Live
- * resources. Live-only deletes are used by setup handoff resources
- * (Terraform/CloudFormation) so Alien removes only the resources it owns
- * before setup tears down Frozen resources.
+ * `All` is used for deployments where Alien owns the full recorded stack.
+ * `Live` is used when setup tools own Frozen resources and Alien should only
+ * delete resources it owns before setup tears down its part.
  */
-export const DeploymentPendingDeleteScopeEnum = {
-  Full: "full",
-  LiveOnly: "liveOnly",
+export const DeploymentPendingDeleteResourceModeEnum = {
+  All: "all",
+  Live: "live",
 } as const;
 /**
- * Scope for a delete operation.
+ * Resource set selected for deployment cleanup.
  *
  * @remarks
  *
- * Full deletes are setup/admin owned and may remove both Frozen and Live
- * resources. Live-only deletes are used by setup handoff resources
- * (Terraform/CloudFormation) so Alien removes only the resources it owns
- * before setup tears down Frozen resources.
+ * `All` is used for deployments where Alien owns the full recorded stack.
+ * `Live` is used when setup tools own Frozen resources and Alien should only
+ * delete resources it owns before setup tears down its part.
  */
-export type DeploymentPendingDeleteScopeEnum = ClosedEnum<
-  typeof DeploymentPendingDeleteScopeEnum
+export type DeploymentPendingDeleteResourceModeEnum = ClosedEnum<
+  typeof DeploymentPendingDeleteResourceModeEnum
 >;
 
-export type DeploymentPendingDeleteScopeUnion =
-  | DeploymentPendingDeleteScopeEnum
+export type DeploymentPendingDeleteResourceModeUnion =
+  | DeploymentPendingDeleteResourceModeEnum
   | any;
 
 export const DeploymentManagementEnum = {
@@ -2715,7 +2726,11 @@ export type DeploymentPreparedStackUnion = DeploymentPreparedStack | any;
  * Runtime metadata for deployment state persistence
  */
 export type DeploymentRuntimeMetadata = {
-  deleteScope?: DeploymentDeleteScopeEnum | any | null | undefined;
+  deleteResourceMode?:
+    | DeploymentDeleteResourceModeEnum
+    | any
+    | null
+    | undefined;
   /**
    * Hash of the environment variables snapshot that was last synced to the vault
    *
@@ -2723,8 +2738,8 @@ export type DeploymentRuntimeMetadata = {
    * Used to avoid redundant sync operations during incremental deployment
    */
   lastSyncedEnvVarsHash?: string | null | undefined;
-  pendingDeleteScope?:
-    | DeploymentPendingDeleteScopeEnum
+  pendingDeleteResourceMode?:
+    | DeploymentPendingDeleteResourceModeEnum
     | any
     | null
     | undefined;
@@ -2893,6 +2908,14 @@ export type Deployment = {
    */
   platform: DeploymentPlatform;
   /**
+   * Underlying cloud platform for Kubernetes deployments.
+   */
+  basePlatform?: DeploymentBasePlatform | null | undefined;
+  /**
+   * Cloud region or location for the deployment.
+   */
+  region?: string | null | undefined;
+  /**
    * DeploymentState protocol version owned by the runtime/manager
    */
   deploymentProtocolVersion: number;
@@ -3003,6 +3026,11 @@ export const DeploymentStatus$inboundSchema: z.ZodEnum<
 export const DeploymentPlatform$inboundSchema: z.ZodEnum<
   typeof DeploymentPlatform
 > = z.enum(DeploymentPlatform);
+
+/** @internal */
+export const DeploymentBasePlatform$inboundSchema: z.ZodEnum<
+  typeof DeploymentBasePlatform
+> = z.enum(DeploymentBasePlatform);
 
 /** @internal */
 export const DeploymentPlatformTest$inboundSchema: z.ZodEnum<
@@ -5003,44 +5031,50 @@ export function deploymentStackStateFromJSON(
 }
 
 /** @internal */
-export const DeploymentDeleteScopeEnum$inboundSchema: z.ZodEnum<
-  typeof DeploymentDeleteScopeEnum
-> = z.enum(DeploymentDeleteScopeEnum);
+export const DeploymentDeleteResourceModeEnum$inboundSchema: z.ZodEnum<
+  typeof DeploymentDeleteResourceModeEnum
+> = z.enum(DeploymentDeleteResourceModeEnum);
 
 /** @internal */
-export const DeploymentDeleteScopeUnion$inboundSchema: z.ZodType<
-  DeploymentDeleteScopeUnion,
+export const DeploymentDeleteResourceModeUnion$inboundSchema: z.ZodType<
+  DeploymentDeleteResourceModeUnion,
   unknown
-> = z.union([DeploymentDeleteScopeEnum$inboundSchema, z.any()]);
+> = z.union([DeploymentDeleteResourceModeEnum$inboundSchema, z.any()]);
 
-export function deploymentDeleteScopeUnionFromJSON(
+export function deploymentDeleteResourceModeUnionFromJSON(
   jsonString: string,
-): SafeParseResult<DeploymentDeleteScopeUnion, SDKValidationError> {
+): SafeParseResult<DeploymentDeleteResourceModeUnion, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DeploymentDeleteScopeUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentDeleteScopeUnion' from JSON`,
+    (x) => DeploymentDeleteResourceModeUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDeleteResourceModeUnion' from JSON`,
   );
 }
 
 /** @internal */
-export const DeploymentPendingDeleteScopeEnum$inboundSchema: z.ZodEnum<
-  typeof DeploymentPendingDeleteScopeEnum
-> = z.enum(DeploymentPendingDeleteScopeEnum);
+export const DeploymentPendingDeleteResourceModeEnum$inboundSchema: z.ZodEnum<
+  typeof DeploymentPendingDeleteResourceModeEnum
+> = z.enum(DeploymentPendingDeleteResourceModeEnum);
 
 /** @internal */
-export const DeploymentPendingDeleteScopeUnion$inboundSchema: z.ZodType<
-  DeploymentPendingDeleteScopeUnion,
+export const DeploymentPendingDeleteResourceModeUnion$inboundSchema: z.ZodType<
+  DeploymentPendingDeleteResourceModeUnion,
   unknown
-> = z.union([DeploymentPendingDeleteScopeEnum$inboundSchema, z.any()]);
+> = z.union([DeploymentPendingDeleteResourceModeEnum$inboundSchema, z.any()]);
 
-export function deploymentPendingDeleteScopeUnionFromJSON(
+export function deploymentPendingDeleteResourceModeUnionFromJSON(
   jsonString: string,
-): SafeParseResult<DeploymentPendingDeleteScopeUnion, SDKValidationError> {
+): SafeParseResult<
+  DeploymentPendingDeleteResourceModeUnion,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => DeploymentPendingDeleteScopeUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DeploymentPendingDeleteScopeUnion' from JSON`,
+    (x) =>
+      DeploymentPendingDeleteResourceModeUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentPendingDeleteResourceModeUnion' from JSON`,
   );
 }
 
@@ -6644,12 +6678,12 @@ export const DeploymentRuntimeMetadata$inboundSchema: z.ZodType<
   DeploymentRuntimeMetadata,
   unknown
 > = z.object({
-  deleteScope: z.nullable(
-    z.union([DeploymentDeleteScopeEnum$inboundSchema, z.any()]),
+  deleteResourceMode: z.nullable(
+    z.union([DeploymentDeleteResourceModeEnum$inboundSchema, z.any()]),
   ).optional(),
   lastSyncedEnvVarsHash: z.nullable(z.string()).optional(),
-  pendingDeleteScope: z.nullable(
-    z.union([DeploymentPendingDeleteScopeEnum$inboundSchema, z.any()]),
+  pendingDeleteResourceMode: z.nullable(
+    z.union([DeploymentPendingDeleteResourceModeEnum$inboundSchema, z.any()]),
   ).optional(),
   preparedStack: z.nullable(
     z.union([z.lazy(() => DeploymentPreparedStack$inboundSchema), z.any()]),
@@ -6748,6 +6782,8 @@ export const Deployment$inboundSchema: z.ZodType<Deployment, unknown> = z
     status: DeploymentStatus$inboundSchema,
     projectId: z.string(),
     platform: DeploymentPlatform$inboundSchema,
+    basePlatform: z.nullable(DeploymentBasePlatform$inboundSchema).optional(),
+    region: z.nullable(z.string()).optional(),
     deploymentProtocolVersion: z.int(),
     deploymentGroupId: z.string(),
     environmentInfo: z.nullable(

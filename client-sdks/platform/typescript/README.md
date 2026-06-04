@@ -197,10 +197,10 @@ run();
 * [listFilterEnvironments](docs/sdks/deployments/README.md#listfilterenvironments) - List distinct effective environments used by deployments. Used for filter dropdowns.
 * [listFilterDeploymentGroups](docs/sdks/deployments/README.md#listfilterdeploymentgroups) - List deployment groups with deployment counts. Used for filter dropdowns.
 * [get](docs/sdks/deployments/README.md#get) - Retrieve a deployment by ID.
-* [delete](docs/sdks/deployments/README.md#delete) - Delete a deployment by ID. Non-force deletes enqueue cleanup; force deletes only remove the record.
 * [getInfo](docs/sdks/deployments/README.md#getinfo) - Get deployment connection information including command endpoint and resource URLs.
 * [import](docs/sdks/deployments/README.md#import) - Import a deployment from resolved setup infrastructure such as CloudFormation, Terraform, or Helm.
 * [acceptCloudFormationCallback](docs/sdks/deployments/README.md#acceptcloudformationcallback) - Accept a CloudFormation custom-resource event, hand off import/delete work, and store the callback for Platform-owned completion.
+* [delete](docs/sdks/deployments/README.md#delete) - Delete, detach, or forget a deployment by ID.
 * [redeploy](docs/sdks/deployments/README.md#redeploy) - Redeploy a running deployment with the same release and fresh environment variables. Sets status to update-pending.
 * [pinRelease](docs/sdks/deployments/README.md#pinrelease) - Pin or unpin deployment to a specific release. Only works for running deployments. Controller will automatically trigger update to target release.
 * [retry](docs/sdks/deployments/README.md#retry) - Retry a failed deployment operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
@@ -210,7 +210,8 @@ run();
 ### [Domains](docs/sdks/domains/README.md)
 
 * [list](docs/sdks/domains/README.md#list) - List system domains and workspace domains.
-* [create](docs/sdks/domains/README.md#create) - Create a workspace domain.
+* [create](docs/sdks/domains/README.md#create) - Create a workspace domain and optional initial endpoints.
+* [createEndpoint](docs/sdks/domains/README.md#createendpoint) - Create an endpoint under a workspace domain.
 * [get](docs/sdks/domains/README.md#get) - Get domain by ID.
 * [delete](docs/sdks/domains/README.md#delete) - Delete a workspace domain.
 * [refresh](docs/sdks/domains/README.md#refresh) - Refresh workspace domain verification.
@@ -354,7 +355,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`deploymentsAcceptCloudFormationCallback`](docs/sdks/deployments/README.md#acceptcloudformationcallback) - Accept a CloudFormation custom-resource event, hand off import/delete work, and store the callback for Platform-owned completion.
 - [`deploymentsCreate`](docs/sdks/deployments/README.md#create) - Create a new deployment. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId.
 - [`deploymentsCreateToken`](docs/sdks/deployments/README.md#createtoken) - Create a deployment token (deployment-scoped API key). The deployment must exist before creating a token.
-- [`deploymentsDelete`](docs/sdks/deployments/README.md#delete) - Delete a deployment by ID. Non-force deletes enqueue cleanup; force deletes only remove the record.
+- [`deploymentsDelete`](docs/sdks/deployments/README.md#delete) - Delete, detach, or forget a deployment by ID.
 - [`deploymentsGet`](docs/sdks/deployments/README.md#get) - Retrieve a deployment by ID.
 - [`deploymentsGetInfo`](docs/sdks/deployments/README.md#getinfo) - Get deployment connection information including command endpoint and resource URLs.
 - [`deploymentsGetStats`](docs/sdks/deployments/README.md#getstats) - Get aggregated deployment statistics. Returns total count and breakdown by status.
@@ -366,7 +367,8 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`deploymentsRedeploy`](docs/sdks/deployments/README.md#redeploy) - Redeploy a running deployment with the same release and fresh environment variables. Sets status to update-pending.
 - [`deploymentsRetry`](docs/sdks/deployments/README.md#retry) - Retry a failed deployment operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
 - [`deploymentsUpdateEnvironmentVariables`](docs/sdks/deployments/README.md#updateenvironmentvariables) - Update a deployment's environment variables. If the deployment is running and not locked, the status will be changed to update-pending to trigger a deployment.
-- [`domainsCreate`](docs/sdks/domains/README.md#create) - Create a workspace domain.
+- [`domainsCreate`](docs/sdks/domains/README.md#create) - Create a workspace domain and optional initial endpoints.
+- [`domainsCreateEndpoint`](docs/sdks/domains/README.md#createendpoint) - Create an endpoint under a workspace domain.
 - [`domainsDelete`](docs/sdks/domains/README.md#delete) - Delete a workspace domain.
 - [`domainsGet`](docs/sdks/domains/README.md#get) - Get domain by ID.
 - [`domainsList`](docs/sdks/domains/README.md#list) - List system domains and workspace domains.

@@ -437,7 +437,9 @@ async fn delete_deployment_task(
     client
         .delete_deployment()
         .id(&deployment.id)
-        .delete_scope(alien_manager_api::types::DeleteScope::Full)
+        .body(alien_manager_api::types::DeleteDeploymentRequest {
+            mode: alien_manager_api::types::DeleteDeploymentMode::Clean,
+        })
         .send()
         .await
         .into_sdk_error()

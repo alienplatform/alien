@@ -726,8 +726,10 @@
             "description": "Not found"
           }
         }
-      },
-      "delete": {
+      }
+    },
+    "/v1/deployments/{id}/delete": {
+      "post": {
         "tags": [
           "deployments"
         ],
@@ -741,26 +743,18 @@
             "schema": {
               "type": "string"
             }
-          },
-          {
-            "name": "force",
-            "in": "query",
-            "description": "Force delete without running cleanup (immediately removes record)",
-            "required": false,
-            "schema": {
-              "type": "boolean"
-            }
-          },
-          {
-            "name": "deleteScope",
-            "in": "query",
-            "description": "Delete scope: full or liveOnly",
-            "required": false,
-            "schema": {
-              "$ref": "#/components/schemas/DeleteScope"
-            }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteDeploymentRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "202": {
             "description": "Deployment deletion enqueued"
@@ -934,6 +928,7 @@
         "tags": [
           "releases"
         ],
+        "summary": "`GET /v1/releases` — Inbound: workspace / project bearer (or authenticated\nuser). Outbound: caller bearer (passthrough). Returns only releases the\ncaller may read.",
         "operationId": "list_releases",
         "responses": {
           "200": {
@@ -3516,6 +3511,12 @@
         "properties": {
           "keyVaultCertificateId": {
             "type": "string"
+          },
+          "keyVaultResourceId": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -4594,6 +4595,12 @@
           "isByoVnet"
         ],
         "properties": {
+          "applicationGatewaySubnetName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "cidrBlock": {
             "type": [
               "string",
@@ -5041,6 +5048,47 @@
           }
         }
       },
+      "ComputeCapacityBlocker": {
+        "type": "object",
+        "required": [
+          "category",
+          "message",
+          "observedAt"
+        ],
+        "properties": {
+          "category": {
+            "$ref": "#/components/schemas/ComputeCapacityBlockerCategory"
+          },
+          "message": {
+            "type": "string"
+          },
+          "observedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "providerCode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "providerReference": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ComputeCapacityBlockerCategory": {
+        "type": "string",
+        "enum": [
+          "quota",
+          "capacity",
+          "allocation",
+          "other"
+        ]
+      },
       "ComputeCapacityGroupStatus": {
         "type": "object",
         "required": [
@@ -5049,6 +5097,16 @@
           "desiredMachines"
         ],
         "properties": {
+          "capacityBlocker": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ComputeCapacityBlocker"
+              }
+            ]
+          },
           "currentMachines": {
             "type": "integer",
             "format": "int32",
@@ -5700,12 +5758,31 @@
           }
         ]
       },
-      "DeleteScope": {
+      "DeleteDeploymentMode": {
         "type": "string",
-        "description": "Scope for a delete operation.\n\nFull deletes are setup/admin owned and may remove both Frozen and Live\nresources. Live-only deletes are used by setup handoff resources\n(Terraform/CloudFormation) so Alien removes only the resources it owns\nbefore setup tears down Frozen resources.",
         "enum": [
-          "full",
-          "liveOnly"
+          "clean",
+          "detach",
+          "forget"
+        ]
+      },
+      "DeleteDeploymentRequest": {
+        "type": "object",
+        "required": [
+          "mode"
+        ],
+        "properties": {
+          "mode": {
+            "$ref": "#/components/schemas/DeleteDeploymentMode"
+          }
+        }
+      },
+      "DeleteResourceMode": {
+        "type": "string",
+        "description": "Resource set selected for deployment cleanup.\n\n`All` is used for deployments where Alien owns the full recorded stack.\n`Live` is used when setup tools own Frozen resources and Alien should only\ndelete resources it owns before setup tears down its part.",
+        "enum": [
+          "all",
+          "live"
         ]
       },
       "DeploymentGroupMinimal": {
@@ -9209,7 +9286,8 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/ReleaseResponse"
-            }
+            },
+            "description": "Releases the caller may read, newest first."
           }
         }
       },
@@ -10486,6 +10564,13 @@
               "type"
             ],
             "properties": {
+              "application_gateway_subnet_name": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Name of the dedicated classic Application Gateway subnet within the VNet."
+              },
               "private_subnet_name": {
                 "type": "string",
                 "description": "Name of the private subnet within the VNet"

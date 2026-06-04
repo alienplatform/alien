@@ -14,6 +14,10 @@ import {
   ImportSourceKind,
   ImportSourceKind$outboundSchema,
 } from "./importsourcekind.js";
+import {
+  KubernetesBasePlatform,
+  KubernetesBasePlatform$outboundSchema,
+} from "./kubernetesbaseplatform.js";
 
 /**
  * Cloud platform of the imported stack
@@ -30,24 +34,6 @@ export const ImportSourcePlatform = {
  * Cloud platform of the imported stack
  */
 export type ImportSourcePlatform = ClosedEnum<typeof ImportSourcePlatform>;
-
-/**
- * Base cloud platform for cloud-backed Kubernetes imports.
- */
-export const ImportSourceBasePlatform = {
-  Aws: "aws",
-  Gcp: "gcp",
-  Azure: "azure",
-  Kubernetes: "kubernetes",
-  Local: "local",
-  Test: "test",
-} as const;
-/**
- * Base cloud platform for cloud-backed Kubernetes imports.
- */
-export type ImportSourceBasePlatform = ClosedEnum<
-  typeof ImportSourceBasePlatform
->;
 
 /**
  * Deployment model: how updates are delivered to the remote environment.
@@ -1153,7 +1139,7 @@ export type ImportSource = {
   /**
    * Base cloud platform for cloud-backed Kubernetes imports.
    */
-  basePlatform?: ImportSourceBasePlatform | undefined;
+  basePlatform?: KubernetesBasePlatform | undefined;
   /**
    * Region or location reported by the setup artifact
    */
@@ -1201,11 +1187,6 @@ export type ImportSource = {
 export const ImportSourcePlatform$outboundSchema: z.ZodEnum<
   typeof ImportSourcePlatform
 > = z.enum(ImportSourcePlatform);
-
-/** @internal */
-export const ImportSourceBasePlatform$outboundSchema: z.ZodEnum<
-  typeof ImportSourceBasePlatform
-> = z.enum(ImportSourceBasePlatform);
 
 /** @internal */
 export const ImportSourceDeploymentModel$outboundSchema: z.ZodEnum<
@@ -3390,7 +3371,7 @@ export const ImportSource$outboundSchema: z.ZodType<
   sourceKind: ImportSourceKind$outboundSchema.optional(),
   releaseId: z.string().optional(),
   platform: ImportSourcePlatform$outboundSchema,
-  basePlatform: ImportSourceBasePlatform$outboundSchema.optional(),
+  basePlatform: KubernetesBasePlatform$outboundSchema.optional(),
   region: z.string(),
   setupTarget: z.string(),
   setupImportFormatVersion: z.int(),

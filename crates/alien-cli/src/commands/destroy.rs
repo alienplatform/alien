@@ -105,7 +105,9 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
     manager_client
         .delete_deployment()
         .id(&tracked_deployment.deployment_id)
-        .delete_scope(alien_manager_api::types::DeleteScope::Full)
+        .body(alien_manager_api::types::DeleteDeploymentRequest {
+            mode: alien_manager_api::types::DeleteDeploymentMode::Clean,
+        })
         .send()
         .await
         .into_alien_error()

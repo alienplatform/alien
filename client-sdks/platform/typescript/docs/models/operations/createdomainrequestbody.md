@@ -7,11 +7,15 @@ import { CreateDomainRequestBody } from "@alienplatform/platform-api/models/oper
 
 let value: CreateDomainRequestBody = {
   domain: "definite-technologist.info",
+  setup: {
+    deploymentUrlProjectId: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  },
 };
 ```
 
 ## Fields
 
-| Field              | Type               | Required           | Description        |
-| ------------------ | ------------------ | ------------------ | ------------------ |
-| `domain`           | *string*           | :heavy_check_mark: | N/A                |
+| Field                                                | Type                                                 | Required                                             | Description                                          |
+| ---------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------- |
+| `domain`                                             | *string*                                             | :heavy_check_mark:                                   | N/A                                                  |
+| `setup`                                              | [operations.Setup](../../models/operations/setup.md) | :heavy_minus_sign:                                   | N/A                                                  |

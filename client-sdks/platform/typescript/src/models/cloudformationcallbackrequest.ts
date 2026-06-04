@@ -14,6 +14,10 @@ import {
   ImportSourceKind,
   ImportSourceKind$outboundSchema,
 } from "./importsourcekind.js";
+import {
+  KubernetesBasePlatform,
+  KubernetesBasePlatform$outboundSchema,
+} from "./kubernetesbaseplatform.js";
 
 export const RequestType = {
   Create: "Create",
@@ -38,24 +42,6 @@ export const CloudFormationCallbackRequestPlatform = {
  */
 export type CloudFormationCallbackRequestPlatform = ClosedEnum<
   typeof CloudFormationCallbackRequestPlatform
->;
-
-/**
- * Base cloud platform for cloud-backed Kubernetes imports.
- */
-export const CloudFormationCallbackRequestBasePlatform = {
-  Aws: "aws",
-  Gcp: "gcp",
-  Azure: "azure",
-  Kubernetes: "kubernetes",
-  Local: "local",
-  Test: "test",
-} as const;
-/**
- * Base cloud platform for cloud-backed Kubernetes imports.
- */
-export type CloudFormationCallbackRequestBasePlatform = ClosedEnum<
-  typeof CloudFormationCallbackRequestBasePlatform
 >;
 
 /**
@@ -1218,7 +1204,7 @@ export type CloudFormationCallbackRequestSource = {
   /**
    * Base cloud platform for cloud-backed Kubernetes imports.
    */
-  basePlatform?: CloudFormationCallbackRequestBasePlatform | undefined;
+  basePlatform?: KubernetesBasePlatform | undefined;
   /**
    * Region or location reported by the setup artifact
    */
@@ -1282,12 +1268,6 @@ export const RequestType$outboundSchema: z.ZodEnum<typeof RequestType> = z.enum(
 export const CloudFormationCallbackRequestPlatform$outboundSchema: z.ZodEnum<
   typeof CloudFormationCallbackRequestPlatform
 > = z.enum(CloudFormationCallbackRequestPlatform);
-
-/** @internal */
-export const CloudFormationCallbackRequestBasePlatform$outboundSchema:
-  z.ZodEnum<typeof CloudFormationCallbackRequestBasePlatform> = z.enum(
-    CloudFormationCallbackRequestBasePlatform,
-  );
 
 /** @internal */
 export const CloudFormationCallbackRequestDeploymentModel$outboundSchema:
@@ -3835,8 +3815,7 @@ export const CloudFormationCallbackRequestSource$outboundSchema: z.ZodType<
   sourceKind: ImportSourceKind$outboundSchema.optional(),
   releaseId: z.string().optional(),
   platform: CloudFormationCallbackRequestPlatform$outboundSchema,
-  basePlatform: CloudFormationCallbackRequestBasePlatform$outboundSchema
-    .optional(),
+  basePlatform: KubernetesBasePlatform$outboundSchema.optional(),
   region: z.string(),
   setupTarget: z.string(),
   setupImportFormatVersion: z.int(),

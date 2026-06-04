@@ -5,14 +5,14 @@
 import * as z from "zod/v4";
 import { safeParse } from "../lib/schemas.js";
 import { Result as SafeParseResult } from "../types/fp.js";
-import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import {
-  ManagerDomainBinding,
-  ManagerDomainBinding$inboundSchema,
-} from "./managerdomainbinding.js";
+  DomainEndpoint,
+  DomainEndpoint$inboundSchema,
+} from "./domainendpoint.js";
+import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 export type ManagerDomainBindingResponse = {
-  managerDomainBinding: ManagerDomainBinding | null;
+  managerDomainBinding: DomainEndpoint | null;
 };
 
 /** @internal */
@@ -20,7 +20,7 @@ export const ManagerDomainBindingResponse$inboundSchema: z.ZodType<
   ManagerDomainBindingResponse,
   unknown
 > = z.object({
-  managerDomainBinding: z.nullable(ManagerDomainBinding$inboundSchema),
+  managerDomainBinding: z.nullable(DomainEndpoint$inboundSchema),
 });
 
 export function managerDomainBindingResponseFromJSON(

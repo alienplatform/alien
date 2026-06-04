@@ -7,21 +7,26 @@ import { ManagerDomainBindingResponse } from "@alienplatform/platform-api/models
 
 let value: ManagerDomainBindingResponse = {
   managerDomainBinding: {
-    id: "mdb_crarp1rv29ef40gdifx8kiac",
+    id: "dend_1bb6gdvm1bs74acqkjstcgv",
     workspaceId: "ws_It13CUaGEhLLAB87simX0",
-    managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
     domainId: "dom_469m0agk8luj4s16sakmmpdd",
-    hostname: "colorful-cope.net",
-    status: "pending-endpoint",
-    retryAttempts: 102654,
-    createdAt: new Date("2024-02-10T02:09:23.400Z"),
-    updatedAt: new Date("2025-12-08T03:21:00.870Z"),
+    kind: "deployment_portal",
+    owner: {
+      type: "manager",
+      id: "<id>",
+    },
+    hostname: "different-slipper.info",
+    status: "waiting_for_domain",
+    managedDnsRecords: [],
+    retryAttempts: 645201,
+    createdAt: new Date("2026-02-13T20:08:55.887Z"),
+    updatedAt: new Date("2024-08-10T13:36:22.642Z"),
   },
 };
 ```
 
 ## Fields
 
-| Field                                                            | Type                                                             | Required                                                         | Description                                                      |
-| ---------------------------------------------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------- |
-| `managerDomainBinding`                                           | [models.ManagerDomainBinding](../models/managerdomainbinding.md) | :heavy_check_mark:                                               | N/A                                                              |
+| Field                                                | Type                                                 | Required                                             | Description                                          |
+| ---------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------- |
+| `managerDomainBinding`                               | [models.DomainEndpoint](../models/domainendpoint.md) | :heavy_check_mark:                                   | N/A                                                  |
