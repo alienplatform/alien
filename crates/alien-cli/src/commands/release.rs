@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::time::Instant;
 use tracing::info;
 
 #[derive(Parser, Debug, Clone)]
@@ -164,6 +165,12 @@ struct ReleaseConfig {
     platforms: Vec<String>,
 }
 
+#[derive(Clone)]
+struct AutoBuildPlan {
+    platform: String,
+    settings: alien_build::settings::BuildSettings,
+}
+
 /// Load and validate all release configuration from args + execution context.
 /// This is the single place where auth, workspace, project, and platform discovery happen.
 async fn load_release_config(
@@ -172,6 +179,7 @@ async fn load_release_config(
     allow_bootstrap: bool,
     show_human_output: bool,
 ) -> Result<ReleaseConfig> {
+    let config_started = Instant::now();
     let current_dir = get_current_dir()?;
     let output_dir = current_dir.join(".alien");
 
@@ -246,17 +254,15 @@ async fn load_release_config(
     // Build for every platform unless --prebuilt is set.
     // Content-hash dedup in the build layer makes this fast when nothing changed.
     if !args.prebuilt {
-        for platform_str in &target_platforms {
-            auto_build_for_platform(
-                platform_str,
-                &stack,
-                &output_dir,
-                show_human_output,
-                args.override_base_image.clone(),
-                kubernetes_base_platform,
-            )
-            .await?;
-        }
+        auto_build_for_platforms(
+            &target_platforms,
+            &stack,
+            &output_dir,
+            show_human_output,
+            args.override_base_image.clone(),
+            kubernetes_base_platform,
+        )
+        .await?;
     }
 
     // Re-discover platforms after potential auto-build
@@ -302,6 +308,11 @@ async fn load_release_config(
             }
         }
     };
+
+    info!(
+        "Release configuration loaded in {:.2}s",
+        config_started.elapsed().as_secs_f64()
+    );
 
     Ok(ReleaseConfig {
         output_dir,
@@ -353,6 +364,7 @@ async fn release_task_core(
     config: ReleaseConfig,
     ctx: &ExecutionMode,
 ) -> Result<ReleaseResult> {
+    let release_started = Instant::now();
     let ReleaseConfig {
         output_dir,
         manager,
@@ -372,6 +384,7 @@ async fn release_task_core(
     };
 
     for platform_str in &platforms_to_release {
+        let platform_started = Instant::now();
         info!("Processing {} platform...", platform_str);
 
         // Parse platform
@@ -423,11 +436,17 @@ async fn release_task_core(
 
             info!("   Pushing images to {}...", push_settings.repository);
 
+            let push_started = Instant::now();
             let pushed = alien_build::push_stack(built_stack, platform.clone(), &push_settings)
                 .await
                 .context(ErrorData::ReleaseFailed {
                     message: format!("Failed to push images for {} platform", platform_str),
                 })?;
+            info!(
+                "Push for platform '{}' completed in {:.2}s",
+                platform_str,
+                push_started.elapsed().as_secs_f64()
+            );
 
             // Update and persist the push cache with newly pushed URIs
             collect_push_cache_entries(&pushed, &pre_push_stack, &mut push_cache);
@@ -458,10 +477,15 @@ async fn release_task_core(
             Platform::Test => stack_by_platform.test = Some(stack_json),
         }
 
-        info!("   ✓ {} platform ready", platform_str);
+        info!(
+            "   ✓ {} platform ready in {:.2}s",
+            platform_str,
+            platform_started.elapsed().as_secs_f64()
+        );
     }
 
     // Create release
+    let create_release_started = Instant::now();
     let release_id = if let Some(ref manager) = manager {
         // Standalone/Dev mode: create release on the manager
         let sdk_git_metadata = git_metadata.and_then(|m| {
@@ -498,6 +522,14 @@ async fn release_task_core(
             }));
         }
     };
+    info!(
+        "Release creation API call completed in {:.2}s",
+        create_release_started.elapsed().as_secs_f64()
+    );
+    info!(
+        "Release task core completed in {:.2}s",
+        release_started.elapsed().as_secs_f64()
+    );
 
     Ok(release_id)
 }
@@ -640,15 +672,63 @@ fn discover_built_platforms(
     Ok(platforms)
 }
 
-/// Build for a single platform.
-async fn auto_build_for_platform(
-    platform_str: &str,
+async fn auto_build_for_platforms(
+    platform_strs: &[String],
     stack: &Stack,
     output_dir: &PathBuf,
     _show_human_output: bool,
     override_base_image: Option<String>,
     kubernetes_base_platform: Option<Platform>,
 ) -> Result<()> {
+    let mut plans = Vec::new();
+    for platform_str in platform_strs {
+        plans.push(AutoBuildPlan {
+            platform: platform_str.clone(),
+            settings: auto_build_settings_for_platform(
+                platform_str,
+                output_dir,
+                override_base_image.clone(),
+                kubernetes_base_platform,
+            )?,
+        });
+    }
+
+    let groups = group_auto_builds(plans);
+    if groups.len() > 1 {
+        info!(
+            "Auto-building {} independent target group(s) in parallel",
+            groups.len()
+        );
+    }
+
+    let group_futures = groups.into_iter().map(|group| {
+        let stack = stack.clone();
+        async move {
+            for plan in group {
+                let platform_build_started = Instant::now();
+                alien_build::build_stack(stack.clone(), &plan.settings)
+                    .await
+                    .context(ErrorData::BuildFailed)?;
+                info!(
+                    "Auto-build for platform '{}' completed in {:.2}s",
+                    plan.platform,
+                    platform_build_started.elapsed().as_secs_f64()
+                );
+            }
+            Ok::<_, AlienError<ErrorData>>(())
+        }
+    });
+
+    futures::future::try_join_all(group_futures).await?;
+    Ok(())
+}
+
+fn auto_build_settings_for_platform(
+    platform_str: &str,
+    output_dir: &PathBuf,
+    override_base_image: Option<String>,
+    kubernetes_base_platform: Option<Platform>,
+) -> Result<alien_build::settings::BuildSettings> {
     let platform = Platform::from_str(platform_str).map_err(|e| {
         AlienError::new(ErrorData::ValidationError {
             field: "platform".to_string(),
@@ -674,20 +754,38 @@ async fn auto_build_for_platform(
         _ => None,
     };
 
-    let settings = alien_build::settings::BuildSettings {
+    Ok(alien_build::settings::BuildSettings {
         output_directory: output_dir.to_str().unwrap().to_string(),
         platform: platform_build_settings,
         targets,
         cache_url: None,
         override_base_image,
         debug_mode: false,
-    };
+    })
+}
 
-    alien_build::build_stack(stack.clone(), &settings)
-        .await
-        .context(ErrorData::BuildFailed)?;
+fn group_auto_builds(plans: Vec<AutoBuildPlan>) -> Vec<Vec<AutoBuildPlan>> {
+    let mut groups: Vec<(String, Vec<AutoBuildPlan>)> = Vec::new();
 
-    Ok(())
+    for plan in plans {
+        let key = auto_build_target_group_key(&plan.settings);
+        if let Some((_, group)) = groups.iter_mut().find(|(group_key, _)| *group_key == key) {
+            group.push(plan);
+        } else {
+            groups.push((key, vec![plan]));
+        }
+    }
+
+    groups.into_iter().map(|(_, group)| group).collect()
+}
+
+fn auto_build_target_group_key(settings: &alien_build::settings::BuildSettings) -> String {
+    settings
+        .get_targets()
+        .iter()
+        .map(|target| target.runtime_platform_id())
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 /// Load a built stack from .alien/build/{platform}/stack.json
@@ -1290,5 +1388,51 @@ mod tests {
     fn parse_kubernetes_base_platform_rejects_non_cloud_platforms() {
         assert!(parse_kubernetes_base_platform(true, Some("kubernetes")).is_err());
         assert!(parse_kubernetes_base_platform(true, Some("local")).is_err());
+    }
+
+    #[test]
+    fn group_auto_builds_keeps_equivalent_targets_in_order() {
+        let plans = vec![
+            test_plan(
+                "aws",
+                alien_build::settings::PlatformBuildSettings::Aws {
+                    managing_account_id: None,
+                },
+            ),
+            test_plan("gcp", alien_build::settings::PlatformBuildSettings::Gcp {}),
+            test_plan(
+                "azure",
+                alien_build::settings::PlatformBuildSettings::Azure {},
+            ),
+        ];
+
+        let groups = group_auto_builds(plans);
+
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0][0].platform, "aws");
+        assert_eq!(
+            groups[1]
+                .iter()
+                .map(|plan| plan.platform.as_str())
+                .collect::<Vec<_>>(),
+            vec!["gcp", "azure"]
+        );
+    }
+
+    fn test_plan(
+        platform: &str,
+        platform_settings: alien_build::settings::PlatformBuildSettings,
+    ) -> AutoBuildPlan {
+        AutoBuildPlan {
+            platform: platform.to_string(),
+            settings: alien_build::settings::BuildSettings {
+                output_directory: ".alien".to_string(),
+                platform: platform_settings,
+                targets: None,
+                cache_url: None,
+                override_base_image: None,
+                debug_mode: false,
+            },
+        }
     }
 }

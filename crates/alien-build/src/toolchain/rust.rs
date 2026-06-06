@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::time::Instant;
 use tokio::fs;
 use tokio::process::Command;
 use tracing::{error, info, warn};
@@ -16,6 +17,11 @@ use tracing::{error, info, warn};
 pub struct RustToolchain {
     /// Name of the binary to build and run
     pub binary_name: String,
+}
+
+struct CargoProjectMetadata {
+    target_directory: PathBuf,
+    workspace_root: PathBuf,
 }
 
 impl RustToolchain {
@@ -75,7 +81,9 @@ impl RustToolchain {
 
     /// Generate cache key from Cargo.lock and build configuration
     async fn generate_cache_key(&self, context: &ToolchainContext) -> Result<String> {
-        let cargo_lock_hash = cache_utils::hash_files(&["**/Cargo.lock"], &context.src_dir).await?;
+        let cargo_metadata = self.get_cargo_metadata(&context.src_dir).await?;
+        let cargo_lock_hash =
+            cache_utils::hash_files(&["Cargo.lock"], &cargo_metadata.workspace_root).await?;
         let build_mode = if context.debug_mode {
             "debug"
         } else {
@@ -95,6 +103,10 @@ impl RustToolchain {
     /// In workspace scenarios, this returns the workspace target directory.
     /// Otherwise, it returns the project-local target directory.
     async fn get_target_directory(&self, src_dir: &Path) -> Result<PathBuf> {
+        Ok(self.get_cargo_metadata(src_dir).await?.target_directory)
+    }
+
+    async fn get_cargo_metadata(&self, src_dir: &Path) -> Result<CargoProjectMetadata> {
         // Use cargo metadata to get the actual target directory
         let metadata_output = Command::new("cargo")
             .args(&["metadata", "--format-version", "1", "--no-deps"])
@@ -137,14 +149,28 @@ impl RustToolchain {
                     build_output: None,
                 })
             })?;
+        let workspace_root = metadata
+            .get("workspace_root")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::ImageBuildFailed {
+                    resource_name: self.binary_name.clone(),
+                    reason: "cargo metadata missing workspace_root field".to_string(),
+                    build_output: None,
+                })
+            })?;
 
-        Ok(PathBuf::from(target_directory))
+        Ok(CargoProjectMetadata {
+            target_directory: PathBuf::from(target_directory),
+            workspace_root: PathBuf::from(workspace_root),
+        })
     }
 }
 
 #[async_trait]
 impl Toolchain for RustToolchain {
     async fn build(&self, context: &ToolchainContext) -> Result<ToolchainOutput> {
+        let build_started = Instant::now();
         info!("Building Rust project with binary: {}", self.binary_name);
 
         // Validate that this is a Rust project
@@ -335,6 +361,7 @@ impl Toolchain for RustToolchain {
         );
 
         // Use in_scope for automatic event lifecycle management
+        let compile_started = Instant::now();
         AlienEvent::CompilingCode {
             language: "rust".to_string(),
             progress: None,
@@ -394,6 +421,13 @@ impl Toolchain for RustToolchain {
             Ok(())
         })
         .await?;
+        info!(
+            "{} for binary '{}' target '{}' completed in {:.2}s",
+            build_command,
+            self.binary_name,
+            context.build_target.rust_target_triple(),
+            compile_started.elapsed().as_secs_f64()
+        );
 
         // Verify the binary was built
         if !binary_path.exists() {
@@ -425,6 +459,13 @@ impl Toolchain for RustToolchain {
             // Just package the application binary
             let runtime_command = vec![format!("./{}", binary_filename)];
 
+            info!(
+                "Rust toolchain prepared image inputs for binary '{}' target '{}' in {:.2}s",
+                self.binary_name,
+                context.build_target.rust_target_triple(),
+                build_started.elapsed().as_secs_f64()
+            );
+
             return Ok(ToolchainOutput {
                 build_strategy: super::ImageBuildStrategy::FromScratch {
                     layers: vec![super::LayerSpec {
@@ -448,7 +489,7 @@ impl Toolchain for RustToolchain {
         // Base image ENTRYPOINT is ["/app/alien-runtime"] so CMD must start with "--"
         let runtime_command = vec!["--".to_string(), format!("./{}", binary_filename)];
 
-        Ok(ToolchainOutput {
+        let output = ToolchainOutput {
             build_strategy: super::ImageBuildStrategy::FromBaseImage {
                 base_images,
                 files_to_package: vec![super::FileSpec {
@@ -458,7 +499,16 @@ impl Toolchain for RustToolchain {
                 }],
             },
             runtime_command,
-        })
+        };
+
+        info!(
+            "Rust toolchain prepared image inputs for binary '{}' target '{}' in {:.2}s",
+            self.binary_name,
+            context.build_target.rust_target_triple(),
+            build_started.elapsed().as_secs_f64()
+        );
+
+        Ok(output)
     }
 
     fn dev_command(&self, _src_dir: &Path) -> Vec<String> {
@@ -567,6 +617,12 @@ version = "0.1.0"
         )
         .await
         .unwrap();
+        fs::create_dir_all(temp_dir.path().join("src"))
+            .await
+            .unwrap();
+        fs::write(temp_dir.path().join("src/main.rs"), "fn main() {}\n")
+            .await
+            .unwrap();
 
         fs::write(
             temp_dir.path().join("Cargo.lock"),

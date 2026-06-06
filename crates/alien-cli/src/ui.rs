@@ -245,7 +245,7 @@ fn build_output_from_context(context: Option<&Value>) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests {
+mod event_tests {
     use super::*;
     use alien_error::Context;
 
