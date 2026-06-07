@@ -2111,16 +2111,15 @@ impl AzureWorkerController {
                 resource_id: Some(func_cfg.id.clone()),
             })?;
 
-        self.container_apps_certificate_id = Some(response.id.ok_or_else(|| {
+        let container_apps_certificate_id = response.id.ok_or_else(|| {
             AlienError::new(ErrorData::CloudPlatformError {
                 message: "Azure Container Apps Environment certificate response missing ID"
                     .to_string(),
                 resource_id: Some(func_cfg.id.clone()),
             })
-        })?);
-        self.certificate_issued_at = resource.issued_at.clone();
+        })?;
 
-        if self.fqdn.is_some() && self.container_apps_certificate_id.is_some() {
+        if self.fqdn.is_some() {
             let container_app_name = self.container_app_name.as_ref().ok_or_else(|| {
                 AlienError::new(ErrorData::ResourceControllerConfigError {
                     resource_id: func_cfg.id.clone(),
@@ -2128,7 +2127,6 @@ impl AzureWorkerController {
                 })
             })?;
             let fqdn = self.fqdn.clone().unwrap();
-            let container_apps_certificate_id = self.container_apps_certificate_id.clone().unwrap();
             let environment_name = get_container_apps_environment_name(ctx.state)?;
             let mut app = self
                 .build_container_app(
@@ -2139,7 +2137,7 @@ impl AzureWorkerController {
                     ctx,
                 )
                 .await?;
-            Self::set_custom_domain(&mut app, fqdn, container_apps_certificate_id);
+            Self::set_custom_domain(&mut app, fqdn, container_apps_certificate_id.clone());
 
             container_apps_client
                 .create_or_update_container_app(&resource_group_name, container_app_name, &app)
@@ -2149,6 +2147,9 @@ impl AzureWorkerController {
                     resource_id: Some(func_cfg.id.clone()),
                 })?;
         }
+
+        self.container_apps_certificate_id = Some(container_apps_certificate_id);
+        self.certificate_issued_at = resource.issued_at.clone();
 
         Ok(HandlerAction::Continue {
             state: UpdateStart,
@@ -2764,11 +2765,38 @@ impl AzureWorkerController {
 
         // Delete commands Dapr component (best-effort)
         if let Some(component_name) = self.commands_dapr_component.take() {
-            let _ = azure_config;
-            warn!(
-                component=%component_name,
-                "Skipping commands Dapr component deletion because the Azure Container Apps client does not expose a delete API"
-            );
+            let env_outputs = get_container_apps_environment_outputs(ctx.state)?;
+            let client = ctx
+                .service_provider
+                .get_azure_container_apps_client(azure_config)?;
+
+            match client
+                .delete_dapr_component(
+                    &env_outputs.resource_group_name,
+                    &env_outputs.environment_name,
+                    &component_name,
+                )
+                .await
+            {
+                Ok(_) => {
+                    info!(component=%component_name, "Commands Dapr component delete requested");
+                }
+                Err(e)
+                    if matches!(
+                        e.error,
+                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                    ) =>
+                {
+                    info!(component=%component_name, "Commands Dapr component was already deleted");
+                }
+                Err(e) => {
+                    warn!(
+                        component=%component_name,
+                        error=%e,
+                        "Failed to delete commands Dapr component"
+                    );
+                }
+            }
         }
 
         // Delete commands role assignments (best-effort)
@@ -2884,9 +2912,8 @@ impl AzureWorkerController {
         {
             Ok(OperationResult::Completed(_)) => {
                 info!(name=%container_app_name, "Container app deleted immediately");
-                self.clear_all();
                 Ok(HandlerAction::Continue {
-                    state: Deleted,
+                    state: DeletingCertificate,
                     suggested_delay: None,
                 })
             }
@@ -2906,9 +2933,8 @@ impl AzureWorkerController {
                 ) =>
             {
                 info!(name=%container_app_name, "Container app already deleted");
-                self.clear_all();
                 Ok(HandlerAction::Continue {
-                    state: Deleted,
+                    state: DeletingCertificate,
                     suggested_delay: None,
                 })
             }
@@ -2963,6 +2989,8 @@ impl AzureWorkerController {
             })?;
 
         if op_status.is_some() {
+            self.pending_operation_url = None;
+            self.pending_operation_retry_after = None;
             Ok(HandlerAction::Continue {
                 state: DeletingContainerApp,
                 suggested_delay: None,
@@ -2992,10 +3020,8 @@ impl AzureWorkerController {
         let container_app_name = match &self.container_app_name {
             Some(n) => n.clone(),
             None => {
-                // Already cleared → consider successful
-                self.clear_all();
                 return Ok(HandlerAction::Continue {
-                    state: Deleted,
+                    state: DeletingCertificate,
                     suggested_delay: None,
                 });
             }
@@ -3016,9 +3042,8 @@ impl AzureWorkerController {
                 ) =>
             {
                 info!(name=%container_app_name, "Container app confirmed deleted");
-                self.clear_all();
                 Ok(HandlerAction::Continue {
-                    state: Deleted,
+                    state: DeletingCertificate,
                     suggested_delay: None,
                 })
             }
@@ -3033,6 +3058,140 @@ impl AzureWorkerController {
                 message: "Error checking container app deletion status".to_string(),
                 resource_id: Some(ctx.desired_resource_config::<Worker>()?.id.clone()),
             })),
+        }
+    }
+
+    #[handler(
+        state = DeletingCertificate,
+        on_failure = DeleteFailed,
+        status = ResourceStatus::Deleting,
+    )]
+    async fn deleting_certificate(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        if self.container_apps_certificate_id.is_none() {
+            self.clear_all();
+            return Ok(HandlerAction::Continue {
+                state: Deleted,
+                suggested_delay: None,
+            });
+        }
+
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        let azure_cfg = ctx.get_azure_config()?;
+        let resource_group_name = get_resource_group_name(ctx.state)?;
+        let environment_name = get_container_apps_environment_name(ctx.state)?;
+        let certificate_name =
+            get_container_apps_certificate_name(ctx.resource_prefix, &worker_config.id);
+        let client = ctx
+            .service_provider
+            .get_azure_container_apps_client(azure_cfg)?;
+
+        match client
+            .delete_managed_environment_certificate(
+                &resource_group_name,
+                &environment_name,
+                &certificate_name,
+            )
+            .await
+        {
+            Ok(OperationResult::Completed(())) => {
+                self.clear_all();
+                Ok(HandlerAction::Continue {
+                    state: Deleted,
+                    suggested_delay: None,
+                })
+            }
+            Ok(OperationResult::LongRunning(lro)) => {
+                self.pending_operation_url = Some(lro.url.clone());
+                self.pending_operation_retry_after = lro.retry_after.map(|d| d.as_secs());
+                Ok(HandlerAction::Continue {
+                    state: WaitingForCertificateDeleteOperation,
+                    suggested_delay: Some(lro.retry_after.unwrap_or(Duration::from_secs(15))),
+                })
+            }
+            Err(e)
+                if matches!(
+                    e.error,
+                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
+                self.clear_all();
+                Ok(HandlerAction::Continue {
+                    state: Deleted,
+                    suggested_delay: None,
+                })
+            }
+            Err(e) => Err(e.context(ErrorData::CloudPlatformError {
+                message: "Failed to delete Container Apps managed environment certificate"
+                    .to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })),
+        }
+    }
+
+    #[handler(
+        state = WaitingForCertificateDeleteOperation,
+        on_failure = DeleteFailed,
+        status = ResourceStatus::Deleting,
+    )]
+    async fn waiting_for_certificate_delete_operation(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let worker_config = ctx.desired_resource_config::<Worker>()?;
+        let operation_url = self.pending_operation_url.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::InfrastructureError {
+                message: "No pending_operation_url in WaitingForCertificateDeleteOperation"
+                    .to_string(),
+                operation: Some("waiting_for_certificate_delete_operation".to_string()),
+                resource_id: Some(worker_config.id.clone()),
+            })
+        })?;
+
+        let azure_cfg = ctx.get_azure_config()?;
+        let operation_client = ctx
+            .service_provider
+            .get_azure_long_running_operation_client(azure_cfg)?;
+        let lro = LongRunningOperation {
+            url: operation_url,
+            retry_after: self.pending_operation_retry_after.map(Duration::from_secs),
+            location_url: None,
+        };
+        let certificate_name =
+            get_container_apps_certificate_name(ctx.resource_prefix, &worker_config.id);
+
+        let status = operation_client
+            .check_status(
+                &lro,
+                "DeleteManagedEnvironmentCertificate",
+                &certificate_name,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Azure ARM operation failed for managed environment certificate deletion"
+                    .to_string(),
+                resource_id: Some(worker_config.id.clone()),
+            })?;
+
+        if status.is_some() {
+            self.pending_operation_url = None;
+            self.pending_operation_retry_after = None;
+            self.clear_all();
+            Ok(HandlerAction::Continue {
+                state: Deleted,
+                suggested_delay: None,
+            })
+        } else {
+            let delay = self
+                .pending_operation_retry_after
+                .map(Duration::from_secs)
+                .unwrap_or(Duration::from_secs(15));
+            Ok(HandlerAction::Stay {
+                max_times: 60,
+                suggested_delay: Some(delay),
+            })
         }
     }
 
@@ -4311,19 +4470,15 @@ impl AzureWorkerController {
             .get_azure_container_apps_client(&azure_config)?;
 
         for component_name in &self.dapr_components.clone() {
-            // Check if the component exists (since there's no delete API, we just verify it exists)
             match client
-                .get_dapr_component(&resource_group_name, &environment_name, component_name)
+                .delete_dapr_component(&resource_group_name, &environment_name, component_name)
                 .await
             {
                 Ok(_) => {
-                    // Component exists - in a full implementation, we would delete it here
-                    // For now, we log that manual cleanup may be needed
-                    warn!(
+                    info!(
                         worker=%worker_config.id,
                         component=%component_name,
-                        environment=%environment_name,
-                        "Dapr component exists but no delete API available - may require manual cleanup"
+                        "Dapr component delete requested"
                     );
                 }
                 Err(e)
@@ -4343,7 +4498,7 @@ impl AzureWorkerController {
                         worker=%worker_config.id,
                         component=%component_name,
                         error=%e,
-                        "Failed to check Dapr component status during deletion"
+                        "Failed to delete Dapr component during deletion"
                     );
                 }
             }
