@@ -18,7 +18,7 @@ use clap::Parser;
 use dockdash::{ClientProtocol, RegistryAuth};
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Instant;
 use tracing::info;
@@ -38,7 +38,7 @@ use tracing::info;
     alien release --platforms aws
     alien release --platforms aws,gcp
 
-    # Use pre-built and pre-pushed images (skip build and push)
+    # Use pre-built images (skip build, still push images)
     alien release --prebuilt
 
     # Output JSON (for scripting/automation)
@@ -78,8 +78,7 @@ pub struct ReleaseArgs {
     #[arg(long)]
     pub base_platform: Option<String>,
 
-    /// Use pre-built and pre-pushed images. Skips both build and push steps.
-    /// Requires that stack.json already contains remote image URIs.
+    /// Use pre-built images. Skips build and still pushes local build artifacts.
     #[arg(long)]
     pub prebuilt: bool,
 
@@ -398,13 +397,13 @@ async fn release_task_core(
         // Load built stack
         let mut built_stack = load_built_stack(&output_dir, platform_str)?;
 
-        // Push images if needed (test platform and --prebuilt skip pushing).
+        // Push images if needed (test platform skips pushing).
         // Local platform pushes to a cloud registry — the alien-agent pulls from it.
-        let pushed_stack = if args.prebuilt {
-            // Validate all images are remote URIs when using --prebuilt
-            validate_prebuilt_stack(&built_stack)?;
-            built_stack
-        } else if platform != Platform::Test {
+        let pushed_stack = if platform != Platform::Test {
+            if args.prebuilt {
+                rebase_prebuilt_stack_image_paths(&mut built_stack, &output_dir, platform_str)?;
+            }
+
             // Load push cache — maps content-hashed dir names to previously pushed URIs
             let mut push_cache = load_push_cache(&output_dir, platform_str);
 
@@ -1140,61 +1139,133 @@ fn parse_kubernetes_base_platform(
     }
 }
 
-/// Validate that all compute resources in the stack have remote image URIs (not local paths).
-/// Used with `--prebuilt` to ensure images were already pushed externally.
-fn validate_prebuilt_stack(stack: &Stack) -> Result<()> {
-    for (_resource_id, resource_entry) in stack.resources() {
+/// Rebase copied prebuilt artifact paths to the current checkout.
+///
+/// `alien build` writes local artifact directories into stack.json. CI may build
+/// those artifacts in one checkout and copy `.alien/build` into another image,
+/// so a prebuilt release must resolve stale `.alien/build/{platform}/{artifact}`
+/// paths before pushing.
+fn rebase_prebuilt_stack_image_paths(
+    stack: &mut Stack,
+    output_dir: &Path,
+    platform: &str,
+) -> Result<()> {
+    for (_resource_id, resource_entry) in stack.resources_mut() {
         if let Some(func) = resource_entry.config.downcast_ref::<Worker>() {
-            if let WorkerCode::Image { ref image } = func.code {
-                let path = PathBuf::from(image);
-                if path.exists() && path.is_dir() {
-                    return Err(AlienError::new(ErrorData::ValidationError {
-                        field: "prebuilt".to_string(),
-                        message: format!(
-                            "Function '{}' has a local image path '{}'. \
-                             --prebuilt requires all images to be pre-pushed remote URIs. \
-                             Run `alien release` without --prebuilt first.",
-                            func.id, image
-                        ),
-                    }));
+            match &func.code {
+                WorkerCode::Image { image } => {
+                    if let Some(rebased) =
+                        rebase_prebuilt_image_path("worker", &func.id, image, output_dir, platform)?
+                    {
+                        let mut updated = func.clone();
+                        updated.code = WorkerCode::Image { image: rebased };
+                        resource_entry.config = alien_core::Resource::new(updated);
+                    }
                 }
-            } else {
-                return Err(AlienError::new(ErrorData::ValidationError {
-                    field: "prebuilt".to_string(),
-                    message: format!(
-                        "Function '{}' has source code instead of a built image. \
-                         --prebuilt requires pre-built and pre-pushed images.",
-                        func.id
-                    ),
-                }));
+                WorkerCode::Source { .. } => {
+                    return Err(prebuilt_source_error("Worker", &func.id));
+                }
             }
         } else if let Some(container) = resource_entry.config.downcast_ref::<Container>() {
-            if let ContainerCode::Image { ref image } = container.code {
-                let path = PathBuf::from(image);
-                if path.exists() && path.is_dir() {
-                    return Err(AlienError::new(ErrorData::ValidationError {
-                        field: "prebuilt".to_string(),
-                        message: format!(
-                            "Container '{}' has a local image path '{}'. \
-                             --prebuilt requires all images to be pre-pushed remote URIs. \
-                             Run `alien release` without --prebuilt first.",
-                            container.id, image
-                        ),
-                    }));
+            match &container.code {
+                ContainerCode::Image { image } => {
+                    if let Some(rebased) = rebase_prebuilt_image_path(
+                        "container",
+                        &container.id,
+                        image,
+                        output_dir,
+                        platform,
+                    )? {
+                        let mut updated = container.clone();
+                        updated.code = ContainerCode::Image { image: rebased };
+                        resource_entry.config = alien_core::Resource::new(updated);
+                    }
                 }
-            } else {
-                return Err(AlienError::new(ErrorData::ValidationError {
-                    field: "prebuilt".to_string(),
-                    message: format!(
-                        "Container '{}' has source code instead of a built image. \
-                         --prebuilt requires pre-built and pre-pushed images.",
-                        container.id
-                    ),
-                }));
+                ContainerCode::Source { .. } => {
+                    return Err(prebuilt_source_error("Container", &container.id));
+                }
             }
         }
     }
     Ok(())
+}
+
+fn rebase_prebuilt_image_path(
+    resource_type: &str,
+    resource_id: &str,
+    image: &str,
+    output_dir: &Path,
+    platform: &str,
+) -> Result<Option<String>> {
+    let image_path = PathBuf::from(image);
+    if image_path.exists() {
+        return Ok(None);
+    }
+
+    if let Some(artifact_dir) = artifact_dir_from_build_path(&image_path, platform) {
+        let rebased_path = output_dir.join("build").join(platform).join(&artifact_dir);
+        if rebased_path.exists() && rebased_path.is_dir() {
+            info!(
+                "Rebased prebuilt {} '{}' image artifact from '{}' to '{}'",
+                resource_type,
+                resource_id,
+                image,
+                rebased_path.display()
+            );
+            return Ok(Some(rebased_path.to_string_lossy().into_owned()));
+        }
+
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "prebuilt".to_string(),
+            message: format!(
+                "{} '{}' references prebuilt artifact '{}', but '{}' does not exist. \
+                 Rebuild the prebuilt artifacts or run without --prebuilt.",
+                resource_type,
+                resource_id,
+                image,
+                rebased_path.display()
+            ),
+        }));
+    }
+
+    if image_path.is_absolute() || image.starts_with("./") || image.starts_with("../") {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "prebuilt".to_string(),
+            message: format!(
+                "{} '{}' references local image path '{}', but it does not exist. \
+                 Rebuild the prebuilt artifacts or run without --prebuilt.",
+                resource_type, resource_id, image
+            ),
+        }));
+    }
+
+    Ok(None)
+}
+
+fn artifact_dir_from_build_path(path: &Path, platform: &str) -> Option<String> {
+    let components = path
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .collect::<Vec<_>>();
+
+    components.windows(4).find_map(|window| {
+        if window[0] == ".alien" && window[1] == "build" && window[2] == platform {
+            Some(window[3].to_string())
+        } else {
+            None
+        }
+    })
+}
+
+fn prebuilt_source_error(resource_type: &str, resource_id: &str) -> AlienError<ErrorData> {
+    AlienError::new(ErrorData::ValidationError {
+        field: "prebuilt".to_string(),
+        message: format!(
+            "{} '{}' has source code instead of a built image. \
+             --prebuilt requires .alien/build artifacts.",
+            resource_type, resource_id
+        ),
+    })
 }
 
 // --- Push cache ---
@@ -1419,6 +1490,51 @@ mod tests {
         );
     }
 
+    #[test]
+    fn rebase_prebuilt_stack_image_paths_rewrites_copied_artifact_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let output_dir = temp.path().join(".alien");
+        let artifact_dir = output_dir.join("build").join("gcp").join("writer-12345678");
+        std::fs::create_dir_all(&artifact_dir).unwrap();
+
+        let original_image =
+            "/home/runner/work/platform/platform/alien/examples/byoc-database/.alien/build/gcp/writer-12345678";
+        let mut stack = Stack::new("demo".to_string())
+            .add(
+                test_container("writer", original_image.to_string()),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .build();
+
+        rebase_prebuilt_stack_image_paths(&mut stack, &output_dir, "gcp").unwrap();
+
+        let (_, entry) = stack.resources().next().unwrap();
+        let container = entry.config.downcast_ref::<Container>().unwrap();
+        assert_eq!(
+            container_image(container),
+            artifact_dir.to_string_lossy().as_ref()
+        );
+    }
+
+    #[test]
+    fn rebase_prebuilt_stack_image_paths_keeps_remote_image_refs() {
+        let temp = tempfile::tempdir().unwrap();
+        let output_dir = temp.path().join(".alien");
+        let image = "registry.example.com/demo/writer:latest";
+        let mut stack = Stack::new("demo".to_string())
+            .add(
+                test_container("writer", image.to_string()),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .build();
+
+        rebase_prebuilt_stack_image_paths(&mut stack, &output_dir, "gcp").unwrap();
+
+        let (_, entry) = stack.resources().next().unwrap();
+        let container = entry.config.downcast_ref::<Container>().unwrap();
+        assert_eq!(container_image(container), image);
+    }
+
     fn test_plan(
         platform: &str,
         platform_settings: alien_build::settings::PlatformBuildSettings,
@@ -1433,6 +1549,28 @@ mod tests {
                 override_base_image: None,
                 debug_mode: false,
             },
+        }
+    }
+
+    fn test_container(name: &str, image: String) -> Container {
+        Container::new(name.to_string())
+            .code(ContainerCode::Image { image })
+            .cpu(alien_core::ResourceSpec {
+                min: "0.5".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(alien_core::ResourceSpec {
+                min: "512Mi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .permissions("execution".to_string())
+            .build()
+    }
+
+    fn container_image(container: &Container) -> &str {
+        match &container.code {
+            ContainerCode::Image { image } => image,
+            ContainerCode::Source { .. } => panic!("expected image container"),
         }
     }
 }
