@@ -25,10 +25,11 @@ use crate::commands::{
     build_and_post_release_simple, build_command, build_dev_status, commands_task,
     commands_task_dev, deploy_task, deployments_task, destroy_task,
     ensure_server_running_for_dev_session, ensure_server_running_with_env,
-    fetch_all_dev_deployment_live_states, init_task, onboard_task, prepare_dev_session_deployment,
-    release_command, releases_task, render_task, vault_remote_task, vault_task, whoami_task,
-    write_dev_status, BuildArgs, CliEnvVar, CommandsArgs, DeployArgs, DeploymentsArgs, DestroyArgs,
-    InitArgs, OnboardArgs, ReleaseArgs, ReleasesArgs, RenderArgs, WhoamiArgs,
+    fetch_all_dev_deployment_live_states, init_task, logs_task, onboard_task,
+    prepare_dev_session_deployment, release_command, releases_task, render_task, vault_remote_task,
+    vault_task, whoami_task, write_dev_status, BuildArgs, CliEnvVar, CommandsArgs, DeployArgs,
+    DeploymentsArgs, DestroyArgs, InitArgs, LogsArgs, OnboardArgs, ReleaseArgs, ReleasesArgs,
+    RenderArgs, WhoamiArgs,
 };
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
@@ -85,6 +86,7 @@ impl Cli {
             Some(Commands::Release(args)) => args.json,
             Some(Commands::Render(args)) => args.json,
             Some(Commands::Onboard(args)) => args.json,
+            Some(Commands::Logs(args)) => args.json,
             Some(Commands::Whoami(args)) => args.json,
             Some(Commands::Dev(dev)) => match &dev.subcommand {
                 Some(DevSubcommand::Release(args)) => args.json,
@@ -121,6 +123,8 @@ pub enum Commands {
     /// Deployment commands
     #[command(alias = "deployment")]
     Deployments(DeploymentsArgs),
+    /// Search deployment and manager logs
+    Logs(LogsArgs),
     /// Release commands
     Releases(ReleasesArgs),
     /// Deploy to a cloud platform
@@ -1443,6 +1447,7 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
             Some(Commands::Release(args)) => release_command(args, ctx).await?,
             Some(Commands::Onboard(args)) => onboard_task(args, ctx).await?,
             Some(Commands::Deployments(args)) => deployments_task(args, ctx).await?,
+            Some(Commands::Logs(args)) => logs_task(args, ctx).await?,
             Some(Commands::Releases(args)) => releases_task(args, ctx).await?,
             Some(Commands::Deploy(args)) => deploy_task(args, ctx).await?,
             Some(Commands::Destroy(args)) => destroy_task(args, ctx).await?,

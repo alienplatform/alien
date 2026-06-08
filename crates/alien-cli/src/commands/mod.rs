@@ -5,6 +5,7 @@ pub mod deployments;
 pub mod destroy;
 pub mod dev_helpers;
 pub mod init;
+pub mod logs;
 pub mod onboard;
 pub mod release;
 pub mod releases;
@@ -36,6 +37,7 @@ pub use dev_helpers::{
     CliEnvVar, DevDeploymentLiveState, DevDeploymentSnapshot,
 };
 pub use init::{init_task, InitArgs};
+pub use logs::{logs_task, LogsArgs};
 pub use onboard::{onboard_task, OnboardArgs};
 pub use release::{release_command, ReleaseArgs};
 pub use releases::{releases_task, ReleasesArgs};
