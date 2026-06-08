@@ -60,6 +60,7 @@ const router = new alien.Container("router")
   .memory("256Mi")
   .port(8080)
   .expose("http")
+  .healthCheck({ path: "/health", method: "GET", timeoutSeconds: 1, failureThreshold: 3 })
   .permissions("default")
   .build()
 

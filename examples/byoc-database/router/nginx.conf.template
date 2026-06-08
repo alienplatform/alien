@@ -1,6 +1,6 @@
-# Use DNS resolver with variables for dynamic service discovery
-# This allows nginx to start even if upstreams don't exist yet
-resolver 127.0.0.11 valid=5s;
+# Use the resolver injected into this container for dynamic service discovery.
+# This allows nginx to start even if upstreams don't exist yet.
+resolver ${NGINX_RESOLVER} valid=5s ipv6=off;
 
 server {
     listen 8080;
@@ -48,5 +48,3 @@ server {
         proxy_set_header Host $host;
     }
 }
-
-

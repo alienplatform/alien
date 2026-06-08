@@ -9,12 +9,13 @@
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
+use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     GcpVpcNetworkHeartbeatData, HeartbeatBackend, Network, NetworkHeartbeatData,
     NetworkHeartbeatStatus, NetworkSettings, ObservedHealth, Platform, ProviderLifecycleState,
     ResourceHeartbeat, ResourceHeartbeatData, ResourceStatus,
 };
-use alien_error::{AlienError, Context};
+use alien_error::{AlienError, Context, ContextError};
 use alien_gcp_clients::compute::{
     Firewall, FirewallAllowed, FirewallDirection, Network as GcpNetwork, NetworkRoutingConfig,
     Router, RouterNat, RouterNatSubnetworkToNat, RoutingMode, SourceIpRangesToNat, Subnetwork,
@@ -132,6 +133,24 @@ impl GcpNetworkController {
     fn get_firewall_name(&self, resource_prefix: &str, network_id: &str) -> String {
         format!("{}-{}-allow-internal", resource_prefix, network_id)
     }
+}
+
+fn is_remote_resource_conflict(error: &AlienError<CloudClientErrorData>) -> bool {
+    matches!(
+        &error.error,
+        Some(CloudClientErrorData::RemoteResourceConflict { .. })
+    )
+}
+
+fn network_matches_expected_create(existing: &GcpNetwork, expected_description: &str) -> bool {
+    let routing_mode = existing
+        .routing_config
+        .as_ref()
+        .and_then(|config| config.routing_mode.as_ref());
+
+    existing.auto_create_subnetworks == Some(false)
+        && existing.description.as_deref() == Some(expected_description)
+        && routing_mode == Some(&RoutingMode::Regional)
 }
 
 impl GcpNetworkController {
@@ -334,22 +353,59 @@ impl GcpNetworkController {
         let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
 
         // Create custom-mode VPC (we control subnets)
+        let network_description = format!("Runtime-managed VPC for {}", ctx.resource_prefix);
         let network = GcpNetwork::builder()
             .name(network_name.clone())
-            .description(format!("Runtime-managed VPC for {}", ctx.resource_prefix))
+            .description(network_description.clone())
             .auto_create_subnetworks(false)
             .routing_config(NetworkRoutingConfig {
                 routing_mode: Some(RoutingMode::Regional),
             })
             .build();
 
-        let operation = compute_client.insert_network(network).await.context(
-            ErrorData::InfrastructureError {
-                message: format!("Failed to create VPC network '{}'", network_name),
-                operation: Some("insert_network".to_string()),
-                resource_id: Some(config.id.clone()),
-            },
-        )?;
+        let operation = match compute_client.insert_network(network).await {
+            Ok(operation) => operation,
+            Err(error) if is_remote_resource_conflict(&error) => {
+                let existing = compute_client
+                    .get_network(network_name.clone())
+                    .await
+                    .context(ErrorData::InfrastructureError {
+                        message: format!(
+                            "VPC network '{}' already exists but could not be inspected",
+                            network_name
+                        ),
+                        operation: Some("get_network_after_conflict".to_string()),
+                        resource_id: Some(config.id.clone()),
+                    })?;
+                if !network_matches_expected_create(&existing, &network_description) {
+                    return Err(AlienError::new(ErrorData::InfrastructureError {
+                        message: format!(
+                            "VPC network '{}' already exists but does not match the expected Alien-managed network",
+                            network_name
+                        ),
+                        operation: Some("insert_network".to_string()),
+                        resource_id: Some(config.id.clone()),
+                    }));
+                }
+
+                self.network_self_link = existing.self_link;
+                info!(
+                    network_name = %network_name,
+                    "VPC network already exists and matches expected configuration; resuming create flow"
+                );
+                return Ok(HandlerAction::Continue {
+                    state: CreatingSubnetwork,
+                    suggested_delay: None,
+                });
+            }
+            Err(error) => {
+                return Err(error.context(ErrorData::InfrastructureError {
+                    message: format!("Failed to create VPC network '{}'", network_name),
+                    operation: Some("insert_network".to_string()),
+                    resource_id: Some(config.id.clone()),
+                }));
+            }
+        };
 
         self.pending_operation_name = operation.name;
         self.pending_operation_region = None; // Global operation

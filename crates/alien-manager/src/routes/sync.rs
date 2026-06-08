@@ -225,6 +225,7 @@ async fn acquire(
         statuses: req.statuses,
         platforms: req.platforms,
         limit: Some(req.limit),
+        ..DeploymentFilter::default()
     };
 
     let acquired = match state
@@ -1232,6 +1233,7 @@ async fn initialize(
                 statuses: None,
                 platforms: None,
                 limit: Some(1),
+                ..DeploymentFilter::default()
             };
             match state
                 .deployment_store

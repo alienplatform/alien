@@ -195,7 +195,17 @@ pub struct DeploymentFilter {
     pub deployment_ids: Option<Vec<String>>,
     pub statuses: Option<Vec<String>>,
     pub platforms: Option<Vec<Platform>>,
+    pub setup_method: Option<String>,
+    pub acquire_mode: Option<DeploymentAcquireMode>,
     pub limit: Option<u32>,
+}
+
+/// Ownership mode for deployment acquisition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeploymentAcquireMode {
+    Runtime,
+    SetupRun,
+    SetupTeardown,
 }
 
 /// Result of acquiring deployments for processing.
