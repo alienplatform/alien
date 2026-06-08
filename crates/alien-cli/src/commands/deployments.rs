@@ -438,7 +438,7 @@ async fn delete_deployment_task(
         .delete_deployment()
         .id(&deployment.id)
         .body(alien_manager_api::types::DeleteDeploymentRequest {
-            mode: alien_manager_api::types::DeleteDeploymentMode::Clean,
+            action: alien_manager_api::types::DeleteDeploymentAction::Cleanup,
         })
         .send()
         .await
@@ -852,6 +852,8 @@ async fn create_deployment_task(
         manager_id: None,
         pinned_release_id: None,
         environment_info: None,
+        setup_method: None,
+        setup_metadata: None,
     };
 
     let workspace_param = CreateDeploymentWorkspace::try_from(workspace)

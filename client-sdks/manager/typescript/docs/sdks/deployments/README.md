@@ -255,7 +255,7 @@ async function run() {
   await alienManager.deployments.deleteDeployment({
     id: "<id>",
     deleteDeploymentRequest: {
-      mode: "forget",
+      action: "forget",
     },
   });
 
@@ -284,7 +284,7 @@ async function run() {
   const res = await deploymentsDeleteDeployment(alienManager, {
     id: "<id>",
     deleteDeploymentRequest: {
-      mode: "forget",
+      action: "forget",
     },
   });
   if (res.ok) {

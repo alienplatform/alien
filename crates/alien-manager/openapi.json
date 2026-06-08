@@ -5758,10 +5758,10 @@
           }
         ]
       },
-      "DeleteDeploymentMode": {
+      "DeleteDeploymentAction": {
         "type": "string",
         "enum": [
-          "clean",
+          "cleanup",
           "detach",
           "forget"
         ]
@@ -5769,21 +5769,13 @@
       "DeleteDeploymentRequest": {
         "type": "object",
         "required": [
-          "mode"
+          "action"
         ],
         "properties": {
-          "mode": {
-            "$ref": "#/components/schemas/DeleteDeploymentMode"
+          "action": {
+            "$ref": "#/components/schemas/DeleteDeploymentAction"
           }
         }
-      },
-      "DeleteResourceMode": {
-        "type": "string",
-        "description": "Resource set selected for deployment cleanup.\n\n`All` is used for deployments where Alien owns the full recorded stack.\n`Live` is used when setup tools own Frozen resources and Alien should only\ndelete resources it owns before setup tears down its part.",
-        "enum": [
-          "all",
-          "live"
-        ]
       },
       "DeploymentGroupMinimal": {
         "type": "object",
@@ -10962,7 +10954,6 @@
           "deploymentId": {
             "type": "string"
           },
-          "error": {},
           "heartbeats": {
             "type": "array",
             "items": {
@@ -11625,6 +11616,7 @@
           "update-failed",
           "deleting",
           "delete-failed",
+          "teardown-required",
           "deleted",
           "refresh-failed"
         ]
@@ -12000,6 +11992,9 @@
             "format": "int32",
             "description": "Wire-format version for the setup import payload.",
             "minimum": 0
+          },
+          "setupMetadata": {
+            "description": "Setup source metadata needed by the control plane to guide privileged\nteardown. The manager treats this as opaque JSON."
           },
           "setupTarget": {
             "type": "string",

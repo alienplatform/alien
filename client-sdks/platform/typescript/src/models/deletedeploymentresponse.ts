@@ -8,31 +8,31 @@ import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
-export const DeleteDeploymentResponseMode = {
-  Clean: "clean",
+export const DeleteDeploymentResponseAction = {
+  Cleanup: "cleanup",
   Detach: "detach",
   Forget: "forget",
 } as const;
-export type DeleteDeploymentResponseMode = ClosedEnum<
-  typeof DeleteDeploymentResponseMode
+export type DeleteDeploymentResponseAction = ClosedEnum<
+  typeof DeleteDeploymentResponseAction
 >;
 
 export type DeleteDeploymentResponse = {
-  mode: DeleteDeploymentResponseMode;
+  action: DeleteDeploymentResponseAction;
   message: string;
 };
 
 /** @internal */
-export const DeleteDeploymentResponseMode$inboundSchema: z.ZodEnum<
-  typeof DeleteDeploymentResponseMode
-> = z.enum(DeleteDeploymentResponseMode);
+export const DeleteDeploymentResponseAction$inboundSchema: z.ZodEnum<
+  typeof DeleteDeploymentResponseAction
+> = z.enum(DeleteDeploymentResponseAction);
 
 /** @internal */
 export const DeleteDeploymentResponse$inboundSchema: z.ZodType<
   DeleteDeploymentResponse,
   unknown
 > = z.object({
-  mode: DeleteDeploymentResponseMode$inboundSchema,
+  action: DeleteDeploymentResponseAction$inboundSchema,
   message: z.string(),
 });
 

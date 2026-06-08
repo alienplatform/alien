@@ -293,7 +293,7 @@ impl TestDeployment {
             .delete_deployment()
             .id(&self.id)
             .body(alien_manager_api::types::DeleteDeploymentRequest {
-                mode: alien_manager_api::types::DeleteDeploymentMode::Clean,
+                action: alien_manager_api::types::DeleteDeploymentAction::Cleanup,
             })
             .send()
             .await

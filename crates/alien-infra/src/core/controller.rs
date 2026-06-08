@@ -686,6 +686,14 @@ pub trait ResourceController: Send + Sync + Debug {
     /// Returns the new state as a trait object.
     fn transition_to_delete_start(&mut self) -> Result<()>;
 
+    /// Transitions the resource state to begin privileged setup-owned teardown.
+    ///
+    /// Most resources use the same flow for runtime delete and setup teardown.
+    /// Controllers that keep runtime cleanup separate can override this.
+    fn transition_to_teardown_start(&mut self) -> Result<()> {
+        self.transition_to_delete_start()
+    }
+
     /// Transitions the resource state to begin an update process, if possible from the current state.
     /// This is typically called when the executor detects a config change for a resource in a `Running` or `UpdateFailed` status.
     /// It should update the internal state to the appropriate 'UpdateStart' status.

@@ -25,6 +25,7 @@ import { SDKValidationError } from "./errors/sdkvalidationerror.js";
  */
 export const DeploymentListItemResponseStatus = {
   Pending: "pending",
+  PreflightsFailed: "preflights-failed",
   InitialSetup: "initial-setup",
   InitialSetupFailed: "initial-setup-failed",
   Provisioning: "provisioning",
@@ -37,6 +38,8 @@ export const DeploymentListItemResponseStatus = {
   DeletePending: "delete-pending",
   Deleting: "deleting",
   DeleteFailed: "delete-failed",
+  TeardownRequired: "teardown-required",
+  TeardownFailed: "teardown-failed",
   Deleted: "deleted",
   Error: "error",
 } as const;
@@ -210,6 +213,24 @@ export type DeploymentListItemResponseImportSource = ClosedEnum<
 >;
 
 /**
+ * Setup method that created the deployment record.
+ */
+export const DeploymentListItemResponseSetupMethod = {
+  Cloudformation: "cloudformation",
+  GoogleOauth: "google-oauth",
+  Terraform: "terraform",
+  Helm: "helm",
+  Cli: "cli",
+  Manual: "manual",
+} as const;
+/**
+ * Setup method that created the deployment record.
+ */
+export type DeploymentListItemResponseSetupMethod = ClosedEnum<
+  typeof DeploymentListItemResponseSetupMethod
+>;
+
+/**
  * Latest error information if in a failed state
  */
 export type DeploymentListItemResponseError = {
@@ -341,6 +362,14 @@ export type DeploymentListItemResponse = {
    * Setup source that imported this deployment
    */
   importSource?: DeploymentListItemResponseImportSource | null | undefined;
+  /**
+   * Setup method that created the deployment record.
+   */
+  setupMethod?: DeploymentListItemResponseSetupMethod | null | undefined;
+  /**
+   * Setup method metadata needed to guide privileged teardown.
+   */
+  setupMetadata?: { [k: string]: any | null } | null | undefined;
   /**
    * Imported setup target for compatibility checks
    */
@@ -574,6 +603,11 @@ export const DeploymentListItemResponseImportSource$inboundSchema: z.ZodEnum<
 > = z.enum(DeploymentListItemResponseImportSource);
 
 /** @internal */
+export const DeploymentListItemResponseSetupMethod$inboundSchema: z.ZodEnum<
+  typeof DeploymentListItemResponseSetupMethod
+> = z.enum(DeploymentListItemResponseSetupMethod);
+
+/** @internal */
 export const DeploymentListItemResponseError$inboundSchema: z.ZodType<
   DeploymentListItemResponseError,
   unknown
@@ -630,6 +664,10 @@ export const DeploymentListItemResponse$inboundSchema: z.ZodType<
   desiredReleaseId: z.nullable(z.string()).optional(),
   pinnedReleaseId: z.nullable(z.string()).optional(),
   importSource: z.nullable(DeploymentListItemResponseImportSource$inboundSchema)
+    .optional(),
+  setupMethod: z.nullable(DeploymentListItemResponseSetupMethod$inboundSchema)
+    .optional(),
+  setupMetadata: z.nullable(z.record(z.string(), z.nullable(z.any())))
     .optional(),
   setupTarget: z.nullable(z.string()).optional(),
   setupFingerprint: z.nullable(z.string()).optional(),

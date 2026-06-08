@@ -1387,6 +1387,94 @@ export type SyncReconcileRequestEnvironmentInfoUnion =
   | any;
 
 /**
+ * Canonical error container that provides a structured way to represent errors
+ *
+ * @remarks
+ * with rich metadata including error codes, human-readable messages, context,
+ * and chaining capabilities for error propagation.
+ *
+ * This struct is designed to be both machine-readable and user-friendly,
+ * supporting serialization for API responses and detailed error reporting
+ * in distributed systems.
+ */
+export type SyncReconcileRequestError = {
+  /**
+   * A unique identifier for the type of error.
+   *
+   * @remarks
+   *
+   * This should be a short, machine-readable string that can be used
+   * by clients to programmatically handle different error types.
+   * Examples: "NOT_FOUND", "VALIDATION_ERROR", "TIMEOUT"
+   */
+  code: string;
+  /**
+   * Additional diagnostic information about the error context.
+   *
+   * @remarks
+   *
+   * This optional field can contain structured data providing more details
+   * about the error, such as validation errors, request parameters that
+   * caused the issue, or other relevant context information.
+   */
+  context?: any | null | undefined;
+  /**
+   * Optional human-facing remediation hint.
+   */
+  hint?: string | null | undefined;
+  /**
+   * HTTP status code for this error.
+   *
+   * @remarks
+   *
+   * Used when converting the error to an HTTP response. If None, falls back to
+   * the error type's default status code or 500.
+   */
+  httpStatusCode?: number | null | undefined;
+  /**
+   * Indicates if this is an internal error that should not be exposed to users.
+   *
+   * @remarks
+   *
+   * When `true`, this error contains sensitive information or implementation
+   * details that should not be shown to end-users. Such errors should be
+   * logged for debugging but replaced with generic error messages in responses.
+   */
+  internal: boolean;
+  /**
+   * Human-readable error message.
+   *
+   * @remarks
+   *
+   * This message should be clear and actionable for developers or end-users,
+   * providing context about what went wrong and potentially how to fix it.
+   */
+  message: string;
+  /**
+   * Indicates whether the operation that caused the error should be retried.
+   *
+   * @remarks
+   *
+   * When `true`, the error is transient and the operation might succeed
+   * if attempted again. When `false`, retrying the same operation is
+   * unlikely to succeed without changes.
+   */
+  retryable?: boolean | undefined;
+  /**
+   * The underlying error that caused this error, creating an error chain.
+   *
+   * @remarks
+   *
+   * This allows for proper error propagation and debugging by maintaining
+   * the full context of how an error occurred through multiple layers
+   * of an application.
+   */
+  source?: any | null | undefined;
+};
+
+export type SyncReconcileRequestErrorUnion = SyncReconcileRequestError | any;
+
+/**
  * Represents the target cloud platform.
  */
 export const SyncReconcileRequestPlatform = {
@@ -1403,66 +1491,6 @@ export const SyncReconcileRequestPlatform = {
 export type SyncReconcileRequestPlatform = ClosedEnum<
   typeof SyncReconcileRequestPlatform
 >;
-
-/**
- * Resource set selected for deployment cleanup.
- *
- * @remarks
- *
- * `All` is used for deployments where Alien owns the full recorded stack.
- * `Live` is used when setup tools own Frozen resources and Alien should only
- * delete resources it owns before setup tears down its part.
- */
-export const SyncReconcileRequestDeleteResourceModeEnum = {
-  All: "all",
-  Live: "live",
-} as const;
-/**
- * Resource set selected for deployment cleanup.
- *
- * @remarks
- *
- * `All` is used for deployments where Alien owns the full recorded stack.
- * `Live` is used when setup tools own Frozen resources and Alien should only
- * delete resources it owns before setup tears down its part.
- */
-export type SyncReconcileRequestDeleteResourceModeEnum = ClosedEnum<
-  typeof SyncReconcileRequestDeleteResourceModeEnum
->;
-
-export type SyncReconcileRequestDeleteResourceModeUnion =
-  | SyncReconcileRequestDeleteResourceModeEnum
-  | any;
-
-/**
- * Resource set selected for deployment cleanup.
- *
- * @remarks
- *
- * `All` is used for deployments where Alien owns the full recorded stack.
- * `Live` is used when setup tools own Frozen resources and Alien should only
- * delete resources it owns before setup tears down its part.
- */
-export const SyncReconcileRequestPendingDeleteResourceModeEnum = {
-  All: "all",
-  Live: "live",
-} as const;
-/**
- * Resource set selected for deployment cleanup.
- *
- * @remarks
- *
- * `All` is used for deployments where Alien owns the full recorded stack.
- * `Live` is used when setup tools own Frozen resources and Alien should only
- * delete resources it owns before setup tears down its part.
- */
-export type SyncReconcileRequestPendingDeleteResourceModeEnum = ClosedEnum<
-  typeof SyncReconcileRequestPendingDeleteResourceModeEnum
->;
-
-export type SyncReconcileRequestPendingDeleteResourceModeUnion =
-  | SyncReconcileRequestPendingDeleteResourceModeEnum
-  | any;
 
 export const SyncReconcileRequestPreparedStackManagementEnum = {
   Auto: "auto",
@@ -2696,11 +2724,6 @@ export type SyncReconcileRequestPreparedStackUnion =
  * Stores deployment state that needs to persist across step calls.
  */
 export type SyncReconcileRequestRuntimeMetadata = {
-  deleteResourceMode?:
-    | SyncReconcileRequestDeleteResourceModeEnum
-    | any
-    | null
-    | undefined;
   /**
    * Hash of the environment variables snapshot that was last synced to the vault
    *
@@ -2708,11 +2731,6 @@ export type SyncReconcileRequestRuntimeMetadata = {
    * Used to avoid redundant sync operations during incremental deployment
    */
   lastSyncedEnvVarsHash?: string | null | undefined;
-  pendingDeleteResourceMode?:
-    | SyncReconcileRequestPendingDeleteResourceModeEnum
-    | any
-    | null
-    | undefined;
   preparedStack?: SyncReconcileRequestPreparedStack | any | null | undefined;
   /**
    * Whether cross-account registry access has been successfully granted.
@@ -2807,7 +2825,7 @@ export type SyncReconcileRequestStackStateDependency = {
  * supporting serialization for API responses and detailed error reporting
  * in distributed systems.
  */
-export type SyncReconcileRequestErrorState = {
+export type SyncReconcileRequestStackStateError = {
   /**
    * A unique identifier for the type of error.
    *
@@ -2882,8 +2900,8 @@ export type SyncReconcileRequestErrorState = {
   source?: any | null | undefined;
 };
 
-export type SyncReconcileRequestErrorUnion =
-  | SyncReconcileRequestErrorState
+export type SyncReconcileRequestStackStateErrorUnion =
+  | SyncReconcileRequestStackStateError
   | any;
 
 /**
@@ -2948,6 +2966,7 @@ export const StackStateStateStatus = {
   UpdateFailed: "update-failed",
   Deleting: "deleting",
   DeleteFailed: "delete-failed",
+  TeardownRequired: "teardown-required",
   Deleted: "deleted",
   RefreshFailed: "refresh-failed",
 } as const;
@@ -2980,7 +2999,7 @@ export type SyncReconcileRequestStackStateResources = {
    * This preserves the full dependency information from the stack definition.
    */
   dependencies?: Array<SyncReconcileRequestStackStateDependency> | undefined;
-  error?: SyncReconcileRequestErrorState | any | null | undefined;
+  error?: SyncReconcileRequestStackStateError | any | null | undefined;
   /**
    * Stores the controller state that failed, used for manual retry operations.
    *
@@ -3042,6 +3061,7 @@ export type SyncReconcileRequestStackStateUnion =
  */
 export const StateStatus = {
   Pending: "pending",
+  PreflightsFailed: "preflights-failed",
   InitialSetup: "initial-setup",
   InitialSetupFailed: "initial-setup-failed",
   Provisioning: "provisioning",
@@ -3054,6 +3074,8 @@ export const StateStatus = {
   DeletePending: "delete-pending",
   Deleting: "deleting",
   DeleteFailed: "delete-failed",
+  TeardownRequired: "teardown-required",
+  TeardownFailed: "teardown-failed",
   Deleted: "deleted",
   Error: "error",
 } as const;
@@ -4328,6 +4350,7 @@ export type SyncReconcileRequestState = {
     | any
     | null
     | undefined;
+  error?: SyncReconcileRequestError | any | null | undefined;
   /**
    * Represents the target cloud platform.
    */
@@ -4359,84 +4382,6 @@ export type SyncReconcileRequestState = {
    */
   status: StateStatus;
   targetRelease?: SyncReconcileRequestTargetRelease | any | null | undefined;
-};
-
-/**
- * Deployment error from step() result. Set when deployment fails, null to clear.
- */
-export type SyncReconcileRequestError = {
-  /**
-   * A unique identifier for the type of error.
-   *
-   * @remarks
-   *
-   * This should be a short, machine-readable string that can be used
-   * by clients to programmatically handle different error types.
-   * Examples: "NOT_FOUND", "VALIDATION_ERROR", "TIMEOUT"
-   */
-  code: string;
-  /**
-   * Additional diagnostic information about the error context.
-   *
-   * @remarks
-   *
-   * This optional field can contain structured data providing more details
-   * about the error, such as validation errors, request parameters that
-   * caused the issue, or other relevant context information.
-   */
-  context?: any | null | undefined;
-  /**
-   * Optional human-facing remediation hint.
-   */
-  hint?: string | null | undefined;
-  /**
-   * HTTP status code for this error.
-   *
-   * @remarks
-   *
-   * Used when converting the error to an HTTP response. If None, falls back to
-   * the error type's default status code or 500.
-   */
-  httpStatusCode?: number | null | undefined;
-  /**
-   * Indicates if this is an internal error that should not be exposed to users.
-   *
-   * @remarks
-   *
-   * When `true`, this error contains sensitive information or implementation
-   * details that should not be shown to end-users. Such errors should be
-   * logged for debugging but replaced with generic error messages in responses.
-   */
-  internal: boolean;
-  /**
-   * Human-readable error message.
-   *
-   * @remarks
-   *
-   * This message should be clear and actionable for developers or end-users,
-   * providing context about what went wrong and potentially how to fix it.
-   */
-  message: string;
-  /**
-   * Indicates whether the operation that caused the error should be retried.
-   *
-   * @remarks
-   *
-   * When `true`, the error is transient and the operation might succeed
-   * if attempted again. When `false`, retrying the same operation is
-   * unlikely to succeed without changes.
-   */
-  retryable?: boolean | undefined;
-  /**
-   * The underlying error that caused this error, creating an error chain.
-   *
-   * @remarks
-   *
-   * This allows for proper error propagation and debugging by maintaining
-   * the full context of how an error occurred through multiple layers
-   * of an application.
-   */
-  source?: any | null | undefined;
 };
 
 export const BackendEnum = {
@@ -10877,10 +10822,6 @@ export type SyncReconcileRequest = {
    */
   state: SyncReconcileRequestState;
   /**
-   * Deployment error from step() result. Set when deployment fails, null to clear.
-   */
-  error?: SyncReconcileRequestError | null | undefined;
-  /**
    * Update heartbeat timestamp (for successful health checks)
    */
   updateHeartbeat?: boolean | undefined;
@@ -13582,71 +13523,65 @@ export function syncReconcileRequestEnvironmentInfoUnionToJSON(
 }
 
 /** @internal */
-export const SyncReconcileRequestPlatform$outboundSchema: z.ZodEnum<
-  typeof SyncReconcileRequestPlatform
-> = z.enum(SyncReconcileRequestPlatform);
+export type SyncReconcileRequestError$Outbound = {
+  code: string;
+  context?: any | null | undefined;
+  hint?: string | null | undefined;
+  httpStatusCode?: number | null | undefined;
+  internal: boolean;
+  message: string;
+  retryable: boolean;
+  source?: any | null | undefined;
+};
 
 /** @internal */
-export const SyncReconcileRequestDeleteResourceModeEnum$outboundSchema:
-  z.ZodEnum<typeof SyncReconcileRequestDeleteResourceModeEnum> = z.enum(
-    SyncReconcileRequestDeleteResourceModeEnum,
-  );
+export const SyncReconcileRequestError$outboundSchema: z.ZodType<
+  SyncReconcileRequestError$Outbound,
+  SyncReconcileRequestError
+> = z.object({
+  code: z.string(),
+  context: z.nullable(z.any()).optional(),
+  hint: z.nullable(z.string()).optional(),
+  httpStatusCode: z.nullable(z.int()).optional(),
+  internal: z.boolean(),
+  message: z.string(),
+  retryable: z.boolean().default(false),
+  source: z.nullable(z.any()).optional(),
+});
 
-/** @internal */
-export type SyncReconcileRequestDeleteResourceModeUnion$Outbound = string | any;
-
-/** @internal */
-export const SyncReconcileRequestDeleteResourceModeUnion$outboundSchema:
-  z.ZodType<
-    SyncReconcileRequestDeleteResourceModeUnion$Outbound,
-    SyncReconcileRequestDeleteResourceModeUnion
-  > = z.union([
-    SyncReconcileRequestDeleteResourceModeEnum$outboundSchema,
-    z.any(),
-  ]);
-
-export function syncReconcileRequestDeleteResourceModeUnionToJSON(
-  syncReconcileRequestDeleteResourceModeUnion:
-    SyncReconcileRequestDeleteResourceModeUnion,
+export function syncReconcileRequestErrorToJSON(
+  syncReconcileRequestError: SyncReconcileRequestError,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestDeleteResourceModeUnion$outboundSchema.parse(
-      syncReconcileRequestDeleteResourceModeUnion,
-    ),
+    SyncReconcileRequestError$outboundSchema.parse(syncReconcileRequestError),
   );
 }
 
 /** @internal */
-export const SyncReconcileRequestPendingDeleteResourceModeEnum$outboundSchema:
-  z.ZodEnum<typeof SyncReconcileRequestPendingDeleteResourceModeEnum> = z.enum(
-    SyncReconcileRequestPendingDeleteResourceModeEnum,
-  );
-
-/** @internal */
-export type SyncReconcileRequestPendingDeleteResourceModeUnion$Outbound =
-  | string
+export type SyncReconcileRequestErrorUnion$Outbound =
+  | SyncReconcileRequestError$Outbound
   | any;
 
 /** @internal */
-export const SyncReconcileRequestPendingDeleteResourceModeUnion$outboundSchema:
-  z.ZodType<
-    SyncReconcileRequestPendingDeleteResourceModeUnion$Outbound,
-    SyncReconcileRequestPendingDeleteResourceModeUnion
-  > = z.union([
-    SyncReconcileRequestPendingDeleteResourceModeEnum$outboundSchema,
-    z.any(),
-  ]);
+export const SyncReconcileRequestErrorUnion$outboundSchema: z.ZodType<
+  SyncReconcileRequestErrorUnion$Outbound,
+  SyncReconcileRequestErrorUnion
+> = z.union([z.lazy(() => SyncReconcileRequestError$outboundSchema), z.any()]);
 
-export function syncReconcileRequestPendingDeleteResourceModeUnionToJSON(
-  syncReconcileRequestPendingDeleteResourceModeUnion:
-    SyncReconcileRequestPendingDeleteResourceModeUnion,
+export function syncReconcileRequestErrorUnionToJSON(
+  syncReconcileRequestErrorUnion: SyncReconcileRequestErrorUnion,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestPendingDeleteResourceModeUnion$outboundSchema.parse(
-      syncReconcileRequestPendingDeleteResourceModeUnion,
+    SyncReconcileRequestErrorUnion$outboundSchema.parse(
+      syncReconcileRequestErrorUnion,
     ),
   );
 }
+
+/** @internal */
+export const SyncReconcileRequestPlatform$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestPlatform
+> = z.enum(SyncReconcileRequestPlatform);
 
 /** @internal */
 export const SyncReconcileRequestPreparedStackManagementEnum$outboundSchema:
@@ -16101,9 +16036,7 @@ export function syncReconcileRequestPreparedStackUnionToJSON(
 
 /** @internal */
 export type SyncReconcileRequestRuntimeMetadata$Outbound = {
-  deleteResourceMode?: string | any | null | undefined;
   lastSyncedEnvVarsHash?: string | null | undefined;
-  pendingDeleteResourceMode?: string | any | null | undefined;
   preparedStack?:
     | SyncReconcileRequestPreparedStack$Outbound
     | any
@@ -16117,19 +16050,7 @@ export const SyncReconcileRequestRuntimeMetadata$outboundSchema: z.ZodType<
   SyncReconcileRequestRuntimeMetadata$Outbound,
   SyncReconcileRequestRuntimeMetadata
 > = z.object({
-  deleteResourceMode: z.nullable(
-    z.union([
-      SyncReconcileRequestDeleteResourceModeEnum$outboundSchema,
-      z.any(),
-    ]),
-  ).optional(),
   lastSyncedEnvVarsHash: z.nullable(z.string()).optional(),
-  pendingDeleteResourceMode: z.nullable(
-    z.union([
-      SyncReconcileRequestPendingDeleteResourceModeEnum$outboundSchema,
-      z.any(),
-    ]),
-  ).optional(),
   preparedStack: z.nullable(
     z.union([
       z.lazy(() => SyncReconcileRequestPreparedStack$outboundSchema),
@@ -16264,7 +16185,7 @@ export function syncReconcileRequestStackStateDependencyToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestErrorState$Outbound = {
+export type SyncReconcileRequestStackStateError$Outbound = {
   code: string;
   context?: any | null | undefined;
   hint?: string | null | undefined;
@@ -16276,9 +16197,9 @@ export type SyncReconcileRequestErrorState$Outbound = {
 };
 
 /** @internal */
-export const SyncReconcileRequestErrorState$outboundSchema: z.ZodType<
-  SyncReconcileRequestErrorState$Outbound,
-  SyncReconcileRequestErrorState
+export const SyncReconcileRequestStackStateError$outboundSchema: z.ZodType<
+  SyncReconcileRequestStackStateError$Outbound,
+  SyncReconcileRequestStackStateError
 > = z.object({
   code: z.string(),
   context: z.nullable(z.any()).optional(),
@@ -16290,36 +16211,37 @@ export const SyncReconcileRequestErrorState$outboundSchema: z.ZodType<
   source: z.nullable(z.any()).optional(),
 });
 
-export function syncReconcileRequestErrorStateToJSON(
-  syncReconcileRequestErrorState: SyncReconcileRequestErrorState,
+export function syncReconcileRequestStackStateErrorToJSON(
+  syncReconcileRequestStackStateError: SyncReconcileRequestStackStateError,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestErrorState$outboundSchema.parse(
-      syncReconcileRequestErrorState,
+    SyncReconcileRequestStackStateError$outboundSchema.parse(
+      syncReconcileRequestStackStateError,
     ),
   );
 }
 
 /** @internal */
-export type SyncReconcileRequestErrorUnion$Outbound =
-  | SyncReconcileRequestErrorState$Outbound
+export type SyncReconcileRequestStackStateErrorUnion$Outbound =
+  | SyncReconcileRequestStackStateError$Outbound
   | any;
 
 /** @internal */
-export const SyncReconcileRequestErrorUnion$outboundSchema: z.ZodType<
-  SyncReconcileRequestErrorUnion$Outbound,
-  SyncReconcileRequestErrorUnion
+export const SyncReconcileRequestStackStateErrorUnion$outboundSchema: z.ZodType<
+  SyncReconcileRequestStackStateErrorUnion$Outbound,
+  SyncReconcileRequestStackStateErrorUnion
 > = z.union([
-  z.lazy(() => SyncReconcileRequestErrorState$outboundSchema),
+  z.lazy(() => SyncReconcileRequestStackStateError$outboundSchema),
   z.any(),
 ]);
 
-export function syncReconcileRequestErrorUnionToJSON(
-  syncReconcileRequestErrorUnion: SyncReconcileRequestErrorUnion,
+export function syncReconcileRequestStackStateErrorUnionToJSON(
+  syncReconcileRequestStackStateErrorUnion:
+    SyncReconcileRequestStackStateErrorUnion,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestErrorUnion$outboundSchema.parse(
-      syncReconcileRequestErrorUnion,
+    SyncReconcileRequestStackStateErrorUnion$outboundSchema.parse(
+      syncReconcileRequestStackStateErrorUnion,
     ),
   );
 }
@@ -16474,7 +16396,7 @@ export type SyncReconcileRequestStackStateResources$Outbound = {
   dependencies?:
     | Array<SyncReconcileRequestStackStateDependency$Outbound>
     | undefined;
-  error?: SyncReconcileRequestErrorState$Outbound | any | null | undefined;
+  error?: SyncReconcileRequestStackStateError$Outbound | any | null | undefined;
   lastFailedState?: any | null | undefined;
   lifecycle?: string | any | null | undefined;
   outputs?: SyncReconcileRequestOutputs$Outbound | any | null | undefined;
@@ -16504,7 +16426,7 @@ export const SyncReconcileRequestStackStateResources$outboundSchema: z.ZodType<
   ).optional(),
   error: z.nullable(
     z.union([
-      z.lazy(() => SyncReconcileRequestErrorState$outboundSchema),
+      z.lazy(() => SyncReconcileRequestStackStateError$outboundSchema),
       z.any(),
     ]),
   ).optional(),
@@ -19095,6 +19017,7 @@ export type SyncReconcileRequestState$Outbound = {
     | any
     | null
     | undefined;
+  error?: SyncReconcileRequestError$Outbound | any | null | undefined;
   platform: string;
   protocolVersion: number;
   retryRequested?: boolean | undefined;
@@ -19133,6 +19056,9 @@ export const SyncReconcileRequestState$outboundSchema: z.ZodType<
       z.any(),
     ]),
   ).optional(),
+  error: z.nullable(
+    z.union([z.lazy(() => SyncReconcileRequestError$outboundSchema), z.any()]),
+  ).optional(),
   platform: SyncReconcileRequestPlatform$outboundSchema,
   protocolVersion: z.int(),
   retryRequested: z.boolean().optional(),
@@ -19162,41 +19088,6 @@ export function syncReconcileRequestStateToJSON(
 ): string {
   return JSON.stringify(
     SyncReconcileRequestState$outboundSchema.parse(syncReconcileRequestState),
-  );
-}
-
-/** @internal */
-export type SyncReconcileRequestError$Outbound = {
-  code: string;
-  context?: any | null | undefined;
-  hint?: string | null | undefined;
-  httpStatusCode?: number | null | undefined;
-  internal: boolean;
-  message: string;
-  retryable: boolean;
-  source?: any | null | undefined;
-};
-
-/** @internal */
-export const SyncReconcileRequestError$outboundSchema: z.ZodType<
-  SyncReconcileRequestError$Outbound,
-  SyncReconcileRequestError
-> = z.object({
-  code: z.string(),
-  context: z.nullable(z.any()).optional(),
-  hint: z.nullable(z.string()).optional(),
-  httpStatusCode: z.nullable(z.int()).optional(),
-  internal: z.boolean(),
-  message: z.string(),
-  retryable: z.boolean().default(false),
-  source: z.nullable(z.any()).optional(),
-});
-
-export function syncReconcileRequestErrorToJSON(
-  syncReconcileRequestError: SyncReconcileRequestError,
-): string {
-  return JSON.stringify(
-    SyncReconcileRequestError$outboundSchema.parse(syncReconcileRequestError),
   );
 }
 
@@ -32804,7 +32695,6 @@ export type SyncReconcileRequest$Outbound = {
   deploymentId: string;
   session?: string | undefined;
   state: SyncReconcileRequestState$Outbound;
-  error?: SyncReconcileRequestError$Outbound | null | undefined;
   updateHeartbeat?: boolean | undefined;
   suggestedDelayMs?: number | undefined;
   heartbeats?: Array<Heartbeat$Outbound> | undefined;
@@ -32818,8 +32708,6 @@ export const SyncReconcileRequest$outboundSchema: z.ZodType<
   deploymentId: z.string(),
   session: z.string().optional(),
   state: z.lazy(() => SyncReconcileRequestState$outboundSchema),
-  error: z.nullable(z.lazy(() => SyncReconcileRequestError$outboundSchema))
-    .optional(),
   updateHeartbeat: z.boolean().optional(),
   suggestedDelayMs: z.int().optional(),
   heartbeats: z.array(z.lazy(() => Heartbeat$outboundSchema)).optional(),

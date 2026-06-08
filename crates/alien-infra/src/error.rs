@@ -104,6 +104,18 @@ pub enum ErrorData {
         dependency_id: String,
     },
 
+    /// Persisted resource state is missing lifecycle ownership metadata.
+    #[error(
+        code = "RESOURCE_LIFECYCLE_MISSING",
+        message = "Resource '{resource_id}' is missing lifecycle metadata required for scoped deletion",
+        retryable = "false",
+        internal = "false"
+    )]
+    ResourceLifecycleMissing {
+        /// ID of the resource missing lifecycle metadata
+        resource_id: String,
+    },
+
     /// Duplicate resource ID detected in stack configuration.
     #[error(
         code = "DUPLICATE_RESOURCE_ID",

@@ -7,8 +7,8 @@ use std::sync::Arc;
 use tracing::warn;
 
 use alien_core::{
-    import::ImportSourceKind, DeleteResourceMode, EnvironmentInfo, EnvironmentVariable, Platform,
-    RuntimeMetadata, StackState,
+    import::ImportSourceKind, EnvironmentInfo, EnvironmentVariable, Platform, RuntimeMetadata,
+    StackState,
 };
 use alien_error::{AlienError, Context, GenericError, IntoAlienError};
 
@@ -115,6 +115,8 @@ impl SqliteDeploymentStore {
             current_release_id: p.optional_string(11, "current_release_id")?,
             desired_release_id: p.optional_string(12, "desired_release_id")?,
             import_source,
+            setup_method: None,
+            setup_metadata: None,
             setup_target: p.optional_string(14, "setup_target")?,
             setup_fingerprint: p.optional_string(15, "setup_fingerprint")?,
             setup_fingerprint_version: p
@@ -285,6 +287,8 @@ impl DeploymentStore for SqliteDeploymentStore {
             current_release_id: None,
             desired_release_id: None,
             import_source: None,
+            setup_method: None,
+            setup_metadata: None,
             setup_target: None,
             setup_fingerprint: None,
             setup_fingerprint_version: None,
@@ -441,7 +445,13 @@ impl DeploymentStore for SqliteDeploymentStore {
             runtime_metadata: Some(params.runtime_metadata),
             current_release_id: params.current_release_id,
             desired_release_id: params.desired_release_id,
-            import_source: params.import_source,
+            import_source: params.import_source.clone(),
+            setup_method: params.import_source.as_ref().and_then(|source| {
+                serde_json::to_value(source)
+                    .ok()
+                    .and_then(|value| value.as_str().map(ToString::to_string))
+            }),
+            setup_metadata: params.setup_metadata,
             setup_target: Some(params.setup_target),
             setup_fingerprint: Some(params.setup_fingerprint),
             setup_fingerprint_version: Some(params.setup_fingerprint_version),
@@ -659,12 +669,15 @@ impl DeploymentStore for SqliteDeploymentStore {
         &self,
         caller: &crate::auth::Subject,
         id: &str,
-        delete_resource_mode: DeleteResourceMode,
     ) -> Result<(), AlienError> {
         let deployment = self
             .get_deployment(caller, id)
             .await?
             .ok_or_else(|| db_error(&format!("Deployment {} not found", id)))?;
+
+        if deployment.status == "teardown-required" || deployment.status == "teardown-failed" {
+            return Ok(());
+        }
 
         let rejection_statuses = ["delete-pending", "deleting", "deleted"];
         if rejection_statuses.contains(&deployment.status.as_str()) {
@@ -675,8 +688,8 @@ impl DeploymentStore for SqliteDeploymentStore {
             .into_generic());
         }
 
-        let mut runtime_metadata = deployment.runtime_metadata.unwrap_or_default();
-        runtime_metadata.delete_resource_mode = Some(delete_resource_mode);
+        // FUTURE: reject or queue delete requests when another session currently owns the deployment lock.
+        let runtime_metadata = deployment.runtime_metadata.unwrap_or_default();
         let runtime_metadata_json = serde_json::to_string(&runtime_metadata)
             .into_alien_error()
             .context(GenericError {
@@ -781,32 +794,51 @@ impl DeploymentStore for SqliteDeploymentStore {
 
         // Failed statuses that can be retried when retry_requested is true
         let failed_statuses = [
+            "preflights-failed",
             "initial-setup-failed",
             "provisioning-failed",
             "refresh-failed",
             "update-failed",
             "delete-failed",
         ];
+        let setup_teardown_statuses = ["teardown-required", "teardown-failed"];
 
         // Stale lock threshold: 5 minutes. If a manager crashed mid-processing,
         // the lock will self-heal after this period.
         let stale_lock_condition = Self::stale_lock_condition_sql();
+        let explicit_status_filter = filter
+            .statuses
+            .as_ref()
+            .filter(|statuses| !statuses.is_empty());
 
         // SELECT deployments that need work AND are either unlocked or stale-locked
         let select_sql = {
             let mut query = Query::select();
             query
                 .columns(Self::DEPLOYMENT_COLUMNS)
-                .from(Deployments::Table)
-                .cond_where(
-                    sea_query::Cond::any()
-                        .add(Expr::col(Deployments::Status).is_in(work_statuses))
-                        .add(
-                            sea_query::Cond::all()
-                                .add(Expr::col(Deployments::Status).is_in(failed_statuses))
-                                .add(Expr::col(Deployments::RetryRequested).eq(1)),
-                        ),
-                )
+                .from(Deployments::Table);
+
+            let work_eligibility = sea_query::Cond::any()
+                .add(Expr::col(Deployments::Status).is_in(work_statuses))
+                .add(
+                    sea_query::Cond::all()
+                        .add(Expr::col(Deployments::Status).is_in(failed_statuses))
+                        .add(Expr::col(Deployments::RetryRequested).eq(1)),
+                );
+
+            if let Some(statuses) = explicit_status_filter {
+                let status_strs: Vec<&str> = statuses.iter().map(|s| s.as_str()).collect();
+                query
+                    .and_where(Expr::col(Deployments::Status).is_in(status_strs))
+                    .cond_where(
+                        work_eligibility
+                            .add(Expr::col(Deployments::Status).is_in(setup_teardown_statuses)),
+                    );
+            } else {
+                query.cond_where(work_eligibility);
+            }
+
+            query
                 // Unlocked OR stale-locked (locked_at older than 5 minutes)
                 .cond_where(
                     sea_query::Cond::any()
@@ -820,10 +852,6 @@ impl DeploymentStore for SqliteDeploymentStore {
             if let Some(ids) = &filter.deployment_ids {
                 let id_strs: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
                 query.and_where(Expr::col(Deployments::Id).is_in(id_strs));
-            }
-            if let Some(statuses) = &filter.statuses {
-                let status_strs: Vec<&str> = statuses.iter().map(|s| s.as_str()).collect();
-                query.and_where(Expr::col(Deployments::Status).is_in(status_strs));
             }
             if let Some(platforms) = &filter.platforms {
                 let platform_strs: Vec<&str> = platforms.iter().map(|p| p.as_str()).collect();
@@ -859,21 +887,36 @@ impl DeploymentStore for SqliteDeploymentStore {
         for dep in deployments {
             // Atomically lock: only succeeds if still unlocked or stale-locked
             let lock_sql = {
-                Query::update()
+                let mut query = Query::update();
+                query
                     .table(Deployments::Table)
                     .value(Deployments::LockedBy, session)
                     .value(Deployments::LockedAt, now.to_rfc3339())
                     .value(Deployments::RetryRequested, 0i64)
-                    .and_where(Expr::col(Deployments::Id).eq(dep.id.as_str()))
-                    .cond_where(
-                        sea_query::Cond::any()
-                            .add(Expr::col(Deployments::Status).is_in(work_statuses))
-                            .add(
-                                sea_query::Cond::all()
-                                    .add(Expr::col(Deployments::Status).is_in(failed_statuses))
-                                    .add(Expr::col(Deployments::RetryRequested).eq(1)),
+                    .and_where(Expr::col(Deployments::Id).eq(dep.id.as_str()));
+
+                let work_eligibility = sea_query::Cond::any()
+                    .add(Expr::col(Deployments::Status).is_in(work_statuses))
+                    .add(
+                        sea_query::Cond::all()
+                            .add(Expr::col(Deployments::Status).is_in(failed_statuses))
+                            .add(Expr::col(Deployments::RetryRequested).eq(1)),
+                    );
+
+                if let Some(statuses) = explicit_status_filter {
+                    let status_strs: Vec<&str> = statuses.iter().map(|s| s.as_str()).collect();
+                    query
+                        .and_where(Expr::col(Deployments::Status).is_in(status_strs))
+                        .cond_where(
+                            work_eligibility.add(
+                                Expr::col(Deployments::Status).is_in(setup_teardown_statuses),
                             ),
-                    )
+                        );
+                } else {
+                    query.cond_where(work_eligibility);
+                }
+
+                query
                     .cond_where(
                         sea_query::Cond::any()
                             .add(Expr::col(Deployments::LockedBy).is_null())
@@ -965,8 +1008,8 @@ impl DeploymentStore for SqliteDeploymentStore {
             })
             .unwrap_or(false);
 
-        let error_json: Option<String> = data
-            .error
+        let headline_error = alien_deployment::deployment_headline_error_from_state(state);
+        let error_json: Option<String> = headline_error
             .as_ref()
             .map(|e| serde_json::to_string(e))
             .transpose()

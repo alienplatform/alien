@@ -160,6 +160,7 @@ impl StackState {
                     | ResourceStatus::Provisioning
                     | ResourceStatus::Updating
                     | ResourceStatus::Deleting
+                    | ResourceStatus::TeardownRequired
             )
         }) {
             return Ok(StackStatus::InProgress);
@@ -1134,6 +1135,7 @@ mod tests {
                 current_release: None,
                 target_release: None,
                 stack_state: Some(stack_state),
+                error: None,
                 environment_info: None,
                 runtime_metadata: None,
                 retry_requested: false,

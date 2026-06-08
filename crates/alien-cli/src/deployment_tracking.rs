@@ -10,6 +10,7 @@ use alien_platform_api::{
     types::{Subject, SubjectScope},
     Client as SdkClient,
 };
+#[cfg(debug_assertions)]
 use dirs::config_dir;
 use reqwest::{
     header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT},

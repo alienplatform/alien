@@ -10,9 +10,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use alien_core::{
-    import::ImportSourceKind, is_valid_resource_prefix, ContainerOutputs, DeleteResourceMode,
-    EnvironmentVariable, Platform, StackSettings, StackState, WorkerOutputs,
-    RESOURCE_PREFIX_ERROR_MESSAGE,
+    import::ImportSourceKind, is_valid_resource_prefix, ContainerOutputs, EnvironmentVariable,
+    Platform, StackSettings, StackState, WorkerOutputs, RESOURCE_PREFIX_ERROR_MESSAGE,
 };
 
 use crate::error::ErrorData;
@@ -134,8 +133,8 @@ impl<S: Send + Sync> axum::extract::FromRequestParts<S> for ListDeploymentsQuery
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
-pub enum DeleteDeploymentMode {
-    Clean,
+pub enum DeleteDeploymentAction {
+    Cleanup,
     Detach,
     Forget,
 }
@@ -144,7 +143,7 @@ pub enum DeleteDeploymentMode {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct DeleteDeploymentRequest {
-    pub mode: DeleteDeploymentMode,
+    pub action: DeleteDeploymentAction,
 }
 
 #[derive(Debug, Serialize)]
@@ -642,18 +641,24 @@ async fn delete_deployment(
         return ErrorData::forbidden("Cannot delete deployment").into_response();
     }
 
-    match req.mode {
-        DeleteDeploymentMode::Clean => {
-            let delete_resource_mode = clean_delete_resource_mode(&deployment);
+    let message = match &req.action {
+        DeleteDeploymentAction::Cleanup => {
             if let Err(e) = state
                 .deployment_store
-                .set_delete_pending(&subject, &id, delete_resource_mode)
+                .set_delete_pending(&subject, &id)
                 .await
             {
                 return e.into_response();
             }
+            match deployment.status.as_str() {
+                "teardown-required" => "Runtime cleanup complete; setup teardown required",
+                "teardown-failed" => {
+                    "Setup teardown failed; retry setup teardown with setup credentials"
+                }
+                _ => "Deployment deletion accepted",
+            }
         }
-        DeleteDeploymentMode::Detach | DeleteDeploymentMode::Forget => {
+        DeleteDeploymentAction::Detach | DeleteDeploymentAction::Forget => {
             if let Err(e) = state
                 .deployment_store
                 .delete_deployment(&subject, &id)
@@ -661,25 +666,18 @@ async fn delete_deployment(
             {
                 return e.into_response();
             }
+            "Deployment deletion accepted"
         }
-    }
+    };
 
     (
         StatusCode::ACCEPTED,
         Json(serde_json::json!({
-            "mode": req.mode,
-            "message": "Deployment deletion accepted"
+            "action": req.action,
+            "message": message
         })),
     )
         .into_response()
-}
-
-fn clean_delete_resource_mode(deployment: &DeploymentRecord) -> DeleteResourceMode {
-    if deployment.import_source.is_some() {
-        DeleteResourceMode::Live
-    } else {
-        DeleteResourceMode::All
-    }
 }
 
 #[cfg_attr(feature = "openapi", utoipa::path(

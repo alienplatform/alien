@@ -121,6 +121,7 @@ pub async fn handle_provisioning(
 
         next.status = DeploymentStatus::Running;
         next.stack_state = Some(step_result.next_state);
+        next.error = None;
         next.runtime_metadata = Some(runtime_metadata);
 
         // Promote target to current: deployment successful
@@ -129,7 +130,6 @@ pub async fn handle_provisioning(
 
         DeploymentStepResult {
             state: next,
-            error: None,
             suggested_delay_ms: None,
             update_heartbeat: false,
             heartbeats: vec![],
@@ -163,16 +163,13 @@ pub async fn handle_provisioning(
         // Interrupt all in-progress resources so every resource reflects its true status.
         crate::helpers::interrupt_in_progress_resources(&mut next_state, &failed_refs);
 
-        // Create aggregated error from failed resources
-        let error = crate::helpers::create_aggregated_error_from_stack_state(&next_state);
-
         next.status = DeploymentStatus::ProvisioningFailed;
         next.stack_state = Some(next_state);
+        next.error = None;
         next.runtime_metadata = Some(runtime_metadata);
 
         DeploymentStepResult {
             state: next,
-            error,
             suggested_delay_ms: None,
             update_heartbeat: false,
             heartbeats: vec![],
@@ -184,7 +181,6 @@ pub async fn handle_provisioning(
 
         DeploymentStepResult {
             state: next,
-            error: None,
             suggested_delay_ms: step_result.suggested_delay_ms,
             update_heartbeat: false,
             heartbeats: step_result.heartbeats,
@@ -218,7 +214,6 @@ pub async fn handle_provisioning_failed(
         info!("No retry requested, staying in ProvisioningFailed status");
         return Ok(DeploymentStepResult {
             state: current,
-            error: None,
             suggested_delay_ms: None,
             update_heartbeat: false,
             heartbeats: vec![],
@@ -246,11 +241,11 @@ pub async fn handle_provisioning_failed(
     // Transition back to Provisioning to continue deployment
     next.status = DeploymentStatus::Provisioning;
     next.stack_state = Some(stack_state);
+    next.error = None;
     next.retry_requested = false; // Clear retry flag directly
 
     Ok(DeploymentStepResult {
         state: next,
-        error: None,
         suggested_delay_ms: None,
         update_heartbeat: false,
         heartbeats: vec![],

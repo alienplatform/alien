@@ -301,6 +301,8 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                             environment_variables: None,
                             deployment_group_id: None,
                             environment_info: None,
+                            setup_method: None,
+                            setup_metadata: None,
                         })
                         .send()
                         .await
@@ -430,6 +432,7 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
             .context(ErrorData::ConfigurationError {
                 message: "Failed to deserialize stack_state".to_string(),
             })?,
+        error: None,
         environment_info: deployment
             .environment_info
             .map(serde_json::from_value)
@@ -625,10 +628,12 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
 
 fn describe_failed_status(status: &alien_deployment::DeploymentStatus) -> &'static str {
     match status {
+        alien_deployment::DeploymentStatus::PreflightsFailed => "preflights",
         alien_deployment::DeploymentStatus::InitialSetupFailed => "initial setup",
         alien_deployment::DeploymentStatus::ProvisioningFailed => "provisioning",
         alien_deployment::DeploymentStatus::UpdateFailed => "update",
         alien_deployment::DeploymentStatus::DeleteFailed => "deletion",
+        alien_deployment::DeploymentStatus::TeardownFailed => "setup teardown",
         alien_deployment::DeploymentStatus::RefreshFailed => "refresh",
         _ => "deployment",
     }

@@ -8,7 +8,7 @@ import { DeleteDeploymentRequest } from "@alienplatform/manager-api/models/opera
 let value: DeleteDeploymentRequest = {
   id: "<id>",
   deleteDeploymentRequest: {
-    mode: "clean",
+    action: "cleanup",
   },
 };
 ```

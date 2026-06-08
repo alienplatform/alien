@@ -6,12 +6,12 @@
 import { DeleteDeploymentRequest } from "@alienplatform/platform-api/models";
 
 let value: DeleteDeploymentRequest = {
-  mode: "clean",
+  action: "cleanup",
 };
 ```
 
 ## Fields
 
-| Field                                                                          | Type                                                                           | Required                                                                       | Description                                                                    |
-| ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ |
-| `mode`                                                                         | [models.DeleteDeploymentRequestMode](../models/deletedeploymentrequestmode.md) | :heavy_check_mark:                                                             | N/A                                                                            |
+| Field                                                                              | Type                                                                               | Required                                                                           | Description                                                                        |
+| ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `action`                                                                           | [models.DeleteDeploymentRequestAction](../models/deletedeploymentrequestaction.md) | :heavy_check_mark:                                                                 | N/A                                                                                |

@@ -16,7 +16,7 @@ let value: SyncReconcileResponseStackState = {
         id: "<id>",
         type: "<value>",
       },
-      status: "delete-failed",
+      status: "teardown-required",
       type: "<value>",
     },
   },

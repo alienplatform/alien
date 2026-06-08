@@ -49,7 +49,7 @@ export * from "./createtokenresponse.js";
 export * from "./customcertificateconfig.js";
 export * from "./customdomainconfig.js";
 export * from "./daemonheartbeatdata.js";
-export * from "./deletedeploymentmode.js";
+export * from "./deletedeploymentaction.js";
 export * from "./deletedeploymentrequest.js";
 export * from "./deploymentgroupminimal.js";
 export * from "./deploymentgroupresponse.js";

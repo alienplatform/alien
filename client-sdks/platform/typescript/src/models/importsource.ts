@@ -1128,6 +1128,7 @@ export type ImportSource = {
    * Source label for observability only — does not affect import behavior.
    */
   sourceKind?: ImportSourceKind | undefined;
+  setupMetadata?: { [k: string]: any | null } | undefined;
   /**
    * Release that produced the setup artifact. Defaults to latest.
    */
@@ -3341,6 +3342,7 @@ export type ImportSource$Outbound = {
   deploymentName: string;
   resourcePrefix: string;
   sourceKind?: string | undefined;
+  setupMetadata?: { [k: string]: any | null } | undefined;
   releaseId?: string | undefined;
   platform: string;
   basePlatform?: string | undefined;
@@ -3369,6 +3371,7 @@ export const ImportSource$outboundSchema: z.ZodType<
   deploymentName: z.string(),
   resourcePrefix: z.string(),
   sourceKind: ImportSourceKind$outboundSchema.optional(),
+  setupMetadata: z.record(z.string(), z.nullable(z.any())).optional(),
   releaseId: z.string().optional(),
   platform: ImportSourcePlatform$outboundSchema,
   basePlatform: KubernetesBasePlatform$outboundSchema.optional(),

@@ -18,7 +18,8 @@ use alien_core::{
 use alien_deployment::{
     loop_contract::{LoopOperation, LoopOutcome},
     manager_api_transport::{
-        acquire_deployment, final_reconcile, release_deployment, ManagerApiTransport,
+        acquire_deployment, acquire_setup_delete_deployment, final_reconcile, release_deployment,
+        ManagerApiTransport,
     },
     runner::{run_step_loop as shared_run_step_loop, RunnerPolicy},
 };
@@ -852,6 +853,7 @@ pub fn create_manager_client(token: &str, manager_url: &str) -> Result<ServerCli
 fn parse_deployment_status(raw_status: &str) -> Result<DeploymentStatus> {
     match raw_status.to_ascii_lowercase().as_str() {
         "pending" => Ok(DeploymentStatus::Pending),
+        "preflights-failed" => Ok(DeploymentStatus::PreflightsFailed),
         "initial-setup" => Ok(DeploymentStatus::InitialSetup),
         "initial-setup-failed" => Ok(DeploymentStatus::InitialSetupFailed),
         "provisioning" => Ok(DeploymentStatus::Provisioning),
@@ -864,6 +866,8 @@ fn parse_deployment_status(raw_status: &str) -> Result<DeploymentStatus> {
         "delete-pending" => Ok(DeploymentStatus::DeletePending),
         "deleting" => Ok(DeploymentStatus::Deleting),
         "delete-failed" => Ok(DeploymentStatus::DeleteFailed),
+        "teardown-required" => Ok(DeploymentStatus::TeardownRequired),
+        "teardown-failed" => Ok(DeploymentStatus::TeardownFailed),
         "deleted" => Ok(DeploymentStatus::Deleted),
         "error" => Ok(DeploymentStatus::Error),
         _ => Err(AlienError::new(ErrorData::ConfigurationError {
@@ -875,6 +879,7 @@ fn parse_deployment_status(raw_status: &str) -> Result<DeploymentStatus> {
 fn deployment_status_str(status: DeploymentStatus) -> &'static str {
     match status {
         DeploymentStatus::Pending => "pending",
+        DeploymentStatus::PreflightsFailed => "preflights-failed",
         DeploymentStatus::InitialSetup => "initial-setup",
         DeploymentStatus::InitialSetupFailed => "initial-setup-failed",
         DeploymentStatus::Provisioning => "provisioning",
@@ -887,6 +892,8 @@ fn deployment_status_str(status: DeploymentStatus) -> &'static str {
         DeploymentStatus::DeletePending => "delete-pending",
         DeploymentStatus::Deleting => "deleting",
         DeploymentStatus::DeleteFailed => "delete-failed",
+        DeploymentStatus::TeardownRequired => "teardown-required",
+        DeploymentStatus::TeardownFailed => "teardown-failed",
         DeploymentStatus::Deleted => "deleted",
         DeploymentStatus::Error => "error",
     }
@@ -1673,6 +1680,7 @@ pub async fn push_initial_setup(
         current_release: None,
         target_release,
         stack_state,
+        error: None,
         environment_info,
         runtime_metadata: None,
         retry_requested: deployment.retry_requested,
@@ -1926,6 +1934,7 @@ pub async fn push_deletion(
         current_release: current_release.clone(),
         target_release: current_release,
         stack_state,
+        error: None,
         environment_info,
         runtime_metadata,
         retry_requested: deployment.retry_requested,
@@ -1957,7 +1966,7 @@ pub async fn push_deletion(
 
     // Acquire sync lock with retry
     let session = format!("push-deletion-{}", uuid::Uuid::new_v4());
-    acquire_deployment(client, deployment_id, &session)
+    acquire_setup_delete_deployment(client, deployment_id, &session)
         .await
         .context(ErrorData::DeploymentFailed {
             operation: "acquire sync lock for deletion".to_string(),
@@ -2003,7 +2012,7 @@ pub async fn push_deletion(
         delay_threshold: None,
     };
 
-    let runner_result = shared_run_step_loop(
+    let runner_result = match shared_run_step_loop(
         &mut state,
         &mut config,
         &client_config,
@@ -2013,7 +2022,26 @@ pub async fn push_deletion(
         None,
         None,
     )
-    .await;
+    .await
+    {
+        Ok(result)
+            if result.loop_result.outcome == LoopOutcome::Success
+                && state.status == DeploymentStatus::TeardownRequired =>
+        {
+            alien_deployment::setup_teardown::run_setup_teardown_after_handoff(
+                &mut state,
+                &mut config,
+                &client_config,
+                deployment_id,
+                &policy,
+                &transport,
+                None,
+            )
+            .await
+            .map(|setup_result| setup_result.unwrap_or(result))
+        }
+        other => other,
+    };
 
     // Always reconcile + release, even on error
     final_reconcile(client, deployment_id, &session, &state).await;

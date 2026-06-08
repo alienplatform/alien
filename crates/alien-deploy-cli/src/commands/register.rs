@@ -390,6 +390,7 @@ fn build_import_request(
         deployment_name: deployment_name.to_string(),
         resource_prefix,
         source_kind: Some(source_kind),
+        setup_metadata: None,
         release_id: None,
         platform,
         base_platform,

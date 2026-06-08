@@ -432,6 +432,7 @@ impl CloudProxyTest {
             }),
             target_release: None,
             stack_state: None,
+            error: None,
             environment_info: None,
             runtime_metadata: None,
             retry_requested: false,
@@ -446,7 +447,6 @@ impl CloudProxyTest {
                     state,
                     update_heartbeat: false,
                     heartbeats: vec![],
-                    error: None,
                     suggested_delay_ms: None,
                 },
             )

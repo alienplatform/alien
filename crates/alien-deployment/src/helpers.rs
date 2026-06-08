@@ -526,6 +526,7 @@ pub fn interrupt_in_progress_resources(
             // Already terminal — don't touch it.
             ResourceStatus::Running
             | ResourceStatus::Deleted
+            | ResourceStatus::TeardownRequired
             | ResourceStatus::ProvisionFailed
             | ResourceStatus::UpdateFailed
             | ResourceStatus::DeleteFailed
@@ -555,7 +556,8 @@ pub fn interrupt_in_progress_resources(
 /// are counted separately and excluded from `resource_errors` so the caller gets
 /// an accurate picture of what actually broke vs. what was collateral damage.
 ///
-/// Returns `None` if no resources carry any error at all.
+/// Returns `None` if no resources carry a real failure. Interrupted resources
+/// are fallout from another failure, not a standalone headline cause.
 pub fn create_aggregated_error_from_stack_state(stack_state: &StackState) -> Option<AlienError> {
     use crate::error::ResourceError;
 
@@ -578,7 +580,7 @@ pub fn create_aggregated_error_from_stack_state(stack_state: &StackState) -> Opt
         }
     }
 
-    if resource_errors.is_empty() && interrupted_resources == 0 {
+    if resource_errors.is_empty() {
         return None;
     }
 
@@ -586,7 +588,7 @@ pub fn create_aggregated_error_from_stack_state(stack_state: &StackState) -> Opt
     let failed_resources = resource_errors.len();
 
     Some(
-        AlienError::new(ErrorData::AgentDeploymentFailed {
+        AlienError::new(ErrorData::DeploymentFailed {
             resource_errors,
             total_resources,
             failed_resources,
@@ -594,6 +596,23 @@ pub fn create_aggregated_error_from_stack_state(stack_state: &StackState) -> Opt
         })
         .into_generic(),
     )
+}
+
+/// Derive the single headline deployment error from durable deployment state.
+///
+/// Deployment-level errors win because they describe failures outside a
+/// specific resource. Resource controller errors remain preserved on
+/// `StackState.resources[*].error` and are summarized only when there is no
+/// deployment-level error.
+pub fn deployment_headline_error_from_state(
+    state: &alien_core::DeploymentState,
+) -> Option<AlienError> {
+    state.error.clone().or_else(|| {
+        state
+            .stack_state
+            .as_ref()
+            .and_then(create_aggregated_error_from_stack_state)
+    })
 }
 
 #[cfg(test)]
@@ -649,8 +668,10 @@ mod tests {
     // ── inject_environment_variables tests ──────────────────────────
 
     use alien_core::{
-        ExternalBindings, ResourceEntry, ResourceLifecycle, StackSettings, Worker, WorkerCode,
+        ExternalBindings, Platform, Resource, ResourceEntry, ResourceLifecycle, ResourceStatus,
+        StackResourceState, StackSettings, Worker, WorkerCode,
     };
+    use alien_error::GenericError;
     use indexmap::IndexMap;
 
     fn make_snapshot(
@@ -721,6 +742,97 @@ mod tests {
             },
             supported_platforms: None,
         }
+    }
+
+    fn make_worker_resource_state(id: &str, error: Option<AlienError>) -> StackResourceState {
+        let worker = Worker::new(id.to_string())
+            .code(WorkerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .permissions("default".to_string())
+            .build();
+        let resource = Resource::new(worker);
+
+        StackResourceState {
+            resource_type: resource.resource_type().as_ref().to_string(),
+            internal_state: None,
+            status: ResourceStatus::ProvisionFailed,
+            outputs: None,
+            config: resource,
+            previous_config: None,
+            retry_attempt: 0,
+            error,
+            lifecycle: Some(ResourceLifecycle::Live),
+            controller_platform: None,
+            dependencies: Vec::new(),
+            last_failed_state: None,
+            remote_binding_params: None,
+        }
+    }
+
+    fn generic_error(code_message: &str) -> AlienError {
+        AlienError::new(GenericError {
+            message: code_message.to_string(),
+        })
+    }
+
+    #[test]
+    fn aggregate_error_ignores_interrupted_only_resources() {
+        let mut stack_state = StackState::new(Platform::Test);
+        stack_state.resources.insert(
+            "skipped".to_string(),
+            make_worker_resource_state(
+                "skipped",
+                Some(
+                    AlienError::new(ErrorData::DeploymentInterrupted {
+                        failed_resource_id: "failed".to_string(),
+                        failed_resource_type: "worker".to_string(),
+                    })
+                    .into_generic(),
+                ),
+            ),
+        );
+
+        assert!(create_aggregated_error_from_stack_state(&stack_state).is_none());
+    }
+
+    #[test]
+    fn aggregate_error_counts_failed_and_interrupted_resources() {
+        let mut stack_state = StackState::new(Platform::Test);
+        stack_state.resources.insert(
+            "failed".to_string(),
+            make_worker_resource_state("failed", Some(generic_error("worker failed"))),
+        );
+        stack_state.resources.insert(
+            "skipped".to_string(),
+            make_worker_resource_state(
+                "skipped",
+                Some(
+                    AlienError::new(ErrorData::DeploymentInterrupted {
+                        failed_resource_id: "failed".to_string(),
+                        failed_resource_type: "worker".to_string(),
+                    })
+                    .into_generic(),
+                ),
+            ),
+        );
+
+        let error = create_aggregated_error_from_stack_state(&stack_state)
+            .expect("real resource error should create aggregate deployment error");
+
+        assert_eq!(error.code, "DEPLOYMENT_FAILED");
+        assert_eq!(
+            error.context.as_ref().and_then(|context| context
+                .get("failed_resources")
+                .and_then(serde_json::Value::as_u64)),
+            Some(1)
+        );
+        assert_eq!(
+            error.context.as_ref().and_then(|context| context
+                .get("interrupted_resources")
+                .and_then(serde_json::Value::as_u64)),
+            Some(1)
+        );
     }
 
     #[test]

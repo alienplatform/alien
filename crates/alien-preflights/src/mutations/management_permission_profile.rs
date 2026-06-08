@@ -117,7 +117,7 @@ fn generate_auto_management_profile(
                 // Alien can create, replace, and delete them after setup.
                 permission_set_ids.insert(format!("{}/provision", resource_type));
             }
-            ResourceLifecycle::Frozen if policy.frozen_requires_management() => {
+            ResourceLifecycle::Frozen if policy.requires_management_permissions() => {
                 permission_set_ids.insert(format!("{}/management", resource_type));
             }
             ResourceLifecycle::Frozen => {

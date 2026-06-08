@@ -21,6 +21,7 @@ import { SDKValidationError } from "./errors/sdkvalidationerror.js";
  */
 export const SyncListResponseStatus = {
   Pending: "pending",
+  PreflightsFailed: "preflights-failed",
   InitialSetup: "initial-setup",
   InitialSetupFailed: "initial-setup-failed",
   Provisioning: "provisioning",
@@ -33,6 +34,8 @@ export const SyncListResponseStatus = {
   DeletePending: "delete-pending",
   Deleting: "deleting",
   DeleteFailed: "delete-failed",
+  TeardownRequired: "teardown-required",
+  TeardownFailed: "teardown-failed",
   Deleted: "deleted",
   Error: "error",
 } as const;
@@ -1430,6 +1433,7 @@ export const SyncListResponseStackStateStatus = {
   UpdateFailed: "update-failed",
   Deleting: "deleting",
   DeleteFailed: "delete-failed",
+  TeardownRequired: "teardown-required",
   Deleted: "deleted",
   RefreshFailed: "refresh-failed",
 } as const;
@@ -1520,66 +1524,6 @@ export type SyncListResponseStackState = {
    */
   resources: { [k: string]: SyncListResponseStackStateResources };
 };
-
-/**
- * Resource set selected for deployment cleanup.
- *
- * @remarks
- *
- * `All` is used for deployments where Alien owns the full recorded stack.
- * `Live` is used when setup tools own Frozen resources and Alien should only
- * delete resources it owns before setup tears down its part.
- */
-export const SyncListResponseDeleteResourceModeEnum = {
-  All: "all",
-  Live: "live",
-} as const;
-/**
- * Resource set selected for deployment cleanup.
- *
- * @remarks
- *
- * `All` is used for deployments where Alien owns the full recorded stack.
- * `Live` is used when setup tools own Frozen resources and Alien should only
- * delete resources it owns before setup tears down its part.
- */
-export type SyncListResponseDeleteResourceModeEnum = ClosedEnum<
-  typeof SyncListResponseDeleteResourceModeEnum
->;
-
-export type SyncListResponseDeleteResourceModeUnion =
-  | SyncListResponseDeleteResourceModeEnum
-  | any;
-
-/**
- * Resource set selected for deployment cleanup.
- *
- * @remarks
- *
- * `All` is used for deployments where Alien owns the full recorded stack.
- * `Live` is used when setup tools own Frozen resources and Alien should only
- * delete resources it owns before setup tears down its part.
- */
-export const SyncListResponsePendingDeleteResourceModeEnum = {
-  All: "all",
-  Live: "live",
-} as const;
-/**
- * Resource set selected for deployment cleanup.
- *
- * @remarks
- *
- * `All` is used for deployments where Alien owns the full recorded stack.
- * `Live` is used when setup tools own Frozen resources and Alien should only
- * delete resources it owns before setup tears down its part.
- */
-export type SyncListResponsePendingDeleteResourceModeEnum = ClosedEnum<
-  typeof SyncListResponsePendingDeleteResourceModeEnum
->;
-
-export type SyncListResponsePendingDeleteResourceModeUnion =
-  | SyncListResponsePendingDeleteResourceModeEnum
-  | any;
 
 export const SyncListResponseManagementEnum = {
   Auto: "auto",
@@ -2780,11 +2724,6 @@ export type SyncListResponsePreparedStackUnion =
  * Runtime metadata for deployment state persistence
  */
 export type SyncListResponseRuntimeMetadata = {
-  deleteResourceMode?:
-    | SyncListResponseDeleteResourceModeEnum
-    | any
-    | null
-    | undefined;
   /**
    * Hash of the environment variables snapshot that was last synced to the vault
    *
@@ -2792,11 +2731,6 @@ export type SyncListResponseRuntimeMetadata = {
    * Used to avoid redundant sync operations during incremental deployment
    */
   lastSyncedEnvVarsHash?: string | null | undefined;
-  pendingDeleteResourceMode?:
-    | SyncListResponsePendingDeleteResourceModeEnum
-    | any
-    | null
-    | undefined;
   preparedStack?: SyncListResponsePreparedStack | any | null | undefined;
   /**
    * Whether cross-account registry access has been successfully granted.
@@ -2822,6 +2756,24 @@ export const SyncListResponseImportSource = {
  */
 export type SyncListResponseImportSource = ClosedEnum<
   typeof SyncListResponseImportSource
+>;
+
+/**
+ * Setup method that created the deployment record and owns setup-time resources.
+ */
+export const SyncListResponseSetupMethod = {
+  Cloudformation: "cloudformation",
+  GoogleOauth: "google-oauth",
+  Terraform: "terraform",
+  Helm: "helm",
+  Cli: "cli",
+  Manual: "manual",
+} as const;
+/**
+ * Setup method that created the deployment record and owns setup-time resources.
+ */
+export type SyncListResponseSetupMethod = ClosedEnum<
+  typeof SyncListResponseSetupMethod
 >;
 
 /**
@@ -3071,6 +3023,14 @@ export type SyncListResponseDeployment = {
    * Setup source that imported this deployment
    */
   importSource?: SyncListResponseImportSource | null | undefined;
+  /**
+   * Setup method that created the deployment record and owns setup-time resources.
+   */
+  setupMethod?: SyncListResponseSetupMethod | null | undefined;
+  /**
+   * Setup method metadata needed to guide privileged teardown.
+   */
+  setupMetadata?: { [k: string]: any | null } | null | undefined;
   /**
    * Imported setup target for compatibility checks
    */
@@ -5236,62 +5196,6 @@ export function syncListResponseStackStateFromJSON(
 }
 
 /** @internal */
-export const SyncListResponseDeleteResourceModeEnum$inboundSchema: z.ZodEnum<
-  typeof SyncListResponseDeleteResourceModeEnum
-> = z.enum(SyncListResponseDeleteResourceModeEnum);
-
-/** @internal */
-export const SyncListResponseDeleteResourceModeUnion$inboundSchema: z.ZodType<
-  SyncListResponseDeleteResourceModeUnion,
-  unknown
-> = z.union([SyncListResponseDeleteResourceModeEnum$inboundSchema, z.any()]);
-
-export function syncListResponseDeleteResourceModeUnionFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  SyncListResponseDeleteResourceModeUnion,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      SyncListResponseDeleteResourceModeUnion$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'SyncListResponseDeleteResourceModeUnion' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponsePendingDeleteResourceModeEnum$inboundSchema:
-  z.ZodEnum<typeof SyncListResponsePendingDeleteResourceModeEnum> = z.enum(
-    SyncListResponsePendingDeleteResourceModeEnum,
-  );
-
-/** @internal */
-export const SyncListResponsePendingDeleteResourceModeUnion$inboundSchema:
-  z.ZodType<SyncListResponsePendingDeleteResourceModeUnion, unknown> = z.union([
-    SyncListResponsePendingDeleteResourceModeEnum$inboundSchema,
-    z.any(),
-  ]);
-
-export function syncListResponsePendingDeleteResourceModeUnionFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  SyncListResponsePendingDeleteResourceModeUnion,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      SyncListResponsePendingDeleteResourceModeUnion$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'SyncListResponsePendingDeleteResourceModeUnion' from JSON`,
-  );
-}
-
-/** @internal */
 export const SyncListResponseManagementEnum$inboundSchema: z.ZodEnum<
   typeof SyncListResponseManagementEnum
 > = z.enum(SyncListResponseManagementEnum);
@@ -6965,16 +6869,7 @@ export const SyncListResponseRuntimeMetadata$inboundSchema: z.ZodType<
   SyncListResponseRuntimeMetadata,
   unknown
 > = z.object({
-  deleteResourceMode: z.nullable(
-    z.union([SyncListResponseDeleteResourceModeEnum$inboundSchema, z.any()]),
-  ).optional(),
   lastSyncedEnvVarsHash: z.nullable(z.string()).optional(),
-  pendingDeleteResourceMode: z.nullable(
-    z.union([
-      SyncListResponsePendingDeleteResourceModeEnum$inboundSchema,
-      z.any(),
-    ]),
-  ).optional(),
   preparedStack: z.nullable(
     z.union([
       z.lazy(() => SyncListResponsePreparedStack$inboundSchema),
@@ -6998,6 +6893,11 @@ export function syncListResponseRuntimeMetadataFromJSON(
 export const SyncListResponseImportSource$inboundSchema: z.ZodEnum<
   typeof SyncListResponseImportSource
 > = z.enum(SyncListResponseImportSource);
+
+/** @internal */
+export const SyncListResponseSetupMethod$inboundSchema: z.ZodEnum<
+  typeof SyncListResponseSetupMethod
+> = z.enum(SyncListResponseSetupMethod);
 
 /** @internal */
 export const SyncListResponseError$inboundSchema: z.ZodType<
@@ -7190,6 +7090,9 @@ export const SyncListResponseDeployment$inboundSchema: z.ZodType<
   desiredReleaseId: z.nullable(z.string()).optional(),
   pinnedReleaseId: z.nullable(z.string()).optional(),
   importSource: z.nullable(SyncListResponseImportSource$inboundSchema)
+    .optional(),
+  setupMethod: z.nullable(SyncListResponseSetupMethod$inboundSchema).optional(),
+  setupMetadata: z.nullable(z.record(z.string(), z.nullable(z.any())))
     .optional(),
   setupTarget: z.nullable(z.string()).optional(),
   setupFingerprint: z.nullable(z.string()).optional(),

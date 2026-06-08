@@ -8,6 +8,6 @@ import * as z from "zod";
 /**
  * @description Represents the high-level status of a resource during its lifecycle.
  */
-export const ResourceStatusSchema = z.enum(["pending", "provisioning", "provision-failed", "running", "updating", "update-failed", "deleting", "delete-failed", "deleted", "refresh-failed"]).describe("Represents the high-level status of a resource during its lifecycle.")
+export const ResourceStatusSchema = z.enum(["pending", "provisioning", "provision-failed", "running", "updating", "update-failed", "deleting", "delete-failed", "teardown-required", "deleted", "refresh-failed"]).describe("Represents the high-level status of a resource during its lifecycle.")
 
 export type ResourceStatus = z.infer<typeof ResourceStatusSchema>

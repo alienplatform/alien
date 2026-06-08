@@ -390,11 +390,13 @@ export type DataError1 = {
  *
  * @remarks
  *
- * Derived from the source deployment status: `provisioning-failed` →
- * `Provisioning`, `update-failed` → `Updating`, `delete-failed` → `Deleting`.
+ * Derived from the source deployment status: `preflights-failed` →
+ * `Preflights`, `provisioning-failed` → `Provisioning`, `update-failed` →
+ * `Updating`, `delete-failed` → `Deleting`.
  * `refresh-failed` is modelled separately via `DeploymentDegraded`.
  */
 export const Phase = {
+  Preflights: "preflights",
   Provisioning: "provisioning",
   Updating: "updating",
   Deleting: "deleting",
@@ -404,8 +406,9 @@ export const Phase = {
  *
  * @remarks
  *
- * Derived from the source deployment status: `provisioning-failed` →
- * `Provisioning`, `update-failed` → `Updating`, `delete-failed` → `Deleting`.
+ * Derived from the source deployment status: `preflights-failed` →
+ * `Preflights`, `provisioning-failed` → `Provisioning`, `update-failed` →
+ * `Updating`, `delete-failed` → `Deleting`.
  * `refresh-failed` is modelled separately via `DeploymentDegraded`.
  */
 export type Phase = ClosedEnum<typeof Phase>;
@@ -436,8 +439,9 @@ export type DataDeploymentFailed = {
    *
    * @remarks
    *
-   * Derived from the source deployment status: `provisioning-failed` →
-   * `Provisioning`, `update-failed` → `Updating`, `delete-failed` → `Deleting`.
+   * Derived from the source deployment status: `preflights-failed` →
+   * `Preflights`, `provisioning-failed` → `Provisioning`, `update-failed` →
+   * `Updating`, `delete-failed` → `Deleting`.
    * `refresh-failed` is modelled separately via `DeploymentDegraded`.
    */
   phase: Phase;
@@ -857,6 +861,7 @@ export const EventStatus = {
   UpdateFailed: "update-failed",
   Deleting: "deleting",
   DeleteFailed: "delete-failed",
+  TeardownRequired: "teardown-required",
   Deleted: "deleted",
   RefreshFailed: "refresh-failed",
 } as const;

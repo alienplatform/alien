@@ -1015,9 +1015,9 @@ async fn run_dev_server_only(
 }
 
 fn deployment_error_message(error: &serde_json::Value) -> Option<String> {
-    // For AGENT_DEPLOYMENT_FAILED errors, extract per-resource root causes
+    // For DEPLOYMENT_FAILED errors, extract per-resource root causes
     // instead of the generic "Deployment failed: N resource error(s)..." summary.
-    if error.get("code").and_then(|v| v.as_str()) == Some("AGENT_DEPLOYMENT_FAILED") {
+    if error.get("code").and_then(|v| v.as_str()) == Some("DEPLOYMENT_FAILED") {
         if let Some(resource_errors) = error
             .get("context")
             .and_then(|c| c.get("resource_errors"))

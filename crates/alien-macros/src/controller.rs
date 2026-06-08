@@ -478,6 +478,8 @@ fn generate_controller_impl(
         generate_get_status_match_arms(state_enum_name, handlers, terminal_states);
     let transition_to_failure_body = generate_transition_to_failure(state_enum_name, handlers);
     let transition_to_delete_body = generate_transition_to_delete(state_enum_name, flow_entries);
+    let transition_to_teardown_body =
+        generate_transition_to_teardown(state_enum_name, flow_entries);
     let transition_to_update_body = generate_transition_to_update(state_enum_name, flow_entries);
 
     let get_binding_params_impl = if let Some(method) = get_binding_params_method {
@@ -547,6 +549,11 @@ fn generate_controller_impl(
             fn transition_to_delete_start(&mut self) -> crate::Result<()> {
                 use #state_enum_name::*;
                 #transition_to_delete_body
+            }
+
+            fn transition_to_teardown_start(&mut self) -> crate::Result<()> {
+                use #state_enum_name::*;
+                #transition_to_teardown_body
             }
 
             fn transition_to_update(&mut self) -> crate::Result<()> {
@@ -725,6 +732,34 @@ fn generate_transition_to_update(
                 resource_id: None, // Not available in macro-generated transition methods
             }))
         }
+    }
+}
+
+fn generate_transition_to_teardown(
+    state_enum_name: &Ident,
+    flow_entries: &HashMap<String, (Ident, FlowEntryAttr)>,
+) -> TokenStream2 {
+    if let Some((teardown_start_state, teardown_flow)) = flow_entries.get("Teardown") {
+        let allowed_states = &teardown_flow.from_states;
+        let allowed_states_str = allowed_states
+            .iter()
+            .map(|s| quote!(#s).to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        quote! {
+            match &self.state {
+                #(#allowed_states)|* => {
+                    self.state = #state_enum_name::#teardown_start_state;
+                    Ok(())
+                }
+                _ => Err(alien_error::AlienError::new(crate::error::ErrorData::ResourceConfigInvalid {
+                    message: format!("Cannot transition to teardown from state: {:?}. Allowed states: {}", self.state, #allowed_states_str),
+                    resource_id: None,
+                }))
+            }
+        }
+    } else {
+        generate_transition_to_delete(state_enum_name, flow_entries)
     }
 }
 

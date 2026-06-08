@@ -5,27 +5,27 @@
 import * as z from "zod/v4";
 import { ClosedEnum } from "../types/enums.js";
 
-export const DeleteDeploymentRequestMode = {
-  Clean: "clean",
+export const DeleteDeploymentRequestAction = {
+  Cleanup: "cleanup",
   Detach: "detach",
   Forget: "forget",
 } as const;
-export type DeleteDeploymentRequestMode = ClosedEnum<
-  typeof DeleteDeploymentRequestMode
+export type DeleteDeploymentRequestAction = ClosedEnum<
+  typeof DeleteDeploymentRequestAction
 >;
 
 export type DeleteDeploymentRequest = {
-  mode: DeleteDeploymentRequestMode;
+  action: DeleteDeploymentRequestAction;
 };
 
 /** @internal */
-export const DeleteDeploymentRequestMode$outboundSchema: z.ZodEnum<
-  typeof DeleteDeploymentRequestMode
-> = z.enum(DeleteDeploymentRequestMode);
+export const DeleteDeploymentRequestAction$outboundSchema: z.ZodEnum<
+  typeof DeleteDeploymentRequestAction
+> = z.enum(DeleteDeploymentRequestAction);
 
 /** @internal */
 export type DeleteDeploymentRequest$Outbound = {
-  mode: string;
+  action: string;
 };
 
 /** @internal */
@@ -33,7 +33,7 @@ export const DeleteDeploymentRequest$outboundSchema: z.ZodType<
   DeleteDeploymentRequest$Outbound,
   DeleteDeploymentRequest
 > = z.object({
-  mode: DeleteDeploymentRequestMode$outboundSchema,
+  action: DeleteDeploymentRequestAction$outboundSchema,
 });
 
 export function deleteDeploymentRequestToJSON(

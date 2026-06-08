@@ -50,7 +50,6 @@ impl DeploymentLoopTransport for ManagerTransport {
         deployment_id: &str,
         state: &DeploymentState,
         _config: &alien_core::DeploymentConfig,
-        step_error: Option<&AlienError>,
         update_heartbeat: bool,
         suggested_delay_ms: Option<u64>,
         heartbeats: Vec<ResourceHeartbeat>,
@@ -68,8 +67,6 @@ impl DeploymentLoopTransport for ManagerTransport {
         .await;
 
         // 2. Persist the step result (including any registry access changes).
-        let error_value = step_error.map(|e| serde_json::to_value(e).unwrap_or_default());
-
         // Driven from the deployment loop with no inbound caller — use the
         // synthetic system subject (empty bearer signals to embedders that
         // no caller passthrough is available).
@@ -82,7 +79,6 @@ impl DeploymentLoopTransport for ManagerTransport {
                     session: self.session.clone(),
                     state: updated_state.clone(),
                     update_heartbeat,
-                    error: error_value,
                     suggested_delay_ms,
                     heartbeats,
                 },

@@ -1404,6 +1404,94 @@ export type SyncAcquireResponseEnvironmentInfoUnion =
   | any;
 
 /**
+ * Canonical error container that provides a structured way to represent errors
+ *
+ * @remarks
+ * with rich metadata including error codes, human-readable messages, context,
+ * and chaining capabilities for error propagation.
+ *
+ * This struct is designed to be both machine-readable and user-friendly,
+ * supporting serialization for API responses and detailed error reporting
+ * in distributed systems.
+ */
+export type SyncAcquireResponseError = {
+  /**
+   * A unique identifier for the type of error.
+   *
+   * @remarks
+   *
+   * This should be a short, machine-readable string that can be used
+   * by clients to programmatically handle different error types.
+   * Examples: "NOT_FOUND", "VALIDATION_ERROR", "TIMEOUT"
+   */
+  code: string;
+  /**
+   * Additional diagnostic information about the error context.
+   *
+   * @remarks
+   *
+   * This optional field can contain structured data providing more details
+   * about the error, such as validation errors, request parameters that
+   * caused the issue, or other relevant context information.
+   */
+  context?: any | null | undefined;
+  /**
+   * Optional human-facing remediation hint.
+   */
+  hint?: string | null | undefined;
+  /**
+   * HTTP status code for this error.
+   *
+   * @remarks
+   *
+   * Used when converting the error to an HTTP response. If None, falls back to
+   * the error type's default status code or 500.
+   */
+  httpStatusCode?: number | null | undefined;
+  /**
+   * Indicates if this is an internal error that should not be exposed to users.
+   *
+   * @remarks
+   *
+   * When `true`, this error contains sensitive information or implementation
+   * details that should not be shown to end-users. Such errors should be
+   * logged for debugging but replaced with generic error messages in responses.
+   */
+  internal: boolean;
+  /**
+   * Human-readable error message.
+   *
+   * @remarks
+   *
+   * This message should be clear and actionable for developers or end-users,
+   * providing context about what went wrong and potentially how to fix it.
+   */
+  message: string;
+  /**
+   * Indicates whether the operation that caused the error should be retried.
+   *
+   * @remarks
+   *
+   * When `true`, the error is transient and the operation might succeed
+   * if attempted again. When `false`, retrying the same operation is
+   * unlikely to succeed without changes.
+   */
+  retryable: boolean;
+  /**
+   * The underlying error that caused this error, creating an error chain.
+   *
+   * @remarks
+   *
+   * This allows for proper error propagation and debugging by maintaining
+   * the full context of how an error occurred through multiple layers
+   * of an application.
+   */
+  source?: any | null | undefined;
+};
+
+export type SyncAcquireResponseErrorUnion = SyncAcquireResponseError | any;
+
+/**
  * Represents the target cloud platform.
  */
 export const SyncAcquireResponseCurrentPlatform = {
@@ -1420,66 +1508,6 @@ export const SyncAcquireResponseCurrentPlatform = {
 export type SyncAcquireResponseCurrentPlatform = ClosedEnum<
   typeof SyncAcquireResponseCurrentPlatform
 >;
-
-/**
- * Resource set selected for deployment cleanup.
- *
- * @remarks
- *
- * `All` is used for deployments where Alien owns the full recorded stack.
- * `Live` is used when setup tools own Frozen resources and Alien should only
- * delete resources it owns before setup tears down its part.
- */
-export const SyncAcquireResponseDeleteResourceModeEnum = {
-  All: "all",
-  Live: "live",
-} as const;
-/**
- * Resource set selected for deployment cleanup.
- *
- * @remarks
- *
- * `All` is used for deployments where Alien owns the full recorded stack.
- * `Live` is used when setup tools own Frozen resources and Alien should only
- * delete resources it owns before setup tears down its part.
- */
-export type SyncAcquireResponseDeleteResourceModeEnum = ClosedEnum<
-  typeof SyncAcquireResponseDeleteResourceModeEnum
->;
-
-export type SyncAcquireResponseDeleteResourceModeUnion =
-  | SyncAcquireResponseDeleteResourceModeEnum
-  | any;
-
-/**
- * Resource set selected for deployment cleanup.
- *
- * @remarks
- *
- * `All` is used for deployments where Alien owns the full recorded stack.
- * `Live` is used when setup tools own Frozen resources and Alien should only
- * delete resources it owns before setup tears down its part.
- */
-export const SyncAcquireResponsePendingDeleteResourceModeEnum = {
-  All: "all",
-  Live: "live",
-} as const;
-/**
- * Resource set selected for deployment cleanup.
- *
- * @remarks
- *
- * `All` is used for deployments where Alien owns the full recorded stack.
- * `Live` is used when setup tools own Frozen resources and Alien should only
- * delete resources it owns before setup tears down its part.
- */
-export type SyncAcquireResponsePendingDeleteResourceModeEnum = ClosedEnum<
-  typeof SyncAcquireResponsePendingDeleteResourceModeEnum
->;
-
-export type SyncAcquireResponsePendingDeleteResourceModeUnion =
-  | SyncAcquireResponsePendingDeleteResourceModeEnum
-  | any;
 
 export const SyncAcquireResponsePreparedStackManagementEnum = {
   Auto: "auto",
@@ -2722,11 +2750,6 @@ export type SyncAcquireResponsePreparedStackUnion =
  * Stores deployment state that needs to persist across step calls.
  */
 export type SyncAcquireResponseRuntimeMetadata = {
-  deleteResourceMode?:
-    | SyncAcquireResponseDeleteResourceModeEnum
-    | any
-    | null
-    | undefined;
   /**
    * Hash of the environment variables snapshot that was last synced to the vault
    *
@@ -2734,11 +2757,6 @@ export type SyncAcquireResponseRuntimeMetadata = {
    * Used to avoid redundant sync operations during incremental deployment
    */
   lastSyncedEnvVarsHash?: string | null | undefined;
-  pendingDeleteResourceMode?:
-    | SyncAcquireResponsePendingDeleteResourceModeEnum
-    | any
-    | null
-    | undefined;
   preparedStack?: SyncAcquireResponsePreparedStack | any | null | undefined;
   /**
    * Whether cross-account registry access has been successfully granted.
@@ -2835,7 +2853,7 @@ export type SyncAcquireResponseStackStateDependency = {
  * supporting serialization for API responses and detailed error reporting
  * in distributed systems.
  */
-export type SyncAcquireResponseError = {
+export type SyncAcquireResponseStackStateError = {
   /**
    * A unique identifier for the type of error.
    *
@@ -2910,7 +2928,9 @@ export type SyncAcquireResponseError = {
   source?: any | null | undefined;
 };
 
-export type SyncAcquireResponseErrorUnion = SyncAcquireResponseError | any;
+export type SyncAcquireResponseStackStateErrorUnion =
+  | SyncAcquireResponseStackStateError
+  | any;
 
 /**
  * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
@@ -2974,6 +2994,7 @@ export const SyncAcquireResponseStackStateStatus = {
   UpdateFailed: "update-failed",
   Deleting: "deleting",
   DeleteFailed: "delete-failed",
+  TeardownRequired: "teardown-required",
   Deleted: "deleted",
   RefreshFailed: "refresh-failed",
 } as const;
@@ -3012,7 +3033,7 @@ export type SyncAcquireResponseStackStateResources = {
    * This preserves the full dependency information from the stack definition.
    */
   dependencies?: Array<SyncAcquireResponseStackStateDependency> | undefined;
-  error?: SyncAcquireResponseError | any | null | undefined;
+  error?: SyncAcquireResponseStackStateError | any | null | undefined;
   /**
    * Stores the controller state that failed, used for manual retry operations.
    *
@@ -3078,6 +3099,7 @@ export type SyncAcquireResponseStackStateUnion =
  */
 export const SyncAcquireResponseStatus = {
   Pending: "pending",
+  PreflightsFailed: "preflights-failed",
   InitialSetup: "initial-setup",
   InitialSetupFailed: "initial-setup-failed",
   Provisioning: "provisioning",
@@ -3090,6 +3112,8 @@ export const SyncAcquireResponseStatus = {
   DeletePending: "delete-pending",
   Deleting: "deleting",
   DeleteFailed: "delete-failed",
+  TeardownRequired: "teardown-required",
+  TeardownFailed: "teardown-failed",
   Deleted: "deleted",
   Error: "error",
 } as const;
@@ -4375,6 +4399,7 @@ export type SyncAcquireResponseCurrent = {
     | any
     | null
     | undefined;
+  error?: SyncAcquireResponseError | any | null | undefined;
   /**
    * Represents the target cloud platform.
    */
@@ -10423,67 +10448,50 @@ export function syncAcquireResponseEnvironmentInfoUnionFromJSON(
 }
 
 /** @internal */
+export const SyncAcquireResponseError$inboundSchema: z.ZodType<
+  SyncAcquireResponseError,
+  unknown
+> = z.object({
+  code: z.string(),
+  context: z.nullable(z.any()).optional(),
+  hint: z.nullable(z.string()).optional(),
+  httpStatusCode: z.nullable(z.int()).optional(),
+  internal: z.boolean(),
+  message: z.string(),
+  retryable: z.boolean().default(false),
+  source: z.nullable(z.any()).optional(),
+});
+
+export function syncAcquireResponseErrorFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseError, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseError$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseError' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseErrorUnion$inboundSchema: z.ZodType<
+  SyncAcquireResponseErrorUnion,
+  unknown
+> = z.union([z.lazy(() => SyncAcquireResponseError$inboundSchema), z.any()]);
+
+export function syncAcquireResponseErrorUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseErrorUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseErrorUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseErrorUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const SyncAcquireResponseCurrentPlatform$inboundSchema: z.ZodEnum<
   typeof SyncAcquireResponseCurrentPlatform
 > = z.enum(SyncAcquireResponseCurrentPlatform);
-
-/** @internal */
-export const SyncAcquireResponseDeleteResourceModeEnum$inboundSchema: z.ZodEnum<
-  typeof SyncAcquireResponseDeleteResourceModeEnum
-> = z.enum(SyncAcquireResponseDeleteResourceModeEnum);
-
-/** @internal */
-export const SyncAcquireResponseDeleteResourceModeUnion$inboundSchema:
-  z.ZodType<SyncAcquireResponseDeleteResourceModeUnion, unknown> = z.union([
-    SyncAcquireResponseDeleteResourceModeEnum$inboundSchema,
-    z.any(),
-  ]);
-
-export function syncAcquireResponseDeleteResourceModeUnionFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  SyncAcquireResponseDeleteResourceModeUnion,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      SyncAcquireResponseDeleteResourceModeUnion$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'SyncAcquireResponseDeleteResourceModeUnion' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncAcquireResponsePendingDeleteResourceModeEnum$inboundSchema:
-  z.ZodEnum<typeof SyncAcquireResponsePendingDeleteResourceModeEnum> = z.enum(
-    SyncAcquireResponsePendingDeleteResourceModeEnum,
-  );
-
-/** @internal */
-export const SyncAcquireResponsePendingDeleteResourceModeUnion$inboundSchema:
-  z.ZodType<SyncAcquireResponsePendingDeleteResourceModeUnion, unknown> = z
-    .union([
-      SyncAcquireResponsePendingDeleteResourceModeEnum$inboundSchema,
-      z.any(),
-    ]);
-
-export function syncAcquireResponsePendingDeleteResourceModeUnionFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  SyncAcquireResponsePendingDeleteResourceModeUnion,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      SyncAcquireResponsePendingDeleteResourceModeUnion$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'SyncAcquireResponsePendingDeleteResourceModeUnion' from JSON`,
-  );
-}
 
 /** @internal */
 export const SyncAcquireResponsePreparedStackManagementEnum$inboundSchema:
@@ -12579,16 +12587,7 @@ export const SyncAcquireResponseRuntimeMetadata$inboundSchema: z.ZodType<
   SyncAcquireResponseRuntimeMetadata,
   unknown
 > = z.object({
-  deleteResourceMode: z.nullable(
-    z.union([SyncAcquireResponseDeleteResourceModeEnum$inboundSchema, z.any()]),
-  ).optional(),
   lastSyncedEnvVarsHash: z.nullable(z.string()).optional(),
-  pendingDeleteResourceMode: z.nullable(
-    z.union([
-      SyncAcquireResponsePendingDeleteResourceModeEnum$inboundSchema,
-      z.any(),
-    ]),
-  ).optional(),
   preparedStack: z.nullable(
     z.union([
       z.lazy(() => SyncAcquireResponsePreparedStack$inboundSchema),
@@ -12717,8 +12716,8 @@ export function syncAcquireResponseStackStateDependencyFromJSON(
 }
 
 /** @internal */
-export const SyncAcquireResponseError$inboundSchema: z.ZodType<
-  SyncAcquireResponseError,
+export const SyncAcquireResponseStackStateError$inboundSchema: z.ZodType<
+  SyncAcquireResponseStackStateError,
   unknown
 > = z.object({
   code: z.string(),
@@ -12731,29 +12730,39 @@ export const SyncAcquireResponseError$inboundSchema: z.ZodType<
   source: z.nullable(z.any()).optional(),
 });
 
-export function syncAcquireResponseErrorFromJSON(
+export function syncAcquireResponseStackStateErrorFromJSON(
   jsonString: string,
-): SafeParseResult<SyncAcquireResponseError, SDKValidationError> {
+): SafeParseResult<SyncAcquireResponseStackStateError, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => SyncAcquireResponseError$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncAcquireResponseError' from JSON`,
+    (x) =>
+      SyncAcquireResponseStackStateError$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseStackStateError' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncAcquireResponseErrorUnion$inboundSchema: z.ZodType<
-  SyncAcquireResponseErrorUnion,
+export const SyncAcquireResponseStackStateErrorUnion$inboundSchema: z.ZodType<
+  SyncAcquireResponseStackStateErrorUnion,
   unknown
-> = z.union([z.lazy(() => SyncAcquireResponseError$inboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => SyncAcquireResponseStackStateError$inboundSchema),
+  z.any(),
+]);
 
-export function syncAcquireResponseErrorUnionFromJSON(
+export function syncAcquireResponseStackStateErrorUnionFromJSON(
   jsonString: string,
-): SafeParseResult<SyncAcquireResponseErrorUnion, SDKValidationError> {
+): SafeParseResult<
+  SyncAcquireResponseStackStateErrorUnion,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => SyncAcquireResponseErrorUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncAcquireResponseErrorUnion' from JSON`,
+    (x) =>
+      SyncAcquireResponseStackStateErrorUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseStackStateErrorUnion' from JSON`,
   );
 }
 
@@ -12882,7 +12891,10 @@ export const SyncAcquireResponseStackStateResources$inboundSchema: z.ZodType<
     z.lazy(() => SyncAcquireResponseStackStateDependency$inboundSchema),
   ).optional(),
   error: z.nullable(
-    z.union([z.lazy(() => SyncAcquireResponseError$inboundSchema), z.any()]),
+    z.union([
+      z.lazy(() => SyncAcquireResponseStackStateError$inboundSchema),
+      z.any(),
+    ]),
   ).optional(),
   lastFailedState: z.nullable(z.any()).optional(),
   lifecycle: z.nullable(
@@ -15097,6 +15109,9 @@ export const SyncAcquireResponseCurrent$inboundSchema: z.ZodType<
       z.lazy(() => SyncAcquireResponseEnvironmentInfoTest$inboundSchema),
       z.any(),
     ]),
+  ).optional(),
+  error: z.nullable(
+    z.union([z.lazy(() => SyncAcquireResponseError$inboundSchema), z.any()]),
   ).optional(),
   platform: SyncAcquireResponseCurrentPlatform$inboundSchema,
   protocolVersion: z.int(),

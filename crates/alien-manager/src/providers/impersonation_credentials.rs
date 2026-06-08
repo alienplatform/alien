@@ -63,9 +63,12 @@ impl CredentialResolver for ImpersonationCredentialResolver {
 
         let status = parse_status(&deployment.status);
 
-        // During Pending, use the management SA directly because no remote
-        // stack management identity exists yet.
-        if matches!(status, DeploymentStatus::Pending) {
+        // During Pending and preflight retry, use the management SA directly
+        // because no remote stack management identity exists yet.
+        if matches!(
+            status,
+            DeploymentStatus::Pending | DeploymentStatus::PreflightsFailed
+        ) {
             let provider = self.provider_for_target(platform);
             let base_config = impersonate_management_sa(&**provider, platform).await?;
             return apply_target_environment(base_config, deployment.environment_info.as_ref());
@@ -121,7 +124,9 @@ impl CredentialResolver for ImpersonationCredentialResolver {
             Platform::Local | Platform::Test | Platform::Kubernetes
         ) || !matches!(
             status,
-            DeploymentStatus::Pending | DeploymentStatus::InitialSetup
+            DeploymentStatus::Pending
+                | DeploymentStatus::PreflightsFailed
+                | DeploymentStatus::InitialSetup
         );
 
         Ok(ResolvedCredentials {

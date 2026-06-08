@@ -262,6 +262,8 @@ mod tests {
             current_release_id: None,
             desired_release_id: None,
             import_source: None,
+            setup_method: None,
+            setup_metadata: None,
             setup_target: None,
             setup_fingerprint: None,
             setup_fingerprint_version: None,

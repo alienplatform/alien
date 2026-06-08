@@ -13,7 +13,7 @@ use crate::ui::{command, contextual_heading, dim_label, success_line, FixedSteps
 use alien_core::{ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus, Platform};
 use alien_deployment::loop_contract::{LoopOperation, LoopOutcome};
 use alien_deployment::manager_api_transport::{
-    acquire_deployment, final_reconcile, release_deployment, ManagerApiTransport,
+    acquire_setup_delete_deployment, final_reconcile, release_deployment, ManagerApiTransport,
 };
 use alien_deployment::runner::{RunnerPolicy, RunnerResult};
 use alien_error::{AlienError, Context, IntoAlienError};
@@ -101,12 +101,33 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
     // Step 3: Delete via manager
     steps.activate(2, Some(tracked_deployment.deployment_id.clone()));
 
+    if args.force {
+        manager_client
+            .delete_deployment()
+            .id(&tracked_deployment.deployment_id)
+            .body(alien_manager_api::types::DeleteDeploymentRequest {
+                action: alien_manager_api::types::DeleteDeploymentAction::Forget,
+            })
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to force-delete deployment record".to_string(),
+            })?;
+
+        steps.complete(2, Some("Force-deleted".to_string()));
+        drop(steps);
+        eprintln!();
+        println!("{}", success_line("Deployment force-deleted."));
+        return Ok(());
+    }
+
     // Request deletion
     manager_client
         .delete_deployment()
         .id(&tracked_deployment.deployment_id)
         .body(alien_manager_api::types::DeleteDeploymentRequest {
-            mode: alien_manager_api::types::DeleteDeploymentMode::Clean,
+            action: alien_manager_api::types::DeleteDeploymentAction::Cleanup,
         })
         .send()
         .await
@@ -114,14 +135,6 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
         .context(ErrorData::ConfigurationError {
             message: "Failed to request deployment deletion".to_string(),
         })?;
-
-    if args.force {
-        steps.complete(2, Some("Force-deleted".to_string()));
-        drop(steps);
-        eprintln!();
-        println!("{}", success_line("Deployment force-deleted."));
-        return Ok(());
-    }
 
     // Run the deletion step loop
     let client_config =
@@ -163,6 +176,7 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
             .context(ErrorData::ConfigurationError {
                 message: "Failed to deserialize stack_state".to_string(),
             })?,
+        error: None,
         environment_info: deployment
             .environment_info
             .map(serde_json::from_value)
@@ -208,7 +222,7 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
 
     // Acquire → step loop → reconcile → release
     let session = format!("cli-destroy-{}", Uuid::new_v4());
-    acquire_deployment(&manager_client, &tracked_deployment.deployment_id, &session)
+    acquire_setup_delete_deployment(&manager_client, &tracked_deployment.deployment_id, &session)
         .await
         .context(ErrorData::ConfigurationError {
             message: "Failed to acquire deployment lock for deletion".to_string(),
@@ -247,7 +261,7 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
         delay_threshold: None,
     };
 
-    let runner_result = alien_deployment::runner::run_step_loop(
+    let runner_result = match alien_deployment::runner::run_step_loop(
         &mut current,
         &mut config,
         &client_config,
@@ -257,7 +271,26 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
         None,
         None,
     )
-    .await;
+    .await
+    {
+        Ok(result)
+            if result.loop_result.outcome == LoopOutcome::Success
+                && current.status == DeploymentStatus::TeardownRequired =>
+        {
+            alien_deployment::setup_teardown::run_setup_teardown_after_handoff(
+                &mut current,
+                &mut config,
+                &client_config,
+                &tracked_deployment.deployment_id,
+                &policy,
+                &transport,
+                None,
+            )
+            .await
+            .map(|setup_result| setup_result.unwrap_or(result))
+        }
+        other => other,
+    };
 
     // Always reconcile + release
     final_reconcile(

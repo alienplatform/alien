@@ -18,6 +18,7 @@ use alien_core::{
     sync::TargetDeployment, DeploymentConfig, DeploymentState, DeploymentStatus,
     EnvironmentVariable, EnvironmentVariablesSnapshot, Platform, ReleaseInfo, ResourceHeartbeat,
 };
+use alien_error::AlienError;
 
 use crate::error::ErrorData;
 use crate::ids;
@@ -72,8 +73,6 @@ pub struct ReconcileRequest {
     pub state: serde_json::Value,
     #[serde(default, deserialize_with = "deserialize_bool_or_null")]
     pub update_heartbeat: bool,
-    #[serde(default)]
-    pub error: Option<serde_json::Value>,
     #[serde(default)]
     pub suggested_delay_ms: Option<u64>,
     #[serde(default)]
@@ -327,7 +326,6 @@ async fn reconcile(
                 session: req.session,
                 state: final_state.clone(),
                 update_heartbeat: req.update_heartbeat,
-                error: req.error,
                 suggested_delay_ms: req.suggested_delay_ms,
                 heartbeats: req.heartbeats,
             },
@@ -614,6 +612,7 @@ mod tests {
             current_release: None,
             target_release: None,
             stack_state: None,
+            error: None,
             environment_info: None,
             runtime_metadata: None,
             retry_requested: false,
@@ -643,6 +642,8 @@ mod tests {
             current_release_id: None,
             desired_release_id: None,
             import_source: None,
+            setup_method: None,
+            setup_metadata: None,
             setup_target: None,
             setup_fingerprint: None,
             setup_fingerprint_version: None,
@@ -734,7 +735,6 @@ async fn agent_sync(
                                 state: agent_state.clone(),
                                 update_heartbeat: true,
                                 heartbeats: vec![],
-                                error: None,
                                 suggested_delay_ms: None,
                             },
                         )
@@ -1034,6 +1034,7 @@ fn deployment_state_from_record(
         current_release,
         target_release,
         stack_state: deployment.stack_state.clone(),
+        error: deployment_record_error(&deployment.error),
         environment_info: deployment.environment_info.clone(),
         runtime_metadata: deployment.runtime_metadata.clone(),
         retry_requested: deployment.retry_requested,
@@ -1043,6 +1044,12 @@ fn deployment_state_from_record(
 
 fn deployment_status_from_record(status: &str) -> Option<DeploymentStatus> {
     serde_json::from_value(serde_json::Value::String(status.to_string())).ok()
+}
+
+fn deployment_record_error(error: &Option<serde_json::Value>) -> Option<AlienError> {
+    error
+        .clone()
+        .and_then(|value| serde_json::from_value::<AlienError>(value).ok())
 }
 
 fn release_info_from_record(

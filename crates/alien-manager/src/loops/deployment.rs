@@ -24,14 +24,14 @@ use alien_core::{
     ENV_ALIEN_DEPLOYMENT_ID,
 };
 use alien_deployment::loop_contract::LoopOperation;
-use alien_deployment::runner::{RunnerPolicy, RunnerResult};
+use alien_deployment::runner::{failed_status_for_deployment_error, RunnerPolicy, RunnerResult};
 use alien_error::{AlienError, Context, GenericError};
 use alien_infra::DefaultPlatformServiceProvider;
 use alien_local::LocalBindingsProvider;
 
 use crate::auth::Subject;
 use crate::config::ManagerConfig;
-use crate::traits::deployment_store::{DeploymentFilter, DeploymentRecord};
+use crate::traits::deployment_store::{DeploymentFilter, DeploymentRecord, ReconcileData};
 use crate::traits::{CredentialResolver, DeploymentStore, ReleaseStore, ServerBindings};
 use crate::transports::ManagerTransport;
 
@@ -70,6 +70,7 @@ fn active_work_statuses() -> Vec<String> {
 
 fn retryable_failed_statuses() -> Vec<String> {
     vec![
+        "preflights-failed",
         "initial-setup-failed",
         "provisioning-failed",
         "refresh-failed",
@@ -285,6 +286,7 @@ impl DeploymentLoop {
                     message: format!("Release {} not found", target_release_id),
                 })
             })?;
+        let deployment_stack = release.stacks.get(&deployment.platform).cloned();
 
         // 2. Resolve credentials for the target platform and lifecycle phase.
         let resolved_credentials = match self
@@ -294,13 +296,45 @@ impl DeploymentLoop {
         {
             Ok(resolved) => resolved,
             Err(e) => {
-                warn!(
-                    deployment_id = %deployment_id,
-                    status = ?status,
-                    platform = ?deployment.platform,
-                    error = %e,
-                    "Credentials unavailable for deployment phase; waiting for another driver or credential handoff"
-                );
+                if should_wait_for_credential_handoff(status, &deployment) {
+                    warn!(
+                        deployment_id = %deployment_id,
+                        status = ?status,
+                        platform = ?deployment.platform,
+                        error = %e,
+                        "Credentials unavailable for deployment phase; waiting for another driver or credential handoff"
+                    );
+                } else {
+                    let credential_error = e.into_generic();
+                    let failed_state = failed_state_for_credential_error(
+                        &deployment,
+                        status,
+                        deployment_stack.as_ref(),
+                        target_release_id,
+                        credential_error,
+                    );
+                    warn!(
+                        deployment_id = %deployment_id,
+                        status = ?status,
+                        failed_status = ?failed_state.status,
+                        platform = ?deployment.platform,
+                        "Credential resolution failed for manager-owned phase; checkpointing failed deployment state"
+                    );
+                    let caller = Subject::system();
+                    self.deployment_store
+                        .reconcile(
+                            &caller,
+                            ReconcileData {
+                                deployment_id: deployment_id.clone(),
+                                session: session.to_string(),
+                                state: failed_state,
+                                update_heartbeat: false,
+                                suggested_delay_ms: None,
+                                heartbeats: Vec::new(),
+                            },
+                        )
+                        .await?;
+                }
                 return Ok(());
             }
         };
@@ -317,18 +351,14 @@ impl DeploymentLoop {
         let client_config = resolved_credentials.client_config;
 
         // 3. Extract the stack for this deployment's platform from the release.
-        let deployment_stack = release
-            .stacks
-            .get(&deployment.platform)
-            .cloned()
-            .ok_or_else(|| {
-                AlienError::new(GenericError {
-                    message: format!(
-                        "Release {} does not contain a stack for platform {}",
-                        target_release_id, deployment.platform
-                    ),
-                })
-            })?;
+        let deployment_stack = deployment_stack.ok_or_else(|| {
+            AlienError::new(GenericError {
+                message: format!(
+                    "Release {} does not contain a stack for platform {}",
+                    target_release_id, deployment.platform
+                ),
+            })
+        })?;
 
         // 4. Build deployment state from the record.
         let target_release = ReleaseInfo {
@@ -352,6 +382,7 @@ impl DeploymentLoop {
                 }),
             target_release: Some(target_release),
             stack_state: deployment.stack_state.clone(),
+            error: deployment_record_error(&deployment.error),
             environment_info: deployment.environment_info.clone(),
             runtime_metadata: deployment.runtime_metadata.clone(),
             retry_requested: deployment.retry_requested,
@@ -723,6 +754,64 @@ fn parse_otel_resource_attributes(existing: Option<&str>) -> BTreeMap<String, St
     attributes
 }
 
+fn should_wait_for_credential_handoff(
+    status: DeploymentStatus,
+    deployment: &DeploymentRecord,
+) -> bool {
+    match status {
+        DeploymentStatus::Pending => true,
+        DeploymentStatus::InitialSetup => {
+            deployment.stack_state.as_ref().map_or(true, |stack_state| {
+                !has_remote_stack_management_outputs(stack_state)
+            })
+        }
+        _ => false,
+    }
+}
+
+fn has_remote_stack_management_outputs(stack_state: &alien_core::StackState) -> bool {
+    stack_state.resources.values().any(|resource_state| {
+        resource_state.resource_type == "remote-stack-management"
+            && resource_state.outputs.as_ref().is_some()
+    })
+}
+
+fn failed_state_for_credential_error(
+    deployment: &DeploymentRecord,
+    status: DeploymentStatus,
+    deployment_stack: Option<&alien_core::Stack>,
+    target_release_id: &str,
+    error: AlienError,
+) -> DeploymentState {
+    DeploymentState {
+        status: failed_status_for_deployment_error(status),
+        platform: deployment.platform,
+        current_release: deployment_stack.and_then(|stack| {
+            deployment
+                .current_release_id
+                .as_ref()
+                .map(|id| ReleaseInfo {
+                    release_id: id.clone(),
+                    version: None,
+                    description: None,
+                    stack: stack.clone(),
+                })
+        }),
+        target_release: deployment_stack.map(|stack| ReleaseInfo {
+            release_id: target_release_id.to_string(),
+            version: None,
+            description: None,
+            stack: stack.clone(),
+        }),
+        stack_state: deployment.stack_state.clone(),
+        error: Some(error),
+        environment_info: deployment.environment_info.clone(),
+        runtime_metadata: deployment.runtime_metadata.clone(),
+        retry_requested: false,
+        protocol_version: deployment.deployment_protocol_version,
+    }
+}
+
 // Test ownership: Manager-specific behavior tests (status parsing, skip logic,
 // active statuses, local bindings caching). Loop contract correctness is tested
 // in alien-deployment::loop_contract — not duplicated here.
@@ -730,14 +819,113 @@ fn parse_otel_resource_attributes(existing: Option<&str>) -> BTreeMap<String, St
 #[cfg(test)]
 mod tests {
     use super::{
-        active_work_statuses, get_or_create_local_bindings_provider, manager_candidate_statuses,
+        active_work_statuses, get_or_create_local_bindings_provider,
+        has_remote_stack_management_outputs, manager_candidate_statuses,
         needs_provision_capability, parse_status, retryable_failed_statuses,
+        should_wait_for_credential_handoff,
     };
-    use alien_core::DeploymentStatus;
+    use alien_core::{
+        DeploymentStatus, Platform, RemoteStackManagement, RemoteStackManagementOutputs, Resource,
+        ResourceOutputs, ResourceStatus, StackResourceState, StackSettings, StackState,
+    };
     use alien_deployment::loop_contract::{classify_status, LoopOperation};
+    use chrono::Utc;
     use std::collections::HashMap;
     use std::sync::Mutex;
     use tempfile::TempDir;
+
+    use crate::traits::deployment_store::DeploymentRecord;
+
+    fn deployment_record(
+        status: DeploymentStatus,
+        stack_state: Option<StackState>,
+    ) -> DeploymentRecord {
+        DeploymentRecord {
+            id: "dep_test".to_string(),
+            workspace_id: "default".to_string(),
+            project_id: "default".to_string(),
+            name: "test".to_string(),
+            deployment_group_id: "dg_test".to_string(),
+            platform: Platform::Aws,
+            deployment_protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+            base_platform: None,
+            status: deployment_status_str(status).to_string(),
+            stack_settings: Some(StackSettings::default()),
+            stack_state,
+            environment_info: None,
+            runtime_metadata: None,
+            current_release_id: None,
+            desired_release_id: Some("rel_test".to_string()),
+            import_source: None,
+            setup_method: None,
+            setup_metadata: None,
+            setup_target: None,
+            setup_fingerprint: None,
+            setup_fingerprint_version: None,
+            user_environment_variables: None,
+            management_config: None,
+            deployment_config: None,
+            deployment_token: None,
+            retry_requested: false,
+            locked_by: None,
+            locked_at: None,
+            created_at: Utc::now(),
+            updated_at: None,
+            error: None,
+        }
+    }
+
+    fn deployment_status_str(status: DeploymentStatus) -> &'static str {
+        match status {
+            DeploymentStatus::Pending => "pending",
+            DeploymentStatus::PreflightsFailed => "preflights-failed",
+            DeploymentStatus::InitialSetup => "initial-setup",
+            DeploymentStatus::InitialSetupFailed => "initial-setup-failed",
+            DeploymentStatus::Provisioning => "provisioning",
+            DeploymentStatus::ProvisioningFailed => "provisioning-failed",
+            DeploymentStatus::Running => "running",
+            DeploymentStatus::RefreshFailed => "refresh-failed",
+            DeploymentStatus::UpdatePending => "update-pending",
+            DeploymentStatus::Updating => "updating",
+            DeploymentStatus::UpdateFailed => "update-failed",
+            DeploymentStatus::DeletePending => "delete-pending",
+            DeploymentStatus::Deleting => "deleting",
+            DeploymentStatus::DeleteFailed => "delete-failed",
+            DeploymentStatus::TeardownRequired => "teardown-required",
+            DeploymentStatus::TeardownFailed => "teardown-failed",
+            DeploymentStatus::Deleted => "deleted",
+            DeploymentStatus::Error => "error",
+        }
+    }
+
+    fn stack_state_with_remote_management_outputs(has_outputs: bool) -> StackState {
+        let mut state = StackState::with_resource_prefix(Platform::Aws, "test".to_string());
+        let builder = StackResourceState::builder()
+            .resource_type("remote-stack-management".to_string())
+            .status(ResourceStatus::Running)
+            .config(Resource::new(RemoteStackManagement {
+                id: "remote-stack-management".to_string(),
+            }))
+            .dependencies(Vec::new());
+
+        let resource_state = if has_outputs {
+            builder
+                .outputs(ResourceOutputs::new(RemoteStackManagementOutputs {
+                    management_resource_id: "arn:aws:iam::123456789012:role/test-management"
+                        .to_string(),
+                    access_configuration: "arn:aws:iam::123456789012:role/test-management"
+                        .to_string(),
+                }))
+                .build()
+        } else {
+            builder.build()
+        };
+
+        state
+            .resources
+            .insert("remote-stack-management".to_string(), resource_state);
+        state
+    }
 
     #[test]
     fn active_work_statuses_include_new_deployment_phases() {
@@ -783,6 +971,7 @@ mod tests {
     fn retryable_failed_statuses_include_manual_retry_candidates() {
         let statuses = retryable_failed_statuses();
         for included in [
+            "preflights-failed",
             "initial-setup-failed",
             "provisioning-failed",
             "refresh-failed",
@@ -794,6 +983,67 @@ mod tests {
                 "{included} should be a retryable failed status"
             );
         }
+    }
+
+    #[test]
+    fn credential_failure_waits_during_expected_handoff_windows() {
+        let pending = deployment_record(DeploymentStatus::Pending, None);
+        assert!(should_wait_for_credential_handoff(
+            DeploymentStatus::Pending,
+            &pending
+        ));
+
+        let initial_setup_without_stack = deployment_record(DeploymentStatus::InitialSetup, None);
+        assert!(should_wait_for_credential_handoff(
+            DeploymentStatus::InitialSetup,
+            &initial_setup_without_stack
+        ));
+
+        let initial_setup_without_outputs = deployment_record(
+            DeploymentStatus::InitialSetup,
+            Some(stack_state_with_remote_management_outputs(false)),
+        );
+        assert!(should_wait_for_credential_handoff(
+            DeploymentStatus::InitialSetup,
+            &initial_setup_without_outputs
+        ));
+    }
+
+    #[test]
+    fn credential_failure_marks_manager_owned_phases_failed() {
+        let initial_setup_with_outputs = deployment_record(
+            DeploymentStatus::InitialSetup,
+            Some(stack_state_with_remote_management_outputs(true)),
+        );
+        assert!(!should_wait_for_credential_handoff(
+            DeploymentStatus::InitialSetup,
+            &initial_setup_with_outputs
+        ));
+
+        for status in [
+            DeploymentStatus::Provisioning,
+            DeploymentStatus::Running,
+            DeploymentStatus::UpdatePending,
+            DeploymentStatus::Updating,
+            DeploymentStatus::DeletePending,
+            DeploymentStatus::Deleting,
+        ] {
+            let deployment = deployment_record(status, Some(StackState::new(Platform::Aws)));
+            assert!(
+                !should_wait_for_credential_handoff(status, &deployment),
+                "{status:?} should be classified as manager-owned"
+            );
+        }
+    }
+
+    #[test]
+    fn remote_stack_management_output_detection_is_explicit() {
+        assert!(!has_remote_stack_management_outputs(
+            &stack_state_with_remote_management_outputs(false)
+        ));
+        assert!(has_remote_stack_management_outputs(
+            &stack_state_with_remote_management_outputs(true)
+        ));
     }
 
     #[test]
@@ -814,6 +1064,7 @@ mod tests {
     fn parse_status_roundtrips_all_known_statuses() {
         let cases = [
             ("pending", DeploymentStatus::Pending),
+            ("preflights-failed", DeploymentStatus::PreflightsFailed),
             ("initial-setup", DeploymentStatus::InitialSetup),
             ("initial-setup-failed", DeploymentStatus::InitialSetupFailed),
             ("provisioning", DeploymentStatus::Provisioning),
@@ -842,6 +1093,9 @@ mod tests {
     #[test]
     fn only_bootstrap_statuses_need_provision_capability() {
         assert!(needs_provision_capability(DeploymentStatus::Pending));
+        assert!(needs_provision_capability(
+            DeploymentStatus::PreflightsFailed
+        ));
 
         for status in [
             DeploymentStatus::InitialSetup,
@@ -920,13 +1174,23 @@ mod tests {
 }
 
 fn needs_provision_capability(status: DeploymentStatus) -> bool {
-    matches!(status, DeploymentStatus::Pending)
+    matches!(
+        status,
+        DeploymentStatus::Pending | DeploymentStatus::PreflightsFailed
+    )
+}
+
+fn deployment_record_error(error: &Option<serde_json::Value>) -> Option<AlienError> {
+    error
+        .clone()
+        .and_then(|value| serde_json::from_value::<AlienError>(value).ok())
 }
 
 /// Parse a status string (kebab-case, as stored in the DB) to `DeploymentStatus`.
 fn parse_status(status: &str) -> DeploymentStatus {
     match status {
         "pending" => DeploymentStatus::Pending,
+        "preflights-failed" => DeploymentStatus::PreflightsFailed,
         "initial-setup" => DeploymentStatus::InitialSetup,
         "initial-setup-failed" => DeploymentStatus::InitialSetupFailed,
         "provisioning" => DeploymentStatus::Provisioning,
@@ -939,6 +1203,8 @@ fn parse_status(status: &str) -> DeploymentStatus {
         "delete-pending" => DeploymentStatus::DeletePending,
         "deleting" => DeploymentStatus::Deleting,
         "delete-failed" => DeploymentStatus::DeleteFailed,
+        "teardown-required" => DeploymentStatus::TeardownRequired,
+        "teardown-failed" => DeploymentStatus::TeardownFailed,
         "deleted" => DeploymentStatus::Deleted,
         "error" => DeploymentStatus::Error,
         _ => {

@@ -12,7 +12,8 @@
 * [get](#get) - Retrieve a deployment by ID.
 * [getInfo](#getinfo) - Get deployment connection information including command endpoint and resource URLs.
 * [import](#import) - Import a deployment from resolved setup infrastructure such as CloudFormation, Terraform, or Helm.
-* [acceptCloudFormationCallback](#acceptcloudformationcallback) - Accept a CloudFormation custom-resource event, hand off import/delete work, and store the callback for Platform-owned completion.
+* [createSetupRegistrationOperation](#createsetupregistrationoperation) - Start a durable setup registration operation for CloudFormation, Terraform, or Helm.
+* [getSetupRegistrationOperation](#getsetupregistrationoperation) - Get setup registration operation status.
 * [delete](#delete) - Delete, detach, or forget a deployment by ID.
 * [redeploy](#redeploy) - Redeploy a running deployment with the same release and fresh environment variables. Sets status to update-pending.
 * [pinRelease](#pinrelease) - Pin or unpin deployment to a specific release. Only works for running deployments. Controller will automatically trigger update to target release.
@@ -704,13 +705,13 @@ run();
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
-## acceptCloudFormationCallback
+## createSetupRegistrationOperation
 
-Accept a CloudFormation custom-resource event, hand off import/delete work, and store the callback for Platform-owned completion.
+Start a durable setup registration operation for CloudFormation, Terraform, or Helm.
 
 ### Example Usage
 
-<!-- UsageSnippet language="typescript" operationID="acceptCloudFormationCallback" method="post" path="/v1/deployments/cloudformation-callbacks" -->
+<!-- UsageSnippet language="typescript" operationID="createSetupRegistrationOperation" method="post" path="/v1/deployments/setup-registration-operations" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -719,37 +720,33 @@ const alien = new Alien({
 });
 
 async function run() {
-  const result = await alien.deployments.acceptCloudFormationCallback({
+  const result = await alien.deployments.createSetupRegistrationOperation({
     workspace: "my-workspace",
-    cloudFormationCallbackRequest: {
-      stackId: "<id>",
-      requestId: "<id>",
-      logicalResourceId: "<id>",
-      requestType: "Delete",
-      responseUrl: "https://candid-formamide.info",
+    createSetupRegistrationOperationRequest: {
+      action: "update",
+      sourceKind: "terraform",
       source: {
         deploymentName: "<value>",
         resourcePrefix: "<value>",
         releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
-        platform: "kubernetes",
+        platform: "test",
         region: "<value>",
         setupTarget: "<value>",
-        setupImportFormatVersion: 1,
+        setupImportFormatVersion: 425975,
         setupFingerprint: "<value>",
-        setupFingerprintVersion: 688409,
+        setupFingerprintVersion: 547456,
         stackSettings: {},
         resources: [
           {
             id: "<id>",
             type: "<value>",
             importData: {
-              "key": "<value>",
-              "key1": "<value>",
-              "key2": "<value>",
+
             },
           },
         ],
       },
+      deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     },
   });
 
@@ -765,7 +762,7 @@ The standalone function version of this method:
 
 ```typescript
 import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { deploymentsAcceptCloudFormationCallback } from "@alienplatform/platform-api/funcs/deploymentsAcceptCloudFormationCallback.js";
+import { deploymentsCreateSetupRegistrationOperation } from "@alienplatform/platform-api/funcs/deploymentsCreateSetupRegistrationOperation.js";
 
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -774,44 +771,40 @@ const alien = new AlienCore({
 });
 
 async function run() {
-  const res = await deploymentsAcceptCloudFormationCallback(alien, {
+  const res = await deploymentsCreateSetupRegistrationOperation(alien, {
     workspace: "my-workspace",
-    cloudFormationCallbackRequest: {
-      stackId: "<id>",
-      requestId: "<id>",
-      logicalResourceId: "<id>",
-      requestType: "Delete",
-      responseUrl: "https://candid-formamide.info",
+    createSetupRegistrationOperationRequest: {
+      action: "update",
+      sourceKind: "terraform",
       source: {
         deploymentName: "<value>",
         resourcePrefix: "<value>",
         releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
-        platform: "kubernetes",
+        platform: "test",
         region: "<value>",
         setupTarget: "<value>",
-        setupImportFormatVersion: 1,
+        setupImportFormatVersion: 425975,
         setupFingerprint: "<value>",
-        setupFingerprintVersion: 688409,
+        setupFingerprintVersion: 547456,
         stackSettings: {},
         resources: [
           {
             id: "<id>",
             type: "<value>",
             importData: {
-              "key": "<value>",
-              "key1": "<value>",
-              "key2": "<value>",
+  
             },
           },
         ],
       },
+      deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     },
   });
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
   } else {
-    console.log("deploymentsAcceptCloudFormationCallback failed:", res.error);
+    console.log("deploymentsCreateSetupRegistrationOperation failed:", res.error);
   }
 }
 
@@ -822,20 +815,97 @@ run();
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.AcceptCloudFormationCallbackRequest](../../models/operations/acceptcloudformationcallbackrequest.md)                                                               | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `request`                                                                                                                                                                      | [operations.CreateSetupRegistrationOperationRequest](../../models/operations/createsetupregistrationoperationrequest.md)                                                       | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
 
 ### Response
 
-**Promise\<[operations.AcceptCloudFormationCallbackResponse](../../models/operations/acceptcloudformationcallbackresponse.md)\>**
+**Promise\<[models.SetupRegistrationOperationResponse](../../models/setupregistrationoperationresponse.md)\>**
 
 ### Errors
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
 | errors.APIError          | 400                      | application/json         |
+| errors.APIError          | 500                      | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
+## getSetupRegistrationOperation
+
+Get setup registration operation status.
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="getSetupRegistrationOperation" method="get" path="/v1/deployments/setup-registration-operations/{id}" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.deployments.getSetupRegistrationOperation({
+    id: "setupop_y41lqnfosxuwqkzmiax7",
+    workspace: "my-workspace",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { deploymentsGetSetupRegistrationOperation } from "@alienplatform/platform-api/funcs/deploymentsGetSetupRegistrationOperation.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await deploymentsGetSetupRegistrationOperation(alien, {
+    id: "setupop_y41lqnfosxuwqkzmiax7",
+    workspace: "my-workspace",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("deploymentsGetSetupRegistrationOperation failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.GetSetupRegistrationOperationRequest](../../models/operations/getsetupregistrationoperationrequest.md)                                                             | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.SetupRegistrationOperationResponse](../../models/setupregistrationoperationresponse.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 404                      | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 

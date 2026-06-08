@@ -3,10 +3,10 @@
 //! These tests exercise the full alien_deployment::step() lifecycle with no cloud I/O.
 
 use alien_core::{
-    ClientConfig, DeleteResourceMode, DeploymentConfig, DeploymentState, DeploymentStatus,
-    EnvironmentVariable, EnvironmentVariableType, EnvironmentVariablesSnapshot, Platform,
-    ReleaseInfo, ResourceEntry, ResourceLifecycle, RuntimeMetadata, Stack, StackSettings,
-    StackState, Storage, Worker, WorkerCode,
+    ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus, EnvironmentVariable,
+    EnvironmentVariableType, EnvironmentVariablesSnapshot, Platform, ReleaseInfo, ResourceEntry,
+    ResourceLifecycle, RuntimeMetadata, Stack, StackSettings, StackState, Storage, Worker,
+    WorkerCode,
 };
 use chrono::Utc;
 use indexmap::IndexMap;
@@ -108,9 +108,6 @@ fn start_update(state: &mut DeploymentState, new_release: ReleaseInfo) {
 /// Helper to start a delete
 fn start_delete(state: &mut DeploymentState) {
     state.status = DeploymentStatus::DeletePending;
-    let mut runtime_metadata = state.runtime_metadata.clone().unwrap_or_default();
-    runtime_metadata.delete_resource_mode = Some(DeleteResourceMode::All);
-    state.runtime_metadata = Some(runtime_metadata);
     // Keep target_release when starting delete - it's needed for preflight/mutation steps
     if state.target_release.is_none() && state.current_release.is_some() {
         state.target_release = state.current_release.clone();
@@ -255,6 +252,7 @@ fn create_initial_state(stack: Stack) -> DeploymentState {
         current_release: None,
         target_release: Some(release),
         stack_state: None,
+        error: None,
         environment_info: None,
         runtime_metadata: None,
         retry_requested: false,
@@ -771,10 +769,7 @@ async fn assert_failed_retry_transition(
     state.stack_state = Some(StackState::new(Platform::Test));
 
     if failed_status == DeploymentStatus::DeleteFailed {
-        state.runtime_metadata = Some(RuntimeMetadata {
-            delete_resource_mode: Some(DeleteResourceMode::All),
-            ..Default::default()
-        });
+        state.runtime_metadata = Some(RuntimeMetadata::default());
     }
 
     let result = alien_deployment::step(state.clone(), config.clone(), ClientConfig::Test, None)

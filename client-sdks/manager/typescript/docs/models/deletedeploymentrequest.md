@@ -6,12 +6,12 @@
 import { DeleteDeploymentRequest } from "@alienplatform/manager-api/models";
 
 let value: DeleteDeploymentRequest = {
-  mode: "clean",
+  action: "cleanup",
 };
 ```
 
 ## Fields
 
-| Field                                                            | Type                                                             | Required                                                         | Description                                                      |
-| ---------------------------------------------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------- |
-| `mode`                                                           | [models.DeleteDeploymentMode](../models/deletedeploymentmode.md) | :heavy_check_mark:                                               | N/A                                                              |
+| Field                                                                | Type                                                                 | Required                                                             | Description                                                          |
+| -------------------------------------------------------------------- | -------------------------------------------------------------------- | -------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `action`                                                             | [models.DeleteDeploymentAction](../models/deletedeploymentaction.md) | :heavy_check_mark:                                                   | N/A                                                                  |

@@ -4,17 +4,17 @@
 
 import * as z from "zod/v4";
 import {
-  DeleteDeploymentMode,
-  DeleteDeploymentMode$outboundSchema,
-} from "./deletedeploymentmode.js";
+  DeleteDeploymentAction,
+  DeleteDeploymentAction$outboundSchema,
+} from "./deletedeploymentaction.js";
 
 export type DeleteDeploymentRequest = {
-  mode: DeleteDeploymentMode;
+  action: DeleteDeploymentAction;
 };
 
 /** @internal */
 export type DeleteDeploymentRequest$Outbound = {
-  mode: string;
+  action: string;
 };
 
 /** @internal */
@@ -22,7 +22,7 @@ export const DeleteDeploymentRequest$outboundSchema: z.ZodType<
   DeleteDeploymentRequest$Outbound,
   DeleteDeploymentRequest
 > = z.object({
-  mode: DeleteDeploymentMode$outboundSchema,
+  action: DeleteDeploymentAction$outboundSchema,
 });
 
 export function deleteDeploymentRequestToJSON(

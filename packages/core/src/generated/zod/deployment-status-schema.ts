@@ -8,6 +8,6 @@ import * as z from "zod";
 /**
  * @description Deployment status in the deployment lifecycle
  */
-export const DeploymentStatusSchema = z.enum(["pending", "initial-setup", "initial-setup-failed", "provisioning", "provisioning-failed", "running", "refresh-failed", "update-pending", "updating", "update-failed", "delete-pending", "deleting", "delete-failed", "deleted", "error"]).describe("Deployment status in the deployment lifecycle")
+export const DeploymentStatusSchema = z.enum(["pending", "preflights-failed", "initial-setup", "initial-setup-failed", "provisioning", "provisioning-failed", "running", "refresh-failed", "update-pending", "updating", "update-failed", "delete-pending", "deleting", "delete-failed", "teardown-required", "teardown-failed", "deleted", "error"]).describe("Deployment status in the deployment lifecycle")
 
 export type DeploymentStatus = z.infer<typeof DeploymentStatusSchema>

@@ -47,6 +47,10 @@ pub struct StackImportRequest {
     /// regardless of which setup package emitted the payload.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_kind: Option<ImportSourceKind>,
+    /// Setup source metadata needed by the control plane to guide privileged
+    /// teardown. The manager treats this as opaque JSON.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup_metadata: Option<serde_json::Value>,
     /// Optional release id that produced the setup package. When
     /// omitted, the manager imports against the latest release.
     #[serde(default, skip_serializing_if = "Option::is_none")]
